@@ -544,6 +544,53 @@
     (testing "the transition that created it is written beside it"
       (is (= ["invitation"] (mapv #(get-in % [:body :kind]) (of narrow "transition")))))))
 
+(deftest an-invitation-frame-carries-the-given-values
+  (let [eng (stream-engine)
+        typed-errand (errand! eng "Dishes")
+        plain-errand (errand! eng "Laundry")
+        ;; only the engine writes `given`, so the engine's actor is followed
+        engine-id (str (:id invitations/engine-actor))
+        narrow (walk! eng {:followed engine-id})
+        whole (:row (inv/create! eng :walk
+                                 {:followed engine-id :title "The same, seen whole"}
+                                 {:principal other}))
+        ;; a follower that sees every row and one argument of the step
+        title-only (assoc (vis-of)
+                          :row? (fn [_kind _id] true)
+                          :arg? (fn [_kind _action arg] (= "title" arg)))
+        invite! (fn [errand-id extra]
+                  (str (:id (:row (inv/create! eng :invitation
+                                               (merge {:subject "colton"
+                                                       :self (errand-path errand-id)
+                                                       :action "rename"
+                                                       :field "title"
+                                                       :note "Pick the new title here."}
+                                                      extra)
+                                               {:principal invitations/engine-actor})))))
+        typed (invite! typed-errand {:given {:title "Dishes, twice" :room "Kitchen"}})
+        plain (invite! plain-errand {})
+        body-of (fn [w id]
+                  (some #(when (and (= "invitation" (:type %))
+                                    (= id (get-in % [:body :id])))
+                           (:body %))
+                        (frames-in eng (:id w))))
+        scoped (walks/recorder eng person title-only engine-id)
+        unscoped (walks/recorder eng other nil engine-id)]
+    (doseq [t (log-of eng)]
+      ((:event scoped) t)
+      ((:event unscoped) t))
+    (testing "an unscoped follower's frame carries given whole"
+      (is (= {:title "Dishes, twice" :room "Kitchen"}
+             (:given (body-of whole typed)))))
+    (testing "given keeps only the keys the follower's :arg? admits"
+      (is (= {:title "Dishes, twice"}
+             (:given (body-of narrow typed)))))
+    (testing "an invitation with no given values has no given key in its frame"
+      (doseq [w [whole narrow]]
+        (let [body (body-of w plain)]
+          (is (some? body))
+          (is (not (contains? body :given))))))))
+
 (deftest the-export-reads-the-pinned-invitation-body
   (let [[eng tick!] (clocked-engine {:resources [chore errand]})
         c (errand! eng "Dishes")
