@@ -68,8 +68,11 @@
                    (seed-cursor! eng name* from-origin?))]
     (loop [cursor cursor n 0]
       (let [rows (store/with-tx st
+                   ;; :settled — the read stays behind writers in
+                   ;; flight, so a lower id cannot commit after the
+                   ;; cursor has passed it
                    (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200})))
+                                               {:limit 200 :settled true})))
             outcome
             (reduce
              (fn [[_cursor n] t]

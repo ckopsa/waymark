@@ -99,6 +99,45 @@
     (is (pos? (count @seen)) "history replayed from the log's origin")
     (is (= 1 (first @seen)))))
 
+;; ── 1b. two writers that commit out of id order ─────────────────────
+
+(deftest out-of-order-commits-are-both-delivered
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        seen (atom [])
+        f #(swap! seen conj (:id %))
+        _ (consumers/drain-consumer! *eng* :f-ordered f)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        appended (promise)
+        release (promise)
+        ;; the slow writer takes the LOWER id and holds its transaction open
+        slow (future
+               (store/with-tx st
+                 (fn [tx]
+                   (deliver appended (:id (store/append-transition! st tx record)))
+                   (deref release 20000 nil))))]
+    (try
+      (let [low (deref appended 10000 nil)
+            ;; the fast writer takes the HIGHER id and commits first
+            high (:id (store/with-tx st
+                        #(store/append-transition! st % record)))]
+        (is (some? low))
+        (is (< low high))
+        (testing "a drain in the window does not pass the id still in flight"
+          (is (= 0 (consumers/drain-consumer! *eng* :f-ordered f)))
+          (is (empty? @seen))
+          (is (< (cursor-of :f-ordered) low)))
+        (deliver release true)
+        @slow
+        (testing "once the lower id commits, both arrive, in id order"
+          (is (= 2 (consumers/drain-consumer! *eng* :f-ordered f)))
+          (is (= [low high] @seen))
+          (is (= high (cursor-of :f-ordered)))))
+      (finally (deliver release true)))))
+
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 
 (deftest throwing-consumer-parks-and-retries

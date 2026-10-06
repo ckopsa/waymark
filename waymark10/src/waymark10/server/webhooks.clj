@@ -731,8 +731,10 @@
    (try
     (loop [cursor cursor]
       (let [rows (store/with-tx st
+                   ;; :settled, as the consumers' drain reads: never
+                   ;; past a writer still in flight
                    (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200})))
+                                               {:limit 200 :settled true})))
             advance! (fn [t]
                        (store/with-tx st
                          #(store/cursor-set! st % consumer (:id t)))
