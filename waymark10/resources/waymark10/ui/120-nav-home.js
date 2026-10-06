@@ -519,6 +519,17 @@ async function refreshQuest() {
   /* no answer (a held replay, an engine restarting) changes nothing */
   if (!res.ok && res.status !== 404) return;
   const item = res.ok && ((res.body.data || {}).items || [])[0];
+  /* none is pinned and one is in hand: it may have finished before its
+     stream said so, as it does after the owner's own goal write. The
+     row itself says which, and a finished one is said here. */
+  const held = questDoc;
+  if (!item && held) {
+    const was = await api(held.self);
+    if (was.ok && was.body.state === "finished" && questDoc === held) {
+      questFinished();
+      return;
+    }
+  }
   /* a collection item is a summary: the plan is on the row's envelope */
   const row = item ? await api(item.self) : null;
   if (row && !row.ok) return;
@@ -544,22 +555,25 @@ function questFollow() {
       f => { if (mine() && f.event === "transition") onQuestRowFrame(f.data); },
       () => { if (mine()) refreshQuest().catch(() => {}); });
 }
+/* the quest in hand has finished: the tracker says so for a few
+   seconds before it hides. The stream's frame and the read both come
+   here, whichever learns it first. */
+function questFinished() {
+  questDone = questTitle(questDoc);
+  questDoc = null;
+  clearTimeout(questDoneTimer);
+  questDoneTimer = setTimeout(() => {
+    questDone = null;
+    questTracker();
+    refreshQuest();
+  }, QUEST_DONE_MS);
+  questTracker();
+}
 /* the stream's half: a transition of the quest in hand reads it again,
-   and finish says so for a few seconds before the tracker hides */
+   and finish says so */
 async function questRowFrame(ev) {
   if (!questDoc || replay) return;
-  if (ev.action === "finish") {
-    questDone = questTitle(questDoc);
-    questDoc = null;
-    clearTimeout(questDoneTimer);
-    questDoneTimer = setTimeout(() => {
-      questDone = null;
-      questTracker();
-      refreshQuest();
-    }, QUEST_DONE_MS);
-    questTracker();
-    return;
-  }
+  if (ev.action === "finish") { questFinished(); return; }
   await refreshQuest();
 }
 function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
