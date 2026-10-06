@@ -1726,9 +1726,25 @@ function replayKept(r, f) {
    not drawn yet draws it when it opens (openGuidedDialog). A refusal no
    form was open for (replayFormless) is drawn in the caption band
    (replayCaption), one line for each, and the form that is open keeps
-   its own. */
+   its own. A refused Accept quest is said in the quest's sheet
+   (replaySheetRefused), as the recording said it: its box, with Accept
+   disabled, and the sheet then closes off Not now. */
+function replaySheetRefused(f) {
+  /* the sheet is modal: while it is open the recorder's hand writes
+     with Accept quest alone, and the write it was refused is the
+     quest's create or its pin (questSheet, 140-links-access.js) */
+  const sheet = $("dialog[open][data-quest-sheet]");
+  return sheet && sheet.questRefuse && f && f.type === "refusal" &&
+    (f.action === "create" || f.action === "pin") ? sheet : null;
+}
 function replayRefuse(f) {
   if (!replay) return;
+  const sheet = replaySheetRefused(f);
+  if (sheet) {
+    sheet.questRefuse({title: f.title, detail: f.detail});
+    sheet.removeAttribute("data-replay-accepted");
+    return;
+  }
   if (f && replayFormless(replay, f)) {
     replay.refusals.push(replayRefusedLine(replay, f));
     replayCaption();
@@ -1834,10 +1850,13 @@ function replayGestureTarget(f) {
     return write;
   }
   /* under the quest's sheet (replayQuestSheet): the recorder's create
-     is a press on Accept quest, and the beat that closes a sheet no
+     is a press on Accept quest, and so is the create or the pin it was
+     refused (replaySheetRefused); the beat that closes a sheet no
      quest was made from is a press on Not now */
   const sheet = $("dialog[open][data-quest-sheet]");
   if (sheet) {
+    if (f.type === "refusal")
+      return replaySheetRefused(f) ? sheet.querySelector("[data-quest-accept]") : null;
     if (f.type === "transition")
       return f.kind === "quest" && f.action === "create" && !replayNotice(replay, f)
         ? sheet.querySelector("[data-quest-accept]") : null;

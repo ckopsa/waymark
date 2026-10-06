@@ -173,6 +173,9 @@ function questSheet(btn, name, doc, create, goal, seen) {
       el("button", {"data-quest-decline": "", onclick: () => dlg.close()}, "Not now"),
       accept));
   if (!seen.ok) refused(seen.body);
+  /* a replay says the recorded Accept's refusal by the same door
+     (replayRefuse, 200-events-follow.js) */
+  dlg.questRefuse = refused;
   accept.addEventListener("click", async () => {
     if (replay || !create || accept.disabled) return;
     accept.disabled = true;

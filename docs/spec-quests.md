@@ -185,7 +185,10 @@ closes carries none. A replay draws the sheet from that part
 (`replayQuestSheet`), asks the engine nothing and writes nothing. Its
 pointer presses the shut door, then **Accept quest** at the recorded
 create, or **Not now** at the beat that closes a sheet no quest was
-made from.
+made from. An Accept the recording has refused (the create or the pin:
+a `refusal` frame while the sheet is open) is a press on **Accept
+quest** too, and the replay says the sentence in the sheet's own box
+with Accept disabled (`replaySheetRefused`), not in the caption band.
 
 A person following live in guided mode sees the same sheet from the
 same part, read-only, and it closes with the followed person's
