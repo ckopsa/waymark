@@ -176,8 +176,16 @@ door's label on this row, with `goal` under it, why it is not available
 yet, the numbered steps with whose turn each is, the
 estimate note, and **Not now** and **Accept quest**. Not now closes the
 sheet. Accept creates the quest and pins it. A refusal is said in the
-sheet, and Accept is disabled with that line. A replay opens no sheet
-and writes nothing.
+sheet, and Accept is disabled with that line.
+
+A recording keeps the sheet. While it is open, the recorder's `ui` beat
+carries a `quest` part: the goal, the door's label and what the
+rehearsal answered (docs/spec-guided-follow.md § 1). The beat after it
+closes carries none. A replay draws the sheet from that part
+(`replayQuestSheet`), asks the engine nothing and writes nothing. Its
+pointer presses the shut door, then **Accept quest** at the recorded
+create, or **Not now** at the beat that closes a sheet no quest was
+made from.
 
 ## What this change does not do
 

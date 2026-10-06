@@ -3814,7 +3814,24 @@ async function questPhoneStory() {
     console.log(`· film: the tapped door's walk ${where}`);
     /* the press is lit for a moment: the page itself notes it, with
        whether the replay first walked to another row (replayGesture) */
+    const active = async () => ((await get("/api/quests?state=active&owner=" +
+      encodeURIComponent(me))).data?.items || []).length;
+    const before = await active();
+    /* and each sheet the replay opens, with its steps and its close */
     await evaljs(`window.__notYet = null;
+      window.__sheets = [];
+      if (window.__sheetWatch) window.__sheetWatch.disconnect();
+      window.__sheetWatch = new MutationObserver(ms => {
+        const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
+        for (const m of ms) {
+          for (const n of m.addedNodes)
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
+              steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
+          for (const n of m.removedNodes)
+            if (is(n)) (window.__sheets.find(s => !s.closed) || {}).closed = true;
+        }
+      });
+      window.__sheetWatch.observe(document.body, {childList: true});
       new MutationObserver(() => {
         const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
         if (b && !window.__notYet)
@@ -3832,6 +3849,14 @@ async function questPhoneStory() {
     await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
                   `the film to end ${where}`, 240000, why);
     ok(`film mode reaches ended ${where}`, true);
+    const sheets = await evaljs(`window.__sheets`);
+    console.log("  the replay's sheets: " + JSON.stringify(sheets));
+    ok("the replay opens the quest's sheet for each tap, with the recorded steps",
+       sheets.length === 2 && sheets.every(s => s.replay &&
+         JSON.stringify(s.steps) === JSON.stringify(seen.steps)));
+    ok("and closes each: off Not now, and off Accept quest",
+       sheets.every(s => s.closed));
+    ok("the replay makes no quest", (await active()) === before);
     await shot(`${slug}-notyet-film`);
     await fresh(`the page ${where}, out of its film`);
   };
