@@ -125,6 +125,9 @@ async function renderResource(view, doc, hints) {
      person sees the whole path before they agree to it
      (docs/spec-walkthrough.md §5; 200-events-follow.js) */
   if (kind === "walkthrough") panel.append(walkthroughSteps(doc));
+  /* a quest's row page shows its plan as a checklist, with Go on the
+     step to take now (docs/spec-quests.md; 200-events-follow.js) */
+  if (kind === "quest") panel.append(questPlan(doc));
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&
