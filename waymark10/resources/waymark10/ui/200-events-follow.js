@@ -393,6 +393,9 @@ function applyUiFrame(f) {
   const typing = !!d && typeof ui.focus === "string" && !ui.focus.startsWith("/");
   guidedTyping = typing ? ui.focus : null;
   guidedFocus = typing ? null : ui.focus || null;
+  /* a replay closes the quest's sheet with the beat that carries none,
+     before the guards below: the sheet is a dialog of its own */
+  if (replay && !ui.quest) replayQuestSheet(null);
   /* the existing guards: the Access panel parks, and a dialog this
      person opened themselves is never replaced; nor is a replayed
      invitation's, which stands where the invited person's own stood */
@@ -416,15 +419,19 @@ function applyUiFrame(f) {
       openGuidedDialog(d, f.principal.display || f.principal.id, key);
     }
   }
+  /* and opens it over the screen the beat is on, from the rehearsal's
+     answer the beat carries */
+  if (replay && ui.quest) replayQuestSheet(ui.quest);
   paintGuidedFocus();
 }
 
 /* ── share my screen, the reporter's side (§2): per tab, OFF by
    default. While on, every beat carries this tab's `ui` part — the
    dialog and its fields (180-action-dialog.js, 170-forms.js), the
-   collection query (130-collection.js) and the focused row. A
+   collection query (130-collection.js), the focused row and the quest's
+   sheet a tap on a shut door opened (140-links-access.js). A
    person's form is never broadcast because someone chose to watch. */
-const UI_SHARE = {dialog: null, fields: null, focus: null};
+const UI_SHARE = {dialog: null, fields: null, focus: null, quest: null};
 let uiShareTimer = null, uiShareClear = false;
 function uiSharing() {
   try { return sessionStorage.getItem("wm10.share.ui") === "1"; }
@@ -434,7 +441,8 @@ function uiShareState() {
   return {dialog: UI_SHARE.dialog,
           fields: UI_SHARE.dialog ? UI_SHARE.fields : null,
           collection: collectionShareOf(location.hash.slice(1)),
-          focus: UI_SHARE.focus};
+          focus: UI_SHARE.focus,
+          quest: UI_SHARE.quest};
 }
 function shareUi(part) {
   Object.assign(UI_SHARE, part);
@@ -1326,6 +1334,11 @@ function applyReplayFrame(f, landed) {
     const inv = $("dialog[open][data-replay-invite]");
     if (inv && inv.getAttribute("data-guided") === f.self + " " + f.action)
       closeGuided();
+    /* the quest its open sheet was accepted for: the beat that closes
+       the sheet is then no press on Not now (replayGestureTarget) */
+    const sheet = $("dialog[open][data-quest-sheet]");
+    if (sheet && f.kind === "quest" && f.action === "create")
+      sheet.setAttribute("data-replay-accepted", "");
     /* as the firehose steers: go where they wrote, unless a dialog is
        open; a row already on screen is drawn again from the frame, and
        one that was not was walked to before this (replayWalkOf), so
@@ -1602,11 +1615,33 @@ function replayQuestDoor(r, f) {
     return null;
   const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
   const d = (held && held.doc.data) || {};
-  const self = String(d.self || "").split("?")[0];
+  return replayShutDoor(d);
+}
+/* the reachable button of the door `goal` names ({self, action}), on
+   the screen shown, or null */
+function replayShutDoor(goal) {
+  const self = String(goal.self || "").split("?")[0];
   return [...document.querySelectorAll("#view button[data-quest-door]")]
     .find(b => b.getClientRects().length > 0 &&
-               b.dataset.questDoor === d.action &&
+               b.dataset.questDoor === goal.action &&
                b.dataset.questSelf === self) || null;
+}
+/* the quest's sheet of a replay (questSheet, 140-links-access.js), from
+   the `quest` part of a `ui` beat: the goal, the door's label and the
+   rehearsal's answer, as the recording had them. Nothing is asked of
+   the engine, and Accept writes nothing. Null closes the sheet; a beat
+   for the sheet already open draws nothing. */
+function replayQuestSheet(q) {
+  const open = $("dialog[open][data-quest-sheet]");
+  const key = q && q.goal ? JSON.stringify([q.goal.self, q.goal.action]) : null;
+  if (open && key && open.getAttribute("data-replay-quest") === key) return;
+  if (open) open.close();
+  if (!key) return;
+  const name = q.goal.action;
+  const dlg = questSheet(replayShutDoor(q.goal) || {title: ""}, name,
+    {unavailable: {[name]: {display: {label: q.label}}}}, null, q.goal,
+    q.seen || {ok: false});
+  dlg.setAttribute("data-replay-quest", key);
 }
 /* the door a `refusal` frame is about, as a guided dialog is keyed */
 function replayRefusedKey(f) {
@@ -1763,9 +1798,24 @@ function replayGestureTarget(f) {
     }
     return write;
   }
+  /* under the quest's sheet (replayQuestSheet): the recorder's create
+     is a press on Accept quest, and the beat that closes a sheet no
+     quest was made from is a press on Not now */
+  const sheet = $("dialog[open][data-quest-sheet]");
+  if (sheet) {
+    if (f.type === "transition")
+      return f.kind === "quest" && f.action === "create" && !replayNotice(replay, f)
+        ? sheet.querySelector("[data-quest-accept]") : null;
+    return f.type === "ui" && !ui.quest && !sheet.hasAttribute("data-replay-accepted")
+      ? sheet.querySelector("[data-quest-decline]") : null;
+  }
   if (replay.door || $("dialog[open]")) return null;
-  /* a quest accepted by a tap on its shut door: the press is on that
-     button, for the recorder's own create */
+  /* a tap on a shut door: the press is on that button, and the beat
+     opens its sheet */
+  if (ui.quest && ui.quest.goal) return replayShutDoor(ui.quest.goal);
+  /* a quest accepted by a tap on its shut door, in a walk that holds no
+     sheet for it: the press is on that button, for the recorder's own
+     create */
   if (f.type === "transition")
     return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);
   const link = (box, hit) =>
@@ -2000,6 +2050,7 @@ function playReplay() {
     r.rows.clear();
     r.docs.clear();
     closeGuided();
+    replayQuestSheet(null);
     guidedFocus = null;
     guidedDismissed = null;
   }
@@ -2028,6 +2079,7 @@ function stopReplay(quiet) {
   clearTimeout(r.timer);
   replayGestureRest(r, true);
   closeGuided();
+  replayQuestSheet(null);
   replay = null;
   apiHeld = false;
   guidedFocus = null;

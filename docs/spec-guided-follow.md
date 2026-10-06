@@ -80,8 +80,9 @@ carries them.
 | `fields`     | `{name: value}`: the dialog form's values as typed | input, debounced 150 ms |
 | `collection` | `{self, filter, sort, page}` of the collection screen | query change |
 | `focus`      | the `self` of the focused row, or `null`       | selection, keyboard focus |
+| `quest`      | `{goal: {self, action}, label, seen: {ok, body}}` of the open quest's sheet (docs/spec-quests.md), absent when none is open. `body` is the rehearsal's `preview`, or a refusal's `title` and `detail` | a tap on a shut door, Not now, Accept quest |
 
-The states are exactly these four. Scroll, hover and cursor position
+The states are exactly these five. Scroll, hover and cursor position
 are not carried: they are noise for a person learning a task and
 expensive on the wire. The event says what is open, what it holds and
 which row is focused. It does not say where the pointer is. Stage 2's
@@ -138,6 +139,8 @@ The reporter's visibility is not used for this.
   `collection.self` follows presence's whole-kind rule. If `sort` names
   a field that fails `:field?`, it is dropped.
 - `focus` crosses only if `:row?` admits it. Otherwise it is `null`.
+- `quest` crosses only if `:row?` admits its goal's row, and its plan
+  keeps the steps on rows `:row?` admits. Otherwise it is absent.
 - **Secrets never cross, whatever the grant.** A field the schema marks
   `writeOnly`, `format: password` or `x-secret` is removed on the
   reporting side, and the server removes it again at report time. It
