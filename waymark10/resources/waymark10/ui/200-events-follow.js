@@ -366,6 +366,8 @@ async function openGuidedDialog(d, name, key) {
   if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);
   /* a replayed caption about this form is drawn in it */
   if (replay) replayCaption();
+  /* and so is the refusal the form got before it was drawn */
+  if (replay) replayRefuse(replay.refused);
 }
 function applyGuidedUi(f) {
   if (replay || !followUi || !followId || !f || !f.ui ||
@@ -1256,6 +1258,13 @@ function applyReplayFrame(f, landed) {
     replayChip();
     return;
   }
+  /* a `refusal` frame is the answer the open form got and moves no
+     screen: its box is drawn in that form (replayRefuse) */
+  if (f.type === "refusal") {
+    replayRefuse(f);
+    replayChip();
+    return;
+  }
   const actor = replayActor(f);
   replay.who = actor;
   /* a `ui` beat equal to the act before it is on screen already: it is
@@ -1272,6 +1281,8 @@ function applyReplayFrame(f, landed) {
     /* whether the recording has a form open: its dialog is drawn a
        moment after this, and no gesture is made under it */
     replay.door = !!(f.ui || {}).dialog;
+    /* a form that closed takes its refusal with it */
+    if (!replay.door) replay.refused = null;
     const c = (f.ui || {}).collection;
     if (c && c.self && !(f.ui || {}).dialog)
       replayGaze("list", collectionHrefOf(c));
@@ -1351,9 +1362,10 @@ function replayBeat(f) {
   return JSON.stringify([f.who || "", f.self || "", f.ui || {}]);
 }
 /* whether the frame `f` ends no form: the form's own beats, a caption,
-   and the frames that wait behind the form. */
+   the refusal the form got, and the frames that wait behind the form. */
 function replayKeepsForm(f) {
   return f.type === "transition" || f.type === "doc" || f.type === "caption" ||
+    f.type === "refusal" ||
     (f.type === "ui" && !!(f.ui || {}).dialog);
 }
 /* whether the frame at `at` waits behind an open form, as
@@ -1366,7 +1378,8 @@ function replayHeld(frames, at) {
   for (let i = at - 1; i >= 0; i--) {
     const t = frames[i].type;
     if (t === "ui") return !!(frames[i].ui || {}).dialog;
-    if (t !== "transition" && t !== "doc" && t !== "caption") return false;
+    if (t !== "transition" && t !== "doc" && t !== "caption" &&
+        t !== "refusal") return false;
   }
   return false;
 }
@@ -1534,20 +1547,52 @@ function replayWrote(r, key) {
   }
   return false;
 }
+/* whether the frame `f` is a quest's `create` by `who` whose goal is
+   the door `key` names. The goal is read from the quest's own document,
+   which the walk holds from the quest's first plan on. */
+function replayKeeps(r, f, who, key) {
+  if (f.type !== "transition" || f.who !== who || f.kind !== "quest" ||
+      f.action !== "create") return false;
+  const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+  const d = (held && held.doc.data) || {};
+  return String(d.self || "").split("?")[0] + " " + d.action === key;
+}
+/* the door a `refusal` frame is about, as a guided dialog is keyed */
+function replayRefusedKey(f) {
+  return String(f.self || "").split("?")[0] + " " + f.action;
+}
+/* whether the refusal `f` was kept as a goal: the same hand's quest for
+   that door comes after it, before their next refusal. */
+function replayKept(r, f) {
+  const key = replayRefusedKey(f);
+  for (let i = r.frames.indexOf(f) + 1; i > 0 && i < r.frames.length; i++) {
+    const n = r.frames[i];
+    if (replayKeeps(r, n, f.who, key)) return true;
+    if (n.type === "refusal" && n.who === f.who) return false;
+  }
+  return false;
+}
+/* a `refusal` frame: the answer the recorder's write door gave. It is
+   kept (replay.refused) until its form closes, and drawn in that form
+   by the live code (dlg.guidedRefuse, 180-action-dialog.js): the
+   problem box, and "Accept as quest" when the recording keeps it as a
+   goal, so the pointer presses it where the person saw it. A form not
+   drawn yet draws it when it opens (openGuidedDialog). */
+function replayRefuse(f) {
+  if (!replay) return;
+  replay.refused = f || null;
+  const g = $("dialog[open][data-guided]:not([data-replay-invite])");
+  if (!f || !g || !g.guidedRefuse ||
+      g.getAttribute("data-guided") !== replayRefusedKey(f)) return;
+  g.guidedRefuse({title: f.title, detail: f.detail, remedies: f.remedies || []},
+                 replayKept(replay, f));
+}
 /* whether the form `key` ended as a quest and not as a write: a quest's
    `create` by the same hand, found as replayWrote finds a write, whose
-   goal is that form's door. A walk records no refusal, and the goal is
-   read from the quest's own document, which the walk holds from the
-   quest's first plan on. */
+   goal is that form's door (replayKeeps). */
 function replayAccepted(r, key) {
   const who = r.frames[r.at].who, t = r.frames[r.at].t || 0;
-  const kept = f => {
-    if (f.type !== "transition" || f.who !== who || f.kind !== "quest" ||
-        f.action !== "create") return false;
-    const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
-    const d = (held && held.doc.data) || {};
-    return String(d.self || "").split("?")[0] + " " + d.action === key;
-  };
+  const kept = f => replayKeeps(r, f, who, key);
   for (let i = r.at + 1; i < r.frames.length &&
                          (r.frames[i].t || 0) - t < REPLAY_BURST_MS; i++)
     if (kept(r.frames[i])) return true;
@@ -1617,7 +1662,9 @@ function replayGestureTarget(f) {
     if (d) return d.self + " " + d.action === key
       ? g.guidedField(replayTypingOf(f)) : null;
     if (!replayWrote(replay, key)) return null;
-    /* a refusal kept as a goal: the press is on "Accept as quest" */
+    /* a refusal kept as a goal: the press is on "Accept as quest", under
+       the refusal's own box; the footer's is for a walk recorded before
+       a walk held its refusals */
     if (replayAccepted(replay, key))
       return g.querySelector("[data-quest-accept]") || g.guidedAccept();
     /* the button that writes, drawn unlit until the pointer presses it */

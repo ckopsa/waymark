@@ -454,6 +454,17 @@
     (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
     (is (str/includes? body "if (replay) replayCaption();"))))
 
+(deftest ui-replay-draws-a-recorded-refusal-in-its-form
+  ;; docs/spec-agent-demo-walks.md §2: a `refusal` frame is drawn in the
+  ;; open form by the code that draws a person's own refusal, with
+  ;; "Accept as quest" where they saw it; the footer's button is for a
+  ;; walk recorded before the frame existed
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "dlg.guidedRefuse = (problem, kept) => {"))
+    (is (str/includes? body "if (f.type === \"refusal\") {"))
+    (is (str/includes? body "if (replay) replayRefuse(replay.refused);"))
+    (is (str/includes? body "return g.querySelector(\"[data-quest-accept]\") || g.guidedAccept();"))))
+
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
   ;; write, the pointer goes to the guided dialog's submit button, drawn

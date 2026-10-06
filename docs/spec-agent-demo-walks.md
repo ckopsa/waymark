@@ -137,6 +137,19 @@ with more than twelve arguments types the first eleven one by one and
 the rest in the last beat. A refused call makes no closing beat: the
 form stays open with what was typed, as it would on a person's screen.
 
+A refused write is recorded as a `refusal` frame, for a person's own
+write and for a staged call alike. The action route writes it
+(`walks/record-refused!`) to every self walk the caller is recording,
+under the request's own visibility. Its body is `{principal, self,
+action, title, detail, remedies}`: what the refusal's box shows, and no
+more of the problem. A rehearsal's refusal and the acknowledge wall
+record none. The export carries the frame when the exporter sees its
+`self`, with the remedies whose doors the exporter may invoke. Replay
+draws it in the open form with the code that draws a person's own
+refusal, and with "Accept as quest" under it when the recording keeps
+the refusal as a goal. A walk recorded before this frame existed has
+that button drawn in the form's footer instead.
+
 **How a sitter with no browser reports presence.** The connector calls
 `presence/report!` in process, with the session's principal, the `self`
 and the `ui` part, and `walks/self-recorder`'s tap built from the
