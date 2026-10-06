@@ -45,6 +45,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -207,9 +208,16 @@
     (when-not (or (= :pending (:state row))
                   (and (= :stored (:state row))
                        (= sha (get-in row [:data :sha256]))))
-      (throw (p/wrong-state :mark_stored (:state row)
-                            (get-in rdef [:actions :mark_stored :from])
-                            {:kind :attachment :id (str id)})))
+      ;; mark_stored is a declared action, so the refusal names the
+      ;; machine's roads the way invoke's step 5 does. Today there are
+      ;; none (nothing leads back to pending), and the 409 carries no
+      ;; `remedies` — the same answer as the envelope, which hides the
+      ;; door outright.
+      (let [defn (get-in rdef [:actions :mark_stored])]
+        (throw (p/wrong-state :mark_stored (:state row) (:from defn)
+                              {:kind :attachment :id (str id)}
+                              nil
+                              (machine/roads rdef defn (:state row))))))
     (let [f (file-of eng id)]
       (io/make-parents f)
       (io/copy data f))
