@@ -1064,11 +1064,13 @@ function parseWalk(text) {
                         .sort((a, b) => (a.t || 0) - (b.t || 0)))};
 }
 /* a `move` to the row a hand's open form stands on moves no screen.
-   The engine records one when their presence was elsewhere with no beat
-   of their tab's (a stream the page opened, a read) and the form's next
-   beat brought it back: the beat that closes a form kept as a quest,
-   after the tracker opened the quest's stream. It is left out, so it
-   does not end the form before the press that closes it. */
+   The engine no longer records one: `presence/report!` judges a `move`
+   from the `self` of the principal's last beat. A walk recorded before
+   ticket 5c1acbcb may hold one, from a beat that brought presence back
+   after a stream or a read had moved it: the beat that closes a form
+   kept as a quest, after the tracker opened the quest's stream. The
+   filter is kept for those walks. Such a move is left out, so it does
+   not end the form before the press that closes it. */
 function replayFormMoves(frames) {
   const on = new Map();          // who → the row their open form is on
   return frames.filter(f => {
