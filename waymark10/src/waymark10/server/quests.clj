@@ -579,23 +579,38 @@
               (take 16))
         needs))
 
+(defn- awaiting-note
+  "The guards that wait on a form, as one sentence; nil when none do."
+  [awaiting]
+  (when (seq awaiting)
+    (clip (str "Judged when you fill the form: "
+               (str/join ", " (map #(if (keyword? %) (name %) (str %)) awaiting))
+               ".")
+          240)))
+
+(defn- confirm-note
+  "A confirm step's note: the consequence, and after it the guards that
+  wait on its form. The consequence is cut first, so the guards stay."
+  [sentence awaiting]
+  (if-some [tail (clip (awaiting-note awaiting) 160)]
+    (str/triml (str (clip sentence (- 239 (count tail))) " " tail))
+    (clip sentence 240)))
+
 (defn- with-form
   "A step on a door whose form is not filled yet: its `needs`, and on
-  its note the guards that wait on them. They cannot be planned."
-  [step {:keys [needs awaiting]}]
+  its note the guards that wait on them. They cannot be planned. A
+  confirm door's step stays the owner's to confirm."
+  [step {:keys [needs awaiting confirm consequence]}]
   (cond-> step
     (seq needs) (assoc :needs (needs-of needs))
-    (seq awaiting) (assoc :note (clip (str "Judged when you fill the form: "
-                                           (str/join ", " (map #(if (keyword? %) (name %) (str %))
-                                                               awaiting))
-                                           ".")
-                                      240))))
+    confirm (assoc :whose "confirm" :note (confirm-note consequence awaiting))
+    (and (not confirm) (seq awaiting)) (assoc :note (awaiting-note awaiting))))
 
 (defn- blocked-steps
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
   bound, else one, with the refusal's other remedies on it as
   `:alternatives`. An alternative is never a step of its own."
-  [{:keys [door row reason needs confirm consequence held hold warnings] :as entry}
+  [{:keys [door row reason needs awaiting confirm consequence held hold warnings] :as entry}
    goal seat-lookup]
   (let [[k action] (door-parts door)
         base (step-of entry goal)
@@ -605,7 +620,8 @@
       (loop-reason entry) []
 
       confirm
-      [(cond-> (assoc base :whose "confirm" :note (clip (or consequence reason) 240))
+      [(cond-> (assoc base :whose "confirm"
+                      :note (confirm-note (or consequence reason) awaiting))
          (seq needs) (assoc :needs (needs-of needs)))]
 
       (or held hold)
