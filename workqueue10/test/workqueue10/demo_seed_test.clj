@@ -10,10 +10,14 @@
   it ends `failed` with the engine's no-server sentence, and behind a
   wall served in-process it ends `failed` with the wall's sentence.
 
+  The seeded epic's `complete` is pursued here as Ada, step by step:
+  that test is the script of the film.
+
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.demo-seed-test"
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as factory]
+            [waymark10.client :as c]
             [waymark10.dev :as dev]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -306,3 +310,74 @@
   (testing "behind a wall that answers nothing, the engine's own words stand"
     (is (str/includes? (reason-behind "" "text/plain")
                        "initialize answered 403"))))
+
+;; ── the quest: the seeded epic's `complete`, pursued as Ada ─────────
+
+(def ^:private ending {:close_reason "Done: the house planned the dinner."})
+
+(def ^:private film-url "https://films.example/harbour-house-dinner")
+
+(defn- steps [entries] (mapv (juxt :door :row) entries))
+
+(deftest the-seeded-epic-completes-as-a-quest
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        refs (:refs (seed/load! eng (seed/read-seed "demo") {}))
+        id-of (fn [k] (str (get-in refs [k :id])))
+        h (dev/handler eng)
+        ada (c/connect "http://test" {:principal "ada" :handler h
+                                      :grant (id-of :ada-grant)})
+        planner (c/connect "http://test" {:principal {:id "plan" :type :agent}
+                                          :handler h
+                                          :grant (id-of :plan-grant)})
+        doc (fn [session k]
+              (c/get-doc session
+                         (str (get-in (c/index session) [:resources :ticket :href])
+                              "/" (id-of k))))
+        self (fn [k] (:self (doc ada k)))
+        rehearse (fn [choices]
+                   (c/pursue! ada (doc ada :q-epic) :complete ending
+                              {:dry-run true :choices choices}))
+        child (fn [k] {"ticket.complete" {:id (id-of k) :input ending}})
+        stated (-> (:data (doc ada :q-epic))
+                   (select-keys [:title :detail :type :showcase])
+                   (assoc-in [:showcase :evidence] {:film_url film-url}))]
+    ;; a rehearsal reads one denier for each door, and the epic's own
+    ;; envelope names the evidence first: the children show after it
+    (testing "the first step known: the film's link, a restate with its fields to fill"
+      (let [res (rehearse nil)]
+        (is (:rehearsal res))
+        (is (= [] (steps (:writes res))) (pr-str res))
+        (is (= [{:door "ticket.restate" :row (self :q-epic) :needs [:title :type]}]
+               (mapv #(select-keys % [:door :row :needs]) (:blocked-on res)))
+            (pr-str res)))
+      (let [res (rehearse {"ticket.restate" {:input stated}})]
+        (is (= [["ticket.restate" (self :q-epic)]
+                ["ticket.complete" (self :q-epic)]]
+               (steps (:writes res)))
+            (pr-str res)))
+      (is (= film-url
+             (get-in (c/act! ada (doc ada :q-epic) :restate stated)
+                     [:data :showcase :evidence :film_url]))))
+    (testing "the next, which no rehearsal could see before: Ada ends the child that is hers"
+      (let [res (rehearse (child :q-guide))]
+        (is (= [["ticket.complete" (self :q-guide)]
+                ["ticket.complete" (self :q-epic)]]
+               (steps (:writes res)))
+            (pr-str res)))
+      (is (= "done" (:state (c/act! ada (doc ada :q-guide) :complete ending)))))
+    (testing "the next: the deferred child, which is not Ada's to end"
+      (let [res (rehearse (child :q-seats))]
+        (is (= [] (steps (:writes res))) (pr-str res))
+        (is (contains? (set (map :row (:blocked-on res))) (self :q-seats))
+            (pr-str res)))
+      (is (nil? (get-in (doc ada :q-seats) [:actions :resume])))
+      (testing "Planner ends it"
+        (is (= "open" (:state (c/act! planner (doc planner :q-seats) :resume nil))))
+        (is (= "done" (:state (c/act! planner (doc planner :q-seats)
+                                      :complete ending))))))
+    (testing "the goal is all that is left, and it lands"
+      (is (= [["ticket.complete" (self :q-epic)]]
+             (steps (:writes (rehearse nil)))))
+      (let [res (c/pursue! ada (doc ada :q-epic) :complete ending)]
+        (is (c/doc? (:done res)) (pr-str res))
+        (is (= "done" (:state (doc ada :q-epic))))))))

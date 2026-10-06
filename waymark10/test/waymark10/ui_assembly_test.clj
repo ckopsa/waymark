@@ -505,3 +505,31 @@
       (is (str/includes? page "fieldCell(schema, c, r[c], r)")))
     (testing "a target the reader cannot read stays the bare value"
       (is (str/includes? page "if (s) span.replaceWith(resourceRef(kind, id, s));")))))
+
+(deftest a-refusal-with-remedies-offers-accept-as-quest
+  ;; 063c43b4 (docs/spec-quests.md). The page is not executed here, so
+  ;; this pins the seams: the offer is made beside the remedy chips and
+  ;; under a refusal's own box, never without a remedy, only when the
+  ;; quests collection affords create, and the click creates the quest
+  ;; from this row, this door and the form, then pins it
+  (let [page (sut/assemble)]
+    (testing "a refused door with remedies shows the button"
+      (is (= 2 (count (re-seq #"questOffer\(w\.remedies\)" page)))
+          "beside the chips of a rehearsal's warning and of a warned submit")
+      (is (str/includes? page "const offer = questOffer((problem || {}).remedies);")
+          "and under a refusal's own box")
+      (is (str/includes? page "\"Accept as quest\"")))
+    (testing "a refusal without remedies does not"
+      (is (str/includes? page "if (!remedies || !remedies.length || bulkIds) return null;")))
+    (testing "the grant decides: the create door is read off the collection"
+      (is (str/includes? page "const col = collectionHref(w, \"quest\");"))
+      (is (str/includes? page "const create = res.ok && ((res.body || {}).actions || {}).create;"))
+      (is (str/includes? page "if (!create) return;")))
+    (testing "clicking creates a quest whose goal is the door and its input"
+      (is (str/includes? page "const goal = {self: doc.self.split(\"?\")[0], action: name};"))
+      (is (str/includes? page "if (Object.keys(values).length) goal.input = values;"))
+      (is (str/includes? page "body: JSON.stringify(goal), headers: h});")))
+    (testing "then pins it, and a refusal of either is shown in the dialog"
+      (is (str/includes? page "const pinned = await invokeBare(pin, quest);"))
+      (is (str/includes? page "if (!made.ok) { showErrors(made.body); return; }"))
+      (is (str/includes? page "if (!pinned.ok) { showErrors(pinned.body); return; }")))))
