@@ -3976,7 +3976,8 @@ async function questPhoneStory() {
     const active = async () => ((await get("/api/quests?state=active&owner=" +
       encodeURIComponent(me))).data?.items || []).length;
     const before = await active();
-    /* and each sheet the replay opens, with its steps and its close */
+    /* and each sheet the replay opens, with its steps, its close and
+       the presses the replay draws on its Accept quest */
     await evaljs(`window.__notYet = null;
       window.__sheets = [];
       if (window.__sheetWatch) window.__sheetWatch.disconnect();
@@ -3984,7 +3985,7 @@ async function questPhoneStory() {
         const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
         for (const m of ms) {
           for (const n of m.addedNodes)
-            if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false, accepts: 0,
               steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
           for (const n of m.removedNodes)
             if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
@@ -3993,7 +3994,13 @@ async function questPhoneStory() {
         }
       });
       window.__sheetWatch.observe(document.body, {childList: true});
-      new MutationObserver(() => {
+      new MutationObserver(ms => {
+        for (const m of ms) {
+          const open = window.__sheets.find(s => !s.closed);
+          if (open && m.target.hasAttribute("data-replay-press") &&
+              m.target.matches("dialog[data-quest-sheet] [data-quest-accept]"))
+            open.accepts++;
+        }
         const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
         if (b && !window.__notYet)
           window.__notYet = {self: b.dataset.questSelf,
@@ -4047,6 +4054,12 @@ async function questPhoneStory() {
        and the film says so where the recording did (replaySheetRefused) */
     ok("the replay says the refused Accept in the sheet, with Accept disabled",
        /at most 20 active quests/.test(sheets[2]?.said || "") && sheets[2]?.shut === true);
+    /* the quest made over the API under that sheet has the sheet's own
+       goal and is not its Accept (replaySheetMade): the one press is
+       the refused create's */
+    ok("and makes one press on Accept quest for the refused Accept" +
+       (sheets[2]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[2]?.accepts === 1);
     ok("and says no refusal in the sheets it was not said in",
        sheets.slice(0, 2).every(s => s.said === ""));
     ok("and closes each: off Not now, and off Accept quest",
