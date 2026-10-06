@@ -616,8 +616,19 @@ replay.
     `{label, target}`, or null. `label` is the button's visible text.
     `target` is a stable name where one exists: `door:<action>`,
     `sheet.accept`, `sheet.decline`, `tracker.go`, `dialog.submit`, and
-    `dialog.accept` for "Accept as quest" under a form's refusal. A
-    click on a form's field is no press.
+    `dialog.accept` for "Accept as quest" under a form's refusal, and
+    `nav:<path>` for a link or a navigation entry, where `<path>` is
+    the address it leads to. A click on a form's field is no press
+    here: it is in `presses`.
+  - `presses` is every press the pointer made on the way to the frame,
+    in order, each as `{label, target}`. It is empty when the frame had
+    no gesture. It holds a click on a form's field as `field:<name>`,
+    with the field's label as `label` or null; the navigation entry of
+    a hop and the link of a walk to another row as `nav:<path>`; and
+    last the frame's own press, the same value as `pressed`. So a
+    typing beat has `pressed` null and one `field:<name>` press, and a
+    frame on a row that was not on screen lists the entry and the link
+    pressed to reach it before its button.
   - `screen` is the address shown.
   - `dialog` is the open form as `{self, action, lit}`, or null. `lit`
     lists the names of the fields that are lit.
@@ -632,7 +643,8 @@ replay.
 
   Every value but the frame's own (`i` to `kind`) is read from the page
   as drawn, in its visible words. The press is read as the frame is
-  applied. The rest is read when the frame has had its hold: just
+  applied, and each earlier press as it is made. The rest is read when
+  the frame has had its hold: just
   before the next frame's gesture or act, and before `ended` for the
   last. A frame that waits behind an open form has its beat when it is
   stepped to, so its beat shows the form.
