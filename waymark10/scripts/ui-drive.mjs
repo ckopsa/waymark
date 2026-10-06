@@ -1368,12 +1368,18 @@ async function accessStory() {
      The fixture's shelve door refuses the attic with no remedy, and the
      high shelf, for a note with no room, with rename as its remedy. */
   console.log("· a refused door with remedies: Accept as quest");
-  const shelfNote = (await qPost("/api/led_notes", {title: "Shelf pile"}, h)).doc;
+  const shelfTitle = "Shelf pile";
+  const shelfNote = (await qPost("/api/led_notes", {title: shelfTitle}, h)).doc;
   await evaljs(`location.hash = ${JSON.stringify(shelfNote.self)}; true`);
+  /* the hash moves before the page is drawn, and the page it leaves is
+     the reel's: a note too, with a shelve door of its own. The wait
+     reads the drawn page, so the click is on this note's door. */
   await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(shelfNote.self)} &&
-                 !!document.querySelector('[data-action="shelve"]')`,
+                 document.querySelector("#view").textContent
+                   .includes(${JSON.stringify(shelfTitle)}) &&
+                 !!document.querySelector('#view [data-action="shelve"]')`,
                 "the note's row page", 15000);
-  await evaljs(`document.querySelector('[data-action="shelve"]').click(); true`);
+  await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
                 "the shelve dialog", 15000);
   /* the enum is a select or a radio group, as the form chose */
