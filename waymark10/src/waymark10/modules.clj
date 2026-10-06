@@ -440,6 +440,19 @@
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop walkthroughs/stop!}
+            ;; the quests' consumer (docs/spec-quests.md): it plans a
+            ;; quest when it is accepted and when its owner asks to
+            ;; replan. On its own cursor, and elected for the
+            ;; walkthroughs' reason: two engines draining the same log
+            ;; would rehearse and write each plan twice.
+            {:hook :quests
+             :after [:dispatcher]
+             :elected :quests
+             :start (fn [eng running]
+                      (quests/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop quests/stop!}
             ;; the walks' retention (spec-guided-follow § 4), elected
             ;; for the expiry's reason
             {:hook :walk-retention
