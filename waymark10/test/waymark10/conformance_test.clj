@@ -409,7 +409,10 @@
       (let [p (problem-of #(inv/create! *eng* :vetted {:title "evil"}
                                         (assoc opts :dry-run :partial)))]
         (is (= 409 (:status p))
-            "a covered create leaf refuses the moment it can")))))
+            "a covered create leaf refuses the moment it can")
+        (is (= :refuse-evil (:guard p)))
+        (is (= [:sponsor-known] (:awaiting p))
+            "the refusal names the leaf still waiting, as the row door does")))))
 
 ;; ── 6. the schema-guard gap (the fuzz) ──────────────────────────────
 
