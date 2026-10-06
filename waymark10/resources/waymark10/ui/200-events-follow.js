@@ -406,6 +406,9 @@ function applyGuidedUi(f) {
   /* seq counts up per principal: a frame arriving late across
      processes is dropped */
   if (typeof f.seq === "number") {
+    /* the frame this screen already holds, sent again after a move
+       that changed nothing on theirs: it takes that move's close back */
+    if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);
     if (f.seq <= guidedSeq) return;
     guidedSeq = f.seq;
   }

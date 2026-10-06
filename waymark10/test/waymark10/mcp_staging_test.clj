@@ -664,6 +664,14 @@
             (is (= ["lift" "open"]
                    (mapv :door (get-in q [:seen :body :preview :plan]))))
             (is (some? (not-empty (get-in q [:seen :body :preview :shut_reason]))))
+            (testing "each step keeps its words, as the page's recorder keeps them"
+              (let [plan (get-in q [:seen :body :preview :plan])]
+                (is (every? #(some? (not-empty (:row_label %))) plan) (pr-str plan))
+                (is (= "Open the crate" (:door_label (last plan))) (pr-str plan))
+                (is (= {:door "open" :needs ["why"] :row_label "Crate" :needs_labels ["Why"]}
+                       (presence/sheet-step {:n 2 :door "open" :needs ["why"] :row_label "Crate"
+                                             :needs_labels ["Why"]}))
+                    "and the labels of what a step asks for")))
             (is (every? #(nil? (get-in % [:body :ui :dialog])) fs)
                 "no create form is opened or typed")))
         (testing "the create that follows is Accept: the write, and the sheet closes"
