@@ -140,6 +140,61 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A finished note is history."}}}}))
 
+;; the 'not yet' fixture (ticket dfcd5c9a; ui-drive.mjs, "the 'not yet'
+;; button"): a led_task ends after its children, as a ticket does. Both
+;; of its guards judge the row, so the row page draws both doors shut.
+;; complete names the oldest open child's complete as its way out, and
+;; takes a close_reason; discard names no way out.
+(g/defguard led-children-are-finished
+  {:reads [:led_task]
+   :evidence [:child_id]
+   :remedies [{:door :led_task/complete :id '(evidence :child_id)}]
+   :explain "A child of this task is not finished. A parent ends after its children: complete each one first, and then this door opens."}
+  [row _inp ctx]
+  (if-some [find' (:find ctx)]
+    (let [mine (str (:id row))
+          child (->> (find' :led_task {} {:limit 500})
+                     (filter #(and (= mine (get-in % [:data :parent]))
+                                   (= "open" (name (:state %)))))
+                     (sort-by (comp str :id))
+                     first)]
+      (if child
+        (t/deny {:evidence {:child_id (str (:id child))}})
+        (t/allow)))
+    (t/allow)))
+
+(def ^:private desk-keeps-tasks
+  (g/expr {:name :desk-keeps-tasks
+           :when '(data :loose)
+           :explain "The desk keeps every task."
+           :open "No door changes this: the desk keeps every task."}))
+
+(def led-task
+  (r/resource
+   {:kind :led_task
+    :plural "led_tasks"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 80}]]
+             [:parent {:optional true} [:maybe [:string {:max 60}]]]
+             [:loose {:optional true} [:maybe :boolean]]
+             [:close_reason {:optional true} [:maybe [:string {:max 480}]]]]
+    :actions
+    {:complete {:from #{:open} :to :done
+                :input [:map [:close_reason [:string {:min 1 :max 480}]]]
+                :guards [led-children-are-finished]
+                :handler (fn [row inp _ctx]
+                           (assoc-in row [:data :close_reason] (:close_reason inp)))
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A completed task is history."}}
+     :discard {:from #{:open} :to :done
+               :guards [desk-keeps-tasks]
+               :safety {:idempotent true :reversible false :confirm false
+                        :one-way "A discarded task is history."}}}}))
+
 (def ^:private viewer
   "The principal the drive's first tab signs in as (ui-drive.mjs,
   accessStory)."
@@ -233,8 +288,11 @@
           (jdbc/execute! tx [(str "DROP TABLE IF EXISTS \"" t "\" CASCADE")]))))
     (let [eng (engine/engine {:storage st
                               :resources [caps/capability ref-target ref-card
-                                          led-note]
+                                          led-note led-task]
                               :auto-migrate true
+                              ;; a led_task's complete is judged by its
+                              ;; children: the row page's probe reads them
+                              :probe-reads true
                               :oidc {:issuer "https://idp.test/realms/access-dev"
                                      :audience "access-dev"
                                      :jwks {:keys []}
