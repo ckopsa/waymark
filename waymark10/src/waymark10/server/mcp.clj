@@ -2552,10 +2552,14 @@
   plan of nothing would read as a goal with no way to it. No sitting
   rides: a rehearsal counts on nobody's.
 
+  `opts` may carry `:dry-run :partial`, which is `client/pursue!`'s: a
+  goal whose input lacks a required field is rehearsed all the same,
+  and answers the fields it still needs.
+
   Throws a problem: 404 when nobody named `principal` is a member, 403
   when the grant is gone, another's, unaccepted, expired or revoked, and
   the gate's own 403 for a suspended member."
-  [eng {:keys [principal grant]} self action input]
+  [eng {:keys [principal grant]} self action input & [{:keys [dry-run]}]]
   (let [who (or (members/principal-for eng principal)
                 (throw (p/problem :rehearse-no-such-member 404 "No such member"
                                   {:detail (str "Nobody named " (pr-str principal)
@@ -2580,7 +2584,7 @@
       ;; concealed, gone, or never here — the engine's own refusal
       {:stopped start :writes [] :rehearsal true :first-estimate true}
       (client/pursue! cs start (wire-action (keyword (name action))) input
-                      {:dry-run true}))))
+                      {:dry-run (if (= :partial dry-run) :partial true)}))))
 
 (defn- pursue
   "waymark_pursue: waymark10.client/pursue! over this door. A remedy
