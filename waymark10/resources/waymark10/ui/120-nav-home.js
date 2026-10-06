@@ -413,3 +413,127 @@ async function fillDashCard(card, kind, href) {
   return env;
 }
 
+/* ── the quest tracker (docs/spec-quests.md) ─────────────────────────
+   The person's pinned active quest, in the header's own row, so it is
+   on every page and covers none of a page's actions. It reads the
+   quest row and holds no opinion of its own: the count is "k done, n
+   known so far" and never a total, the head step is the first one not
+   done, and Go opens that step's door on its row (openDoor,
+   180-action-dialog.js). The firehose redraws it (210-ledger.js). */
+let questDoc = null;        // the pinned quest's envelope, when there is one
+let questDone = null;       // the title of the quest that has just finished
+let questDoneTimer = null;
+const QUEST_DONE_MS = 4000;
+const questTitle = doc => (doc.data || {}).title || doc.summary || "Quest";
+function questHead(doc) {
+  return ((doc.data || {}).plan || []).find(s => s.state !== "done") || null;
+}
+/* a seat's step and a held one are someone else's to take */
+function questWaits(step) {
+  return ["seat", "held"].includes(step.whose) || step.state === "waiting";
+}
+/* the tracker's Go; the quest page's own is questGo (200-events-follow.js) */
+function questHeadGo() {
+  const head = questDoc && questHead(questDoc);
+  if (!head || questWaits(head)) return;
+  openDoor({self: head.self, action: head.door, fields: head.needs || [],
+            note: head.note}, "The step's row");
+}
+function questTracker() {
+  const bar = $("#questbar");
+  bar.textContent = "";
+  if (questDone !== null) {
+    bar.hidden = false;
+    bar.append(el("b", {"data-quest-complete": ""}, "Quest complete"),
+               el("span", {class: "quest-line"}, questDone));
+    return;
+  }
+  const doc = questDoc;
+  bar.hidden = !doc;
+  if (!doc) return;
+  const d = doc.data || {}, plan = d.plan || [], acts = doc.actions || {};
+  const done = plan.filter(s => s.state === "done").length;
+  const head = questHead(doc);
+  const waiting = !!head && questWaits(head);
+  bar.append(el("a", {class: "quest-title", "data-quest-title": "",
+                      href: "#" + doc.self}, questTitle(doc)));
+  if (!d.planned_at) {
+    /* born with no plan: the first one has not landed yet */
+    bar.append(el("span", {class: "quest-line muted", "data-quest-planning": ""},
+                  "planning…"));
+  } else {
+    bar.append(
+      el("span", {class: "muted", "data-quest-count": ""},
+         `${done} done, ${plan.length} known so far`),
+      el("span", {class: "quest-meter", "aria-hidden": "true"},
+         el("i", {style: `width:${plan.length
+           ? Math.round(100 * done / plan.length) : 0}%`})));
+    /* blocked hides Go and says why; a waiting head keeps Go, disabled */
+    if (d.blocked_reason)
+      bar.append(el("span", {class: "quest-line", "data-quest-blocked": ""},
+                    d.blocked_reason));
+    else if (waiting)
+      bar.append(el("span", {class: "quest-line", "data-quest-waiting": ""},
+        el("i", {class: "quest-live", "aria-hidden": "true"}),
+        `waiting on ${head.waiting_on || d.waiting_on || "someone else"}`));
+    else
+      bar.append(el("span", {class: "quest-line", "data-quest-note": ""},
+                    head ? head.note || pretty(head.door) : ""));
+    if (head && !d.blocked_reason)
+      bar.append(el("button", {class: "primary", "data-tracker-go": "",
+                               disabled: waiting ? "" : null, onclick: questHeadGo},
+                    "Go"));
+  }
+  /* the quest's own doors, as its row offers them to this person now */
+  const doors = ["pause", "unpin", "replan"].filter(n => acts[n]);
+  if (doors.length)
+    bar.append(el("details", {class: "quest-menu"},
+      el("summary", {title: "this quest's doors", "aria-label": "quest menu"}, "⋯"),
+      el("div", {class: "quest-menu-items"}, doors.map(n =>
+        actionButton({name: n, entry: acts[n], doc, small: true,
+                      onDone: () => { refreshQuest(); render(); }})))));
+}
+/* the collection is the read, so the tracker holds no quest id that
+   could go stale: whichever quest is pinned now is the one shown */
+async function refreshQuest() {
+  const me = viewerId();
+  if (!me) { questDoc = null; questTracker(); return; }
+  const res = await api("/api/quests?state=active&pinned=true&owner=" +
+                        encodeURIComponent(me));
+  /* no answer (a held replay, an engine restarting) changes nothing */
+  if (!res.ok && res.status !== 404) return;
+  const item = res.ok && ((res.body.data || {}).items || [])[0];
+  /* a collection item is a summary: the plan is on the row's envelope */
+  const row = item ? await api(item.self) : null;
+  if (row && !row.ok) return;
+  questDoc = row ? row.body : null;
+  questTracker();
+}
+/* the firehose's half: a transition of the quest in hand redraws it, a
+   pin takes whichever quest is pinned now, and finish says so for a few
+   seconds before the tracker hides */
+async function questFrame(ev) {
+  if (ev.kind !== "quest") return;
+  const held = !!questDoc && ev.self === questDoc.self;
+  if (held && ev.action === "finish") {
+    questDone = questTitle(questDoc);
+    questDoc = null;
+    clearTimeout(questDoneTimer);
+    questDoneTimer = setTimeout(() => {
+      questDone = null;
+      questTracker();
+      refreshQuest();
+    }, QUEST_DONE_MS);
+    questTracker();
+    return;
+  }
+  if (held || ev.action === "pin") await refreshQuest();
+}
+function onQuestFrame(ev) { questFrame(ev).catch(() => {}); }
+/* at boot, and whenever the dev box names another principal */
+wellKnown().then(w => {
+  if (!(w.resources || {}).quest) return;
+  $who.addEventListener("change", () => refreshQuest());
+  return refreshQuest();
+}).catch(() => {});
+

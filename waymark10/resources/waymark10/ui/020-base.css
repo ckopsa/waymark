@@ -221,6 +221,41 @@
                        font-weight: 700; cursor: pointer; }
   #followchip a, #walkchip a { color: var(--verdigris-deep); }
   #followchip .gaze-faded { opacity: .7; font-weight: 400; }
+  /* the quest tracker (docs/spec-quests.md): the pinned quest's own row
+     of the sticky header, so no page hides it and it covers none of a
+     page's actions. One slim line: the step's note gives way first, and
+     the buttons keep their size on a phone. */
+  #questbar { flex: 1 0 100%; display: flex; align-items: center; gap: 10px;
+              min-width: 0; font-size: 12px; padding-top: 4px;
+              border-top: 1px solid var(--line); }
+  #questbar[hidden] { display: none; }
+  #questbar .quest-title { font-weight: 700; color: var(--verdigris-deep);
+                           white-space: nowrap; overflow: hidden;
+                           text-overflow: ellipsis; max-width: 40%; }
+  #questbar [data-quest-count] { white-space: nowrap; }
+  #questbar .quest-meter { flex: 0 0 56px; height: 4px; border-radius: 2px;
+                           background: var(--line); overflow: hidden; }
+  #questbar .quest-meter i { display: block; height: 100%;
+                             background: var(--verdigris-deep); }
+  #questbar .quest-line { flex: 1 1 0; min-width: 0; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+  #questbar .quest-live { display: inline-block; width: 7px; height: 7px;
+                          border-radius: 50%; margin-right: 6px;
+                          background: var(--verdigris-deep);
+                          animation: quest-live 1.6s ease-in-out infinite; }
+  @keyframes quest-live { 50% { opacity: .25; } }
+  #questbar button { font-size: 12px; padding: 2px 10px; }
+  #questbar button[disabled] { opacity: .5; cursor: default; }
+  #questbar .quest-menu { position: relative; }
+  #questbar .quest-menu summary { cursor: pointer; list-style: none;
+                                  padding: 0 6px; font-weight: 700; }
+  #questbar .quest-menu-items { position: absolute; right: 0; top: 100%;
+                                z-index: 6; display: flex; gap: 4px;
+                                flex-direction: column; padding: 6px;
+                                background: var(--panel);
+                                border: 1px solid var(--line);
+                                border-radius: var(--radius); }
+  @media (max-width: 600px) { #questbar .quest-meter { display: none; } }
   /* presence: who else is looking at THIS screen — ephemeral dots off
      the /-/presence stream, never law */
   [data-presence] { margin-top: 6px; }
