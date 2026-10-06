@@ -628,6 +628,13 @@
         blocked (fn [m] {:blocked (merge {:door door :row (:self doc) :needs []
                                           :or (:or call [])}
                                          m)})
+        ;; the warnings an answer still owes: one the caller named in
+        ;; :acknowledge is accepted already, and a dry-run sends no
+        ;; acknowledgement, so it answers that warning all the same
+        pending (fn [res]
+                  (let [accepted (into #{} (map name) (:acknowledge opts))]
+                    (vec (remove #(contains? accepted (some-> (:name %) name))
+                                 (:warnings res)))))
         ;; a remedy that names its fields owes those: what the refusal
         ;; is missing. A patch leaves the door's other fields as stored
         needs (when entry
@@ -702,7 +709,7 @@
            :form form}
           ;; a dry-run answers its warnings beside :valid, with no
           ;; :acknowledge!: the owner accepts them at the door
-          (seq (:warnings res)) (blocked {:needs needs :warnings (vec (:warnings res))})
+          (seq (pending res)) (blocked {:needs needs :warnings (pending res)})
           (or (problem? res) (refused? res))
           (blocked {:needs needs
                     :reason (or (get-in res [:problem :detail])
@@ -732,7 +739,7 @@
           {:landed doc :hold true :to (get-in entry [:effect :to])}
           ;; act! answers :warnings with :acknowledge!, a dry-run
           ;; beside :valid: either way the door waits on the owner
-          (seq (:warnings res)) (blocked {:warnings (vec (:warnings res))})
+          (seq (pending res)) (blocked {:warnings (pending res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
            :bound (vec (get-in res [:problem :resolved_remedies]))
