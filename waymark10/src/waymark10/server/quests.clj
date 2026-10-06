@@ -711,9 +711,11 @@
 
   A goal its row does not afford shows no form, so the rehearsal names
   no `:needs` for it. `declared` is that goal as its kind declares it,
-  `{:door :self :needs}` (`declared-goal`), or nil: with it the goal is
-  the last step all the same, with the declaration's needs, and its
-  note is empty because no guard was asked about the form."
+  `{:door :self :needs :confirm :consequence}` (`declared-goal`), or
+  nil: with it the goal is the last step all the same, with the
+  declaration's needs, and no guard is on its note because none was
+  asked about the form. A door declared a confirm door is the owner's
+  to confirm, with the declared consequence as its note."
   [answer seat-lookup & [declared]]
   (let [blocked (vec (:blocked-on answer))
         goal? (fn [entry]
@@ -723,7 +725,10 @@
         owed (fn [entry]
                (cond-> entry
                  (and (goal? entry) (empty? (:needs entry)) (seq (:needs declared)))
-                 (assoc :needs (:needs declared))))
+                 (assoc :needs (:needs declared))
+                 (and (goal? entry) (not (:confirm entry)) (:confirm declared))
+                 (assoc :confirm true
+                        :consequence (or (:consequence entry) (:consequence declared)))))
         frame (some-> (first (:stack answer)) owed)
         writes (vec (:writes answer))
         ;; a remedy that would land counts the shut goal as landing too
@@ -796,12 +801,15 @@
     (boolean (and at planned (.isBefore at planned)))))
 
 (defn- declared-goal
-  "The goal as its kind declares it, `{:door :self :needs}`: the door's
-  required arguments the stored `input` does not give, in the order of
-  the declaration, and of those only the ones an invitation may show
-  (`invitations/showable`). A door its row does not afford shows no
-  form, so the rehearsal cannot name them. nil when the goal's row is
-  of no served kind, or the kind has no such door."
+  "The goal as its kind declares it, `{:door :self :needs :confirm
+  :consequence}`: the door's required arguments the stored `input` does
+  not give, in the order of the declaration, and of those only the ones
+  an invitation may show (`invitations/showable`). A door its row does
+  not afford shows no form, so the rehearsal cannot name them, nor say
+  that the door is a confirm door: `:confirm` and `:consequence` are the
+  declaration's `:safety`, a per-origin consequence read by the row's
+  state. nil when the goal's row is of no served kind, or the kind has
+  no such door."
   [eng self action input]
   (let [self (str/trim (str self))
         plural (:plural (invitations/parse-self self))
@@ -819,10 +827,16 @@
                            (comp (remove #(:optional (get entries %)))
                                  (remove #(contains? given (name %))))
                            (when form (schema/entry-keys form)))
-            shown (invitations/showable rdef door (zipmap required (repeat true)))]
-        {:door (clip door 60)
-         :self (clip self 300)
-         :needs (into [] (comp (filter #(contains? shown %)) (map name)) required)}))))
+            shown (invitations/showable rdef door (zipmap required (repeat true)))
+            confirm (boolean (get-in decl [:safety :confirm]))
+            sentence (when confirm (get-in decl [:safety :consequence]))
+            sentence (if (map? sentence)
+                       (get sentence (:state (row-of eng (:kind rdef) (id-of-path self))))
+                       sentence)]
+        (cond-> {:door (clip door 60)
+                 :self (clip self 300)
+                 :needs (into [] (comp (filter #(contains? shown %)) (map name)) required)}
+          confirm (assoc :confirm true :consequence sentence))))))
 
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its

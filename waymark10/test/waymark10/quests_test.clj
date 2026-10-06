@@ -1008,6 +1008,15 @@
       (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
     (t/allow)))
 
+(g/defguard the-part-is-kept
+  {:reads [:chore]
+   :explain "The part is not finished, and no door here finishes it."}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [part (read :chore (get-in row [:data :part_id]))]
+      (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
 (def ^:private epic
   "A row whose goal door takes a form: `complete` requires a reason,
   and takes a secret `passphrase`."
@@ -1041,6 +1050,10 @@
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety {:idempotent true :reversible true :confirm true
                      :consequence "The epic is let go."}}
+     :seal {:from #{:open} :to :closed
+            :guards [the-part-is-finished]
+            :safety {:idempotent true :reversible true :confirm true
+                     :consequence "The epic is sealed."}}
      :shelve {:from #{:open} :to :closed
               :input [:map
                       [:close_reason [:string {:min 1 :max 480}]]
@@ -1058,6 +1071,24 @@
             :handler (fn [row inp _ctx]
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety routine}
+     :retire {:from #{:open} :to :closed
+              :input [:map
+                      [:close_reason [:string {:min 1 :max 480}]]
+                      [:film {:optional true} [:maybe [:string {:max 200}]]]]
+              :guards [the-part-is-finished the-film-is-a-link]
+              :handler (fn [row inp _ctx]
+                         (assoc-in row [:data :close_reason] (:close_reason inp)))
+              :safety {:idempotent true :reversible true :confirm true
+                       :consequence "The epic is retired."}}
+     :scrap {:from #{:open} :to :closed
+             :input [:map
+                     [:close_reason [:string {:min 1 :max 480}]]
+                     [:film {:optional true} [:maybe [:string {:max 200}]]]]
+             :guards [the-part-is-kept the-film-is-a-link]
+             :handler (fn [row inp _ctx]
+                        (assoc-in row [:data :close_reason] (:close_reason inp)))
+             :safety {:idempotent true :reversible true :confirm true
+                      :consequence "The epic is scrapped."}}
      :reopen {:from #{:closed} :to :open :safety routine}}}))
 
 (defn- epic-engine [& [opts]]
@@ -1145,6 +1176,44 @@
     (is (= "The epic is let go. Judged when you fill the form: the-film-is-a-link."
            (:note step))
         "the consequence comes first, and the waiting guard after it")))
+
+(deftest a-confirm-goal-behind-a-row-guard-plans-its-remedy-first
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self self :action "retire"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        goal (last (:plan d))]
+    (is (= ["finish" "retire"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= ["person" "confirm"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["next" "later"] (states d)))
+    (is (empty? (:needs (first (:plan d)))))
+    (is (= ["close_reason"] (:needs goal)))
+    (is (= "The epic is retired. Judged when you fill the form: the-film-is-a-link."
+           (:note goal))
+        "the refused rehearsal keeps the consequence and the waiting guard")))
+
+(deftest a-confirm-goal-refused-with-no-remedy-names-the-refusal
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "scrap"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        step (first (:plan d))]
+    (is (= ["scrap"] (mapv :door (:plan d))) (pr-str d))
+    (is (not= "confirm" (some-> (:whose step) name))
+        "a door that refuses is not one to confirm")
+    (is (= ["close_reason"] (:needs step)))
+    (is (str/includes? (str (:note step)) "no door here finishes it")
+        "the step names the refusal")))
 
 (deftest a-confirm-goal-whose-partial-rehearsal-warns-names-the-warning
   (let [eng (epic-engine)
@@ -1293,7 +1362,14 @@
         (is (= ["/api/tickets/c1" "/api/tickets/e1"] (mapv :self plan)))
         (is (empty? (:needs (last plan))))))
     (testing "with no declaration the plan is the rehearsal's alone"
-      (is (= ["/api/tickets/c1"] (mapv :self (:plan (quests/answer->plan answer nil))))))))
+      (is (= ["/api/tickets/c1"] (mapv :self (:plan (quests/answer->plan answer nil))))))
+    (testing "a declared confirm door is the owner's to confirm"
+      (let [goal (last (:plan (quests/answer->plan
+                               answer nil
+                               {:door "complete" :self "/api/tickets/e1" :needs []
+                                :confirm true :consequence "The ticket is let go."})))]
+        (is (= ["complete" "/api/tickets/e1" "confirm" "The ticket is let go."]
+               ((juxt :door :self :whose :note) goal)))))))
 
 (deftest a-goal-the-row-draws-shut-is-the-last-step-of-the-first-plan
   ;; :probe-reads lets the render judge the-part-is-finished, so the
@@ -1313,3 +1389,21 @@
       (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
       (is (= ["done" "next"] (states d)))
       (is (= ["close_reason"] (:needs (last (:plan d))))))))
+
+(deftest a-confirm-goal-the-row-draws-shut-is-a-confirm-step-of-the-first-plan
+  (let [eng (epic-engine {:probe-reads true})
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self self :action "seal"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        goal (last (:plan d))]
+    (is (= ["finish" "seal"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= "confirm" (name (:whose goal)))
+        "the declaration says the shut door is a confirm door")
+    (is (= "The epic is sealed." (:note goal))
+        "the consequence is read from the kind's declaration")))
