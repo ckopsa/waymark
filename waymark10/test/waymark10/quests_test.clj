@@ -1452,6 +1452,37 @@
     (hear! eng)
     (is (= before (held eng rows)) "and the planner hears of nothing")))
 
+(def ^:private ledger
+  "A row whose goal door is fenced: `lock` asks for the version its
+  caller read."
+  (r/resource
+   {:kind :q_ledger
+    :plural "q_ledgers"
+    :states [:open :closed]
+    :initial :open
+    :summary "Ledger · {state}"
+    :schema [:map
+             [:part_id {:not-a-ref "quests fixture: the-part-is-finished binds its remedy to it"}
+              [:string {:max 80}]]]
+    :actions
+    {:lock {:from #{:open} :to :closed
+            :guards [the-part-is-finished]
+            :safety {:idempotent true :reversible true :confirm false :fence true}}
+     :reopen {:from #{:closed} :to :open :safety routine}}}))
+
+(deftest the-preview-of-a-fenced-shut-door-answers-its-guard-and-no-etag-line
+  (let [eng (epic-engine {:probe-reads true :resources [chore epic ledger]})
+        part (str (chore! eng "Write the guide"))
+        v (make! eng :q_ledger {:part_id part})
+        {:keys [preview]} (inv/create! eng :quest
+                                       {:self (str "/api/q_ledgers/" v) :action "lock"}
+                                       {:principal person :dry-run true})
+        shut (str (:shut_reason preview))]
+    (is (str/includes? shut "Finish the part first.") (pr-str preview))
+    (is (not (str/includes? shut "changed since you read it"))
+        "the fence's version refusal is no reason the door is shut")
+    (is (not (str/includes? shut "etag")))))
+
 (deftest a-preview-step-names-its-row-and-its-needs-in-words
   (let [eng (epic-engine {:probe-reads true})
         part (str (chore! eng "Write the guide"))
