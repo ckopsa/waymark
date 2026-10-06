@@ -200,9 +200,8 @@ async function renderDashboard(view, doc) {
       else render();
     }}));
   const {blocked, grouped, gated} = splitRefusals(doc);
-  for (const [name, entry] of blocked.concat(gated))
-    bar.append(el("button", {class: "blocked", disabled: "",
-      title: entry.reason || ""}, label(name, entry)));
+  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+    bar.append(shutDoor(name, entry, doc));
   const slotsLink = (doc.links || {}).slots || {};
   if (slotsLink.href)
     bar.append(el("a", {class: "slot-manage", href: "#" + slotsLink.href,
@@ -253,5 +252,6 @@ async function renderDashboard(view, doc) {
   const footer = notNowFooter(grouped, gated, doc);
   if (footer) dataPanel.append(footer);
   view.append(dataPanel);
+  wireNotYet(view);
   watchScope({self: doc.self});
 }

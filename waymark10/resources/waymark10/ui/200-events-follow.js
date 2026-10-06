@@ -1588,6 +1588,22 @@ function replayKeeps(r, f, who, key) {
   const d = (held && held.doc.data) || {};
   return String(d.self || "").split("?")[0] + " " + d.action === key;
 }
+/* the reachable button a quest's `create` was tapped on, with no form
+   open: the shut door of the quest's goal, on the screen shown
+   (shutDoor, 140-links-access.js). The goal is read as replayKeeps
+   reads it. Null for every other frame, and when no such button is
+   shown. */
+function replayQuestDoor(r, f) {
+  if (f.type !== "transition" || f.kind !== "quest" || f.action !== "create")
+    return null;
+  const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+  const d = (held && held.doc.data) || {};
+  const self = String(d.self || "").split("?")[0];
+  return [...document.querySelectorAll("#view button[data-quest-door]")]
+    .find(b => b.getClientRects().length > 0 &&
+               b.dataset.questDoor === d.action &&
+               b.dataset.questSelf === self) || null;
+}
 /* the door a `refusal` frame is about, as a guided dialog is keyed */
 function replayRefusedKey(f) {
   return String(f.self || "").split("?")[0] + " " + f.action;
@@ -1744,6 +1760,10 @@ function replayGestureTarget(f) {
     return write;
   }
   if (replay.door || $("dialog[open]")) return null;
+  /* a quest accepted by a tap on its shut door: the press is on that
+     button, for the recorder's own create */
+  if (f.type === "transition")
+    return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);
   const link = (box, hit) =>
     [...document.querySelectorAll(box + " a[href^=\"#/\"]")]
       .find(a => seen(a) && hit(a.getAttribute("href").slice(1)));
@@ -1877,6 +1897,8 @@ function replayGestureRest(r, gone) {
    applied as a move with no link is. */
 function replayWalkOf(r, f) {
   if (!f || r.walked === r.at || r.door || $("dialog[open]")) return null;
+  /* a write whose button is on the screen shown is pressed there */
+  if (f.type === "transition" && !replayNotice(r, f) && replayGestureTarget(f)) return null;
   const row = s => String(s || "").split("?")[0];
   const ui = (f.type === "ui" && f.ui) || {}, c = ui.collection;
   const list = !!ui.dialog && !!c && !!c.self;

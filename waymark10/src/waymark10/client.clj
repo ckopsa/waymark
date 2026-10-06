@@ -654,17 +654,21 @@
       ;; the pursuit stops here, rehearsed or real, and names the
       ;; sentence — it is never acknowledged on anyone's behalf
       (and (get-in entry [:safety :confirm]) (not (:confirm! opts)))
-      (blocked {:confirm true
-                :consequence (consequence-of entry)
-                :reason (str "safety.confirm is true — a person must approve: "
-                             (consequence-of entry))})
+      (blocked (cond-> {:confirm true
+                        :consequence (consequence-of entry)
+                        :reason (str "safety.confirm is true — a person must approve: "
+                                     (consequence-of entry))}
+                 ;; a partial rehearsal's goal names the form it owes
+                 (and rehearse? (:partial call) (seq needs)) (assoc :needs needs)))
 
       ;; the goal of a partial rehearsal: its form is filled last, so
       ;; the guards that read no missing field are judged now, and the
       ;; door counts as landing with its :needs still owed
       (and (seq needs) rehearse? (:partial call))
       (let [res (dry-run session doc action input :partial)
-            form {:needs needs :awaiting (vec (:awaiting res))}]
+            ;; a refusal names the waiting guards on its problem
+            form {:needs needs :awaiting (vec (or (:awaiting res)
+                                                  (get-in res [:problem :awaiting])))}]
         (cond
           (or (transport? res) (diverged res)) {:stop res}
           (seq (get-in res [:problem :remedies]))
