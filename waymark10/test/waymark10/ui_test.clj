@@ -204,11 +204,13 @@
   ;; Go opens the head step's door through the helper an invitation uses
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
     (is (str/includes? body "<div id=\"questbar\""))
-    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, invitation}, what)"))
+    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, given, invitation}, what)"))
     (is (str/includes? body "return openDoor({self: d.self, action: d.action, note: d.note,"))
     (is (str/includes? body "openDoor({self: head.self, action: head.door, fields: head.needs || [],"))
-    ;; the goal's own step opens with the quest's stored input in the form
-    (is (str/includes? body "note: head.note, suggest: goal ? d.input || {} : {}},"))
+    ;; the goal's own step opens with the quest's stored input in the form,
+    ;; as the owner's own: `given` wears no suggestion mark
+    (is (str/includes? body "note: head.note, given: goal ? d.input || {} : {}},"))
+    (is (str/includes? body "given: d.given || {},"))
     (is (str/includes? body "\"/api/quests?state=active&pinned=true&owner=\""))
     (is (str/includes? body "`${done} done, ${plan.length} known so far`"))
     (is (not (str/includes? body "${done} of ${"))
