@@ -50,10 +50,12 @@
   read is SETTLED, so every id at or below the seed has committed by
   the time the seed is written: seeded at the newest COMMITTED id
   alone, a lower id still in flight would commit after registration
-  and never be heard. → the position, or nil when the writers in
-  flight outlasted `seed-tries`. No cursor is written then — a seed
-  that read no rows is not an empty log, and seeding it at 0 would
-  replay the whole log — and the next drain seeds."
+  and never be heard. With a writer in flight the seed is the newest
+  id under it, and the drains after deliver the ids above. → the
+  position, or nil when the log has no row under the writers in
+  flight and they outlasted `seed-tries`. No cursor is written then —
+  a seed that read no rows is not an empty log, and seeding it at 0
+  would replay the whole log — and the next drain seeds."
   [eng name* from-origin?]
   (let [st (:storage eng)
         pos (if from-origin?

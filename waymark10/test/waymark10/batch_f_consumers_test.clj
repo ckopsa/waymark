@@ -249,17 +249,19 @@
 
 (deftest a-seed-does-not-pass-the-id-in-flight
   (in-the-window
-   (fn [_low high commit-low!]
+   (fn [low high commit-low!]
      (let [seen (atom [])
            f #(swap! seen conj (:id %))]
-       (testing "a first drain in the window writes no cursor"
+       (testing "a first drain in the window seeds under the id in flight"
          (is (= 0 (consumers/drain-consumer! *eng* :f-seeded f)))
-         (is (nil? (cursor-of :f-seeded))))
+         (is (some? (cursor-of :f-seeded)))
+         (is (< (cursor-of :f-seeded) low))
+         (is (empty? @seen)))
        (commit-low!)
-       (testing "once the lower id commits, the seed is the newest id"
-         (is (= 0 (consumers/drain-consumer! *eng* :f-seeded f)))
+       (testing "once the lower id commits, the next drain delivers both, in id order"
+         (is (= 2 (consumers/drain-consumer! *eng* :f-seeded f)))
          (is (= high (cursor-of :f-seeded)))
-         (is (empty? @seen)))))))
+         (is (= [low high] @seen)))))))
 
 (deftest a-replay-waits-for-the-id-in-flight
   (in-the-window
@@ -310,16 +312,17 @@
 
 (deftest the-dispatcher-seed-does-not-pass-the-id-in-flight
   (in-the-window
-   (fn [_low high commit-low!]
+   (fn [low high commit-low!]
      (let [started (future (events/dispatcher *eng* {:poll-ms 200}))]
        (try
-         (testing "a dispatcher started in the window does not seed above the lower id"
-           (is (= ::waiting (deref started 200 ::waiting))))
-         (commit-low!)
-         (testing "once the lower id commits, the seed is the newest id"
+         (testing "a dispatcher started in the window seeds under the lower id"
            (let [d (deref started 10000 nil)]
              (is (some? d))
-             (is (= high (some-> d :last-seen deref)))))
+             (is (< (some-> d :last-seen deref) low))))
+         (commit-low!)
+         (testing "once the lower id commits, its drains reach the newest id"
+           (let [d (deref started 10000 nil)]
+             (is (await-pred #(= high (some-> d :last-seen deref)) 10000))))
          (finally
            (some-> (deref started 10000 nil) events/stop!))))))
   (testing "a log that never settles is read as it stands"
