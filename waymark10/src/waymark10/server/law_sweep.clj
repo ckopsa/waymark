@@ -178,6 +178,12 @@
   (let [data (:data row)
         kind (keyword (:target_kind data))
         rdef (get (inv/resources eng) kind)]
+    ;; No `roads` on any of the three refusals below: `sweep` is this
+    ;; route's own door and not a declared action of the definition
+    ;; kind, so the machine has no edge to read (machine/roads wants the
+    ;; action's declaration) and the envelope has no out-of-state entry
+    ;; for them to disagree with. The last two are not about the row's
+    ;; state at all — no action on the row mends them.
     (when-not (contains? swept-from (:state row))
       (throw (p/wrong-state :sweep (:state row) swept-from
                             (str "/api/definitions/" (:id row)))))
