@@ -627,7 +627,15 @@
 (defn- seed-cursor!
   "A subscription with no cursor hears the world from its own creation
   transition — the newest transition of the subscription row itself
-  (its create when fresh, its resume after an outage)."
+  (its create when fresh, its resume after an outage).
+
+  THIS READ IS NOT SETTLED, and needs no retry. The seed is the row's
+  own transition and not the log's newest id, so it is the same id
+  whenever it is read: a lower id still in flight took its place in
+  the log before this subscription's own transition did, and is not
+  the subscription's to hear, committed or not. A newer transition of
+  this row still in flight only leaves the seed lower, and the drain
+  after it reads the settled log."
   [eng sub]
   (let [st (:storage eng)
         pos (or (:id (first (store/with-tx st

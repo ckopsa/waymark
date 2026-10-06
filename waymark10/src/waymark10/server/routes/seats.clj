@@ -823,11 +823,16 @@
       n)))
 
 (defn- log-after
-  "One page of the log after event `after`, oldest first."
+  "One page of the log after event `after`, oldest first. The caller
+  keeps `after` from one request to the next, so the page is a SETTLED
+  read: it never passes an id still in flight. A read whose wait ran
+  out answers no rows. The scan then keeps its cursor, and the next
+  tick of a waiting request, or the caller's next request, asks again."
   [eng after]
   (let [st (:storage eng)]
     (store/with-tx st
-      (fn [tx] (store/transitions st tx {:since after} {:limit inbox-page})))))
+      (fn [tx] (store/transitions st tx {:since after}
+                                  {:limit inbox-page :settled true})))))
 
 (defn- sitting-start
   "Where a tail with no `after` begins: just before the sitting's first

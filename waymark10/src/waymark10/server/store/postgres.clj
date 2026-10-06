@@ -655,7 +655,7 @@
                    " ORDER BY id" (when (:newest-first opts) " DESC")
                    " LIMIT " (long (:limit opts 500)))]
       (if (and (:settled opts) (not (log-settled? tx)))
-        []
+        nil
         (mapv transition->map
               (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts)))))
 

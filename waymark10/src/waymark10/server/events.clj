@@ -222,15 +222,35 @@
   (store/with-tx storage
     (fn [tx] (store/transitions storage tx {:since after} {:limit limit}))))
 
+(def ^:private replay-tries
+  "How many times a replay asks for the settled log before it reads the
+  log as it stands."
+  6)
+
+(defn- backlog
+  "Every log row after after-id, for a replay. A replay has one pass,
+  and the floor it leaves (`:delivered`) drops every lower id that
+  comes later, so each page is a SETTLED read: no id still in flight
+  is passed. When the writers outlast `replay-tries` the page is read
+  as it stands, the read this was before, and the log says so: a
+  stream that opens and may miss an event in flight is asked for again
+  by Last-Event-ID, and one that never opens is not."
+  [storage after-id]
+  (loop [acc [] after after-id]
+    (let [batch (or (store/settled-transitions storage {:since after}
+                                               {:limit 500} replay-tries)
+                    (do (warn! "replay after " after ": the log did not"
+                               " settle; reading it as it stands")
+                        (log-since storage after 500)))]
+      (if (= 500 (count batch))
+        (recur (into acc batch) (:id (last batch)))
+        (into acc batch)))))
+
 (defn- replay!
   "Enqueue the backlog after after-id, then flush live events buffered
   past the replayed horizon, in order — then go live."
   [d sub after-id]
-  (let [rows (loop [acc [] after after-id]
-               (let [batch (log-since (:storage d) after 500)]
-                 (if (= 500 (count batch))
-                   (recur (into acc batch) (:id (last batch)))
-                   (into acc batch))))]
+  (let [rows (backlog (:storage d) after-id)]
     (locking (:state sub)
       (let [delivered
             (reduce (fn [last-id t]
