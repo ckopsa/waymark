@@ -216,6 +216,8 @@ invitation
           self (the row the step acts on), action, field (the input
           pointed at), note (one sentence: "pick the repository here"),
           suggest ({field: value}, optional, shown and never submitted),
+          given ({field: value}, optional, written by the engine only:
+          what the person typed already, shown and never submitted),
           answered_by (transition ref), expires_at
   states: open → answered | declined | withdrawn | expired
   doors:  create    (the author, under its own grant)
@@ -251,7 +253,11 @@ row (or its history) until the row leaves `open`, and then reads
 **The person submits, under their own grant.** The invitation carries
 no credential and no delegation. `suggest` values prefill the form as
 suggestions (marked, editable), and they are submitted only if the
-person presses submit. The transition the person commits is theirs in
+person presses submit. `given` values are the person's own, typed
+before the invitation was made (a quest's stored input,
+`docs/spec-quests.md`). Only the engine writes them. They fill the form
+with no suggestion mark, a suggestion for the same field outranks
+them, and the engine never submits them either. The transition the person commits is theirs in
 history, and the invitation's `answered_by` points at it. The audit
 reads: the agent asked, the person did it.
 
@@ -333,7 +339,22 @@ format `waymark-walk/1`:
           "p1": {"display": "Person", "type": "human"}}}
 {"t": 0,    "type": "move", "who": "a1", "self": "/api/tickets/…"}
 {"t": 1830, "type": "ui",   "who": "a1", "ui": {…}}
+{"t": 2410, "type": "invitation", "who": "a1", "subject": "p1",
+ "self": "/api/tickets/…", "action": "groom", "fields": ["priority"],
+ "note": "…", "suggest": {"priority": 2}, "given": {"type": "task"}}
 ```
+
+An `invitation` frame's pinned body is `id`, `author`, `subject`,
+`self`, `action`, `field`, `fields`, `note` and `suggest`, and `given`
+beside them when the invitation has given values. The export's
+invitation line carries `self`, `action`, `field`, `fields`, `note`,
+`step` and `of`, the subject as a cast alias, and `suggest` and `given`
+when either has a value left; it has no `id` and no `author`. The frame
+and the line keep only the keys of `suggest` and of `given`
+that the reader's `:arg?` admits: the follower's when the frame is
+written, the exporting viewer's when the line is. Replay fills the
+read-only dialog with both, the suggestions marked and the given values
+with no mark.
 
 The export has no keys and no secrets:
 
