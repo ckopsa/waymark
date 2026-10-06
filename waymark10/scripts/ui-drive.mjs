@@ -1293,6 +1293,76 @@ async function accessStory() {
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide", 15000);
   ok("a few seconds later the tracker hides", true);
 
+  /* a step's need may be a path into a nested argument (ticket
+     45cae4d6): the fixture's restate door takes
+     showcase.evidence.film_url, a map inside a map. The form names that
+     input by its path, Go lights that one input, and the submit folds
+     the path back into one object. */
+  console.log("· a quest step whose need is a path: showcase.evidence.film_url");
+  const pNeed = "showcase.evidence.film_url";
+  const pFilm = "https://films.example/quest-reel";
+  const reel = (await qPost("/api/led_notes", {title: "Quest reel"}, h)).doc;
+  const pQuest = await qPost("/api/quests",
+    {self: reel.self, action: "finish", title: "Show the reel"}, h);
+  ok("priya accepts a second goal as a quest", pQuest.status === 201);
+  const pSelf = pQuest.doc.self;
+  ok("priya pins the second quest", (await qPost(pSelf + "/-/pin", {}, h)).status < 400);
+  let pBorn = null;
+  for (let i = 0; i < 60 && !pBorn; i++) {
+    if ((await get(pSelf)).data.planned_at) pBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the second create with a first plan", pBorn === true);
+  const pStep = {n: 1, door: "restate", self: reel.self, whose: "person",
+                 note: "Say where the film plays.", needs: [pNeed]};
+  const pPlanned = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next"}], plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes a path as a need", pPlanned.status < 400);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-note]")?.textContent ===
+                   ${JSON.stringify(pStep.note)}`,
+                "the path step's note in the tracker", 15000);
+  const pPlannedAt = (await get(pSelf)).data.planned_at;
+  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
+                "the path step's dialog", 15000);
+  const pDlg = await evaljs(`(() => {
+    const lit = [...document.querySelectorAll("dialog[open] .invited")];
+    const input = document.querySelector('dialog[open] [name="${pNeed}"]');
+    const inner = input ? input.closest('[data-subform="showcase.evidence"]') : null;
+    return {here: hereHref(), lit: lit.length,
+            holds: lit.length === 1 && !!input && lit[0].contains(input),
+            nested: !!inner && !!inner.parentElement.closest('[data-subform="showcase"]'),
+            note: document.querySelector("dialog[open] [data-invite-note]").textContent}; })()`);
+  ok("Go opens the restate door on the step's row", pDlg.here === reel.self);
+  ok("the input two levels down is named by its path", pDlg.nested);
+  ok("the path lights that one input and no other",
+     pDlg.lit === 1 && pDlg.holds && pDlg.note === pStep.note);
+  await evaljs(`(() => {
+    const i = document.querySelector('dialog[open] [name="${pNeed}"]');
+    i.value = ${JSON.stringify(pFilm)};
+    i.dispatchEvent(new Event("input", {bubbles: true}));
+    i.dispatchEvent(new Event("change", {bubbles: true}));
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`,
+                "the path step's dialog to close", 15000);
+  ok("the submit folds the path back into one nested object",
+     JSON.stringify((await get(reel.self)).data.showcase) ===
+       JSON.stringify({evidence: {film_url: pFilm}}));
+  /* the move plans the quest again: that plan lands before the finish */
+  let pAgain = null;
+  for (let i = 0; i < 60 && !pAgain; i++) {
+    if ((await get(pSelf)).data.planned_at !== pPlannedAt) pAgain = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the path step with a new plan", pAgain === true);
+  ok("the engine finishes the second quest",
+     (await qPost(pSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the second completion line", 15000);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
   /* "Accept as quest" (docs/spec-quests.md): a refused door that names
      a remedy offers to keep the goal, and one that names none does not.
      The fixture's shelve door refuses the attic with no remedy, and the
