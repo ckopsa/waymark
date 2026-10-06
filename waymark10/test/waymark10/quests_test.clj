@@ -1063,6 +1063,14 @@
                          (assoc-in row [:data :close_reason] (:close_reason inp)))
               :safety {:idempotent true :reversible true :confirm true
                        :consequence "The epic is shelved."}}
+     :park {:from #{:open} :to :closed
+            :input [:map
+                    [:close_reason [:string {:min 1 :max 480}]]
+                    [:film {:optional true} [:maybe [:string {:max 200}]]]]
+            :guards [the-part-is-still-open the-film-is-a-link]
+            :handler (fn [row inp _ctx]
+                       (assoc-in row [:data :close_reason] (:close_reason inp)))
+            :safety routine}
      :retire {:from #{:open} :to :closed
               :input [:map
                       [:close_reason [:string {:min 1 :max 480}]]
@@ -1224,6 +1232,28 @@
                 " Judged when you fill the form: the-film-is-a-link.")
            (:note step))
         "the consequence, then the warning to accept, then the waiting guard")))
+
+(deftest a-goal-that-is-no-confirm-door-whose-rehearsal-warns-says-a-warning-is-accepted
+  (doseq [[input needs] [[nil ["close_reason"]]
+                         [{:close_reason "Parked."} nil]]]
+    (testing (if input "the full rehearsal" "the partial rehearsal")
+      (let [eng (epic-engine)
+            part (str (chore! eng "Write the guide"))
+            e (make! eng :q_epic {:part_id part})
+            quest (:id (:row (inv/create! eng :quest
+                                          (cond-> {:self (str "/api/q_epics/" e)
+                                                   :action "park"}
+                                            input (assoc :input input))
+                                          {:principal person})))
+            _ (hear! eng)
+            d (data-of eng quest)
+            step (first (:plan d))]
+        (is (= ["park"] (mapv :door (:plan d))) (pr-str d))
+        (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
+        (is (= needs (not-empty (:needs step))))
+        (is (= "This door asks you to accept a warning before it opens."
+               (:note step))
+            "the warning the rehearsal answered is the owner's to accept")))))
 
 (deftest the-mapping-names-a-confirm-entrys-warning-after-its-consequence
   (let [plan (quests/answer->plan

@@ -649,8 +649,9 @@
 
       ;; an advisory guard: the owner accepts its warning at the door
       (seq warnings)
-      [(assoc base :whose "confirm"
-              :note "This door asks you to accept a warning before it opens.")]
+      [(cond-> (assoc base :whose "confirm"
+                      :note "This door asks you to accept a warning before it opens.")
+         (seq needs) (assoc :needs (needs-of needs)))]
 
       (or (seq needs) (= no-row-chosen reason))
       [(cond-> (assoc base :whose "choice" :note (clip reason 240))
