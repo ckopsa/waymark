@@ -168,8 +168,9 @@ shows no dialog, or another door's, or a `move` came after that beat
 "Refused: ", the row's summary as the recording has it or its address,
 and the problem's detail. The lines are held, in the notice's italic,
 until the recorder's next `move` or `ui` beat, and each is given a
-caption's reading time. The export is not changed. This was not checked
-in a browser.
+caption's reading time. The export is not changed. A story of
+`waymark10/scripts/ui-drive.mjs guided` replays such a walk in a browser
+and checks the lines and their going.
 
 **How a sitter with no browser reports presence.** The connector calls
 `presence/report!` in process, with the session's principal, the `self`
