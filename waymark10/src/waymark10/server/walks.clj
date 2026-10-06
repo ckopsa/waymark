@@ -823,7 +823,9 @@
 
 (defn record-refused!
   "A write door's refusal (router's action route, which the connector's
-  invoke rides): the problem the exception `e` carries goes, as a
+  invoke rides; its create route, where `self` is the collection; and
+  its bulk route, once for each row refused): the problem the exception
+  `e` carries goes, as a
   `refusal` frame under `sight`, the request's own visibility, to every
   self walk `principal` is recording. The body is {principal, self,
   action, title, detail, remedies, errors}: what the refusal's box and

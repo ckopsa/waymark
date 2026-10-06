@@ -601,6 +601,16 @@
                               (get-in target [:problem :title])
                               "That row did not answer.")})))
 
+(defn- input-at
+  "What `input` holds at a remedy's `field`: a name, or a dotted path
+  into a nested field (showcase.evidence.film_url)."
+  [input field]
+  (reduce (fn [m k]
+            (when (map? m)
+              (if-some [v (get m (keyword k))] v (get m k))))
+          input
+          (str/split (name field) #"\.")))
+
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
   read of its row. → {:landed doc :to state} (the state it landed the
@@ -620,7 +630,7 @@
                 (if (seq fields)
                   (into []
                         (distinct)
-                        (concat (remove #(some? (get input %)) fields)
+                        (concat (remove #(some? (input-at input %)) fields)
                                 (when-not (true? (:patch input))
                                   (missing-inputs entry input))))
                   (missing-inputs entry input)))]
