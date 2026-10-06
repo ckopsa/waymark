@@ -1364,8 +1364,8 @@ function replayBeat(f) {
 /* whether the frame `f` ends no form: the form's own beats, a caption,
    the refusal the form got, and the frames that wait behind the form. */
 function replayKeepsForm(f) {
+  if (f.type === "refusal") return true;
   return f.type === "transition" || f.type === "doc" || f.type === "caption" ||
-    f.type === "refusal" ||
     (f.type === "ui" && !!(f.ui || {}).dialog);
 }
 /* whether the frame at `at` waits behind an open form, as
@@ -1378,8 +1378,8 @@ function replayHeld(frames, at) {
   for (let i = at - 1; i >= 0; i--) {
     const t = frames[i].type;
     if (t === "ui") return !!(frames[i].ui || {}).dialog;
-    if (t !== "transition" && t !== "doc" && t !== "caption" &&
-        t !== "refusal") return false;
+    if (t === "refusal") continue;
+    if (t !== "transition" && t !== "doc" && t !== "caption") return false;
   }
   return false;
 }
