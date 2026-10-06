@@ -1620,6 +1620,61 @@
           (t/allow)
           (t/deny {:vars {:domain stated :own own}}))))))
 
+;; ── a seat does not file one failure twice (ticket 535d86ed) ─────────
+
+(def ^:private failure-key-patterns
+  "What names a failing check in a ticket's words: the ui-drive step
+  after `FAILED: `, a `timed out waiting for <what>` phrase, and the
+  Clojure test of a `FAIL in (<name>)` line."
+  [#"FAILED:\s*([^\n`\"]+)"
+   #"(timed out waiting for [^\n`\".;,]+)"
+   #"FAIL in \(([^)\s]+)\)"])
+
+(defn- failure-keys
+  "The failing checks a title and a detail name, as the strings another
+  ticket would hold. A key shorter than six characters names nothing."
+  [text]
+  (into #{}
+        (comp (mapcat #(re-seq % (str text)))
+              (map #(str/replace (str/trim (second %)) #"[\s.,;:')]+$" ""))
+              (filter #(<= 6 (count %))))
+        failure-key-patterns))
+
+(defn- tickets-naming
+  "The draft, open, in-review and blocked tickets of `repo` whose title
+  or detail holds one of `named`. A seat's follow-up is born a draft and
+  stays one until it is groomed, so drafts are read too (ticket
+  901e3c37). A bounded read of each state, with no index: the queue is
+  hundreds of rows, not thousands."
+  [named repo ctx]
+  (when-some [find' (:find ctx)]
+    (for [state ["draft" "open" "in_review" "blocked"]
+          row (find' :ticket (cond-> {:state state} repo (assoc :repo repo))
+                     {:limit 200})
+          :let [words (str (get-in row [:data :title]) "\n"
+                           (get-in row [:data :detail]))]
+          :when (some #(str/includes? words %) named)]
+      row)))
+
+(defguardfn no-open-ticket-names-this-failure
+  {:severity :warning
+   :judges [:title :detail]
+   :reads [:principal :ticket]
+   :vars [:which]
+   :open "The tickets that already name a failure are read from the queue at the write; no form can recite them. Acknowledge the warning by its name to file the ticket anyway."
+   :explain "A ticket in the queue already names this failing check: {which}. Restate that ticket with your run instead of filing a second one, or acknowledge this warning to file anyway."}
+  [_row inp ctx]
+  ;; a person's create is not slowed, and neither is the engine's
+  (let [named (when (= :agent (:type (:principal ctx)))
+                (failure-keys (str (:title inp) "\n" (:detail inp))))
+        hits (when (seq named)
+               (take 5 (tickets-naming named (some-> (:repo inp) str not-empty) ctx)))]
+    (if (seq hits)
+      (t/deny {:vars {:which (str/join "; "
+                                       (map #(str (:id %) " \"" (get-in % [:data :title]) "\"")
+                                            hits))}})
+      (t/allow))))
+
 (defn- take-the-domain
   "The birth's other stamp. A ticket that names a domain keeps it; one
   with a parent takes what its parent stores, and any other takes the
@@ -1773,6 +1828,7 @@
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
                    the-domain-is-one-we-have only-a-mayor-asks-another-domain
+                   no-open-ticket-names-this-failure
                    the-parent-is-not-waited-on]
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named

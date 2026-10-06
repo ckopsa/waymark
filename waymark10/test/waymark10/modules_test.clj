@@ -241,6 +241,9 @@
                "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               ;; the names a scene addresses the page by, beside the
+               ;; page that carries them
+               "/api/-/ui/surfaces"
                ;; the prose fields' render door, beside the page that
                ;; calls it
                "/api/-/render/markdown"

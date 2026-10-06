@@ -561,7 +561,7 @@ function itemTable(items, opts) {
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
-    const row = el("tr", {"data-self": item.self},
+    const row = el("tr", {"data-self": item.self, "data-surface": "row"},
       opts.selectable ? el("td", {class:"c-check"},
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,

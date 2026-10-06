@@ -565,7 +565,8 @@
     (testing "blocking on an unrelated open ticket still works"
       (is (= :allow (:verdict (judge ["U"])))))
     (testing "setting a parent the ticket already waits on refuses"
-      (let [guard (last (:create-guards ticket))
+      (let [guard (first (filter #(= :the-parent-is-not-waited-on (:name %))
+                                 (:create-guards ticket)))
             row (at :blocked {:blocked_by ["G"]} "C")
             judge-parent (fn [parent]
                            (:verdict (first (g/evaluate guard row {:parent parent}
@@ -908,7 +909,9 @@
                           (sitter "house-mayor"))]
       (is (nil? (:requested_by data)))
       (is (= 1 (:priority data)))))
-  (let [[_ _ known mayors] (:create-guards ticket)
+  (let [named (fn [n] (first (filter #(= n (:name %)) (:create-guards ticket))))
+        known (named :the-domain-is-one-we-have)
+        mayors (named :only-a-mayor-asks-another-domain)
         allowed? (fn [guard seat inp]
                    (= :allow (:verdict (first (g/evaluate guard nil inp (sitter seat))))))]
     (testing "only a mayor names another domain"
@@ -1040,3 +1043,52 @@
         "a requested ticket's sitting is the requester's cost")
     (is (== 3 (:factory spend))
         "a ticket nobody asked for, and a sitting that walked nothing, are factory's")))
+
+;; ── a seat does not file one failure twice (ticket 535d86ed) ──────────
+
+(deftest a-seat-is-warned-of-the-open-ticket-that-names-its-failure
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        seat (t/principal {:id "code-seat" :type :agent})
+        failure {:title "ui-drive is red on my pull request"
+                 :detail "The run says `FAILED: Accept closes the sheet and shows the tracker`."
+                 :type "bug"
+                 :repo "ckopsa/waymark"}
+        file! (fn [input opts]
+                (try (str (:id (:row (inv/create! eng :ticket input opts))))
+                     (catch clojure.lang.ExceptionInfo e (ex-data e))))
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"}
+                       {:principal colton})
+        first-id (file! failure {:principal colton})
+        _ (inv/invoke! eng :ticket first-id :groom {} {:principal colton})
+        warned (file! failure {:principal seat})]
+    (testing "a seat's second filing of the failure is refused with a warning"
+      (is (map? warned) (pr-str warned))
+      (is (= 409 (:status warned)) (pr-str warned))
+      (is (str/includes? (pr-str warned) "no-open-ticket-names-this-failure")
+          "the refusal names the guard to acknowledge")
+      (is (str/includes? (pr-str warned) first-id)
+          "and the ticket that already names the failure"))
+    (testing "and lands when the warning is acknowledged"
+      (is (string? (file! failure
+                          {:principal seat
+                           :acknowledged #{:no-open-ticket-names-this-failure}}))))
+    (testing "a person's identical create lands at once"
+      (is (string? (file! failure {:principal colton}))))
+    (testing "a seat naming an unrelated failure is not warned"
+      (is (string? (file! (assoc failure :detail
+                                 "The run says `FAILED: the offer under the refusal`.")
+                          {:principal seat}))))
+    (testing "a second filing is warned while the first is still a draft"
+      (let [fresh (assoc failure :detail
+                         "The run says `FAILED: the sheet keeps its scroll place`.")
+            draft (:row (inv/create! eng :ticket fresh {:principal seat}))
+            draft-id (str (:id draft))
+            warned (file! fresh {:principal seat})]
+        (is (= "draft" (some-> (:state draft) name))
+            "the first filing was not groomed")
+        (is (map? warned) (pr-str warned))
+        (is (= 409 (:status warned)) (pr-str warned))
+        (is (str/includes? (pr-str warned) draft-id)
+            "the refusal names the draft that already names the failure")))))

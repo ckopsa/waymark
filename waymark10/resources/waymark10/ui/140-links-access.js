@@ -83,9 +83,12 @@ function reachGrouped(grouped, doc) {
 function shutDoor(name, entry, doc) {
   if (!questReach(entry, doc))
     return el("button", {class:"blocked", disabled:"",
+      "data-surface": "door:" + name,
+      "data-row": (doc.self || "").split("?")[0] || null,
       title: entry.reason || ""}, label(name, entry));
   const btn = el("button", {type: "button", class: "blocked notyet",
     "aria-disabled": "true", "data-quest-door": name,
+    "data-surface": "door-shut:" + name, "data-row": doc.self.split("?")[0],
     "data-quest-self": doc.self.split("?")[0],
     title: entry.reason || ""},
     label(name, entry),
@@ -133,14 +136,15 @@ function questSheet(btn, name, doc, create, goal, seen) {
     : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
     : "waiting on " + (s.waiting_on || "a person");
   const errBox = el("p", {class: "notyet-refused", role: "alert",
-                          "data-quest-refused": ""});
-  const accept = el("button", {class: "primary", "data-quest-accept": ""},
+                          "data-quest-refused": "", "data-surface": "refusal"});
+  const accept = el("button", {class: "primary", "data-quest-accept": "",
+                               "data-surface": "sheet.accept"},
     "Accept quest");
   const refused = p => {
     errBox.textContent = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
     accept.disabled = true;
   };
-  const dlg = el("dialog", {"data-quest-sheet": ""},
+  const dlg = el("dialog", {"data-quest-sheet": "", "data-surface": "sheet"},
     el("div", {class: "dlghead"},
       /* the door's label on this row, as its button says it; the line
          under it is the title the quest would be given */
@@ -154,7 +158,8 @@ function questSheet(btn, name, doc, create, goal, seen) {
         p.shut_reason || btn.title || "This door is shut now."),
       steps.length
         ? el("ol", {class: "quest-sheet-steps", "data-quest-steps": ""},
-            ...steps.map(s => el("li", {title: s.self || ""},
+            ...steps.map((s, i) => el("li", {title: s.self || "",
+                                             "data-surface": "sheet.step:" + (i + 1)},
               el("b", {}, s.door_label || title(s.door || "")), " ",
               s.row_label
                 ? el("span", {"data-quest-row": ""}, s.row_label)
@@ -180,7 +185,8 @@ function questSheet(btn, name, doc, create, goal, seen) {
         : null,
       errBox),
     el("div", {class: "dlgfoot"},
-      el("button", {"data-quest-decline": "", onclick: () => dlg.close()}, "Not now"),
+      el("button", {"data-quest-decline": "", "data-surface": "sheet.decline",
+                    onclick: () => dlg.close()}, "Not now"),
       accept));
   if (!seen.ok) refused(seen.body);
   /* a replay says the recorded Accept's refusal by the same door

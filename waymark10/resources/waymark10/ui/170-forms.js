@@ -22,6 +22,8 @@ function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
             : entry.effort === "assent" ? "primary" : "";
   const btn = el("button",
     {class: cls, "data-action": name, "data-effort": entry.effort || "",
+     "data-surface": "door:" + name,
+     "data-row": ((doc || {}).self || "").split("?")[0] || null,
      style: small ? "font-size:12px;padding:3px 8px" : "",
      title: entry.display?.description || ""},
     lbl || label(name, entry),
@@ -176,6 +178,7 @@ function subformWidget(name, prop, value) {
        carries the recipe until wireOptions walks the finished form */
     markOptions(widget, subRaw);
     box.append(el("div", {class: "field", "data-field": path,
+                          "data-surface": "dialog.field:" + path,
                           "data-when": w ? w.sib : null,
                           "data-when-value": w ? w.val : null},
       el("label", {title: path}, el("b", {}, xd.label || sub),
@@ -698,6 +701,7 @@ function buildForm(schema, prefill, kind) {
     const xd = rawProp["x-display"] || prop["x-display"] || {};
     const w = whenOf(xd);
     form.append(el("div", {class: "field", "data-field": name,
+                           "data-surface": "dialog.field:" + name,
                            "data-when": w ? w.sib : null,
                            "data-when-value": w ? w.val : null},
       el("label", {title: name}, el("b", {}, xd.label || name),

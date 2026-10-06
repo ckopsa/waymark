@@ -946,3 +946,30 @@
     (testing "the data table leaves the plan out and draws the goal row in words"
       (is (str/includes? body "if (kind === \"quest\") delete plainData.plan;"))
       (is (str/includes? body "tr.lastChild.replaceChildren(questRow(plainData.self));")))))
+
+(deftest ui-surfaces-are-the-names-the-page-sets
+  ;; docs/spec-agent-demo-walks.md § 8a: the list at /api/-/ui/surfaces
+  ;; and the data-surface values the page's code sets are one
+  ;; vocabulary. A listed name that ends in <…> is a stem the page
+  ;; completes ("door:" + name), so both sides are compared by stem.
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        resp (*h* {:request-method :get :uri "/api/-/ui/surfaces" :headers {}})
+        listed (map :name (:surfaces (some-> (:body resp) wire/read-json)))
+        stem #(first (str/split % #"<"))
+        in-page (set (map second
+                          (re-seq #"data-surface\"?[:,=]\s*\"([a-z][a-z.:-]*)\""
+                                  body)))]
+    (is (= 200 (:status resp)))
+    (is (seq listed))
+    (is (= (count listed) (count (distinct listed))) "a name is listed once")
+    (testing "every name the page sets is in the list"
+      (doseq [s in-page]
+        (is (some #(= s (stem %)) listed)
+            (str s " is set in ui/ and is not in the list"))))
+    (testing "every listed name is set somewhere in the page"
+      (doseq [n listed]
+        (is (contains? in-page (stem n))
+            (str n " is listed and the page never sets it"))))
+    (testing "the page reads a surface by its name"
+      (is (str/includes? body "function surfaceNode(name)"))
+      (is (str/includes? body "function readSurface(name)")))))

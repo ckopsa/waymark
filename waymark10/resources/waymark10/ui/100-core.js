@@ -77,6 +77,56 @@ const el = (tag, attrs={}, ...kids) => {
   return n;
 };
 
+/* ── surfaces: the names a scene addresses the screen by ─────────────
+   (docs/spec-agent-demo-walks.md §8a). A name is the value an element
+   carries in its data-surface attribute; the list of them is served at
+   GET /api/-/ui/surfaces. `name@row` narrows a name to one row: the
+   address the element carries in data-row, or the one the row or the
+   dialog around it carries in data-self. Of several, the one drawn. */
+function surfaceNode(name) {
+  const at = String(name).indexOf("@");
+  const n = at < 0 ? String(name) : String(name).slice(0, at);
+  const row = at < 0 ? null : String(name).slice(at + 1);
+  const rowOf = e => e.getAttribute("data-row") ||
+    (e.closest("[data-self]") || e).getAttribute("data-self");
+  const all = [...document.querySelectorAll('[data-surface="' + CSS.escape(n) + '"]')]
+    .filter(e => !row || rowOf(e) === row);
+  return all.find(e => e.getClientRects().length) || all[0] || null;
+}
+/* what a surface shows now, read from the page as drawn and said in
+   its visible text: null when it is not on the screen. The sheet, the
+   tracker and the dialog answer the parts a film beat names; a caption
+   and a refusal answer their line; any other answers its text and
+   whether it can be pressed. */
+function readSurface(name) {
+  const e = surfaceNode(name);
+  if (!e || !e.getClientRects().length) return null;
+  const text = (q, of = e) => {
+    const k = q ? of.querySelector(q) : of;
+    return k ? k.textContent.trim() || null : null;
+  };
+  const base = String(name).split("@")[0];
+  if (base === "sheet")
+    return {goal: text("[data-quest-sheet-goal]"),
+            steps: [...e.querySelectorAll('[data-surface^="sheet.step:"]')].map((li, i) =>
+              ({n: i + 1,
+                label: [text("b", li), text("[data-quest-row]", li)].filter(Boolean).join(" "),
+                whose: text("[data-quest-turn]", li),
+                state: li.getAttribute("data-quest-step")})),
+            shut_reason: (text("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,
+            refused: text("[data-quest-refused]")};
+  if (base === "tracker")
+    return {title: text("[data-quest-title]"), next: text("[data-quest-note]"),
+            waiting_on: text("[data-quest-waiting]"),
+            progress: text("[data-quest-count]"), text: text()};
+  if (base === "dialog")
+    return {self: e.getAttribute("data-self"), action: e.getAttribute("data-action"),
+            lit: [...e.querySelectorAll(".invited [name]")].map(f => f.name)};
+  if (base === "caption" || base === "refusal") return text();
+  return {text: text(),
+          disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};
+}
+
 /* ── identity: the dev principal + the session's grant scope ───────── */
 const $who = $("#who");
 $who.value = localStorage.getItem("wm10.principal") || "";
