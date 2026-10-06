@@ -440,6 +440,24 @@ function questHeadGo() {
   openDoor({self: head.self, action: head.door, fields: head.needs || [],
             note: head.note}, "The step's row");
 }
+/* the owner's own step moves the quest a moment later, in the engine's
+   consumer, and the stream alone would have to say so: a frame that is
+   late or lost left the tracker on the step just taken. So the quest is
+   read again after a door taken through openDoor (180-action-dialog.js),
+   a few times and further apart, until what the tracker holds is
+   another plan or no quest at all. */
+const QUEST_AFTER_GO_MS = [500, 1000, 2000, 4000, 8000, 15000];
+const questMark = doc =>
+  doc ? doc.self + " " + ((doc.data || {}).planned_at || "") : "";
+async function questAfterGo() {
+  const was = questMark(questDoc);
+  if (!was) return;
+  for (const ms of QUEST_AFTER_GO_MS) {
+    await new Promise(r => setTimeout(r, ms));
+    if (replay || questMark(questDoc) !== was) return;
+    await refreshQuest();
+  }
+}
 function questTracker() {
   /* a replay draws the quest its walk recorded (replayQuest,
      200-events-follow.js): it reads nothing, follows no stream, and

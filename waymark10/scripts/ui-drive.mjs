@@ -1627,9 +1627,15 @@ async function accessStory() {
   /* the owner's own goal write, end to end: the live tracker says Quest
      complete whether it hears the finish or reads the held quest's row
      first. It is waited for before the row is asked, since the line
-     stays only a few seconds. */
+     stays only a few seconds. The finish is the consumer's, so the wait
+     is as long as the tracker's own reads after Go, and a timeout says
+     what the quest's row held: active is a late consumer, finished is a
+     tracker that never said so. */
   await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
-                "Quest complete, after priya's own goal write", 15000, rPlan);
+                "Quest complete, after priya's own goal write", 40000, rPlan)
+    .catch(async e => {
+      throw new Error(e.message + "; the quest's row is " + (await get(rSelf)).state);
+    });
   ok("the tracker says Quest complete after the owner's own goal write", true);
   for (let i = 0; i < 60 && (await get(rSelf)).state !== "finished"; i++) await sleep(250);
   ok("the goal door finishes the recorded quest",
