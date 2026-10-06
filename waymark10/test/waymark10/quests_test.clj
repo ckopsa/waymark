@@ -2,12 +2,17 @@
   "The quest kind (docs/spec-quests.md): the birth stamps, the create
   guards, who may take which door, and the engine's `plan`. Memory
   storage and the real engine. No consumer runs: the engine's own doors
-  are walked by hand with the engine's actor."
+  are walked by hand with the engine's actor. The consumer's cases at
+  the bottom drain it directly, and the mapping's run on canned
+  answers with no engine."
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.quests :as quests]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -122,6 +127,23 @@
     (is (str/includes? (str no-door) "`launch` is not a door"))
     (is (nil? (refusal #(accept! eng planner seen {} gr))))))
 
+(deftest a-grant-that-does-not-admit-the-goal-door-is-refused-at-create
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        ;; sees the row, and admits every door of it but the goal
+        reads-only (assoc (grant-seeing c)
+                          :action? (fn [_kind action]
+                                     (not= "finish" (name action))))
+        shut (refusal #(accept! eng planner c {} reads-only))]
+    (is (str/includes?
+         (str shut)
+         "your grant does not see that row or does not admit that door.")
+        "the invitation's sentence: the owner could never take the goal")
+    (is (nil? (refusal #(accept! eng planner c {:action "reopen"} reads-only)))
+        "the same grant accepts a goal door it does admit")
+    (is (nil? (refusal #(accept! eng person c)))
+        "a person acting as themselves is judged by the row alone")))
+
 (deftest an-owner-holds-at-most-twenty-active-quests
   (let [eng (fresh-engine)
         c (chore! eng "Dishes")
@@ -194,3 +216,227 @@
     (is (= "finished" (some-> (store/with-tx (:storage eng)
                                 (fn [tx] (store/load-row (:storage eng) tx :quest (str id) {})))
                               :state name)))))
+
+;; ── the mapping (Quests 1b): canned rehearsal answers, no engine ────
+
+(defn- seats-for
+  "A seat lookup that knows one door."
+  [k action]
+  (when (= ["chore" "reopen"] [k action]) ["Planner"]))
+
+(defn- shape [plan ks]
+  (mapv #(mapv % ks) (:plan plan)))
+
+(deftest the-mapping-orders-person-writes-and-ends-on-the-goal
+  (let [plan (quests/answer->plan
+              {:writes [{:door "q_latch.lift" :row "/api/q_latches/1" :input nil}
+                        {:door "q_bolt.draw" :row "/api/q_bolts/2" :input nil}
+                        {:door "q_crate.open" :row "/api/q_crates/3" :input nil}]
+               :rehearsal true :first-estimate true}
+              seats-for)]
+    (is (= [[1 "lift" "/api/q_latches/1" "person" "next"]
+            [2 "draw" "/api/q_bolts/2" "person" "later"]
+            [3 "open" "/api/q_crates/3" "person" "later"]]
+           (shape plan [:n :door :self :whose :state])))
+    (is (true? (:plan_is_estimate plan)))
+    (is (nil? (:blocked_reason plan)))
+    (is (nil? (:waiting_on plan)))))
+
+(deftest the-mapping-names-the-seat-a-step-waits-on
+  (testing "a refusal on the bound row names the seats that hold the door"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "chore.reopen" :row "/api/chores/9" :needs [] :or []
+                               :reason "Only the planner reopens a chore."}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]
+                 :rehearsal true :first-estimate true}
+                seats-for)]
+      (is (= [[1 "reopen" "seat" "waiting" "Planner"]
+              [2 "finish" "person" "later" nil]]
+             (shape plan [:n :door :whose :state :waiting_on])))
+      (is (= "More steps may follow once this one is done."
+             (:note (second (:plan plan)))))
+      (is (= "Planner" (:waiting_on plan)))))
+  (testing "an unseen row, with no seat that holds the door"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "pantry.stock" :row nil :needs [] :or []
+                               :reason "Not found"}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]}
+                seats-for)]
+      (is (= [["stock" "/api/chores/9" "seat" "waiting"]
+              ["finish" "/api/chores/9" "person" "later"]]
+             (shape plan [:door :self :whose :state])))
+      (is (= "someone who holds pantry.stock" (:waiting_on plan))))))
+
+(deftest the-mapping-marks-a-confirm-a-hold-and-a-choice
+  (testing "a confirm door carries its consequence and is the owner's next"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "pt_seal.break" :row "/api/pt_seals/1" :needs [] :or []
+                               :confirm true
+                               :consequence "The seal cannot be made whole again."
+                               :reason "safety.confirm is true"}]
+                 :stack [{:door "pt_vault.open" :row "/api/pt_vaults/2"}]}
+                seats-for)]
+      (is (= [["break" "confirm" "next" "The seal cannot be made whole again."]]
+             (shape plan [:door :whose :state :note])))))
+  (testing "a rehearsed hold is a write marked :hold; a real one blocks"
+    (let [rehearsed (quests/answer->plan
+                     {:writes [{:door "pt_turnstile.turn" :row "/api/pt_turnstiles/1"
+                                :hold true}]}
+                     seats-for)
+          held (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "pt_turnstile.turn" :row "/api/pt_turnstiles/1"
+                               :held true :held_call "hc-1"}]}
+                seats-for)]
+      (is (= [["turn" "held" "waiting" "your tap"]]
+             (shape rehearsed [:door :whose :state :waiting_on])
+             (shape held [:door :whose :state :waiting_on])))
+      (is (= "your tap" (:waiting_on rehearsed)))))
+  (testing "a remedy with no row chosen, and a door with an input to give"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "plan_day.assign_meal" :row nil :needs [] :or []
+                               :reason "No row was chosen for this remedy."}
+                              {:door "plan.finalize" :row "/api/plans/4"
+                               :needs [:meal_id] :or []}]
+                 :stack [{:door "plan.finalize" :row "/api/plans/4"}]}
+                seats-for)]
+      (is (= [["assign_meal" "/api/plans/4" "choice" "next" nil]
+              ["finalize" "/api/plans/4" "choice" "later" ["meal_id"]]]
+             (shape plan [:door :self :whose :state :needs]))))))
+
+(deftest the-mapping-says-why-a-cycle-is-blocked
+  (let [plan (quests/answer->plan
+              {:writes []
+               :blocked-on [{:door "latch.lift" :row "/api/latches/1" :needs [] :or []
+                             :reason :cycle}]
+               :stack [{:door "latch.lift" :row "/api/latches/1"}]}
+              seats-for)]
+    (is (empty? (:plan plan)))
+    (is (str/includes? (str (:blocked_reason plan)) "latch.lift"))
+    (is (nil? (:waiting_on plan)))))
+
+;; ── the consumer: fixture kinds whose remedy is BOUND to a row ──────
+
+;; a cross-kind read, so the render probe declines and the dry run
+;; answers the refusal with its remedy bound to the crate's own latch
+(g/defguard the-latch-is-up
+  {:reads [:q_latch]
+   :explain "Lift the latch first."
+   :remedies [{:door :q_latch/lift :id '(data :latch_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [latch (read :q_latch (get-in row [:data :latch_id]))]
+      (if (= "up" (some-> latch :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
+(def ^:private routine {:idempotent true :reversible true :confirm false})
+
+(def ^:private latch
+  (r/resource
+   {:kind :q_latch
+    :plural "q_latches"
+    :states [:down :up]
+    :initial :down
+    :summary "Latch · {state}"
+    :schema [:map [:label {:optional true} [:maybe [:string {:max 40}]]]]
+    :actions
+    {:lift {:from #{:down} :to :up :safety routine}
+     :lower {:from #{:up} :to :down :safety routine}}}))
+
+(def ^:private crate
+  (r/resource
+   {:kind :q_crate
+    :plural "q_crates"
+    :states [:shut :open]
+    :initial :shut
+    :summary "Crate · {state}"
+    :schema [:map
+             [:latch_id {:not-a-ref "quests fixture: the-latch-is-up binds its remedy to it"}
+              [:string {:max 80}]]]
+    :actions
+    {:open {:from #{:shut} :to :open
+            :guards [the-latch-is-up]
+            :safety routine}
+     :close {:from #{:open} :to :shut :safety routine}}}))
+
+(defn- crate-engine
+  "An engine with the fixture chain, and the owner made a member as the
+  identity boundary makes anybody who calls."
+  []
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore latch crate]})]
+    ((engine/handler eng) {:request-method :get :uri "/api/q_crates"
+                           :headers {"x-waymark-principal" "colton"}})
+    eng))
+
+(defn- make! [eng kind data]
+  (str (:id (:row (inv/create! eng kind data {:principal person})))))
+
+(defn- hear!
+  "Drain the quests' consumer, from the log's origin on its first pass."
+  [eng]
+  (consumers/drain-consumer! eng quests/consumer-name (quests/consumer-fn eng)
+                             {:from-origin? true}))
+
+(defn- crate-quest!
+  "A shut crate behind a lowered latch, and the quest to open it."
+  [eng]
+  (let [l (make! eng :q_latch {})
+        c (make! eng :q_crate {:latch_id l})
+        self (str "/api/q_crates/" c)]
+    {:latch l :crate c :self self
+     :quest (:id (:row (inv/create! eng :quest {:self self :action "open"}
+                                    {:principal person})))}))
+
+(deftest accepting-a-quest-lands-the-plan-the-rehearsal-found
+  (let [eng (crate-engine)
+        {:keys [quest self]} (crate-quest! eng)
+        _ (hear! eng)
+        d (data-of eng quest)
+        answer (mcp/rehearse eng {:principal "colton"} self :open nil)]
+    (is (= ["q_latch.lift" "q_crate.open"] (mapv :door (:writes answer))) (pr-str answer))
+    (is (= (mapv :row (:writes answer)) (mapv :self (:plan d)))
+        "each step acts on the row the rehearsal named")
+    (is (= ["lift" "open"] (mapv :door (:plan d))))
+    (is (= ["person" "person"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["next" "later"] (mapv (comp name :state) (:plan d))))
+    (is (true? (:plan_is_estimate d)))
+    (is (some? (:planned_at d)))
+    (is (nil? (:blocked_reason d)))))
+
+(deftest replan-after-a-step-taken-by-hand-lands-a-shorter-plan
+  (let [eng (crate-engine)
+        {:keys [quest latch]} (crate-quest! eng)]
+    (hear! eng)
+    (is (= 2 (count (:plan (data-of eng quest)))))
+    (inv/invoke! eng :q_latch latch :lift {}
+                 {:principal person :idempotency-key (str (random-uuid))})
+    (take! eng quest person :replan)
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (= ["open"] (mapv :door (:plan d))))
+      (is (= ["next"] (mapv (comp name :state) (:plan d)))))))
+
+(deftest replaying-the-log-writes-nothing-new
+  (let [eng (crate-engine)
+        {:keys [quest]} (crate-quest! eng)
+        _ (hear! eng)
+        before (data-of eng quest)
+        ;; a second cursor at the origin hears every entry again
+        heard (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
+                                         {:from-origin? true})]
+    (is (pos? heard))
+    (is (= 2 (count (:plan before))))
+    (is (= before (data-of eng quest)) "the plan and its stamp are the ones first written")))
+
+(deftest a-paused-quest-is-not-planned
+  (let [eng (crate-engine)
+        {:keys [quest]} (crate-quest! eng)]
+    (take! eng quest person :pause)
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (empty? (:plan d)))
+      (is (nil? (:planned_at d))))))

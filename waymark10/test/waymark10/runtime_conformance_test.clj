@@ -168,8 +168,9 @@
              :mcp-discover :held-call-expiry :notifier
              ;; the invitations' resolution and expiry
              ;; (spec-guided-follow § 3), the walkthroughs' consumer
-             ;; (spec-walkthrough § 3), and the walks' retention (§ 4)
-             :invitations :invitation-expiry :walkthroughs :walk-retention
+             ;; (spec-walkthrough § 3), the quests' consumer
+             ;; (spec-quests), and the walks' retention (§ 4)
+             :invitations :invitation-expiry :walkthroughs :quests :walk-retention
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock

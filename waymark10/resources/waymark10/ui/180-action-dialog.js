@@ -379,6 +379,55 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     showFieldErrors(problem);
     if (!Object.keys((problem || {}).errors || {}).length)
       errBox.append(problemBox(problem || {}));
+    const offer = questOffer((problem || {}).remedies);
+    if (offer) errBox.append(offer);
+  }
+  /* the other way through a refusal (docs/spec-quests.md): a refusal
+     that names a remedy can be kept as a goal instead of walked by
+     hand. The button is offered only when the quests collection affords
+     create to this reader — read off the wire, as every button is — and
+     only for a door on ONE row, which is what a quest's goal is. The
+     remedy chips stay as they are. */
+  function questOffer(remedies) {
+    if (!remedies || !remedies.length || bulkIds) return null;
+    if (/_collection$/.test(doc.kind || "") || !doc.self) return null;
+    const slot = el("span", {class: "questoffer"});
+    wellKnown().then(async w => {
+      const col = collectionHref(w, "quest");
+      if (!col) return;
+      const res = await api(col + "?page%5Bsize%5D=1");
+      const create = res.ok && ((res.body || {}).actions || {}).create;
+      if (!create) return;
+      slot.append(el("button", {type: "button", class: "primary",
+        "data-quest-accept": "",
+        title: "Keep this as a goal: the engine plans the steps to it",
+        onclick: () => acceptQuest(create)}, "Accept as quest"));
+    }).catch(() => {});
+    return slot;
+  }
+  /* one click: the goal is this row, this door and what the form
+     holds; then the quest is pinned and the dialog closes on the row
+     it was opened from. A refused create or pin is shown as any
+     refusal is. */
+  async function acceptQuest(create) {
+    const goal = {self: doc.self.split("?")[0], action: name};
+    const values = input ? collectValues(form, input) : {};
+    if (Object.keys(values).length) goal.input = values;
+    const h = {};
+    if (create.safety && create.safety.idempotent === false)
+      h["Idempotency-Key"] = uuid();
+    const made = await api(create.href,
+      {method: create.method || "POST", body: JSON.stringify(goal), headers: h});
+    if (!made.ok) { showErrors(made.body); return; }
+    const quest = made.body || {};
+    const pin = (quest.actions || {}).pin;
+    if (pin && !(quest.data || {}).pinned) {
+      const pinned = await invokeBare(pin, quest);
+      if (!pinned.ok) { showErrors(pinned.body); return; }
+    }
+    disarmDraft();
+    closeDlg();
+    toast("Quest accepted and pinned");
   }
   async function check() {           /* dry-run pre-validation (rule 5):
                                         the FULL rehearsal — every field,
@@ -406,7 +455,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         for (const w of warns)
           errBox.append(el("div", {class: "warnbox"},
             el("span", {class:"prose"}, w.reason || w.name),
-            remedyChips(w.remedies, doc, () => closeDlg())));
+            remedyChips(w.remedies, doc, () => closeDlg()),
+            questOffer(w.remedies)));
       }
     } else showErrors(res.body);
   }
@@ -458,7 +508,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         el("b", {}, "The server warns:"),
         el("ul", {}, (problem.warnings || []).map(w =>
           el("li", {}, (w.name ? w.name + ": " : "") + (w.reason || ""),
-             remedyChips(w.remedies, doc, () => closeDlg())))),
+             remedyChips(w.remedies, doc, () => closeDlg()),
+             questOffer(w.remedies)))),
         el("div", {class: "actions"},
           el("button", {class: "primary", onclick: () => {
             acknowledged = problem.acknowledge.names;
