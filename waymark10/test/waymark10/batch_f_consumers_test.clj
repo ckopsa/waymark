@@ -150,9 +150,12 @@
   are read from a passing one."
   [line]
   ;; never closed: closing it closes the descriptor
+  ;; a line of its own: the runner's progress line has no end, and one
+  ;; printed after it is read as part of it
   (doto (java.io.PrintStream.
          (java.io.FileOutputStream. java.io.FileDescriptor/out) true)
-    (.println (str line))))
+    (.print (str \newline line \newline))
+    (.flush)))
 
 (defn- append-latencies!
   "For hold-ms, `drains` threads read the log (:settled as given) and
@@ -211,6 +214,17 @@
                                      settled long-writer? (count ms)
                                      (at 0.5) (at 0.99) (peek ms)))
                 ms))]
+    ;; not printed: the first case would otherwise pay for the cold pool
+    (append-latencies! st record {:hold-ms 500 :drains 2 :writers writers
+                                  :settled false :long-writer? false})
+    ;; the same runner with the plain INSERT, which holds no floor:
+    ;; what the watermark costs a writer
+    (with-redefs-fn {(ns-resolve 'waymark10.server.store.postgres 'append-with-floor-sql)
+                     ((ns-resolve 'waymark10.server.store.postgres 'append-sql) false)}
+      #(do (to-job-log! "log-order-lock floor=off")
+           (run false false)
+           (run false true)
+           (to-job-log! "log-order-lock floor=on")))
     (run false false)
     (run true false)
     (run false true)

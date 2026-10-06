@@ -414,6 +414,17 @@
   transaction of many appends holds one lock and not one for each."
   "waymark10.log_floor")
 
+;; What the watermark costs a writer, from `order-lock-cost-to-writers`
+;; (3 writers for 1.5 s behind a long writer, unsettled readers; one
+;; runner for both lines of a pair, and runners differ by a factor of
+;; two, so read a pair and not a number alone):
+;;   floor in statements of its own  10235 appends without it, 6891 with
+;;                                   (p50 0.4 ms against 0.6 ms)
+;;   floor in the append's INSERT     6845 appends without it, 6866 with
+;;                                   (p50 0.6 ms both, p99 1.7 against 1.6)
+;; With the fold, settled readers behind a long writer: 6961 appends,
+;; p50 0.6 ms, p99 1.0 ms. The fall from 8678 to 2917 between two CI
+;; runs was mostly the runners; the floor's own statements took a third.
 (def ^:private settle-wait-ms
   "How long a settled read with no row to give waits for the writers
   in flight under it, before it answers nil. It waits by asking again
@@ -425,21 +436,34 @@
 
 (def ^:private settle-poll-ms 10)
 
-(defn- hold-log-floor!
-  "Before tx's first append: note in pg_locks the floor its ids will be
-  above (see the log's commit order). The lock is shared and never
-  asked for exclusively, so this waits on nothing."
-  [tx]
-  (when (str/blank? (some-> (jdbc/execute-one!
-                             tx ["SELECT current_setting(?, true) AS held"
-                                 log-floor-setting])
-                            vals first))
-    ;; the two-key form, so the floor is read back from pg_locks.objid;
-    ;; its low 32 bits, which log-watermark reads against the sequence
-    (jdbc/execute-one!
-     tx [(str "SELECT pg_advisory_xact_lock_shared(?, (" log-floor-sql
-              ")::bit(32)::int4), set_config(?, 'held', true)")
-         (int lock-namespace) log-floor-setting])))
+(def ^:private hold-log-floor-sql
+  "A transaction's first append: note in pg_locks the floor its ids
+  will be above (see the log's commit order), and give no row once the
+  transaction holds one. The lock is shared and never asked for
+  exclusively, so this waits on nothing."
+  ;; the two-key form, so the floor is read back from pg_locks.objid;
+  ;; its low 32 bits, which log-watermark reads against the sequence
+  (str "SELECT pg_advisory_xact_lock_shared(" (int lock-namespace)
+       ", (" log-floor-sql ")::bit(32)::int4),"
+       " set_config('" log-floor-setting "', 'held', true)"
+       " WHERE coalesce(current_setting('" log-floor-setting "', true), '') = ''"))
+
+(defn- append-sql
+  "The append's INSERT. With floor? the same statement holds the log's
+  floor first, so an append is one round trip: the INSERT reads its one
+  row from a count over the floor's, and the id's default is evaluated
+  for that row, after the lock is held."
+  [floor?]
+  (str (when floor? (str "WITH floor AS (" hold-log-floor-sql ") "))
+       "INSERT INTO waymark10_transitions"
+       " (kind, resource_id, action, from_state, to_state, actor,"
+       "  law_revision, input_digest, inputs, acknowledged,"
+       "  judgment, after, correlation_id, idempotency_key, summary)"
+       " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+       (when floor? " FROM (SELECT count(*) FROM floor) held")
+       " RETURNING id, at"))
+
+(def ^:private append-with-floor-sql (append-sql true))
 
 (defn- log-watermark
   "→ {:bound id :cut? bool}: every id at or under :bound has committed
@@ -686,17 +710,11 @@
                            jdbc-opts))))
 
   (append-transition! [_ tx record]
-    ;; before the id is allocated, held to the commit: see the log's
-    ;; commit order
-    (hold-log-floor! tx)
+    ;; the floor is held before the id is allocated, and to the commit:
+    ;; see the log's commit order
     (let [res (jdbc/execute-one!
                tx
-               [(str "INSERT INTO waymark10_transitions"
-                     " (kind, resource_id, action, from_state, to_state, actor,"
-                     "  law_revision, input_digest, inputs, acknowledged,"
-                     "  judgment, after, correlation_id, idempotency_key, summary)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                     " RETURNING id, at")
+               [append-with-floor-sql
                 (name (:kind record)) (:resource-id record)
                 (name (:action record))
                 (some-> (:from-state record) name)
