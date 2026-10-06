@@ -1343,6 +1343,66 @@ async function accessStory() {
      (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
 
+  /* the same under a grant that admits quest and nothing else: the one
+     live stream carries no row events there, so the tracker hears the
+     quest on the quest's own event stream */
+  console.log("· a pinned quest under a grant: the tracker hears its own row");
+  const gTitle = "Clear the granted pile";
+  const gPile = (await qPost("/api/led_notes", {title: "Granted pile"}, h)).doc;
+  const gQuest = await qPost("/api/quests",
+    {self: gPile.self, action: "finish", title: gTitle}, h);
+  ok("priya accepts a second goal as a quest", gQuest.status === 201);
+  const gSelf = gQuest.doc.self;
+  ok("priya pins it", (await qPost(gSelf + "/-/pin", {}, h)).status < 400);
+  let gBorn = null;
+  for (let i = 0; i < 60 && !gBorn; i++) {
+    if ((await get(gSelf)).data.planned_at) gBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the create with a first plan", gBorn === true);
+  const gGrant = await qPost("/api/grants",
+    {audience: "priya", scope: [{kind: "quest", actions: []}],
+     expires_at: new Date(Date.now() + 86400000).toISOString()}, sys);
+  ok("a grant to priya admits quest and nothing else", gGrant.status === 201);
+  const gId = gGrant.doc.self.split("/").pop();
+  /* an offered grant is the audience's to accept; one born active
+     refuses this, and what the page reads below is the proof either way */
+  await qPost("/api/grants/" + gId + "/-/accept", {}, h);
+  await evaljs(`localStorage.setItem("wm10.grant", ${JSON.stringify(gId)});
+                location.reload(); true`);
+  await sleep(1200);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-title]")?.textContent ===
+                   ${JSON.stringify(gTitle)}`,
+                "the tracker at page load, under the grant", 15000);
+  const gScope = await evaljs(`(async () => ({
+    quests: (await api("/api/quests")).ok,
+    notes: (await api("/api/led_notes")).ok}))()`);
+  ok("the page reads through the grant: quests and no notes",
+     gScope.quests === true && gScope.notes === false);
+  await evaljs(`window.__granted = true; true`);
+  const gPlanned = await qPost(gSelf + "/-/plan",
+    {plan: [{n: 1, door: "rename", self: gPile.self, whose: "person",
+             note: "Name the pile.", state: "done"},
+            {n: 2, door: "finish", self: gPile.self, whose: "seat",
+             waiting_on: "Planner", state: "waiting"}],
+     plan_is_estimate: true, waiting_on: "Planner"}, sys);
+  ok("the engine plans the granted quest", gPlanned.status < 400);
+  await waitFor(`${qCount} === "1 done, 2 known so far" &&
+                 !!${qBar}.querySelector("[data-quest-waiting]")`,
+                "the count under the grant", 15000);
+  ok("under a grant a plan transition moves the count with no reload",
+     await evaljs(`window.__granted === true`));
+  ok("the engine finishes the granted quest",
+     (await qPost(gSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]") &&
+                 ${qBar}.textContent.includes(${JSON.stringify(gTitle)})`,
+                "the completion line under the grant", 15000);
+  ok("under a grant finish shows Quest complete with the title",
+     await evaljs(`window.__granted === true`));
+  await evaljs(`localStorage.removeItem("wm10.grant"); location.reload(); true`);
+  await sleep(1200);
+
   /* signed in the way a person is: a session cookie off the magic
      link, the dev box EMPTY. An open invitation addressed to that
      member offers "Take this step" on its row page and in its

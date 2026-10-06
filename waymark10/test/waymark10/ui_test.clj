@@ -212,6 +212,12 @@
     (is (not (str/includes? body "${done} of ${"))
         "the count is never k of n")
     (is (str/includes? body "onQuestFrame(ev);"))
+    ;; the quest in hand is heard on its own stream, so a viewer under a
+    ;; grant hears it too; the stream of a quest let go is closed
+    (is (str/includes? body "const href = questDoc ? questDoc.self + \"/-/events\" : null;"))
+    (is (str/includes? body "if (questStream) sseClose(questStream);"))
+    (is (str/includes? body "function sseClose(href)"))
+    (is (str/includes? body "if (!document.hidden) refreshQuest().catch(() => {});"))
     (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questHeadGo"))
     (is (str/includes? body "\"Quest complete\""))))
 
