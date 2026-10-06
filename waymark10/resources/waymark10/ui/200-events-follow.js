@@ -1060,8 +1060,26 @@ function parseWalk(text) {
   const [header, ...frames] = docs;
   if (!header || header.format !== "waymark-walk/1") return null;
   return {header,
-          frames: frames.filter(f => f && typeof f.type === "string")
-                        .sort((a, b) => (a.t || 0) - (b.t || 0))};
+          frames: replayFormMoves(frames.filter(f => f && typeof f.type === "string")
+                        .sort((a, b) => (a.t || 0) - (b.t || 0)))};
+}
+/* a `move` to the row a hand's open form stands on moves no screen.
+   The engine records one when their presence was elsewhere with no beat
+   of their tab's (a stream the page opened, a read) and the form's next
+   beat brought it back: the beat that closes a form kept as a quest,
+   after the tracker opened the quest's stream. It is left out, so it
+   does not end the form before the press that closes it. */
+function replayFormMoves(frames) {
+  const on = new Map();          // who → the row their open form is on
+  return frames.filter(f => {
+    const row = String(f.self || "").split("?")[0];
+    if (f.type === "ui") {
+      if ((f.ui || {}).dialog) on.set(f.who, row);
+      else on.delete(f.who);
+      return true;
+    }
+    return !(f.type === "move" && on.get(f.who) === row);
+  });
 }
 function startReplay(text) {
   const walk = parseWalk(text);
@@ -1700,9 +1718,11 @@ function replayGestureTarget(f) {
   const row = s => String(s || "").split("?")[0];
   const seen = e => e.getClientRects().length > 0;
   const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog, c = ui.collection;
-  /* the pointer fills the form; an invitation's dialog has no submit */
+  /* the pointer fills the form; an invitation's dialog has no submit. A
+     `move` ends a form as its closing beat does (replayKeepsForm), and a
+     recorded walk may hold one before that beat: the press is made there */
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
-  if (g && g.guidedField && f.type === "ui") {
+  if (g && g.guidedField && (f.type === "ui" || f.type === "move")) {
     const key = g.getAttribute("data-guided");
     if (d) return d.self + " " + d.action === key
       ? g.guidedField(replayTypingOf(f)) : null;
