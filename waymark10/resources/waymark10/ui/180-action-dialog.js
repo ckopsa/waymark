@@ -13,7 +13,7 @@ const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
 async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
-                             idemKey: callerKey, suggest, invitation,
+                             idemKey: callerKey, suggest, given, invitation,
                              guided}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
@@ -69,6 +69,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        not hold. Never for a bulk write, as above. */
     (!bulkIds && entry.prefill_values) || {},
     prefill || {},
+    /* what the person typed already (a quest's stored input): in the
+       form as their own, with no mark */
+    given || {},
     /* an invitation's suggestions: in the form, marked, and sent only
        by the person's own submit */
     suggest || {},
@@ -896,7 +899,7 @@ function reportDialog(report) {
    and `what` names the row in the sentence that says it was not read.
    A door taken here may be a step of the quest in hand, so the tracker
    reads its quest again after it (questAfterGo) ── */
-async function openDoor({self, action, fields, note, suggest, invitation}, what) {
+async function openDoor({self, action, fields, note, suggest, given, invitation}, what) {
   const res = await api(self);
   if (!res.ok) {
     toast(`${what} cannot be read: ${(res.body || {}).detail || res.status}`);
@@ -913,6 +916,7 @@ async function openDoor({self, action, fields, note, suggest, invitation}, what)
     return;
   }
   actionDialog({name: action, entry, doc: target, suggest: suggest || {},
+                given: given || {},
                 invitation: {note, fields: fields || [], ...(invitation || {})},
                 onDone: () => { render(); questAfterGo().catch(() => {}); }});
 }
@@ -923,6 +927,8 @@ async function openInvitation(inv) {
   const d = inv.data || {};
   return openDoor({self: d.self, action: d.action, note: d.note,
                    suggest: d.suggest || {},
+                   /* a quest's stored input: the person's own values */
+                   given: d.given || {},
                    /* a row born before `fields` holds `field` alone */
                    fields: d.fields || (d.field ? [d.field] : []),
                    invitation: {doc: inv,

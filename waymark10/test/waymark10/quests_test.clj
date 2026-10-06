@@ -13,6 +13,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.quests :as quests]
@@ -1019,7 +1020,10 @@
                            (assoc-in row [:data :close_reason] (:close_reason inp)))
                 :safety routine}
      :drop {:from #{:open} :to :closed
-            :input [:map [:close_reason [:string {:min 1 :max 480}]]]
+            :input [:map
+                    [:close_reason [:string {:min 1 :max 480}]]
+                    [:film {:optional true} [:maybe [:string {:max 200}]]]]
+            :guards [the-film-is-a-link]
             :handler (fn [row inp _ctx]
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety {:idempotent true :reversible true :confirm true
@@ -1095,6 +1099,22 @@
     (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
     (is (= ["close_reason"] (:needs (first (:plan d)))))))
 
+(deftest a-confirm-goal-with-no-input-names-the-guard-that-awaits-its-form
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "drop"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        step (first (:plan d))]
+    (is (= ["confirm"] (mapv (comp name :whose) (:plan d))) (pr-str d))
+    (is (= ["close_reason"] (:needs step)))
+    (is (= "The epic is let go. Judged when you fill the form: the-film-is-a-link."
+           (:note step))
+        "the consequence comes first, and the waiting guard after it")))
+
 (deftest a-goal-whose-input-was-given-keeps-it-and-needs-nothing
   (let [eng (epic-engine)
         {:keys [quest]} (epic-quest! eng {:close_reason "Merged."})
@@ -1104,19 +1124,30 @@
     (is (every? (comp empty? :needs) (:plan d)))
     (is (= "Merged." (:close_reason (walk/keywordize-keys (:input d)))))))
 
-(deftest the-goals-invitation-suggests-the-stored-input
+(deftest the-goals-invitation-carries-the-stored-input-as-given
   (let [eng (epic-engine)
         film "https://example.org/film"
         {:keys [quest part]} (epic-quest! eng {:film film})
         _ (hear! eng)]
-    (is (nil? (get-in (invitation-of eng quest) [:data :suggest]))
+    (is (nil? (get-in (invitation-of eng quest) [:data :given]))
         "a step that is not the goal's carries no stored input")
     (move! eng :chore part :finish person)
     (hear! eng)
     (let [data (:data (invitation-of eng quest))]
       (is (= ["close_reason"] (:fields data)) (pr-str data))
-      (is (= {:film film} (walk/keywordize-keys (:suggest data)))
-          "the goal's form opens with what the quest stored"))))
+      (is (= {:film film} (walk/keywordize-keys (:given data)))
+          "the goal's form opens with what the quest stored")
+      (is (nil? (:suggest data))
+          "the owner's own values are not marked as a suggestion"))))
+
+(deftest a-stored-key-the-invitation-may-not-show-is-left-out-alone
+  (is (= {:film "https://example.org/film"}
+         (invitations/showable epic "complete"
+                               {:film "https://example.org/film"
+                                :colour "red"}))
+      "the key the door does not take goes, and the other still pre-fills")
+  (is (= {} (invitations/showable nil "complete" {:film "x"}))
+      "a row of no served kind shows nothing"))
 
 (deftest the-mapping-ends-on-a-goal-whose-form-is-not-filled
   (let [plan (quests/answer->plan

@@ -2200,7 +2200,8 @@
   warnings ride the body as data. :dry-run :partial narrows both
   tiers to what the caller provided (§23's judged-when-answerable
   mode): provided entries schema-checked, fully covered guard leaves
-  judged, the rest :awaiting."
+  judged, the rest :awaiting — on the verdict, and on a judged leaf's
+  409 exactly as partial-verdict names them."
   [engine rdef model body principal acknowledged mode grant]
   (let [partial? (= :partial mode)
         inp (schema/decode model (or body {}))
@@ -2221,7 +2222,17 @@
                     (split-leaves (create-walled-guards rdef)
                                   (set (keys (or body {}))))
                     {:keys [warned]}
-                    (create-guard-pass judged inp ctx acknowledged)]
+                    (try
+                      (create-guard-pass judged inp ctx acknowledged)
+                      (catch clojure.lang.ExceptionInfo e
+                        (if (and (seq awaiting)
+                                 (= :guard-refused
+                                    (:waymark10/problem (ex-data e))))
+                          (throw (ex-info (ex-message e)
+                                          (assoc (ex-data e)
+                                                 :awaiting (mapv :name awaiting))
+                                          e))
+                          (throw e))))]
                 {:valid? true
                  :judged (mapv :name judged)
                  :awaiting (mapv :name awaiting)

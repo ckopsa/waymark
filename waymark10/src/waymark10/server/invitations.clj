@@ -158,6 +158,17 @@
       (some #(secret? (:properties %)) walked)
       (str "`" arg "`" where " is a secret argument, and nobody is invited to type a secret."))))
 
+(defn showable
+  "The entries of `values` an invitation may show a person as arguments
+  of `action` on `rdef`. A key that is no argument of the door, or a
+  secret one, is left out alone, and the others stand."
+  [rdef action values]
+  (let [entries (some-> (get-in rdef [:actions (keyword (name action)) :input])
+                        schema/entry-map)]
+    (into {}
+          (remove (fn [[k _]] (argument-problem entries action "" (arg-name k))))
+          values)))
+
 (defn- judges-the-input?
   "Does this denier's verdict turn on what the door is handed: does its
   `:judges` name an argument of the action's input?"
@@ -226,9 +237,15 @@
   (let [{:keys [action door]} (step-of inp ctx)
         entries (some-> (:input door) schema/entry-map)
         names (named-fields inp)
-        suggest (:suggest inp)]
+        suggest (:suggest inp)
+        given (:given inp)]
     (cond
       (nil? door) nil
+
+      ;; what the person typed already is the engine's to say: an
+      ;; author's own values are suggestions, and are marked as such
+      (and (some? given) (not= :system (:type (:principal ctx))))
+      "`given` is the engine's to write; name values of your own in `suggest`."
 
       (and (some? (:field inp)) (some? (:fields inp)))
       "name `fields`, or `field` alone for a list of one, and not both."
@@ -245,7 +262,12 @@
             (some #(argument-problem entries action
                                      ", a key of `suggest`,"
                                      (arg-name %))
-                  (keys suggest)))))))
+                  (keys suggest)))
+          (when (map? given)
+            (some #(argument-problem entries action
+                                     ", a key of `given`,"
+                                     (arg-name %))
+                  (keys given)))))))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -269,7 +291,7 @@
           (t/allow))))))
 
 (g/defguard the-field-is-an-open-argument
-  {:judges [:action :field :fields :suggest]
+  {:judges [:action :field :fields :suggest :given]
    :reads [:storage]
    :vars [:problem]
    :open "The fields are the action's own input schema; name arguments of it that are not secret, in `fields` or in `field` alone, and suggest values only for such arguments."
@@ -415,6 +437,15 @@
                      :help "How many steps the walkthrough has. Written by the engine."}}
     [:maybe [:int {:min 1 :max 20}]]]])
 
+(def ^:private given-fields
+  "What the ENGINE writes when a quest hands its owner the goal's own
+  step (docs/spec-quests.md): the values the owner gave the quest."
+  [[:given {:optional true
+            :x-display {:label "Given values"
+                        :help "Values the invited person typed already, written by the engine and shown as their own. The engine never submits them; only the person's own submit does."
+                        :spelled-by-hand "Its keys are the arguments of the invited action, which differ per action, so no fixed sub-form can offer them."}}
+    [:maybe [:map-of :keyword :any]]]])
+
 (defn- off-the-form
   "The same entries, kept off an author's form: the create model must
   hold them for the engine's own create, and no person fills them in."
@@ -441,6 +472,7 @@
          [:string {:min 1 :max 128}]]]
        (into step-fields)
        (into led-fields)
+       (into given-fields)
        (conj [:subject_name {:optional true
                              :x-display {:label "Invited by name"
                                          :help "The invited person's name as their member row said it at birth, stamped by the engine."}}
@@ -454,7 +486,8 @@
    ;; the author and the answer are the engine's to write
    :create-schema (-> [:map]
                       (into step-fields)
-                      (into (off-the-form led-fields)))
+                      (into (off-the-form led-fields))
+                      (into (off-the-form given-fields)))
    :filterable {:state #{:eq :in}
                 :subject #{:eq}
                 :author #{:eq}

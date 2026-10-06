@@ -579,23 +579,38 @@
               (take 16))
         needs))
 
+(defn- awaiting-note
+  "The guards that wait on a form, as one sentence; nil when none do."
+  [awaiting]
+  (when (seq awaiting)
+    (clip (str "Judged when you fill the form: "
+               (str/join ", " (map #(if (keyword? %) (name %) (str %)) awaiting))
+               ".")
+          240)))
+
+(defn- confirm-note
+  "A confirm step's note: the consequence, and after it the guards that
+  wait on its form. The consequence is cut first, so the guards stay."
+  [sentence awaiting]
+  (if-some [tail (clip (awaiting-note awaiting) 160)]
+    (str/triml (str (clip sentence (- 239 (count tail))) " " tail))
+    (clip sentence 240)))
+
 (defn- with-form
   "A step on a door whose form is not filled yet: its `needs`, and on
-  its note the guards that wait on them. They cannot be planned."
-  [step {:keys [needs awaiting]}]
+  its note the guards that wait on them. They cannot be planned. A
+  confirm door's step stays the owner's to confirm."
+  [step {:keys [needs awaiting confirm consequence]}]
   (cond-> step
     (seq needs) (assoc :needs (needs-of needs))
-    (seq awaiting) (assoc :note (clip (str "Judged when you fill the form: "
-                                           (str/join ", " (map #(if (keyword? %) (name %) (str %))
-                                                               awaiting))
-                                           ".")
-                                      240))))
+    confirm (assoc :whose "confirm" :note (confirm-note consequence awaiting))
+    (and (not confirm) (seq awaiting)) (assoc :note (awaiting-note awaiting))))
 
 (defn- blocked-steps
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
   bound, else one, with the refusal's other remedies on it as
   `:alternatives`. An alternative is never a step of its own."
-  [{:keys [door row reason needs confirm consequence held hold warnings] :as entry}
+  [{:keys [door row reason needs awaiting confirm consequence held hold warnings] :as entry}
    goal seat-lookup]
   (let [[k action] (door-parts door)
         base (step-of entry goal)
@@ -605,7 +620,8 @@
       (loop-reason entry) []
 
       confirm
-      [(cond-> (assoc base :whose "confirm" :note (clip (or consequence reason) 240))
+      [(cond-> (assoc base :whose "confirm"
+                      :note (confirm-note (or consequence reason) awaiting))
          (seq needs) (assoc :needs (needs-of needs)))]
 
       (or held hold)
@@ -827,15 +843,22 @@
 (defn- invitation-of
   "The invitation a step becomes: the step's row, door and needs,
   addressed to the quest's owner, with the step's note. The goal's own
-  step carries the quest's stored `input` as `suggest`, so the form
-  opens with what was already given."
-  [row step]
+  step carries the quest's stored `input` as `given`, so the form opens
+  with what the owner typed already, as the owner's own. A stored key
+  the invitation may not show is left out alone."
+  [eng row step]
   (let [fields (into [] (take 8) (:needs step))
         {:keys [self action input]} (:data row)
         goal? (and (= (str/trim (str self)) (:self step))
                    (= (str/trim (str action)) (some-> (:door step) name)))
+        plural (:plural (invitations/parse-self (:self step)))
+        rdef (when plural
+               (some #(when (= plural (some-> (:plural %) name)) %)
+                     (vals (inv/resources eng))))
         stored (when (and goal? (map? input))
-                 (into {} (map (fn [[k v]] [(keyword (name k)) v])) input))]
+                 (invitations/showable
+                  rdef (:door step)
+                  (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)))]
     (cond-> {:subject (get-in row [:data :owner])
              :self (:self step)
              :action (:door step)
@@ -844,7 +867,7 @@
                                   (get-in row [:data :title]))
                              240))}
       (seq fields) (assoc :fields fields)
-      (seq stored) (assoc :suggest stored))))
+      (seq stored) (assoc :given stored))))
 
 (defn- open-invitation
   "The quest's invitation, when it is still open; else nil."
@@ -883,12 +906,12 @@
   new one. The key is made from `t`, so a replay opens no second one.
   A create the invitation's own guards refuse is a warning: the plan
   still lands, with no invitation. A create refused with the stored
-  input as `suggest` is tried once more without it, so a key the
-  invitation may not show costs the pre-fill and not the step."
+  input as `given` is tried once more without it, so a value the
+  invitation still refuses costs the pre-fill and not the step."
   [eng row plan t]
   (when (contains? (inv/resources eng) invitations/kind)
     (let [open (open-invitation eng row)
-          want (some->> (step-to-hand plan) (invitation-of row))]
+          want (some->> (step-to-hand plan) (invitation-of eng row))]
       (if (and open want (same-step? open want))
         (str (:id open))
         (do
@@ -903,8 +926,8 @@
               (try
                 (create! want key)
                 (catch Exception e
-                  (or (when (:suggest want)
-                        (try (create! (dissoc want :suggest) (str key ":plain"))
+                  (or (when (:given want)
+                        (try (create! (dissoc want :given) (str key ":plain"))
                              (catch Exception _ nil)))
                       (do (warn! "quest " (:id row) " could not open an invitation ("
                                  (or (inv/problem-reason e) (ex-message e)) ")")
