@@ -64,7 +64,10 @@
 ;; the refusal's evidence: {:door :plan_day/assign_meal
 ;; :id (evidence :plan_day_id)}. It may also say which input fields
 ;; answer the refusal: {:door :ticket/restate :fields [:showcase]} —
-;; a pursuit asks for those, and not for the door's required fields
+;; a pursuit asks for those, and not for the door's required fields.
+;; A field may be a path into a nested one, [:showcase :evidence
+;; :film_url], or (evidence :f): the name or path the guard found
+;; missing. The wire spells a path dotted, as a form names its input
 
 (defn- binding-form?
   "(input :f), (data :f) or (evidence :f): the three reads a remedy
@@ -74,6 +77,15 @@
   (clojure.core/and (seq? f) (= 2 (count f))
                     (contains? '#{input data evidence} (first f))
                     (keyword? (second f))))
+
+(defn- remedy-field?
+  "One entry of a remedy's :fields: an input field name, a path of
+  names into a nested field, or (evidence :f) for the field the
+  refusing guard found missing."
+  [f]
+  (clojure.core/or (simple-keyword? f)
+                   (clojure.core/and (vector? f) (seq f) (every? simple-keyword? f))
+                   (clojure.core/and (binding-form? f) (= 'evidence (first f)))))
 
 (defn- remedy-problem
   "Why a remedy map is malformed, nil when it is not. A bare token is
@@ -90,8 +102,9 @@
       (clojure.core/and (contains? r :fields)
                         (not (clojure.core/and (vector? (:fields r))
                                                (seq (:fields r))
-                                               (every? simple-keyword? (:fields r)))))
-      (str "the :fields of " (pr-str r) " is not a vector of input field names")
+                                               (every? remedy-field? (:fields r)))))
+      (str "the :fields of " (pr-str r)
+           " is not a vector of input field names, paths of them or (evidence :f)")
 
       (clojure.core/and (contains? r :id) (not (binding-form? (:id r))))
       (str "the :id of " (pr-str r) " is not (input :f), (data :f) or (evidence :f)")
@@ -117,7 +130,8 @@
 (defn remedy-bindings
   "Every binding form one remedy map carries."
   [r]
-  (cond-> (vec (vals (:input r))) (:id r) (conj (:id r))))
+  (cond-> (into (vec (vals (:input r))) (filter seq?) (:fields r))
+    (:id r) (conj (:id r))))
 
 (defn evidence-names
   "The evidence names a guard declares its refusal returns."
@@ -129,6 +143,15 @@
     input (get inp k)
     data (get-in row [:data k])
     evidence (get evidence k)))
+
+(defn- field-path
+  "A remedy field as the wire spells it: a name, or a path dotted
+  (showcase.evidence.film_url). nil when it names nothing."
+  [f]
+  (cond
+    (keyword? f) (name f)
+    (string? f) (not-empty f)
+    (sequential? f) (not-empty (apply str (interpose "." (keep field-path f))))))
 
 (defn resolve-remedies
   "The refusal's remedies resolved against the refused call and the
@@ -147,11 +170,19 @@
                               (keep (fn [[k f]]
                                       (when-some [v (bound-value f row inp evidence)]
                                         [k v])))
-                              (:input r))]
+                              (:input r))
+                     ;; a field the evidence did not find names nothing
+                     fields (into []
+                                  (keep (fn [f]
+                                          (field-path
+                                           (if (seq? f)
+                                             (bound-value f row inp evidence)
+                                             f))))
+                                  (:fields r))]
                  (cond-> {:door (:door r)}
                    (some? id) (assoc :id (str id))
                    (seq in) (assoc :input in)
-                   (seq (:fields r)) (assoc :fields (mapv name (:fields r)))))))
+                   (seq fields) (assoc :fields fields)))))
            (:remedies g)))))
 
 (defn guard

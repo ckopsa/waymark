@@ -470,6 +470,33 @@
                  :safety fx/routine}
           :lower {:from #{:open} :to :shut :safety fx/routine}}}))))
 
+(deftest a-remedy-field-may-be-a-path-or-come-from-the-evidence
+  (let [fields (fn [declared evidence]
+                 (:fields (first (g/resolve-remedies
+                                  {:remedies [{:door :crate/pry :fields declared}]}
+                                  {} {} evidence))))
+        declares (fn [declared]
+                   (g/expr {:name :crate-fields
+                            :when '(= (data :free) true)
+                            :explain "The crate is shut."
+                            :remedies [{:door :crate/pry :fields declared}]}))]
+    (is (= ["title" "showcase.evidence.film_url"]
+           (fields [:title [:showcase :evidence :film_url]] nil))
+        "a path is written dotted, as the form names the nested input")
+    (is (= ["showcase.evidence.scene_ref"]
+           (fields ['(evidence :missing_field)]
+                   {:missing_field "showcase.evidence.scene_ref"}))
+        "the guard's evidence names the field it found missing")
+    (is (= ["showcase.evidence.film_url"]
+           (fields ['(evidence :missing_field)]
+                   {:missing_field [:showcase :evidence :film_url]})))
+    (is (nil? (fields ['(evidence :missing_field)] nil))
+        "evidence the guard did not find names no field")
+    (is (= ["title"] (fields [:title '(evidence :missing_field)] {})))
+    (is (some? (declares [:title [:showcase :evidence] '(evidence :missing_field)])))
+    (doseq [bad [[[]] ["showcase"] ['(input :title)] [[:showcase "evidence"]]]]
+      (is (thrown? Exception (declares bad)) (pr-str bad)))))
+
 (deftest the-depth-bound-stops-a-branch
   (let [{:keys [meal plan] :as rows} (chain!)
         res (pursue-list! rows {:resolve (resolver rows (id-of meal))
