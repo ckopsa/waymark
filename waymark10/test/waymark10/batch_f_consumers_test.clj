@@ -386,6 +386,29 @@
         (events/unsubscribe d sub)
         (events/stop! d)))))
 
+(deftest the-dispatcher-seed-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [_low high commit-low!]
+     (let [started (future (events/dispatcher *eng* {:poll-ms 200}))]
+       (try
+         (testing "a dispatcher started in the window does not seed above the lower id"
+           (is (= ::waiting (deref started 200 ::waiting))))
+         (commit-low!)
+         (testing "once the lower id commits, the seed is the newest id"
+           (let [d (deref started 10000 nil)]
+             (is (some? d))
+             (is (= high (some-> d :last-seen deref)))))
+         (finally
+           (some-> (deref started 10000 nil) events/stop!))))))
+  (testing "a log that never settles is read as it stands"
+    (in-the-window
+     (fn [_low high _commit-low!]
+       (let [d (with-redefs [store/settled-transitions (fn [& _] nil)]
+                 (events/dispatcher *eng* {:poll-ms 200}))]
+         (try
+           (is (= high @(:last-seen d)))
+           (finally (events/stop! d))))))))
+
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 
 (deftest throwing-consumer-parks-and-retries

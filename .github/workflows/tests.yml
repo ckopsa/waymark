@@ -1216,7 +1216,14 @@ jobs:
         env:
           SHOTS: ${{ runner.temp }}/ui-access-shots
         run: node waymark10/scripts/ui-drive.mjs access
-      # the drive's screenshots ("Accept as quest": the offer, the tracker)
+      # the quest flow again at 390x844 with touch, live and as a film,
+      # against the same engine
+      - name: Drive the quest flow on a phone
+        env:
+          SHOTS: ${{ runner.temp }}/ui-access-shots
+        run: node waymark10/scripts/ui-drive.mjs quest-phone
+      # the drives' screenshots ("Accept as quest": the offer, the tracker;
+      # phone-quest-*: the same on a phone)
       - name: Upload the drive's screenshots
         if: always()
         uses: actions/upload-artifact@v4
