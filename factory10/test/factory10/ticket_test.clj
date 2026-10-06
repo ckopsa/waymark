@@ -1076,4 +1076,16 @@
     (testing "a seat naming an unrelated failure is not warned"
       (is (string? (file! (assoc failure :detail
                                  "The run says `FAILED: the offer under the refusal`.")
-                          {:principal seat}))))))
+                          {:principal seat}))))
+    (testing "a second filing is warned while the first is still a draft"
+      (let [fresh (assoc failure :detail
+                         "The run says `FAILED: the sheet keeps its scroll place`.")
+            draft (:row (inv/create! eng :ticket fresh {:principal seat}))
+            draft-id (str (:id draft))
+            warned (file! fresh {:principal seat})]
+        (is (= "draft" (some-> (:state draft) name))
+            "the first filing was not groomed")
+        (is (map? warned) (pr-str warned))
+        (is (= 409 (:status warned)) (pr-str warned))
+        (is (str/includes? (pr-str warned) draft-id)
+            "the refusal names the draft that already names the failure")))))
