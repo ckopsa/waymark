@@ -4106,6 +4106,8 @@ async function questPhoneStory() {
     ok("the film opens one sheet, on the goal's own page, and closes it",
        staged.length === 1 && staged[0].replay && staged[0].closed &&
        staged[0].here === loft && staged[0].steps.length > 0);
+    ok("its steps are said in words, with no /api/ path in them",
+       (staged[0]?.steps || []).every(s => !s.includes("/api/")));
     ok("and says no refusal in it", staged[0]?.said === "" && staged[0]?.shut === false);
     ok("the connector's film makes no quest", (await active()) === left);
     await fresh(`the page ${where}, out of the connector's film`);

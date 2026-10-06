@@ -679,6 +679,21 @@
   (let [labeled (cond-> ui labels (assoc :labels labels))]
     (if (<= (long (json-bytes labeled)) (long ui-max-bytes)) labeled ui)))
 
+(def sheet-step-keys
+  "The keys a recorded quest sheet keeps of each step of its preview's
+  plan: the step's names, and beside them the words a person reads
+  (`in-words`, quests.clj). The page's recorder keeps the same ones
+  (questSheet, ui/140-links-access.js; docs/spec-guided-follow.md §1)."
+  [:door :self :whose :waiting_on :needs :note
+   :door_label :row_label :needs_labels])
+
+(defn sheet-step
+  "One step of a preview's plan as a recorded sheet keeps it
+  (`sheet-step-keys`), for the connector's recorder (`stage-sheet!`,
+  mcp.clj)."
+  [step]
+  (select-keys step sheet-step-keys))
+
 (defn- clean-quest
   "The `quest` part of a reported ui part as the registry may store it:
   the sheet a tap on a shut door opened (ui/140-links-access.js,
