@@ -63,6 +63,83 @@ function splitRefusals(doc) {
   return {blocked, grouped, gated};
 }
 
+/* ── a shut door that names a way out (docs/spec-quests.md) ────────────
+   A refused action with remedies is a goal the engine can plan toward,
+   so its seat in the bar takes a tap: dashed, flagged, aria-disabled and
+   not disabled, so it keeps focus. One tap makes and pins the quest
+   whose goal is this row and this door, with no input: the goal's form
+   is the quest's last step. A refusal with no remedy stays the plain
+   dimmed button, and so does one on a collection: a quest's goal is a
+   door on ONE row. */
+function questReach(entry, doc) {
+  return !!(entry.remedies || []).length && !!doc.self &&
+    !/_collection$/.test(doc.kind || "");
+}
+/* the entries of repeated reasons that name a way out: they have no
+   dimmed seat in the bar, and get a reachable one */
+function reachGrouped(grouped, doc) {
+  return grouped.flat().filter(([, entry]) => questReach(entry, doc));
+}
+function shutDoor(name, entry, doc) {
+  if (!questReach(entry, doc))
+    return el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry));
+  const btn = el("button", {type: "button", class: "blocked notyet",
+    "aria-disabled": "true", "data-quest-door": name,
+    "data-quest-self": doc.self.split("?")[0],
+    title: entry.reason || ""},
+    label(name, entry),
+    el("span", {class: "notyet-flag", "aria-hidden": "true"}, " ⚑"));
+  btn.addEventListener("click", () => questFromDoor(btn, name, doc));
+  return btn;
+}
+/* the tap: the create door is read off the quests collection, as every
+   button is, then the quest is pinned and the tracker shows it
+   (120-nav-home.js). No form opens. A replay writes nothing. */
+async function questFromDoor(btn, name, doc) {
+  if (replay || btn.hasAttribute("data-quest-busy")) return;
+  btn.setAttribute("data-quest-busy", "");
+  const refused = p => toast(`${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`);
+  try {
+    const col = collectionHref(await wellKnown(), "quest");
+    const res = col ? await api(col + "?page%5Bsize%5D=1") : {ok: false};
+    const create = res.ok && ((res.body || {}).actions || {}).create;
+    if (!create) { toast("A quest cannot be made here"); return; }
+    const goal = {self: doc.self.split("?")[0], action: name};
+    const h = {};
+    if (create.safety && create.safety.idempotent === false)
+      h["Idempotency-Key"] = uuid();
+    const made = await api(create.href,
+      {method: create.method || "POST", body: JSON.stringify(goal), headers: h});
+    if (!made.ok) { refused(made.body); return; }
+    const quest = made.body || {};
+    const pin = (quest.actions || {}).pin;
+    if (pin && !(quest.data || {}).pinned) {
+      const pinned = await invokeBare(pin, quest);
+      if (!pinned.ok) { refused(pinned.body); return; }
+    }
+    await refreshQuest();
+  } finally { btn.removeAttribute("data-quest-busy"); }
+}
+/* each reachable button is described by its reason line (data-whynot,
+   below), and that line says what a tap does. Called again when a line
+   is drawn late: a button already described is left alone. */
+let whyNotSeq = 0;
+function wireNotYet(root) {
+  const lines = [...root.querySelectorAll("[data-whynot]")];
+  for (const btn of root.querySelectorAll(
+         "button[data-quest-door]:not([aria-describedby])")) {
+    const line = lines.find(l =>
+      l.getAttribute("data-whynot").split(" ").includes(btn.dataset.questDoor));
+    if (!line) continue;
+    if (!line.id) line.id = "whynot-" + (++whyNotSeq);
+    if (!line.querySelector(".notyet-hint"))
+      line.append(el("span", {class: "notyet-hint"},
+        " Not yet. Tap to make it a quest."));
+    btn.setAttribute("aria-describedby", line.id);
+  }
+}
+
 /* A live countdown from becomes_available.at — the literal moment
    stays printed (machine truth), the tick is the courtesy. */
 /* ── the Access panel (#access): the hand-in-hand loop on one screen —
@@ -554,7 +631,7 @@ function blockedNotes(blocked, doc) {
   if (!blocked.length) return null;
   const box = el("ul", {class:"blockedwhy notnow"});
   for (const [name, entry] of blocked) {
-    const li = el("li", {class:"item"},
+    const li = el("li", {class:"item", "data-whynot": name},
       el("b", {}, label(name, entry)), " — ",
       el("span", {class:"why"}, entry.reason || ""),
       entry.becomes_available
@@ -574,7 +651,7 @@ function notNowFooter(grouped, gated, doc) {
   if (!n) return null;
   const box = el("div", {class:"cantyet"});
   for (const g of grouped)          // one reason, many actions: say it once
-    box.append(el("div", {class:"item"},
+    box.append(el("div", {class:"item", "data-whynot": g.map(([nm]) => nm).join(" ")},
       el("b", {}, g.map(([nm, e]) => label(nm, e)).join(", ")),
       el("div", {class:"why"}, g[0][1].reason || ""),
       remedyChips(g[0][1].remedies, doc)));
@@ -582,11 +659,11 @@ function notNowFooter(grouped, gated, doc) {
   for (const [nm, e] of gated) {
     const k = e.becomes_available.in_states.join(", ");
     if (!byStates.has(k)) byStates.set(k, []);
-    byStates.get(k).push(label(nm, e));
+    byStates.get(k).push([nm, label(nm, e)]);
   }
   for (const [states, names] of byStates)
-    box.append(el("div", {class:"item"},
-      el("b", {}, names.join(", ")),
+    box.append(el("div", {class:"item", "data-whynot": names.map(n => n[0]).join(" ")},
+      el("b", {}, names.map(n => n[1]).join(", ")),
       el("span", {class:"muted"}, ` — available in state(s) ${states}`)));
   return el("details", {class:"unavail"},
     el("summary", {class:"muted"}, `not now (${n})`), box);

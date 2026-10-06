@@ -78,12 +78,9 @@ async function renderResource(view, doc, hints) {
   /* refused actions keep their seats in the bar, dimmed; their honest
      reasons render just below, at the point of intent */
   const {blocked, grouped, gated} = splitRefusals(doc);
-  for (const [name, entry] of blocked)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
-  for (const [name, entry] of gated)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
+  /* one that names a way out is a tap away from a quest (shutDoor) */
+  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+    bar.append(shutDoor(name, entry, doc));
   /* the grant scope (wire 10): a grant row is a scope SELECTOR its
      audience presents via X-Waymark-Grant — this session can put it on */
   if (kind === "grant") {
@@ -189,6 +186,7 @@ async function renderResource(view, doc, hints) {
   const footer = notNowFooter(grouped, gated, doc);
   if (footer) dataPanel.append(footer);
   view.append(dataPanel);
+  wireNotYet(view);
   watchScope({self: doc.self});
   paintPresence();
 }
@@ -284,12 +282,12 @@ async function renderSurface(view, doc) {
     if (!showcase.has(name))
       bar.append(actionButton({name, entry, doc: anchor, onDone: () => render()}));
   const {blocked, grouped, gated} = splitRefusals(anchor);
-  for (const [name, entry] of blocked)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
+  for (const [name, entry] of blocked.concat(reachGrouped(grouped, anchor)))
+    bar.append(shutDoor(name, entry, anchor));
   panel.append(bar);
   const notes = blockedNotes(blocked, anchor);
   if (notes) panel.append(notes);
+  wireNotYet(panel);
   if (anchor.self)
     panel.append(el("div", {class:"embed"},
       el("div", {class:"embed-head"}, el("b", {}, "Anchor"),
@@ -326,6 +324,7 @@ async function renderSurface(view, doc) {
       dataPanel.append(historySection(`${anchor.self}/-/events`));
       const footer = notNowFooter(grouped, gated, anchor);
       if (footer) dataPanel.append(footer);
+      wireNotYet(view);
     });
     view.append(dataPanel);
     watchScope({self: anchor.self});
