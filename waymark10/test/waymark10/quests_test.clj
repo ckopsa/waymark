@@ -217,6 +217,32 @@
                                 (fn [tx] (store/load-row (:storage eng) tx :quest (str id) {})))
                               :state name)))))
 
+(deftest a-row-reads-its-progress-and-its-next-step
+  ;; one step of each state: the collection row's two lines
+  (let [self "/api/chores/1"
+        step (fn [n whose state & {:as more}]
+               (merge {:n n :door "finish" :self self :whose whose :state state} more))
+        done (step 1 "person" "done" :note "Write the guide.")
+        nxt (step 2 "choice" "next" :note "Pick the reviewer." :needs ["reviewer"])
+        seat (step 3 "seat" "waiting" :waiting_on "Planner")
+        held (step 4 "held" "waiting")
+        later (step 5 "person" "later" :note "Complete the epic.")
+        row (fn [& plan] {:data {:plan (vec plan)}})]
+    (testing "the count is k done, n known so far, and never k of n"
+      (is (= "1 done, 5 known so far"
+             (quests/progress-line (row done nxt seat held later) nil)))
+      (is (nil? (quests/progress-line (row) nil)) "no plan yet"))
+    (testing "the head step is the first one not done"
+      (is (= "Pick the reviewer." (quests/next-line (row done nxt seat held later) nil)))
+      (is (= "waiting on Planner" (quests/next-line (row done seat later) nil)))
+      (is (= "waiting on your tap" (quests/next-line (row done held later) nil)))
+      (is (= "finish" (quests/next-line (row (dissoc nxt :note)) nil))
+          "a step with no note reads as its door")
+      (is (nil? (quests/next-line (row done) nil)) "every known step is done"))
+    (testing "a stored step's state may be a keyword"
+      (is (= "1 done, 1 known so far"
+             (quests/progress-line (row (update done :state keyword)) nil))))))
+
 ;; ── the mapping (Quests 1b): canned rehearsal answers, no engine ────
 
 (defn- seats-for
