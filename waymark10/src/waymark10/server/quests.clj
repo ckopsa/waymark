@@ -827,15 +827,22 @@
 (defn- invitation-of
   "The invitation a step becomes: the step's row, door and needs,
   addressed to the quest's owner, with the step's note. The goal's own
-  step carries the quest's stored `input` as `suggest`, so the form
-  opens with what was already given."
-  [row step]
+  step carries the quest's stored `input` as `given`, so the form opens
+  with what the owner typed already, as the owner's own. A stored key
+  the invitation may not show is left out alone."
+  [eng row step]
   (let [fields (into [] (take 8) (:needs step))
         {:keys [self action input]} (:data row)
         goal? (and (= (str/trim (str self)) (:self step))
                    (= (str/trim (str action)) (some-> (:door step) name)))
+        plural (:plural (invitations/parse-self (:self step)))
+        rdef (when plural
+               (some #(when (= plural (some-> (:plural %) name)) %)
+                     (vals (inv/resources eng))))
         stored (when (and goal? (map? input))
-                 (into {} (map (fn [[k v]] [(keyword (name k)) v])) input))]
+                 (invitations/showable
+                  rdef (:door step)
+                  (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)))]
     (cond-> {:subject (get-in row [:data :owner])
              :self (:self step)
              :action (:door step)
@@ -844,7 +851,7 @@
                                   (get-in row [:data :title]))
                              240))}
       (seq fields) (assoc :fields fields)
-      (seq stored) (assoc :suggest stored))))
+      (seq stored) (assoc :given stored))))
 
 (defn- open-invitation
   "The quest's invitation, when it is still open; else nil."
@@ -883,12 +890,12 @@
   new one. The key is made from `t`, so a replay opens no second one.
   A create the invitation's own guards refuse is a warning: the plan
   still lands, with no invitation. A create refused with the stored
-  input as `suggest` is tried once more without it, so a key the
-  invitation may not show costs the pre-fill and not the step."
+  input as `given` is tried once more without it, so a value the
+  invitation still refuses costs the pre-fill and not the step."
   [eng row plan t]
   (when (contains? (inv/resources eng) invitations/kind)
     (let [open (open-invitation eng row)
-          want (some->> (step-to-hand plan) (invitation-of row))]
+          want (some->> (step-to-hand plan) (invitation-of eng row))]
       (if (and open want (same-step? open want))
         (str (:id open))
         (do
@@ -903,8 +910,8 @@
               (try
                 (create! want key)
                 (catch Exception e
-                  (or (when (:suggest want)
-                        (try (create! (dissoc want :suggest) (str key ":plain"))
+                  (or (when (:given want)
+                        (try (create! (dissoc want :given) (str key ":plain"))
                              (catch Exception _ nil)))
                       (do (warn! "quest " (:id row) " could not open an invitation ("
                                  (or (inv/problem-reason e) (ex-message e)) ")")

@@ -13,6 +13,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.quests :as quests]
@@ -1104,19 +1105,30 @@
     (is (every? (comp empty? :needs) (:plan d)))
     (is (= "Merged." (:close_reason (walk/keywordize-keys (:input d)))))))
 
-(deftest the-goals-invitation-suggests-the-stored-input
+(deftest the-goals-invitation-carries-the-stored-input-as-given
   (let [eng (epic-engine)
         film "https://example.org/film"
         {:keys [quest part]} (epic-quest! eng {:film film})
         _ (hear! eng)]
-    (is (nil? (get-in (invitation-of eng quest) [:data :suggest]))
+    (is (nil? (get-in (invitation-of eng quest) [:data :given]))
         "a step that is not the goal's carries no stored input")
     (move! eng :chore part :finish person)
     (hear! eng)
     (let [data (:data (invitation-of eng quest))]
       (is (= ["close_reason"] (:fields data)) (pr-str data))
-      (is (= {:film film} (walk/keywordize-keys (:suggest data)))
-          "the goal's form opens with what the quest stored"))))
+      (is (= {:film film} (walk/keywordize-keys (:given data)))
+          "the goal's form opens with what the quest stored")
+      (is (nil? (:suggest data))
+          "the owner's own values are not marked as a suggestion"))))
+
+(deftest a-stored-key-the-invitation-may-not-show-is-left-out-alone
+  (is (= {:film "https://example.org/film"}
+         (invitations/showable epic "complete"
+                               {:film "https://example.org/film"
+                                :colour "red"}))
+      "the key the door does not take goes, and the other still pre-fills")
+  (is (= {} (invitations/showable nil "complete" {:film "x"}))
+      "a row of no served kind shows nothing"))
 
 (deftest the-mapping-ends-on-a-goal-whose-form-is-not-filled
   (let [plan (quests/answer->plan

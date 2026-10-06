@@ -155,9 +155,11 @@ row's envelope.
   on <waiting_on>" with a live dot.
 - **Go** opens the head step's `door` on its `self`, with its `needs`
   lit and its note shown. On the goal's own step the form holds the
-  quest's stored `input` already, as suggestions the owner may change;
-  the step's invitation carries the same values as `suggest`, so the
-  quest page's Go shows them too. It goes through `openDoor`
+  quest's stored `input` already, as the owner's own values and with no
+  suggestion mark; the step's invitation carries the same values as
+  `given`, which only the engine writes, so the quest page's Go shows
+  them too. A stored key the invitation may not show, a secret argument
+  or one the door does not take, is left out alone. It goes through `openDoor`
   (`ui/180-action-dialog.js`), the helper an invitation opens through.
   Go is disabled while the head waits. It is not shown when the plan
   has no step to take or `blocked_reason` is written; the reason is
