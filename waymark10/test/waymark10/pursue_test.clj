@@ -402,27 +402,35 @@
 ;; ── a door shut by the row's state names the row's own doors that
 ;; lead to a state where it opens
 
-(defn- lifted! []
+;; the session's key-store replays an identical create, so this is the
+;; free latch the tests above read shut: it is lowered again after `f`
+(defn- with-lifted [f]
   (let [lt (make! :latch {:free true})]
-    (is (= "open" (:state (c/act! *session* lt :lift nil))))
-    lt))
+    (is (= "open" (:state (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil))))
+    (try
+      (f lt)
+      (finally
+        (c/act! *session* (c/get-doc *session* (:self lt)) :lower nil)))))
 
 (deftest an-out-of-state-door-names-the-doors-that-lead-to-it
-  (let [doc (c/get-doc *session* (:self (lifted!)))]
-    (is (= ["latch.lower"] (get-in doc [:unavailable :lift :remedies])) (pr-str doc))
-    (is (= ["shut"] (get-in doc [:unavailable :lift :becomes_available :in_states])))))
+  (with-lifted
+    (fn [lt]
+      (let [doc (c/get-doc *session* (:self lt))]
+        (is (= ["latch.lower"] (get-in doc [:unavailable :lift :remedies])) (pr-str doc))
+        (is (= ["shut"] (get-in doc [:unavailable :lift :becomes_available :in_states])))))))
 
 (deftest pursue-walks-an-out-of-state-remedy-back-to-its-state
-  (let [lt (lifted!)
-        cr (crate! lt)
-        res (c/pursue! *session* cr :pry nil {:dry-run true})]
-    (is (empty? (:blocked-on res)) (pr-str res))
-    (is (= [["latch.lower" (:self lt)]
-            ["latch.lift" (:self lt)]
-            ["crate.pry" (:self cr)]]
-           (mapv (juxt :door :row) (:writes res)))
-        "lift is shut on an open latch: lower is the row's own door back")
-    (is (= "open" (state-of lt)))))
+  (with-lifted
+    (fn [lt]
+      (let [cr (crate! lt)
+            res (c/pursue! *session* cr :pry nil {:dry-run true})]
+        (is (empty? (:blocked-on res)) (pr-str res))
+        (is (= [["latch.lower" (:self lt)]
+                ["latch.lift" (:self lt)]
+                ["crate.pry" (:self cr)]]
+               (mapv (juxt :door :row) (:writes res)))
+            "lift is shut on an open latch: lower is the row's own door back")
+        (is (= "open" (state-of lt)))))))
 
 (deftest a-binding-naming-no-input-field-fails-the-battery
   (is (thrown-with-msg?
