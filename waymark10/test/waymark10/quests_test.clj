@@ -976,3 +976,115 @@
             "the owner's walk holds the other principal's move")
         (is (= (inc filmed) (count (docs-in eng w)))
             "and the quest's document after it")))))
+
+;; ── the goal's form is the last step ────────────────────────────────
+
+(g/defguard the-part-is-finished
+  {:reads [:chore]
+   :explain "Finish the part first."
+   :remedies [{:door :chore/finish :id '(data :part_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [part (read :chore (get-in row [:data :part_id]))]
+      (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
+(g/defguard the-film-is-a-link
+  {:judges [:film]
+   :explain "The film is a link."}
+  [_row inp _ctx]
+  (if (or (nil? (:film inp)) (str/starts-with? (str (:film inp)) "https://"))
+    (t/allow)
+    (t/deny)))
+
+(def ^:private epic
+  "A row whose goal door takes a form: `complete` requires a reason."
+  (r/resource
+   {:kind :q_epic
+    :plural "q_epics"
+    :states [:open :closed]
+    :initial :open
+    :summary "Epic · {state}"
+    :schema [:map
+             [:part_id {:not-a-ref "quests fixture: the-part-is-finished binds its remedy to it"}
+              [:string {:max 80}]]
+             [:close_reason {:optional true} [:maybe [:string {:max 480}]]]]
+    :actions
+    {:complete {:from #{:open} :to :closed
+                :input [:map
+                        [:close_reason [:string {:min 1 :max 480}]]
+                        [:film {:optional true} [:maybe [:string {:max 200}]]]]
+                :guards [the-part-is-finished the-film-is-a-link]
+                :handler (fn [row inp _ctx]
+                           (assoc-in row [:data :close_reason] (:close_reason inp)))
+                :safety routine}
+     :reopen {:from #{:closed} :to :open :safety routine}}}))
+
+(defn- epic-engine []
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore epic]})]
+    ((engine/handler eng) {:request-method :get :uri "/api/q_epics"
+                           :headers {"x-waymark-principal" "colton"}})
+    eng))
+
+(defn- epic-quest!
+  "An open epic over an unfinished part, and the quest to complete it
+  with `input`, or with none."
+  [eng input]
+  (let [part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)]
+    {:part part :epic e :self self
+     :quest (:id (:row (inv/create! eng :quest
+                                    (cond-> {:self self :action "complete"}
+                                      input (assoc :input input))
+                                    {:principal person})))}))
+
+(deftest a-goal-with-no-input-is-the-last-step-and-names-its-needs
+  (let [eng (epic-engine)
+        {:keys [quest part epic self]} (epic-quest! eng nil)
+        _ (hear! eng)
+        d (data-of eng quest)]
+    (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= ["person" "person"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["next" "later"] (states d)))
+    (is (empty? (:needs (first (:plan d)))))
+    (is (= ["close_reason"] (:needs (last (:plan d)))))
+    (move! eng :chore part :finish person)
+    (hear! eng)
+    (let [d (data-of eng quest)
+          goal (last (:plan d))]
+      (is (= ["done" "next"] (states d)) (pr-str d))
+      (is (= ["close_reason"] (:needs goal)))
+      (is (str/includes? (str (:note goal)) "the-film-is-a-link")
+          "a guard that reads a field not given yet is named on the goal step")
+      (is (= ["close_reason"] (get-in (invitation-of eng quest) [:data :fields]))
+          "the goal's form is what the owner is handed")
+      (inv/invoke! eng :q_epic epic :complete {:close_reason "Merged."}
+                   {:principal person :idempotency-key (str (random-uuid))})
+      (hear! eng)
+      (is (= "finished" (name (:state (row-of eng :quest quest))))))))
+
+(deftest a-goal-whose-input-was-given-keeps-it-and-needs-nothing
+  (let [eng (epic-engine)
+        {:keys [quest]} (epic-quest! eng {:close_reason "Merged."})
+        _ (hear! eng)
+        d (data-of eng quest)]
+    (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
+    (is (every? (comp empty? :needs) (:plan d)))
+    (is (= "Merged." (:close_reason (walk/keywordize-keys (:input d)))))))
+
+(deftest the-mapping-ends-on-a-goal-whose-form-is-not-filled
+  (let [plan (quests/answer->plan
+              {:blocked-on [{:door "ticket.complete" :row "/api/tickets/c1"
+                             :needs [:close_reason] :or []}]
+               :stack [{:door "ticket.complete" :row "/api/tickets/e1"
+                        :needs [:close_reason] :awaiting ["the-film-is-a-link"]}]
+               :writes []}
+              nil)]
+    (is (= [["complete" "/api/tickets/c1" "choice" "next"]
+            ["complete" "/api/tickets/e1" "person" "later"]]
+           (mapv (juxt :door :self :whose :state) (:plan plan))))
+    (is (= [["close_reason"] ["close_reason"]] (mapv :needs (:plan plan))))
+    (is (= "Judged when you fill the form: the-film-is-a-link."
+           (:note (last (:plan plan)))))))

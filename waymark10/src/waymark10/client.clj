@@ -457,23 +457,26 @@
   :verdicts […]}, per item) or {:problem …}; refuses locally on an
   undeclared action exactly like act!. act!'s confirm gate calls
   this itself; the fn stays public for callers pre-validating
-  outside a confirm flow."
-  [session doc action input]
-  (let [aname (keyword action)
-        entry (get-in doc [:actions aname])]
-    (if (nil? entry)
-      {:refused {:code :unknown-action
-                 :action (name aname)
-                 :reason (or (why-not doc aname)
-                             (str (:kind doc) " does not afford "
-                                  (name aname) "."))}}
-      (post! session
-             (str (:href entry)
-                  (if (str/includes? (:href entry) "?") "&" "?")
-                  "dry_run=1")
-             input
-             (act-headers doc entry nil nil)
-             true))))
+  outside a confirm flow. `mode` :partial asks the door to judge only
+  what the input gives: a missing field is no error, and the guards
+  that read one are named under :awaiting, not judged."
+  ([session doc action input] (dry-run session doc action input nil))
+  ([session doc action input mode]
+   (let [aname (keyword action)
+         entry (get-in doc [:actions aname])]
+     (if (nil? entry)
+       {:refused {:code :unknown-action
+                  :action (name aname)
+                  :reason (or (why-not doc aname)
+                              (str (:kind doc) " does not afford "
+                                   (name aname) "."))}}
+       (post! session
+              (str (:href entry)
+                   (if (str/includes? (:href entry) "?") "&" "?")
+                   (if (= :partial mode) "dry_run=partial" "dry_run=1"))
+              input
+              (act-headers doc entry nil nil)
+              true)))))
 
 ;; ── plan (rule 7) ───────────────────────────────────────────────────
 
@@ -541,9 +544,10 @@
 (defn- door-action [door] (second (str/split (str door) #"\." 2)))
 
 (defn- trail
-  "The stack as a person reads it: which door waits on which row."
+  "The stack as a person reads it: which door waits on which row. A
+  goal rehearsed partially carries its form: :needs and :awaiting."
   [stack]
-  (mapv (fn [f] {:door (:door f) :row (get-in f [:doc :self])}) stack))
+  (mapv (fn [f] (merge {:door (:door f) :row (get-in f [:doc :self])} (:form f))) stack))
 
 (defn- missing-inputs
   "The required fields of a door's declared input this input leaves
@@ -655,6 +659,27 @@
                 :reason (str "safety.confirm is true — a person must approve: "
                              (consequence-of entry))})
 
+      ;; the goal of a partial rehearsal: its form is filled last, so
+      ;; the guards that read no missing field are judged now, and the
+      ;; door counts as landing with its :needs still owed
+      (and (seq needs) rehearse? (:partial call))
+      (let [res (dry-run session doc action input :partial)
+            form {:needs needs :awaiting (vec (:awaiting res))}]
+        (cond
+          (or (transport? res) (diverged res)) {:stop res}
+          (seq (get-in res [:problem :remedies]))
+          {:refused (vec (get-in res [:problem :remedies])) :doc doc
+           :bound (vec (get-in res [:problem :resolved_remedies]))
+           :reason (get-in res [:problem :detail])
+           :form form}
+          (warnings? res) (blocked {:needs needs :warnings (:warnings res)})
+          (or (problem? res) (refused? res))
+          (blocked {:needs needs
+                    :reason (or (get-in res [:problem :detail])
+                                (get-in res [:refused :reason])
+                                (get-in res [:problem :title]))})
+          :else {:landed doc :to (get-in entry [:effect :to]) :form form}))
+
       (seq needs) (blocked {:needs needs})
 
       :else
@@ -732,7 +757,8 @@
   [session stack rehearse? {:keys [resolve choices max-depth max-steps expect] :or {max-depth 8} :as opts}]
   (let [act-opts (select-keys opts [:confirm! :acknowledge])
         max-steps (or max-steps (* 4 max-depth))
-        write-of (fn [f] {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)})]
+        write-of (fn [f] (merge {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)}
+                                (:form f)))]
     (loop [stack stack writes [] blocked [] at nil expect expect steps 0]
       (let [top (peek stack)]
         (cond
@@ -753,7 +779,7 @@
               (recur (conj (pop stack)
                            (assoc top :doc (:doc out) :reason (:reason out)
                                   :remedies (seq (:refused out)) :all (:refused out)
-                                  :bound (:bound out)))
+                                  :bound (:bound out) :form (:form out)))
                      writes blocked at expect steps)
 
               (:blocked out)
@@ -765,7 +791,7 @@
                   (recur stack' writes blocked' at' expect steps)))
 
               :else
-              (let [w (cond-> (write-of top) (:hold out) (assoc :hold true))
+              (let [w (cond-> (merge (write-of top) (:form out)) (:hold out) (assoc :hold true))
                     writes' (conj writes w)
                     expected (first expect)
                     row (get-in top [:doc :self])
@@ -857,7 +883,13 @@
     :max-steps  attempts one real run may make across its re-rehearsals
                 (default 4 × :max-depth); past it the run answers
                 {:stopped {:step-bound n} …}
-    :dry-run    rehearse only: the writes it would make, every choice
+    :dry-run    rehearse only: the writes it would make, every choice.
+                :partial rehearses a goal whose input lacks a required
+                field all the same: the door is asked to judge only
+                what was given, its remedies are followed, and the
+                goal's write (or its :stack frame, when a remedy
+                blocks) carries :needs, the fields still owed, and
+                :awaiting, the guards that wait on them
     :confirm! :acknowledge  ride every act! (rules 2 and 6)
   → {:done doc :writes […]}, or {:blocked-on [{:door :row :needs
   [input …] :or [alternative remedy …] (:reason)}] :stack […] :writes
@@ -870,7 +902,8 @@
   true and the :held_call id."
   ([session doc action input] (pursue! session doc action input {}))
   ([session doc action input opts]
-   (let [call {:door (door-of doc action) :doc doc :input input}
+   (let [call (cond-> {:door (door-of doc action) :doc doc :input input}
+                (= :partial (:dry-run opts)) (assoc :partial true))
          rehearsal (walk session [call] true opts)]
      (if (or (:dry-run opts) (not (contains? rehearsal :done)))
        (-> rehearsal (dissoc :done) (assoc :rehearsal true :first-estimate true))

@@ -570,6 +570,27 @@
                 (take 8))
           (:or entry))))
 
+(defn- needs-of
+  "A door's arguments still to be given, as a step's `needs`."
+  [needs]
+  (into []
+        (comp (map #(clip (if (keyword? %) (name %) %) 60))
+              (remove nil?)
+              (take 16))
+        needs))
+
+(defn- with-form
+  "A step on a door whose form is not filled yet: its `needs`, and on
+  its note the guards that wait on them. They cannot be planned."
+  [step {:keys [needs awaiting]}]
+  (cond-> step
+    (seq needs) (assoc :needs (needs-of needs))
+    (seq awaiting) (assoc :note (clip (str "Judged when you fill the form: "
+                                           (str/join ", " (map #(if (keyword? %) (name %) (str %))
+                                                               awaiting))
+                                           ".")
+                                      240))))
+
 (defn- blocked-steps
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
   bound, else one, with the refusal's other remedies on it as
@@ -596,11 +617,7 @@
 
       (or (seq needs) (= no-row-chosen reason))
       [(cond-> (assoc base :whose "choice" :note (clip reason 240))
-         (seq needs) (assoc :needs (into []
-                                         (comp (map #(clip (if (keyword? %) (name %) %) 60))
-                                               (remove nil?)
-                                               (take 16))
-                                         needs)))]
+         (seq needs) (assoc :needs (needs-of needs)))]
 
       ;; a row the owner cannot read, or a refusal that names no way
       :else
@@ -652,19 +669,31 @@
   The writes come first, in the rehearsal's order, so the goal door is
   last when it is among them; each blocked entry follows. The plan is
   always an estimate: a rehearsal cannot see the effect of a write it
-  did not make."
+  did not make.
+
+  A goal rehearsed partially (`:dry-run :partial`) carries `:needs`,
+  the fields of its form not given yet, and `:awaiting`, the guards
+  that wait on them. It is the owner's step and the last one, also
+  when a step before it is blocked."
   [answer seat-lookup]
   (let [blocked (vec (:blocked-on answer))
         writes (vec (:writes answer))
-        goal (some-> (or (first (:stack answer)) (peek writes) (first blocked))
+        frame (first (:stack answer))
+        goal (some-> (or frame (peek writes) (first blocked))
                      (step-of nil))
-        steps (-> (mapv (fn [w]
-                          (cond-> (assoc (step-of w goal) :whose "person")
-                            (:hold w) (assoc :whose "held" :waiting_on your-tap)))
-                        writes)
-                  (into (mapcat #(blocked-steps % goal seat-lookup))
-                        (first-remedies blocked))
-                  (with-placeholder goal))
+        before (into (mapv (fn [w]
+                             (cond-> (with-form (assoc (step-of w goal) :whose "person") w)
+                               (:hold w) (assoc :whose "held" :waiting_on your-tap)))
+                           writes)
+                     (mapcat #(blocked-steps % goal seat-lookup))
+                     (first-remedies blocked))
+        steps (if (and (seq before) (seq (:needs frame)))
+                (let [form (with-form (assoc goal :whose "person") frame)]
+                  (conj before
+                        (cond-> form
+                          (and (not (:note form)) (some #(= "seat" (:whose %)) before))
+                          (assoc :note more-may-follow))))
+                (with-placeholder before goal))
         steps (with-states (into [] (comp (filter :self) (take 100)) steps))
         head (first steps)
         stopped (when-some [s (:stopped answer)]
@@ -717,13 +746,16 @@
 
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its
-  grant. A rehearsal that cannot be made (the owner is no member now,
-  the grant confers nothing) is a plan of no steps that says why."
+  grant. The rehearsal is partial, so a goal whose form is not filled
+  is still judged by the guards that read none of it, and is the last
+  step with its `needs`; with a whole input it is the full rehearsal.
+  A rehearsal that cannot be made (the owner is no member now, the
+  grant confers nothing) is a plan of no steps that says why."
   [eng row]
   (let [{:keys [owner grant self action input]} (:data row)]
     (try
       (answer->plan (mcp/rehearse eng {:principal owner :grant grant}
-                                  self action input)
+                                  self action input {:dry-run :partial})
                     (seat-lookup eng owner))
       (catch clojure.lang.ExceptionInfo e
         {:plan []
