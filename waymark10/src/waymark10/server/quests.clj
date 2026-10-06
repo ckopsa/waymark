@@ -23,8 +23,10 @@
   step's row. A transition on such a row that is the goal door itself
   finishes the quest. Any other one rehearses the goal again: the steps
   that transition ended stay at the top as `done`, and the rest are
-  the fresh rehearsal's. A transition on a row no active quest names
-  reads no quest.
+  the fresh rehearsal's. A fresh plan equal to the one held is written
+  all the same (`plan` declares `:replay false`), so `planned_at` moves
+  and the owner's walk records the move. A transition on a row no
+  active quest names reads no quest.
 
   ONE INVITATION FOLLOWS THE PLAN. The step the owner takes now is
   handed to the owner as an invitation the engine authors. When that
@@ -466,6 +468,9 @@
                              [k (assoc props :x-display {:hidden true}) sch]))
                       plan-fields))
      :guards [the-engine-plans-it]
+     ;; a plan equal to the one held is still written: a step already
+     ;; done, taken again, would else replay the last plan's outcome
+     :replay false
      :handler write-plan
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The plan before this one is replaced; the transition that wrote it is in the log."}
