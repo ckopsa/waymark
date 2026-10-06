@@ -777,6 +777,20 @@
       (is (str/includes? body "const inv = $(\"dialog[open][data-replay-invite]\");"))
       (is (str/includes? body "if (inv && inv.getAttribute(\"data-guided\") === f.self + \" \" + f.action)")))))
 
+(deftest ui-replay-fills-an-invitations-given-values-unmarked
+  ;; docs/spec-walkthrough.md §6: a replayed invitation's `given` values
+  ;; fill their fields as `suggest` values do, and only a suggestion
+  ;; wears the `suggested-value` mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (testing "a given key has an input in the replayed form"
+      (is (str/includes? body "...Object.keys(f.given || {})]")))
+    (testing "the frame's given values reach the dialog and fill it"
+      (is (str/includes? body "    given: f.given || {},"))
+      (is (str/includes? body "g.guidedSet(Object.assign({}, f.given || {}, f.suggest || {}));")))
+    (testing "the mark is put on the keys of `suggest` alone"
+      (is (str/includes? body "for (const k of Object.keys(suggest || {})) {"))
+      (is (= 1 (count (re-seq #"classList\.add\(\"suggested-value\"\)" body)))))))
+
 (deftest ui-replay-draws-a-row-from-its-doc
   ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
   ;; replay passes it, and the screen it names is drawn by the code that
