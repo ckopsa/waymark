@@ -265,6 +265,22 @@ clone.** That is the design, and it is why the loader refuses to seed
 an engine that has an IdP or a name that is not `demo-…`, and why the
 door refuses a route on a clone that restored a snapshot.
 
+**The quest's film wears Ada's grant.** The header alone makes the
+person an unscoped member: she holds every door a person may take,
+`resume` on the quest's deferred child among them, because no ticket
+guard tells a person from an agent there. The seed tells them apart by
+grant (section 1's file: `:ada-grant` admits `complete` and `restate`,
+`:plan-grant` admits `resume`). So for the session that records the
+quest the sign-in has a second step: as Ada, open the grant whose
+audience is Ada and press "act under this grant". The UI then sends its
+id as `X-Waymark-Grant` on every request and shows the grant chip, the
+deferred child reads no `resume` door, and the step waits on Planner.
+
+The engine does not put the grant on by itself. A worn grant narrows
+the whole session to its scope, and Ada's other films need what it
+leaves out: the invitation's `prioritize` and the held call's tap. The
+person leaves the scope at the chip's ✕ before those.
+
 ## 3. The walk leaves before the clone dies
 
 The person signs in as a cast member, presses ● Record (ticket
