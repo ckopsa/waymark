@@ -188,6 +188,8 @@ function onRowFrame({event, id, data: ev}) {
   /* a walkthrough in hand hears its own row, and its next step
      (200-events-follow.js) */
   onLedFrame(ev);
+  /* the pinned quest's tracker hears its own row (120-nav-home.js) */
+  onQuestFrame(ev);
   const isFollowed = !!(followId && ev.actor && ev.actor.id === followId);
   let lawLine = false;
   if (ev.kind === "definition") {

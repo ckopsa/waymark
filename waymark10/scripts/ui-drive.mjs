@@ -1141,6 +1141,111 @@ async function accessStory() {
      wtEnded.state === "finished" &&
      (wtEnded.data.outcomes || []).map(o => o.outcome).join() === "answered,done,skipped");
 
+  /* the quest tracker (docs/spec-quests.md, the tracker): priya accepts
+     a goal on a note of her own and pins it. The plan is written
+     through the engine's own `plan` door by a system principal, as the
+     planner writes it, so no planner runs here. */
+  console.log("· a pinned quest: the tracker rides every page");
+  const sys = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  let qCalls = 0;
+  const qPost = async (path, body, headers) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...headers,
+                "Idempotency-Key": `ui-drive-quest-${Date.now()}-${qCalls++}`},
+      body: JSON.stringify(body)});
+    return {status: res.status, doc: await res.json().catch(() => null)};
+  };
+  const qBar = `document.querySelector("#questbar")`;
+  const qCount = `${qBar}.querySelector("[data-quest-count]")?.textContent`;
+  const qTitle = "Clear the quest pile";
+  ok("with no pinned quest the tracker is hidden", await evaljs(`${qBar}.hidden === true`));
+  const pile = (await qPost("/api/led_notes", {title: "Quest pile"}, h)).doc;
+  const quest = await qPost("/api/quests",
+    {self: pile.self, action: "finish", title: qTitle}, h);
+  ok("priya accepts the goal as a quest", quest.status === 201);
+  const qSelf = quest.doc.self;
+  await evaljs(`window.__quest = true; true`);
+  ok("priya pins it", (await qPost(qSelf + "/-/pin", {}, h)).status < 400);
+  await waitFor(`!${qBar}.hidden && !!${qBar}.querySelector("[data-quest-planning]")`,
+                "the tracker, off the firehose", 15000);
+  ok("a quest with no plan yet reads planning… under its title, with no Go",
+     await evaljs(`(() => { const t = ${qBar}.querySelector("[data-quest-title]");
+       return t.textContent === ${JSON.stringify(qTitle)} &&
+         t.getAttribute("href") === ${JSON.stringify("#" + qSelf)} &&
+         !${qBar}.querySelector("[data-quest-go]"); })()`));
+  const stepOne = {n: 1, door: "rename", self: pile.self, whose: "person",
+                   note: "Name the pile, then say which room it is in.",
+                   needs: ["title", "room"]};
+  const stepTwo = {n: 2, door: "finish", self: pile.self};
+  const planned = await qPost(qSelf + "/-/plan",
+    {plan: [{...stepOne, state: "next"},
+            {...stepTwo, whose: "person", note: "Finish the note.", state: "later"}],
+     plan_is_estimate: true}, sys);
+  ok("the engine's plan door writes the first plan", planned.status < 400);
+  await waitFor(`${qCount} === "0 done, 2 known so far"`,
+                "the count, off the plan transition", 15000);
+  ok("the count is k done, n known so far, and never k of n",
+     await evaljs(`!/\\d+ of \\d+/.test(${qBar}.textContent)`));
+  ok("the head step's note stands beside the count",
+     await evaljs(`${qBar}.querySelector("[data-quest-note]")?.textContent`) === stepOne.note);
+  const qPageOne = await evaljs(`hereHref()`);
+  await evaljs(`location.hash = "/api/led_notes"; true`);
+  await waitFor(`hereHref().split("?")[0] === "/api/led_notes" && !${qBar}.hidden &&
+                 ${qCount} === "0 done, 2 known so far"`,
+                "the tracker on a second page");
+  ok("the tracker is on two different pages", qPageOne.split("?")[0] !== "/api/led_notes");
+
+  await evaljs(`${qBar}.querySelector("[data-quest-go]").click(); true`);
+  await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
+                "the head step's dialog", 15000);
+  const qDlg = await evaljs(`({here: hereHref(),
+    lit: document.querySelectorAll("dialog[open] .invited").length,
+    note: document.querySelector("dialog[open] [data-invite-note]").textContent,
+    decline: !!document.querySelector("dialog[open] [data-invite-decline]")})`);
+  ok("Go opens the head step's door on its row", qDlg.here === pile.self);
+  ok("the step's needs are lit and its note is shown",
+     qDlg.lit === 2 && qDlg.note === stepOne.note);
+  ok("a quest's step is no invitation: the dialog offers no Decline", !qDlg.decline);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    set("title", "Sorted quest pile"); set("room", "Hall");
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the step's dialog to close", 15000);
+  ok("the step is taken through its own door",
+     (await get(pile.self)).data.title === "Sorted quest pile");
+
+  const replanned = await qPost(qSelf + "/-/plan",
+    {plan: [{...stepOne, state: "done"},
+            {...stepTwo, whose: "seat", waiting_on: "Planner", state: "waiting"}],
+     plan_is_estimate: true, waiting_on: "Planner"}, sys);
+  ok("the engine plans again", replanned.status < 400);
+  await waitFor(`${qCount} === "1 done, 2 known so far"`, "the new count", 15000);
+  ok("a new plan transition moves the count with no reload",
+     await evaljs(`window.__quest === true`));
+  const qSeat = await evaljs(`({
+    waiting: ${qBar}.querySelector("[data-quest-waiting]")?.textContent,
+    go: ${qBar}.querySelector("[data-quest-go]")?.disabled,
+    doors: ["pause", "unpin", "replan"].every(n =>
+      !!${qBar}.querySelector('[data-action="' + n + '"]'))})`);
+  ok("a seat's head step reads waiting on, and Go is disabled",
+     qSeat.waiting === "waiting on Planner" && qSeat.go === true);
+  ok("the menu offers the quest's own Pause, Unpin and Replan", qSeat.doors);
+
+  ok("the engine finishes the quest",
+     (await qPost(qSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]") &&
+                 ${qBar}.textContent.includes(${JSON.stringify(qTitle)})`,
+                "the completion line", 15000);
+  ok("finish shows Quest complete with the title", true);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide", 15000);
+  ok("a few seconds later the tracker hides", true);
+
   /* signed in the way a person is: a session cookie off the magic
      link, the dev box EMPTY. An open invitation addressed to that
      member offers "Take this step" on its row page and in its

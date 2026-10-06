@@ -139,7 +139,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
         ? el("button", {onclick: () => check()}, "Check") : null,
-      invitation && (invitation.doc.actions || {}).decline
+      invitation && ((invitation.doc || {}).actions || {}).decline
         ? el("button", {class: "danger", "data-invite-decline": "",
                         onclick: () => declineInvitation()},
             led ? "Skip" : "Decline")
@@ -772,32 +772,43 @@ function reportDialog(report) {
   dlg.showModal();
 }
 
+/* ── a door on a row, opened in the person's own hand: the screen goes
+   to the row, and the door's dialog opens with the named fields lit and
+   the note beside them. An invitation and a quest's Go (120-nav-home.js)
+   both come through here; `invitation` is what only an invitation adds,
+   and `what` names the row in the sentence that says it was not read ── */
+async function openDoor({self, action, fields, note, suggest, invitation}, what) {
+  const res = await api(self);
+  if (!res.ok) {
+    toast(`${what} cannot be read: ${(res.body || {}).detail || res.status}`);
+    return;
+  }
+  const target = res.body;
+  const entry = (target.actions || {})[action];
+  /* a door addressed to this person opens in their own hand, over any
+     guided dialog (#613) */
+  closeGuided();
+  go(target.self);
+  if (!entry) {
+    toast(`${pretty(action)} is not open to you on this row right now`);
+    return;
+  }
+  actionDialog({name: action, entry, doc: target, suggest: suggest || {},
+                invitation: {note, fields: fields || [], ...(invitation || {})},
+                onDone: () => render()});
+}
 /* ── an invitation, opened in the person's own hand: the invited row,
    its door's dialog with the inputs live, and the engine answering the
    invitation when the person submits — the page does nothing extra ── */
 async function openInvitation(inv) {
   const d = inv.data || {};
-  const res = await api(d.self);
-  if (!res.ok) {
-    toast(`The invited row cannot be read: ${(res.body || {}).detail || res.status}`);
-    return;
-  }
-  const target = res.body;
-  const entry = (target.actions || {})[d.action];
-  /* an invitation addressed to this person opens in their own hand,
-     over any guided dialog (#613) */
-  closeGuided();
-  go(target.self);
-  if (!entry) {
-    toast(`${pretty(d.action)} is not open to you on this row right now`);
-    return;
-  }
-  actionDialog({name: d.action, entry, doc: target, suggest: d.suggest || {},
-                /* a row born before `fields` holds `field` alone */
-                invitation: {doc: inv, note: d.note,
-                             fields: d.fields || (d.field ? [d.field] : []),
-                             walkthrough: d.walkthrough ? ledStep(d) : null},
-                onDone: () => render()});
+  return openDoor({self: d.self, action: d.action, note: d.note,
+                   suggest: d.suggest || {},
+                   /* a row born before `fields` holds `field` alone */
+                   fields: d.fields || (d.field ? [d.field] : []),
+                   invitation: {doc: inv,
+                                walkthrough: d.walkthrough ? ledStep(d) : null}},
+                  "The invited row");
 }
 
 /* ── undo: an inverse action present in the post-action document ───── */
