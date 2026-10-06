@@ -9,9 +9,14 @@
 
   THE ENGINE ALONE WRITES THE PLAN. A quest is born with an empty plan
   and no `planned_at`. `plan` and `finish` are the engine's doors; no
-  hand at the wire takes them. This namespace plans nothing: the
-  consumer that hears `create` and `replan` and walks `plan` is its own
-  change (Quests 1b).
+  hand at the wire takes them.
+
+  ONE CONSUMER PLANS IT. A durable log consumer (`:quests`) hears a
+  quest's `create` and `replan`, rehearses the goal as the owner under
+  the owner's grant (`mcp/rehearse`, GRAIL's dry run), maps the answer
+  to steps (`answer->plan`, a pure function) and walks `plan`. It reads
+  before it writes and its key is made from what it heard, so a
+  replayed transition changes nothing.
 
   ONE PINNED QUEST PER OWNER. `pin` unpins the owner's other quests
   through their own `unpin` door, in the same transaction. Only an
@@ -19,7 +24,11 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.invitations :as invitations]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
+            [waymark10.server.store :as store]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -392,3 +401,264 @@
    :deviations
    ["Only an active quest is pinned: pause, abandon and finish unpin, so `pin` and `unpin` are doors of the active state alone."
     "`resume` is judged by the cap as create is, so a resumed quest never makes a twenty-first active one."]})
+
+;; ── the plan, from a rehearsal ──────────────────────────────────────
+
+(def ^:private your-tap
+  "Who a held step waits on."
+  "your tap")
+
+(def ^:private more-may-follow
+  "More steps may follow once this one is done.")
+
+(def ^:private no-row-chosen
+  "The sentence `client/pursue!` blocks a remedy with when nobody named
+  the row it acts on: a choice. An entry with any other sentence is a
+  door the owner has no way through."
+  "No row was chosen for this remedy.")
+
+(defn- clip [s n]
+  (when-some [s (some-> s str not-empty)]
+    (subs s 0 (min (long n) (count s)))))
+
+(defn- door-parts
+  "A door as the rehearsal spells it, `kind.action`, as its two names."
+  [door]
+  (if (keyword? door)
+    [(namespace door) (name door)]
+    (let [d (str door)
+          i (str/last-index-of d ".")]
+      (if i [(subs d 0 i) (subs d (inc (long i)))] [nil d]))))
+
+(defn- step-of
+  "The door and the row of a write, a blocked entry or a stack frame, as
+  a step's. A remedy nobody bound to a row is shown on the goal's."
+  [{:keys [door row]} goal]
+  {:door (clip (second (door-parts door)) 60)
+   :self (clip (or row (:self goal)) 300)})
+
+(defn- loop-reason
+  "The sentence for a branch the rehearsal gave up on, or nil."
+  [{:keys [door reason]}]
+  (case (some-> reason name)
+    "cycle" (str "The way to " door " leads back to " door
+                 ", so no step can be taken now.")
+    "depth" (str "The way to " door " is longer than the engine follows"
+                 ", so no step can be taken now.")
+    nil))
+
+(defn- blocked-steps
+  "One `:blocked-on` entry as its steps: none for a cycle or the depth
+  bound, two for a door that is somebody else's, else one."
+  [{:keys [door reason needs confirm consequence held hold warnings] :as entry}
+   goal seat-lookup]
+  (let [[k action] (door-parts door)
+        base (step-of entry goal)]
+    (cond
+      (loop-reason entry) []
+
+      confirm
+      [(assoc base :whose "confirm" :note (clip (or consequence reason) 240))]
+
+      (or held hold)
+      [(assoc base :whose "held" :waiting_on your-tap)]
+
+      ;; an advisory guard: the owner accepts its warning at the door
+      (seq warnings)
+      [(assoc base :whose "confirm"
+              :note "This door asks you to accept a warning before it opens.")]
+
+      (or (seq needs) (= no-row-chosen reason))
+      [(cond-> (assoc base :whose "choice" :note (clip reason 240))
+         (seq needs) (assoc :needs (into []
+                                         (comp (map #(clip (if (keyword? %) (name %) %) 60))
+                                               (remove nil?)
+                                               (take 16))
+                                         needs)))]
+
+      ;; a row the owner cannot read, or a refusal that names no way
+      :else
+      (let [seats (seq (take 3 (when (and k seat-lookup) (seat-lookup k action))))
+            who (if seats
+                  (str/join ", " seats)
+                  (str "someone who holds " (if (keyword? door) (str k "." action) door)))]
+        [(assoc base :whose "seat" :waiting_on (clip who 128) :note (clip reason 240))
+         (assoc (if (:door goal) goal base) :whose "person" :note more-may-follow)]))))
+
+(defn- with-states
+  "Number the steps and say which is taken now: a seat's or a held step
+  at the head waits and nothing is next; otherwise the first step that
+  is the owner's is next. The rest are later."
+  [steps]
+  (let [waiting? (contains? #{"seat" "held"} (:whose (first steps)))
+        next-at (when-not waiting?
+                  (first (keep-indexed
+                          (fn [i s]
+                            (when (contains? #{"person" "confirm" "choice"} (:whose s)) i))
+                          steps)))]
+    (into []
+          (map-indexed
+           (fn [i s]
+             (assoc s
+                    :n (inc (long i))
+                    :state (cond
+                             (and waiting? (zero? (long i))) "waiting"
+                             (= i next-at) "next"
+                             :else "later"))))
+          steps)))
+
+(defn answer->plan
+  "A rehearsal's answer (`client/pursue!` with `:dry-run true`, or
+  `mcp/rehearse`'s `:stopped`) as the input of the `plan` door. Pure:
+  `seat-lookup` is (fn [kind action]) → the names of the active seats
+  whose scope admits that door, and is asked only for a door the owner
+  cannot take.
+
+  The writes come first, in the rehearsal's order, so the goal door is
+  last when it is among them; each blocked entry follows. The plan is
+  always an estimate: a rehearsal cannot see the effect of a write it
+  did not make."
+  [answer seat-lookup]
+  (let [blocked (vec (:blocked-on answer))
+        writes (vec (:writes answer))
+        goal (some-> (or (first (:stack answer)) (peek writes) (first blocked))
+                     (step-of nil))
+        steps (-> (mapv (fn [w]
+                          (cond-> (assoc (step-of w goal) :whose "person")
+                            (:hold w) (assoc :whose "held" :waiting_on your-tap)))
+                        writes)
+                  (into (mapcat #(blocked-steps % goal seat-lookup)) blocked))
+        steps (with-states (into [] (comp (filter :self) (take 100)) steps))
+        head (first steps)
+        stopped (when-some [s (:stopped answer)]
+                  (or (get-in s [:problem :detail])
+                      (get-in s [:problem :title])
+                      "The goal could not be read, so no step can be found."))]
+    {:plan steps
+     :plan_is_estimate true
+     :blocked_reason (clip (or (some loop-reason blocked) stopped) 480)
+     :waiting_on (when (= "waiting" (:state head)) (:waiting_on head))}))
+
+;; ── the engine's own hand ───────────────────────────────────────────
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 quests: " parts))))
+
+(def ^:private sweep-cap
+  "The most rows one pass reads."
+  500)
+
+(defn- row-of
+  "One row of kind `k`, decoded; nil when it is gone."
+  [eng k id]
+  (let [st (:storage eng)]
+    (when-some [rdef (get (inv/resources eng) k)]
+      (some->> (store/with-tx st
+                 (fn [tx] (store/load-row st tx k (str id) {})))
+               (inv/decode-row rdef)))))
+
+(defn- rows-of [eng k where]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) k)]
+    (mapv #(inv/decode-row rdef %)
+          (store/with-tx st
+            (fn [tx]
+              (vec (store/query-rows st tx k where {:limit sweep-cap})))))))
+
+(defn- seat-lookup
+  "(fn [kind action]) → the names of the active seats whose scope names
+  that action on that kind. Read when a plan needs it, never per write."
+  [eng]
+  (fn [k action]
+    (when (contains? (inv/resources eng) :seat)
+      (into []
+            (comp (filter (fn [row]
+                            (some (fn [e]
+                                    (and (= (str k) (some-> (:kind e) name))
+                                         (some #(= (str action) (name %)) (:actions e))))
+                                  (get-in row [:data :scope]))))
+                  (keep #(some-> (get-in % [:data :name]) str not-empty)))
+            (rows-of eng :seat {:state :active})))))
+
+(defn- planned-since?
+  "Whether the row's plan was written after transition `t` was
+  committed. Such a transition was already answered: a replay of it
+  plans nothing."
+  [t row]
+  (let [at (invitations/instant-of (:at t))
+        planned (invitations/instant-of (get-in row [:data :planned_at]))]
+    (boolean (and at planned (.isBefore at planned)))))
+
+(defn- rehearsed
+  "The plan for one quest: the goal rehearsed as its owner under its
+  grant. A rehearsal that cannot be made (the owner is no member now,
+  the grant confers nothing) is a plan of no steps that says why."
+  [eng row]
+  (let [{:keys [owner grant self action input]} (:data row)]
+    (try
+      (answer->plan (mcp/rehearse eng {:principal owner :grant grant}
+                                  self action input)
+                    (seat-lookup eng))
+      (catch clojure.lang.ExceptionInfo e
+        {:plan []
+         :plan_is_estimate true
+         :blocked_reason (clip (or (get-in (ex-data e) [:waymark10/problem :detail])
+                                   (ex-message e))
+                               480)}))))
+
+(defn- plan!
+  "Plan one quest for the transition `t` that asked. A paused, finished
+  or abandoned quest is not planned. The key is made from `t`, so the
+  same transition heard twice writes one plan."
+  [eng id t]
+  (when-some [row (row-of eng kind id)]
+    (when (and (active? row) (not (planned-since? t row)))
+      (inv/invoke! eng kind (str id) :plan (rehearsed eng row)
+                   {:principal engine-actor
+                    :idempotency-key (str "quest-plan:" id ":" (:id t))}))))
+
+(def consumer-name
+  "The durable cursor's name in waymark10_cursors (consumer:quests)."
+  :quests)
+
+(defn handle-transition!
+  "One committed transition. A quest's own `create` or `replan` plans
+  it. Never throws: a parked cursor would stop every later quest from
+  being planned."
+  [eng t]
+  (try
+    (let [k (some-> (:kind t) keyword)
+          action (some-> (:action t) name)]
+      (when (and (contains? (inv/resources eng) kind) (:resource-id t) action)
+        (cond
+          (= kind k)
+          (when (contains? #{"create" "replan"} action)
+            (plan! eng (:resource-id t) t))
+
+          ;; Quests 2 goes here: a move of a row a plan names re-plans
+          ;; that quest, keeps its invitation and finishes it when the
+          ;; goal door was taken.
+          :else nil)))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be handled — " (ex-message e))
+      nil))
+  nil)
+
+(defn consumer-fn
+  "The consumer's function of one transition. Public because a test
+  drains it directly (`consumers/drain-consumer!`)."
+  [eng]
+  (fn [t] (handle-transition! eng t)))
+
+(defn start!
+  "Register the durable log consumer that plans each quest. opts:
+  :dispatcher, :poll-ms, :from-origin?."
+  ([eng] (start! eng {}))
+  ([eng opts]
+   (consumers/register-consumer!
+    eng consumer-name (consumer-fn eng)
+    (select-keys opts [:dispatcher :poll-ms :from-origin?]))))
+
+(defn stop! [consumer]
+  (some-> consumer consumers/stop-consumer!))
