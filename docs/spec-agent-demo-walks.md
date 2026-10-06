@@ -603,6 +603,39 @@ replay.
 - The page says where it is in `data-film` on the root element:
   `ready`, `playing`, then `ended`. The camera reads that and nothing
   else.
+- **The page says each beat.** A reader that cannot watch the film
+  reads what it showed. For each frame the replay steps to, the page
+  dispatches a `waymark:film-beat` CustomEvent on `document`; its
+  `detail` is the beat, and `window.wmFilmBeats` is the array of every
+  beat of the take, in order. This is the contract the renderer reads
+  (8c). Outside film mode nothing is dispatched. A beat is plain JSON:
+  - `i` is the frame's index and `t` its own time. `type` is the
+    frame's type. `who` (the cast id), `self`, `action` and `kind` are
+    there when the frame has them.
+  - `pressed` is what the pointer pressed for the frame, as
+    `{label, target}`, or null. `label` is the button's visible text.
+    `target` is a stable name where one exists: `door:<action>`,
+    `sheet.accept`, `sheet.decline`, `tracker.go`, `dialog.submit`, and
+    `dialog.accept` for "Accept as quest" under a form's refusal. A
+    click on a form's field is no press.
+  - `screen` is the address shown.
+  - `dialog` is the open form as `{self, action, lit}`, or null. `lit`
+    lists the names of the fields that are lit.
+  - `sheet` is the open quest's sheet as
+    `{goal, steps, shut_reason, refused}`, or null. Each step is
+    `{n, label, whose, state}`. `label` is the step's door and row as
+    the sheet says them. `state` is null, because the sheet draws none.
+  - `tracker` is `{title, next, waiting_on, progress, text}`, or null
+    when no tracker shows. `text` is the whole bar without its menu.
+  - `caption` is the caption band's text, or the caption beside a
+    field, or null. `refusal` is the refusal line on screen, or null.
+
+  Every value but the frame's own (`i` to `kind`) is read from the page
+  as drawn, in its visible words. The press is read as the frame is
+  applied. The rest is read when the frame has had its hold: just
+  before the next frame's gesture or act, and before `ended` for the
+  last. A frame that waits behind an open form has its beat when it is
+  stepped to, so its beat shows the form.
 
 ### 8c. The renderer and its door (waymark-doors)
 

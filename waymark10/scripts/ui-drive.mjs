@@ -3964,6 +3964,9 @@ async function questPhoneStory() {
                              walk: !!(replay && replay.gesture && replay.gesture.walk)};
       }).observe(document.documentElement,
                  {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      window.__beatEvents = [];
+      if (!window.__beatWatch) document.addEventListener("waymark:film-beat",
+        window.__beatWatch = e => window.__beatEvents.push(e.detail.i));
       location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
     await waitFor(`!!window.__notYet`, "the replay's press on Complete", 240000, why);
     const pressed = await evaljs(`window.__notYet`);
@@ -3974,6 +3977,30 @@ async function questPhoneStory() {
     await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
                   `the film to end ${where}`, 240000, why);
     ok(`film mode reaches ended ${where}`, true);
+    /* the beats the film said (docs/spec-agent-demo-walks.md §8b): what
+       it pressed, and what the sheet and the tracker said */
+    const said = JSON.parse(await evaljs(`JSON.stringify({beats: window.wmFilmBeats || [],
+      events: window.__beatEvents, frames: replay ? replay.frames.length : null,
+      tracker: filmTracker()})`));
+    const beats = said.beats, lastBeat = beats[beats.length - 1] || {};
+    const presses = beats.map(b => b.pressed && b.pressed.target);
+    const flat = t => String(t).replace(/\s+/g, " ").trim();
+    console.log("  the film's beats: " + JSON.stringify(beats.map(b =>
+      [b.i, b.type, b.pressed, b.sheet && b.sheet.steps.map(s => s.label),
+       b.tracker && b.tracker.next])));
+    ok(`the film says a beat for each frame it steps to, in order, by its event ${where}`,
+       beats.length > 0 && beats.every((b, n) => !n || b.i > beats[n - 1].i) &&
+       JSON.stringify(said.events) === JSON.stringify(beats.map(b => b.i)) &&
+       (said.frames == null || lastBeat.i === said.frames - 1));
+    ok("the beats hold the press on the shut Complete and the press on Accept quest",
+       presses.includes("door:complete") && presses.includes("sheet.accept"));
+    ok("a beat's sheet lists the recorded steps, each by its door and its row",
+       beats.some(b => b.sheet && b.sheet.steps.length === seen.steps.length &&
+         b.sheet.steps.every((s, n) => !!s.label && flat(seen.steps[n]).startsWith(s.label))));
+    ok("a beat's tracker names the step at its head",
+       beats.some(b => b.tracker && !!b.tracker.next));
+    ok("the last beat says the tracker as the film leaves it",
+       JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
     const sheets = await evaljs(`window.__sheets`);
     console.log("  the replay's sheets: " + JSON.stringify(sheets));
     ok("the replay opens the quest's sheet for each tap, with the recorded steps",
