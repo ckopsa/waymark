@@ -2030,6 +2030,8 @@ function replayGesture(r) {
     if (replay !== r || !lit) return;
     if (lit !== to) replayPointerTo(lit, r.speed);
     const form = lit.closest("dialog[data-guided]");
+    /* a field's click lights no button: a film keeps it for the beat */
+    if (form && r.gesture && r.gesture.field) filmPress(filmField(lit, r.gesture.field));
     if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }
     lit.classList.add("invited");
     lit.setAttribute("data-replay-press", "");
@@ -2093,6 +2095,7 @@ function replayHopOf(f, to) {
 function replayHop(r) {
   const list = r.gesture.hop;
   r.hopped = r.at;
+  filmPress(filmPressed());
   replayGestureRest(r);
   location.hash = "#" + list;
   replayGaze("list", list);
@@ -2105,6 +2108,7 @@ function replayHop(r) {
 function replayArrive(r) {
   const walk = r.gesture.walk;
   r.walked = r.at;
+  filmPress(filmPressed());
   replayGestureRest(r);
   applyFollowMove(walk.self);
   replayGaze(walk.list ? "list" : "row", walk.self);
@@ -2145,8 +2149,14 @@ function replayStep() {
   if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
   const shows = replayShows(r.frames, r.at);
   /* a film's beat for this frame (filmBeatSay): the press is read now,
-     before the frame draws over the button it was made on */
+     before the frame draws over the button it was made on, and it ends
+     the presses made on the way to the frame (filmPress) */
   const owed = film ? {i: r.at, f: r.frames[r.at], pressed: filmPressed()} : null;
+  if (owed) {
+    filmPress(owed.pressed);
+    owed.presses = filmPresses;
+    filmPresses = [];
+  }
   applyReplayFrame(r.frames[r.at++]);
   if (replay === r) filmBeatOwed = owed;
   /* the stillness a change is owed is counted from here, or from the
@@ -2350,13 +2360,29 @@ function filmEnd() {
    as drawn and not from the frame, when the frame has had its hold:
    just before the next frame's gesture or act, and before `ended` for
    the last. Outside film mode nothing is said. ─────────────────────── */
-/* the frame whose beat is not said yet: {i, f, pressed}, or null */
+/* the frame whose beat is not said yet: {i, f, pressed, presses}, or null */
 let filmBeatOwed = null;
+/* what the pointer pressed on the way to the frame at the playhead, in
+   order, each as {label, target}: a click on a form's field, the
+   navigation entry of a hop (replayHop), the link of a walk to another
+   row (replayArrive), and last the press the frame is applied under.
+   The frame's beat takes the list when the frame is applied. */
+let filmPresses = [];
+function filmPress(p) { if (film && p) filmPresses.push(p); }
+/* a click on the field `name` of an open form, where the pointer is on
+   `spot`: the label's own words, and `field:<name>` */
+function filmField(spot, name) {
+  const lab = spot.closest("label");
+  const own = lab && [...lab.childNodes].filter(n => n.nodeType === 3)
+    .map(n => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+  return {label: own || null, target: "field:" + name};
+}
 const filmText = e => e ? e.textContent.replace(/\s+/g, " ").trim() : "";
-/* the button the pointer has lit for the frame at the playhead, as
-   {label, target}, or null. `label` is the button's own text; `target`
-   is a stable name where there is one. A click on a form's field is no
-   press. */
+/* the button or the link the pointer has lit for the frame at the
+   playhead, as {label, target}, or null. `label` is its own text;
+   `target` is a stable name where there is one, and `nav:<path>` for a
+   link to a screen. A click on a form's field lights nothing: it is in
+   the beat's `presses` (filmField). */
 function filmPressed() {
   const e = $("[data-replay-press]");
   if (!e) return null;
@@ -2367,6 +2393,7 @@ function filmPressed() {
     : e.hasAttribute("data-replay-write") ? "dialog.submit"
     : e.dataset.action ? "door:" + e.dataset.action
     : e.dataset.questDoor ? "door:" + e.dataset.questDoor
+    : e.matches("a[href^='#']") ? "nav:" + e.getAttribute("href").slice(1)
     : null;
   return {label: filmText(e), target};
 }
@@ -2430,7 +2457,7 @@ function filmBeatSay() {
   if (!o || !film) return;
   const f = o.f, beat = {i: o.i, t: f.t == null ? null : f.t, type: f.type};
   for (const k of ["who", "self", "action", "kind"]) if (f[k] != null) beat[k] = f[k];
-  Object.assign(beat, {pressed: o.pressed, screen: hereHref() || null,
+  Object.assign(beat, {pressed: o.pressed, presses: o.presses, screen: hereHref() || null,
                        dialog: filmDialog(), sheet: filmSheet(), tracker: filmTracker(),
                        caption: filmCaption(), refusal: filmRefusal()});
   (window.wmFilmBeats = window.wmFilmBeats || []).push(beat);
@@ -2449,6 +2476,7 @@ async function filmBoot() {
   if (!self || film) return;
   film = self;
   window.wmFilmBeats = [];
+  filmPresses = [];
   /* the chrome is gone before the walk is read; a walk that cannot be
      read never says `ready` */
   filmState("");

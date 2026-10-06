@@ -1641,12 +1641,14 @@
         failure-key-patterns))
 
 (defn- tickets-naming
-  "The open, in-review and blocked tickets of `repo` whose title or
-  detail holds one of `named`. A bounded read of each state, with no
-  index: the queue is hundreds of rows, not thousands."
+  "The draft, open, in-review and blocked tickets of `repo` whose title
+  or detail holds one of `named`. A seat's follow-up is born a draft and
+  stays one until it is groomed, so drafts are read too (ticket
+  901e3c37). A bounded read of each state, with no index: the queue is
+  hundreds of rows, not thousands."
   [named repo ctx]
   (when-some [find' (:find ctx)]
-    (for [state ["open" "in_review" "blocked"]
+    (for [state ["draft" "open" "in_review" "blocked"]
           row (find' :ticket (cond-> {:state state} repo (assoc :repo repo))
                      {:limit 200})
           :let [words (str (get-in row [:data :title]) "\n"
