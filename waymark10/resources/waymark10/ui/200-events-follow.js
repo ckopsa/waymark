@@ -648,6 +648,65 @@ function walkthroughSteps(doc) {
       ended.has(i + 1)
         ? el("span", {class: "muted"}, ` · ${ended.get(i + 1)}`) : null)));
 }
+/* a quest's row page: the plan as a checklist, in order. A done step is
+   struck through, the next one is lit and carries Go, a waiting one
+   names who it waits on, a later one is dim, and a choice says what
+   must be picked. The page is redrawn on the quest's own transitions
+   (scopeHit, 210-ledger.js), so a new plan shows with no reload
+   (docs/spec-quests.md, the step vocabulary) */
+function questPlan(doc) {
+  const d = doc.data || {};
+  const steps = d.plan || [];
+  const done = steps.filter(s => s.state === "done").length;
+  return el("div", {class: "quest-plan", "data-quest-plan": ""},
+    d.blocked_reason
+      ? el("p", {class: "quest-blocked", "data-quest-blocked": ""}, d.blocked_reason)
+      : null,
+    steps.length
+      /* a plan is never a total: "k done, n known so far" */
+      ? el("p", {class: "muted", "data-quest-count": ""},
+          `${done} done, ${steps.length} known so far`)
+      : el("p", {class: "muted"}, "No step is known yet."),
+    el("ol", {class: "quest-steps"}, steps.map(s => questStep(doc, s))),
+    d.plan_is_estimate
+      ? el("p", {class: "muted", "data-quest-estimate": ""},
+          "This plan is an estimate: more steps may appear after these are taken.")
+      : null);
+}
+function questStep(doc, s) {
+  const needs = (s.needs || []).map(pretty).join(", ");
+  const row = el("li", {class: "quest-step", "data-quest-step": s.state},
+    el("span", {class: "quest-note"}, s.note || pretty(s.door)));
+  if (s.whose === "choice" && s.state !== "done")
+    row.append(el("span", {class: "muted", "data-quest-choice": ""},
+      needs ? ` · choose ${needs}` : " · a choice is yours to make"));
+  if (s.state === "waiting")
+    /* a held call waits for the owner's own tap: the link is the row
+       the tap is made on */
+    row.append(el("span", {class: "muted", "data-quest-waiting": ""}, " · waiting on ",
+      s.whose === "held"
+        ? el("a", {href: "#" + s.self}, "your tap")
+        : s.waiting_on || "someone else"));
+  if (s.state === "next" && doc.state === "active")
+    row.append(el("button", {class: "primary small", "data-quest-go": "",
+      onclick: () => questGo(s)}, "Go"));
+  return row;
+}
+/* Go: the viewer's open invitation for this step opens in their own
+   hand (openInvitationRow, 130-collection.js); with no invitation the
+   screen goes to the step's row */
+async function questGo(step) {
+  const me = viewerId();
+  const res = me
+    ? await api(`/api/invitations?state=open&subject=${encodeURIComponent(me)}`)
+    : null;
+  const inv = res && res.ok
+    ? (res.body.data?.items || []).find(i =>
+        (i.fields || {}).self === step.self && (i.fields || {}).action === step.door)
+    : null;
+  if (inv) openInvitationRow(inv);
+  else go(step.self);
+}
 /* the next step arrives by itself: the firehose's half (210-ledger.js
    hands every transition here). A transition of the row in hand redraws
    the chip; the person's own start or resume takes the row in hand and

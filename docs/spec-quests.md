@@ -102,6 +102,21 @@ One step is `{n, door, self, whose, note, needs, waiting_on, state}`:
 never a total. A reader counts "k done, n known so far": k steps in
 `done`, n steps in the plan. It never says "k of n".
 
+## What a reader sees
+
+A summary row carries no vector, so the kind works out two lines at
+read time: `progress` ("k done, n known so far") and `next_step` (the
+head step's note, or "waiting on <name>"). The collection orders the
+pinned quest first and then the newest.
+
+The quest's row page shows the plan as a checklist (`questPlan` in
+`ui/200-events-follow.js`): a `done` step is struck through, the
+`next` step is lit and carries **Go**, a `waiting` step names who it
+waits on ("your tap" for a held call, linked to the step's row), a
+`later` step is dim, and a `choice` step names what must be picked.
+Go opens the viewer's open invitation for that row and door, and
+goes to the step's row when there is none.
+
 ## What this change does not do
 
 - It plans nothing and finishes nothing: no consumer is started.

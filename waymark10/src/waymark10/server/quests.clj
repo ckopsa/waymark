@@ -171,6 +171,38 @@
           :plan_is_estimate (boolean (:plan_is_estimate inp))
           :waiting_on (:waiting_on inp)))
 
+;; ── what a collection row reads ─────────────────────────────────────
+;; the plan is a vector, so it does not ride a summary row; these two
+;; lines are worked out from it at read time and do
+
+(defn- step-state [step]
+  (some-> (:state step) name))
+
+(defn progress-line
+  "The count a reader sees: k steps done, n known so far. It is never
+  \"k of n\": a plan is not a total (docs/spec-quests.md, Counts). Nil
+  until the first plan lands."
+  [row _]
+  (let [plan (get-in row [:data :plan])]
+    (when (seq plan)
+      (str (count (filter #(= "done" (step-state %)) plan))
+           " done, " (count plan) " known so far"))))
+
+(defn next-line
+  "The head step in one line: its note when it is the owner's to take,
+  or who it waits on. Nil when every known step is done."
+  [row _]
+  (let [d (:data row)
+        head (first (remove #(= "done" (step-state %)) (:plan d)))]
+    (when head
+      (if (= "waiting" (step-state head))
+        (str "waiting on "
+             (or (not-empty (:waiting_on head))
+                 (not-empty (:waiting_on d))
+                 (when (= "held" (some-> (:whose head) name)) "your tap")
+                 "someone else"))
+        (or (not-empty (:note head)) (str (:door head)))))))
+
 ;; ── the kind ────────────────────────────────────────────────────────
 
 (def ^:private step-schema
@@ -259,6 +291,16 @@
    :terminal #{:finished :abandoned}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
+   :computed {:progress
+              {:schema [:maybe [:string {:max 60}]]
+               :x-display {:label "Progress"
+                           :help "How many steps are done, and how many are known so far. More may appear."}
+               :fn progress-line}
+              :next_step
+              {:schema [:maybe [:string {:max 300}]]
+               :x-display {:label "Next"
+                           :help "The note of the step to take now, or who the quest waits on."}
+               :fn next-line}}
    :schema
    (-> [:map
         [:owner {:x-ref {:principal true}
@@ -288,7 +330,8 @@
    :filterable {:state #{:eq :in}
                 :owner #{:eq}
                 :pinned #{:eq}}
-   :sortable {:fields [:created_at] :default "-created_at"}
+   ;; the pinned quest first, then the newest
+   :sortable {:fields [:pinned :created_at] :default ["-pinned" "-created_at"]}
    :default-filters {:state "active,paused"}
    :create-guards [the-owner-sees-the-goal active-quests-are-few]
    :on-create born

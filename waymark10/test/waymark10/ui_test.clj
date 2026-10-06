@@ -832,3 +832,34 @@
                                  {:texts "# One"})))))
   (testing "anonymous is not let in"
     (is (= 404 (:status (render! {} {:texts ["# One"]}))))))
+
+(deftest ui-quest-page-shows-its-plan-as-a-checklist
+  ;; docs/spec-quests.md: each step state has its own affordance on the
+  ;; quest's row page, and Go is the next step's alone
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from (str/index-of body "function questStep(doc, s)")
+        step (subs body from (str/index-of body "async function questGo(step)"))]
+    (is (str/includes? body "if (kind === \"quest\") panel.append(questPlan(doc));"))
+    (is (str/includes? body "function questPlan(doc)"))
+    (testing "the step's state rides the row, and the sheet styles each one"
+      (is (str/includes? step "\"data-quest-step\": s.state"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"done\"] .quest-note { text-decoration: line-through;"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"next\"] { font-weight: 600;"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"later\"] { opacity: .5; }")))
+    (testing "Go is on the next step of an active quest, and nowhere else"
+      (is (str/includes? step "if (s.state === \"next\" && doc.state === \"active\")"))
+      (is (= 1 (count (re-seq #"data-quest-go" body)))))
+    (testing "a waiting step says who, and a held one links to the tap"
+      (is (str/includes? step "if (s.state === \"waiting\")"))
+      (is (str/includes? step "? el(\"a\", {href: \"#\" + s.self}, \"your tap\")"))
+      (is (str/includes? step ": s.waiting_on || \"someone else\"));")))
+    (testing "a choice says what must be picked"
+      (is (str/includes? step "if (s.whose === \"choice\" && s.state !== \"done\")"))
+      (is (str/includes? step "needs ? ` · choose ${needs}`")))
+    (testing "the blocked reason, the count and the estimate note"
+      (is (str/includes? body "\"data-quest-blocked\": \"\"}, d.blocked_reason)"))
+      (is (str/includes? body "`${done} done, ${steps.length} known so far`"))
+      (is (str/includes? body "\"data-quest-estimate\": \"\"")))
+    (testing "Go opens the viewer's invitation for the step, else its row"
+      (is (str/includes? body "if (inv) openInvitationRow(inv);"))
+      (is (str/includes? body "else go(step.self);")))))
