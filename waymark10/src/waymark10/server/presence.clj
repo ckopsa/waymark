@@ -293,8 +293,12 @@
 
 (defn- publish!
   "Re-merge, diff against the last announced truth, fan the
-  difference as join/move/leave frames. Reentrant under :lock; cv is
-  the curtain-view its caller resolved OUTSIDE the lock."
+  difference as join/move/leave frames. A move whose entry carries a
+  `ui` fans that `ui` frame after it, changed or not: to a follower a
+  move alone is what a wholly redacted beat looks like, so the screen
+  that is still there is said again, under its old `seq`. Reentrant
+  under :lock; cv is the curtain-view its caller resolved OUTSIDE the
+  lock."
   [reg cv]
   (locking (:lock reg)
     (let [now (System/currentTimeMillis)
@@ -306,7 +310,8 @@
           (nil? o) (fan! reg (frame-of "join" e))
           (not= (:self o) (:self e)) (fan! reg (frame-of "move" e)))
         (when (and (some? (:ui e))
-                   (not= (select-keys o [:ui :seq]) (select-keys e [:ui :seq])))
+                   (or (not= (:self o) (:self e))
+                       (not= (select-keys o [:ui :seq]) (select-keys e [:ui :seq]))))
           (fan! reg (ui-frame-of e))))
       ;; a LEAVE is whatever merged-view dropped. That is why the
       ;; curtain verdict is resolved there and not here: a pid missing
@@ -678,6 +683,21 @@
   [ui labels]
   (let [labeled (cond-> ui labels (assoc :labels labels))]
     (if (<= (long (json-bytes labeled)) (long ui-max-bytes)) labeled ui)))
+
+(def sheet-step-keys
+  "The keys a recorded quest sheet keeps of each step of its preview's
+  plan: the step's names, and beside them the words a person reads
+  (`in-words`, quests.clj). The page's recorder keeps the same ones
+  (questSheet, ui/140-links-access.js; docs/spec-guided-follow.md §1)."
+  [:door :self :whose :waiting_on :needs :note
+   :door_label :row_label :needs_labels])
+
+(defn sheet-step
+  "One step of a preview's plan as a recorded sheet keeps it
+  (`sheet-step-keys`), for the connector's recorder (`stage-sheet!`,
+  mcp.clj)."
+  [step]
+  (select-keys step sheet-step-keys))
 
 (defn- clean-quest
   "The `quest` part of a reported ui part as the registry may store it:
