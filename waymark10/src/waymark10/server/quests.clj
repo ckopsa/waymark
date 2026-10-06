@@ -42,6 +42,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invitations :as invitations]
@@ -705,11 +706,29 @@
   A goal rehearsed partially (`:dry-run :partial`) carries `:needs`,
   the fields of its form not given yet, and `:awaiting`, the guards
   that wait on them. It is the owner's step and the last one, also
-  when a step before it is blocked."
-  [answer seat-lookup]
+  when a step before it is blocked.
+
+  A goal its row does not afford shows no form, so the rehearsal names
+  no `:needs` for it. `declared` is that goal as its kind declares it,
+  `{:door :self :needs}` (`declared-goal`), or nil: with it the goal is
+  the last step all the same, with the declaration's needs, and its
+  note is empty because no guard was asked about the form."
+  [answer seat-lookup & [declared]]
   (let [blocked (vec (:blocked-on answer))
+        goal? (fn [entry]
+                (and declared
+                     (= (select-keys declared [:door :self])
+                        (step-of entry nil))))
+        owed (fn [entry]
+               (cond-> entry
+                 (and (goal? entry) (empty? (:needs entry)) (seq (:needs declared)))
+                 (assoc :needs (:needs declared))))
+        frame (some-> (first (:stack answer)) owed)
         writes (vec (:writes answer))
-        frame (first (:stack answer))
+        ;; a remedy that would land counts the shut goal as landing too
+        writes (if (and (seq writes) (nil? frame) (empty? blocked) (not (:stopped answer)))
+                 (conj (pop writes) (owed (peek writes)))
+                 writes)
         goal (some-> (or frame (peek writes) (first blocked))
                      (step-of nil))
         before (into (mapv (fn [w]
@@ -718,7 +737,7 @@
                            writes)
                      (mapcat #(blocked-steps % goal seat-lookup))
                      (first-remedies blocked))
-        steps (if (and (seq before) (seq (:needs frame)))
+        steps (if (and (seq before) (or (seq (:needs frame)) (goal? frame)))
                 (let [form (with-form (assoc goal :whose "person") frame)]
                   (conj before
                         (cond-> form
@@ -775,11 +794,42 @@
         planned (invitations/instant-of (get-in row [:data :planned_at]))]
     (boolean (and at planned (.isBefore at planned)))))
 
+(defn- declared-goal
+  "The goal as its kind declares it, `{:door :self :needs}`: the door's
+  required arguments the stored `input` does not give, in the order of
+  the declaration, and of those only the ones an invitation may show
+  (`invitations/showable`). A door its row does not afford shows no
+  form, so the rehearsal cannot name them. nil when the goal's row is
+  of no served kind, or the kind has no such door."
+  [eng self action input]
+  (let [self (str/trim (str self))
+        plural (:plural (invitations/parse-self self))
+        rdef (when plural
+               (some #(when (= plural (some-> (:plural %) name)) %)
+                     (vals (inv/resources eng))))
+        door (some-> action str str/trim not-empty)]
+    (when-some [decl (and door (get-in rdef [:actions (keyword door)]))]
+      (let [form (:input decl)
+            given (into #{}
+                        (keep (fn [[k v]] (when (some? v) (name k))))
+                        (when (map? input) input))
+            entries (when form (schema/entry-map form))
+            required (into []
+                           (comp (remove #(:optional (get entries %)))
+                                 (remove #(contains? given (name %))))
+                           (when form (schema/entry-keys form)))
+            shown (invitations/showable rdef door (zipmap required (repeat true)))]
+        {:door (clip door 60)
+         :self (clip self 300)
+         :needs (into [] (comp (filter #(contains? shown %)) (map name)) required)}))))
+
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its
   grant. The rehearsal is partial, so a goal whose form is not filled
   is still judged by the guards that read none of it, and is the last
   step with its `needs`; with a whole input it is the full rehearsal.
+  A goal its row does not afford is the last step too, its `needs` read
+  from the kind's declaration (`declared-goal`).
   A rehearsal that cannot be made (the owner is no member now, the
   grant confers nothing) is a plan of no steps that says why."
   [eng row]
@@ -787,7 +837,8 @@
     (try
       (answer->plan (mcp/rehearse eng {:principal owner :grant grant}
                                   self action input {:dry-run :partial})
-                    (seat-lookup eng owner))
+                    (seat-lookup eng owner)
+                    (declared-goal eng self action input))
       (catch clojure.lang.ExceptionInfo e
         {:plan []
          :plan_is_estimate true

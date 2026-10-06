@@ -1052,8 +1052,9 @@
                        :consequence "The epic is shelved."}}
      :reopen {:from #{:closed} :to :open :safety routine}}}))
 
-(defn- epic-engine []
-  (let [eng (engine/engine {:storage (memory/storage) :resources [chore epic]})]
+(defn- epic-engine [& [opts]]
+  (let [eng (engine/engine (merge {:storage (memory/storage) :resources [chore epic]}
+                                  opts))]
     ((engine/handler eng) {:request-method :get :uri "/api/q_epics"
                            :headers {"x-waymark-principal" "colton"}})
     eng))
@@ -1236,3 +1237,49 @@
     (is (= [["close_reason"] ["close_reason"]] (mapv :needs (:plan plan))))
     (is (= "Judged when you fill the form: the-film-is-a-link."
            (:note (last (:plan plan)))))))
+
+;; ── a goal its row draws shut ───────────────────────────────────────
+
+(deftest the-mapping-ends-on-a-shut-goal-with-its-declared-needs
+  (let [answer {:blocked-on [{:door "ticket.complete" :row "/api/tickets/c1"
+                              :needs [:close_reason] :or []}]
+                ;; the frame of a door not afforded: no form was read
+                :stack [{:door "ticket.complete" :row "/api/tickets/e1"}]
+                :writes []}
+        steps (fn [needs]
+                (:plan (quests/answer->plan
+                        answer nil
+                        (when needs
+                          {:door "complete" :self "/api/tickets/e1" :needs needs}))))]
+    (testing "the goal is the last step, with the declaration's needs"
+      (let [plan (steps ["close_reason"])]
+        (is (= [["complete" "/api/tickets/c1" "choice" "next"]
+                ["complete" "/api/tickets/e1" "person" "later"]]
+               (mapv (juxt :door :self :whose :state) plan)))
+        (is (= [["close_reason"] ["close_reason"]] (mapv :needs plan)))
+        (is (nil? (:note (last plan))) "no guard was asked about the form")))
+    (testing "a declaration that requires nothing still ends on the goal"
+      (let [plan (steps [])]
+        (is (= ["/api/tickets/c1" "/api/tickets/e1"] (mapv :self plan)))
+        (is (empty? (:needs (last plan))))))
+    (testing "with no declaration the plan is the rehearsal's alone"
+      (is (= ["/api/tickets/c1"] (mapv :self (:plan (quests/answer->plan answer nil))))))))
+
+(deftest a-goal-the-row-draws-shut-is-the-last-step-of-the-first-plan
+  ;; :probe-reads lets the render judge the-part-is-finished, so the
+  ;; epic's row does not afford `complete` and the rehearsal reads no form
+  (let [eng (epic-engine {:probe-reads true})
+        {:keys [quest part self]} (epic-quest! eng nil)
+        _ (hear! eng)
+        d (data-of eng quest)]
+    (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= ["next" "later"] (states d)))
+    (is (= ["close_reason"] (:needs (last (:plan d))))
+        "the goal's needs are read from the kind's declaration")
+    (move! eng :chore part :finish person)
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
+      (is (= ["done" "next"] (states d)))
+      (is (= ["close_reason"] (:needs (last (:plan d))))))))
