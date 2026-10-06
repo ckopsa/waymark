@@ -2673,8 +2673,62 @@ async function guidedStory() {
   ok("the follow bo already held stands when the walkthrough leaves his hand",
      await B.js(`followId === "ada" && localStorage.getItem("wm10.follow.ui") === "1"`));
 
-  console.log("· stopping");
+  /* the quest's sheet (docs/spec-guided-follow.md § 2): a plan with an
+     uncovered day keeps Finalize shut, and names assign_meal as its way
+     out (fixtures.clj, all-days-covered-gate). Ada taps it, and bo's
+     screen shows her sheet with the same steps, read-only. */
+  console.log("· the quest's sheet of a shut door");
   await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's recipe form closed");
+  await B.until(`!document.querySelector("dialog[open]")`,
+                "ada's dialog off bo's screen", 15000, guidedState);
+  const plan = must(await call("POST", "/api/plans",
+    {start_date: "2026-07-14", weeks: 1,
+     days: [{date: "2026-07-14"}, {date: "2026-07-15"}]}, "ada"),
+    201, "ada creates a plan with no meal on its days").body.self;
+  const shutDoor = '#view button[data-quest-door="finalize"]';
+  await A.js(`location.hash = ${JSON.stringify(plan)}; true`);
+  await A.until(`hereHref() === ${JSON.stringify(plan)} &&
+                 !!document.querySelector(${JSON.stringify(shutDoor)})`,
+                "the plan's page, with its shut Finalize", 15000,
+                `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+  await B.until(`hereHref() === ${JSON.stringify(plan)}`,
+                "bo following ada to the plan", 15000, guidedState);
+  await sleep(600);
+  await A.js(`document.querySelector(${JSON.stringify(shutDoor)}).click(); true`);
+  const questSheetOpen = `document.querySelector("dialog[open][data-quest-sheet]")`;
+  await A.until(`!!${questSheetOpen}`, "ada's quest sheet", 15000,
+                `document.body.innerText.slice(-400)`);
+  await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+                "ada's quest sheet on bo's screen", 15000, guidedState);
+  const sheetSays = `(() => { const g = ${questSheetOpen};
+    return JSON.stringify({
+      goal: g.querySelector("[data-quest-sheet-goal]").textContent,
+      title: g.querySelector("[data-quest-title-line]").textContent,
+      why: g.querySelector("[data-quest-why]").textContent,
+      steps: [...g.querySelectorAll("[data-quest-steps] li")].map(li => li.textContent),
+      blocked: g.querySelector("[data-quest-blocked]")?.textContent ?? null,
+      refused: g.querySelector("[data-quest-refused]").textContent}); })()`;
+  const hers = await A.js(sheetSays), his = await B.js(sheetSays);
+  console.log("  ada's sheet: " + hers);
+  if (hers !== his) console.log("  bo's sheet:  " + his);
+  ok("bo's screen shows ada's quest sheet, with the same goal, reason and steps",
+     hers === his);
+  ok("the engine found steps to the shut door, and both sheets list them",
+     JSON.parse(hers).steps.length > 0);
+  ok("the sheet is read-only on bo's screen: it says whose it is, and Accept is disabled",
+     await B.js(`{ const g = ${questSheetOpen};
+       (g.querySelector("[data-guided-note]")?.textContent || "").endsWith(" has this open") &&
+       g.querySelector("[data-quest-accept]").disabled === true }`));
+  ok("ada's own Accept stays live",
+     await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
+  await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
+                "ada's sheet off bo's screen", 15000, guidedState);
+  ok("bo's sheet closes with ada's", true);
+
+  console.log("· stopping");
   await A.js(`document.querySelector("#sharebtn").click(); true`);
   ok("the toggle turns sharing off", await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
   await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);

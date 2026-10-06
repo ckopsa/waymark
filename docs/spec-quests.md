@@ -190,6 +190,10 @@ a `refusal` frame while the sheet is open) is a press on **Accept
 quest** too, and the replay says the sentence in the sheet's own box
 with Accept disabled (`replaySheetRefused`), not in the caption band.
 
+A person following live in guided mode sees the same sheet from the
+same part, read-only, and it closes with the followed person's
+(docs/spec-guided-follow.md § 2).
+
 ## What this change does not do
 
 - It plans nothing and finishes nothing: no consumer is started.

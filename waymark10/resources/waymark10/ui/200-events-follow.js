@@ -220,6 +220,7 @@ function follow(actor, opts) {
   else { localStorage.removeItem("wm10.follow.ui"); closeGuided(); }
   guidedSeq = -1;
   guidedDismissed = null;
+  guidedQuestSheet(null);
   followId = actor.id;
   followName = actor.display || actor.id;
   followGaze = null;
@@ -282,6 +283,7 @@ function unfollow() {
   localStorage.removeItem("wm10.follow.name");
   localStorage.removeItem("wm10.follow.ui");
   closeGuided();
+  guidedQuestSheet(null);
   guidedFocus = null;
   paintGuidedFocus();
   followChip();
@@ -322,6 +324,35 @@ function paintGuidedFocus() {
 function closeGuided() {
   const g = $("dialog[open][data-guided]");
   if (g) { g.dataset.guidedAuto = "1"; g.close(); }
+}
+/* the quest's sheet the followed person has open, live (questSheet,
+   140-links-access.js; docs/spec-guided-follow.md § 2): drawn from the
+   `quest` part of their `ui` beat, as a replay draws it. It is
+   read-only: it names whose it is, Accept is disabled, and nothing is
+   asked of the engine or reported. Not now closes it here alone, and
+   the same goal does not reopen it. It is never opened over a dialog
+   this person has open. Null closes it; a beat for the sheet already
+   open draws nothing. */
+let guidedQuestDismissed = null;  // the goal of the sheet this person closed by hand
+function guidedQuestSheet(q, who) {
+  const open = $("dialog[open][data-guided-quest]");
+  const key = q && q.goal ? JSON.stringify([q.goal.self, q.goal.action]) : null;
+  if (!key) guidedQuestDismissed = null;
+  if (open && key && open.getAttribute("data-guided-quest") === key) return;
+  if (open) { open.dataset.guidedAuto = "1"; open.close(); }
+  if (!key || key === guidedQuestDismissed || $("dialog[open]")) return;
+  const name = q.goal.action;
+  const dlg = questSheet(replayShutDoor(q.goal) || {title: ""}, name,
+    {unavailable: {[name]: {display: {label: q.label}}}}, null, q.goal,
+    q.seen || {ok: false});
+  dlg.setAttribute("data-guided-quest", key);
+  dlg.querySelector(".dlgbody").prepend(
+    el("p", {class: "guided-note", "data-guided-note": ""},
+      `${who} has this open`));
+  dlg.querySelector("[data-quest-accept]").disabled = true;
+  dlg.addEventListener("close", () => {
+    if (!dlg.dataset.guidedAuto) guidedQuestDismissed = key;
+  });
 }
 /* a ref field's row as a form names it: the label the beat itself
    carries (a staged call's, read under the recorder's own grant; a list
@@ -393,9 +424,10 @@ function applyUiFrame(f) {
   const typing = !!d && typeof ui.focus === "string" && !ui.focus.startsWith("/");
   guidedTyping = typing ? ui.focus : null;
   guidedFocus = typing ? null : ui.focus || null;
-  /* a replay closes the quest's sheet with the beat that carries none,
-     before the guards below: the sheet is a dialog of its own */
-  if (replay && !ui.quest) replayQuestSheet(null);
+  /* the quest's sheet closes with the beat that carries none, before
+     the guards below: the sheet is a dialog of its own. A replay's is
+     replayQuestSheet's, a live follower's is guidedQuestSheet's. */
+  if (!ui.quest) (replay ? replayQuestSheet : guidedQuestSheet)(null);
   /* the existing guards: the Access panel parks, and a dialog this
      person opened themselves is never replaced; nor is a replayed
      invitation's, which stands where the invited person's own stood */
@@ -421,7 +453,10 @@ function applyUiFrame(f) {
   }
   /* and opens it over the screen the beat is on, from the rehearsal's
      answer the beat carries */
-  if (replay && ui.quest) replayQuestSheet(ui.quest);
+  if (ui.quest) {
+    if (replay) replayQuestSheet(ui.quest);
+    else guidedQuestSheet(ui.quest, f.principal.display || f.principal.id);
+  }
   paintGuidedFocus();
 }
 
