@@ -170,6 +170,12 @@
 
   /* a guard-refused action keeps its seat in the bar, dimmed */
   button.blocked { opacity: .55; cursor: not-allowed; }
+  /* a shut door that names a way out takes a tap (shutDoor): dashed, in
+     the tracker's verdigris, and not dimmed */
+  button.blocked.notyet { opacity: 1; cursor: pointer; background: transparent;
+                          border: 1px dashed var(--verdigris);
+                          color: var(--verdigris-deep); }
+  .notyet-hint { color: var(--verdigris-deep); }
   .blockedwhy { margin: 2px 0 4px; }
   .blockedwhy .item { font-size: 13px; padding: 3px 0; }
   .blockedwhy .item b { font-weight: 700; }
