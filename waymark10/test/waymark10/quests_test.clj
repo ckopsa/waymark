@@ -895,3 +895,84 @@
       (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
                                  {:from-origin? true})
       (is (= ["lift"] (doors))))))
+
+;; ── a step already done, taken again (the access drive's led_note) ──
+
+(def ^:private high-shelf-filed-by-room
+  (g/expr {:name :q-high-shelf-filed-by-room
+           :when '(or (not= (input :shelf) "high") (data :room))
+           :explain "The high shelf is filed by room, and this note names no room."
+           :remedies [:q_note/rename]}))
+
+(def ^:private note
+  "A row whose remedy door stays open after it is taken: `rename` moves
+  no state, so anybody may take it again."
+  (r/resource
+   {:kind :q_note
+    :plural "q_notes"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 80}]]
+             [:room {:optional true} [:maybe [:string {:max 40}]]]
+             [:shelf {:optional true} [:maybe [:enum "low" "high"]]]]
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map
+                      [:title [:string {:min 1 :max 80}]]
+                      [:room {:optional true} [:maybe [:string {:max 40}]]]]
+              :handler (fn [row inp _ctx]
+                         (update row :data merge (select-keys inp [:title :room])))
+              :safety routine}
+     :shelve {:from #{:open} :to :open
+              :input [:map [:shelf [:enum "low" "high"]]]
+              :guards [high-shelf-filed-by-room]
+              :handler (fn [row inp _ctx]
+                         (assoc-in row [:data :shelf] (:shelf inp)))
+              :safety routine}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished note is history."}}}}))
+
+(defn- note-engine []
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore note]})]
+    ((engine/handler eng) {:request-method :get :uri "/api/q_notes"
+                           :headers {"x-waymark-principal" "colton"}})
+    eng))
+
+(deftest another-principals-repeat-of-a-done-step-plans-again
+  (let [eng (note-engine)
+        w (self-walk! eng true)
+        n (make! eng :q_note {:title "Unsorted mail"})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_notes/" n)
+                                       :action "shelve"
+                                       :input {:shelf "high"}}
+                                      {:principal person})))
+        rename! (fn [who title]
+                  (inv/invoke! eng :q_note n :rename {:title title :room "hall"}
+                               {:principal who :idempotency-key (str (random-uuid))}))
+        plans (fn [] (count (filter #(= :plan (:action %)) (log-of eng quest))))]
+    (hear! eng)
+    (is (= "rename" (:door (first (:plan (data-of eng quest)))))
+        (pr-str (data-of eng quest)))
+    (rename! person "Hall mail")
+    (hear! eng)
+    (let [before (data-of eng quest)
+          written (plans)
+          filmed (count (docs-in eng w))]
+      (is (= ["rename" "shelve"] (mapv :door (:plan before))) (pr-str before))
+      (is (= ["done" "next"] (states before)))
+      (rename! other "Hall post")
+      (hear! eng)
+      (let [after (data-of eng quest)]
+        (is (= (:plan before) (:plan after)) "the fresh plan equals the one held")
+        (is (= (inc written) (plans)) "and it is written all the same")
+        (is (= (:invitation before) (:invitation after))
+            "the step to take is the same, so its invitation stands")
+        (is (= ["rename"] (mapv (comp name :action) (heard-in eng w)))
+            "the owner's walk holds the other principal's move")
+        (is (= (inc filmed) (count (docs-in eng w)))
+            "and the quest's document after it")))))
