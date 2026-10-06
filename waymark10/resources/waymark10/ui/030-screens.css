@@ -176,8 +176,19 @@
                           border: 1px dashed var(--verdigris);
                           color: var(--verdigris-deep); }
   .notyet-hint { color: var(--verdigris-deep); }
-  /* the tap's own refusal, said after the hint (questFromDoor) */
+  /* a refused rehearsal, create or pin, said in the tap's sheet
+     (questSheet) */
   .notyet-refused { color: var(--law); font-weight: 700; }
+  .notyet-refused:empty { display: none; }
+  /* the sheet's steps scroll inside it, and under a thumb its two
+     buttons are 44px tall */
+  .quest-sheet-steps { margin: 8px 0; padding-left: 24px; max-height: 40vh;
+                       overflow-y: auto; }
+  .quest-sheet-steps li { margin: 6px 0; overflow-wrap: anywhere; }
+  @media (max-width: 600px), (pointer: coarse) {
+    dialog[data-quest-sheet] .dlgfoot button {
+      min-height: 44px; font-size: 14px; padding: 8px 14px; }
+  }
   .blockedwhy { margin: 2px 0 4px; }
   .blockedwhy .item { font-size: 13px; padding: 3px 0; }
   .blockedwhy .item b { font-weight: 700; }

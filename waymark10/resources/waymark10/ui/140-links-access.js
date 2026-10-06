@@ -94,28 +94,85 @@ function shutDoor(name, entry, doc) {
   return btn;
 }
 /* the tap: the create door is read off the quests collection, as every
-   button is, then the quest is pinned and the tracker shows it
-   (120-nav-home.js). No form opens. A replay writes nothing. */
+   button is, and rehearsed (dry_run=1). The rehearsal writes nothing and
+   answers `preview`, the plan the quest would be given; the sheet shows
+   it (questSheet), and the quest is made only on Accept. A replay
+   writes nothing. */
 async function questFromDoor(btn, name, doc) {
   if (replay || btn.hasAttribute("data-quest-busy")) return;
   btn.setAttribute("data-quest-busy", "");
-  /* a refused create or pin is said in the door's own reason line, under
-     the bar, where it stays: a toast goes away. A door with no line
-     drawn says it in a toast. */
-  const line = document.getElementById(btn.getAttribute("aria-describedby") || "");
-  const said = line && line.querySelector(".notyet-refused");
-  if (said) said.remove();
-  const refused = p => {
-    const say = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
-    if (!line) { toast(say); return; }
-    line.append(el("span", {class: "notyet-refused", role: "alert"}, " " + say));
-  };
   try {
     const col = collectionHref(await wellKnown(), "quest");
     const res = col ? await api(col + "?page%5Bsize%5D=1") : {ok: false};
     const create = res.ok && ((res.body || {}).actions || {}).create;
     if (!create) { toast("A quest cannot be made here"); return; }
     const goal = {self: doc.self.split("?")[0], action: name};
+    const seen = await api(
+      create.href + (create.href.includes("?") ? "&" : "?") + "dry_run=1",
+      {method: create.method || "POST", body: JSON.stringify(goal)});
+    questSheet(btn, name, doc, create, goal, seen);
+  } finally { btn.removeAttribute("data-quest-busy"); }
+}
+/* the sheet a tap opens, from the create door's rehearsal `seen`: the
+   goal in words, why its door is shut now, the steps the engine found
+   with whose turn each is (the goal's own form last, with the fields it
+   asks for), and two buttons. Not now closes it and writes nothing.
+   Accept creates the quest and pins it, and the tracker shows it
+   (120-nav-home.js). A refused rehearsal, create or pin is said in the
+   sheet, and Accept is disabled with that line. */
+function questSheet(btn, name, doc, create, goal, seen) {
+  const p = (seen.ok && (seen.body || {}).preview) || {};
+  const steps = p.plan || [];
+  const turn = s => s.whose === "person" || s.whose === "confirm" ? "yours"
+    : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
+    : "waiting on " + (s.waiting_on || "a person");
+  const errBox = el("p", {class: "notyet-refused", role: "alert",
+                          "data-quest-refused": ""});
+  const accept = el("button", {class: "primary", "data-quest-accept": ""},
+    "Accept quest");
+  const refused = p => {
+    errBox.textContent = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
+    accept.disabled = true;
+  };
+  const dlg = el("dialog", {"data-quest-sheet": ""},
+    el("div", {class: "dlghead"},
+      /* the door's label on this row, as its button says it; the line
+         under it is the title the quest would be given */
+      el("h3", {"data-quest-sheet-goal": ""},
+        label(name, (doc.unavailable || {})[name] || {})),
+      el("p", {class: "metaline", "data-quest-title-line": ""},
+        p.goal ? "Quest: " + p.goal
+               : "A quest: the steps to this door, kept in view.")),
+    el("div", {class: "dlgbody"},
+      el("p", {"data-quest-why": ""}, el("b", {}, "Not yet: "),
+        p.shut_reason || btn.title || "This door is shut now."),
+      steps.length
+        ? el("ol", {class: "quest-sheet-steps", "data-quest-steps": ""},
+            ...steps.map(s => el("li", {},
+              el("b", {}, title(s.door || "")), " ",
+              el("span", {class: "mono muted"}, s.self || ""),
+              " · ", el("span", {"data-quest-turn": ""}, turn(s)),
+              (s.needs || []).flat().length
+                ? el("div", {class: "muted"},
+                    "asks for: " + (s.needs || []).flat().join(", "))
+                : null,
+              s.note ? el("div", {class: "muted"}, s.note) : null)))
+        : seen.ok
+          ? el("p", {"data-quest-blocked": ""},
+              p.blocked_reason || "The engine found no step yet.")
+          : null,
+      steps.length && p.plan_is_estimate
+        ? el("p", {class: "muted", "data-quest-estimate": ""},
+            "An estimate: the engine learns more steps as each one lands.")
+        : null,
+      errBox),
+    el("div", {class: "dlgfoot"},
+      el("button", {"data-quest-decline": "", onclick: () => dlg.close()}, "Not now"),
+      accept));
+  if (!seen.ok) refused(seen.body);
+  accept.addEventListener("click", async () => {
+    if (accept.disabled) return;
+    accept.disabled = true;
     const h = {};
     if (create.safety && create.safety.idempotent === false)
       h["Idempotency-Key"] = uuid();
@@ -128,8 +185,13 @@ async function questFromDoor(btn, name, doc) {
       const pinned = await invokeBare(pin, quest);
       if (!pinned.ok) { refused(pinned.body); return; }
     }
+    dlg.close();
     await refreshQuest();
-  } finally { btn.removeAttribute("data-quest-busy"); }
+  });
+  document.body.append(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.showModal();
+  return dlg;
 }
 /* each reachable button is described by its reason line (data-whynot,
    below), and that line says what a tap does. Called again when a line
@@ -145,7 +207,7 @@ function wireNotYet(root) {
     if (!line.id) line.id = "whynot-" + (++whyNotSeq);
     if (!line.querySelector(".notyet-hint"))
       line.append(el("span", {class: "notyet-hint"},
-        " Not yet. Tap to make it a quest."));
+        " Not yet. Tap to see the quest."));
     btn.setAttribute("aria-describedby", line.id);
   }
 }
