@@ -349,7 +349,7 @@
       (let [res (rehearse nil)]
         (is (:rehearsal res))
         (is (= [] (steps (:writes res))) (pr-str res))
-        (is (= [{:door "ticket.restate" :row (self :q-epic) :needs [:showcase]}]
+        (is (= [{:door "ticket.restate" :row (self :q-epic) :needs [:showcase.evidence.film_url]}]
                (mapv #(select-keys % [:door :row :needs]) (:blocked-on res)))
             (pr-str res)))
       (let [res (rehearse {"ticket.restate" {:input linked}})]

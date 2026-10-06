@@ -150,6 +150,7 @@
             [waymark10.derived :as derived]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
@@ -1363,7 +1364,8 @@
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
                                      :summary (summary-of rdef row)}
-                                    (out-of-state-says defn row guard-ctx))))
+                                    (out-of-state-says defn row guard-ctx)
+                                    (machine/roads rdef defn (:state row)))))
           (do
             ;; concealment precedes everything in-state too (phase 8's
             ;; ordering amendment, forced by the mirror's sync doors):
@@ -1723,10 +1725,16 @@
   recording, walks/record-own!). A rehearsal, a deferral and a replay
   of the whole call run none. In a partial bulk a throw from the
   after-write or from `:on-item` is logged and changes nothing in the
-  report: the row's transaction committed, so the row succeeded."
+  report: the row's transaction committed, so the row succeeded.
+
+  `:on-refused`, when given, is called with a refused row's id and the
+  refusal it threw, in a partial bulk and in an atomic one alike: the
+  router's seam for what a single invoke does with its refusal (a self
+  walk's recording, walks/record-refused!). A rehearsal runs none, and
+  a throw from it is logged and changes nothing."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant on-item]
+           dry-run grant on-item on-refused]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1840,6 +1848,16 @@
                                        (binding [*out* *err*]
                                          (println "waymark10 bulk item on-item error:"
                                                   (name kind) id "-" (ex-message e)))))))
+                    ;; a refused row's own pass: the refusal stands
+                    ;; whatever this does, so a throw here is logged
+                    refused! (fn [id e]
+                               (when on-refused
+                                 (try
+                                   (on-refused id e)
+                                   (catch Exception x
+                                     (binding [*out* *err*]
+                                       (println "waymark10 bulk item on-refused error:"
+                                                (name kind) id "-" (ex-message x)))))))
                     data
                     (if (= "atomic" mode)
                       ;; all-or-nothing: one transaction, any refusal
@@ -1853,6 +1871,7 @@
                                   (mapv (fn [it] (vreset! at (:id it)) (run-item tx it))
                                         items)))
                               (catch Exception e
+                                (when (refusal? e) (refused! @at e))
                                 (if (refusal? e)
                                   (throw (p/problem
                                           :bulk-refused 409 "Atomic bulk refused"
@@ -1886,7 +1905,7 @@
                                          (update rep :succeeded inc))
                                        (catch Exception e
                                          (if (refusal? e)
-                                           (-> rep
+                                           (-> (do (refused! id e) rep)
                                                (update :refused inc)
                                                (update :refusals conj
                                                        {:self (href id)

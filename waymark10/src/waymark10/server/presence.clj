@@ -517,6 +517,17 @@
                         (and (vector? s) (secret-props? (second s))))]
           k)))
 
+(defn secret-arguments
+  "The arguments the door `action` on `self` marks secret, as `clean-ui`
+  reads them → a set of keywords, or nil when `self` names no such
+  door: nothing of that door's input may then be shown."
+  [eng self action]
+  (let [dself (normalize-self self)
+        a (when (or (string? action) (keyword? action)) (not-empty (name action)))]
+    (when-some [[rdef _id door] (when (and a (valid-self? dself))
+                                  (dialog-door eng dself a))]
+      (secret-keys (:input door) (:schema rdef)))))
+
 (defn- ref-kinds
   "The plain `:kind` ref arguments of these :map schemas → {key kind}:
   an entry a picker is drawn for, one row or a list of them."

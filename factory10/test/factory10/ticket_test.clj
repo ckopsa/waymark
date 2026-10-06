@@ -300,6 +300,35 @@
       "complete is shut by the state, and names the door that leads
        to a state where it opens"))
 
+(deftest the-invoke's-wrong-state-refusal-names-the-envelope's-remedies
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        opts {:principal colton}
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"} opts)
+        id (str (:id (:row (inv/create! eng :ticket
+                                        {:title "Not now"
+                                         :type "task"
+                                         :repo "ckopsa/waymark"}
+                                        opts))))
+        groomed (:row (inv/invoke! eng :ticket id :groom {} opts))
+        ;; defer is an edit door: it is fenced on the version it read
+        _ (inv/invoke! eng :ticket id :defer {:defer_until "2026-11-19"}
+                       (assoc opts :if-match
+                              (inv/etag :ticket id (:version groomed))))
+        p (try (inv/invoke! eng :ticket id :complete
+                            {:close_reason "Done as asked."} opts)
+               nil
+               (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+    (is (= 409 (:status p)) (pr-str p))
+    (is (= :wrong-state (:waymark10/problem p)) (pr-str p))
+    (is (= [:ticket/resume] (:remedies p))
+        "a caller that never read the envelope still learns the way out")
+    (is (= (:remedies (refusal (at :deferred {:defer_until "2026-11-19"})
+                               (ctx the-person) :complete))
+           (:remedies p))
+        "the 409 and the envelope's unavailable entry name the same doors")))
+
 (deftest the-two-endings-offer-reopen-to-a-person-and-nothing-to-a-seat
   (doseq [state [:done :dropped]]
     (let [row (at state {:close_reason "Merged: github:ckopsa/waymark#41."})]

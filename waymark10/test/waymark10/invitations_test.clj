@@ -17,7 +17,8 @@
   (:import (java.time Instant)))
 
 (def ^:private chore
-  "The row a step acts on: one door, two plain arguments and one secret."
+  "The row a step acts on: one door, two plain arguments and one secret,
+  a map argument that holds a map, and a secret map argument."
   (r/resource
    {:kind :chore
     :plural "chores"
@@ -42,7 +43,21 @@
                        [:maybe [:string {:max 40}]]]
                       [:pin {:optional true :x-secret true
                              :x-display {:label "Lock code"}}
-                       [:maybe [:string {:max 12}]]]]
+                       [:maybe [:string {:max 12}]]]
+                      [:showcase {:optional true :x-display {:label "Showcase"}}
+                       [:maybe [:map
+                                [:evidence {:optional true
+                                            :x-display {:label "Evidence"}}
+                                 [:maybe [:map
+                                          [:film_url {:optional true
+                                                      :x-display {:label "The film"}}
+                                           [:maybe [:string {:max 500}]]]]]]]]]
+                      [:vault {:optional true :x-secret true
+                               :x-display {:label "Vault"}}
+                       [:maybe [:map
+                                [:code {:optional true
+                                        :x-display {:label "Vault code"}}
+                                 [:maybe [:string {:max 12}]]]]]]]
               :handler (fn [row inp _ctx]
                          (update row :data merge (select-keys inp [:title :room :pin])))
               :safety {:idempotent true :reversible true :confirm false}
@@ -144,6 +159,35 @@
     (is (some? (refusal #(invite! eng c {:field "colour"})))
         "a field the action does not take")
     (is (nil? (refusal #(invite! eng c {:field "title"}))))))
+
+;; ticket 45cae4d6: a field may be a dotted path into a nested map
+;; argument, as the form names that input.
+
+(deftest a-dotted-field-walks-a-nested-map-argument
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")]
+    (testing "a path that resolves"
+      (let [row (invite! eng c {:field "showcase.evidence.film_url"})
+            stored (row-of eng :invitation (:id row))]
+        (is (= "open" (name (:state row))))
+        (is (= ["showcase.evidence.film_url"] (get-in stored [:data :fields]))
+            "the row stores the path as the author wrote it")))
+    (testing "an inner step that names nothing"
+      (let [why (refusal #(invite! eng c {:field "showcase.proof.film_url"}))]
+        (is (some? why))
+        (is (str/includes? (str why) "showcase.proof.film_url")
+            "the refusal names the whole path")
+        (is (str/includes? (str why) "not an argument")))
+      (is (some? (refusal #(invite! eng c {:field "showcase.evidence.reel"})))
+          "a last step the inner map does not hold")
+      (is (some? (refusal #(invite! eng c {:field "title.film_url"})))
+          "a step past an argument that is no map"))
+    (testing "a path that crosses a secret argument"
+      (let [why (refusal #(invite! eng c {:field "vault.code"}))]
+        (is (some? why))
+        (is (str/includes? (str why) "vault.code"))
+        (is (str/includes? (str why) "secret")
+            "the secret is the map the path walks through, not its leaf")))))
 
 ;; docs/spec-walkthrough.md § 4: `fields`, with `field` the spelling for
 ;; a list of one. `invite!` names `field`, so a case naming `fields`

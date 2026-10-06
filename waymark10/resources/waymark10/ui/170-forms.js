@@ -156,8 +156,9 @@ function fieldWidget(name, rawProp, value) {
    own widget named parent.child (the enum a select wearing its choices,
    a string an input, a property-less map-of still the JSON box), and
    collectValues folds them back into one object, omitting a sub-form
-   left entirely blank. One level: a map inside a map inside a map has
-   not been declared anywhere in the house. */
+   left entirely blank. It nests: a map inside the map is a sub-form
+   inside the sub-form, its inputs named by the whole path
+   (showcase.evidence.film_url), and ui-drive's access story drives one. */
 function subformWidget(name, prop, value) {
   const box = el("div", {class: "subform", "data-subform": name});
   const required = new Set((prop.required || []).map(String));

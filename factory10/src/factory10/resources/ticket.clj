@@ -800,7 +800,8 @@
 (defguardfn an-epic-shows-its-evidence
   {:reads [:storage]
    :vars [:missing]
-   :remedies [{:door :ticket/restate :fields [:showcase]}]
+   :evidence [:missing_field]
+   :remedies [{:door :ticket/restate :fields ['(evidence :missing_field)]}]
    :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
   [row _inp ctx]
   (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
@@ -819,9 +820,14 @@
                     (and read' (nil? (told-scene scene-ref read')))
                     "Its `scene_ref` names no row that exists: write it kind:id, for the journal or other row whose text is the told scene.")
                   :else
-                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")]
+                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")
+        ;; the one input the refusal is missing, as the restate's form names it
+        field (case fmt
+                "film" "showcase.evidence.film_url"
+                "text" "showcase.evidence.scene_ref"
+                "showcase")]
     (if missing
-      (t/deny {:vars {:missing missing}})
+      (t/deny {:vars {:missing missing} :evidence {:missing_field field}})
       (t/allow))))
 
 (defn- parent-scene

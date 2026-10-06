@@ -389,16 +389,8 @@
 
 (defn- out-of-state-entry [rdef defn' state]
   (let [states (sort (:from defn'))
-        ;; the way there: the kind's own doors that leave the row's
-        ;; state and land in one this door opens from, in the machine's
-        ;; deterministic (name) order. They act on this same row, so a
-        ;; pursuit binds them without being told which
-        roads (into []
-                    (comp (remove :bulk)
-                          (filter #(and (contains? (:from %) state)
-                                        (contains? (:from defn') (:to %))))
-                          (map #(keyword (name (:kind rdef)) (name (:name %)))))
-                    (machine/actions-seq rdef))]
+        ;; the way there, shared with the invoke's wrong-state refusal
+        roads (machine/roads rdef defn' state)]
     ;; humanized state labels: reasons are prose, not tokens; the
     ;; machine-readable states ride becomes_available
     (cond-> {:reason (str "Available in state(s) "
