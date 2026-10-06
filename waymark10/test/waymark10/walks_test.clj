@@ -585,6 +585,36 @@
     (testing "an exporter that cannot see the invitation gets no line"
       (is (empty? (:lines (export-of eng w (vis-of c colton planner))))))))
 
+(deftest the-export-carries-an-invitation's-given-values
+  (let [[eng tick!] (clocked-engine {:resources [chore errand]})
+        c (errand! eng "Dishes")
+        colton (member! eng "Colton" "human")
+        planner (member! eng "Planner" "agent")
+        w (walk! eng)
+        title-only (fn [vis] (assoc vis :arg? (fn [_kind _action arg] (= "title" arg))))]
+    (tick!)
+    (is (some? (walks/record-frame!
+                eng (:id w) nil
+                {:type "invitation"
+                 :body {:id "inv-1"
+                        :author planner
+                        :subject colton
+                        :self (errand-path c)
+                        :action "rename"
+                        :field "title"
+                        :note "Pick the new title here."
+                        :given {:title "Dishes, twice" :room "Kitchen"}}})))
+    (seal! eng w)
+    (testing "an unscoped exporter reads them whole, beside no suggest"
+      (let [[line] (:lines (export-of eng w nil))]
+        (is (= {:title "Dishes, twice" :room "Kitchen"} (:given line)))
+        (is (not (contains? line :suggest)))))
+    (testing "given crosses under the exporter's :arg?, as suggest does"
+      (is (= [{:title "Dishes, twice"}]
+             (mapv :given
+                   (:lines (export-of eng w (title-only
+                                             (vis-of c "inv-1" colton planner))))))))))
+
 ;; ── a walkthrough is recorded (docs/spec-walkthrough.md § 6) ────────
 
 (def ^:private seeing-all
