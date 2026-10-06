@@ -999,7 +999,8 @@
     (t/deny)))
 
 (def ^:private epic
-  "A row whose goal door takes a form: `complete` requires a reason."
+  "A row whose goal door takes a form: `complete` requires a reason,
+  and takes a secret `passphrase`."
   (r/resource
    {:kind :q_epic
     :plural "q_epics"
@@ -1014,7 +1015,9 @@
     {:complete {:from #{:open} :to :closed
                 :input [:map
                         [:close_reason [:string {:min 1 :max 480}]]
-                        [:film {:optional true} [:maybe [:string {:max 200}]]]]
+                        [:film {:optional true} [:maybe [:string {:max 200}]]]
+                        [:passphrase {:optional true :secret true}
+                         [:maybe [:string {:max 80}]]]]
                 :guards [the-part-is-finished the-film-is-a-link]
                 :handler (fn [row inp _ctx]
                            (assoc-in row [:data :close_reason] (:close_reason inp)))
@@ -1140,6 +1143,23 @@
           "the goal's form opens with what the quest stored")
       (is (nil? (:suggest data))
           "the owner's own values are not marked as a suggestion"))))
+
+(deftest the-goals-invitation-leaves-out-a-stored-secret-argument
+  (let [eng (epic-engine)
+        film "https://example.org/film"
+        passphrase "open-sesame-4471"
+        {:keys [quest part]} (epic-quest! eng {:film film :passphrase passphrase})
+        _ (hear! eng)]
+    (is (= passphrase (:passphrase (walk/keywordize-keys (:input (data-of eng quest)))))
+        "the quest stored the secret argument")
+    (move! eng :chore part :finish person)
+    (hear! eng)
+    (let [data (:data (invitation-of eng quest))]
+      (is (= "complete" (some-> (:action data) name)) (pr-str data))
+      (is (= {:film film} (walk/keywordize-keys (:given data)))
+          "the other stored value still pre-fills, and the secret one is left out")
+      (is (not (str/includes? (pr-str data) passphrase))
+          "the secret value is nowhere in the invitation"))))
 
 (deftest a-stored-key-the-invitation-may-not-show-is-left-out-alone
   (is (= {:film "https://example.org/film"}

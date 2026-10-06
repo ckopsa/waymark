@@ -1118,7 +1118,8 @@ function startReplay(text) {
     if (!r.recorder && (f.type === "move" || f.type === "ui")) r.recorder = f.who || null;
     const ui = (f.type === "ui" && f.ui) || {};
     /* an invitation names a dialog as well: its row's door, with the
-       invited fields and the suggested ones; and so does a caption
+       invited fields, the suggested ones and the given ones; and so
+       does a caption
        anchored to a field */
     const inv = (f.type === "invitation" || (f.type === "caption" && f.field))
       && f.self && f.action;
@@ -1132,7 +1133,8 @@ function startReplay(text) {
       const key = d.self + " " + d.action;
       const names = r.fields.get(key) || new Set();
       const typed = inv ? [f.field, ...(f.fields || []),
-                           ...Object.keys(f.suggest || {})]
+                           ...Object.keys(f.suggest || {}),
+                           ...Object.keys(f.given || {})]
                         : Object.keys(ui.fields || {});
       for (const k of typed) if (k) names.add(k);
       r.fields.set(key, names);
@@ -1182,7 +1184,7 @@ function replayDialogDoc(d) {
 }
 /* an `invitation` frame applied: the invited row, and its door's
    dialog as actionDialog draws a live invitation — the suggestions
-   marked, every invited field lit, the note beside the first, a
+   marked, the given values with no mark, every invited field lit, the note beside the first, a
    walkthrough's "Step 2 of 4" line above the form — read-only, with
    only Cancel in the footer. It holds the screen as an invited
    person's own dialog does, until the transition that answers it. A
@@ -1198,6 +1200,7 @@ async function openReplayInvitation(f, actor) {
   const doc = replayDialogDoc(d).body;
   await actionDialog({name: d.action, entry: doc.actions[d.action], doc,
     suggest: f.suggest || {},
+    given: f.given || {},
     /* a frame recorded before `fields` holds `field` alone */
     invitation: {doc: {}, note: f.note, step: f.step, of: f.of,
                  fields: f.fields || (f.field ? [f.field] : [])},
@@ -1207,7 +1210,8 @@ async function openReplayInvitation(f, actor) {
   if (!g) return;
   if (replay !== r) { closeGuided(); return; }
   g.setAttribute("data-replay-invite", "");
-  g.guidedSet(f.suggest || {});
+  /* a suggestion outranks a given value, as in the live form */
+  g.guidedSet(Object.assign({}, f.given || {}, f.suggest || {}));
 }
 /* the form is gone: the frames that waited behind it (replay.held) are
    drawn on the screen it was over, in the order they were recorded,
