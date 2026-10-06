@@ -565,7 +565,8 @@
     (testing "blocking on an unrelated open ticket still works"
       (is (= :allow (:verdict (judge ["U"])))))
     (testing "setting a parent the ticket already waits on refuses"
-      (let [guard (last (:create-guards ticket))
+      (let [guard (first (filter #(= :the-parent-is-not-waited-on (:name %))
+                                 (:create-guards ticket)))
             row (at :blocked {:blocked_by ["G"]} "C")
             judge-parent (fn [parent]
                            (:verdict (first (g/evaluate guard row {:parent parent}
@@ -908,7 +909,9 @@
                           (sitter "house-mayor"))]
       (is (nil? (:requested_by data)))
       (is (= 1 (:priority data)))))
-  (let [[_ _ known mayors] (:create-guards ticket)
+  (let [named (fn [n] (first (filter #(= n (:name %)) (:create-guards ticket))))
+        known (named :the-domain-is-one-we-have)
+        mayors (named :only-a-mayor-asks-another-domain)
         allowed? (fn [guard seat inp]
                    (= :allow (:verdict (first (g/evaluate guard nil inp (sitter seat))))))]
     (testing "only a mayor names another domain"
