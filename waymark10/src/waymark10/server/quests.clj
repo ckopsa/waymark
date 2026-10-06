@@ -41,6 +41,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -482,7 +483,7 @@
 (defn- blocked-steps
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
   bound, two for a door that is somebody else's, else one."
-  [{:keys [door reason needs confirm consequence held hold warnings] :as entry}
+  [{:keys [door row reason needs confirm consequence held hold warnings] :as entry}
    goal seat-lookup]
   (let [[k action] (door-parts door)
         base (step-of entry goal)]
@@ -510,7 +511,7 @@
 
       ;; a row the owner cannot read, or a refusal that names no way
       :else
-      (let [seats (seq (take 3 (when (and k seat-lookup) (seat-lookup k action))))
+      (let [seats (seq (take 3 (when (and k seat-lookup) (seat-lookup k action row))))
             who (if seats
                   (str/join ", " seats)
                   (str "someone who holds " (if (keyword? door) (str k "." action) door)))]
@@ -542,9 +543,9 @@
 (defn answer->plan
   "A rehearsal's answer (`client/pursue!` with `:dry-run true`, or
   `mcp/rehearse`'s `:stopped`) as the input of the `plan` door. Pure:
-  `seat-lookup` is (fn [kind action]) → the names of the active seats
-  whose scope admits that door, and is asked only for a door the owner
-  cannot take.
+  `seat-lookup` is (fn [kind action self]) → the names of those who can
+  take that door on the row at `self` (nil when the rehearsal bound no
+  row), and is asked only for a door the owner cannot take.
 
   The writes come first, in the rehearsal's order, so the goal door is
   last when it is among them; each blocked entry follows. The plan is
@@ -577,10 +578,6 @@
   (binding [*out* *err*]
     (println (apply str "waymark10 quests: " parts))))
 
-(def ^:private sweep-cap
-  "The most rows one pass reads."
-  500)
-
 (defn- row-of
   "One row of kind `k`, decoded; nil when it is gone."
   [eng k id]
@@ -590,28 +587,20 @@
                  (fn [tx] (store/load-row st tx k (str id) {})))
                (inv/decode-row rdef)))))
 
-(defn- rows-of [eng k where]
-  (let [st (:storage eng)
-        rdef (get (inv/resources eng) k)]
-    (mapv #(inv/decode-row rdef %)
-          (store/with-tx st
-            (fn [tx]
-              (vec (store/query-rows st tx k where {:limit sweep-cap})))))))
+(defn- id-of-path
+  "The id a row's path ends in, `/api/<plural>/<id>`; nil for no path."
+  [self]
+  (some-> self str not-empty (str/split #"/") peek not-empty))
 
 (defn- seat-lookup
-  "(fn [kind action]) → the names of the active seats whose scope names
-  that action on that kind. Read when a plan needs it, never per write."
-  [eng]
-  (fn [k action]
-    (when (contains? (inv/resources eng) :seat)
-      (into []
-            (comp (filter (fn [row]
-                            (some (fn [e]
-                                    (and (= (str k) (some-> (:kind e) name))
-                                         (some #(= (str action) (name %)) (:actions e))))
-                                  (get-in row [:data :scope]))))
-                  (keep #(some-> (get-in % [:data :name]) str not-empty)))
-            (rows-of eng :seat {:state :active})))))
+  "(fn [kind action self]) → the display names of those who can take
+  that door on the row at `self`, the quest's `owner` left out: the
+  active seats and the holders of a live grant, each judged as a grant
+  is judged (`grants/door-takers`). Read when a plan needs it, never
+  per write."
+  [eng owner]
+  (fn [k action self]
+    (grants/door-takers eng k action (id-of-path self) owner)))
 
 (defn- planned-since?
   "Whether the row's plan was written after transition `t` was
@@ -631,7 +620,7 @@
     (try
       (answer->plan (mcp/rehearse eng {:principal owner :grant grant}
                                   self action input)
-                    (seat-lookup eng))
+                    (seat-lookup eng owner))
       (catch clojure.lang.ExceptionInfo e
         {:plan []
          :plan_is_estimate true
