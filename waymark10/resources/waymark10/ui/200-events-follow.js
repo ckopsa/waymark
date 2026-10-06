@@ -1700,9 +1700,11 @@ function replayGestureTarget(f) {
   const row = s => String(s || "").split("?")[0];
   const seen = e => e.getClientRects().length > 0;
   const ui = (f.type === "ui" && f.ui) || {}, d = ui.dialog, c = ui.collection;
-  /* the pointer fills the form; an invitation's dialog has no submit */
+  /* the pointer fills the form; an invitation's dialog has no submit. A
+     `move` ends a form as its closing beat does (replayKeepsForm), and a
+     recorded walk may hold one before that beat: the press is made there */
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
-  if (g && g.guidedField && f.type === "ui") {
+  if (g && g.guidedField && (f.type === "ui" || f.type === "move")) {
     const key = g.getAttribute("data-guided");
     if (d) return d.self + " " + d.action === key
       ? g.guidedField(replayTypingOf(f)) : null;
