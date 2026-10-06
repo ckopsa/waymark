@@ -152,6 +152,38 @@
     (take! eng a person :pause)
     (is (false? (:pinned (data-of eng a))) "a paused quest is not pinned")))
 
+(defn- log-of [eng id]
+  (store/with-tx (:storage eng)
+    #(store/transitions (:storage eng) % {:kind :quest :resource-id id} {})))
+
+(deftest pin-unpins-the-other-quest-with-the-engines-hand
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        ;; a leash that offers `pin` and not `unpin`, and sees no quest row
+        gr (assoc (grant-seeing c)
+                  :action? (fn [_kind action] (not= "unpin" (name action))))
+        pin! (fn [id]
+               (inv/invoke! eng :quest (str id) :pin {}
+                            {:principal planner
+                             :grant gr
+                             :idempotency-key (str (random-uuid))}))
+        a (:id (accept! eng planner c {} gr))
+        b (:id (accept! eng planner c {} gr))]
+    (pin! a)
+    (is (nil? (refusal #(pin! b))) "a grant offering `pin` needs no `unpin`")
+    (is (true? (:pinned (data-of eng b))) "the second quest is pinned")
+    (is (false? (:pinned (data-of eng a))) "the first is unpinned")
+    (let [unpin (first (filter #(= :unpin (:action %)) (log-of eng a)))]
+      (is (some? unpin) "through its own `unpin` door")
+      (is (= (:id quests/engine-actor) (get-in unpin [:actor :id]))
+          "the log names the engine's actor")
+      (is (nil? (get-in unpin [:actor :grant]))
+          "and no grant: the engine's hand wears no leash"))
+    (is (some? (refusal #(take! eng b other :unpin)))
+        "another principal still does not unpin it")
+    (is (nil? (refusal #(take! eng b planner :unpin)))
+        "and the owner still does")))
+
 (deftest another-principals-doors-are-refused
   (let [eng (fresh-engine)
         c (chore! eng "Dishes")

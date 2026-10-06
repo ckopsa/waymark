@@ -40,7 +40,7 @@ false. A reader shows "planning" until the first plan lands.
 |---|---|---|---|
 | `create` | → `active` | anyone who sees the goal | accepts the goal |
 | `pin` | `active` | owner | sets `pinned`, and unpins the owner's other quests |
-| `unpin` | `active` | owner | clears `pinned` |
+| `unpin` | `active` | owner, or the engine inside a `pin` | clears `pinned` |
 | `pause` | `active` → `paused` | owner | sets it aside, and unpins it |
 | `resume` | `paused` → `active` | owner | takes it up again |
 | `replan` | `active` | owner | no input; stamps `replan_requested_at` |
@@ -57,12 +57,18 @@ The guards:
 - one owner holds at most 20 active quests. Create and `resume` are
   both judged by it;
 - only the owner takes `pin`, `unpin`, `pause`, `resume`, `abandon`
-  and `replan`;
+  and `replan`. `unpin` also admits the engine, and no other of these
+  doors does;
 - only the engine (a `:system` principal) takes `plan` and `finish`.
 
-`pin` unpins the others through their own `unpin` door, in the same
-transaction, so each quest's history says when it left view. Only an
-active quest is pinned: `pause`, `abandon` and `finish` unpin.
+The engine keeps the one-pinned rule. One pinned quest per owner is
+the engine's invariant, not a second move the caller makes. `pin`
+unpins the others through their own `unpin` door, in the same
+transaction, as the engine's actor (`waymark10-quests`) and under no
+grant. So a grant that offers `pin` needs no `unpin`, and it need not
+see the other quest. Each quest's history says when it left view and
+that the engine took it out. Only an active quest is pinned: `pause`,
+`abandon` and `finish` unpin.
 
 ## The plan and the step vocabulary
 
