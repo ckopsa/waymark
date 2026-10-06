@@ -38,7 +38,7 @@ false. A reader shows "planning" until the first plan lands.
 
 | Door | From → to | Who | What it does |
 |---|---|---|---|
-| `create` | → `active` | anyone who sees the goal | accepts the goal |
+| `create` | → `active` | anyone who sees the goal row and, under a grant, is admitted to the goal door | accepts the goal |
 | `pin` | `active` | owner | sets `pinned`, and unpins the owner's other quests |
 | `unpin` | `active` | owner | clears `pinned` |
 | `pause` | `active` → `paused` | owner | sets it aside, and unpins it |
@@ -51,9 +51,17 @@ false. A reader shows "planning" until the first plan lands.
 The guards:
 
 - at create, the owner sees the goal row and the goal door exists on
-  its kind. The judge is the invitation's own (`sight-problem`), so a
-  granted caller's grant must also admit that door, and a row that
-  does not exist reads the same as a row out of scope;
+  its kind. The judge is the invitation's own (`sight-problem`), and
+  this is law, not an accident of the reuse: a quest's goal is a door
+  its owner could take. A caller wearing a grant accepts a quest only
+  when the grant sees the goal row AND admits the goal door. A person
+  acting as themselves (no grant) is judged by the row's existence.
+  The reason: an owner whose grant can never take the goal would hold
+  a quest that can never finish, and the planner's rehearsal under
+  that grant could not even try the goal door. The refusal is the
+  invitation's one sentence, "your grant does not see that row or
+  does not admit that door.", so a row that does not exist, a row out
+  of scope and a door the grant does not admit all read the same;
 - one owner holds at most 20 active quests. Create and `resume` are
   both judged by it;
 - only the owner takes `pin`, `unpin`, `pause`, `resume`, `abandon`
