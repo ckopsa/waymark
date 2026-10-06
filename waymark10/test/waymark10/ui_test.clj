@@ -481,6 +481,16 @@
     (is (str/includes? body "if (f.type === \"move\" || f.type === \"ui\") replay.refusals = [];"))
     (is (str/includes? body "#replaycaption[data-replay-notice] { white-space: pre-line; }"))))
 
+(deftest ui-replay-says-a-refused-accept-in-the-quests-sheet
+  ;; docs/spec-quests.md: a `refusal` frame while the quest's sheet is
+  ;; open is the answer Accept quest got; the replay says it in the
+  ;; sheet's own box, by the sheet's own code, and not in the band
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "dlg.questRefuse = refused;"))
+    (is (str/includes? body "function replaySheetRefused(f) {"))
+    (is (str/includes? body "sheet.questRefuse({title: f.title, detail: f.detail});"))
+    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-quest-accept]\") : null;"))))
+
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
   ;; write, the pointer goes to the guided dialog's submit button, drawn
