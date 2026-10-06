@@ -337,7 +337,10 @@
         rehearse (fn [choices]
                    (c/pursue! ada (doc ada :q-epic) :complete ending
                               {:dry-run true :choices choices}))
-        child (fn [k] {"ticket.complete" {:id (id-of k) :input ending}})
+        ;; no id: the refusal binds the child, and a person gives only
+        ;; the sentence that child's `complete` asks for
+        sentence {"ticket.complete" {:input ending}}
+        on (fn [res k] (filterv #(= (self k) (:row %)) (:blocked-on res)))
         stated (-> (:data (doc ada :q-epic))
                    (select-keys [:title :detail :type :showcase])
                    (assoc-in [:showcase :evidence] {:film_url film-url}))]
@@ -359,16 +362,33 @@
              (get-in (c/act! ada (doc ada :q-epic) :restate stated)
                      [:data :showcase :evidence :film_url]))))
     (testing "the next, which no rehearsal could see before: Ada ends the child that is hers"
-      (let [res (rehearse (child :q-guide))]
+      (let [res (rehearse nil)]
+        (is (= [] (steps (:writes res))) (pr-str res))
+        (is (= [{:door "ticket.complete" :row (self :q-guide) :needs [:close_reason]}]
+               (mapv #(select-keys % [:door :row :needs])
+                     (filter #(= "ticket.complete" (:door %)) (:blocked-on res))))
+            (pr-str res)))
+      (let [res (rehearse sentence)]
         (is (= [["ticket.complete" (self :q-guide)]
                 ["ticket.complete" (self :q-epic)]]
                (steps (:writes res)))
             (pr-str res)))
       (is (= "done" (:state (c/act! ada (doc ada :q-guide) :complete ending)))))
     (testing "the next: the deferred child, which is not Ada's to end"
-      (let [res (rehearse (child :q-seats))]
+      (let [res (rehearse sentence)]
         (is (= [] (steps (:writes res))) (pr-str res))
-        (is (contains? (set (map :row (:blocked-on res))) (self :q-seats))
+        (is (= (:blocked-on res) (on res :q-seats)) (pr-str res))
+        ;; still plain blocked-on entries, and not an `:unseen` door: Ada
+        ;; reads the child, and each refusal leaves her no way. Neither
+        ;; door is afforded on the deferred row, neither names a remedy,
+        ;; and neither asks her for an input, a tap or a confirm. That
+        ;; is the shape of a step that is a seat's (`whose: seat`).
+        (is (= [{:door "ticket.complete" :needs [] :or ["ticket.drop"]
+                 :reason "Available in state(s) Draft, Open; the resource is Deferred."}
+                {:door "ticket.drop" :needs [] :or ["ticket.complete"]
+                 :reason (str "ticket.drop is not afforded on " (self :q-seats) ".")}]
+               (mapv #(select-keys % [:door :needs :or :reason :confirm :held])
+                     (:blocked-on res)))
             (pr-str res)))
       (is (nil? (get-in (doc ada :q-seats) [:actions :resume])))
       (testing "Planner ends it"
