@@ -160,6 +160,17 @@ quest" under it when the recording keeps
 the refusal as a goal. A walk recorded before this frame existed has
 that button drawn in the form's footer instead.
 
+A bulk write opens no form, so its refusals have none to be drawn in.
+Replay draws a refusal in the caption band when the recording had no
+form open for its door: the same hand's last `ui` beat before the frame
+shows no dialog, or another door's, or a `move` came after that beat
+(`replayFormless`). The band shows one line for each refused row,
+"Refused: ", the row's summary as the recording has it or its address,
+and the problem's detail. The lines are held, in the notice's italic,
+until the recorder's next `move` or `ui` beat, and each is given a
+caption's reading time. The export is not changed. This was not checked
+in a browser.
+
 **How a sitter with no browser reports presence.** The connector calls
 `presence/report!` in process, with the session's principal, the `self`
 and the `ui` part, and `walks/self-recorder`'s tap built from the

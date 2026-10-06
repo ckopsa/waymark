@@ -465,6 +465,18 @@
     (is (str/includes? body "if (replay) replayRefuse(replay.refused);"))
     (is (str/includes? body "return g.querySelector(\"[data-quest-accept]\") || g.guidedAccept();"))))
 
+(deftest ui-replay-draws-a-formless-refusal-in-the-band
+  ;; docs/spec-agent-demo-walks.md §2: a bulk write opens no form, so
+  ;; each row it refused is a line in the caption band, held until the
+  ;; recorder's next step
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function replayFormless(r, f) {"))
+    (is (str/includes? body "if (n.type === \"move\") return true;"))
+    (is (str/includes? body "replay.refusals.push(replayRefusedLine(replay, f));"))
+    (is (str/includes? body "[...replay.refusals, replay.notice].filter(Boolean).join(\"\\n\");"))
+    (is (str/includes? body "if (f.type === \"move\" || f.type === \"ui\") replay.refusals = [];"))
+    (is (str/includes? body "#replaycaption[data-replay-notice] { white-space: pre-line; }"))))
+
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
   ;; write, the pointer goes to the guided dialog's submit button, drawn

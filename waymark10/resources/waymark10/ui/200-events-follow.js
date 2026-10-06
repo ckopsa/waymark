@@ -1078,6 +1078,7 @@ function startReplay(text) {
              beat: null,          // the `ui` beat last played (replayBeat)
              recorder: null,      // the cast alias whose hand the pointer is
              notice: null,        // the line of a step with no click behind it
+             refusals: [],        // the lines of the refusals no form was open for
              quest: null,         // the pinned active quest's document (replayQuest)
              questDone: null,     // the title of the quest that has just finished
              hopped: null,        // the frame a hop to its kind's list was made for
@@ -1259,7 +1260,9 @@ function applyReplayFrame(f, landed) {
     return;
   }
   /* a `refusal` frame is the answer the open form got and moves no
-     screen: its box is drawn in that form (replayRefuse) */
+     screen: its box is drawn in that form (replayRefuse), or its line
+     in the caption band when no form was open for it (a bulk write's
+     refused row) */
   if (f.type === "refusal") {
     replayRefuse(f);
     replayChip();
@@ -1273,6 +1276,8 @@ function applyReplayFrame(f, landed) {
   const again = !!beat && beat === replay.beat;
   replay.beat = beat;
   replay.notice = replayNotice(replay, f);
+  /* the recorder's next step takes the band's refusals with it */
+  if (f.type === "move" || f.type === "ui") replay.refusals = [];
   if (note && !replay.notice) replay.notice = note;
   if (f.type === "move") {
     if (f.self) { applyFollowMove(f.self); replayGaze("row", f.self); }
@@ -1474,6 +1479,9 @@ function replayStillLeft(r) {
 /* how long the frame after `f` waits for `f` to be read: nothing,
    unless `f` is a caption with a line in it */
 function replayReadingTime(f) {
+  /* a refusal drawn in the band is a line to read as well */
+  if (f && f.type === "refusal" && replay && replayFormless(replay, f))
+    f = {type: "caption", text: replayRefusedLine(replay, f)};
   if (!f || f.type !== "caption" || !f.text) return 0;
   return Math.min(REPLAY_READ_MAX,
                   Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));
@@ -1487,7 +1495,10 @@ function replayCaption() {
   const c = replay && replay.caption;
   /* a step with no click behind it (replayNotice) says so in the band,
      in the caption's place, until the next frame is applied */
-  const n = replay && replay.notice;
+  /* and so does a refusal no form was open for (replayRefuse): one line
+     for each refused row, until the recorder's next step */
+  const n = replay &&
+    [...replay.refusals, replay.notice].filter(Boolean).join("\n");
   let band = $("#replaycaption");
   if (!band && (c || n))
     document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
@@ -1561,6 +1572,30 @@ function replayKeeps(r, f, who, key) {
 function replayRefusedKey(f) {
   return String(f.self || "").split("?")[0] + " " + f.action;
 }
+/* whether the recording had no form open for the refusal `f`: the same
+   hand's last `ui` beat before it shows no dialog, or another door's,
+   or a `move` came after that beat. A bulk write is so: it is staged
+   as a move to the collection and then the writes, and each row it
+   refused has a frame of its own (docs/spec-agent-demo-walks.md §2). */
+function replayFormless(r, f) {
+  const key = replayRefusedKey(f);
+  for (let i = r.frames.indexOf(f) - 1; i >= 0; i--) {
+    const n = r.frames[i];
+    if (n.type === "move") return true;
+    if (n.type !== "ui" || n.who !== f.who) continue;
+    const d = (n.ui || {}).dialog;
+    return !d || String(d.self || "").split("?")[0] + " " + d.action !== key;
+  }
+  return true;
+}
+/* the line the caption band shows for a refusal no form was open for:
+   the row, by the name the recording has for it, and its problem. */
+function replayRefusedLine(r, f) {
+  const self = String(f.self || "").split("?")[0];
+  const name = (r.rows.get(self) || {}).summary ||
+    (r.docs.get(self) || {}).summary || self;
+  return "Refused: " + [name, f.detail || f.title].filter(Boolean).join(": ");
+}
 /* whether the refusal `f` was kept as a goal: the same hand's quest for
    that door comes after it, before their next refusal. */
 function replayKept(r, f) {
@@ -1578,9 +1613,17 @@ function replayKept(r, f) {
    problem box, or each field's message under its field for a schema
    refusal (`errors`), and "Accept as quest" when the recording keeps it
    as a goal, so the pointer presses it where the person saw it. A form
-   not drawn yet draws it when it opens (openGuidedDialog). */
+   not drawn yet draws it when it opens (openGuidedDialog). A refusal no
+   form was open for (replayFormless) is drawn in the caption band
+   (replayCaption), one line for each, and the form that is open keeps
+   its own. */
 function replayRefuse(f) {
   if (!replay) return;
+  if (f && replayFormless(replay, f)) {
+    replay.refusals.push(replayRefusedLine(replay, f));
+    replayCaption();
+    return;
+  }
   replay.refused = f || null;
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
   if (!f || !g || !g.guidedRefuse ||
@@ -1902,6 +1945,7 @@ function playReplay() {
     r.door = false;
     r.beat = null;
     r.notice = null;
+    r.refusals = [];
     r.hopped = null;
     r.walked = null;
     r.held = null;
