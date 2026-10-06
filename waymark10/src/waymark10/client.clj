@@ -654,12 +654,32 @@
       ;; the pursuit stops here, rehearsed or real, and names the
       ;; sentence — it is never acknowledged on anyone's behalf
       (and (get-in entry [:safety :confirm]) (not (:confirm! opts)))
-      (blocked (cond-> {:confirm true
-                        :consequence (consequence-of entry)
-                        :reason (str "safety.confirm is true — a person must approve: "
-                                     (consequence-of entry))}
-                 ;; a partial rehearsal's goal names the form it owes
-                 (and rehearse? (:partial call) (seq needs)) (assoc :needs needs)))
+      (let [stop {:confirm true :consequence (consequence-of entry)}
+            reason (str "safety.confirm is true — a person must approve: "
+                        (consequence-of entry))]
+        (if-not (and rehearse? (:partial call) (seq needs))
+          (blocked (assoc stop :reason reason))
+          ;; a partial rehearsal's goal names the form it owes. A dry-run
+          ;; writes nothing, so it is sent through the confirm door: the
+          ;; guards that wait on the form, and a refusal, are known
+          ;; before the person confirms
+          (let [res (dry-run session doc action input :partial)
+                awaiting (vec (or (:awaiting res) (get-in res [:problem :awaiting])))
+                form (cond-> (assoc stop :needs needs)
+                       (seq awaiting) (assoc :awaiting awaiting))]
+            (cond
+              (or (transport? res) (diverged res)) {:stop res}
+              (seq (get-in res [:problem :remedies]))
+              {:refused (vec (get-in res [:problem :remedies])) :doc doc
+               :bound (vec (get-in res [:problem :resolved_remedies]))
+               :reason (get-in res [:problem :detail])
+               :form form}
+              (or (problem? res) (refused? res))
+              (blocked {:needs needs
+                        :reason (or (get-in res [:problem :detail])
+                                    (get-in res [:refused :reason])
+                                    (get-in res [:problem :title]))})
+              :else (blocked (assoc form :reason reason))))))
 
       ;; the goal of a partial rehearsal: its form is filled last, so
       ;; the guards that read no missing field are judged now, and the

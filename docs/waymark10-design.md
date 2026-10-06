@@ -3118,10 +3118,16 @@ judging questions the form hadn't answered yet — so the wire grows
   transition, no handler, nothing committed. The 200 answers
   `{"valid": true, "judged": […], "awaiting": […]}` (both arrays
   always present in partial mode — the mode is recognizable on the
-  wire); refusals answer the usual problem shapes.
+  wire); refusals answer the usual problem shapes. One member is
+  added: when a judged leaf refuses (the guard's 409) while other
+  leaves still wait, the problem carries `awaiting` too — the same
+  names the 200 would have listed — so the caller learns the form's
+  guards from the first refusal. It is absent when nothing waits,
+  and the 404 of a hidden leaf says nothing more.
 
 Partial composes with every door: it rides `create!` (provided
-entries, covered create-guard leaves) and, per item, the bulk/batch
+entries, covered create-guard leaves; its 409 names `awaiting` the
+same way) and, per item, the bulk/batch
 fan-outs — for free, because they all run the one per-item
 algorithm.
 
@@ -3181,7 +3187,8 @@ proves it — warnings as data, acknowledged names pass); the partial
 obligations (silence on unprovided fields, provided-field errors
 keyed only by provided fields, covered leaves judged now, uncovered
 leaves named `awaiting`). `router_test` (wire): the create door's
-200/verdict/422 and the partial door's shape. `bulk_batch_test`:
+200/verdict/422, the partial door's shape, and the partial 409's
+`awaiting` member. `bulk_batch_test`:
 mixed verdicts with the guard's own sentence per item, no row moved,
 no job minted on an over-threshold rehearsal, nothing stored under a
 presented key, the batch rehearsal's full verdict list, and the 428
@@ -3204,6 +3211,7 @@ considering cards on the live stream.
 | --- | --- | --- |
 | `?dry_run=partial` (wire mode; engine `:dry-run :partial`) | the blur judge should judge only what the form has answered — judged-when-answerable | 2026-07-10 |
 | `judged`/`awaiting` (partial verdict body), `verdicts` (bulk/batch dry-run body) | the rehearsal names what it judged and what still waits | 2026-07-10 |
+| `awaiting` on the partial rehearsal's guard-refused 409 (row door and create door) | a judged leaf's refusal should not hide the leaves that still wait; the caller learns them from the first answer | 2026-10-06 |
 | create dry-run tiers = waymark9 `_create_entry` | schema-only without create guards; guards judged with warnings as data | 2026-07-10 |
 | bulk dry-run exists (9 had none); batch dry-run judges independently (9 rolled back real executions) | the iron rule: a rehearsal never fires a handler | 2026-07-10 |
 | dry-runs never defer, never touch idempotency | a job is an effect; a key is a record | 2026-07-10 |

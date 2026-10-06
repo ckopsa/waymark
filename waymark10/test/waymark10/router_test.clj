@@ -389,7 +389,19 @@
                      :headers {"x-waymark-principal" "colton"}
                      :body (wire/write-json {:date "not-a-date"})})]
       (is (= 422 (:status resp)))
-      (is (= [:date] (vec (keys (:errors (json resp)))))))))
+      (is (= [:date] (vec (keys (:errors (json resp))))))))
+  (testing "a judged leaf's refusal names the leaves that still wait"
+    (let [pid (id-of (create-plan! "2026-10-26" ["2026-10-26"]))
+          resp (*h* {:request-method :post
+                     :uri (str "/api/plans/" pid "/-/assign_meal")
+                     :query-string "dry_run=partial"
+                     :headers {"x-waymark-principal" "colton"}
+                     :body (wire/write-json {:meal_id (str (random-uuid))})})
+          b (json resp)]
+      (is (= 409 (:status resp)))
+      (is (= "application/problem+json" (ctype resp)))
+      (is (= "names-a-row-that-stands" (:guard b)))
+      (is (= ["date-in-plan"] (:awaiting b))))))
 
 ;; ── 9. the collection ───────────────────────────────────────────────
 

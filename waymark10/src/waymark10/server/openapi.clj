@@ -70,14 +70,15 @@
 
 (def ^:private problem-schema
   {:type "object"
-   :description "RFC 9457 problem details; refusals carry remedies and becomes_available beside the standard members."
+   :description "RFC 9457 problem details; refusals carry remedies and becomes_available beside the standard members. A partial rehearsal's guard refusal also carries awaiting: the guard leaves that still wait on a field."
    :properties {:type {:type "string"}
                 :title {:type "string"}
                 :status {:type "integer"}
                 :detail {:type "string"}
                 :errors {:type "object"}
                 :remedies {:type "array" :items {:type "string"}}
-                :becomes_available {:type "object"}}
+                :becomes_available {:type "object"}
+                :awaiting {:type "array" :items {:type "string"}}}
    :required ["title" "status"]})
 
 (def ^:private bulk-report-schema

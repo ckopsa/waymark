@@ -1020,7 +1020,10 @@
                            (assoc-in row [:data :close_reason] (:close_reason inp)))
                 :safety routine}
      :drop {:from #{:open} :to :closed
-            :input [:map [:close_reason [:string {:min 1 :max 480}]]]
+            :input [:map
+                    [:close_reason [:string {:min 1 :max 480}]]
+                    [:film {:optional true} [:maybe [:string {:max 200}]]]]
+            :guards [the-film-is-a-link]
             :handler (fn [row inp _ctx]
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety {:idempotent true :reversible true :confirm true
@@ -1095,6 +1098,22 @@
     (is (= ["drop"] (mapv :door (:plan d))) (pr-str d))
     (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
     (is (= ["close_reason"] (:needs (first (:plan d)))))))
+
+(deftest a-confirm-goal-with-no-input-names-the-guard-that-awaits-its-form
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "drop"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        step (first (:plan d))]
+    (is (= ["confirm"] (mapv (comp name :whose) (:plan d))) (pr-str d))
+    (is (= ["close_reason"] (:needs step)))
+    (is (= "The epic is let go. Judged when you fill the form: the-film-is-a-link."
+           (:note step))
+        "the consequence comes first, and the waiting guard after it")))
 
 (deftest a-goal-whose-input-was-given-keeps-it-and-needs-nothing
   (let [eng (epic-engine)
