@@ -365,10 +365,30 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     for (const node of dlg.querySelectorAll("[data-srverr]"))
       node.textContent = "";
   }
+  /* a nested argument's errors arrive as a map, or as a list with a
+     hole for each entry that passed: each message goes to the slot its
+     sub-field's widget is named by (shelf.label, items[1].name), which
+     is how a recorded refusal already spells it (walks/refusal-errors) */
+  function flatFieldErrors(path, v, out) {
+    const say = (...msgs) => { (out[path] = out[path] || []).push(...msgs); };
+    if (Array.isArray(v)) {
+      if (v.every(x => typeof x === "string")) say(...v);
+      else v.forEach((x, i) => {
+        if (x != null) flatFieldErrors(path + "[" + i + "]", x, out);
+      });
+    } else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v))
+        flatFieldErrors(k === "malli/error" ? path : path + "." + k, x, out);
+    } else if (v != null) say(String(v));
+    return out;
+  }
   function showFieldErrors(problem) {
-    for (const [field, msgs] of Object.entries((problem || {}).errors || {})) {
+    const flat = {};
+    for (const [field, msgs] of Object.entries((problem || {}).errors || {}))
+      flatFieldErrors(field, msgs, flat);
+    for (const [field, msgs] of Object.entries(flat)) {
       const slot = dlg.querySelector('[data-srverr="' + field + '"]');
-      const text = Array.isArray(msgs) ? msgs.join("; ") : String(msgs);
+      const text = msgs.join("; ");
       if (slot) slot.textContent = text;
       else errBox.append(el("div", {class: "problem"}, field + ": " + text));
     }
