@@ -1074,6 +1074,20 @@
     (is (every? (comp empty? :needs) (:plan d)))
     (is (= "Merged." (:close_reason (walk/keywordize-keys (:input d)))))))
 
+(deftest the-goals-invitation-suggests-the-stored-input
+  (let [eng (epic-engine)
+        film "https://example.org/film"
+        {:keys [quest part]} (epic-quest! eng {:film film})
+        _ (hear! eng)]
+    (is (nil? (get-in (invitation-of eng quest) [:data :suggest]))
+        "a step that is not the goal's carries no stored input")
+    (move! eng :chore part :finish person)
+    (hear! eng)
+    (let [data (:data (invitation-of eng quest))]
+      (is (= ["close_reason"] (:fields data)) (pr-str data))
+      (is (= {:film film} (walk/keywordize-keys (:suggest data)))
+          "the goal's form opens with what the quest stored"))))
+
 (deftest the-mapping-ends-on-a-goal-whose-form-is-not-filled
   (let [plan (quests/answer->plan
               {:blocked-on [{:door "ticket.complete" :row "/api/tickets/c1"
