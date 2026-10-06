@@ -209,7 +209,9 @@
       (and (some? (:field inp)) (some? (:fields inp)))
       "name `fields`, or `field` alone for a list of one, and not both."
 
-      (empty? names)
+      ;; the engine's own invitation may point at the door alone: a
+      ;; quest's step that takes no argument still has a door to light
+      (and (empty? names) (not= :system (:type (:principal ctx))))
       "name at least one argument, in `fields` or in `field`."
 
       :else
