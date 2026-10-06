@@ -27,7 +27,15 @@
     #questbar { display: grid; gap: 4px 8px; font-size: 13px;
                 grid-template-columns: minmax(0, 1fr) auto auto; }
     #questbar[hidden] { display: none; }
-    #questbar .quest-title { grid-area: 1 / 1; max-width: none; }
+    /* the title's box is 44px tall for a thumb, and its row stays one
+       line: the box starts in the bar's top padding and runs down over
+       the note below it, and the negative margins give that height back
+       (-22px where a browser has no lh unit) */
+    #questbar .quest-title { grid-area: 1 / 1; max-width: none;
+                             position: relative; z-index: 1;
+                             box-sizing: border-box; min-height: 44px;
+                             padding-top: 4px; margin: -4px 0 -22px;
+                             margin-bottom: calc(1lh - 40px); }
     #questbar [data-quest-count] { grid-area: 1 / 2 / auto / -1;
                                    justify-self: end; }
     #questbar .quest-line { grid-area: 2 / 1; }
