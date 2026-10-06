@@ -2673,8 +2673,62 @@ async function guidedStory() {
   ok("the follow bo already held stands when the walkthrough leaves his hand",
      await B.js(`followId === "ada" && localStorage.getItem("wm10.follow.ui") === "1"`));
 
-  console.log("· stopping");
+  /* the quest's sheet (docs/spec-guided-follow.md § 2): a plan with an
+     uncovered day keeps Finalize shut, and names assign_meal as its way
+     out (fixtures.clj, all-days-covered-gate). Ada taps it, and bo's
+     screen shows her sheet with the same steps, read-only. */
+  console.log("· the quest's sheet of a shut door");
   await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's recipe form closed");
+  await B.until(`!document.querySelector("dialog[open]")`,
+                "ada's dialog off bo's screen", 15000, guidedState);
+  const plan = must(await call("POST", "/api/plans",
+    {start_date: "2026-07-14", weeks: 1,
+     days: [{date: "2026-07-14"}, {date: "2026-07-15"}]}, "ada"),
+    201, "ada creates a plan with no meal on its days").body.self;
+  const shutDoor = '#view button[data-quest-door="finalize"]';
+  await A.js(`location.hash = ${JSON.stringify(plan)}; true`);
+  await A.until(`hereHref() === ${JSON.stringify(plan)} &&
+                 !!document.querySelector(${JSON.stringify(shutDoor)})`,
+                "the plan's page, with its shut Finalize", 15000,
+                `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+  await B.until(`hereHref() === ${JSON.stringify(plan)}`,
+                "bo following ada to the plan", 15000, guidedState);
+  await sleep(600);
+  await A.js(`document.querySelector(${JSON.stringify(shutDoor)}).click(); true`);
+  const questSheetOpen = `document.querySelector("dialog[open][data-quest-sheet]")`;
+  await A.until(`!!${questSheetOpen}`, "ada's quest sheet", 15000,
+                `document.body.innerText.slice(-400)`);
+  await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+                "ada's quest sheet on bo's screen", 15000, guidedState);
+  const sheetSays = `(() => { const g = ${questSheetOpen};
+    return JSON.stringify({
+      goal: g.querySelector("[data-quest-sheet-goal]").textContent,
+      title: g.querySelector("[data-quest-title-line]").textContent,
+      why: g.querySelector("[data-quest-why]").textContent,
+      steps: [...g.querySelectorAll("[data-quest-steps] li")].map(li => li.textContent),
+      blocked: g.querySelector("[data-quest-blocked]")?.textContent ?? null,
+      refused: g.querySelector("[data-quest-refused]").textContent}); })()`;
+  const hers = await A.js(sheetSays), his = await B.js(sheetSays);
+  console.log("  ada's sheet: " + hers);
+  if (hers !== his) console.log("  bo's sheet:  " + his);
+  ok("bo's screen shows ada's quest sheet, with the same goal, reason and steps",
+     hers === his);
+  ok("the engine found steps to the shut door, and both sheets list them",
+     JSON.parse(hers).steps.length > 0);
+  ok("the sheet is read-only on bo's screen: it says whose it is, and Accept is disabled",
+     await B.js(`{ const g = ${questSheetOpen};
+       (g.querySelector("[data-guided-note]")?.textContent || "").endsWith(" has this open") &&
+       g.querySelector("[data-quest-accept]").disabled === true }`));
+  ok("ada's own Accept stays live",
+     await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
+  await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
+                "ada's sheet off bo's screen", 15000, guidedState);
+  ok("bo's sheet closes with ada's", true);
+
+  console.log("· stopping");
   await A.js(`document.querySelector("#sharebtn").click(); true`);
   ok("the toggle turns sharing off", await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
   await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);
@@ -3631,6 +3685,15 @@ async function questPhoneStory() {
     for (const q of held) await post(q + "/-/abandon", {}, h);
     ok("priya lets the held quests go",
        (await Promise.all(held.map(q => get(q)))).every(q => q.state === "abandoned"));
+    /* one short of the cap again, for the Accept the recording has
+       refused (ticket 5b321c0a): the walk's own quest is finished by
+       then, and one more made under the open sheet fills the cap */
+    const kept = [];
+    for (let i = 0; i < held.length - 1; i++) {
+      const q = await post("/api/quests", {self: room, action: "complete"}, h);
+      if (q.status === 201 && q.doc?.self) kept.push(q.doc.self);
+    }
+    ok("priya holds one quest short of the cap", kept.length === held.length - 1);
     const walk = await evaljs(`(async () => {
       const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
         {followed: principalId() || viewerId(),
@@ -3804,12 +3867,49 @@ async function questPhoneStory() {
          const e = (shut || {})[n];
          return !!e && (e.becomes_available?.in_states || []).includes("open") &&
            !(e.remedies || []).length; }));
+    /* a refused Accept (ticket 5b321c0a): the cap is reached between the
+       preview and Accept, so the sheet opens with its steps and the
+       create is refused. The sentence is said in the sheet and Accept
+       is disabled; the walk holds the `refusal` frame for its film. */
+    await evaljs(`location.hash = ${JSON.stringify(room)}; true`);
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(room)} &&
+                   !!document.querySelector(${JSON.stringify(shutDoor + "[aria-describedby]")})`,
+                  "the second task's row page again, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    await press(shutDoor);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-quest-accept]").disabled === false`,
+                  "the second task's sheet, with Accept offered", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    const last = await post("/api/quests", {self: room, action: "complete"}, h);
+    if (last.status === 201 && last.doc?.self) kept.push(last.doc.self);
+    ok("a quest made elsewhere fills the cap under the open sheet", last.status === 201);
+    await press(acceptIt);
+    await waitFor(`!!${saidWhy}`, "the refused Accept, in the quest's sheet", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const late = await evaljs(saidWhy);
+    console.log("  the refused Accept: " + JSON.stringify(late));
+    ok("a refused Accept says the engine's sentence in the sheet",
+       /at most 20 active quests/.test(late));
+    ok("and Accept is disabled, in the sheet still open",
+       await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+    if (phone) await sheetFits("the sheet of the refused Accept");
+    await shot(`${slug}-notyet-accept-refused`);
+    await sleep(600);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet of the refused Accept to close, off Not now", 15000);
+    ok("the refused Accept pins no quest", (await pinned()).length === 0);
     await sleep(1500);
     await evaljs(`stopRecording().then(() => true)`);
     await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
                    !!document.querySelector("[data-replay-walk]")`,
                   "the sealed walk's page", 15000);
     ok(`stop seals the walk ${where}`, (await get(walk)).state === "sealed");
+    for (const q of kept) await post(q + "/-/abandon", {}, h);
+    ok("priya lets the kept quests go, out of her recording",
+       (await Promise.all(kept.map(q => get(q)))).every(q => q.state === "abandoned"));
 
     console.log(`· film: the tapped door's walk ${where}`);
     /* the press is lit for a moment: the page itself notes it, with
@@ -3828,7 +3928,9 @@ async function questPhoneStory() {
             if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
               steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
           for (const n of m.removedNodes)
-            if (is(n)) (window.__sheets.find(s => !s.closed) || {}).closed = true;
+            if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
+              said: n.querySelector("[data-quest-refused]").textContent,
+              shut: n.querySelector("[data-quest-accept]").disabled});
         }
       });
       window.__sheetWatch.observe(document.body, {childList: true});
@@ -3852,8 +3954,15 @@ async function questPhoneStory() {
     const sheets = await evaljs(`window.__sheets`);
     console.log("  the replay's sheets: " + JSON.stringify(sheets));
     ok("the replay opens the quest's sheet for each tap, with the recorded steps",
-       sheets.length === 2 && sheets.every(s => s.replay &&
+       sheets.length === 3 && sheets.every(s => s.replay && s.steps.length > 0) &&
+       sheets.slice(0, 2).every(s =>
          JSON.stringify(s.steps) === JSON.stringify(seen.steps)));
+    /* the third is the second task's: its Accept was refused at the cap,
+       and the film says so where the recording did (replaySheetRefused) */
+    ok("the replay says the refused Accept in the sheet, with Accept disabled",
+       /at most 20 active quests/.test(sheets[2]?.said || "") && sheets[2]?.shut === true);
+    ok("and says no refusal in the sheets it was not said in",
+       sheets.slice(0, 2).every(s => s.said === ""));
     ok("and closes each: off Not now, and off Accept quest",
        sheets.every(s => s.closed));
     ok("the replay makes no quest", (await active()) === before);

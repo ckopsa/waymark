@@ -198,6 +198,15 @@ in"), sets the collection query and highlights the focused row. The
 existing guards still apply: the Access panel parks, and a dialog
 the follower opened themselves is never replaced.
 
+The `quest` part is applied live too. The follower's screen shows the
+quest's sheet the followed person has open (`guidedQuestSheet`), with
+the same goal, reason and steps, drawn from the part alone. It is
+read-only: it is marked "Planner has this open", **Accept quest** is
+disabled, and it asks the engine nothing and reports nothing. It
+closes with the beat that carries no `quest`. **Not now** closes it on
+the follower's screen alone, and the same goal does not reopen it. It
+is never opened over a dialog the follower has open.
+
 ## 3. Invited input
 
 An agent points at one field of one action and hands the step to the
