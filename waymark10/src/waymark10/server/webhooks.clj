@@ -721,7 +721,10 @@
   subscription stays active — liveness over completeness, chosen per
   subscription. A delivery whose signing secret is a secret row with no
   value yet is not attempted: the drain stops there, the cursor stays,
-  and the subscription says what it waits for. The pass's tally —
+  and the subscription says what it waits for. The subscription's state
+  is read anew before each send: the batch was read before it, and a
+  subscription paused, failed or revoked since is sent nothing more —
+  the drain stops there and the cursor stays. The pass's tally —
   whether anything was delivered, how many were skipped — is written on
   the subscription once, at the end of the pass or before it is marked
   failed, never once per event."
@@ -755,6 +758,10 @@
                  (let [body (wire-body eng t)
                        secret (signing-key eng sub)]
                    (cond
+                     (not= :active
+                           (:state (stored-row eng :subscription (:id sub))))
+                     (reduced ::failed)
+
                      (= ::waiting secret)
                      (do (hold! eng sub)
                          (reduced ::failed))
