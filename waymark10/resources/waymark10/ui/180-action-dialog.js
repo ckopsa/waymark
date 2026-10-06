@@ -387,9 +387,13 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
      hand. The button is offered only when the quests collection affords
      create to this reader — read off the wire, as every button is — and
      only for a door on ONE row, which is what a quest's goal is. The
-     remedy chips stay as they are. */
+     remedy chips stay as they are. A refusal of the quest's own create
+     or pin offers none: a second quest for the same goal is no way
+     through it. */
+  let questAccepting = false;
   function questOffer(remedies) {
     if (!remedies || !remedies.length || bulkIds) return null;
+    if (questAccepting) return null;
     if (/_collection$/.test(doc.kind || "") || !doc.self) return null;
     const slot = el("span", {class: "questoffer"});
     wellKnown().then(async w => {
@@ -406,10 +410,16 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     return slot;
   }
   /* one click: the goal is this row, this door and what the form
-     holds; then the quest is pinned and the dialog closes on the row
-     it was opened from. A refused create or pin is shown as any
-     refusal is. */
+     holds; then the quest is pinned, the dialog closes on the row it
+     was opened from and the tracker shows the quest (120-nav-home.js).
+     A refused create or pin is shown as any refusal is, without the
+     offer. */
   async function acceptQuest(create) {
+    questAccepting = true;
+    try { await makeQuest(create); }
+    finally { questAccepting = false; }
+  }
+  async function makeQuest(create) {
     const goal = {self: doc.self.split("?")[0], action: name};
     const values = input ? collectValues(form, input) : {};
     if (Object.keys(values).length) goal.input = values;
@@ -427,7 +437,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     }
     disarmDraft();
     closeDlg();
-    toast("Quest accepted and pinned");
+    await refreshQuest();
   }
   async function check() {           /* dry-run pre-validation (rule 5):
                                         the FULL rehearsal — every field,

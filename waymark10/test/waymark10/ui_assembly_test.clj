@@ -532,4 +532,10 @@
     (testing "then pins it, and a refusal of either is shown in the dialog"
       (is (str/includes? page "const pinned = await invokeBare(pin, quest);"))
       (is (str/includes? page "if (!made.ok) { showErrors(made.body); return; }"))
-      (is (str/includes? page "if (!pinned.ok) { showErrors(pinned.body); return; }")))))
+      (is (str/includes? page "if (!pinned.ok) { showErrors(pinned.body); return; }")))
+    (testing "a refusal of the quest's own create or pin offers no second quest"
+      (is (str/includes? page "if (questAccepting) return null;"))
+      (is (str/includes? page "finally { questAccepting = false; }")))
+    (testing "the click shows the tracker, in place of the toast"
+      (is (re-find #"closeDlg\(\);\s+await refreshQuest\(\);" page))
+      (is (not (str/includes? page "Quest accepted and pinned"))))))
