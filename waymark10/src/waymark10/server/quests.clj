@@ -875,16 +875,18 @@
 (defn- moved!
   "A transition on a row quest `qid` names. The goal door itself
   finishes the quest and closes its invitation; any other move plans
-  it again. A transition older than the quest moves nothing."
+  it again. A transition older than the quest moves nothing. → what the
+  quest's door answered, or nil when the quest was not moved."
   [eng qid t self action]
   (when-some [row (row-of eng kind qid)]
     (when (and (active? row) (not (before? (:at t) (:created-at row))))
       (if (and (= self (str/trim (str (get-in row [:data :self]))))
                (= action (str/trim (str (get-in row [:data :action])))))
-        (do (inv/invoke! eng kind (str qid) :finish {}
-                         {:principal engine-actor
-                          :idempotency-key (str "quest-finish:" qid ":" (:id t))})
-            (close-invitation! eng row))
+        (let [done (inv/invoke! eng kind (str qid) :finish {}
+                                {:principal engine-actor
+                                 :idempotency-key (str "quest-finish:" qid ":" (:id t))})]
+          (close-invitation! eng row)
+          done)
         (plan! eng qid t {:self self :action action})))))
 
 ;; ── the index of the rows the active quests name ────────────────────
@@ -950,25 +952,32 @@
   `plan`, `finish` and `unpin` pass no write door of the owner's, and
   the tracker a replay draws is this document. The sight is the owner's
   as `rehearsed` rebuilds it: the quest's grant, or the owner's own
-  with none. A grant that confers nothing now records nothing. Never
-  throws."
-  [eng id]
-  (try
-    (when-some [row (row-of eng kind id)]
-      (let [{:keys [owner grant]} (:data row)
-            gid (some-> grant str not-empty)]
-        (when (walks/recording-own? eng {:id owner})
-          (when-some [who (members/principal-for eng owner)]
-            (let [vis (if gid
-                        (grants/visibility eng gid who)
-                        (grants/unscoped-visibility eng who))]
-              (when (or (nil? gid) (:grant vis))
-                (walks/record-seen!
-                 eng who vis
-                 (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))))))))
-    (catch Exception e
-      (warn! "quest " id " was not recorded in its owner's walk — " (ex-message e))
-      nil)))
+  with none. A grant that confers nothing now records nothing. `heard`
+  is the transition on one of the plan's rows that moved the quest: when
+  another principal made it, it is recorded under that same sight just
+  before the envelope (`walks/record-heard!`), so a replay says whose
+  move planned the quest again. Never throws."
+  ([eng id] (record-in-walk! eng id nil))
+  ([eng id heard]
+   (try
+     (when-some [row (row-of eng kind id)]
+       (let [{:keys [owner grant]} (:data row)
+             gid (some-> grant str not-empty)]
+         (when (walks/recording-own? eng {:id owner})
+           (when-some [who (members/principal-for eng owner)]
+             (let [vis (if gid
+                         (grants/visibility eng gid who)
+                         (grants/unscoped-visibility eng who))]
+               (when (or (nil? gid) (:grant vis))
+                 (when (and heard
+                            (not= (str owner) (str (get-in heard [:actor :id]))))
+                   (walks/record-heard! eng who vis heard))
+                 (walks/record-seen!
+                  eng who vis
+                  (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))))))))
+     (catch Exception e
+       (warn! "quest " id " was not recorded in its owner's walk — " (ex-message e))
+       nil))))
 
 (def consumer-name
   "The durable cursor's name in waymark10_cursors (consumer:quests)."
@@ -1002,12 +1011,15 @@
            (when-some [rdef (get rs k)]
              (let [self (str "/api/" (:plural rdef) "/" id)]
                (doseq [qid (get-in (index-of eng index) [:by-row self])]
-                 (try
-                   (moved! eng qid t self action)
-                   (catch Exception e
-                     (warn! "quest " qid " could not follow transition "
-                            (:id t) " — " (ex-message e))))
-                 (record-in-walk! eng qid)
+                 (record-in-walk!
+                  eng qid
+                  (when (try
+                          (moved! eng qid t self action)
+                          (catch Exception e
+                            (warn! "quest " qid " could not follow transition "
+                                   (:id t) " — " (ex-message e))
+                            nil))
+                    t))
                  (note-quest! eng index qid)))))))
      (catch Exception e
        (warn! "transition " (:id t) " could not be handled — " (ex-message e))

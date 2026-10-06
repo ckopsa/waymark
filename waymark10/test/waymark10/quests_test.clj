@@ -862,3 +862,36 @@
         (is (= held (count (docs-in eng w))))))
     (testing "a walk made without docs records none"
       (is (empty? (docs-in eng plain))))))
+
+(defn- heard-in
+  "The `transition` frames a walk holds → [body]."
+  [eng walk-id]
+  (let [st (:storage eng)
+        frdef (get (inv/resources eng) :walk_frame)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (vec (store/query-rows st tx :walk_frame {:walk (str walk-id)}
+                                    {:limit 100}))))
+         (map #(:data (inv/decode-row frdef %)))
+         (filter #(= "transition" (name (:type %))))
+         (mapv #(walk/keywordize-keys (:body %))))))
+
+(deftest another-principals-step-is-recorded-in-the-owners-walk
+  (let [eng (vault-engine)
+        w (self-walk! eng true)
+        {:keys [latch crate]} (vault-quest! eng)
+        doors (fn [] (mapv (comp name :action) (heard-in eng w)))]
+    (hear! eng)
+    (is (empty? (doors)) "the engine's own plan is no notice")
+    (testing "the move that planned the quest again is a transition frame"
+      (move! eng :q_latch latch :lift other)
+      (hear! eng)
+      (is (= ["lift"] (doors))))
+    (testing "the owner's own step is not: their write door records it"
+      (move! eng :q_crate crate :open person)
+      (hear! eng)
+      (is (= ["lift"] (doors))))
+    (testing "a transition heard twice is recorded one time"
+      (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
+                                 {:from-origin? true})
+      (is (= ["lift"] (doors))))))
