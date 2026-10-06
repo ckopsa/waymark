@@ -122,16 +122,40 @@
     (some? field) [(arg-name field)]
     :else []))
 
+(defn- map-form
+  "The :map form a field's schema holds, through any :maybe; nil when
+  the field is no map."
+  [form]
+  (cond
+    (and (vector? form) (= :map (first form))) form
+    (and (vector? form) (= :maybe (first form))) (recur (last form))))
+
+(defn- argument-entries
+  "The schema entries `arg` walks: one for an argument, and one more for
+  each step of a dotted path into a nested map argument
+  (showcase.evidence.film_url), as the form names that input. nil when
+  a step names nothing."
+  [entries arg]
+  (loop [entries entries
+         [k & more] (str/split arg #"\." -1)
+         walked []]
+    (when-some [entry (get entries (keyword k))]
+      (if (seq more)
+        (recur (some-> (map-form (:schema entry)) schema/entry-map)
+               more
+               (conj walked entry))
+        (conj walked entry)))))
+
 (defn- argument-problem
   "Why `arg` cannot be shown to a person as an argument of `action`; nil
   when it can. `where` says where the author named it."
   [entries action where arg]
-  (let [k (keyword arg)]
+  (let [walked (argument-entries entries arg)]
     (cond
-      (not (contains? entries k))
+      (nil? walked)
       (str "`" arg "`" where " is not an argument of `" (name action) "`.")
 
-      (secret? (get-in entries [k :properties]))
+      (some #(secret? (:properties %)) walked)
       (str "`" arg "`" where " is a secret argument, and nobody is invited to type a secret."))))
 
 (defn- judges-the-input?
