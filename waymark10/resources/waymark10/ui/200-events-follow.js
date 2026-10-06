@@ -71,7 +71,21 @@ function sseReopen(href) {
       try { s.ctl.abort(); } catch (_e) {}
     }
 }
-async function sse(href, onFrame) {
+/* close a stream for good: it leaves the registry, its body is aborted
+   and its loop ends. A parked one is simply never woken. The quest
+   tracker closes the stream of a quest it no longer holds
+   (120-nav-home.js). */
+function sseClose(href) {
+  for (const s of [...SSE_STREAMS])
+    if (s.href === href) {
+      s.closed = true;
+      SSE_STREAMS.delete(s);
+      try { if (s.ctl) s.ctl.abort(); } catch (_e) {}
+    }
+}
+/* onOpen, when given, is told each time the stream connects: what
+   moved before that is the caller's to read */
+async function sse(href, onFrame, onOpen) {
   /* lastId is this stream's resume point — set only by frames that
      actually carry an id line, which is how a resumable route
      (the firehose) tells itself apart from an ephemeral one */
@@ -79,6 +93,7 @@ async function sse(href, onFrame) {
   SSE_STREAMS.add(stream);
   while (true) {
     while (ssePaused) await new Promise(r => { stream.wake = r; });
+    if (stream.closed) return;
     let refused = false;
     const ctl = typeof AbortController === "function"
       ? new AbortController() : null;
@@ -109,6 +124,7 @@ async function sse(href, onFrame) {
       } else {
         if (sseRefusalToldFor) { sseRefusalToldFor = null;
                                  $("#ticker").textContent = ""; }
+        if (onOpen) onOpen();
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
@@ -126,6 +142,8 @@ async function sse(href, onFrame) {
       }
     } catch (_e) { /* server restarting, or the hide-abort landed */ }
     stream.ctl = null;
+    /* closed on purpose by sseClose: the loop ends here */
+    if (stream.closed) return;
     /* aborted by the hide: park at the top of the loop with no timer
        pending, rather than sleeping and reconnecting into a hidden tab */
     if (ssePaused) continue;

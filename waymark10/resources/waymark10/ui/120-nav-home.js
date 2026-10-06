@@ -419,7 +419,8 @@ async function fillDashCard(card, kind, href) {
    quest row and holds no opinion of its own: the count is "k done, n
    known so far" and never a total, the head step is the first one not
    done, and Go opens that step's door on its row (openDoor,
-   180-action-dialog.js). The firehose redraws it (210-ledger.js). */
+   180-action-dialog.js). The quest's own event stream redraws it
+   (questFollow, below). */
 let questDoc = null;        // the pinned quest's envelope, when there is one
 let questDone = null;       // the title of the quest that has just finished
 let questDoneTimer = null;
@@ -441,6 +442,7 @@ function questHeadGo() {
 }
 function questTracker() {
   const bar = $("#questbar");
+  questFollow();
   bar.textContent = "";
   if (questDone !== null) {
     bar.hidden = false;
@@ -509,13 +511,30 @@ async function refreshQuest() {
   questDoc = row ? row.body : null;
   questTracker();
 }
-/* the firehose's half: a transition of the quest in hand redraws it, a
-   pin takes whichever quest is pinned now, and finish says so for a few
-   seconds before the tracker hides */
-async function questFrame(ev) {
-  if (ev.kind !== "quest") return;
-  const held = !!questDoc && ev.self === questDoc.self;
-  if (held && ev.action === "finish") {
+/* the quest in hand is followed on its own event stream, as a row page
+   follows one row. A grant that admits the quest admits that stream,
+   and under a grant the one live stream carries no row events
+   (220-boot.js): so every viewer hears the quest here, granted or not.
+   The stream closes when the tracker lets the quest go, and another
+   opens when it takes one up. Each time one opens the quest is read
+   again, for what moved before it did. */
+let questStream = null;     // the href of the stream that is open
+function questFollow() {
+  const href = questDoc ? questDoc.self + "/-/events" : null;
+  if (href === questStream) return;
+  if (questStream) sseClose(questStream);
+  questStream = href;
+  if (!href) return;
+  const mine = () => questStream === href;
+  sse(href,
+      f => { if (mine() && f.event === "transition") onQuestRowFrame(f.data); },
+      () => { if (mine()) refreshQuest().catch(() => {}); });
+}
+/* the stream's half: a transition of the quest in hand reads it again,
+   and finish says so for a few seconds before the tracker hides */
+async function questRowFrame(ev) {
+  if (!questDoc) return;
+  if (ev.action === "finish") {
     questDone = questTitle(questDoc);
     questDoc = null;
     clearTimeout(questDoneTimer);
@@ -527,13 +546,22 @@ async function questFrame(ev) {
     questTracker();
     return;
   }
-  if (held || ev.action === "pin") await refreshQuest();
+  await refreshQuest();
 }
-function onQuestFrame(ev) { questFrame(ev).catch(() => {}); }
+function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
+/* the firehose's half (210-ledger.js): a pin takes whichever quest is
+   pinned now. The quest in hand is heard on its own stream, above. */
+function onQuestFrame(ev) {
+  if (ev.kind !== "quest" || ev.action !== "pin") return;
+  refreshQuest().catch(() => {});
+}
 /* at boot, and whenever the dev box names another principal */
 wellKnown().then(w => {
   if (!(w.resources || {}).quest) return;
   $who.addEventListener("change", () => refreshQuest());
+  /* the backstop: a tab that comes back reads the pinned quest again */
+  document.addEventListener("visibilitychange",
+    () => { if (!document.hidden) refreshQuest().catch(() => {}); });
   return refreshQuest();
 }).catch(() => {});
 
