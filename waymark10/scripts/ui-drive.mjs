@@ -146,13 +146,20 @@ async function shot(name) {
   await mkdir(process.env.SHOTS, {recursive: true});
   await writeFile(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, "base64"));
 }
-async function waitFor(pred, what, ms = 6000) {
+/* `why`, when given, is an expression read once at the timeout: what the
+   page held, so the message says which half of the wait was false */
+async function waitFor(pred, what, ms = 6000, why = null) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     if (await evaljs(pred)) return true;
     await sleep(150);
   }
-  throw new Error("timed out waiting for " + what);
+  let seen = "";
+  if (why) {
+    try { seen = ": " + JSON.stringify(await evaljs(why)); }
+    catch (e) { seen = ": (" + e.message + ")"; }
+  }
+  throw new Error("timed out waiting for " + what + seen);
 }
 let passed = 0;
 function ok(name, cond) {
@@ -1319,7 +1326,13 @@ async function accessStory() {
   ok("a refusal without remedies offers no Accept as quest", await evaljs(`!${qAccept}`));
   await shelve("high");
   await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
-                "the offer under the refusal", 15000);
+                "the offer under the refusal", 15000,
+                `({refusal_names_room: ${qRefused}.includes("room"),
+                   button: !!${qAccept},
+                   offer: document.querySelector("dialog[open] .questoffer")
+                            ?.getAttribute("data-quest-offer") ?? null,
+                   dialog_open: !!document.querySelector("dialog[open]"),
+                   problem: ${qRefused}})`);
   ok("a refused door with remedies shows Accept as quest", true);
   await shot("accept-as-quest-offer");
   await evaljs(`${qAccept}.click(); true`);
