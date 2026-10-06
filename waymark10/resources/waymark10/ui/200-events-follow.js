@@ -1609,6 +1609,7 @@ function replayCaption() {
   if (!band && (c || n))
     document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
   if (band) {
+    band.setAttribute("data-surface", "caption");
     band.textContent = c ? c.text : "";
     band.style.display = c && !filmBeside(c) ? "block" : "none";
     if (n) {

@@ -3518,7 +3518,7 @@ async function questPhoneStory() {
     const s = questDoc && questHead(questDoc);
     return !!s && s.door === ${JSON.stringify(door)} &&
       s.self === ${JSON.stringify(note.self)} &&
-      !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+      !!${bar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
   await waitFor(goFor("rename"), "the remedy at the tracker's head", 30000, plan);
   /* the head step's row is in the tracker by its title, which the page
      reads, and no path is text (ticket 5b3fa3f7) */
@@ -3543,7 +3543,7 @@ async function questPhoneStory() {
      !!(says.note || "").trim() && says.noteWide >= 100);
   ok("a long title ends in an ellipsis",
      says.ellipsis && (says.title.length < 60 || says.clipped));
-  const go = await checkTarget("Go", "#questbar [data-tracker-go]");
+  const go = await checkTarget("Go", '[data-surface="tracker.go"]');
   await checkTarget("the tracker's title", "#questbar [data-quest-title]");
   /* the title's 44px box overlaps its neighbours: the tracker is still
      the count's line, the gap and the row of Go, and no taller */
@@ -3551,7 +3551,7 @@ async function questPhoneStory() {
     const b = ${bar}, cs = getComputedStyle(b);
     const h = sel => b.querySelector(sel).getBoundingClientRect().height;
     return {bar: b.getBoundingClientRect().height,
-            rows: h("[data-quest-count]") + h("[data-tracker-go]") +
+            rows: h("[data-quest-count]") + h("[data-surface='tracker.go']") +
                   [cs.rowGap, cs.paddingTop, cs.paddingBottom, cs.borderTopWidth,
                    cs.borderBottomWidth].reduce((n, v) => n + (parseFloat(v) || 0), 0)}; })()`);
   console.log("  the tracker's height: " + JSON.stringify(tall));
@@ -3603,7 +3603,7 @@ async function questPhoneStory() {
                 "the note's new title in the tracker", 15000, `${bar}.textContent`);
   ok("a rename shows in the tracker: the row's new title", true);
   await sleep(600);
-  await tap(await evaljs(target("#questbar [data-tracker-go]")));
+  await tap(await evaljs(target('[data-surface="tracker.go"]')));
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
                 "the goal's dialog, off a tap on Go", 15000);
   await sleep(600);
@@ -3637,7 +3637,7 @@ async function questPhoneStory() {
   await evaljs(`location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
   await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
                  getComputedStyle(${bar}).display !== "none" &&
-                 !!${bar}.querySelector("[data-tracker-go]:disabled")`,
+                 !!${bar}.querySelector("[data-surface='tracker.go']:disabled")`,
                 "the tracker in the phone's film", 240000, why);
   ok("film mode keeps the tracker on a phone", true);
   await noOverflow("in the film");
@@ -3672,7 +3672,7 @@ async function questPhoneStory() {
     /* the sheet a tap on a shut door opens (questSheet), and its doors */
     const sheet = `document.querySelector("dialog[open][data-quest-sheet]")`;
     const notNow = "dialog[open] [data-quest-decline]";
-    const acceptIt = "dialog[open] [data-quest-accept]";
+    const acceptIt = '[data-surface="sheet.accept"]';
     await evaljs(`refreshQuest().catch(() => {}); true`);
     await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);
     const parent = await post("/api/led_tasks", {title: `Spring clean ${where}`}, h);
@@ -3704,7 +3704,7 @@ async function questPhoneStory() {
        held.length > 0 && !!full && full.status >= 400 && full.status < 500 &&
        /at most 20 active quests/.test(full.doc?.detail || ""));
     await evaljs(`location.hash = ${JSON.stringify(room)}; true`);
-    const shutDoor = '#view button[data-quest-door="complete"]';
+    const shutDoor = '[data-surface="door-shut:complete"]';
     await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(room)} &&
                    !!document.querySelector(${JSON.stringify(shutDoor + "[aria-describedby]")})`,
                   "the second task's row page, with its shut Complete", 15000,
@@ -3719,7 +3719,7 @@ async function questPhoneStory() {
     ok("a refused preview says the engine's sentence in the sheet",
        /at most 20 active quests/.test(refusal));
     ok("and Accept is disabled with that line",
-       await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
     if (phone) await sheetFits("the refused quest's sheet");
     await shot(`${slug}-notyet-refused`);
     await press(notNow);
@@ -3759,7 +3759,7 @@ async function questPhoneStory() {
     ok(`priya records her walk ${where}`, typeof walk === "string");
     await sleep(600);
     await evaljs(`location.hash = ${JSON.stringify(epic)}; true`);
-    const door = '#view button[data-quest-door="complete"]';
+    const door = '[data-surface="door-shut:complete"]';
     await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(epic)} &&
                    !!document.querySelector(${JSON.stringify(door + "[aria-describedby]")})`,
                   "the parent's row page, with its shut Complete", 15000,
@@ -3805,7 +3805,7 @@ async function questPhoneStory() {
               paths: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.title),
               turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),
               refused: g.querySelector("[data-quest-refused]").textContent,
-              accept: g.querySelector("[data-quest-accept]").disabled}; })()`);
+              accept: g.querySelector("[data-surface='sheet.accept']").disabled}; })()`);
     console.log("  the quest's sheet: " + JSON.stringify(seen));
     ok("the sheet says the goal and why its door is shut",
        /Complete/.test(seen.goal) && seen.why.replace("Not yet:", "").trim().length > 0);
@@ -3834,7 +3834,7 @@ async function questPhoneStory() {
     ok("Not now leaves no quest and shows no tracker",
        await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
     await press(door);
-    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-quest-accept]").disabled === false`,
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
                   "the quest's sheet again, off a second tap", 15000,
                   `document.body.innerText.slice(-400)`);
     await sleep(600);
@@ -3858,7 +3858,7 @@ async function questPhoneStory() {
     const headIs = self => `(() => {
       const s = questDoc && questHead(questDoc);
       return !!s && s.door === "complete" && s.self === ${JSON.stringify(self)} &&
-        !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+        !!${bar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
     await waitFor(headIs(child), "the child's Complete at the tracker's head", 30000, plan);
     /* the tracker and the quest's page name a step's row and what its
        door asks for in words, and no path is text (ticket 5b3fa3f7) */
@@ -3904,7 +3904,7 @@ async function questPhoneStory() {
        the form's fields were lit */
     const close = async what => {
       await sleep(600);
-      await press("#questbar [data-tracker-go]");
+      await press('[data-surface="tracker.go"]');
       await waitFor(`!!document.querySelector('dialog[open] [name="close_reason"]')`,
                     `${what}, off Go`, 15000);
       await sleep(600);
@@ -3959,7 +3959,7 @@ async function questPhoneStory() {
                   `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
     await sleep(600);
     await press(shutDoor);
-    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-quest-accept]").disabled === false`,
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
                   "the second task's sheet, with Accept offered", 15000,
                   `document.body.innerText.slice(-400)`);
     await sleep(600);
@@ -3974,7 +3974,7 @@ async function questPhoneStory() {
     ok("a refused Accept says the engine's sentence in the sheet",
        /at most 20 active quests/.test(late));
     ok("and Accept is disabled, in the sheet still open",
-       await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
     if (phone) await sheetFits("the sheet of the refused Accept");
     await shot(`${slug}-notyet-accept-refused`);
     await sleep(600);
@@ -4012,7 +4012,7 @@ async function questPhoneStory() {
           for (const n of m.removedNodes)
             if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
               said: n.querySelector("[data-quest-refused]").textContent,
-              shut: n.querySelector("[data-quest-accept]").disabled});
+              shut: n.querySelector("[data-surface='sheet.accept']").disabled});
         }
       });
       window.__sheetWatch.observe(document.body, {childList: true});

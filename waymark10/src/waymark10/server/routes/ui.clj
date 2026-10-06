@@ -107,6 +107,55 @@
                                           " bytes. Send the rest in another call.")})))
         (router/json-response 200 {:html (mapv markdown/render texts)})))))
 
+(def surfaces
+  "The names the page's interactive surfaces carry in `data-surface`,
+  each with one line of what it is: what a scene or a drive addresses
+  in place of a selector (docs/spec-agent-demo-walks.md § 8a). A name
+  that ends in <…> is a stem the page completes: `door:complete`,
+  `nav.ticket`. The page's own code is the source, and
+  waymark10.ui-test fails when this list and the page part."
+  [{:name "nav.<kind>"
+    :is "A kind's tab in the navigation bar."}
+   {:name "row"
+    :is "One row of a collection's table; data-self carries its address."}
+   {:name "door:<action>"
+    :is "An action's button on the shown row, open or shut; data-row carries the row's address."}
+   {:name "door-shut:<action>"
+    :is "The dotted 'not yet' button of a shut action that a quest can reach."}
+   {:name "dialog"
+    :is "An action's open form; data-self and data-action say whose it is."}
+   {:name "dialog.field:<name>"
+    :is "One field of a form, its label and its input."}
+   {:name "dialog.submit"
+    :is "The button that writes an action's form."}
+   {:name "dialog.cancel"
+    :is "The button that closes an action's form and writes nothing."}
+   {:name "sheet"
+    :is "The quest sheet a tap on a dotted button opens."}
+   {:name "sheet.step:<n>"
+    :is "The sheet's step n of the plan, counted from 1."}
+   {:name "sheet.accept"
+    :is "The sheet's Accept quest button."}
+   {:name "sheet.decline"
+    :is "The sheet's Not now button."}
+   {:name "tracker"
+    :is "The bar that shows the pinned quest."}
+   {:name "tracker.go"
+    :is "The tracker's Go button, for the step at the plan's head."}
+   {:name "tracker.next"
+    :is "The tracker's line for the step at the plan's head."}
+   {:name "caption"
+    :is "The caption band of a replay."}
+   {:name "refusal"
+    :is "The line a refused write is said in, in a form or in the sheet."}])
+
+(defn- ui-surfaces
+  "GET /api/-/ui/surfaces: the list above, as static as the page and
+  served to anyone the page is."
+  [_eng]
+  (fn [_req]
+    (router/json-response 200 {:surfaces surfaces})))
+
 (defn routes
   "Three static addresses for one page: the page assembles ONCE here,
   as it always did, and the root and /api/-/ui share the very same
@@ -120,4 +169,5 @@
               ["/api/-/ui-lite"
                {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
                                           slurp))}]
+              ["/api/-/ui/surfaces" {:get (ui-surfaces eng)}]
               ["/api/-/render/markdown" {:post (render-markdown eng)}]]}))
