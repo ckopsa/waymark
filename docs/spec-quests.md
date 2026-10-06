@@ -104,6 +104,15 @@ One step is `{n, door, self, whose, note, needs, waiting_on, state}`:
 - `state`: `done`, `next` (the one to take now), `waiting` (on
   someone else), `later` (a step before it is not done).
 
+**A step that needs input on a bound row is the person's.** When a
+refusal binds the row its remedy acts on and that door still needs an
+argument, the plan carries a step on that row with the argument in
+`needs`, and the owner takes it each time. `children-are-finished`
+binds the oldest unfinished child, so each child's `ticket.complete`
+is its own step with `needs` `close_reason`: no guard declares one
+sentence for every child. The tracker's Go opens that row's dialog
+for the door with the `needs` fields lit.
+
 **Counts.** The engine learns steps as the house moves, so a plan is
 never a total. A reader counts "k done, n known so far": k steps in
 `done`, n steps in the plan. It never says "k of n".
