@@ -1189,7 +1189,7 @@ async function accessStory() {
        return !!${qBar}.querySelector("[data-quest-planning]") &&
          t.textContent === ${JSON.stringify(qTitle)} &&
          t.getAttribute("href") === ${JSON.stringify("#" + qSelf)} &&
-         !${qBar}.querySelector("[data-quest-go]"); })()`));
+         !${qBar}.querySelector("[data-tracker-go]"); })()`));
   const stepOne = {n: 1, door: "rename", self: pile.self, whose: "person",
                    note: "Name the pile, then say which room it is in.",
                    needs: ["title", "room"]};
@@ -1212,7 +1212,8 @@ async function accessStory() {
                 "the tracker on a second page");
   ok("the tracker is on two different pages", qPageOne.split("?")[0] !== "/api/led_notes");
 
-  await evaljs(`${qBar}.querySelector("[data-quest-go]").click(); true`);
+  const qPlannedAt = (await get(qSelf)).data.planned_at;
+  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
   await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
                 "the head step's dialog", 15000);
   const qDlg = await evaljs(`({here: hereHref(),
@@ -1236,18 +1237,30 @@ async function accessStory() {
   await waitFor(`!document.querySelector("dialog[open]")`, "the step's dialog to close", 15000);
   ok("the step is taken through its own door",
      (await get(pile.self)).data.title === "Sorted quest pile");
+  /* a move on the row the quest names plans it again: that plan lands
+     first, so it cannot write over the story's */
+  let qAgain = null;
+  for (let i = 0; i < 60 && !qAgain; i++) {
+    if ((await get(qSelf)).data.planned_at !== qPlannedAt) qAgain = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the step with a new plan", qAgain === true);
 
   const replanned = await qPost(qSelf + "/-/plan",
     {plan: [{...stepOne, state: "done"},
             {...stepTwo, whose: "seat", waiting_on: "Planner", state: "waiting"}],
      plan_is_estimate: true, waiting_on: "Planner"}, sys);
   ok("the engine plans again", replanned.status < 400);
-  await waitFor(`${qCount} === "1 done, 2 known so far"`, "the new count", 15000);
+  /* the planner's own plan may read the same count: the waiting line is
+     the story's alone */
+  await waitFor(`${qCount} === "1 done, 2 known so far" &&
+                 !!${qBar}.querySelector("[data-quest-waiting]")`,
+                "the new count", 15000);
   ok("a new plan transition moves the count with no reload",
      await evaljs(`window.__quest === true`));
   const qSeat = await evaljs(`({
     waiting: ${qBar}.querySelector("[data-quest-waiting]")?.textContent,
-    go: ${qBar}.querySelector("[data-quest-go]")?.disabled,
+    go: ${qBar}.querySelector("[data-tracker-go]")?.disabled,
     doors: ["pause", "unpin", "replan"].every(n =>
       !!${qBar}.querySelector('[data-action="' + n + '"]'))})`);
   ok("a seat's head step reads waiting on, and Go is disabled",

@@ -212,7 +212,7 @@
     (is (not (str/includes? body "${done} of ${"))
         "the count is never k of n")
     (is (str/includes? body "onQuestFrame(ev);"))
-    (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questGo"))
+    (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questHeadGo"))
     (is (str/includes? body "\"Quest complete\""))))
 
 (deftest ui-opens-an-invitation-from-the-collection

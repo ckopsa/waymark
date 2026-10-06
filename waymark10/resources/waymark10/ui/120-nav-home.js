@@ -432,7 +432,8 @@ function questHead(doc) {
 function questWaits(step) {
   return ["seat", "held"].includes(step.whose) || step.state === "waiting";
 }
-function questGo() {
+/* the tracker's Go; the quest page's own is questGo (200-events-follow.js) */
+function questHeadGo() {
   const head = questDoc && questHead(questDoc);
   if (!head || questWaits(head)) return;
   openDoor({self: head.self, action: head.door, fields: head.needs || [],
@@ -479,8 +480,8 @@ function questTracker() {
       bar.append(el("span", {class: "quest-line", "data-quest-note": ""},
                     head ? head.note || pretty(head.door) : ""));
     if (head && !d.blocked_reason)
-      bar.append(el("button", {class: "primary", "data-quest-go": "",
-                               disabled: waiting ? "" : null, onclick: questGo},
+      bar.append(el("button", {class: "primary", "data-tracker-go": "",
+                               disabled: waiting ? "" : null, onclick: questHeadGo},
                     "Go"));
   }
   /* the quest's own doors, as its row offers them to this person now */
