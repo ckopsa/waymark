@@ -646,6 +646,57 @@ The files do not become attachments of the working engine. That would
 need a byte door on the connector or a credential in the clone door,
 and the attachment cap is 10 MiB. It is a punt.
 
+## 8a. The surfaces a scene names
+
+A scene and a browser drive address the screen by meaning, not by a
+selector. Every interactive surface a demo can name carries
+`data-surface="<name>"`, from one vocabulary:
+
+| Name | What it is |
+|---|---|
+| `nav.<kind>` | A kind's tab in the navigation bar. |
+| `row` | One row of a collection's table; `data-self` carries its address. |
+| `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
+| `door-shut:<action>` | The dotted 'not yet' button of a shut action that a quest can reach. |
+| `dialog` | An action's open form; `data-self` and `data-action` say whose it is. |
+| `dialog.field:<name>` | One field of a form, its label and its input. |
+| `dialog.submit` | The button that writes an action's form. |
+| `dialog.cancel` | The button that closes an action's form and writes nothing. |
+| `sheet` | The quest sheet a tap on a dotted button opens. |
+| `sheet.step:<n>` | The sheet's step n of the plan, counted from 1. |
+| `sheet.accept` | The sheet's Accept quest button. |
+| `sheet.decline` | The sheet's Not now button. |
+| `tracker` | The bar that shows the pinned quest. |
+| `tracker.go` | The tracker's Go button, for the step at the plan's head. |
+| `tracker.next` | The tracker's line for the step at the plan's head. |
+| `caption` | The caption band of a replay. |
+| `refusal` | The line a refused write is said in, in a form or in the sheet. |
+
+The same list is served as JSON at `GET /api/-/ui/surfaces`:
+`{"surfaces": [{"name": "tracker.go", "is": "…"}, …]}`. The page's own
+code is the source. A test (`ui-surfaces-are-the-names-the-page-sets`)
+fails when the page sets a `data-surface` value the list does not
+hold, or the list holds a name the page never sets.
+
+Where several elements carry one name, the scene qualifies it by row:
+`door:complete@/api/tickets/<id>`. The row is the address the element
+carries in `data-row`, or the one the row or the dialog around it
+carries in `data-self`. Of several that remain, the one drawn is meant.
+
+The page answers two functions over these names. `surfaceNode(name)`
+answers the element. `readSurface(name)` answers what the surface
+shows now, read from the page as drawn, and null when it is not on the
+screen:
+
+- `sheet`: `{goal, steps: [{n, label, whose, state}], shut_reason, refused}`;
+- `tracker`: `{title, next, waiting_on, progress, text}`;
+- `dialog`: `{self, action, lit: [field names]}`;
+- `caption` and `refusal`: the line's text;
+- any other name: `{text, disabled}`.
+
+These are the shapes a film beat's `screen` carries (§ 8), so a beat
+and a scene's screen check read the same thing.
+
 ## 9. What this amends
 
 **docs/spec-guided-follow.md § 4.**
