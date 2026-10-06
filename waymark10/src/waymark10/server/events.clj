@@ -351,16 +351,25 @@
                             " running on the poll backstop alone"))
         d {:eng eng
            :storage storage
-           ;; a plain read on purpose: a lower id in flight at this
-           ;; moment was owed to no subscriber, since none exists yet,
-           ;; and one that subscribes with :since replays it through
-           ;; the settled backlog. It never answers nil, so 0 here is
-           ;; an empty log.
-           :last-seen (atom (or (:id (first (store/with-tx storage
-                                              (fn [tx]
-                                                (store/transitions
-                                                 storage tx {}
-                                                 {:newest-first true :limit 1})))))
+           ;; a SETTLED read, as the consumers' seed is: drain! reads
+           ;; after this id, so a lower id still in flight here would
+           ;; commit under it and reach no live subscriber. When the
+           ;; writers outlast `replay-tries` the log is read as it
+           ;; stands, as `backlog` reads it, and the log says so; that
+           ;; read never answers nil, so 0 here is an empty log.
+           :last-seen (atom (or (:id (first
+                                      (or (store/settled-transitions
+                                           storage {}
+                                           {:newest-first true :limit 1}
+                                           replay-tries)
+                                          (do (warn! "dispatcher seed: the log did"
+                                                     " not settle; reading it as"
+                                                     " it stands")
+                                              (store/with-tx storage
+                                                (fn [tx]
+                                                  (store/transitions
+                                                   storage tx {}
+                                                   {:newest-first true :limit 1})))))))
                                 0))
            :last-obs (atom (last-observation-id storage))
            :subs (atom #{})
