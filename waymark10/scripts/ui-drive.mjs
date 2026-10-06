@@ -3806,9 +3806,12 @@ async function questPhoneStory() {
     await sleep(600);
     await press(acceptIt);
     /* a refused create or pin is said in the sheet: the page's last
-       words say which, when the tracker never shows */
-    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]")`,
-                  "the tracker, off Accept", 15000,
+       words say which, when the tracker never shows. The pin's frame
+       can show the tracker before the pin's answer closes the sheet,
+       so the wait is for both. */
+    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]") &&
+                   !document.querySelector("dialog[open]")`,
+                  "the tracker and the closed sheet, off Accept", 15000,
                   `document.body.innerText.slice(-400)`);
     ok("Accept closes the sheet and shows the tracker",
        await evaljs(`!document.querySelector("dialog[open]")`));
