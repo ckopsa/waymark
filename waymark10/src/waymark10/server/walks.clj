@@ -319,6 +319,57 @@
   (some (fn [[k rdef]] (when (= plural (:plural rdef)) k))
         (inv/resources eng)))
 
+(defn- own-sight
+  "`sight` as section 1's redaction reads it for a recorder's OWN `ui`
+  frame: a kind whose create verb the sight admits counts as a whole
+  kind, so the redaction keeps their own create form on the collection
+  when their scope names only some rows. `own-create?` then judges
+  whether the frame is written. A row is still asked of `:row?`. nil,
+  an unscoped recorder, stays nil."
+  [eng sight]
+  (when sight
+    (let [whole? (:whole-kind? sight)
+          action? (:action? sight)]
+      (assoc sight :whole-kind?
+             (fn [k]
+               (boolean
+                (or (some-> whole? (apply [k]))
+                    (when action?
+                      (some #(action? k %)
+                            (:create-action-names
+                             (get (inv/resources eng) (keyword (name k)))))))))))))
+
+(defn- own-create?
+  "Is this frame a create form (`ui`, by its dialog) or a refused create
+  (`refusal`) on the collection of a kind whose create verb `sight`
+  admits? Such a frame is written, and exported to its recorder, though
+  the collection `self` is not seen whole: the form and its refusal are
+  the recorder's own, and permission to create is no sight of the
+  list, so a `move`, a `caption` and a `doc` on that collection still
+  ask `sees-self?`. A follower's stream redacted a create form under
+  presence's whole-kind rule before it came here, so this admits
+  nothing a follower was not sent."
+  [eng sight type body]
+  (let [at (fn [m k] (when (map? m) (or (get m k) (get m (name k)))))
+        collection (fn [self]
+                     (let [[_ plural] (re-matches #"/api/([^/?#]+)"
+                                                  (str/trim (str self)))]
+                       (when (and plural (not= "-" plural))
+                         (kind-of-plural eng plural))))
+        k (collection (at body :self))
+        door (case type
+               "refusal" body
+               "ui" (at (at body :ui) :dialog)
+               nil)
+        action (some-> (at door :action) name)
+        action? (:action? sight)]
+    (boolean
+     (and k action action?
+          (= k (collection (at door :self)))
+          (some #(= action (name %))
+                (:create-action-names (get (inv/resources eng) k)))
+          (action? k (keyword action))))))
+
 (defn- sees-self?
   "Could the recorder GET this `self`? A row path asks `:row?`, a bare
   collection path asks whole-kind sight, and a path naming no served
@@ -349,14 +400,16 @@
   {:type :body}, and `(:self body)` names what the frame is about.
   → the frame row, or nil when nothing was written: the walk is not
   recording, the type is not a frame type, or the recorder could not
-  see the frame's `self`. The frame that brings the walk to
+  see the frame's `self` and the frame is not their own create form or
+  its refusal (`own-create?`). The frame that brings the walk to
   `frame-ceiling` is written, and the engine then seals the walk."
   [eng walk-id sight {:keys [type body]}]
   (let [type (some-> type name)
         body (scrub (or body {}))
         self (or (:self body) (get body "self"))]
     (when (and (some #{type} frame-types)
-               (or (nil? self) (sees-self? eng sight self))
+               (or (nil? self) (sees-self? eng sight self)
+                   (own-create? eng sight type body))
                ;; a transition is the firehose's event projected by the
                ;; recorder's visibility, the export's own rule
                (or (not= "transition" type)
@@ -760,13 +813,14 @@
   `:presence` is the tap `presence/report!` takes: it sees each `move`
   and `ui` frame the person's own beat made. A `ui` frame passes
   section 1's redaction under `sight` first, as a follower's stream
-  would have redacted it. `:event` takes a transition the person
-  committed (`record-own!`)."
+  would have redacted it, but with the person's own create form kept
+  where they may create (`own-sight`). `:event` takes a transition the
+  person committed (`record-own!`)."
   [eng principal sight]
   (when (contains? (inv/resources eng) kind)
     (let [pid (str (:id principal))
           rec (recorder eng principal sight pid)
-          redact (presence/ui-redactor eng sight)]
+          redact (presence/ui-redactor eng (own-sight eng sight))]
       (assoc rec :presence
              (fn [frame]
                (try
@@ -1274,12 +1328,14 @@
   arguments the exporter's :arg? admits (`errors-seen`); `doc`
   presence's self rule and `export-doc`, and the principals its rows
   name ride as ::refs for the cast."
-  [{:keys [eng vis visible? redact-ui suggest]} type body]
-  (let [self (path-of (:self body))]
+  [{:keys [eng vis visible? own-create? redact-ui suggest]} type body]
+  (let [self (path-of (:self body))
+        ;; the recorder's own create form and its refusal (`export`)
+        own? (fn [] (boolean (and own-create? (own-create? type body))))]
     (case type
       "move" (when (and self (visible? self))
                {:type "move" :self self})
-      "ui" (when (and self (visible? self))
+      "ui" (when (and self (or (visible? self) (own?)))
              (let [f (redact-ui (assoc body :self self))]
                (if (and (map? (:ui f)) (not= "move" (:event f)))
                  {:type "ui" :self self :ui (:ui f)}
@@ -1304,7 +1360,7 @@
                     (:action body) (assoc :action (:action body))
                     (:field body) (assoc :field (:field body))
                     true (assoc :text (str (:text body)))))
-      "refusal" (when (and self (visible? self) (:action body))
+      "refusal" (when (and self (or (visible? self) (own?)) (:action body))
                   (let [seen (filterv #(remedy-seen? vis %) (:remedies body))
                         errors (errors-seen eng vis body)]
                     (cond-> {:type "refusal" :self self
@@ -1337,19 +1393,30 @@
   exporter could both see. A frame with nothing left is left out and
   the `t` of the others keeps the gap. A principal crosses only as a
   cast alias: no principal id, grant id, sitting id, header, key or
-  origin is written. → the text, or nil when the walk is absent or
-  not sealed."
-  [eng walk-id vis]
+  origin is written. `exporter` is the principal who asks, when the
+  caller knows it: the recorder of a self walk reads that walk's create
+  forms and their refusals as recording judged them (`own-create?`),
+  and anyone else reads them under presence's whole-kind rule. → the
+  text, or nil when the walk is absent or not sealed."
+  ([eng walk-id vis] (export eng walk-id vis nil))
+  ([eng walk-id vis exporter]
   (let [st (:storage eng)
         id (str walk-id)
         row (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))]
     (when (= "sealed" (some-> (:state row) name))
       (let [d (:data row)
             frdef (get (inv/resources eng) frame-kind)
+            ;; the recorder's own screen: the rule that recorded it
+            own? (and (some? (:id exporter))
+                      (= (str (:id exporter)) (str (:recorder d)) (str (:followed d))))
             rules {:eng eng
                    :vis vis
                    :visible? (presence/self-visible? eng vis)
-                   :redact-ui (presence/ui-redactor eng vis)
+                   :own-create? (if own?
+                                  #(own-create? eng vis %1 %2)
+                                  (constantly false))
+                   :redact-ui (presence/ui-redactor
+                               eng (if own? (own-sight eng vis) vis))
                    :suggest #(suggest-for eng vis %)}
             frames (->> (store/with-tx st
                           (fn [tx]
@@ -1378,7 +1445,7 @@
                     :engine (or (:name eng) "waymark")
                     :cast (apply array-map (mapcat identity cast)))]
         (apply str (map #(str (wire/write-json %) "\n")
-                        (cons header (map #(export-line alias %) parts))))))))
+                        (cons header (map #(export-line alias %) parts)))))))))
 
 ;; ── the purge and the sweep ─────────────────────────────────────────
 
