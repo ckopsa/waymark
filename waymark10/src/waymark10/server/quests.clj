@@ -45,7 +45,9 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
+            [waymark10.server.walks :as walks]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -845,6 +847,32 @@
     (let [row (row-of eng kind qid)]
       (swap! index indexed qid (when (and row (active? row)) (quest-rows row))))))
 
+(defn- record-in-walk!
+  "Hand the quest's envelope to each self walk its owner is recording
+  with `docs` (`walks/record-seen!`), whoever moved it: the engine's
+  `plan`, `finish` and `unpin` pass no write door of the owner's, and
+  the tracker a replay draws is this document. The sight is the owner's
+  as `rehearsed` rebuilds it: the quest's grant, or the owner's own
+  with none. A grant that confers nothing now records nothing. Never
+  throws."
+  [eng id]
+  (try
+    (when-some [row (row-of eng kind id)]
+      (let [{:keys [owner grant]} (:data row)
+            gid (some-> grant str not-empty)]
+        (when (walks/recording-own? eng {:id owner})
+          (when-some [who (members/principal-for eng owner)]
+            (let [vis (if gid
+                        (grants/visibility eng gid who)
+                        (grants/unscoped-visibility eng who))]
+              (when (or (nil? gid) (:grant vis))
+                (walks/record-seen!
+                 eng who vis
+                 (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))))))))
+    (catch Exception e
+      (warn! "quest " id " was not recorded in its owner's walk — " (ex-message e))
+      nil)))
+
 (def consumer-name
   "The durable cursor's name in waymark10_cursors (consumer:quests)."
   :quests)
@@ -852,7 +880,8 @@
 (defn handle-transition!
   "One committed transition. A quest's own `create`, `replan` or
   `resume` plans it, and its `abandon` or `finish` closes its
-  invitation. A transition on a row an active quest names finishes that
+  invitation. Any transition of a quest hands its envelope to the walk
+  its owner is recording (`record-in-walk!`). A transition on a row an active quest names finishes that
   quest when it is the goal door, and plans it again otherwise. `index`
   is the consumer's atom of those rows; without one the index is read
   for this call alone. Never throws: a parked cursor would stop every
@@ -871,6 +900,7 @@
                  ("abandon" "finish") (some->> (row-of eng kind id)
                                              (close-invitation! eng))
                  nil)
+               (record-in-walk! eng id)
                (note-quest! eng index id))
            (when-some [rdef (get rs k)]
              (let [self (str "/api/" (:plural rdef) "/" id)]
@@ -880,6 +910,7 @@
                    (catch Exception e
                      (warn! "quest " qid " could not follow transition "
                             (:id t) " — " (ex-message e))))
+                 (record-in-walk! eng qid)
                  (note-quest! eng index qid)))))))
      (catch Exception e
        (warn! "transition " (:id t) " could not be handled — " (ex-message e))
