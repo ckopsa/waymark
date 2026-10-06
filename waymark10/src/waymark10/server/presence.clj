@@ -209,7 +209,9 @@
 
 ;; ── the registry ────────────────────────────────────────────────────
 ;;
-;; :local    pid → {:entry public-entry :streams {self n} :hb-at ms}
+;; :local    pid → {:entry public-entry :streams {self n} :hb-at ms
+;;                  :beat-self self}. :beat-self is the self the last
+;;                  heartbeat reported, whatever wrote :entry since.
 ;; :remotes  origin → {pid {:entry public-entry :seen ms}}
 ;; :published pid → public-entry — the merged truth last announced;
 ;;            every mutation re-merges and diffs against it, so join/
@@ -786,7 +788,10 @@
   clean-ui and stored beside the entry with the next seq; a beat
   without one keeps the last. An optional `tap` is shown the frames
   this beat made, after it published: a `move` when the gaze changed
-  and the `ui` frame when the beat carried one. It is how a person's
+  and the `ui` frame when the beat carried one. The gaze changed when
+  `self` is not the self the last beat reported: a stream or a read
+  moves the entry with no beat, and the beat that brings the entry
+  back to the row its sender never left is no `move`. It is how a person's
   own walk is recorded with nobody following (walks/self-recorder); a
   curtained beat makes no frame, so its tap sees none. An optional
   `since`, {:from self}, says where the gaze was before the call this
@@ -819,9 +824,11 @@
         (evict-local! reg pid)
         (let [e (entry-of reg principal self "heartbeat")
               cv (curtain-view reg [pid])
+              ;; the last beat's self and not the entry's: a stream
+              ;; or a read writes the entry with no beat
               before (if (contains? since :from)
                        {:self (:from since)}
-                       (get-in @(:local reg) [pid :entry]))]
+                       {:self (get-in @(:local reg) [pid :beat-self])})]
           (locking (:lock reg)
             (swap! (:local reg) update pid
                    (fn [st] (let [st (or st {:streams {}})]
@@ -829,7 +836,8 @@
                                      :entry (if ui
                                               (assoc e :ui ui :seq (next-seq st))
                                               (carry-ui st e))
-                                     :hb-at (:at-ms e)))))
+                                     :hb-at (:at-ms e)
+                                     :beat-self (:self e)))))
             (notify! reg {:event "report" :pid pid
                           :entry (get-in @(:local reg) [pid :entry])})
             (publish! reg cv))
