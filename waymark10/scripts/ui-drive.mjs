@@ -2108,8 +2108,11 @@ async function guidedStory() {
                 "the walkthrough in hand and its author followed in guided mode", 15000);
   ok("Start follows the author in guided mode", true);
   await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
+  /* the stew's own door, not a row's: ada comes from the collection, and
+     its rows carry the same door for another meal until the page is drawn */
   const stewButton = `[...document.querySelectorAll("button")]
-    .find(b => !b.closest("dialog") && /^update recipe/i.test(b.textContent))`;
+    .find(b => !b.closest("dialog") && !b.closest("tr[data-self]") &&
+               /^update recipe/i.test(b.textContent))`;
   await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
                 "ada's recipe door on the stew's page");
   await A.js(`${stewButton}.click(); true`);
