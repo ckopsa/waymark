@@ -293,7 +293,12 @@
   (is (= #{:resume} (offers (at :deferred {:defer_until "2026-11-19"})
                             (ctx the-person)))
       "one door back into the queue, and nothing that would end or
-       rank a ticket the house said not-now about"))
+       rank a ticket the house said not-now about")
+  (is (= [:ticket/resume]
+         (:remedies (refusal (at :deferred {:defer_until "2026-11-19"})
+                             (ctx the-person) :complete)))
+      "complete is shut by the state, and names the door that leads
+       to a state where it opens"))
 
 (deftest the-two-endings-offer-reopen-to-a-person-and-nothing-to-a-seat
   (doseq [state [:done :dropped]]
