@@ -1620,8 +1620,13 @@ async function accessStory() {
   await shelve("high");
   await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
                 qRefused);
-  /* the quest's own row is asked: the live tracker says Quest complete
-     only when it hears the finish before it reads the pinned quest again */
+  /* the owner's own goal write, end to end: the live tracker says Quest
+     complete whether it hears the finish or reads the held quest's row
+     first. It is waited for before the row is asked, since the line
+     stays only a few seconds. */
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "Quest complete, after priya's own goal write", 15000, rPlan);
+  ok("the tracker says Quest complete after the owner's own goal write", true);
   for (let i = 0; i < 60 && (await get(rSelf)).state !== "finished"; i++) await sleep(250);
   ok("the goal door finishes the recorded quest",
      (await get(rSelf)).state === "finished");
