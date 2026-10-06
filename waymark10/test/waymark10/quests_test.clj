@@ -368,6 +368,55 @@
               ["finalize" "/api/plans/4" "choice" "later" ["meal_id"]]]
              (shape plan [:door :self :whose :state :needs]))))))
 
+(deftest the-mapping-puts-a-refusals-other-remedy-on-its-step
+  (let [plan (quests/answer->plan
+              {:writes []
+               :blocked-on [{:door "ticket.complete" :row "/api/tickets/7"
+                             :needs [:close_reason] :or ["ticket.drop"]}
+                            {:door "ticket.drop" :row "/api/tickets/7" :needs []
+                             :or ["ticket.complete"] :confirm true
+                             :consequence "The ticket is let go."}]
+               :stack [{:door "epic.complete" :row "/api/epics/1"}]}
+              seats-for)]
+    (is (= [[1 "complete" "/api/tickets/7" "choice" "next"]]
+           (shape plan [:n :door :self :whose :state]))
+        "drop is the other remedy, not a step after complete")
+    (is (= [{:door "drop" :self "/api/tickets/7"}]
+           (:alternatives (first (:plan plan)))))))
+
+(deftest the-mapping-says-more-may-follow-one-time-and-last
+  (testing "a seat head whose refusal named two remedies"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "chore.reopen" :row "/api/chores/9" :needs []
+                               :or ["chore.drop"]
+                               :reason "Only the planner reopens a chore."}
+                              {:door "chore.drop" :row "/api/chores/9" :needs []
+                               :or ["chore.reopen"]
+                               :reason "Only the planner drops a chore."}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]}
+                seats-for)]
+      (is (= [[1 "reopen" "seat" "waiting"]
+              [2 "finish" "person" "later"]]
+             (shape plan [:n :door :whose :state])))
+      (is (= [{:door "drop" :self "/api/chores/9"}]
+             (:alternatives (first (:plan plan)))))
+      (is (= [nil "More steps may follow once this one is done."]
+             (mapv #(when (= "person" (:whose %)) (:note %)) (:plan plan))))))
+  (testing "two doors that are somebody else's"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "chore.reopen" :row "/api/chores/9" :needs [] :or []
+                               :reason "Only the planner reopens a chore."}
+                              {:door "pantry.stock" :row nil :needs [] :or []
+                               :reason "Not found"}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]}
+                seats-for)]
+      (is (= [["reopen" "seat" "waiting"]
+              ["stock" "seat" "later"]
+              ["finish" "person" "later"]]
+             (shape plan [:door :whose :state]))))))
+
 (deftest the-mapping-says-why-a-cycle-is-blocked
   (let [plan (quests/answer->plan
               {:writes []
@@ -666,6 +715,46 @@
       (hear! eng)
       (is (= "finished" (name (:state (row-of eng :quest quest)))))
       (is (not= "open" (name (:state (row-of eng :invitation (:id last-one)))))))))
+
+(deftest a-finished-quest-reads-all-done
+  (testing "the goal step is done and a step nobody took is dropped"
+    (let [eng (fresh-engine)
+          c (chore! eng "Dishes")
+          id (:id (accept! eng person c))
+          self (str "/api/chores/" c)]
+      (take! eng id quests/engine-actor :plan
+             {:plan [{:n 1 :door "reopen" :self self :whose "person" :state "done"
+                      :alternatives [{:door "drop" :self self}]}
+                     {:n 2 :door "sweep" :self self :whose "seat"
+                      :waiting_on "Planner" :state "waiting"}
+                     {:n 3 :door "finish" :self self :whose "person"
+                      :note "More steps may follow once this one is done."
+                      :state "later"}]
+              :plan_is_estimate true})
+      (is (= [{:door "drop" :self self}]
+             (:alternatives (first (:plan (data-of eng id)))))
+          "the plan door takes a step's alternatives")
+      (take! eng id quests/engine-actor :finish)
+      (let [plan (:plan (data-of eng id))]
+        (is (= [[1 "reopen" "done"] [2 "finish" "done"]]
+               (mapv (juxt :n :door (comp name :state)) plan)))
+        (is (some? (:ended_at (last plan))))
+        (is (nil? (:note (last plan)))))))
+  (testing "landing the goal door marks its own step done"
+    (let [eng (vault-engine)
+          {:keys [quest latch crate vault]} (vault-quest! eng)]
+      (hear! eng)
+      (move! eng :q_latch latch :lift person)
+      (hear! eng)
+      (move! eng :q_crate crate :open person)
+      (hear! eng)
+      (move! eng :q_vault vault :open person)
+      (hear! eng)
+      (let [d (data-of eng quest)]
+        (is (= "finished" (name (:state (row-of eng :quest quest)))))
+        (is (= ["lift" "open" "open"] (mapv :door (:plan d))))
+        (is (= ["done" "done" "done"] (states d)))
+        (is (some? (:ended_at (last (:plan d)))))))))
 
 (deftest another-principals-move-on-a-plan-row-plans-again
   (let [eng (vault-engine)
