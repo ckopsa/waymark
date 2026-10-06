@@ -381,3 +381,29 @@
       (let [res (c/pursue! ada (doc ada :q-epic) :complete ending)]
         (is (c/doc? (:done res)) (pr-str res))
         (is (= "done" (:state (doc ada :q-epic))))))))
+
+;; ── the clone's sign-in for the quest (spec-demo-clones § 2) ────────
+
+(deftest the-clones-sign-in-leaves-the-deferred-child-to-planner
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        refs (:refs (seed/load! eng (seed/read-seed "demo") {}))
+        id-of (fn [k] (str (get-in refs [k :id])))
+        h (dev/handler eng)
+        doc (fn [session kind k]
+              (c/get-doc session
+                         (str (get-in (c/index session) [:resources kind :href])
+                              "/" (id-of k))))
+        ;; the dev principal box: the header and nothing else
+        typed (c/connect "http://test" {:principal "ada" :handler h})
+        grant (doc typed :grant :ada-grant)
+        ;; the grant screen's button: the last segment of the grant's self
+        worn (c/connect "http://test" {:principal "ada" :handler h
+                                       :grant (last (str/split (:self grant) #"/"))})]
+    (testing "the header alone leaves the seat's step open to the person"
+      (is (some? (get-in (doc typed :ticket :q-seats) [:actions :resume]))))
+    (testing "the grant Ada opens is her own"
+      (is (= "ada" (get-in grant [:data :audience]))))
+    (testing "acting under it, the deferred child reads no resume door"
+      (let [seats (doc worn :ticket :q-seats)]
+        (is (= "deferred" (:state seats)))
+        (is (nil? (get-in seats [:actions :resume])) (pr-str (:actions seats)))))))
