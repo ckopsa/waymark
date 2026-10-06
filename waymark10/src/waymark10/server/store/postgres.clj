@@ -395,8 +395,12 @@
   queue behind the waiting reader, so the wait is short and the reader
   yields; it is under Postgres's default deadlock_timeout (1s), so a
   reader standing between two writers steps aside before either is
-  cancelled."
-  500)
+  cancelled. An append commits in about 1 ms (p99 under 5 ms), so 50
+  outwaits the ordinary writer; at 500, drains behind one long
+  transaction cut appends from 6700 to 171 in 1.5 s, each stalled up
+  to the whole wait (`order-lock-cost-to-writers` prints the four
+  cases)."
+  50)
 
 (defn- log-settled?
   "Take the log's order lock exclusively in tx. → true when no append
