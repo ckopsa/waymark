@@ -2722,6 +2722,20 @@ async function guidedStory() {
        g.querySelector("[data-quest-accept]").disabled === true }`));
   ok("ada's own Accept stays live",
      await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  /* a `ui` beat whose every part was redacted for bo reaches his page as
+     a plain move (presence/ui-redactor): it closes the guided sheet.
+     Ada's own 10 s heartbeat carries her sheet again and takes the close
+     back when it lands inside the wait, so the move is given again. */
+  let movedShut = false;
+  for (let i = 0; i < 3 && !movedShut; i++) {
+    await B.js(`onPresenceFrame({event: "presence", data: {event: "move",
+      principal: {id: followId, display: followName},
+      self: ${JSON.stringify(plan)}, at: new Date().toISOString()}}); true`);
+    await sleep(600);
+    movedShut = await B.js(`!document.querySelector("dialog[open][data-guided-quest]")`);
+  }
+  ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
+     movedShut);
   await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
   await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
@@ -3974,6 +3988,124 @@ async function questPhoneStory() {
     ok("the replay makes no quest", (await active()) === before);
     await shot(`${slug}-notyet-film`);
     await fresh(`the page ${where}, out of its film`);
+
+    /* the same sheet from a walk the connector records (stage-sheet!,
+       server/mcp.clj; ticket 5bc2c3e4): a rehearsed quest create on a
+       shut goal is the tap, the create after it is Accept quest, and the
+       pin puts the quest in the tracker. No page takes part in the
+       recording: the film is all the browser sees of it. */
+    console.log(`· the connector's quest preview ${where}`);
+    const tool = async (name, args) => {
+      const res = await fetch(BASE + "/api/-/mcp", {method: "POST",
+        headers: {...h, "Content-Type": "application/json", "Accept": "application/json"},
+        body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+                              params: {name, arguments: args}})});
+      const doc = await res.json().catch(() => null);
+      if (res.status !== 200 || !doc?.result || doc.result.isError)
+        console.log(`  ${name}: ${res.status} ` + JSON.stringify(doc).slice(0, 400));
+      return res.status === 200 && !!doc?.result && !doc.result.isError;
+    };
+    const top = await post("/api/led_tasks", {title: `Clear the loft ${where}`}, h);
+    const loft = top.doc?.self;
+    const box = await post("/api/led_tasks",
+      {title: `Carry the boxes down ${where}`, parent: String(loft).split("/").pop()}, h);
+    ok("a third task with an open child, for the connector's quest",
+       top.status === 201 && !!loft && box.status === 201);
+    const actives = async () => ((await get("/api/quests?state=active&owner=" +
+      encodeURIComponent(me))).data?.items || []).map(q => q.self);
+    const had = await actives();
+    const rec = await post("/api/walks",
+      {followed: await evaljs(`principalId() || viewerId()`),
+       title: "A quest previewed by the connector " + where, docs: true}, h);
+    const cWalk = rec.doc?.self;
+    if (!cWalk) console.log("  the walk's create: " + JSON.stringify(rec));
+    ok(`priya records a walk of her own, with no page in it ${where}`,
+       rec.status === 201 && !!cWalk);
+    const shutGoal = {self: loft, action: "complete"};
+    ok("the connector rehearses the quest's create on the shut Complete",
+       await tool("waymark_invoke",
+                  {kind: "quest", action: "create", dry_run: true, input: shutGoal}));
+    await sleep(1500);
+    ok("and then makes the quest, with the same input",
+       await tool("waymark_invoke", {kind: "quest", action: "create", input: shutGoal}));
+    const quest = (await actives()).find(q => !had.includes(q));
+    ok("the create made one quest of priya's", !!quest);
+    await sleep(1500);
+    ok("and the connector pins it",
+       await tool("waymark_invoke",
+                  {kind: "quest", id: String(quest).split("/").pop(), action: "pin"}));
+    ok("the quest is priya's pinned one", (await pinned()).some(q => q.self === quest));
+    await sleep(1500);
+    ok("priya seals the connector's walk",
+       (await post(cWalk + "/-/seal", {}, h)).status < 400 &&
+       (await get(cWalk)).state === "sealed");
+    /* the live quest is let go, out of the recording: the tracker the
+       film shows is then the film's own */
+    await post(quest + "/-/abandon", {}, h);
+    ok("priya lets the connector's quest go", (await get(quest)).state === "abandoned");
+    await evaljs(`refreshQuest().catch(() => {}); true`);
+    await waitFor(`${bar}.hidden === true`, `no pinned quest before the film ${where}`, 15000);
+
+    console.log(`· film: the connector's quest preview ${where}`);
+    const left = await active();
+    await evaljs(`window.__accept = null;
+      window.__sheets = [];
+      if (window.__sheetWatch) window.__sheetWatch.disconnect();
+      window.__sheetWatch = new MutationObserver(ms => {
+        const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
+        for (const m of ms) {
+          for (const n of m.addedNodes)
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
+              here: hereHref().split("?")[0],
+              steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
+          for (const n of m.removedNodes)
+            if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
+              said: n.querySelector("[data-quest-refused]")?.textContent || "",
+              shut: !!n.querySelector("[data-quest-accept]")?.disabled});
+        }
+      });
+      window.__sheetWatch.observe(document.body, {childList: true});
+      new MutationObserver(() => {
+        const b = document.querySelector(
+          "dialog[data-quest-sheet] [data-quest-accept][data-replay-press]");
+        if (b && !window.__accept)
+          window.__accept = {text: b.textContent, shut: b.disabled,
+                             tracker: getComputedStyle(${bar}).display !== "none"};
+      }).observe(document.documentElement,
+                 {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      location.hash = "#" + ${JSON.stringify(cWalk)} + "?film=1"; true`);
+    await waitFor(`!!replay && !!${sheet} &&
+                   ${sheet}.querySelectorAll("[data-quest-steps] li").length > 0`,
+                  `the quest's sheet in the connector's film ${where}`, 240000, why);
+    ok("the replay opens the quest's sheet, with its steps", true);
+    if (phone) {
+      await sheetFits("the sheet of the connector's film");
+      await noOverflow("under the sheet of the connector's film");
+    }
+    await shot(`${slug}-connector-film-sheet`);
+    await waitFor(`!!window.__accept`, "the replay's press on Accept quest", 240000, why);
+    const accepted = await evaljs(`window.__accept`);
+    console.log("  the replay's Accept: " + JSON.stringify(accepted));
+    ok("the pointer presses Accept quest, in the sheet, with Accept offered",
+       accepted.shut === false);
+    await waitFor(`!document.querySelector("dialog[data-quest-sheet]") &&
+                   getComputedStyle(${bar}).display !== "none" &&
+                   !!${bar}.querySelector("[data-tracker-go]")`,
+                  `the pinned quest in the film's tracker ${where}`, 240000, why);
+    ok("the sheet closes off Accept quest, and the quest is pinned in the tracker", true);
+    if (phone) await noOverflow("with the connector's quest in the film's tracker");
+    await shot(`${slug}-connector-film-tracker`);
+    await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                  `the connector's film to end ${where}`, 240000, why);
+    ok(`the connector's film reaches ended ${where}`, true);
+    const staged = await evaljs(`window.__sheets`);
+    console.log("  the connector's film's sheets: " + JSON.stringify(staged));
+    ok("the film opens one sheet, on the goal's own page, and closes it",
+       staged.length === 1 && staged[0].replay && staged[0].closed &&
+       staged[0].here === loft && staged[0].steps.length > 0);
+    ok("and says no refusal in it", staged[0]?.said === "" && staged[0]?.shut === false);
+    ok("the connector's film makes no quest", (await active()) === left);
+    await fresh(`the page ${where}, out of the connector's film`);
   };
 
   await fresh("the phone's page, out of its film");
