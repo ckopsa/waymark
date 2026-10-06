@@ -1658,7 +1658,7 @@
   types all but the last beat one by one, and the rest in the last."
   12)
 
-(defn- stage
+(defn- stage*
   "What a staged beat needs, {:reg :principal :tap :visible? :summary-of}, or nil
   when this call makes no beat: the engine's presence registry is not
   running, the session is anonymous, the kind is the recording's own
@@ -1711,6 +1711,82 @@
   (try
     {:from (presence/gaze reg (:id principal))}
     (catch Exception _ nil)))
+
+(defn- sheet-close!
+  "The beat that closes the quest's sheet, when the stage's principal
+  has one open: a `ui` beat with no `quest` part, on the row the gaze is
+  on. With no sheet open it makes none. It never throws."
+  [{:keys [reg principal] :as st}]
+  (try
+    (when (presence/sheet reg (:id principal))
+      (when-some [self (presence/gaze reg (:id principal))]
+        (beat! st self {:dialog nil})))
+    (catch Exception _ nil))
+  nil)
+
+(defn- stage
+  "`stage*` for a call that is not the sheet's own: a quest's sheet a
+  rehearsal left open closes first, as Not now does on a person's
+  screen."
+  [eng session rdef]
+  (when-some [st (stage* eng session rdef)]
+    (sheet-close! st)
+    st))
+
+(defn- quest-goal
+  "The goal a quest's create names in `input`, {:self :action} as the
+  page's tap spells it (the row's href with no query), or nil when the
+  input names no row's door."
+  [input]
+  (let [given (when (map? input)
+                (into {} (map (fn [[k v]] [(keyword (name k)) v])) input))
+        self (presence/normalize-self (:self given))
+        action (:action given)]
+    (when (and (string? self) (str/starts-with? self "/api/")
+               (or (string? action) (keyword? action))
+               (seq (name action)))
+      {:self (first (str/split self #"\?")) :action (name action)})))
+
+(defn- stage-sheet!
+  "A rehearsed quest create's beat: the quest's sheet, as the page's tap
+  on a shut door reports it (questSheet, ui/140-links-access.js). The
+  gaze moves to the goal's row and the `ui` beat carries `quest`
+  {goal, label, seen {ok, body}}: the label is the goal door's own on
+  its row, and `body` is the rehearsal's `preview` or the refusal's
+  title and detail. An answer with neither makes no beat, and so does a
+  goal row the session could not GET (`beat!`). → `resp`, its body read
+  to text so the answer reads it again. It never throws."
+  [eng call session st goal since resp]
+  (let [resp (assoc resp :body (body-text resp))]
+    (try
+      (let [ok? (<= 200 (:status resp 500) 299)
+            body (body-json resp)
+            p (when ok? (:preview body))]
+        (when (or (map? p) (and (not ok?) (map? body)))
+          (let [env-resp (call (request session :get (:self goal) {}))
+                entry (when (<= 200 (:status env-resp 500) 299)
+                        (get-in (body-json env-resp)
+                                [:unavailable (wire-action (keyword (:action goal)))]))
+                label (or (get-in entry [:display :label])
+                          (presence/door-label eng (:self goal) (:action goal)))
+                shut (or (:shut_reason p) (:reason entry))
+                seen (if ok?
+                       {:ok true
+                        :body {:preview
+                               (cond-> (assoc (select-keys p [:goal :blocked_reason
+                                                              :plan_is_estimate])
+                                              :plan (mapv #(select-keys % [:door :self :whose
+                                                                           :waiting_on :needs
+                                                                           :note])
+                                                          (filter map? (:plan p))))
+                                 shut (assoc :shut_reason shut))}}
+                       {:ok false :body (select-keys body [:title :detail])})]
+            (beat! st (:self goal)
+                   {:quest (cond-> {:goal goal :seen seen}
+                             (string? label) (assoc :label label))}
+                   since))))
+      (catch Exception _ nil))
+    resp))
 
 (defn- typed-steps
   "The `fields` of each typing beat, in order: each adds one value, and
@@ -1799,7 +1875,7 @@
   cannot be shown (`walks/caption-problem`). With no recording self
   walk the arguments are accepted and do nothing."
   [eng session rdef self aname {:keys [caption caption_field]}]
-  (when (and (some? caption) (stage eng session rdef))
+  (when (and (some? caption) (stage* eng session rdef))
     (let [c {:self self :action (some-> aname name) :field caption_field
              :text caption}]
       (if-some [why (walks/caption-problem eng c)]
@@ -2148,8 +2224,9 @@
   reaches this one for approval_request, which is how it asks for
   everything else — so the create verb had to be reachable, and
   `waymark_invoke` with no id is where it went rather than a seventh
-  tool."
-  [call session rdef aname input dry-run warnings return]
+  tool. `seen`, when given, is shown the route's answer before it is
+  read and answers the one to read (`stage-sheet!`)."
+  [call session rdef aname input dry-run warnings return & [seen]]
   (let [names (set (map p/wire-key (:create-action-names rdef)))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
@@ -2158,15 +2235,16 @@
                                         (pr-str (mapv name (:create-action-names rdef)))
                                         ", not " (pr-str (name aname)) ".")}))
       (answer
-       (call (request session :post (str "/api/" (:plural rdef))
-                      {:body (or input {})
-                       :query (when dry-run "dry_run=1")
-                       :headers (cond-> {"idempotency-key"
-                                         (origin-key (get-in session [:principal :id])
-                                                     (random-uuid))}
-                                  (seq warnings)
-                                  (assoc "waymark-acknowledge"
-                                         (str/join "," (map name warnings))))}))
+       ((or seen identity)
+        (call (request session :post (str "/api/" (:plural rdef))
+                       {:body (or input {})
+                        :query (when dry-run "dry_run=1")
+                        :headers (cond-> {"idempotency-key"
+                                          (origin-key (get-in session [:principal :id])
+                                                      (random-uuid))}
+                                   (seq warnings)
+                                   (assoc "waymark-acknowledge"
+                                          (str/join "," (map name warnings))))})))
        return
        #(when (row-doc? %) (invoke-summary aname nil %))))))
 
@@ -2429,15 +2507,36 @@
 
       (nil? id)
       (let [self (str "/api/" (:plural rdef))
-            st (stage eng session rdef)
+            raw (stage* eng session rdef)
+            ;; staged (§ 2): a quest's create is the quest's sheet, not
+            ;; the quests create form. Rehearsed, it is the tap on the
+            ;; goal's shut door, and the sheet opens with what the
+            ;; rehearsal answered; made while that sheet is open, it is
+            ;; Accept, and the sheet closes after the write
+            goal (when (and raw (= "quest" (name (:kind rdef)))
+                            (contains? (set (map p/wire-key (:create-action-names rdef)))
+                                       (p/wire-key aname)))
+                   (quest-goal input))
+            preview? (boolean (and goal dry_run))
+            accept? (boolean
+                     (and goal (not dry_run)
+                          (= goal (try (:goal (presence/sheet (:reg raw)
+                                                              (:id (:principal raw))))
+                                       (catch Exception _ nil)))))
+            sheet? (or preview? accept?)
+            ;; any other create closes a sheet left open (Not now)
+            st (when raw (when-not sheet? (sheet-close! raw)) raw)
+            since (when preview? (gaze-before st))
             ;; staged (§ 2): the form opens on the collection and is
             ;; typed before the write, so a refusal leaves it open
-            _ (when st (stage-dialog! eng st self aname input))
+            _ (when (and st (not sheet?)) (stage-dialog! eng st self aname input))
             res (create-row call session rdef aname input dry_run
-                            acknowledge_warnings return)]
+                            acknowledge_warnings return
+                            (when preview?
+                              #(stage-sheet! eng call session st goal since %)))]
         ;; staged (§ 2): the create landed, so the form closes
         (when (and st (not dry_run) (not (:isError res)))
-          (stage-close! st self))
+          (if accept? (sheet-close! st) (stage-close! st self)))
         res)
 
       :else

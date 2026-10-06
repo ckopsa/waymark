@@ -3768,6 +3768,7 @@ async function questPhoneStory() {
       return {goal: g.querySelector("[data-quest-sheet-goal]").textContent,
               why: g.querySelector("[data-quest-why]").textContent,
               steps: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent),
+              paths: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.title),
               turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),
               refused: g.querySelector("[data-quest-refused]").textContent,
               accept: g.querySelector("[data-quest-accept]").disabled}; })()`);
@@ -3777,8 +3778,13 @@ async function questPhoneStory() {
     ok("it numbers the steps, each with whose turn it is",
        seen.steps.length >= 2 && seen.turns.length === seen.steps.length &&
        seen.turns.every(t => t.trim().length > 0));
-    ok("the goal's own form is the last step, with close_reason asked for",
-       /close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
+    ok("a step names its row in words: the child's title, and the path only as a title",
+       seen.steps.some(t => t.includes(`Sweep the hall ${where}`)) &&
+       seen.steps.every(t => !t.includes("/api/led_tasks/")) &&
+       seen.paths.includes(child) && seen.paths.includes(epic));
+    ok("the goal's own form is the last step, with Close reason asked for",
+       /Close reason/.test(seen.steps[seen.steps.length - 1] || "") &&
+       !/close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
     ok("Accept is offered, with no refusal said",
        seen.accept === false && seen.refused === "");
     if (phone) {

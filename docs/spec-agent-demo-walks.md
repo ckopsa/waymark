@@ -128,6 +128,9 @@ What each call becomes:
 | `waymark_invoke`, `dry_run` | `move` to the row; `ui` with `dialog {self, action}` and no fields; then one `ui` per argument, each adding one value. The dialog stays open. |
 | `waymark_invoke` | the same beats, unless the last `ui` already shows this dialog with these values; then the write; then `ui` with `dialog: null` |
 | a create (no `id`) | as an invoke, with the collection as `self` |
+| a `quest` create, `dry_run` | `move` to the goal's row, then `ui` with `quest {goal, label, seen {ok, body}}`: the quest's sheet. No dialog and no typing. |
+| a `quest` create, its goal's sheet open | the write, then `ui` with `quest: null` |
+| any other staged call, a sheet open | first `ui` with `quest: null`, then its own beats |
 | a bulk invoke | `move` to the collection, then the writes |
 
 `waymark_discover`, `waymark_schema`, `waymark_resolve` and
@@ -136,6 +139,18 @@ and a viewer does not need to see them. A query with `rows: "none"`
 makes none either. `waymark_pursue` is ordinary invokes, so each step
 is staged as one. A call with `at` stages its dialog, and the
 `scheduled_action` it creates is the write.
+
+A quest's preview is staged the way the page makes it. A person taps
+the goal's shut door and sees the sheet, not the quests create form
+(docs/spec-quests.md, "A tap previews, Accept creates"). So a rehearsed
+`quest` create whose answer carries `preview`, or a refusal, writes one
+`ui` beat on the goal's row with the `quest` part the page's sheet
+reports: the goal, the goal door's label on its row, and the `preview`
+or the refusal's title and detail. It passes `presence/clean-quest` and
+the gates of every staged beat. The next `quest` create for that goal
+is Accept: the write, then a `ui` beat with no `quest` part. Any other
+staged call closes the sheet first with such a beat, which a replay
+shows as Not now.
 
 Arguments are typed in the order of the action's input schema. A call
 with more than twelve arguments types the first eleven one by one and
