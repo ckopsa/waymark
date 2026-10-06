@@ -304,9 +304,22 @@
 
 ;; ── the dispatcher ──────────────────────────────────────────────────
 
-(defn- drain! [d]
+(defn- drain!
+  "Deliver the log after `:last-seen`, then the observations. The log
+  is a SETTLED read: `:last-seen` and each subscription's `:delivered`
+  floor drop every lower id that comes later, so no id still in flight
+  is passed. A read that answers nil keeps `:last-seen`, and the next
+  wake (the lower id's own NOTIFY, or the poll) asks again. The cost:
+  the read takes the log's order lock exclusively on every wake, and
+  while a writer is in flight appends queue behind it for up to the
+  store's settle wait, as they do behind the consumers' drain."
+  [d]
   (loop []
-    (let [rows (log-since (:storage d) @(:last-seen d) 500)]
+    (when-some [rows (store/with-tx (:storage d)
+                       (fn [tx]
+                         (store/transitions (:storage d) tx
+                                            {:since @(:last-seen d)}
+                                            {:limit 500 :settled true})))]
       (doseq [t rows]
         (doseq [sub @(:subs d)]
           (when (wants? sub t) (deliver-event! sub t)))
