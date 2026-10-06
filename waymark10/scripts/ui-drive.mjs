@@ -2724,6 +2724,28 @@ async function guidedStory() {
        g.querySelector("[data-quest-accept]").disabled === true }`));
   ok("ada's own Accept stays live",
      await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  /* a second tab of ada's reads another row: her gaze moves and no new
+     `ui` beat is made, so the server says the carried frame again under
+     its old seq (presence/publish!). That frame takes the move's close
+     back on bo's page, and the sheet he holds is the one he held: the
+     mark tells a sheet that stayed from one closed and drawn again. */
+  await B.js(`document.querySelector("dialog[open][data-guided-quest]")
+    .dataset.heldAcrossMove = "1"; true`);
+  const A2 = await openTab("ada's second tab");
+  await boot(A2, "ada");
+  await A2.js(`location.hash = ${JSON.stringify(meals[0])}; true`);
+  await A2.until(`hereHref() === ${JSON.stringify(meals[0])}`,
+                 "the meal's page on ada's second tab", 15000);
+  await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meals[0])}`,
+                "ada's move to the meal, on bo's page", 15000, guidedState);
+  await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+  ok("a move of ada's with no new ui beat leaves her sheet open on bo's screen",
+     await B.js(`!!document.querySelector(
+       "dialog[open][data-guided-quest][data-held-across-move]")`));
+  /* the second tab leaves: its beats would move ada's gaze under the
+     cases below */
+  await A2.call("Page.navigate", {url: "about:blank"});
+  A2.close();
   /* a `ui` beat whose every part was redacted for bo reaches his page as
      a plain move (presence/ui-redactor): it closes the guided sheet.
      Ada's own 10 s heartbeat carries her sheet again and takes the close
