@@ -265,8 +265,13 @@
 (defn- coll [kind]
   (c/get-doc *session* (get-in (c/index *session*) [:resources kind :href])))
 
+;; a row of its own on every call: the session's key-store replays an
+;; identical create, so the key this create persisted is forgotten again
 (defn- make! [kind input]
-  (let [res (c/create! *session* (coll kind) input)]
+  (let [keys (:key-store *session*)
+        before @keys
+        res (c/create! *session* (coll kind) input)]
+    (reset! keys before)
     (is (c/doc? res) (pr-str res))
     res))
 
@@ -278,8 +283,7 @@
 (defn- chain!
   "A suggested meal, an undecided day, a draft plan over that day."
   []
-  ;; fresh inputs each call: the session's key-store replays an
-  ;; identical create, and every test needs rows of its own
+  ;; a suffix each call, so one test's rows read apart from another's
   (let [n (subs (str (random-uuid)) 0 8)
         meal (make! :meal {:name (str "Tacos " n) :themes ["test"]})
         day (make! :plan_day {:label (str "Monday " n)})]
@@ -402,15 +406,10 @@
 ;; ── a door shut by the row's state names the row's own doors that
 ;; lead to a state where it opens
 
-;; the session's key-store replays an identical create, so this is the
-;; free latch the tests above read shut: it is lowered again after `f`
 (defn- with-lifted [f]
   (let [lt (make! :latch {:free true})]
     (is (= "open" (:state (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil))))
-    (try
-      (f lt)
-      (finally
-        (c/act! *session* (c/get-doc *session* (:self lt)) :lower nil)))))
+    (f lt)))
 
 (deftest an-out-of-state-door-names-the-doors-that-lead-to-it
   (with-lifted
