@@ -3061,6 +3061,43 @@ async function guidedStory() {
      bulkRefused(bulkOf("move")[1]) === "");
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
+  console.log("· replay: a create form with no move to its collection");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a self walk of a recorder whose scope names only some rows, and who
+     may create there: the create form's `ui` beats and its `refusal`,
+     with no `move` to the collection before them and no `doc` behind
+     them (docs/spec-agent-demo-walks.md §2). Replay opens the form from
+     the beat's own `self`. */
+  const ownDoor = {self: "/api/meals", action: "create"};
+  const ownName = `Guided broth ${tag}`;
+  const ownDetail = "A meal of that name is on the list already.";
+  const ownForm = (t, fields) => (
+    {t, type: "ui", who: "a1", self: ownDoor.self, ui: {dialog: ownDoor, fields}});
+  const ownFile = [
+    {format: "waymark-walk/1", title: "A create form and its refusal",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    ownForm(0, {}),
+    ownForm(10, {name: ownName}),
+    {t: 20, type: "refusal", who: "a1", ...ownDoor, title: "Not available", detail: ownDetail},
+  ].map(l => JSON.stringify(l)).join("\n");
+  await A.js(`startReplay(${JSON.stringify(ownFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the create form's walk to end", 20000);
+  await A.until(`!!document.querySelector("dialog[open][data-guided] .problem")`,
+                "the create form's refusal to be drawn in the form");
+  const own = JSON.parse(await A.js(`{ const g = document.querySelector("dialog[open][data-guided]");
+    JSON.stringify({here: hereHref(),
+      screen: !!document.querySelector('#view [data-replay-screen="/api/meals"]'),
+      key: g.getAttribute("data-guided"),
+      name: g.querySelector("[name=name]")?.value || "",
+      box: g.querySelector(".problem")?.innerText || ""}) }`));
+  console.log("  seen at the walk's end: " + JSON.stringify(own));
+  ok("a create form with no move before it is opened on its own collection",
+     own.here === ownDoor.self && own.screen && own.key === ownDoor.self + " " + ownDoor.action);
+  ok("with what the recorder typed", own.name === ownName);
+  ok("and its refusal is drawn in that form", own.box.includes(ownDetail));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
   console.log("· replay: a quest kept from a refusal, and its tracker");
   await A.until(onWalk, "the replay to stop on the walk's page");
   /* a walk as `docs: true` records it: the refused door's form with the

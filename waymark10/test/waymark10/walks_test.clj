@@ -838,6 +838,32 @@
           (walks/record-own! eng person nil (rename! eng a "Dishes" person))
           (is (= 3 (count (frames-of eng (:id w))))))))))
 
+(deftest a-self-walk-records-no-move-to-a-row-its-tab-did-not-leave
+  (with-registry
+    (fn [eng reg]
+      (let [a (errand! eng "Dishes")
+            b (errand! eng "Laundry")
+            w (self-walk! eng)
+            rec (walks/self-recorder eng person nil)
+            beat! #(presence/report! reg person (errand-path %) nil (:presence rec))
+            moves (fn [] (->> (frames-in eng (:id w))
+                              (filter #(= "move" (:type %)))
+                              (map #(get-in % [:body :self]))
+                              frequencies))]
+        (beat! a)
+        (is (= {(errand-path a) 1} (moves)))
+        (testing "a stream on another row moved the entry"
+          (presence/stream-open! reg person (errand-path b))
+          (beat! a)
+          (is (= {(errand-path a) 1} (moves))))
+        (testing "a read of another row moved the entry"
+          (presence/read! reg person (errand-path b))
+          (beat! a)
+          (is (= {(errand-path a) 1} (moves))))
+        (testing "the tab's own beat on another row is a move"
+          (beat! b)
+          (is (= {(errand-path a) 1 (errand-path b) 1} (moves))))))))
+
 (deftest a-self-walk-holds-no-row-its-person-cannot-see
   (with-registry
     (fn [eng reg]
