@@ -154,7 +154,11 @@ open → dropped) take `close_reason`, one sentence. Both are one-way:
 `reopen` lands in `draft`. A blocked or deferred ticket is unblocked
 or resumed first. The guard
 `children-are-finished` refuses either while a child is `open`,
-`blocked` or `deferred`, and names how many.
+`blocked` or `deferred`, and names how many. It also names one: the
+oldest unfinished child the caller can see, by title in the sentence
+and by id in the refusal's `resolved_remedies`, so a pursuit of the
+parent's ending plans that child's `complete` first. A caller who
+sees none of them is told so, and no remedy is bound.
 
 **R-4.7** `reopen` (done or dropped → draft) clears `close_reason`.
 `only-a-person-reopens` holds every agent hand for the person's tap
