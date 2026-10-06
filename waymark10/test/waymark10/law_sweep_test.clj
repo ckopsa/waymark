@@ -85,6 +85,19 @@
     (inv/decode-row (get (inv/resources eng) :definition)
                     (store/with-tx st #(store/load-row st % :definition id {})))))
 
+(defn- with-kinds
+  "The engine over a registry whose kinds are `(f kinds)` — the resident
+  code after it moved, without a third boot."
+  [eng f]
+  (assoc eng :registry (atom (assoc (some-> (:registry eng) deref)
+                                    :kinds (f (inv/resources eng))))))
+
+(defn- refusal
+  "The ex-data `sweepable!` refuses with, or nil when it does not."
+  [eng row]
+  (try (law-sweep/sweepable! eng row) nil
+       (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
 ;; ── the sweep ───────────────────────────────────────────────────────
 
 (deftest a-held-proposal-names-the-rows-it-re-judges
@@ -206,7 +219,38 @@
                                                     :definition (get (inv/resources eng) :definition)}}))
                 {:id did :state :proposed
                  :data {:target_kind "s_acct" :revision 2
-                        :fingerprint_hash (:fingerprint-hash rdef)}}))))))))
+                        :fingerprint_hash (:fingerprint-hash rdef)}})))))
+
+      (testing "neither of the two is about the row's state, so each
+                refuses as itself and not as wrong-state"
+        (let [defrow {:id did :state :proposed
+                      :data {:target_kind "s_acct" :revision 2
+                             :fingerprint_hash (:fingerprint-hash rdef)}}
+              moved (with-kinds eng #(assoc-in % [:s_acct :fingerprint-hash]
+                                               "not-the-proposal"))
+              unserved (with-kinds eng #(dissoc % :s_acct))
+              uri (str "/api/definitions/" did "/sweep")]
+          (testing "code-moved names the row and the one door that mends it"
+            (let [d (refusal moved defrow)]
+              (is (= :code-moved (:waymark10/problem d)))
+              (is (= 409 (:status d)))
+              (is (= [:definition/withdraw] (:remedies d)))
+              (is (= (str "/api/definitions/" did) (:resource d)))))
+          (testing "kind-not-served has no door to name"
+            (let [d (refusal unserved defrow)]
+              (is (= :kind-not-served (:waymark10/problem d)))
+              (is (= 409 (:status d)))
+              (is (not (contains? d :remedies)))))
+          (testing "on the wire the remedy is spelled as pursuit binds it"
+            (let [[status doc] (get-json moved uri)]
+              (is (= 409 status))
+              (is (= "https://waymark.dev/problems/code-moved" (:type doc)))
+              (is (= ["definition.withdraw"] (:remedies doc)))
+              (is (= (str "/api/definitions/" did) (:resource doc))))
+            (let [[status doc] (get-json unserved uri)]
+              (is (= 409 status))
+              (is (= "https://waymark.dev/problems/kind-not-served" (:type doc)))
+              (is (not (contains? doc :remedies))))))))))
 
 ;; ── the door rides the law's envelope, lent by the assembly ─────────
 
