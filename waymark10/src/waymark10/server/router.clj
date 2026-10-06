@@ -2270,7 +2270,7 @@
   [eng]
   (fn [{{:keys [id]} :path-params :as req}]
     (check-row! req {:kind walks/kind} id)
-    (if-some [body (walks/export eng id (visibility-of req))]
+    (if-some [body (walks/export eng id (visibility-of req) (principal-of req))]
       {:status 200
        :headers {"Content-Type" "application/x-ndjson"}
        :body body}

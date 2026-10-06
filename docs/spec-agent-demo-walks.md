@@ -142,7 +142,13 @@ write and for a staged call alike. The action route writes it
 (`walks/record-refused!`) to every self walk the caller is recording,
 under the request's own visibility. The create route writes it too,
 with the collection as `self` and the create verb as `action`, so the
-recorder must see the whole kind, as for the create form's own beats.
+recorder must see the whole kind or be allowed that create verb, as for
+the create form's own `ui` beats. A recorder whose scope names only
+some rows of a kind, and who may create there, therefore keeps their
+own create form and its refusal; the export gives those lines back to
+that recorder alone, and any other exporter must see the whole kind.
+Permission to create is not sight of the list: the `move` to that
+collection, a caption on it and its screen still need the whole kind.
 A bulk write records one frame for each row it refused, about that row
 and with that row's own problem, in an atomic call as in a partial
 one; a bulk call refused whole, before any row was tried, records
