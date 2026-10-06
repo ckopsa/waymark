@@ -887,14 +887,30 @@
 (defn- shut-reason
   "Why the goal's door refuses `principal` now, in the door's own
   sentence: the door rehearsed partially, so a form not filled yet is
-  no refusal. nil when the door would open."
+  no refusal. nil when the door would open.
+
+  The rehearsal hands the fence the row's version as it stands, the
+  way the worksheet does (`worksheet/apply-invocations!`): nobody read
+  an older one here, so a fenced door is judged by its guards and not
+  refused for an etag this call never had. A version or stale refusal
+  all the same (the row moved between the read and the rehearsal) is
+  no reason a person can act on, and answers nil: the sheet falls back
+  to the reason the row's envelope gives."
   [eng rdef id action input {:keys [principal grant]}]
-  (try
-    (inv/invoke! eng (:kind rdef) (str id) (keyword action) (or input {})
-                 {:principal principal :grant grant :dry-run :partial})
-    nil
-    (catch clojure.lang.ExceptionInfo e
-      (clip (or (inv/problem-reason e) (ex-message e)) 480))))
+  (let [st (:storage eng)
+        kind (:kind rdef)
+        version (:version (store/with-tx st
+                            (fn [tx] (store/load-row st tx kind (str id) {}))))]
+    (try
+      (inv/invoke! eng kind (str id) (keyword action) (or input {})
+                   (cond-> {:principal principal :grant grant :dry-run :partial}
+                     version (assoc :if-match (inv/etag kind (str id) version))))
+      nil
+      (catch clojure.lang.ExceptionInfo e
+        (let [d (ex-data e)]
+          (when-not (or (#{:version-conflict :stale} (:waymark10/problem d))
+                        (:waymark10/version-conflict d))
+            (clip (or (inv/problem-reason e) (ex-message e)) 480)))))))
 
 (defn- humanise [k] (str/capitalize (str/replace (name k) "_" " ")))
 
