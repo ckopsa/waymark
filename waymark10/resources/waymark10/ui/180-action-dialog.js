@@ -390,11 +390,19 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
      remedy chips stay as they are. A refusal of the quest's own create
      or pin offers none: a second quest for the same goal is no way
      through it. */
-  let questAccepting = false;
+  let questAccepting = false, guidedKept = false;
   function questOffer(remedies) {
     if (!remedies || !remedies.length || bulkIds) return null;
     if (questAccepting) return null;
     if (/_collection$/.test(doc.kind || "") || !doc.self) return null;
+    /* someone else's form (guided, below) reads nothing: the button is
+       drawn when they kept the refusal as a goal (dlg.guidedRefuse),
+       with nothing behind it to press */
+    if (guided)
+      return !guidedKept ? null
+        : el("span", {class: "questoffer", "data-quest-offer": "offered"},
+            el("button", {type: "button", class: "primary",
+                          "data-quest-accept": ""}, "Accept as quest"));
     /* the slot says how the read ended (data-quest-offer), so a refusal
        with no button tells why. A read that failed, and was not refused,
        is tried one more time. */
@@ -684,9 +692,18 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       foot.append(lit);
       return lit;
     };
-    /* a refusal they kept as a goal (questOffer, above): a walk records
-       no refusal, so a replay has that button drawn here, unlit, with
-       nothing behind it to press, for its pointer (200-events-follow.js) */
+    /* the refusal their write got, as a self walk recorded it (a
+       `refusal` frame, 200-events-follow.js): drawn by the code that
+       draws this person's own (showErrors, above), with "Accept as
+       quest" under it when `kept` says they kept it as a goal */
+    dlg.guidedRefuse = (problem, kept) => {
+      guidedKept = !!kept;
+      showErrors(problem);
+    };
+    /* a refusal they kept as a goal (questOffer, above), in a walk
+       recorded before a walk held its refusals: a replay has that
+       button drawn here, unlit, with nothing behind it to press, for
+       its pointer (200-events-follow.js) */
     dlg.guidedAccept = () => {
       const kept = el("button", {class: "primary", type: "button",
                                  "data-quest-accept": ""}, "Accept as quest");

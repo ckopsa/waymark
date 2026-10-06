@@ -14,6 +14,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.live :as live]
             [waymark10.server.presence :as presence]
+            [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.walks :as walks]
@@ -1062,6 +1063,64 @@
           (is (nil? (:principal line)))
           (is (not (str/includes? (:text narrow) "it does not")))
           (is (not (str/includes? (:text narrow) "whole list"))))))))
+
+;; ── a refused write (docs/spec-agent-demo-walks.md § 2) ─────────────
+
+(defn- refused
+  "A guard's refusal of `action`, as a write door throws it."
+  [action]
+  (p/guard-refused action :open "The dishes are not dry."
+                   {:guard :dry :remedies [:errand/rename :chore/hide]} nil))
+
+(deftest a-refused-write-is-recorded-in-its-own-walk
+  (with-captions
+    (fn [eng _reg]
+      (let [a (errand! eng "Dishes")
+            w (self-walk! eng)
+            door {:self (errand-path a) :action "finish"}
+            no! #(walks/record-refused! eng %1 %2 door %3)]
+        (is (= 1 (count (no! person nil (refused :finish)))))
+        (let [[frame] (frames-in eng (:id w))]
+          (is (= "refusal" (:type frame)))
+          (is (= {:self (errand-path a) :action "finish" :title "Refused"
+                  :detail "The dishes are not dry."
+                  :remedies ["errand.rename" "chore.hide"]}
+                 (select-keys (:body frame) [:self :action :title :detail :remedies])))
+          (is (= "colton" (get-in frame [:body :principal :id])))
+          (is (nil? (get-in frame [:body :guard]))
+              "the box's own words, and no more of the problem"))
+        (testing "an error that is no refusal writes none"
+          (is (empty? (no! person nil (ex-info "boom" {})))))
+        (testing "someone who records nothing writes none"
+          (is (empty? (no! other nil (refused :finish)))))
+        (testing "a row the recorder cannot see writes none"
+          (is (empty? (no! person (vis-of) (refused :finish)))))
+        (is (= 1 (count (frames-of eng (:id w)))))))))
+
+(deftest a-refusal-crosses-an-export-with-the-doors-the-exporter-sees
+  (with-captions
+    (fn [eng _reg]
+      (let [seen (errand! eng "Dishes")
+            hidden (errand! eng "Laundry")
+            w (self-walk! eng)
+            no! #(walks/record-refused! eng person nil
+                                        {:self (errand-path %) :action "finish"}
+                                        (refused :finish))]
+        (no! seen)
+        (no! hidden)
+        (seal! eng w)
+        (let [refusals (fn [e] (filterv #(= "refusal" (:type %)) (:lines e)))
+              narrow (assoc (vis-of seen)
+                            :action? (fn [kind _action] (= :errand kind)))
+              [line & more] (refusals (export-of eng w narrow))]
+          (is (= 2 (count (refusals (export-of eng w nil)))))
+          (is (nil? more) "the refusal on the unseen row stays behind")
+          (is (= {:self (errand-path seen) :action "finish" :title "Refused"
+                  :detail "The dishes are not dry." :remedies ["errand.rename"]}
+                 (select-keys line [:self :action :title :detail :remedies])))
+          (is (re-matches #"[ap]1" (str (:who line)))
+              "the one refused crosses as a cast alias")
+          (is (nil? (:principal line))))))))
 
 ;; ── the screens a walk carries (docs/spec-agent-demo-walks.md § 8a) ──
 

@@ -369,9 +369,10 @@
         (is (not (tool h "waymark_invoke" {:kind "errand" :id a :action "complete"}))
             "the guard refuses: this errand is not ready")
         (is (= [[:move (path a)]
-                [:ui "complete" {}]]
+                [:ui "complete" {}]
+                ["refusal"]]
                (beats eng w))
-            "no write and no closing beat")))))
+            "no write and no closing beat: the refusal is the form's last frame")))))
 
 (deftest a-secret-argument-is-never-typed
   (with-stage

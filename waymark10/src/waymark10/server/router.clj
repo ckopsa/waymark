@@ -1245,6 +1245,17 @@
                                               :warnings (mapv #(select-keys % [:name :reason])
                                                               (:warnings d))
                                               :acknowledge (:acknowledge d)}))
+                           ;; a person recording their own screen has
+                           ;; the refusal of their write put in their
+                           ;; walk, under this request's sight
+                           ;; (walks/record-refused!); a rehearsal is
+                           ;; no write, and the acknowledge wall is a
+                           ;; question and not a refusal
+                           (when-not (or (:dry-run opts)
+                                         (= :warning-required (:waymark10/problem d)))
+                             (walks/record-refused! eng (principal-of req)
+                                                    (visibility-of req)
+                                                    {:self self :action action} e))
                            (throw e))))))
           ;; beat 3: the dry-run's shadow — "considering — <action> on
           ;; <resource>", gone in a moment if abandoned. Only the FULL

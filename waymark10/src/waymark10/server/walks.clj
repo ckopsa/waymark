@@ -28,7 +28,8 @@
   `recorder` is a person recording their own screen. Nobody's stream
   carries those frames, so the doors that made them hand them over:
   the beat (`presence/report!`, tapped by `self-recorder`) and the
-  write doors (`record-own!`). The sight is the request's own.
+  write doors (`record-own!`, and `record-refused!` for a write a door
+  refused). The sight is the request's own.
 
   THE ROW OUTLIVES ITS FRAMES. The purge deletes every frame and moves
   the walk to `purged`; the row keeps its title and its counts as the
@@ -50,6 +51,7 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.presence :as presence]
+            [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
@@ -90,7 +92,7 @@
   (t/principal {:id "waymark10-walks" :type :system
                 :display "Walks (the frame ceiling was reached)"}))
 
-(def frame-types ["move" "ui" "transition" "invitation" "caption" "doc"])
+(def frame-types ["move" "ui" "transition" "invitation" "caption" "doc" "refusal"])
 
 (def caption-max
   "A caption is one line of at most this many characters
@@ -280,7 +282,7 @@
                      :help "Milliseconds since the walk started. The default sort."}}
      [:int {:min 0}]]
     [:type {:x-display {:label "Type"
-                        :help "move, ui, transition or invitation: what the recorder's stream carried. caption: the line its recorder said about a step. doc: the document of the screen the frame before it shows."}}
+                        :help "move, ui, transition or invitation: what the recorder's stream carried. caption: the line its recorder said about a step. refusal: the answer a write door refused its recorder with. doc: the document of the screen the frame before it shows."}}
      (into [:enum] frame-types)]
     [:body {:x-display {:raw true
                         :label "What the stream carried"
@@ -799,6 +801,41 @@
       (warn! "a write was not recorded in its own walk — " (ex-message e))))
   result)
 
+(defn record-refused!
+  "A write door's refusal (router's action route, which the connector's
+  invoke rides): the problem the exception `e` carries goes, as a
+  `refusal` frame under `sight`, the request's own visibility, to every
+  self walk `principal` is recording. The body is {principal, self,
+  action, title, detail, remedies}: what the refusal's box shows a
+  person, and no more of the problem. `remedies` are the door names as
+  the wire spells them. An exception that is no problem, an anonymous
+  write and a refusal by a walk's or a frame's own door record nothing;
+  a rehearsal's refusal is not handed here. `record-frame!` writes the
+  frame only when the recorder can see `self`. → the frames written. It
+  never throws."
+  [eng principal sight {:keys [self action]} e]
+  (try
+    (let [pid (str (:id principal))
+          d (ex-data e)
+          self (str self)]
+      (if (and (:waymark10/problem d)
+               (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal))
+               (not (re-find #"^/api/walk(s|_frames)(/|$)" self)))
+        (let [body (cond-> {:principal {:id pid :type (some-> (:type principal) name)}
+                            :self self
+                            :action (name action)
+                            :title (str (:title d))}
+                     (some? (:detail d)) (assoc :detail (str (:detail d)))
+                     (seq (:remedies d)) (assoc :remedies (p/wire-value (vec (:remedies d)))))]
+          (into []
+                (keep #(record-frame! eng % sight {:type "refusal" :body body}))
+                (recording-walks eng pid pid)))
+        []))
+    (catch Exception e
+      (warn! "a refusal was not recorded in its own walk — " (ex-message e))
+      [])))
+
 (defn recording-own?
   "Is `principal` recording a self walk now? The connector stages its
   calls while, and only while, this is true
@@ -968,7 +1005,7 @@
   [principal id, the actor type the frame recorded]."
   [type body]
   (let [p (case type
-            ("move" "ui" "caption") (:principal body)
+            ("move" "ui" "caption" "refusal") (:principal body)
             "transition" (:actor body)
             "invitation" (:author body)
             nil)]
@@ -1141,6 +1178,15 @@
                         m)))))
     :else (doc-under eng vis doc)))
 
+(defn- remedy-seen?
+  "Does the exporter's visibility admit the door a refusal's remedy names
+  (`kind.action`, the wire's spelling)? An unscoped exporter sees each."
+  [vis remedy]
+  (or (nil? vis)
+      (let [[_ k a] (re-matches #"([^./]+)[./]([^./]+)" (str remedy))
+            action? (:action? vis)]
+        (boolean (and k a action? (action? (keyword k) (keyword a)))))))
+
 (defn- export-part
   "One frame re-redacted under the exporter's visibility → the line's
   own part, or nil when nothing of it is left. Each type has one rule:
@@ -1149,7 +1195,9 @@
   `transition` events/visible-transition; `invitation` :row? on the
   invitation its pinned body names by `id` (`invitation-frame`), and
   its `suggest` keeps the keys the exporter's :arg? admits; `caption`
-  presence's self rule, so the line crosses only with its `self`; `doc`
+  presence's self rule, so the line crosses only with its `self`;
+  `refusal` that rule as well, and of its `remedies` the doors the
+  exporter's :action? admits (`remedy-seen?`); `doc`
   presence's self rule and `export-doc`, and the principals its rows
   name ride as ::refs for the cast."
   [{:keys [eng vis visible? redact-ui suggest]} type body]
@@ -1182,6 +1230,13 @@
                     (:action body) (assoc :action (:action body))
                     (:field body) (assoc :field (:field body))
                     true (assoc :text (str (:text body)))))
+      "refusal" (when (and self (visible? self) (:action body))
+                  (let [seen (filterv #(remedy-seen? vis %) (:remedies body))]
+                    (cond-> {:type "refusal" :self self
+                             :action (:action body)
+                             :title (str (:title body))}
+                      (:detail body) (assoc :detail (str (:detail body)))
+                      (seq seen) (assoc :remedies seen))))
       "doc" (when (and self (visible? self) (map? (:doc body)))
               (when-some [doc (export-doc eng vis (:doc body))]
                 {:type "doc" :self self :doc doc
