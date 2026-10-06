@@ -1492,9 +1492,302 @@ async function accessStory() {
   ok("the tracker's title opens that quest",
      await evaljs(`${qBar}.querySelector("[data-quest-title]").getAttribute("href")`) ===
        "#" + qPinned[0].self);
+  /* the finish the stream does not deliver: the owner's own goal write
+     can finish the quest before the tracker reads again, so the stream
+     is closed here and the read alone must say Quest complete */
+  await evaljs(`sseClose(questStream); true`);
   ok("the engine finishes the accepted quest",
      (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
+  await evaljs(`refreshQuest().catch(() => {}); true`);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the completion line, off the read alone", 15000);
+  ok("a quest that finished unheard still says Quest complete", true);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
+  /* in a block of its own: the story after it names its own rNote, rWalk
+     and rSeen */
+  {
+  /* the guided story's quest walk ("replay: a quest kept from a refusal,
+     and its tracker") is a hand-written file. This one the engine
+     recorded (walks.clj, `docs: true`): priya keeps the refused shelve as
+     a quest and takes two steps from the tracker's Go, a second
+     principal takes one between them, and the goal door finishes the
+     quest. Every plan is the planner's own, so the counts are read off
+     the export's quest documents and none is written here. */
+  console.log("· replay: a quest walk the engine recorded, with two principals");
+  const rNote = (await qPost("/api/led_notes", {title: "Recorded pile"}, h)).doc;
+  const rWalk = await evaljs(`(async () => {
+    const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+      {followed: principalId() || viewerId(),
+       title: "A quest kept from a refusal, recorded", docs: true})});
+    if (!r.ok || !r.body || !r.body.self) return null;
+    recording = recordingOf(r.body);
+    recordChip();
+    /* the walk takes ui frames only while this tab shares, as Record's
+       own start has it (startRecording, 200-events-follow.js) */
+    if (!uiSharing()) {
+      toggleShareUi();
+      sessionStorage.setItem("wm10.record.shared", "1");
+    }
+    return r.body.self; })()`);
+  ok("priya starts a self walk that carries its screens",
+     !!rWalk && (await get(rWalk)).data.docs === true);
+  const rPlan = `JSON.stringify(((questDoc || {}).data || {}).plan || null)`;
+  /* the live tracker's head step is `door` on the note, after `done`
+     steps, and Go is the owner's to press */
+  const rGoFor = (door, done) => `(() => {
+    const s = questDoc && questHead(questDoc);
+    return !!s && s.door === ${JSON.stringify(door)} &&
+      s.self === ${JSON.stringify(rNote.self)} &&
+      questDoc.data.plan.filter(p => p.state === "done").length === ${done} &&
+      !!${qBar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+  /* the planner's next plan of the quest, after the one planned at `was` */
+  const rPlanned = async (self, was) => {
+    for (let i = 0; i < 60; i++) {
+      const at = (await get(self)).data.planned_at;
+      if (at && at !== was) return at;
+      await sleep(250);
+    }
+    return null;
+  };
+  /* a beat carries the form: each press waits for the one before it */
+  await sleep(600);
+  await evaljs(`location.hash = ${JSON.stringify(rNote.self)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(rNote.self)} &&
+                 !!document.querySelector('[data-action="shelve"]')`,
+                "the recorded note's row page", 15000);
+  await sleep(600);
+  await evaljs(`document.querySelector('[data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog, recorded", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
+                "the offer under the recorded refusal", 15000);
+  await sleep(600);
+  await evaljs(`${qAccept}.click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") && !${qBar}.hidden &&
+                 !!${qBar}.querySelector("[data-quest-title]")`,
+                "the recorded quest's tracker", 15000);
+  const rSelf = ((await get("/api/quests?state=active&pinned=true&owner=" +
+                            encodeURIComponent(qMe))).data?.items || [])[0]?.self;
+  ok("Accept as quest leaves the recorded quest pinned", !!rSelf);
+  const rFirst = await rPlanned(rSelf, null);
+  ok("the planner plans the recorded quest", !!rFirst);
+  await waitFor(rGoFor("rename", 0), "the remedy at the tracker's head", 15000, rPlan);
+  console.log("  the first plan: " + await evaljs(rPlan));
+  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="title"]')`,
+                "the remedy's dialog, from Go", 15000);
+  await sleep(600);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    /* a name and no room: the high shelf still refuses, so the remedy
+       stays the next step */
+    set("title", "Recorded pile, sorted");
+    return true; })()`);
+  await sleep(600);
+  await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
+  ok("priya takes the first step from the tracker's Go",
+     (await get(rNote.self)).data.title === "Recorded pile, sorted");
+  /* the plan that answers priya's step lands first: a move committed
+     before that plan is written counts as answered by it, and is no
+     step of the walk's */
+  await waitFor(rGoFor("rename", 1), "the remedy at the tracker's head again", 15000, rPlan);
+  const rSecond = (await get(rSelf)).data.planned_at;
+  ok("the planner plans again after priya's step", !!rSecond && rSecond !== rFirst);
+  const rStep = await qPost(rNote.self + "/-/rename",
+                            {title: "Recorded pile, filed", room: "Hall"}, sys);
+  ok("a second principal takes the quest's next step", rStep.status < 400);
+  if (!(await rPlanned(rSelf, rSecond)))
+    throw new Error("FAILED: the planner plans again after the second principal's step: " +
+      JSON.stringify({step: rStep.status, note: (await get(rNote.self)).data,
+                      plan: ((await get(rSelf)).data.plan || []).map(s => s.door + " " + s.state)}));
+  ok("the planner plans again after the second principal's step", true);
+  await waitFor(rGoFor("shelve", 2), "the goal door at the tracker's head", 15000, rPlan);
+  console.log("  the last plan: " + await evaljs(rPlan));
+  await sleep(600);
+  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the goal's dialog, from Go", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
+                qRefused);
+  /* the quest's own row is asked: the live tracker says Quest complete
+     only when it hears the finish before it reads the pinned quest again */
+  for (let i = 0; i < 60 && (await get(rSelf)).state !== "finished"; i++) await sleep(250);
+  ok("the goal door finishes the recorded quest",
+     (await get(rSelf)).state === "finished");
+  /* the consumer hands the finished quest to the walk after the move */
+  await sleep(1500);
+  await evaljs(`stopRecording().then(() => true)`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(rWalk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the sealed recorded walk's page", 15000);
+  ok("stop seals the recorded walk", (await get(rWalk)).state === "sealed");
+
+  const rText = await (await fetch(BASE + rWalk + "/export", {headers: h})).text();
+  const [rHeader, ...rFrames] = rText.trim().split("\n").map(l => JSON.parse(l));
+  const rQuestDoc = f => f.type === "doc" && (f.doc || {}).kind === "quest";
+  console.log("  the frames: " + rFrames.map(f =>
+    f.type === "transition" ? `${f.kind}.${f.action}`
+      : rQuestDoc(f) ? `doc(quest ${f.doc.state})` : f.type).join(" "));
+  const rCreateAt = rFrames.findIndex(f =>
+    f.type === "transition" && f.kind === "quest" && f.action === "create");
+  ok("the export is the walk of the quest: its create, and its documents",
+     rHeader.format === "waymark-walk/1" && rCreateAt >= 0 && rFrames.some(rQuestDoc));
+  ok("the quest's first document is recorded after its create",
+     rFrames.findIndex(rQuestDoc) > rCreateAt);
+  const rOwner = rFrames[rCreateAt].who;
+  const rForeignAt = rFrames.findIndex(f =>
+    f.type === "transition" && f.who !== rOwner && f.self === rNote.self);
+  ok("the second principal's step is a transition frame of the walk", rForeignAt >= 0);
+  ok("the second principal's transition is recorded before the quest document it caused",
+     rQuestDoc(rFrames.slice(rForeignAt + 1)
+       .find(f => f.type === "transition" || f.type === "doc") || {}));
+  const rOther = ((rHeader.cast || {})[rFrames[rForeignAt].who] || {}).display || "";
+  /* what the tracker says of one quest document (questDraw, replayQuest) */
+  const rSays = d => d.state === "finished" ? "complete"
+    : !(d.state === "active" && (d.data || {}).pinned) ? null
+    : !d.data.planned_at ? "planning"
+    : `${(d.data.plan || []).filter(s => s.state === "done").length} done, ` +
+      `${(d.data.plan || []).length} known so far`;
+  const rWant = rFrames.filter(rQuestDoc).map(f => rSays(f.doc)).filter(Boolean);
+  console.log("  the tracker, by the documents: " + rWant.join("; "));
+  ok("the recorded documents end on the finished quest",
+     rWant[rWant.length - 1] === "complete");
+  /* each tracker line the replay drew, in order, is one the documents hold */
+  const rFollows = seen => {
+    let i = 0;
+    for (const s of seen) {
+      i = rWant.indexOf(s, i);
+      if (i < 0) return false;
+    }
+    return seen.length > 1 && seen[seen.length - 1] === "complete";
+  };
+  /* the presses: Accept with no tracker yet, each Go on a count the
+     documents hold, and each write on the count its Go had */
+  const rPressed = presses => {
+    if (presses.map(p => p.what).join() !== "accept,go,write,go,write") return false;
+    const [accept, go1, write1, go2, write2] = presses;
+    return accept.count === null &&
+      [go1, go2].every(p => /known so far$/.test(p.count || "") && rWant.includes(p.count)) &&
+      write1.count === go1.count && write2.count === go2.count;
+  };
+  const rRead = async name => JSON.parse(await evaljs(`JSON.stringify(window.${name})`));
+  const rSeen = async () => (await rRead("__questSeen")).filter(s => s !== "hidden");
+  const rLine = presses => presses.map(p => `${p.at} ${p.what} ${p.count}`).join("; ");
+  const rWhy = `({presses: window.__questPresses, seen: window.__questSeen,
+    at: replay && replay.at, film: document.documentElement.getAttribute("data-film"),
+    state: document.querySelector("#replaychip")?.getAttribute("data-replay-state") ?? null})`;
+  await evaljs(`(() => {
+    window.__questPresses = []; window.__questReads = [];
+    window.__questSeen = []; window.__questNotices = []; window.__questForms = [];
+    const to0 = replayPointerTo, fetch0 = window.fetch;
+    /* the tracker of a replay is its walk's: no quest is asked for */
+    window.fetch = (u, o) => {
+      if (replay && String(u).includes("/api/quests")) window.__questReads.push(String(u));
+      return fetch0(u, o);
+    };
+    window.replayPointerTo = (to, speed) => {
+      const what = to.hasAttribute("data-quest-accept") ? "accept"
+        : to.hasAttribute("data-tracker-go") ? "go"
+        : to.hasAttribute("data-replay-write") ? "write" : null;
+      const last = window.__questPresses[window.__questPresses.length - 1];
+      if (replay && what && !(last && last.at === replay.at && last.what === what))
+        window.__questPresses.push({at: replay.at, what,
+          count: document.querySelector("#questbar [data-quest-count]")?.textContent || null});
+      return to0(to, speed);
+    };
+    /* each tracker line and each notice the replay shows, as it changes */
+    setInterval(() => {
+      if (!replay) return;
+      const bar = document.querySelector("#questbar");
+      const now = bar.hidden ? "hidden"
+        : bar.querySelector("[data-quest-complete]") ? "complete"
+        : bar.querySelector("[data-quest-planning]") ? "planning"
+        : bar.querySelector("[data-quest-count]")?.textContent || "";
+      const seen = window.__questSeen, notes = window.__questNotices;
+      if (seen[seen.length - 1] !== now) seen.push(now);
+      const note = String(replay.notice || "");
+      if (note && notes[notes.length - 1] !== note) notes.push(note);
+      /* the form the replay has open at each frame, for a failed press */
+      const form = document.querySelector("dialog[open][data-guided]");
+      const forms = window.__questForms;
+      const mark = replay.at + " " + (form ? form.getAttribute("data-guided") : "none");
+      if (forms[forms.length - 1] !== mark) forms.push(mark);
+    }, 40);
+    return true; })()`);
+  await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
+  await waitFor(`!!replay`, "the recorded walk's replay to start", 15000);
+  ok("a replay hides the tracker until its walk has a quest", await evaljs(`${qBar}.hidden`));
+  await waitFor(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the recorded walk to end", 240000, rWhy);
+  /* the last frame's tracker line is read by the watch above, 40 ms apart */
+  await sleep(200);
+  const rPresses = await rRead("__questPresses");
+  console.log("  the presses: " + rLine(rPresses));
+  console.log("  the tracker, as replayed: " + (await rSeen()).join("; "));
+  ok("the replayed tracker follows the recorded documents, plan by plan, to Quest complete",
+     rFollows(await rSeen()));
+  /* a press the replay did not make: what the walk held up to the first
+     Go, and the form the replay had open at each frame */
+  if (!rPressed(rPresses)) {
+    const tail = s => String(s || "").split("/").pop();
+    console.log("  the frames to the first Go: " + rFrames.slice(0, 16).map((f, i) =>
+      `${i}@${f.t} ${f.who || "-"} ` +
+      (f.type === "transition" ? `${f.kind}.${f.action}`
+        : f.type === "ui" ? `ui ${tail(f.self)} ` + ((f.ui || {}).dialog
+            ? `form ${tail(f.ui.dialog.self)} ${f.ui.dialog.action}` : `no form`)
+        : rQuestDoc(f) ? `doc quest goal ${tail((f.doc.data || {}).self)} ${(f.doc.data || {}).action}`
+        : `${f.type} ${tail(f.self)}`)).join(" | "));
+    console.log("  the forms, as replayed: " + (await rRead("__questForms")).join("; "));
+  }
+  ok("the create is pressed on Accept as quest, and each step's form is opened from the tracker's Go",
+     rPressed(rPresses));
+  ok("the second principal's step is a notice",
+     !!rOther && (await rRead("__questNotices")).some(n => n.startsWith(rOther + ": ")));
+  ok("the finished quest's document says Quest complete",
+     await evaljs(`!${qBar}.hidden && !!${qBar}.querySelector("[data-quest-complete]")`));
+  ok("replaying the recorded quest read no quest",
+     (await rRead("__questReads")).join(", ") === "");
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!replay && hereHref().split("?")[0] === ${JSON.stringify(rWalk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the replay to stop on the recorded walk's page", 15000);
+
+  /* the same walk filmed: its own export, with no stub in between */
+  console.log("· film: the recorded quest walk");
+  await evaljs(`(() => {
+    window.__questPresses = []; window.__questSeen = [];
+    location.hash = "#" + ${JSON.stringify(rWalk)} + "?film=1";
+    return true; })()`);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${qBar}).display !== "none" &&
+                 !!${qBar}.querySelector("[data-tracker-go]:disabled")`,
+                "the tracker in the recorded film", 240000, rWhy);
+  ok("film mode keeps the recorded walk's tracker", true);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the recorded film to end", 240000, rWhy);
+  ok("the recorded film ends on the finished quest, after the same presses",
+     await evaljs(`!!${qBar}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${qBar}).display !== "none"`) &&
+     rLine(await rRead("__questPresses")) === rLine(rPresses));
+  /* out of film mode, and of the story's fetch and pointer */
+  await evaljs(`location.hash = "/api/led_notes"; location.reload(); true`);
+  await sleep(1200);
+  await waitFor(`typeof hereHref === "function" &&
+                 !document.documentElement.hasAttribute("data-film") &&
+                 hereHref().split("?")[0] === "/api/led_notes"`,
+                "the page out of film mode", 15000);
+  }
 
   /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
      walk is the one priya recorded above, as the engine wrote it: the
@@ -2706,6 +2999,66 @@ async function guidedStory() {
               Math.round(late.glide - late.drawn) + " ms after it was drawn");
   ok("a list drawn late is still for its whole floor, counted from the moment it is drawn",
      late.drawn - late.hop >= 650 && late.glide - late.drawn >= 1000 - 20);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a bulk write's refused rows, in the band");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a self walk's bulk write as it is recorded: a move to the
+     collection, the write that went through, and a `refusal` frame for
+     each row that did not. No form is open, so each is a line in the
+     caption band, held until the recorder's next `ui` beat or `move`. */
+  const bulkDoc = (self, name) => ({t: 10, type: "doc", self,
+    doc: {self, kind: "meal", state: "on_list", summary: name, actions: {}, data: {name}}});
+  const bulkRefusal = (t, self, detail) => (
+    {t, type: "refusal", who: "a1", self, action: "accept", title: "Not available", detail});
+  const bulkNames = [`Guided soup ${tag}`, `Guided stew ${tag}`];
+  const bulkDetails = ["The soup is on the list already.", "The stew is on the list already."];
+  const bulkLines = bulkNames.map((n, i) => `Refused: ${n}: ${bulkDetails[i]}`);
+  const bulkFile = [
+    {format: "waymark-walk/1", title: "A bulk write, partly refused",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: "/api/meals"},
+    bulkDoc(meals[0], bulkNames[0]),
+    bulkDoc(meals[1], bulkNames[1]),
+    {t: 20, type: "transition", who: "a1", kind: "meal", self: meals[2],
+     action: "accept", from: "draft", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided pie ${tag}`},
+    bulkRefusal(30, meals[0], bulkDetails[0]),
+    bulkRefusal(40, meals[1], bulkDetails[1]),
+    {t: 50, type: "ui", who: "a1", self: "/api/meals", ui: {dialog: null}},
+    bulkRefusal(60, meals[1], bulkDetails[1]),
+    {t: 70, type: "move", who: "a1", self: meals[0]},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* what the band shows when each frame has been applied */
+  await A.js(`{ window.__bulkBand = [];
+    const apply4 = applyReplayFrame;
+    window.applyReplayFrame = (f, landed) => {
+      const out = apply4(f, landed);
+      const band = document.querySelector("#replaycaption");
+      if (replay) window.__bulkBand.push({type: f.type, self: f.self || null,
+        band: band && getComputedStyle(band).display !== "none" ? band.textContent : "",
+        notice: !!band && band.hasAttribute("data-replay-notice")});
+      return out;
+    };
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(bulkFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the bulk write's walk to end", 40000);
+  const bulkBand = JSON.parse(await A.js(`JSON.stringify(window.__bulkBand)`));
+  const bulkRefused = e => !e ? "no frame"
+    : e.band.split("\n").filter(l => l.startsWith("Refused: ")).join(" | ");
+  const bulkOf = type => bulkBand.filter(e => e.type === type);
+  console.log("  the band: " + bulkBand.map(e => `${e.type} [${bulkRefused(e)}]`).join("; "));
+  ok("each refused row of a bulk write is one line in the band: its summary and the problem's detail",
+     bulkOf("refusal").length === 3 &&
+     bulkRefused(bulkOf("refusal")[0]) === bulkLines[0] &&
+     bulkRefused(bulkOf("refusal")[1]) === bulkLines.join(" | ") &&
+     bulkOf("refusal").every(e => e.notice));
+  ok("the recorder's next ui beat takes the lines away",
+     bulkRefused(bulkOf("ui")[0]) === "" && bulkRefused(bulkOf("refusal")[2]) === bulkLines[1]);
+  ok("and so does the recorder's next move",
+     bulkOf("move").length === 2 && bulkOf("move")[1].self === meals[0] &&
+     bulkRefused(bulkOf("move")[1]) === "");
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
   console.log("· replay: a quest kept from a refusal, and its tracker");
