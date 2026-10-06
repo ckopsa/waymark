@@ -695,6 +695,11 @@ function questStep(doc, s) {
   const needs = (s.needs || []).map(pretty).join(", ");
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
     el("span", {class: "quest-note"}, s.note || pretty(s.door)));
+  /* the refusal's other remedies: any one of them is this step */
+  if (s.state !== "done")
+    for (const a of s.alternatives || [])
+      row.append(el("small", {class: "muted quest-alt", "data-quest-alt": ""},
+        ` or ${pretty(a.door)}`));
   if (s.whose === "choice" && s.state !== "done")
     row.append(el("span", {class: "muted", "data-quest-choice": ""},
       needs ? ` · choose ${needs}` : " · a choice is yours to make"));

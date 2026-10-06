@@ -506,6 +506,7 @@
   .quest-step[data-quest-step="next"] { font-weight: 600;
                                         color: var(--verdigris-deep); }
   .quest-step[data-quest-step="later"] { opacity: .5; }
+  .quest-step .quest-alt { font-size: 11px; font-weight: 400; }
   .quest-step button { margin-left: 8px; }
   .quest-blocked { margin: 8px 0; padding: 6px 10px; font-size: 13px;
                    border-left: 3px solid var(--verdigris); }
