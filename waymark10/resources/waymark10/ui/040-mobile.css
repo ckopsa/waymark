@@ -19,6 +19,32 @@
   @media (max-width: 600px), (pointer: coarse) {
     .themepick button { font-size: 13px; padding: 7px 11px; }
   }
+  /* the quest tracker and its offer on a phone (docs/spec-quests.md).
+     Two rows: the title beside the count, then the step's note beside
+     Go and the menu. The title and the note each end in an ellipsis of
+     their own, so neither pushes Go off the screen. */
+  @media (max-width: 600px) {
+    #questbar { display: grid; gap: 4px 8px; font-size: 13px;
+                grid-template-columns: minmax(0, 1fr) auto auto; }
+    #questbar[hidden] { display: none; }
+    #questbar .quest-title { grid-area: 1 / 1; max-width: none; }
+    #questbar [data-quest-count] { grid-area: 1 / 2 / auto / -1;
+                                   justify-self: end; }
+    #questbar .quest-line { grid-area: 2 / 1; }
+    #questbar [data-tracker-go] { grid-area: 2 / 2; }
+    #questbar .quest-menu { grid-area: 2 / 3; }
+    .questoffer:not(:empty) { display: block; margin-top: 8px; }
+    .questoffer button { width: 100%; }
+  }
+  /* under a thumb every door of the tracker, and the offer, is 44px tall */
+  @media (max-width: 600px), (pointer: coarse) {
+    #questbar button, .questoffer button {
+      min-height: 44px; font-size: 14px; padding: 8px 14px; }
+    #questbar .quest-menu summary {
+      display: flex; align-items: center; justify-content: center;
+      min-width: 44px; min-height: 44px; }
+    #questbar .quest-menu-items { max-width: calc(100vw - 20px); }
+  }
 
   /* ── the mobile shell ──────────────────────────────────────────────
      Served when the request's User-Agent is a phone: the server
