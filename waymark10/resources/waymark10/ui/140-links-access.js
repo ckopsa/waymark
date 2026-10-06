@@ -97,7 +97,8 @@ function shutDoor(name, entry, doc) {
    button is, and rehearsed (dry_run=1). The rehearsal writes nothing and
    answers `preview`, the plan the quest would be given; the sheet shows
    it (questSheet), and the quest is made only on Accept. A replay
-   writes nothing. */
+   asks nothing and writes nothing: it draws the sheet the recording
+   had open (replayQuestSheet, 200-events-follow.js). */
 async function questFromDoor(btn, name, doc) {
   if (replay || btn.hasAttribute("data-quest-busy")) return;
   btn.setAttribute("data-quest-busy", "");
@@ -177,7 +178,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
       accept));
   if (!seen.ok) refused(seen.body);
   accept.addEventListener("click", async () => {
-    if (accept.disabled) return;
+    if (replay || accept.disabled) return;
     accept.disabled = true;
     const h = {};
     if (create.safety && create.safety.idempotent === false)
@@ -194,8 +195,24 @@ function questSheet(btn, name, doc, create, goal, seen) {
     dlg.close();
     await refreshQuest();
   });
+  /* a recording keeps the sheet: while it is open the `ui` beat carries
+     the goal, the door's label and what the rehearsal answered (shareUi,
+     200-events-follow.js), and the beat after it closes carries none. A
+     replay's sheet is drawn from that part and reports nothing. */
+  if (!replay) shareUi({quest: {goal,
+    label: label(name, (doc.unavailable || {})[name] || {}),
+    seen: {ok: !!seen.ok, body: seen.ok
+      ? {preview: {goal: p.goal, shut_reason: p.shut_reason || btn.title,
+                   blocked_reason: p.blocked_reason,
+                   plan_is_estimate: p.plan_is_estimate,
+                   plan: steps.map(s => ({door: s.door, self: s.self, whose: s.whose,
+                     waiting_on: s.waiting_on, needs: s.needs, note: s.note}))}}
+      : {title: (seen.body || {}).title, detail: (seen.body || {}).detail}}}});
   document.body.append(dlg);
-  dlg.addEventListener("close", () => dlg.remove());
+  dlg.addEventListener("close", () => {
+    dlg.remove();
+    if (!replay) shareUi({quest: null});
+  });
   dlg.showModal();
   return dlg;
 }

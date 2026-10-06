@@ -628,6 +628,13 @@
         blocked (fn [m] {:blocked (merge {:door door :row (:self doc) :needs []
                                           :or (:or call [])}
                                          m)})
+        ;; the warnings an answer still owes: one the caller named in
+        ;; :acknowledge is accepted already, and a dry-run sends no
+        ;; acknowledgement, so it answers that warning all the same
+        pending (fn [res]
+                  (let [accepted (into #{} (map name) (:acknowledge opts))]
+                    (vec (remove #(contains? accepted (some-> (:name %) name))
+                                 (:warnings res)))))
         ;; a remedy that names its fields owes those: what the refusal
         ;; is missing. A patch leaves the door's other fields as stored
         needs (when entry
@@ -700,7 +707,11 @@
            :bound (vec (get-in res [:problem :resolved_remedies]))
            :reason (get-in res [:problem :detail])
            :form form}
-          (warnings? res) (blocked {:needs needs :warnings (:warnings res)})
+          ;; a dry-run answers its warnings beside :valid, with no
+          ;; :acknowledge!: the owner accepts them at the door
+          (seq (pending res)) (blocked (cond-> {:needs needs :warnings (pending res)}
+                                         (seq (:awaiting form))
+                                         (assoc :awaiting (:awaiting form))))
           (or (problem? res) (refused? res))
           (blocked {:needs needs
                     :reason (or (get-in res [:problem :detail])
@@ -728,7 +739,9 @@
           ;; as landing, marked, so the real run reaches it and holds
           (and rehearse? (holds/hold? (get-in res [:problem :guard])))
           {:landed doc :hold true :to (get-in entry [:effect :to])}
-          (warnings? res) (blocked {:warnings (:warnings res)})
+          ;; act! answers :warnings with :acknowledge!, a dry-run
+          ;; beside :valid: either way the door waits on the owner
+          (seq (pending res)) (blocked {:warnings (pending res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
            :bound (vec (get-in res [:problem :resolved_remedies]))

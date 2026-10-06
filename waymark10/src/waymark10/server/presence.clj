@@ -679,9 +679,38 @@
   (let [labeled (cond-> ui labels (assoc :labels labels))]
     (if (<= (long (json-bytes labeled)) (long ui-max-bytes)) labeled ui)))
 
+(defn- clean-quest
+  "The `quest` part of a reported ui part as the registry may store it:
+  the sheet a tap on a shut door opened (ui/140-links-access.js,
+  questSheet). {goal {self, action}, label, seen {ok, body}}, where
+  `body` keeps the rehearsal's `preview`, or a refusal's `title` and
+  `detail`, and nothing else. nil when it names no goal."
+  [quest]
+  (let [{:keys [goal label seen]} (when (map? quest) quest)
+        self (normalize-self (when (map? goal) (:self goal)))
+        a (when (map? goal) (:action goal))
+        action (when (or (string? a) (keyword? a)) (not-empty (name a)))
+        seen (when (map? seen) seen)
+        body (:body seen)]
+    (when (and action (valid-self? self))
+      (cond-> {:goal {:self self :action action}
+               :seen {:ok (true? (:ok seen))
+                      :body (if (map? body)
+                              (select-keys body [:preview :title :detail])
+                              {})}}
+        (string? label) (assoc :label label)))))
+
+(defn- quest-ui
+  "The part with its `quest`, where it is still under the cap with it:
+  a sheet never refuses a beat."
+  [ui quest]
+  (let [with (cond-> ui quest (assoc :quest quest))]
+    (if (<= (long (json-bytes with)) (long ui-max-bytes)) with ui)))
+
 (defn- clean-ui
   "A reported ui part as the registry may store it: the four parts, a
-  staged call's `labels` for the fields it shows (`ref-labels`), and
+  staged call's `labels` for the fields it shows (`ref-labels`), a
+  quest's sheet (`clean-quest`), and
   nothing else, selves normalized, a dialog naming no action of its
   row's kind (or, on a collection self, no create action of the kind)
   dropped with its fields, fields read from the shared live
@@ -696,7 +725,7 @@
             :presence
             {:ui ["must be an object {dialog, fields, collection, focus}"]})))
   (let [eng (:eng reg)
-        {:keys [dialog fields labels collection focus]} ui
+        {:keys [dialog fields labels collection focus quest]} ui
         dself (normalize-self (when (map? dialog) (:self dialog)))
         a (when (map? dialog) (:action dialog))
         action (when (or (string? a) (keyword? a)) (not-empty (name a)))
@@ -722,18 +751,20 @@
                                           (and (sequential? v)
                                                (every? #(or (nil? %) (string? %)) v))))))
                        labels)))]
-    (label-ui
-     (fit-ui
-      {:dialog (when door {:self dself :action action})
-       :fields shown
-       :collection (when (valid-self? cself)
-                     (cond-> {:self cself}
-                       (map? (:filter collection)) (assoc :filter (:filter collection))
-                       (string? (:sort collection)) (assoc :sort (:sort collection))
-                       (integer? (:page collection)) (assoc :page (:page collection))))
-       :focus (cond (valid-self? fself) fself
-                    typing typing)})
-     named)))
+    (quest-ui
+     (label-ui
+      (fit-ui
+       {:dialog (when door {:self dself :action action})
+        :fields shown
+        :collection (when (valid-self? cself)
+                      (cond-> {:self cself}
+                        (map? (:filter collection)) (assoc :filter (:filter collection))
+                        (string? (:sort collection)) (assoc :sort (:sort collection))
+                        (integer? (:page collection)) (assoc :page (:page collection))))
+        :focus (cond (valid-self? fself) fself
+                     typing typing)})
+      named)
+     (clean-quest quest))))
 
 (defn typed-keys
   "The keys of `input` a dialog on `self`'s `action` may show, in the
@@ -1066,7 +1097,9 @@
   whole-kind rule, its filter keeps the keys :field? admits and a sort
   on a refused field is dropped; focus needs :row?, and one that names
   a typed argument crosses with its field; a label crosses with its
-  field as well, and only for a row :row? admits. A frame whose
+  field as well, and only for a row :row? admits; a quest's sheet
+  crosses when its goal's row is seen, with the steps of its plan on
+  rows that are. A frame whose
   every part was redacted crosses as a plain move — it never says
   that something was hidden. nil vis (an unscoped follower) sees the
   frame whole."
@@ -1077,7 +1110,7 @@
           arg? (or (:arg? vis) (constantly true))
           field? (or (:field? vis) (constantly true))]
       (fn [frame]
-        (let [{:keys [dialog fields labels collection focus]} (:ui frame)
+        (let [{:keys [dialog fields labels collection focus quest]} (:ui frame)
               [rdef id] (or (row-of eng (:self dialog))
                             (when-some [r (collection-of eng (:self dialog))]
                               [r nil]))
@@ -1112,13 +1145,23 @@
                          (when (visible? focus) focus)
                          (when (some #(= focus (name (key %))) fields') focus)))
               labels' (when (and dialog' (map? labels))
-                        (seen-labels eng dialog' fields' labels (:row? vis)))]
-          (if (and (some some? [dialog collection focus])
-                   (every? nil? [dialog' collection' focus']))
+                        (seen-labels eng dialog' fields' labels (:row? vis)))
+              goal (when (map? quest) (get-in quest [:goal :self]))
+              plan (when (map? quest) (get-in quest [:seen :body :preview :plan]))
+              quest' (when (and (string? goal) (visible? goal))
+                       (cond-> quest
+                         (sequential? plan)
+                         (assoc-in [:seen :body :preview :plan]
+                                   (filterv #(or (not (string? (:self %)))
+                                                 (visible? (:self %)))
+                                            plan))))]
+          (if (and (some some? [dialog collection focus quest])
+                   (every? nil? [dialog' collection' focus' quest']))
             (frame-of "move" frame)
             (assoc frame :ui (cond-> {:dialog dialog' :fields fields'
                                       :collection collection' :focus focus'}
-                               labels' (assoc :labels labels')))))))))
+                               labels' (assoc :labels labels')
+                               quest' (assoc :quest quest')))))))))
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 
