@@ -1559,8 +1559,9 @@ async function accessStory() {
   await shelve("high");
   await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
                 qRefused);
-  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
-                "Quest complete, live", 15000);
+  /* the quest's own row is asked: the live tracker says Quest complete
+     only when it hears the finish before it reads the pinned quest again */
+  for (let i = 0; i < 60 && (await get(rSelf)).state !== "finished"; i++) await sleep(250);
   ok("the goal door finishes the recorded quest",
      (await get(rSelf)).state === "finished");
   /* the consumer hands the finished quest to the walk after the move */
@@ -1627,7 +1628,7 @@ async function accessStory() {
     state: document.querySelector("#replaychip")?.getAttribute("data-replay-state") ?? null})`;
   await evaljs(`(() => {
     window.__questPresses = []; window.__questReads = [];
-    window.__questSeen = []; window.__questNotices = [];
+    window.__questSeen = []; window.__questNotices = []; window.__questForms = [];
     const to0 = replayPointerTo, fetch0 = window.fetch;
     /* the tracker of a replay is its walk's: no quest is asked for */
     window.fetch = (u, o) => {
@@ -1656,6 +1657,11 @@ async function accessStory() {
       if (seen[seen.length - 1] !== now) seen.push(now);
       const note = String(replay.notice || "");
       if (note && notes[notes.length - 1] !== note) notes.push(note);
+      /* the form the replay has open at each frame, for a failed press */
+      const form = document.querySelector("dialog[open][data-guided]");
+      const forms = window.__questForms;
+      const mark = replay.at + " " + (form ? form.getAttribute("data-guided") : "none");
+      if (forms[forms.length - 1] !== mark) forms.push(mark);
     }, 40);
     return true; })()`);
   await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
@@ -1663,11 +1669,26 @@ async function accessStory() {
   ok("a replay hides the tracker until its walk has a quest", await evaljs(`${qBar}.hidden`));
   await waitFor(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
                 "the recorded walk to end", 240000, rWhy);
+  /* the last frame's tracker line is read by the watch above, 40 ms apart */
+  await sleep(200);
   const rPresses = await rRead("__questPresses");
   console.log("  the presses: " + rLine(rPresses));
   console.log("  the tracker, as replayed: " + (await rSeen()).join("; "));
   ok("the replayed tracker follows the recorded documents, plan by plan, to Quest complete",
      rFollows(await rSeen()));
+  /* a press the replay did not make: what the walk held up to the first
+     Go, and the form the replay had open at each frame */
+  if (!rPressed(rPresses)) {
+    const tail = s => String(s || "").split("/").pop();
+    console.log("  the frames to the first Go: " + rFrames.slice(0, 16).map((f, i) =>
+      `${i}@${f.t} ${f.who || "-"} ` +
+      (f.type === "transition" ? `${f.kind}.${f.action}`
+        : f.type === "ui" ? `ui ${tail(f.self)} ` + ((f.ui || {}).dialog
+            ? `form ${tail(f.ui.dialog.self)} ${f.ui.dialog.action}` : `no form`)
+        : rQuestDoc(f) ? `doc quest goal ${tail((f.doc.data || {}).self)} ${(f.doc.data || {}).action}`
+        : `${f.type} ${tail(f.self)}`)).join(" | "));
+    console.log("  the forms, as replayed: " + (await rRead("__questForms")).join("; "));
+  }
   ok("the create is pressed on Accept as quest, and each step's form is opened from the tracker's Go",
      rPressed(rPresses));
   ok("the second principal's step is a notice",
