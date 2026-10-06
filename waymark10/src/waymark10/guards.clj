@@ -62,7 +62,9 @@
 ;; a remedy may name the row and input it acts on, read off the
 ;; refused call: {:door :plan/finalize :id (input :plan_id)} — or off
 ;; the refusal's evidence: {:door :plan_day/assign_meal
-;; :id (evidence :plan_day_id)}
+;; :id (evidence :plan_day_id)}. It may also say which input fields
+;; answer the refusal: {:door :ticket/restate :fields [:showcase]} —
+;; a pursuit asks for those, and not for the door's required fields
 
 (defn- binding-form?
   "(input :f), (data :f) or (evidence :f): the three reads a remedy
@@ -82,8 +84,14 @@
       (not (qualified-keyword? (:door r)))
       (str (pr-str r) " names no :door :kind/action")
 
-      (seq (dissoc r :door :id :input))
-      (str (pr-str r) " carries keys beyond :door, :id and :input")
+      (seq (dissoc r :door :id :input :fields))
+      (str (pr-str r) " carries keys beyond :door, :id, :input and :fields")
+
+      (clojure.core/and (contains? r :fields)
+                        (not (clojure.core/and (vector? (:fields r))
+                                               (seq (:fields r))
+                                               (every? simple-keyword? (:fields r)))))
+      (str "the :fields of " (pr-str r) " is not a vector of input field names")
 
       (clojure.core/and (contains? r :id) (not (binding-form? (:id r))))
       (str "the :id of " (pr-str r) " is not (input :f), (data :f) or (evidence :f)")
@@ -125,8 +133,9 @@
 (defn resolve-remedies
   "The refusal's remedies resolved against the refused call and the
   refusal's evidence: each {:door} plus the :id and :input its
-  bindings read, where they resolve. nil when no remedy binds
-  anything, so a refusal with bare remedies reads as it always did."
+  bindings read, where they resolve, and the :fields it names. nil
+  when no remedy binds anything, so a refusal with bare remedies reads
+  as it always did."
   ([g row inp] (resolve-remedies g row inp nil))
   ([g row inp evidence]
    (when (some map? (:remedies g))
@@ -141,7 +150,8 @@
                               (:input r))]
                  (cond-> {:door (:door r)}
                    (some? id) (assoc :id (str id))
-                   (seq in) (assoc :input in)))))
+                   (seq in) (assoc :input in)
+                   (seq (:fields r)) (assoc :fields (mapv name (:fields r)))))))
            (:remedies g)))))
 
 (defn guard

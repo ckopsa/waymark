@@ -800,7 +800,7 @@
 (defguardfn an-epic-shows-its-evidence
   {:reads [:storage]
    :vars [:missing]
-   :remedies [:ticket/restate]
+   :remedies [{:door :ticket/restate :fields [:showcase]}]
    :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
   [row _inp ctx]
   (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
