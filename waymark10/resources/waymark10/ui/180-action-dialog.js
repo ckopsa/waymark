@@ -368,7 +368,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   /* a nested argument's errors arrive as a map, or as a list with a
      hole for each entry that passed: each message goes to the slot its
      sub-field's widget is named by (shelf.label, items[1].name), which
-     is how a recorded refusal already spells it (walks/refusal-errors) */
+     is how a recorded refusal already spells it (walks/refusal-errors).
+     A list entry is named there by its position in what was sent, and
+     rowPath finds the row on screen that sent it */
   function flatFieldErrors(path, v, out) {
     const say = (...msgs) => { (out[path] = out[path] || []).push(...msgs); };
     if (Array.isArray(v)) {
@@ -387,7 +389,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     for (const [field, msgs] of Object.entries((problem || {}).errors || {}))
       flatFieldErrors(field, msgs, flat);
     for (const [field, msgs] of Object.entries(flat)) {
-      const slot = dlg.querySelector('[data-srverr="' + field + '"]');
+      const slot = dlg.querySelector('[data-srverr="' + rowPath(dlg, field) + '"]');
       const text = msgs.join("; ");
       if (slot) slot.textContent = text;
       else errBox.append(el("div", {class: "problem"}, field + ": " + text));
