@@ -116,7 +116,10 @@ async function questFromDoor(btn, name, doc) {
 /* the sheet a tap opens, from the create door's rehearsal `seen`: the
    goal in words, why its door is shut now, the steps the engine found
    with whose turn each is (the goal's own form last, with the fields it
-   asks for), and two buttons. Not now closes it and writes nothing.
+   asks for), and two buttons. A step is said in words: the door's label,
+   the row's label and the fields' labels, as the preview answers them.
+   The row's path is the step's title, and is shown only for a row the
+   preview could not name. Not now closes it and writes nothing.
    Accept creates the quest and pins it, and the tracker shows it
    (120-nav-home.js). A refused rehearsal, create or pin is said in the
    sheet, and Accept is disabled with that line. */
@@ -148,13 +151,16 @@ function questSheet(btn, name, doc, create, goal, seen) {
         p.shut_reason || btn.title || "This door is shut now."),
       steps.length
         ? el("ol", {class: "quest-sheet-steps", "data-quest-steps": ""},
-            ...steps.map(s => el("li", {},
-              el("b", {}, title(s.door || "")), " ",
-              el("span", {class: "mono muted"}, s.self || ""),
+            ...steps.map(s => el("li", {title: s.self || ""},
+              el("b", {}, s.door_label || title(s.door || "")), " ",
+              s.row_label
+                ? el("span", {"data-quest-row": ""}, s.row_label)
+                : el("span", {class: "mono muted"}, s.self || ""),
               " · ", el("span", {"data-quest-turn": ""}, turn(s)),
               (s.needs || []).flat().length
-                ? el("div", {class: "muted"},
-                    "asks for: " + (s.needs || []).flat().join(", "))
+                ? el("div", {class: "muted", "data-quest-needs": ""},
+                    "asks for: " + (s.needs_labels
+                      || (s.needs || []).flat().map(n => title(n))).join(", "))
                 : null,
               s.note ? el("div", {class: "muted"}, s.note) : null)))
         : seen.ok

@@ -1419,6 +1419,24 @@
     (hear! eng)
     (is (= before (held eng rows)) "and the planner hears of nothing")))
 
+(deftest a-preview-step-names-its-row-and-its-needs-in-words
+  (let [eng (epic-engine {:probe-reads true})
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        {:keys [preview]} (inv/create! eng :quest
+                                       {:self (str "/api/q_epics/" e) :action "complete"}
+                                       {:principal person :dry-run true})
+        [step goal] (:plan preview)]
+    (is (= "Write the guide" (:row_label step)) (pr-str preview))
+    (is (= "Finish" (:door_label step)) "the door's declared label")
+    (is (nil? (:needs_labels step)) "a step that asks for nothing names no field")
+    (is (= "Epic · Open" (:row_label goal))
+        "a row with no name or title is its summary")
+    (is (= "Complete" (:door_label goal)) "a door with no label is its name in words")
+    (is (= ["close_reason"] (:needs goal)) "the field names stay")
+    (is (= ["Close reason"] (:needs_labels goal))
+        "beside the labels of the fields the form will ask for")))
+
 (deftest the-preview-of-a-goal-create-refuses-answers-that-refusal
   (let [eng (epic-engine)
         c (chore! eng "Dishes")

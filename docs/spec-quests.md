@@ -159,7 +159,11 @@ beside its verdict:
 - `plan`, `plan_is_estimate` and `blocked_reason`, in the shape of a
   planned quest's: the plan the planner would write for this owner
   under this grant (`rehearsed`), with the goal's own step last and its
-  `needs`;
+  `needs`. Each step is said in words too (`in-words`): `door_label`,
+  the door's display label, `row_label`, the row's label when the
+  principal's grant sees the row, and `needs_labels`, the display label
+  of each of `needs` from the door's input schema. A door or a field
+  that declares no label is its name in words;
 - `goal`, the line the quest's title defaults to;
 - `shut_reason`, the goal door's own refusal now.
 
@@ -173,8 +177,9 @@ sentence.
 
 The page shows the preview in a sheet (`questSheet`): the goal as the
 door's label on this row, with `goal` under it, why it is not available
-yet, the numbered steps with whose turn each is, the
-estimate note, and **Not now** and **Accept quest**. Not now closes the
+yet, the numbered steps with whose turn each is (the door's label, the
+row's label with its path as the step's title, and the labels of the
+fields it asks for), the estimate note, and **Not now** and **Accept quest**. Not now closes the
 sheet. Accept creates the quest and pins it. A refusal is said in the
 sheet, and Accept is disabled with that line. A replay opens no sheet
 and writes nothing.

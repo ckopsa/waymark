@@ -882,12 +882,46 @@
     (catch clojure.lang.ExceptionInfo e
       (clip (or (inv/problem-reason e) (ex-message e)) 480))))
 
+(defn- humanise [k] (str/capitalize (str/replace (name k) "_" " ")))
+
+(defn- in-words
+  "A preview's step with what a person reads beside its names:
+  `door_label`, the door's display label; `row_label`, the row's label
+  as `goal-label` reads it, when this principal's grant sees the row;
+  and `needs_labels`, the display label of each of `needs` from the
+  door's input schema, in that order. A door or a field that declares
+  no label is its name in words."
+  [eng {:keys [principal grant]} step]
+  (let [self (:self step)
+        rdef (rdef-at eng self)
+        id (id-of-path self)
+        decl (some->> (:door step) keyword (conj [:actions]) (get-in rdef))
+        entries (some-> (:input decl) schema/entry-map)
+        seen? (if-some [row? (:row? grant)]
+                (boolean (row? (:kind rdef) id))
+                (not= :agent (:type principal)))
+        row-label (when (and rdef seen?)
+                    (clip (goal-label rdef (row-of eng (:kind rdef) id)) 120))
+        door-label (clip (or (get-in decl [:display :label])
+                             (some-> (:door step) humanise))
+                         60)
+        needs (seq (:needs step))]
+    (cond-> step
+      door-label (assoc :door_label door-label)
+      row-label (assoc :row_label row-label)
+      needs (assoc :needs_labels
+                   (mapv #(clip (or (get-in entries [(keyword %) :properties :x-display :label])
+                                    (humanise %))
+                                60)
+                         needs)))))
+
 (defn- preview
   "What accepting this goal would make, for the create door's rehearsal
   (`:on-rehearse`): the plan `rehearsed` writes for a quest of this
   principal under this grant, as `plan`, `plan_is_estimate` and
   `blocked_reason`, beside `goal`, the line a quest's title defaults to,
-  and `shut_reason`, why the goal's door is shut now. A read: it makes
+  and `shut_reason`, why the goal's door is shut now. Each step of the
+  plan is said in words too (`in-words`). A read: it makes
   no row and no invitation, and fires no transition. The create guards
   judged the goal before this is asked."
   [eng inp {:keys [principal grant] :as who}]
@@ -897,11 +931,12 @@
         id (:id (invitations/parse-self self))
         door (or (get-in rdef [:actions (keyword action) :display :label]) action)
         row (when rdef (row-of eng (:kind rdef) id))]
-    (assoc (rehearsed eng {:data {:owner (str (:id principal))
-                                  :grant (some-> grant :id str)
-                                  :self self
-                                  :action action
-                                  :input (:input inp)}})
+    (assoc (update (rehearsed eng {:data {:owner (str (:id principal))
+                                          :grant (some-> grant :id str)
+                                          :self self
+                                          :action action
+                                          :input (:input inp)}})
+                   :plan (fn [steps] (mapv #(in-words eng who %) steps)))
            :goal (clip (str/join ": " (remove nil? [door (goal-label rdef row)])) 120)
            :shut_reason (when rdef
                           (shut-reason eng rdef id action (:input inp) who)))))
