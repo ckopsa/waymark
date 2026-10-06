@@ -931,19 +931,30 @@
   the guard leaves whose entire :judges set the caller provided;
   refusals and warnings grade exactly as the full loop's (deny-outcome
   is shared). → {:valid? true :judged [names] :awaiting [names]
-  :warnings […]} — or the same 409/404 the full loop would throw."
+  :warnings […]} — or the same 409/404 the full loop would throw. A
+  judged leaf's 409 names the leaves that still wait (`awaiting`), so
+  the caller learns the form's guards from the first refusal; the 404
+  of a hidden leaf says nothing more."
   [defn row inp ctx acknowledged rdef provided]
   (let [{:keys [judged awaiting]} (split-leaves (g/walled-guards rdef defn row)
                                                 provided)
         {:keys [warned]}
-        (reduce
-         (fn [acc leaf]
-           (let [[v d] (g/evaluate leaf row inp ctx)]
-             (if-not (t/deny? v)
-               acc
-               (deny-outcome acc v d row inp acknowledged defn rdef))))
-         {:warned [] :overridden []}
-         judged)]
+        (try
+          (reduce
+           (fn [acc leaf]
+             (let [[v d] (g/evaluate leaf row inp ctx)]
+               (if-not (t/deny? v)
+                 acc
+                 (deny-outcome acc v d row inp acknowledged defn rdef))))
+           {:warned [] :overridden []}
+           judged)
+          (catch clojure.lang.ExceptionInfo e
+            (if (and (seq awaiting)
+                     (= :guard-refused (:waymark10/problem (ex-data e))))
+              (throw (ex-info (ex-message e)
+                              (assoc (ex-data e) :awaiting (mapv :name awaiting))
+                              e))
+              (throw e))))]
     {:valid? true
      :judged (mapv :name judged)
      :awaiting (mapv :name awaiting)

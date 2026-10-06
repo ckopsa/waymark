@@ -605,7 +605,8 @@
       (loop-reason entry) []
 
       confirm
-      [(assoc base :whose "confirm" :note (clip (or consequence reason) 240))]
+      [(cond-> (assoc base :whose "confirm" :note (clip (or consequence reason) 240))
+         (seq needs) (assoc :needs (needs-of needs)))]
 
       (or held hold)
       [(assoc base :whose "held" :waiting_on your-tap)]
