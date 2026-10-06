@@ -1213,7 +1213,18 @@ jobs:
           echo "chromium never answered on 9223 in 3 attempts"
           exit 1
       - name: Drive the access UI
+        env:
+          SHOTS: ${{ runner.temp }}/ui-access-shots
         run: node waymark10/scripts/ui-drive.mjs access
+      # the drive's screenshots ("Accept as quest": the offer, the tracker)
+      - name: Upload the drive's screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-access-shots
+          path: ${{ runner.temp }}/ui-access-shots
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Engine log
         if: failure()
         run: cat "$RUNNER_TEMP/access-dev.log" || true

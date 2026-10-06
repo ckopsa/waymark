@@ -19,6 +19,7 @@
       -e \"(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)\""
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
@@ -73,6 +74,23 @@
 ;; the walkthrough fixture (docs/spec-walkthrough.md § 7 item 5): the row
 ;; the seeded steps act on. One door with two plain arguments, so a
 ;; person step can name two fields.
+;;
+;; shelve is the quest offer's door (ui-drive.mjs, "Accept as quest"):
+;; both of its guards judge the input, so the dialog opens and the POST
+;; refuses. The attic refuses with no remedy; the high shelf refuses a
+;; note with no room, and rename is its remedy.
+(def ^:private shelf-holds-notes
+  (g/expr {:name :shelf-holds-notes
+           :when '(not= (input :shelf) "attic")
+           :explain "The attic holds no notes."
+           :open "No door changes this: the attic holds no notes."}))
+
+(def ^:private high-shelf-filed-by-room
+  (g/expr {:name :high-shelf-filed-by-room
+           :when '(or (not= (input :shelf) "high") (data :room))
+           :explain "The high shelf is filed by room, and this note names no room."
+           :remedies [:led_note/rename]}))
+
 (def led-note
   (r/resource
    {:kind :led_note
@@ -83,7 +101,8 @@
     :summary "{data.title} · {state}"
     :schema [:map
              [:title [:string {:min 1 :max 80}]]
-             [:room {:optional true} [:maybe [:string {:max 40}]]]]
+             [:room {:optional true} [:maybe [:string {:max 40}]]]
+             [:shelf {:optional true} [:maybe [:enum "low" "high" "attic"]]]]
     :actions
     {:rename {:from #{:open} :to :open
               :input [:map
@@ -91,6 +110,12 @@
                       [:room {:optional true} [:maybe [:string {:max 40}]]]]
               :handler (fn [row inp _ctx]
                          (update row :data merge (select-keys inp [:title :room])))
+              :safety {:idempotent true :reversible true :confirm false}}
+     :shelve {:from #{:open} :to :open
+              :input [:map [:shelf [:enum "low" "high" "attic"]]]
+              :guards [shelf-holds-notes high-shelf-filed-by-room]
+              :handler (fn [row inp _ctx]
+                         (assoc-in row [:data :shelf] (:shelf inp)))
               :safety {:idempotent true :reversible true :confirm false}}
      :finish {:from #{:open} :to :done
               :safety {:idempotent true :reversible false :confirm false

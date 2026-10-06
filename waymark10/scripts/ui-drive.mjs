@@ -136,6 +136,16 @@ async function evaljs(expr) {
   return r.result.result.value;
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* the page as it stands, as a PNG in the directory SHOTS names (CI's
+   ui-access job uploads it); with no SHOTS this does nothing */
+async function shot(name) {
+  if (!process.env.SHOTS) return;
+  const r = await send("Page.captureScreenshot", {format: "png"});
+  if (!r.result?.data) return;
+  const {mkdir, writeFile} = await import("node:fs/promises");
+  await mkdir(process.env.SHOTS, {recursive: true});
+  await writeFile(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, "base64"));
+}
 async function waitFor(pred, what, ms = 6000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
@@ -1275,6 +1285,63 @@ async function accessStory() {
   ok("finish shows Quest complete with the title", true);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide", 15000);
   ok("a few seconds later the tracker hides", true);
+
+  /* "Accept as quest" (docs/spec-quests.md): a refused door that names
+     a remedy offers to keep the goal, and one that names none does not.
+     The fixture's shelve door refuses the attic with no remedy, and the
+     high shelf, for a note with no room, with rename as its remedy. */
+  console.log("· a refused door with remedies: Accept as quest");
+  const shelfNote = (await qPost("/api/led_notes", {title: "Shelf pile"}, h)).doc;
+  await evaljs(`location.hash = ${JSON.stringify(shelfNote.self)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(shelfNote.self)} &&
+                 !!document.querySelector('[data-action="shelve"]')`,
+                "the note's row page", 15000);
+  await evaljs(`document.querySelector('[data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog", 15000);
+  /* the enum is a select or a radio group, as the form chose */
+  const shelve = shelf => evaljs(`(() => {
+    const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
+    const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
+    const i = radio || nodes[0];
+    if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
+    i.dispatchEvent(new Event("input", {bubbles: true}));
+    i.dispatchEvent(new Event("change", {bubbles: true}));
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
+  const qAccept = `document.querySelector("dialog[open] [data-quest-accept]")`;
+  await shelve("attic");
+  await waitFor(`${qRefused}.includes("attic")`, "the attic's refusal", 15000);
+  /* the offer is drawn after a read of the quests collection: give a
+     wrong one the time to land */
+  await sleep(1500);
+  ok("a refusal without remedies offers no Accept as quest", await evaljs(`!${qAccept}`));
+  await shelve("high");
+  await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
+                "the offer under the refusal", 15000);
+  ok("a refused door with remedies shows Accept as quest", true);
+  await shot("accept-as-quest-offer");
+  await evaljs(`${qAccept}.click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") && !${qBar}.hidden &&
+                 !!${qBar}.querySelector("[data-quest-title]")`,
+                "the tracker, off the click", 15000);
+  ok("the click closes the dialog and shows the tracker", true);
+  await shot("accept-as-quest-tracker");
+  const qMe = await evaljs(`viewerId()`);
+  const qPinned = (await get("/api/quests?state=active&pinned=true&owner=" +
+                             encodeURIComponent(qMe))).data?.items || [];
+  ok("the click leaves one pinned quest", qPinned.length === 1);
+  const qMade = (await get(qPinned[0].self)).data;
+  ok("its self, action and input match the door",
+     qMade.self === shelfNote.self && qMade.action === "shelve" &&
+     JSON.stringify(qMade.input) === JSON.stringify({shelf: "high"}));
+  ok("the tracker's title opens that quest",
+     await evaljs(`${qBar}.querySelector("[data-quest-title]").getAttribute("href")`) ===
+       "#" + qPinned[0].self);
+  ok("the engine finishes the accepted quest",
+     (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
 
   /* the same under a grant that admits quest and nothing else: the one
      live stream carries no row events there, so the tracker hears the
