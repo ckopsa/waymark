@@ -44,9 +44,10 @@
     .questoffer:not(:empty) { display: block; margin-top: 8px; }
     .questoffer button { width: 100%; }
   }
-  /* under a thumb every door of the tracker, and the offer, is 44px tall */
+  /* under a thumb every door of the tracker, the offer, and a shut door
+     that takes a tap, is 44px tall */
   @media (max-width: 600px), (pointer: coarse) {
-    #questbar button, .questoffer button {
+    #questbar button, .questoffer button, button.notyet {
       min-height: 44px; font-size: 14px; padding: 8px 14px; }
     #questbar .quest-menu summary {
       display: flex; align-items: center; justify-content: center;

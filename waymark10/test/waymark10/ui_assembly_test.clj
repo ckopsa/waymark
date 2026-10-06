@@ -539,3 +539,33 @@
     (testing "the click shows the tracker, in place of the toast"
       (is (re-find #"closeDlg\(\);\s+await refreshQuest\(\);" page))
       (is (not (str/includes? page "Quest accepted and pinned"))))))
+
+(deftest a-shut-door-with-remedies-is-a-tap-from-a-quest
+  ;; 525f4038 (docs/spec-quests.md). The page is not executed here, so
+  ;; this pins the seams: a refused action with remedies is drawn as a
+  ;; reachable button and one without stays disabled, the tap creates
+  ;; and pins a quest with no input, the reason line describes the
+  ;; button, and a replay presses it for the quest's create
+  (let [page (sut/assemble)]
+    (testing "only a door on one row that names a remedy is reachable"
+      (is (str/includes? page "return !!(entry.remedies || []).length && !!doc.self &&"))
+      (is (str/includes? page "if (!questReach(entry, doc))")))
+    (testing "it is aria-disabled, not disabled, and flagged"
+      (is (str/includes? page "\"aria-disabled\": \"true\", \"data-quest-door\": name,"))
+      (is (str/includes? page "\" ⚑\"")))
+    (testing "every bar draws its shut doors through it"
+      (is (= 3 (count (re-seq #"bar\.append\(shutDoor\(name, entry, " page)))))
+    (testing "the tap makes the quest from the row and the door, with no input, and pins it"
+      (is (str/includes? page "btn.addEventListener(\"click\", () => questFromDoor(btn, name, doc));"))
+      (is (str/includes? page "if (!pinned.ok) { refused(pinned.body); return; }"))
+      (is (str/includes? page "if (replay || btn.hasAttribute(\"data-quest-busy\")) return;")
+          "and a replay writes nothing"))
+    (testing "the reason line describes the button and says what a tap does"
+      (is (str/includes? page "btn.setAttribute(\"aria-describedby\", line.id);"))
+      (is (str/includes? page "\" Not yet. Tap to make it a quest.\"")))
+    (testing "it is dashed, and 44px tall under a thumb"
+      (is (str/includes? page "border: 1px dashed var(--verdigris);"))
+      (is (str/includes? page "#questbar button, .questoffer button, button.notyet {")))
+    (testing "a replay presses it for the quest's create, and walks to no quest row"
+      (is (str/includes? page "return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);"))
+      (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))
