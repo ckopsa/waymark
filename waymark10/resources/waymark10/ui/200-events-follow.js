@@ -409,7 +409,28 @@ function applyGuidedUi(f) {
     if (f.seq <= guidedSeq) return;
     guidedSeq = f.seq;
   }
+  clearTimeout(guidedMoveTimer);
   applyUiFrame(f);
+}
+/* a `move` of the followed person is also what a `ui` beat becomes when
+   every part of it was redacted for this follower (presence/ui-redactor):
+   it closes the guided dialog and the quest's sheet, as a beat that
+   carries neither does. The close waits a moment: a beat that changes
+   their screen sends a move and then its `ui` frame, and that frame,
+   applied, takes the close back. */
+const GUIDED_MOVE_MS = 250;
+let guidedMoveTimer = null;
+function guidedMove(f) {
+  if (replay || !followUi || !followId || !f ||
+      (f.principal || {}).id !== followId) return;
+  const id = followId;
+  clearTimeout(guidedMoveTimer);
+  guidedMoveTimer = setTimeout(() => {
+    if (replay || !followUi || followId !== id) return;
+    guidedDismissed = null;
+    closeGuided();
+    guidedQuestSheet(null);
+  }, GUIDED_MOVE_MS);
 }
 /* one `ui` frame applied to this screen: a live one, or a replay's.
    The navigation, the dialog and the focused row are the same code
