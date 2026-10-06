@@ -9,14 +9,17 @@
   (WAYMARK10_TEST_DSN)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [org.httpkit.server :as http]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.quests :as quests]
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.test.db :as db]
             [waymark10.types :as t]))
 
@@ -32,7 +35,13 @@
     :actions {:file {:from #{:open} :to :filed
                      :safety {:idempotent true :reversible false
                               :confirm false
-                              :one-way "Filed is filed."}}}}))
+                              :one-way "Filed is filed."}}
+              ;; :file's bulk door: a bulk action has no row form
+              :shelve {:from #{:open} :to :filed
+                       :bulk {:max-items 100}
+                       :safety {:idempotent true :reversible false
+                                :confirm false
+                                :one-way "Filed is filed."}}}}))
 
 (def ^:dynamic *eng* nil)
 
@@ -231,6 +240,77 @@
     (testing "behind a long writer a settled drain yields: appends still land"
       ;; held for the whole hold, each writer would land exactly one
       (is (< writers (count (run true true)))))))
+
+;; ── 1c′. the same cost under the engine's own load ──────────────────
+;; A real bulk invoke writes while the quests' consumer and the webhook
+;; deliverer drain on their own cadence: a NOTIFY wakes each, and the
+;; 2 s poll is the backstop. Printed, as above; settled=false is the
+;; same load with no reader held to the settled log.
+
+(defn- bulk-latencies!
+  "Create n notes and shelve them in one bulk invoke. → {:total-ms the
+  call's duration, :items each item's latency in ms, sorted}; an item's
+  latency runs from the item before it to its own commit."
+  [n]
+  (let [ids (mapv #(:id (note! (str "bulk " %))) (range n))
+        marks (atom [])
+        t0 (System/nanoTime)]
+    (inv/bulk! *eng* :f_note :shelve {:ids ids}
+               {:principal elena
+                :on-item (fn [_] (swap! marks conj (System/nanoTime)))})
+    {:total-ms (/ (- (System/nanoTime) t0) 1e6)
+     :items (vec (sort (map #(/ (- %2 %1) 1e6) (cons t0 @marks) @marks)))}))
+
+(deftest order-lock-cost-to-a-bulk-invoke
+  (let [st (:storage *eng*)
+        n 100
+        hits (atom 0)
+        server (http/run-server
+                (fn [_req]
+                  (swap! hits inc)
+                  {:status 200 :headers {} :body ""})
+                {:port 0 :legacy-return-value? false})
+        {sub :row} (inv/create! *eng* :subscription
+                                {:url (str "http://127.0.0.1:"
+                                           (http/server-port server) "/hook")
+                                 :kinds ["f_note"]}
+                                {:principal elena})
+        d (events/dispatcher *eng* {})
+        planner (quests/start! *eng* {:dispatcher d})
+        deliverer (webhooks/start-deliverer! *eng* d {})
+        newest (fn []
+                 (-> (store/with-tx st
+                       #(store/transitions st % {} {:newest-first true :limit 1}))
+                     first
+                     :id))
+        run (fn [settled]
+              (reset! hits 0)
+              (let [{:keys [total-ms items]} (bulk-latencies! n)
+                    at #(nth items (min (dec (count items))
+                                        (long (* % (count items)))))]
+                ;; both drains catch up before the next case writes: the
+                ;; subscription hears a create and a shelve for each note
+                (await-pred #(= (newest) (cursor-of quests/consumer-name)) 10000)
+                (await-pred #(<= (* 2 n) @hits) 10000)
+                (to-job-log! (format (str "log-order-lock bulk settled=%s items=%d"
+                                          " total=%.1fms p50=%.1fms p99=%.1fms"
+                                          " max=%.1fms delivered=%d")
+                                     settled (count items) total-ms
+                                     (at 0.5) (at 0.99) (peek items) @hits))
+                items))]
+    (try
+      ;; the readers' own :settled true, answered as :settled false is:
+      ;; no watermark, no wait
+      (with-redefs-fn {#'pg/settled-read (fn [_tx read _newest-first?] (read nil))}
+        #(run false))
+      (testing "with the drains reading the settled log, every item still commits"
+        (is (= n (count (run true)))))
+      (finally
+        (webhooks/stop-deliverer! deliverer)
+        (quests/stop! planner)
+        (events/stop! d)
+        (inv/invoke! *eng* :subscription (:id sub) :revoke nil {:principal elena})
+        (engine/stop! server)))))
 
 ;; ── 1d. the other readers that walk the log by id ───────────────────
 
