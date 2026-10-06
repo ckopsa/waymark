@@ -665,8 +665,12 @@
           ;; before the person confirms
           (let [res (dry-run session doc action input :partial)
                 awaiting (vec (or (:awaiting res) (get-in res [:problem :awaiting])))
+                ;; an advisory guard that warned: the person accepts it
+                ;; at the same door, so it rides the confirm entry
+                warnings (vec (or (:warnings res) (get-in res [:problem :warnings])))
                 form (cond-> (assoc stop :needs needs)
-                       (seq awaiting) (assoc :awaiting awaiting))]
+                       (seq awaiting) (assoc :awaiting awaiting)
+                       (seq warnings) (assoc :warnings warnings))]
             (cond
               (or (transport? res) (diverged res)) {:stop res}
               (seq (get-in res [:problem :remedies]))

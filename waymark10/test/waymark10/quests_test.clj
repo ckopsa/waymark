@@ -998,6 +998,16 @@
     (t/allow)
     (t/deny)))
 
+(g/defguard the-part-is-still-open
+  {:reads [:chore]
+   :severity :warning
+   :explain "The part is not finished."}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [part (read :chore (get-in row [:data :part_id]))]
+      (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
 (def ^:private epic
   "A row whose goal door takes a form: `complete` requires a reason,
   and takes a secret `passphrase`."
@@ -1031,6 +1041,15 @@
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety {:idempotent true :reversible true :confirm true
                      :consequence "The epic is let go."}}
+     :shelve {:from #{:open} :to :closed
+              :input [:map
+                      [:close_reason [:string {:min 1 :max 480}]]
+                      [:film {:optional true} [:maybe [:string {:max 200}]]]]
+              :guards [the-part-is-still-open the-film-is-a-link]
+              :handler (fn [row inp _ctx]
+                         (assoc-in row [:data :close_reason] (:close_reason inp)))
+              :safety {:idempotent true :reversible true :confirm true
+                       :consequence "The epic is shelved."}}
      :reopen {:from #{:closed} :to :open :safety routine}}}))
 
 (defn- epic-engine []
@@ -1117,6 +1136,40 @@
     (is (= "The epic is let go. Judged when you fill the form: the-film-is-a-link."
            (:note step))
         "the consequence comes first, and the waiting guard after it")))
+
+(deftest a-confirm-goal-whose-partial-rehearsal-warns-names-the-warning
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "shelve"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        step (first (:plan d))]
+    (is (= ["shelve"] (mapv :door (:plan d))) (pr-str d))
+    (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["close_reason"] (:needs step)))
+    (is (= (str "The epic is shelved. You also accept a warning: The part is not finished."
+                " Judged when you fill the form: the-film-is-a-link.")
+           (:note step))
+        "the consequence, then the warning to accept, then the waiting guard")))
+
+(deftest the-mapping-names-a-confirm-entrys-warning-after-its-consequence
+  (let [plan (quests/answer->plan
+              {:writes []
+               :blocked-on [{:door "q_epic.shelve" :row "/api/q_epics/1" :or []
+                             :needs [:close_reason]
+                             :confirm true
+                             :consequence "The epic is shelved."
+                             :warnings [{:name "the-part-is-still-open"
+                                         :reason "The part is not finished."}]
+                             :reason "safety.confirm is true"}]
+               :stack [{:door "q_epic.shelve" :row "/api/q_epics/1"}]}
+              nil)]
+    (is (= [["shelve" "confirm" "next"
+             "The epic is shelved. You also accept a warning: The part is not finished."]]
+           (mapv (juxt :door :whose :state :note) (:plan plan))))))
 
 (deftest a-goal-whose-input-was-given-keeps-it-and-needs-nothing
   (let [eng (epic-engine)
