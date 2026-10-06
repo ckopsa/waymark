@@ -1501,6 +1501,43 @@
     (is (= ["Close reason"] (:needs_labels goal))
         "beside the labels of the fields the form will ask for")))
 
+(deftest a-planned-step-stores-its-door-and-its-needs-in-words
+  (let [eng (epic-engine)
+        {:keys [quest]} (epic-quest! eng nil)
+        _ (hear! eng)
+        [step goal :as plan] (:plan (data-of eng quest))]
+    (is (= ["Finish" "Complete"] (mapv :door_label plan)) (pr-str plan))
+    (is (nil? (:needs_labels step)) "a step that asks for nothing names no field")
+    (is (= ["close_reason"] (:needs goal)) "the field names stay")
+    (is (= ["Close reason"] (:needs_labels goal))
+        "beside the labels of the fields the form will ask for")
+    (is (not-any? :row_label plan) "the stored plan holds no row's label")))
+
+(deftest a-rename-of-a-steps-row-leaves-the-quests-plan-as-it-was
+  (let [eng (note-engine)
+        n (make! eng :q_note {:title "Unsorted mail"})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_notes/" n)
+                                       :action "shelve"
+                                       :input {:shelf "high"}}
+                                      {:principal person})))
+        rename! (fn [who title]
+                  (inv/invoke! eng :q_note n :rename {:title title :room "hall"}
+                               {:principal who :idempotency-key (str (random-uuid))}))]
+    (hear! eng)
+    (rename! person "Hall mail")
+    (hear! eng)
+    (let [before (data-of eng quest)]
+      (is (every? (comp string? :door_label) (:plan before)) (pr-str before))
+      (rename! other "Hall post")
+      (hear! eng)
+      (let [after (data-of eng quest)]
+        (is (= (:plan before) (:plan after)) "the plan is the one held")
+        (is (= (:title before) (:title after)) "and so is the quest's title")
+        (is (not-any? :row_label (:plan after)) "no step holds the row's label")
+        (is (not (str/includes? (pr-str after) "Hall post"))
+            "the row's new name is nowhere in the quest")))))
+
 (deftest the-preview-of-a-goal-create-refuses-answers-that-refusal
   (let [eng (epic-engine)
         c (chore! eng "Dishes")

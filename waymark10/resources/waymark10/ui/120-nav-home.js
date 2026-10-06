@@ -429,6 +429,35 @@ const questTitle = doc => (doc.data || {}).title || doc.summary || "Quest";
 function questHead(doc) {
   return ((doc.data || {}).plan || []).find(s => s.state !== "done") || null;
 }
+/* a step's row in words (ticket 5b3fa3f7). The quest stores the row's
+   path and never its label: a rename is a change to the row, so it
+   moves the screen and not the quest. The label is the row's own
+   summary line, read under the reader's grant and kept for the page;
+   when the row moves it is read again, in place. The path is the
+   link's href and its title only. A row the reader may not see, and
+   every row of a replay, which reads nothing, is its kind in words. */
+const questRowSeen = {};    // a row's path → the promise of its summary
+function questRowSay(node, self) {
+  (questRowSeen[self] || (questRowSeen[self] =
+    api(self + "?depth=summary")
+      .then(r => (r.ok && r.body.summary) || null).catch(() => null)))
+    .then(s => { if (s && node.getAttribute("title") === self) node.textContent = s; });
+}
+/* `link` false is plain text, for the tracker: its title and Go are
+   the tap targets there */
+function questRow(self, link = true) {
+  const node = el(link ? "a" : "span",
+                  {"data-quest-row": "", title: self, href: link ? "#" + self : null},
+                  pretty(String(self).split("/")[2] || "row"));
+  if (!replay) questRowSay(node, self);
+  return node;
+}
+function questRowMoved(self) {
+  if (replay || !(self in questRowSeen)) return;
+  delete questRowSeen[self];
+  for (const node of document.querySelectorAll("[data-quest-row]"))
+    if (node.getAttribute("title") === self) questRowSay(node, self);
+}
 /* a seat's step and a held one are someone else's to take */
 function questWaits(step) {
   return ["seat", "held"].includes(step.whose) || step.state === "waiting";
@@ -513,9 +542,23 @@ function questDraw(doc, finished) {
       bar.append(el("span", {class: "quest-line", "data-quest-waiting": ""},
         el("i", {class: "quest-live", "aria-hidden": "true"}),
         `waiting on ${head.waiting_on || d.waiting_on || "someone else"}`));
-    else
-      bar.append(el("span", {class: "quest-line", "data-quest-note": ""},
-                    head ? head.note || pretty(head.door) : ""));
+    else {
+      /* the head step: its note, then its row and what its door asks
+         for, both in words. The note keeps the line's width, and the
+         words beside it give way first (020-base.css). */
+      const line = el("span", {class: "quest-line quest-head"},
+        el("span", {"data-quest-note": ""},
+           head ? head.note || head.door_label || pretty(head.door) : ""));
+      const needs = head
+        ? head.needs_labels || (head.needs || []).flat().map(pretty) : [];
+      if (head && head.self)
+        line.append(el("span", {class: "quest-on muted"},
+          questRow(head.self, false),
+          needs.length
+            ? el("span", {"data-quest-needs": ""}, ` · asks for ${needs.join(", ")}`)
+            : null));
+      bar.append(line);
+    }
     if (head && !d.blocked_reason)
       bar.append(el("button", {class: "primary", "data-tracker-go": "",
                                disabled: waiting ? "" : null, onclick: questHeadGo},
@@ -597,12 +640,17 @@ function questFinished() {
 async function questRowFrame(ev) {
   if (!questDoc || replay) return;
   if (ev.action === "finish") { questFinished(); return; }
+  /* a move on a plan's row plans the quest again, and under a grant
+     this stream alone says so: the rows' labels are read again */
+  for (const self of Object.keys(questRowSeen)) questRowMoved(self);
   await refreshQuest();
 }
 function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
 /* the firehose's half (210-ledger.js): a pin takes whichever quest is
    pinned now. The quest in hand is heard on its own stream, above. */
 function onQuestFrame(ev) {
+  /* a row a step names has moved: its label is read again */
+  questRowMoved(ev.self);
   if (ev.kind !== "quest" || ev.action !== "pin") return;
   refreshQuest().catch(() => {});
 }
