@@ -2951,6 +2951,66 @@ async function guidedStory() {
      late.drawn - late.hop >= 650 && late.glide - late.drawn >= 1000 - 20);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
+  console.log("· replay: a bulk write's refused rows, in the band");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a self walk's bulk write as it is recorded: a move to the
+     collection, the write that went through, and a `refusal` frame for
+     each row that did not. No form is open, so each is a line in the
+     caption band, held until the recorder's next `ui` beat or `move`. */
+  const bulkDoc = (self, name) => ({t: 10, type: "doc", self,
+    doc: {self, kind: "meal", state: "on_list", summary: name, actions: {}, data: {name}}});
+  const bulkRefusal = (t, self, detail) => (
+    {t, type: "refusal", who: "a1", self, action: "accept", title: "Not available", detail});
+  const bulkNames = [`Guided soup ${tag}`, `Guided stew ${tag}`];
+  const bulkDetails = ["The soup is on the list already.", "The stew is on the list already."];
+  const bulkLines = bulkNames.map((n, i) => `Refused: ${n}: ${bulkDetails[i]}`);
+  const bulkFile = [
+    {format: "waymark-walk/1", title: "A bulk write, partly refused",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: "/api/meals"},
+    bulkDoc(meals[0], bulkNames[0]),
+    bulkDoc(meals[1], bulkNames[1]),
+    {t: 20, type: "transition", who: "a1", kind: "meal", self: meals[2],
+     action: "accept", from: "draft", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided pie ${tag}`},
+    bulkRefusal(30, meals[0], bulkDetails[0]),
+    bulkRefusal(40, meals[1], bulkDetails[1]),
+    {t: 50, type: "ui", who: "a1", self: "/api/meals", ui: {dialog: null}},
+    bulkRefusal(60, meals[1], bulkDetails[1]),
+    {t: 70, type: "move", who: "a1", self: meals[0]},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* what the band shows when each frame has been applied */
+  await A.js(`{ window.__bulkBand = [];
+    const apply4 = applyReplayFrame;
+    window.applyReplayFrame = (f, landed) => {
+      const out = apply4(f, landed);
+      const band = document.querySelector("#replaycaption");
+      if (replay) window.__bulkBand.push({type: f.type, self: f.self || null,
+        band: band && getComputedStyle(band).display !== "none" ? band.textContent : "",
+        notice: !!band && band.hasAttribute("data-replay-notice")});
+      return out;
+    };
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(bulkFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the bulk write's walk to end", 40000);
+  const bulkBand = JSON.parse(await A.js(`JSON.stringify(window.__bulkBand)`));
+  const bulkRefused = e => !e ? "no frame"
+    : e.band.split("\n").filter(l => l.startsWith("Refused: ")).join(" | ");
+  const bulkOf = type => bulkBand.filter(e => e.type === type);
+  console.log("  the band: " + bulkBand.map(e => `${e.type} [${bulkRefused(e)}]`).join("; "));
+  ok("each refused row of a bulk write is one line in the band: its summary and the problem's detail",
+     bulkOf("refusal").length === 3 &&
+     bulkRefused(bulkOf("refusal")[0]) === bulkLines[0] &&
+     bulkRefused(bulkOf("refusal")[1]) === bulkLines.join(" | ") &&
+     bulkOf("refusal").every(e => e.notice));
+  ok("the recorder's next ui beat takes the lines away",
+     bulkRefused(bulkOf("ui")[0]) === "" && bulkRefused(bulkOf("refusal")[2]) === bulkLines[1]);
+  ok("and so does the recorder's next move",
+     bulkOf("move").length === 2 && bulkOf("move")[1].self === meals[0] &&
+     bulkRefused(bulkOf("move")[1]) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
   console.log("· replay: a quest kept from a refusal, and its tracker");
   await A.until(onWalk, "the replay to stop on the walk's page");
   /* a walk as `docs: true` records it: the refused door's form with the
