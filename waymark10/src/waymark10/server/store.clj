@@ -67,10 +67,12 @@
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.
     opts {:settled true} is for a reader that keeps a cursor: it
-    answers only when no append is still in flight, so no lower id can
-    commit after the rows it returns, and answers nil — no rows, and
-    not the [] of a log with none to give — when the writers do not
-    finish in time: the reader asks again on its next pass, and one
+    answers only rows under every append still in flight, so no lower
+    id can commit after the rows it returns. It blocks no writer. It
+    answers nil — no rows, and not the [] of a log with none to give —
+    when it has no row to give and the writers in flight under it do
+    not finish in time, and a :newest-first read answers nil whenever
+    they do not: the reader asks again on its next pass, and one
     with no next pass asks through settled-transitions. Such a read
     runs in a transaction of its own.")
   (transitions-under-grant [st tx grant-id since until opts]
@@ -252,8 +254,7 @@
 (defn settled-transitions
   "The settled log (transitions' {:settled true}) for a reader with no
   next pass of its own: it asks up to `tries` times, each in a
-  transaction of its own, since a read whose wait ran out leaves its
-  transaction aborted. → the rows, or nil when the writers in flight
+  transaction of its own. → the rows, or nil when the writers in flight
   outlasted every try. The caller says what a log that never settled
   means for it; it is never an empty log."
   [st where opts tries]

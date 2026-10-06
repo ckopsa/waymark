@@ -382,41 +382,107 @@
 ;; A transition's id comes from the sequence inside its writer's own
 ;; transaction, so two overlapping writers can COMMIT out of id order,
 ;; and a reader that walks the log by id (`id > cursor`) would step
-;; over the lower id for good. Every append therefore holds this key
-;; SHARED until its transaction ends, and a reader asking for the
-;; settled log takes it EXCLUSIVE for the length of its read: once it
-;; has the lock no allocated id is still in flight, and its statement's
-;; snapshot (READ COMMITTED, taken after the lock) sees them all.
+;; over the lower id for good. A transaction therefore, before its
+;; first append, reads the sequence's last value — a FLOOR: every id it
+;; allocates is above it — and holds a SHARED advisory lock whose key
+;; spells that floor until it ends. Nothing takes that lock
+;; exclusively, so it blocks no one: it is a note in pg_locks that a
+;; transaction in flight may hold any id above it.
+;;
+;; A reader asking for the settled log reads the sequence (B), then the
+;; notes (M, the lowest floor held), then the rows with id <= min(B, M).
+;; An id at or under B was allocated before the notes were read, so its
+;; writer has ended — and the statement's snapshot (READ COMMITTED,
+;; taken after) sees its row — or its note is among those read and its
+;; id is above M. The reader takes no lock, and no append waits on it
+;; (ticket 3a23b699; the exclusive lock this replaces queued every
+;; append behind a waiting reader).
+;;
+;; A long transaction that appended holds the watermark at its floor
+;; until it ends: the reader gets the rows under it and no row above.
+;; A long transaction that never appended leaves no note and holds
+;; nothing back. The sequence must keep CACHE 1 (bigserial's default):
+;; a cached id is under the last value another session reads.
 
-(def ^:private log-order-key (role-lock-key :transitions-log))
+(def ^:private log-floor-sql
+  "The transition sequence's last value, 0 before the first id."
+  (str "coalesce(pg_sequence_last_value("
+       "pg_get_serial_sequence('waymark10_transitions', 'id')::regclass), 0)"))
+
+(def ^:private log-floor-setting
+  "Transaction-local: set once this transaction holds its floor, so a
+  transaction of many appends holds one lock and not one for each."
+  "waymark10.log_floor")
 
 (def ^:private settle-wait-ms
-  "How long a settled read waits for the writers in flight. Appends
-  queue behind the waiting reader, so the wait is short and the reader
-  yields; it is under Postgres's default deadlock_timeout (1s), so a
-  reader standing between two writers steps aside before either is
-  cancelled. An append commits in about 1 ms (p99 under 5 ms), so 50
-  outwaits the ordinary writer; at 500, drains behind one long
-  transaction cut appends from 6700 to 171 in 1.5 s, each stalled up
-  to the whole wait (`order-lock-cost-to-writers` prints the four
-  cases)."
+  "How long a settled read with no row to give waits for the writers
+  in flight under it, before it answers nil. It waits by asking again
+  every `settle-poll-ms` and holds no lock, so no append waits on it
+  (`order-lock-cost-to-writers` prints the four cases). An append
+  commits in about 1 ms (p99 under 5 ms), so 50 outwaits the ordinary
+  writer."
   50)
 
-(defn- log-settled?
-  "Take the log's order lock exclusively in tx. → true when no append
-  is in flight; false when the wait ran out — tx is then aborted, so
-  the caller answers nothing and its next pass asks again. A settled
-  read wants a transaction of its own."
+(def ^:private settle-poll-ms 10)
+
+(defn- hold-log-floor!
+  "Before tx's first append: note in pg_locks the floor its ids will be
+  above (see the log's commit order). The lock is shared and never
+  asked for exclusively, so this waits on nothing."
   [tx]
-  (jdbc/execute! tx [(str "SET LOCAL lock_timeout = " (long settle-wait-ms))])
-  (try
-    (jdbc/execute-one! tx ["SELECT pg_advisory_xact_lock(?)" log-order-key])
-    true
-    (catch SQLException e
-      ;; 55P03 lock_not_available: the lock_timeout above
-      (if (= "55P03" (.getSQLState e))
-        false
-        (throw e)))))
+  (when (str/blank? (some-> (jdbc/execute-one!
+                             tx ["SELECT current_setting(?, true) AS held"
+                                 log-floor-setting])
+                            vals first))
+    ;; the two-key form, so the floor is read back from pg_locks.objid;
+    ;; its low 32 bits, which log-watermark reads against the sequence
+    (jdbc/execute-one!
+     tx [(str "SELECT pg_advisory_xact_lock_shared(?, (" log-floor-sql
+              ")::bit(32)::int4), set_config(?, 'held', true)")
+         (int lock-namespace) log-floor-setting])))
+
+(defn- log-watermark
+  "→ {:bound id :cut? bool}: every id at or under :bound has committed
+  or is gone for good; :cut? says a transaction in flight may hold an
+  id between :bound and the newest allocated. The three reads are in
+  this order on purpose (see the log's commit order)."
+  [tx]
+  (let [last-id #(long (-> (jdbc/execute-one! tx [(str "SELECT " log-floor-sql " AS v")])
+                           vals first))
+        newest (last-id)
+        held (mapv #(long (first (vals %)))
+                   (jdbc/execute!
+                    tx [(str "SELECT objid::bigint AS v FROM pg_locks"
+                             " WHERE locktype = 'advisory' AND granted"
+                             " AND objsubid = 2 AND classid::bigint = ?"
+                             " AND database = (SELECT oid FROM pg_database"
+                             "  WHERE datname = current_database())")
+                        (long lock-namespace)]))
+        ;; a floor noted after `newest` was read may be above it: the
+        ;; 32 bits are read against a value no held floor is above
+        at (if (seq held) (last-id) newest)
+        floors (map #(- at (bit-and (- at %) 0xFFFFFFFF)) held)
+        bound (reduce min newest floors)]
+    {:bound bound :cut? (< bound newest)}))
+
+(defn- settled-read
+  "The settled log through `read`, a fn of the highest id it may
+  answer. Oldest-first, the rows under the watermark are the answer
+  when there are any. With none to give while a transaction in flight
+  holds the watermark down — and for a newest-first read whenever one
+  does, since the newest id is then not known — it asks again for
+  `settle-wait-ms` and then answers nil. It holds no lock while it
+  waits."
+  [tx read newest-first?]
+  (let [deadline (+ (System/nanoTime) (* 1000000 (long settle-wait-ms)))]
+    (loop []
+      (let [{:keys [bound cut?]} (log-watermark tx)
+            rows (when-not (and cut? newest-first?) (read bound))]
+        (cond
+          (or (seq rows) (not cut?)) rows
+          (< (System/nanoTime) deadline) (do (Thread/sleep (long settle-poll-ms))
+                                             (recur))
+          :else nil)))))
 
 (defn- lock-connection
   "A dedicated raw JDBC connection for one role's lock — deliberately
@@ -617,8 +683,9 @@
                            jdbc-opts))))
 
   (append-transition! [_ tx record]
-    ;; before the id is allocated, held to the commit: see log-order-key
-    (jdbc/execute-one! tx ["SELECT pg_advisory_xact_lock_shared(?)" log-order-key])
+    ;; before the id is allocated, held to the commit: see the log's
+    ;; commit order
+    (hold-log-floor! tx)
     (let [res (jdbc/execute-one!
                tx
                [(str "INSERT INTO waymark10_transitions"
@@ -649,19 +716,22 @@
       (assoc record :id id :at (->inst (:at res)))))
 
   (transitions [_ tx where opts]
-    (let [clauses (cond-> []
-                    (:kind where) (conj ["kind = ?" (name (:kind where))])
-                    (:resource-id where) (conj ["resource_id = ?" (:resource-id where)])
-                    (:since where) (conj ["id > ?" (:since where)]))
-          sql (str "SELECT * FROM waymark10_transitions"
-                   (when (seq clauses)
-                     (str " WHERE " (str/join " AND " (map first clauses))))
-                   " ORDER BY id" (when (:newest-first opts) " DESC")
-                   " LIMIT " (long (:limit opts 500)))]
-      (if (and (:settled opts) (not (log-settled? tx)))
-        nil
-        (mapv transition->map
-              (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts)))))
+    (let [read (fn [bound]
+                 (let [clauses (cond-> []
+                                 (:kind where) (conj ["kind = ?" (name (:kind where))])
+                                 (:resource-id where) (conj ["resource_id = ?" (:resource-id where)])
+                                 (:since where) (conj ["id > ?" (:since where)])
+                                 bound (conj ["id <= ?" bound]))
+                       sql (str "SELECT * FROM waymark10_transitions"
+                                (when (seq clauses)
+                                  (str " WHERE " (str/join " AND " (map first clauses))))
+                                " ORDER BY id" (when (:newest-first opts) " DESC")
+                                " LIMIT " (long (:limit opts 500)))]
+                   (mapv transition->map
+                         (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))]
+      (if (:settled opts)
+        (settled-read tx read (:newest-first opts))
+        (read nil))))
 
   (transitions-under-grant [_ tx grant-id since until opts]
     ;; the window bounds `at`, which ix_wm10_t_at serves; the grant is
