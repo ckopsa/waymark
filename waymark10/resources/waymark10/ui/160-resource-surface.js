@@ -21,7 +21,10 @@ async function renderResource(view, doc, hints) {
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : "")),
-    el("span", {class:"version", title: doc.self}, doc.self)));
+    /* a quest's page says every row in words (ticket bdd37958): its own
+       path stays the crumb's title, and is not text */
+    kind === "quest" ? null
+      : el("span", {class:"version", title: doc.self}, doc.self)));
   /* the viewing dots: who else is looking at this screen right now
      (painted from the known truth on mount — a presence that arrived
      before this screen rendered still shows — then repainted as
@@ -166,6 +169,9 @@ async function renderResource(view, doc, hints) {
      the raw report leave the kv table for their own panel */
   if (kind === "worksheet")
     for (const k of ["lines", "report", "tally"]) delete plainData[k];
+  /* a quest row: the checklist above already draws the plan, so it
+     leaves the kv table (ticket bdd37958) */
+  if (kind === "quest") delete plainData.plan;
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -175,10 +181,17 @@ async function renderResource(view, doc, hints) {
       worksheetReport(doc)));
   view.append(...partsSections(doc));
   if (kind !== "scheduled_action") view.append(scheduledSection(doc));
+  const dataTable = kvTable(plainData, hints);
+  /* …and its goal row is drawn in words, as the checklist draws a
+     step's row (questRow, 120-nav-home.js): the path is never text */
+  if (kind === "quest" && plainData.self)
+    for (const tr of dataTable.children)
+      if (tr.firstChild.getAttribute("title") === "self")
+        tr.lastChild.replaceChildren(questRow(plainData.self));
   const dataPanel = el("div", {class:"panel"},
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
-      kvTable(plainData, hints)));
+      dataTable));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */

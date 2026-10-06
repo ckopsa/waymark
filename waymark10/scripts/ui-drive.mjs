@@ -3860,6 +3860,20 @@ async function questPhoneStory() {
        await evaljs(`/Close reason/.test(${qPlan}.textContent) &&
                      !/close_reason/.test(${qPlan}.textContent) &&
                      !/\\/api\\//.test(${qPlan}.textContent)`));
+    /* the data table under the checklist draws the goal row in words
+       and leaves the plan out: no path is visible text anywhere on the
+       page (ticket bdd37958) */
+    await waitFor(`!!document.querySelector("table.kv [data-quest-row]")`,
+                  "the goal row in the quest's data table", 15000,
+                  `document.body.innerText.slice(-400)`);
+    /* the whole page is the view and the tracker: the shell's ticker
+       under them names the last event on any row, on every screen. A
+       miss says the text the path was read in */
+    const paths = JSON.parse(await evaljs(`JSON.stringify(
+      (document.querySelector("#view").innerText + "\\n" + ${bar}.innerText)
+        .match(/.{0,60}\\/api\\/.{0,60}/g) || [])`));
+    ok("the quest's whole page shows no row path as text" +
+       (paths.length ? ": " + JSON.stringify(paths) : ""), !paths.length);
     await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);
     await waitFor(`!${qPlan}`, "the page the quest was accepted on", 15000);
     /* the plan's last step, and whether it is `self`'s Complete with

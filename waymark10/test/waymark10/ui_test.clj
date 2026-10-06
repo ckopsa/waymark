@@ -942,4 +942,7 @@
       (is (str/includes? body "\"data-quest-estimate\": \"\"")))
     (testing "Go opens the viewer's invitation for the step, else its row"
       (is (str/includes? body "if (inv) openInvitationRow(inv);"))
-      (is (str/includes? body "else go(step.self);")))))
+      (is (str/includes? body "else go(step.self);")))
+    (testing "the data table leaves the plan out and draws the goal row in words"
+      (is (str/includes? body "if (kind === \"quest\") delete plainData.plan;"))
+      (is (str/includes? body "tr.lastChild.replaceChildren(questRow(plainData.self));")))))
