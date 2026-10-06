@@ -40,7 +40,7 @@ false. A reader shows "planning" until the first plan lands.
 |---|---|---|---|
 | `create` | → `active` | anyone who sees the goal row and, under a grant, is admitted to the goal door | accepts the goal |
 | `pin` | `active` | owner | sets `pinned`, and unpins the owner's other quests |
-| `unpin` | `active` | owner | clears `pinned` |
+| `unpin` | `active` | owner, or the engine inside a `pin` | clears `pinned` |
 | `pause` | `active` → `paused` | owner | sets it aside, and unpins it |
 | `resume` | `paused` → `active` | owner | takes it up again |
 | `replan` | `active` | owner | no input; stamps `replan_requested_at` |
@@ -65,12 +65,18 @@ The guards:
 - one owner holds at most 20 active quests. Create and `resume` are
   both judged by it;
 - only the owner takes `pin`, `unpin`, `pause`, `resume`, `abandon`
-  and `replan`;
+  and `replan`. `unpin` also admits the engine, and no other of these
+  doors does;
 - only the engine (a `:system` principal) takes `plan` and `finish`.
 
-`pin` unpins the others through their own `unpin` door, in the same
-transaction, so each quest's history says when it left view. Only an
-active quest is pinned: `pause`, `abandon` and `finish` unpin.
+The engine keeps the one-pinned rule. One pinned quest per owner is
+the engine's invariant, not a second move the caller makes. `pin`
+unpins the others through their own `unpin` door, in the same
+transaction, as the engine's actor (`waymark10-quests`) and under no
+grant. So a grant that offers `pin` needs no `unpin`, and it need not
+see the other quest. Each quest's history says when it left view and
+that the engine took it out. Only an active quest is pinned: `pause`,
+`abandon` and `finish` unpin.
 
 ## The plan and the step vocabulary
 
@@ -97,6 +103,15 @@ One step is `{n, door, self, whose, note, needs, waiting_on, state}`:
 - `waiting_on`: who the step waits on, when it is not the owner's;
 - `state`: `done`, `next` (the one to take now), `waiting` (on
   someone else), `later` (a step before it is not done).
+
+**A step that needs input on a bound row is the person's.** When a
+refusal binds the row its remedy acts on and that door still needs an
+argument, the plan carries a step on that row with the argument in
+`needs`, and the owner takes it each time. `children-are-finished`
+binds the oldest unfinished child, so each child's `ticket.complete`
+is its own step with `needs` `close_reason`: no guard declares one
+sentence for every child. The tracker's Go opens that row's dialog
+for the door with the `needs` fields lit.
 
 **Counts.** The engine learns steps as the house moves, so a plan is
 never a total. A reader counts "k done, n known so far": k steps in

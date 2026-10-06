@@ -816,6 +816,10 @@
                 :doc), asked only where the refusal's resolved remedies
                 bound no row. With neither, a remedy on the refused
                 call's own kind acts on its row; any other is a choice.
+                When the rows a guard waits on are outside the caller's
+                sight (unseen children), that fallback tries the refused
+                row itself, the same guard refuses it, and the rehearsal
+                ends in a cycle block, by design.
     :choices    {remedy-door {:id row-id :input {…}}} — as :resolve, and
                 asked first; where the refusal bound the row, its
                 :input still fills what the binding left unset (the
