@@ -1041,6 +1041,10 @@
                        (assoc-in row [:data :close_reason] (:close_reason inp)))
             :safety {:idempotent true :reversible true :confirm true
                      :consequence "The epic is let go."}}
+     :seal {:from #{:open} :to :closed
+            :guards [the-part-is-finished]
+            :safety {:idempotent true :reversible true :confirm true
+                     :consequence "The epic is sealed."}}
      :shelve {:from #{:open} :to :closed
               :input [:map
                       [:close_reason [:string {:min 1 :max 480}]]
@@ -1263,7 +1267,14 @@
         (is (= ["/api/tickets/c1" "/api/tickets/e1"] (mapv :self plan)))
         (is (empty? (:needs (last plan))))))
     (testing "with no declaration the plan is the rehearsal's alone"
-      (is (= ["/api/tickets/c1"] (mapv :self (:plan (quests/answer->plan answer nil))))))))
+      (is (= ["/api/tickets/c1"] (mapv :self (:plan (quests/answer->plan answer nil))))))
+    (testing "a declared confirm door is the owner's to confirm"
+      (let [goal (last (:plan (quests/answer->plan
+                               answer nil
+                               {:door "complete" :self "/api/tickets/e1" :needs []
+                                :confirm true :consequence "The ticket is let go."})))]
+        (is (= ["complete" "/api/tickets/e1" "confirm" "The ticket is let go."]
+               ((juxt :door :self :whose :note) goal)))))))
 
 (deftest a-goal-the-row-draws-shut-is-the-last-step-of-the-first-plan
   ;; :probe-reads lets the render judge the-part-is-finished, so the
@@ -1283,3 +1294,21 @@
       (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
       (is (= ["done" "next"] (states d)))
       (is (= ["close_reason"] (:needs (last (:plan d))))))))
+
+(deftest a-confirm-goal-the-row-draws-shut-is-a-confirm-step-of-the-first-plan
+  (let [eng (epic-engine {:probe-reads true})
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self self :action "seal"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        goal (last (:plan d))]
+    (is (= ["finish" "seal"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= "confirm" (name (:whose goal)))
+        "the declaration says the shut door is a confirm door")
+    (is (= "The epic is sealed." (:note goal))
+        "the consequence is read from the kind's declaration")))
