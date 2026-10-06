@@ -46,7 +46,12 @@ does not have.
   (`presence-report` in `server/routes/realtime.clj`) calls
   `presence/report!` with `walks/self-recorder`'s tap. The tap is shown
   a `move` when the gaze changed and the `ui` frame when the beat
-  carried one. `report!` takes any named principal and needs no stream.
+  carried one. The gaze changed when the beat's `self` is not the
+  `self` the principal's last beat reported. A per-row stream
+  (`stream-open!`) and a read (`read!`) move the presence entry with no
+  beat, and they are not counted: the beat that brings the entry back to
+  the row the tab never left records no `move`. `report!` takes any
+  named principal and needs no stream.
 - **The write doors hand over transitions** (`walks/record-own!`), but
   only the HTTP create and action routes do. The connector and the
   bulk door do not yet. That is slice 1, ticket 0096e862.
@@ -242,6 +247,11 @@ only way the screen changes:
   that list (`replayHop`). One hop is made for a frame. When the list
   does not show the row either, the move is applied with the arrival
   outline alone.
+- **A move to the row a hand's open form stands on** moves no screen
+  and is left out (`replayFormMoves`). The form stays open until the
+  `ui` beat that closes it. The engine no longer records such a frame.
+  A walk recorded before ticket 5c1acbcb may hold one, from a beat that
+  brought presence back after a stream or a read had moved it.
 - **A dialog beat, a write of the recorder's or an invitation on a row
   that is not on screen** goes to that row first, the same way
   (`replayWalkOf`), and the frame is applied on the row it leads to.
