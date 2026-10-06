@@ -334,6 +334,10 @@
     (is (str/includes? body "is filling this in"))
     (is (str/includes? body "dialog[open]:not([data-guided])"))
     (is (str/includes? body "data-guided-mark"))
+    (testing "a move of the followed person, which a wholly redacted ui beat becomes, closes the guided dialog and the quest's sheet"
+      (is (str/includes? body "else if (f.event === \"move\") guidedMove(f);"))
+      (is (str/includes? body "guidedDismissed = null;\n    closeGuided();\n    guidedQuestSheet(null);\n  }, GUIDED_MOVE_MS);"))
+      (is (str/includes? body "clearTimeout(guidedMoveTimer);\n  applyUiFrame(f);")))
     (testing "a guided dialog's read that fails or is not answered gives its key back"
       (is (str/includes? body "await Promise.race([api(d.self),\n      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);"))
       (is (str/includes? body "} catch (_e) { res = null; }\n  finally {\n    mine = guidedOpening === key;"))

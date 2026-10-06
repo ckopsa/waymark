@@ -2722,6 +2722,20 @@ async function guidedStory() {
        g.querySelector("[data-quest-accept]").disabled === true }`));
   ok("ada's own Accept stays live",
      await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  /* a `ui` beat whose every part was redacted for bo reaches his page as
+     a plain move (presence/ui-redactor): it closes the guided sheet.
+     Ada's own 10 s heartbeat carries her sheet again and takes the close
+     back when it lands inside the wait, so the move is given again. */
+  let movedShut = false;
+  for (let i = 0; i < 3 && !movedShut; i++) {
+    await B.js(`onPresenceFrame({event: "presence", data: {event: "move",
+      principal: {id: followId, display: followName},
+      self: ${JSON.stringify(plan)}, at: new Date().toISOString()}}); true`);
+    await sleep(600);
+    movedShut = await B.js(`!document.querySelector("dialog[open][data-guided-quest]")`);
+  }
+  ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
+     movedShut);
   await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
   await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
