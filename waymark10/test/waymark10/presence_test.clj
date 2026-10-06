@@ -984,6 +984,47 @@
           (is (not (str/includes? (presence/frame {:event "snapshot" :presences snap})
                                   "assign"))))))))
 
+(deftest a-quests-sheet-rides-the-ui-part
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [plan [{:door "assign" :self "/api/pres_notes/n2" :whose "person"}
+                  {:door "assign" :self "/api/pres_notes/n1" :whose "person"
+                   :needs [["assignee"]]}]
+            quest {:goal {:self "/api/pres_notes/n1" :action "assign"}
+                   :label "Assign"
+                   :seen {:ok true :status 200
+                          :body {:preview {:goal "Assign n1" :plan plan}
+                                 :valid true}}}
+            kept {:goal {:self "/api/pres_notes/n1" :action "assign"}
+                  :label "Assign"
+                  :seen {:ok true :body {:preview {:goal "Assign n1" :plan plan}}}}
+            follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (testing "the sheet's goal, label and rehearsal are stored, and no more"
+          (presence/report! reg elena "/api/pres_notes/n1" (assoc assigning :quest quest))
+          (is (= kept (get-in (next-frame follower (ui-of? "elena")) [:ui :quest]))))
+        (testing "a beat whose sheet names no goal carries none"
+          (presence/report! reg elena "/api/pres_notes/n1"
+                            (assoc assigning :quest {:goal {:action "assign"}
+                                                     :seen {:ok true}}))
+          (let [g (next-frame follower (ui-of? "elena"))]
+            (is (some? g))
+            (is (not (contains? (:ui g) :quest)))))
+        (testing "it crosses with its goal's row, and its plan keeps the rows seen"
+          (let [frame {:event "ui" :principal {:id "elena" :display "Elena" :type "human"}
+                       :self "/api/pres_notes/n1" :source "heartbeat" :at "t" :seq 7
+                       :ui (assoc assigning :quest kept)}
+                vis (fn [rows]
+                      {:row? (fn [_k id] (contains? rows id))
+                       :action? (fn [_k _a] true)
+                       :arg? (fn [_k _a _arg] true)
+                       :field? (fn [_k _f] true)
+                       :whole-kind? (fn [_k] true)})
+                redact #((presence/ui-redactor eng (vis %)) frame)]
+            (is (= [(second plan)]
+                   (get-in (redact #{"n1"}) [:ui :quest :seen :body :preview :plan])))
+            (is (not (contains? (:ui (redact #{"n2"})) :quest)))))))))
+
 (deftest ui-fields-the-follower-cannot-read-are-absent
   (with-ui-reg {}
     (fn [eng reg]
