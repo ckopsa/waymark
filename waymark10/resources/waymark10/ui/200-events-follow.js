@@ -758,17 +758,27 @@ function questPlan(doc) {
       : null);
 }
 function questStep(doc, s) {
-  const needs = (s.needs || []).map(pretty).join(", ");
+  const needs = (s.needs_labels || (s.needs || []).map(pretty)).join(", ");
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
-    el("span", {class: "quest-note"}, s.note || pretty(s.door)));
+    el("span", {class: "quest-note"}, s.note || s.door_label || pretty(s.door)));
+  /* the row the step is on, in words: the row's own summary, which the
+     page reads (questRow, 120-nav-home.js). Its path is never text. */
+  if (s.self)
+    row.append(el("small", {class: "muted quest-alt"}, " · ", questRow(s.self)));
   /* the refusal's other remedies: any one of them is this step */
   if (s.state !== "done")
-    for (const a of s.alternatives || [])
+    for (const a of s.alternatives || []) {
+      const other = a.self && a.self !== s.self;
       row.append(el("small", {class: "muted quest-alt", "data-quest-alt": ""},
-        ` or ${pretty(a.door)}`));
+        ` or ${a.door_label || pretty(a.door)}`,
+        other ? " on " : null, other ? questRow(a.self) : null));
+    }
   if (s.whose === "choice" && s.state !== "done")
     row.append(el("span", {class: "muted", "data-quest-choice": ""},
       needs ? ` · choose ${needs}` : " · a choice is yours to make"));
+  else if (needs && s.state !== "done")
+    row.append(el("span", {class: "muted", "data-quest-needs": ""},
+      ` · asks for ${needs}`));
   if (s.state === "waiting")
     /* a held call waits for the owner's own tap: the link is the row
        the tap is made on */

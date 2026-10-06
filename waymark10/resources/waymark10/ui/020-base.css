@@ -240,6 +240,15 @@
                              background: var(--verdigris-deep); }
   #questbar .quest-line { flex: 1 1 0; min-width: 0; overflow: hidden;
                           text-overflow: ellipsis; white-space: nowrap; }
+  /* the head step's line: its note, then its row and its needs in
+     words, which give way first and take half the line at most */
+  #questbar .quest-head { display: flex; gap: 6px; }
+  #questbar .quest-head [data-quest-note] { flex: 1 1 0; min-width: 0;
+                                            overflow: hidden;
+                                            text-overflow: ellipsis; }
+  #questbar .quest-head .quest-on { flex: 0 1 auto; min-width: 0;
+                                    max-width: 50%; overflow: hidden;
+                                    text-overflow: ellipsis; }
   #questbar .quest-live { display: inline-block; width: 7px; height: 7px;
                           border-radius: 50%; margin-right: 6px;
                           background: var(--verdigris-deep);
