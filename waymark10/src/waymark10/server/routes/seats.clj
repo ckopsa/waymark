@@ -834,30 +834,48 @@
       (fn [tx] (store/transitions st tx {:since after}
                                   {:limit inbox-page :settled true})))))
 
-(defn- sitting-start
-  "Where a tail with no `after` begins: just before the sitting's first
-  event, so it reads from the sitting's start. A sitting the log does
-  not know begins at the log's newest event, never at its first."
-  [eng sitting]
-  (let [st (:storage eng)
-        [own newest] (store/with-tx st
-                       (fn [tx]
-                         [(first (store/transitions st tx {:kind :sitting
-                                                           :resource-id (str (:id sitting))}
-                                                    {:limit 1}))
-                          (first (store/transitions st tx {} {:newest-first true :limit 1}))]))]
-    (cond own (dec (long (:id own)))
-          newest (long (:id newest))
-          :else 0)))
+(def ^:private inbox-seed-tries
+  "How many times a starting cursor asks for the settled log before the
+  door answers that it is not ready."
+  4)
 
 (defn- log-newest
   "Where a tail that asks for `after=now` begins: the log's newest
-  event, 0 when the log is empty."
+  event, 0 when the log is empty. The caller keeps the answer as its
+  cursor, so the read is SETTLED: seeded at the newest COMMITTED id
+  alone, a lower id still in flight would commit behind the cursor and
+  never be served. → nil when the writers in flight outlasted
+  `inbox-seed-tries`: that is not an empty log, and never 0."
   [eng]
+  (when-some [rows (store/settled-transitions (:storage eng) {}
+                                              {:newest-first true :limit 1}
+                                              inbox-seed-tries)]
+    (if-some [newest (first rows)] (long (:id newest)) 0)))
+
+(defn- sitting-start
+  "Where a tail with no `after` begins: just before the sitting's first
+  event, so it reads from the sitting's start. A sitting the log does
+  not know begins at the log's newest event, never at its first; that
+  is `log-newest`'s settled read, and its nil when the log did not
+  settle."
+  [eng sitting]
   (let [st (:storage eng)
-        newest (store/with-tx st
-                 (fn [tx] (first (store/transitions st tx {} {:newest-first true :limit 1}))))]
-    (if newest (long (:id newest)) 0)))
+        own (store/with-tx st
+              (fn [tx]
+                (first (store/transitions st tx {:kind :sitting
+                                                 :resource-id (str (:id sitting))}
+                                          {:limit 1}))))]
+    (if own
+      (dec (long (:id own)))
+      (log-newest eng))))
+
+(defn- inbox-unsettled!
+  "503 for a tail whose starting cursor could not be read: the log did
+  not settle, so the door names no cursor and the caller asks again."
+  []
+  (throw (p/problem :inbox-unsettled 503 "Inbox not ready"
+                    {:detail (str "The log did not settle, so this tail has no "
+                                  "place to begin yet. Ask again.")})))
 
 (defn- inbox-match
   "A predicate on a log row. The seat's `inbox.only` (stated, or the
@@ -973,7 +991,8 @@
   `after` or from the sitting's start, as newline-delimited JSON
   (docs/spec-seat.md R-12.38). `after=now` answers no event and names
   the log's newest one, so a tail of a long-open sitting can begin at
-  the present.
+  the present. A starting cursor the door has to find in a log that
+  does not settle is 503, never a cursor of 0.
 
   ANONYMOUS ON PURPOSE, the transcript door's reasoning: the key in the
   header is the whole credential, it answers for one open sitting, and
@@ -996,9 +1015,9 @@
       (if now?
         {:status 200
          :headers {"Content-Type" "application/x-ndjson"
-                   "Waymark-Inbox-After" (str (log-newest eng))}
+                   "Waymark-Inbox-After" (str (or (log-newest eng) (inbox-unsettled!)))}
          :body ""}
-        (loop [cursor (or after (sitting-start eng sitting))]
+        (loop [cursor (or after (sitting-start eng sitting) (inbox-unsettled!))]
           (let [[hits cursor] (inbox-scan eng match? cursor)]
             (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
               (do (Thread/sleep (long inbox-tick-ms))
