@@ -32,9 +32,11 @@
   step that waits on a seat or on a tap opens none. `finish` and
   `abandon` withdraw it.
 
-  ONE PINNED QUEST PER OWNER. `pin` unpins the owner's other quests
-  through their own `unpin` door, in the same transaction. Only an
-  active quest is pinned: `pause`, `abandon` and `finish` unpin."
+  ONE PINNED QUEST PER OWNER. The rule is the engine's: `pin` unpins
+  the owner's other quests through their own `unpin` door, in the same
+  transaction, as `engine-actor` and not as the caller. A grant that
+  offers `pin` needs no `unpin`. Only an active quest is pinned:
+  `pause`, `abandon` and `finish` unpin."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -52,7 +54,8 @@
 (def kind :quest)
 
 (def engine-actor
-  "The system actor that plans and finishes a quest."
+  "The system actor that plans and finishes a quest, and that unpins an
+  owner's other quests when the owner pins one."
   (t/principal {:id "waymark10-quests" :type :system
                 :display "Quests"}))
 
@@ -109,6 +112,13 @@
   [row _inp ctx]
   (if (is? row :owner ctx) (t/allow) (t/deny)))
 
+(g/defguard the-owner-or-the-engine-unpins-it
+  {:reads [:principal]
+   :open "The wall is about who: the owner moves its own quest, and no field of this door makes anyone else the owner."
+   :explain "Only the owner of this quest unpins it. The engine unpins it when the owner pins another quest."}
+  [row _inp ctx]
+  (if (or (is? row :owner ctx) (engine? ctx)) (t/allow) (t/deny)))
+
 (g/defguard the-engine-plans-it
   {:reads [:principal]
    :hide true
@@ -162,13 +172,15 @@
 
 (defhandler pin-it [row _inp ctx]
   ;; the owner's other pinned quests leave through their own door, in
-  ;; this write's transaction, so each one's history says who unpinned it
+  ;; this write's transaction. One pinned quest per owner is the engine's
+  ;; rule, so the engine's actor takes that door: the caller's grant needs
+  ;; no `unpin`, and each one's history says the engine unpinned it
   (when-some [invoke (:invoke ctx)]
     (doseq [other (quests-of (get-in row [:data :owner]) ctx)
             :when (and (not= (str (:id other)) (str (:id row)))
                        (true? (get-in other [:data :pinned]))
                        (active? other))]
-      (invoke kind (str (:id other)) :unpin {})))
+      (invoke kind (str (:id other)) :unpin {} {:as engine-actor})))
   (assoc-in row [:data :pinned] true))
 
 (defhandler unpin-it [row _inp _ctx]
@@ -365,7 +377,7 @@
                :description "Keep this quest in view; your other quests are unpinned"}}
     :unpin
     {:from #{:active} :to :active
-     :guards [the-owner-moves-it]
+     :guards [the-owner-or-the-engine-unpins-it]
      :handler unpin-it
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unpin" :order 2

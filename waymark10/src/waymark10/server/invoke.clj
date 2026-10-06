@@ -448,7 +448,21 @@
                    ;; form does not exist here either
                    (when (:bulk adefn)
                      (throw (p/no-such-action target-kind action-name)))
-                   (let [res (invoke-in-tx!
+                   (let [;; THE ENGINE'S OWN HAND (ticket 552b2fd2): a handler
+                         ;; that keeps an invariant of its kind names a
+                         ;; :system actor as `:as`, and the inner write is
+                         ;; that actor's, not the caller's — so it wears no
+                         ;; leash and holds no power, and its transition
+                         ;; names the engine. Only a :system principal: a
+                         ;; handler never writes as a person.
+                         as (:as opts)
+                         _ (when (and as (not= :system (:type as)))
+                             (throw (t/definition-error
+                                     "ctx invoke: :as takes a :system principal")))
+                         principal (or as principal)
+                         grant (when-not as grant)
+                         power (when-not as power)
+                         res (invoke-in-tx!
                               engine tx trdef target-kind (str id) adefn
                               (body-digest body) body
                               {:principal principal
