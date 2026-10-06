@@ -150,6 +150,7 @@
             [waymark10.derived :as derived]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
@@ -1363,7 +1364,8 @@
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
                                      :summary (summary-of rdef row)}
-                                    (out-of-state-says defn row guard-ctx))))
+                                    (out-of-state-says defn row guard-ctx)
+                                    (machine/roads rdef defn (:state row)))))
           (do
             ;; concealment precedes everything in-state too (phase 8's
             ;; ordering amendment, forced by the mirror's sync doors):
