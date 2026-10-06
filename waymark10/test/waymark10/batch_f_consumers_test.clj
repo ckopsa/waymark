@@ -138,6 +138,75 @@
           (is (= high (cursor-of :f-ordered)))))
       (finally (deliver release true)))))
 
+;; ── 1c. what the order lock costs writers behind a long transaction ─
+;; A measurement, printed: timings are the runner's, so the one bound
+;; asserted is a count. Readers that take no lock (:settled false) are
+;; the log as it was before the order lock.
+
+(defn- append-latencies!
+  "For hold-ms, `drains` threads read the log (:settled as given) and
+  `writers` threads append, each append in a transaction of its own;
+  with long-writer? one more transaction appends first and stays open
+  for the whole of it. → the appends' latencies in ms, sorted."
+  [st record {:keys [hold-ms drains writers settled long-writer?]}]
+  (let [appended (promise)
+        hold (future
+               (if long-writer?
+                 (store/with-tx st
+                   (fn [tx]
+                     (deliver appended (:id (store/append-transition! st tx record)))
+                     (Thread/sleep (long hold-ms))))
+                 (do (deliver appended nil)
+                     (Thread/sleep (long hold-ms)))))
+        since (deref appended 10000 nil)
+        drainers (mapv (fn [_]
+                         (future
+                           (while (not (future-done? hold))
+                             (store/with-tx st
+                               (fn [tx] (store/transitions st tx {:since since}
+                                                           {:limit 200 :settled settled})))
+                             (Thread/sleep 20))))
+                       (range drains))
+        appenders (mapv (fn [_]
+                          (future
+                            (loop [ms []]
+                              (if (future-done? hold)
+                                ms
+                                (let [t0 (System/nanoTime)]
+                                  (store/with-tx st
+                                    #(store/append-transition! st % record))
+                                  (recur (conj ms (/ (- (System/nanoTime) t0) 1e6))))))))
+                        (range writers))]
+    @hold
+    (run! deref drainers)
+    (vec (sort (mapcat deref appenders)))))
+
+(deftest order-lock-cost-to-writers
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        writers 3
+        run (fn [settled long-writer?]
+              (let [ms (append-latencies! st record {:hold-ms 1500 :drains 2
+                                                     :writers writers
+                                                     :settled settled
+                                                     :long-writer? long-writer?})
+                    at #(nth ms (min (dec (count ms)) (long (* % (count ms)))))]
+                (println (format (str "log-order-lock settled=%s long-writer=%s"
+                                      " appends=%d p50=%.1fms p99=%.1fms max=%.1fms")
+                                 settled long-writer? (count ms)
+                                 (at 0.5) (at 0.99) (peek ms)))
+                ms))]
+    (run false false)
+    (run true false)
+    (run false true)
+    (testing "behind a long writer a settled drain yields: appends still land"
+      ;; held for the whole hold, each writer would land exactly one
+      (is (< writers (count (run true true)))))))
+
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 
 (deftest throwing-consumer-parks-and-retries
