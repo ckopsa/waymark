@@ -135,25 +135,30 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
                                           : "draft — saved on blur") : ""),
       dryNote,
-      entry.draft ? el("button", {onclick: async () => {
+      entry.draft ? el("button", {"data-surface": "dialog.discard", onclick: async () => {
         disarmDraft();
         await api(entry.draft.href, {method: "DELETE"});
         toast("Draft discarded");
         closeDlg(); render();
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
-        ? el("button", {onclick: () => check()}, "Check") : null,
+        ? el("button", {"data-surface": "dialog.check", onclick: () => check()},
+            "Check")
+        : null,
       invitation && ((invitation.doc || {}).actions || {}).decline
         ? el("button", {class: "danger", "data-invite-decline": "",
+                        "data-surface": "dialog.decline",
                         onclick: () => declineInvitation()},
             led ? "Skip" : "Decline")
         : null,
-      led ? el("button", {"data-walk-stop": "", onclick: () => stopLed()}, "Stop")
+      led ? el("button", {"data-walk-stop": "", "data-surface": "dialog.stop",
+                          onclick: () => stopLed()}, "Stop")
           : null,
       el("button", {"data-surface": "dialog.cancel", onclick: () => closeDlg()},
          "Cancel"),
       laterable
-        ? el("button", {"data-later": "", onclick: () => openLater()},
+        ? el("button", {"data-later": "", "data-surface": "dialog.later",
+                        onclick: () => openLater()},
             "Do this later")
         : null,
       el("button", {class: safety.confirm ? "danger" : "primary",
@@ -427,7 +432,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       return !guidedKept ? null
         : el("span", {class: "questoffer", "data-quest-offer": "offered"},
             el("button", {type: "button", class: "primary",
-                          "data-quest-accept": ""}, "Accept as quest"));
+                          "data-quest-accept": "",
+                          "data-surface": "refusal.accept"}, "Accept as quest"));
     /* the slot says how the read ended (data-quest-offer), so a refusal
        with no button tells why. A read that failed, and was not refused,
        is tried one more time. */
@@ -444,7 +450,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       says(create ? "offered" : res.ok ? "no-create" : "refused " + res.status);
       if (!create) return;
       slot.append(el("button", {type: "button", class: "primary",
-        "data-quest-accept": "",
+        "data-quest-accept": "", "data-surface": "refusal.accept",
         title: "Keep this as a goal: the engine plans the steps to it",
         onclick: () => acceptQuest(create)}, "Accept as quest"));
     };
@@ -732,7 +738,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        its pointer (200-events-follow.js) */
     dlg.guidedAccept = () => {
       const kept = el("button", {class: "primary", type: "button",
-                                 "data-quest-accept": ""}, "Accept as quest");
+                                 "data-quest-accept": "",
+                                 "data-surface": "refusal.accept"},
+                      "Accept as quest");
       foot.append(kept);
       return kept;
     };
@@ -868,7 +876,7 @@ function markTyped(form, name) {
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */
 function reportDialog(report) {
   const d = report.data || {};
-  const dlg = el("dialog", {"data-report": ""},
+  const dlg = el("dialog", {"data-report": "", "data-surface": "report"},
     el("div", {class: "dlghead"},
       el("h3", {}, "Bulk report · " + pretty(report.action || ""))),
     el("div", {class: "dlgbody"},

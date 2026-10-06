@@ -687,7 +687,11 @@ selector. Every interactive surface a demo can name carries
 
 | Name | What it is |
 |---|---|
-| `nav.<kind>` | A kind's tab in the navigation bar. |
+| `nav.<kind>` | A kind's tab in the navigation bar, or its line in the ⋯ menu when it has no tab. |
+| `nav-home` | The Home tab of the phone's navigation bar. |
+| `nav-domain` | The active application's name in the navigation bar, a link to its home. |
+| `nav-access` | The Access tab in the navigation bar. |
+| `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
 | `row` | One row of a collection's table; `data-self` carries its address. |
 | `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
 | `door-shut:<action>` | The dotted 'not yet' button of a shut action that a quest can reach. |
@@ -695,6 +699,14 @@ selector. Every interactive surface a demo can name carries
 | `dialog.field:<name>` | One field of a form, its label and its input. |
 | `dialog.submit` | The button that writes an action's form. |
 | `dialog.cancel` | The button that closes an action's form and writes nothing. |
+| `dialog.check` | The form's Check button, which rehearses the write. |
+| `dialog.discard` | The form's Discard draft button. |
+| `dialog.later` | The form's Do this later button. |
+| `dialog.decline` | The form's Decline button for an invitation; it reads Skip in a led walk. |
+| `dialog.stop` | The form's Stop button in a led walk. |
+| `secret` | The dialog that shows a secret one time, with its Copy button. |
+| `report` | The dialog that reports a bulk action's verdicts. |
+| `upload` | The dialog that uploads a file as an attachment. |
 | `sheet` | The quest sheet a tap on a dotted button opens. |
 | `sheet.step:<n>` | The sheet's step n of the plan, counted from 1. |
 | `sheet.accept` | The sheet's Accept quest button. |
@@ -702,8 +714,16 @@ selector. Every interactive surface a demo can name carries
 | `tracker` | The bar that shows the pinned quest. |
 | `tracker.go` | The tracker's Go button, for the step at the plan's head. |
 | `tracker.next` | The tracker's line for the step at the plan's head. |
+| `tracker.more` | The tracker's ⋯ menu; the quest's own actions inside it are `door:<action>`. |
+| `quest.go` | The Go button of the next step on a quest's own page. |
 | `caption` | The caption band of a replay. |
 | `refusal` | The line a refused write is said in, in a form or in the sheet. |
+| `refusal.accept` | The Accept as quest button offered under a refusal. |
+
+The fixed parts of the navigation bar are spelled with a hyphen
+(`nav-home`), so that no kind's name can make `nav.<kind>` mean one of
+them. A kind folded behind ⋯ is drawn only while the menu is open: a
+scene presses `nav-more` first.
 
 The same list is served as JSON at `GET /api/-/ui/surfaces`:
 `{"surfaces": [{"name": "tracker.go", "is": "…"}, …]}`. The page's own

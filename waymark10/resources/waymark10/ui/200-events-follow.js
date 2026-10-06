@@ -791,6 +791,7 @@ function questStep(doc, s) {
         : s.waiting_on || "someone else"));
   if (s.state === "next" && doc.state === "active")
     row.append(el("button", {class: "primary small", "data-quest-go": "",
+      "data-surface": "quest.go",
       onclick: () => questGo(s)}, "Go"));
   return row;
 }
