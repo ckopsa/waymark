@@ -271,6 +271,33 @@
        (testing "once the lower id commits, the page holds both, in id order"
          (is (= [low high] (page))))))))
 
+(deftest the-dispatcher-does-not-pass-the-id-in-flight
+  (let [d (events/dispatcher *eng* {:poll-ms 200})
+        sub (events/subscribe d {})
+        seen (atom [])
+        ;; take from the live subscription for ms, or until (done? seen)
+        hear! (fn [done? ms]
+                (let [deadline (+ (System/currentTimeMillis) ms)]
+                  (loop []
+                    (let [left (- deadline (System/currentTimeMillis))]
+                      (when (and (pos? left) (not (done? @seen)))
+                        (when-some [t (events/take-event sub left)]
+                          (swap! seen conj (:id t)))
+                        (recur))))))]
+    (try
+      (in-the-window
+       (fn [low high commit-low!]
+         (testing "a drain in the window delivers neither id"
+           (hear! (constantly false) 1500)
+           (is (empty? (filter #(>= % low) @seen))))
+         (commit-low!)
+         (testing "once the lower id commits, a live subscriber hears both, in id order"
+           (hear! #(some #{high} %) 10000)
+           (is (= [low high] (filterv #(>= % low) @seen))))))
+      (finally
+        (events/unsubscribe d sub)
+        (events/stop! d)))))
+
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 
 (deftest throwing-consumer-parks-and-retries
