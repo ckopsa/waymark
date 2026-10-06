@@ -968,6 +968,24 @@
             (is (= "assign" (get-in e [:ui :dialog :action])))
             (is (some? (:seq e)))))))))
 
+(deftest a-move-with-no-new-beat-says-the-carried-ui-again
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (presence/report! reg elena "/api/pres_notes/n1" assigning)
+        (let [f (next-frame follower (ui-of? "elena"))]
+          (is (= "assign" (get-in f [:ui :dialog :action])))
+          (testing "a read of theirs from a second tab moves self and reports no ui"
+            (presence/read! reg elena "/api/pres_notes/n2")
+            (let [m (next-frame follower #(and (= "move" (:event %))
+                                               (= "elena" (get-in % [:principal :id]))))
+                  g (next-frame follower (ui-of? "elena"))]
+              (is (= "/api/pres_notes/n2" (:self m)))
+              (is (some? g) "the ui frame follows the move, so the follower's dialog stays open")
+              (is (= (:seq f) (:seq g)) "under the seq it was reported with")
+              (is (= (:ui f) (:ui g))))))))))
+
 (deftest a-stream-without-ui-is-byte-for-byte-today
   (with-ui-reg {}
     (fn [_eng reg]

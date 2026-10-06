@@ -293,8 +293,12 @@
 
 (defn- publish!
   "Re-merge, diff against the last announced truth, fan the
-  difference as join/move/leave frames. Reentrant under :lock; cv is
-  the curtain-view its caller resolved OUTSIDE the lock."
+  difference as join/move/leave frames. A move whose entry carries a
+  `ui` fans that `ui` frame after it, changed or not: to a follower a
+  move alone is what a wholly redacted beat looks like, so the screen
+  that is still there is said again, under its old `seq`. Reentrant
+  under :lock; cv is the curtain-view its caller resolved OUTSIDE the
+  lock."
   [reg cv]
   (locking (:lock reg)
     (let [now (System/currentTimeMillis)
@@ -306,7 +310,8 @@
           (nil? o) (fan! reg (frame-of "join" e))
           (not= (:self o) (:self e)) (fan! reg (frame-of "move" e)))
         (when (and (some? (:ui e))
-                   (not= (select-keys o [:ui :seq]) (select-keys e [:ui :seq])))
+                   (or (not= (:self o) (:self e))
+                       (not= (select-keys o [:ui :seq]) (select-keys e [:ui :seq]))))
           (fan! reg (ui-frame-of e))))
       ;; a LEAVE is whatever merged-view dropped. That is why the
       ;; curtain verdict is resolved there and not here: a pid missing
