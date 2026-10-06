@@ -1439,8 +1439,16 @@ async function accessStory() {
   ok("the tracker's title opens that quest",
      await evaljs(`${qBar}.querySelector("[data-quest-title]").getAttribute("href")`) ===
        "#" + qPinned[0].self);
+  /* the finish the stream does not deliver: the owner's own goal write
+     can finish the quest before the tracker reads again, so the stream
+     is closed here and the read alone must say Quest complete */
+  await evaljs(`sseClose(questStream); true`);
   ok("the engine finishes the accepted quest",
      (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
+  await evaljs(`refreshQuest().catch(() => {}); true`);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the completion line, off the read alone", 15000);
+  ok("a quest that finished unheard still says Quest complete", true);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
 
   /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
