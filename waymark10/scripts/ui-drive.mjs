@@ -1318,11 +1318,26 @@ async function accessStory() {
     return true; })()`);
   const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
   const qAccept = `document.querySelector("dialog[open] [data-quest-accept]")`;
+  /* what the shelve door answered each time, for the timeout's trace: a
+     submit closes the dialog on a 2xx and on nothing else */
+  await evaljs(`(() => {
+    const real = window.fetch;
+    window.__shelved = [];
+    window.fetch = async (...a) => {
+      const res = await real(...a);
+      if (String(a[0]).includes("/-/shelve"))
+        window.__shelved.push([String(a[0]), res.status, a[1]?.body ?? null]);
+      return res; };
+    return true; })()`);
   await shelve("attic");
   await waitFor(`${qRefused}.includes("attic")`, "the attic's refusal", 15000);
   /* the offer is drawn after a read of the quests collection: give a
      wrong one the time to land */
   await sleep(1500);
+  /* no dialog holds no offer either: the dialog still stands, with the
+     attic's refusal in it */
+  ok("the shelve dialog still stands with the attic's refusal",
+     await evaljs(`${qRefused}.includes("attic")`));
   ok("a refusal without remedies offers no Accept as quest", await evaljs(`!${qAccept}`));
   await shelve("high");
   await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
@@ -1332,6 +1347,8 @@ async function accessStory() {
                    offer: document.querySelector("dialog[open] .questoffer")
                             ?.getAttribute("data-quest-offer") ?? null,
                    dialog_open: !!document.querySelector("dialog[open]"),
+                   shelved: window.__shelved ?? null,
+                   here: location.hash,
                    problem: ${qRefused}})`);
   ok("a refused door with remedies shows Accept as quest", true);
   await shot("accept-as-quest-offer");
