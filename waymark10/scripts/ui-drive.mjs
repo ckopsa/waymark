@@ -2722,6 +2722,20 @@ async function guidedStory() {
        g.querySelector("[data-quest-accept]").disabled === true }`));
   ok("ada's own Accept stays live",
      await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+  /* a `ui` beat whose every part was redacted for bo reaches his page as
+     a plain move (presence/ui-redactor): it closes the guided sheet.
+     Ada's own 10 s heartbeat carries her sheet again and takes the close
+     back when it lands inside the wait, so the move is given again. */
+  let movedShut = false;
+  for (let i = 0; i < 3 && !movedShut; i++) {
+    await B.js(`onPresenceFrame({event: "presence", data: {event: "move",
+      principal: {id: followId, display: followName},
+      self: ${JSON.stringify(plan)}, at: new Date().toISOString()}}); true`);
+    await sleep(600);
+    movedShut = await B.js(`!document.querySelector("dialog[open][data-guided-quest]")`);
+  }
+  ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
+     movedShut);
   await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
   await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
@@ -3754,6 +3768,7 @@ async function questPhoneStory() {
       return {goal: g.querySelector("[data-quest-sheet-goal]").textContent,
               why: g.querySelector("[data-quest-why]").textContent,
               steps: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent),
+              paths: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.title),
               turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),
               refused: g.querySelector("[data-quest-refused]").textContent,
               accept: g.querySelector("[data-quest-accept]").disabled}; })()`);
@@ -3763,8 +3778,13 @@ async function questPhoneStory() {
     ok("it numbers the steps, each with whose turn it is",
        seen.steps.length >= 2 && seen.turns.length === seen.steps.length &&
        seen.turns.every(t => t.trim().length > 0));
-    ok("the goal's own form is the last step, with close_reason asked for",
-       /close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
+    ok("a step names its row in words: the child's title, and the path only as a title",
+       seen.steps.some(t => t.includes(`Sweep the hall ${where}`)) &&
+       seen.steps.every(t => !t.includes("/api/led_tasks/")) &&
+       seen.paths.includes(child) && seen.paths.includes(epic));
+    ok("the goal's own form is the last step, with Close reason asked for",
+       /Close reason/.test(seen.steps[seen.steps.length - 1] || "") &&
+       !/close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
     ok("Accept is offered, with no refusal said",
        seen.accept === false && seen.refused === "");
     if (phone) {

@@ -409,7 +409,28 @@ function applyGuidedUi(f) {
     if (f.seq <= guidedSeq) return;
     guidedSeq = f.seq;
   }
+  clearTimeout(guidedMoveTimer);
   applyUiFrame(f);
+}
+/* a `move` of the followed person is also what a `ui` beat becomes when
+   every part of it was redacted for this follower (presence/ui-redactor):
+   it closes the guided dialog and the quest's sheet, as a beat that
+   carries neither does. The close waits a moment: a beat that changes
+   their screen sends a move and then its `ui` frame, and that frame,
+   applied, takes the close back. */
+const GUIDED_MOVE_MS = 250;
+let guidedMoveTimer = null;
+function guidedMove(f) {
+  if (replay || !followUi || !followId || !f ||
+      (f.principal || {}).id !== followId) return;
+  const id = followId;
+  clearTimeout(guidedMoveTimer);
+  guidedMoveTimer = setTimeout(() => {
+    if (replay || !followUi || followId !== id) return;
+    guidedDismissed = null;
+    closeGuided();
+    guidedQuestSheet(null);
+  }, GUIDED_MOVE_MS);
 }
 /* one `ui` frame applied to this screen: a live one, or a replay's.
    The navigation, the dialog and the focused row are the same code
@@ -1372,7 +1393,7 @@ function applyReplayFrame(f, landed) {
     /* the quest its open sheet was accepted for: the beat that closes
        the sheet is then no press on Not now (replayGestureTarget) */
     const sheet = $("dialog[open][data-quest-sheet]");
-    if (sheet && f.kind === "quest" && f.action === "create")
+    if (sheet && replaySheetMade(replay, f, sheet))
       sheet.setAttribute("data-replay-accepted", "");
     /* as the firehose steers: go where they wrote, unless a dialog is
        open; a row already on screen is drawn again from the frame, and
@@ -1640,6 +1661,22 @@ function replayKeeps(r, f, who, key) {
   const d = (held && held.doc.data) || {};
   return String(d.self || "").split("?")[0] + " " + d.action === key;
 }
+/* whether the frame `f` is the `create` of the quest the open sheet
+   `sheet` shows: its goal, read as replayKeeps reads it, is the sheet's
+   own (replayQuestSheet). A quest made elsewhere while the sheet was
+   open, in another tab or over the connector, is not the sheet's Accept. */
+function replaySheetMade(r, f, sheet) {
+  if (f.type !== "transition" || f.kind !== "quest" || f.action !== "create")
+    return false;
+  const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+  const d = (held && held.doc.data) || {};
+  let goal = null;
+  try { goal = JSON.parse(sheet.getAttribute("data-replay-quest")); }
+  catch (e) { goal = null; }
+  const row = s => String(s || "").split("?")[0];
+  return Array.isArray(goal) && !!d.self && row(d.self) === row(goal[0]) &&
+    d.action === goal[1];
+}
 /* the reachable button a quest's `create` was tapped on, with no form
    open: the shut door of the quest's goal, on the screen shown
    (shutDoor, 140-links-access.js). The goal is read as replayKeeps
@@ -1858,7 +1895,7 @@ function replayGestureTarget(f) {
     if (f.type === "refusal")
       return replaySheetRefused(f) ? sheet.querySelector("[data-quest-accept]") : null;
     if (f.type === "transition")
-      return f.kind === "quest" && f.action === "create" && !replayNotice(replay, f)
+      return replaySheetMade(replay, f, sheet) && !replayNotice(replay, f)
         ? sheet.querySelector("[data-quest-accept]") : null;
     return f.type === "ui" && !ui.quest && !sheet.hasAttribute("data-replay-accepted")
       ? sheet.querySelector("[data-quest-decline]") : null;
