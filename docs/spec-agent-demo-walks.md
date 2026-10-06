@@ -154,6 +154,12 @@ own create form and its refusal; the export gives those lines back to
 that recorder alone, and any other exporter must see the whole kind.
 Permission to create is not sight of the list: the `move` to that
 collection, a caption on it and its screen still need the whole kind.
+Such a walk therefore has a create form's `ui` beat with no `move` before
+it and no `doc` behind it. Replay opens that form from the beat's own
+`self`: it goes to the collection the beat names, draws the recording's
+own panel for it, and draws the form and its refusal there. A story of
+`waymark10/scripts/ui-drive.mjs guided` replays such a walk and checks
+the form, what was typed and the refusal.
 A bulk write records one frame for each row it refused, about that row
 and with that row's own problem, in an atomic call as in a partial
 one; a bulk call refused whole, before any row was tried, records
