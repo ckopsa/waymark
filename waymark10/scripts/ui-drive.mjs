@@ -1370,6 +1370,30 @@ async function accessStory() {
   console.log("· a refused door with remedies: Accept as quest");
   const shelfTitle = "Shelf pile";
   const shelfNote = (await qPost("/api/led_notes", {title: shelfTitle}, h)).doc;
+  /* priya records this story as a walk of her own, with its screens
+     (`docs`, so the walk holds the quest's document), and shares this
+     tab so the walk takes its forms. The replay further down plays what
+     the engine recorded of these refusals. */
+  const rShare = `document.querySelector("#sharebtn")`;
+  const rRec = await qPost("/api/walks",
+    {followed: "priya", title: "A refusal kept as a quest", docs: true}, h);
+  ok("priya starts a walk of her own screen", rRec.status === 201);
+  const rWalkSelf = rRec.doc.self;
+  const rFrameCount = async () => (await get(rWalkSelf)).data.frame_count;
+  /* the walk's frame count, once no more arrive for a second */
+  const rSettled = async () => {
+    let n = await rFrameCount();
+    for (let i = 0; i < 20; i++) {
+      await sleep(1000);
+      const m = await rFrameCount();
+      if (m === n) return n;
+      n = m;
+    }
+    return n;
+  };
+  await evaljs(`${rShare}.click(); true`);
+  await waitFor(`${rShare}.getAttribute("aria-pressed") === "true"`,
+                "priya's share toggle on", 15000);
   await evaljs(`location.hash = ${JSON.stringify(shelfNote.self)}; true`);
   /* the hash moves before the page is drawn, and the page it leaves is
      the reel's: a note too, with a shelve door of its own. The wait
@@ -1379,19 +1403,42 @@ async function accessStory() {
                    .includes(${JSON.stringify(shelfTitle)}) &&
                  !!document.querySelector('#view [data-action="shelve"]')`,
                 "the note's row page", 15000);
+  const rBefore = await rSettled();
   await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
                 "the shelve dialog", 15000);
+  /* a shelf the door's schema does not name. The form offers none, so
+     this write of priya's goes to the action route beside the form,
+     once the walk holds the open form. */
+  let rCount = rBefore;
+  for (let i = 0; i < 30 && rCount <= rBefore; i++) {
+    await sleep(500);
+    rCount = await rFrameCount();
+  }
+  ok("the walk takes priya's shelve form", rCount > rBefore);
+  await sleep(1500);
+  const rLoft = await qPost(shelfNote.self + "/-/shelve", {shelf: "loft"}, h);
+  ok("the shelve door refuses a shelf its schema does not name",
+     rLoft.status >= 400 && rLoft.status < 500);
+  /* the next refusal takes this one's place in the form: the walk
+     keeps them apart, so a replay shows each */
+  await sleep(1500);
   /* the enum is a select or a radio group, as the form chose */
-  const shelve = shelf => evaljs(`(() => {
-    const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
-    const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
-    const i = radio || nodes[0];
-    if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
-    i.dispatchEvent(new Event("input", {bubbles: true}));
-    i.dispatchEvent(new Event("change", {bubbles: true}));
-    document.querySelector("dialog[open] .dlgfoot button.primary").click();
-    return true; })()`);
+  const shelve = async shelf => {
+    const before = await rFrameCount();
+    await evaljs(`(() => {
+      const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
+      const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
+      const i = radio || nodes[0];
+      if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+      return true; })()`);
+    /* the walk takes the choice before the press, as it does of a
+       person: the form's beat and the door's answer are two requests */
+    for (let i = 0; i < 40 && await rFrameCount() <= before; i++) await sleep(250);
+    await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  };
   const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
   const qAccept = `document.querySelector("dialog[open] [data-quest-accept]")`;
   /* what the shelve door answered each time, for the timeout's trace: a
@@ -1743,39 +1790,36 @@ async function accessStory() {
   }
 
   /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
-     walk file holds the shelve form, a schema refusal with its field's
-     message, then the guard's refusal, kept as a quest. Replay draws
+     walk is the one priya recorded above, as the engine wrote it: the
+     shelve form, a schema refusal with its field's message, then the
+     guard's refusals, the last one kept as a quest. Replay draws
      each in the form (dlg.guidedRefuse): the message under its field,
      then the problem box with "Accept as quest" under it, which the
      pointer presses. The press is lit for a moment only, so the page is
      watched while the walk plays. */
   console.log("· replay: a recorded refusal, kept as a quest");
-  const rNote = await get(shelfNote.self);
-  const rQuest = "/api/quests/replayed-refusal";
-  const rDoor = {self: shelfNote.self, action: "shelve"};
-  const rFieldError = "the replayed shelf is not one of the shelves";
-  const rDetail = "The replayed high shelf wants a room.";
-  const rWalk = [
-    {format: "waymark-walk/1", title: "A refusal kept as a quest",
-     cast: {p1: {display: "Priya", type: "human"}}},
-    {t: 0, who: "p1", type: "move", self: shelfNote.self},
-    {t: 10, type: "doc", self: shelfNote.self, doc: rNote},
-    {t: 1500, who: "p1", type: "ui", self: shelfNote.self,
-     ui: {dialog: rDoor, fields: {shelf: "loft"}}},
-    {t: 3000, who: "p1", type: "refusal", ...rDoor,
-     title: "Input failed validation", errors: {shelf: [rFieldError]}},
-    {t: 4500, who: "p1", type: "ui", self: shelfNote.self,
-     ui: {dialog: rDoor, fields: {shelf: "high"}}},
-    {t: 6000, who: "p1", type: "refusal", ...rDoor,
-     title: "Refused", detail: rDetail, remedies: ["led_note.rename"]},
-    {t: 7500, who: "p1", type: "transition", kind: "quest", self: rQuest,
-     action: "create", from: null, to: "active", summary: "Shelve the pile"},
-    {t: 7510, type: "doc", self: rQuest,
-     doc: {self: rQuest, kind: "quest", state: "active",
-           data: {self: shelfNote.self, action: "shelve", input: {shelf: "high"},
-                  pinned: false, plan: []}}},
-    {t: 7520, who: "p1", type: "ui", self: shelfNote.self, ui: {}},
-  ].map(l => JSON.stringify(l)).join("\n") + "\n";
+  /* the form's closing beat lands before the seal */
+  await rSettled();
+  ok("priya seals her walk", (await qPost(rWalkSelf + "/-/seal", {}, h)).status < 400);
+  await evaljs(`${rShare}.click(); true`);
+  await waitFor(`${rShare}.getAttribute("aria-pressed") === "false"`,
+                "priya's share toggle off", 15000);
+  const rWalk = await (await fetch(BASE + rWalkSelf + "/export", {headers: h})).text();
+  const rFrames = rWalk.trim().split("\n").slice(1).map(l => JSON.parse(l));
+  console.log("  recorded: " + rFrames.map(f => f.type).join());
+  const rRefusals = rFrames.filter(f => f.type === "refusal" &&
+    f.self === shelfNote.self && f.action === "shelve");
+  ok("the walk holds the three refusals of priya's own writes", rRefusals.length === 3);
+  const [rSchema, , rGuard] = rRefusals;
+  const rFieldError = ((rSchema?.errors || {}).shelf || [])[0] || "";
+  ok("the schema refusal carries its field's message", rFieldError !== "");
+  const rDetail = rGuard?.detail || "";
+  ok("the high shelf's refusal carries its sentence and its remedy",
+     rDetail !== "" && (rGuard?.remedies || []).length > 0);
+  ok("a quest's create by the same hand follows it",
+     rFrames.slice(rFrames.indexOf(rGuard) + 1).some(f =>
+       f.type === "transition" && f.who === rGuard?.who &&
+       f.kind === "quest" && f.action === "create"));
   await evaljs(`(() => {
     const seen = window.__refused = {fieldError: "", box: "", offered: false, pressed: false};
     window.__refusedWatch = new MutationObserver(() => {
@@ -1796,18 +1840,24 @@ async function accessStory() {
     await replayFile(new File([${JSON.stringify(rWalk)}], "refusal.ndjson"));
     return true; })()`);
   await waitFor(`${replayState} === "ended"`, "the refusal's replay to reach its last frame",
-                60000, `window.__refused`);
+                120000, `window.__refused`);
   const rSeen = await evaljs(`(() => {
     window.__refusedWatch.disconnect();
     return {...window.__refused, open: !!document.querySelector("dialog[open]")}; })()`);
   console.log("  seen during the replay: " + JSON.stringify(rSeen));
-  ok("a replayed schema refusal shows the field's message under its field",
-     rSeen.fieldError === rFieldError);
-  ok("a replayed refusal kept as a quest shows its problem box",
-     rSeen.box.includes(rDetail));
-  ok("with Accept as quest under it", rSeen.offered);
-  ok("the pointer presses Accept as quest", rSeen.pressed);
-  ok("the form closes after the press", !rSeen.open);
+  /* a replay that drew something else says what the walk held from the
+     last refused write on: each frame's time, type, door and form */
+  const rOk = (name, cond) => ok(cond ? name : name + " (the walk: " +
+    rFrames.slice(Math.max(0, rFrames.indexOf(rGuard) - 1))
+      .map(f => f.t + " " + f.type + (f.action ? ":" + f.action : "") +
+                (!f.ui ? "" : f.ui.dialog ? ":form" : ":bare")).join(", ") + ")", cond);
+  rOk("a replayed schema refusal shows the field's message under its field",
+      rFieldError !== "" && rSeen.fieldError.includes(rFieldError));
+  rOk("a replayed refusal kept as a quest shows its problem box",
+      rDetail !== "" && rSeen.box.includes(rDetail));
+  rOk("with Accept as quest under it", rSeen.offered);
+  rOk("the pointer presses Accept as quest", rSeen.pressed);
+  rOk("the form closes after the press", !rSeen.open);
   await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
   await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
                 "the refusal's replay to stop");
