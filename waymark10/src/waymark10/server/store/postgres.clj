@@ -491,17 +491,20 @@
 
 (defn- settled-read
   "The settled log through `read`, a fn of the highest id it may
-  answer. Oldest-first, the rows under the watermark are the answer
-  when there are any. With none to give while a transaction in flight
-  holds the watermark down — and for a newest-first read whenever one
-  does, since the newest id is then not known — it asks again for
+  answer. The rows under the watermark are the answer when there are
+  any, in either order: a newest-first read then answers the newest id
+  UNDER the writers in flight, which is a sound cursor — every id at
+  or under it has committed, and the ids above it are a later read's
+  (ticket dea2b35e; answering nil here starved a seed under writers
+  that overlap without a gap). With none to give while a transaction
+  in flight holds the watermark down it asks again for
   `settle-wait-ms` and then answers nil. It holds no lock while it
   waits."
-  [tx read newest-first?]
+  [tx read]
   (let [deadline (+ (System/nanoTime) (* 1000000 (long settle-wait-ms)))]
     (loop []
       (let [{:keys [bound cut?]} (log-watermark tx)
-            rows (when-not (and cut? newest-first?) (read bound))]
+            rows (read bound)]
         (cond
           (or (seq rows) (not cut?)) rows
           (< (System/nanoTime) deadline) (do (Thread/sleep (long settle-poll-ms))
@@ -748,7 +751,7 @@
                    (mapv transition->map
                          (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))]
       (if (:settled opts)
-        (settled-read tx read (:newest-first opts))
+        (settled-read tx read)
         (read nil))))
 
   (transitions-under-grant [_ tx grant-id since until opts]

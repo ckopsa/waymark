@@ -71,10 +71,11 @@
     id can commit after the rows it returns. It blocks no writer. It
     answers nil — no rows, and not the [] of a log with none to give —
     when it has no row to give and the writers in flight under it do
-    not finish in time, and a :newest-first read answers nil whenever
-    they do not: the reader asks again on its next pass, and one
-    with no next pass asks through settled-transitions. Such a read
-    runs in a transaction of its own.")
+    not finish in time: the reader asks again on its next pass, and
+    one with no next pass asks through settled-transitions. A
+    :newest-first read answers the newest row UNDER the appends in
+    flight, not the newest committed. Such a read runs in a
+    transaction of its own.")
   (transitions-under-grant [st tx grant-id since until opts]
     "Log rows whose actor carries this grant (actor->>'grant') and
     whose `at` lies in [since, until] — a nil bound is open. A
