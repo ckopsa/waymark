@@ -3576,6 +3576,59 @@ async function questPhoneStory() {
       {title: `Sweep the hall ${where}`, parent: epic.split("/").pop()}, h);
     const child = sub.doc?.self;
     ok("and a child of it, not finished", sub.status === 201 && !!child);
+    /* a refused tap (ticket e8cb4bcf): one owner holds at most 20 active
+       quests (quests.clj, active-cap), so at the cap the tap's create is
+       refused. The sentence is said in the door's reason line, under the
+       bar, and stays; no quest is pinned and no tracker shows. */
+    const spare = await post("/api/led_tasks", {title: `Spare room ${where}`}, h);
+    const room = spare.doc?.self;
+    const dust = await post("/api/led_tasks",
+      {title: `Dust the shelf ${where}`, parent: String(room).split("/").pop()}, h);
+    ok("a second task with an open child, for the refused tap",
+       spare.status === 201 && !!room && dust.status === 201);
+    const held = [];
+    let full = null;
+    for (let i = 0; i < 21 && !full; i++) {
+      const q = await post("/api/quests", {self: room, action: "complete"}, h);
+      if (q.status === 201 && q.doc?.self) held.push(q.doc.self);
+      else full = q;
+    }
+    console.log(`  ${held.length} quests held, then: ` + JSON.stringify(full?.doc ?? null));
+    ok("priya's active quests reach the cap, and the next create is refused",
+       held.length > 0 && !!full && full.status >= 400 && full.status < 500 &&
+       /at most 20 active quests/.test(full.doc?.detail || ""));
+    await evaljs(`location.hash = ${JSON.stringify(room)}; true`);
+    const shutDoor = '#view button[data-quest-door="complete"]';
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(room)} &&
+                   !!document.querySelector(${JSON.stringify(shutDoor + "[aria-describedby]")})`,
+                  "the second task's row page, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    await press(shutDoor);
+    const saidWhy = `(() => {
+      const b = document.querySelector(${JSON.stringify(shutDoor)});
+      const line = b && document.getElementById(b.getAttribute("aria-describedby"));
+      const s = line && line.querySelector(".notyet-refused");
+      return s ? s.textContent : ""; })()`;
+    await waitFor(`!!${saidWhy}`, "the refusal, in the door's reason line", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const refusal = await evaljs(saidWhy);
+    console.log("  the refused tap: " + JSON.stringify(refusal));
+    ok("a refused tap says the engine's sentence under the bar, beside the reason",
+       /at most 20 active quests/.test(refusal));
+    await sleep(4000);
+    ok("the sentence stays, after a toast would have gone",
+       (await evaljs(saidWhy)) === refusal);
+    ok("the refused tap opens no form, shows no tracker and pins no quest",
+       await evaljs(`!document.querySelector("dialog[open]") && ${bar}.hidden === true`) &&
+       (await pinned()).length === 0);
+    ok("the door takes a tap again",
+       await evaljs(`!document.querySelector(${JSON.stringify(shutDoor)}).hasAttribute("data-quest-busy")`));
+    if (phone) await noOverflow("under the refused tap's sentence");
+    await shot(`${slug}-notyet-refused`);
+    for (const q of held) await post(q + "/-/abandon", {}, h);
+    ok("priya lets the held quests go",
+       (await Promise.all(held.map(q => get(q)))).every(q => q.state === "abandoned"));
     const walk = await evaljs(`(async () => {
       const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
         {followed: principalId() || viewerId(),
@@ -3626,8 +3679,8 @@ async function questPhoneStory() {
     }
     await shot(`${slug}-notyet-door`);
     await press(door);
-    /* a refused create or pin is a toast, which goes away: the page's
-       last words say which, when the tracker never shows */
+    /* a refused create or pin is said in the door's reason line: the
+       page's last words say which, when the tracker never shows */
     await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]")`,
                   "the tracker, off the tap on Complete", 15000,
                   `document.body.innerText.slice(-400)`);
@@ -3697,10 +3750,17 @@ async function questPhoneStory() {
     for (let i = 0; i < 60 && (await get(made)).state !== "finished"; i++) await sleep(250);
     ok("the parent's Complete finishes the quest", (await get(made)).state === "finished");
     ok("and the parent is done", (await get(epic)).state === "done");
-    /* unknown until driven (ticket dfcd5c9a): whether a door shut by its
-       state alone carries remedies, and so is ever reachable */
-    console.log("  the done parent's shut doors: " +
-                JSON.stringify((await get(epic)).unavailable ?? null));
+    /* a door shut by its state alone carries remedies only when a door
+       of the row leads to a state it opens from (render.clj,
+       out-of-state-entry; machine.clj, roads). Nothing leaves done, so
+       a done task's doors name no way out and are never reachable */
+    const shut = (await get(epic)).unavailable ?? null;
+    console.log("  the done parent's shut doors: " + JSON.stringify(shut));
+    ok("the done parent's doors are shut by its state, and carry no remedies",
+       ["complete", "discard"].every(n => {
+         const e = (shut || {})[n];
+         return !!e && (e.becomes_available?.in_states || []).includes("open") &&
+           !(e.remedies || []).length; }));
     await sleep(1500);
     await evaljs(`stopRecording().then(() => true)`);
     await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
