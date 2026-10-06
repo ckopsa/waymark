@@ -1008,6 +1008,15 @@
       (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
     (t/allow)))
 
+(g/defguard the-part-is-kept
+  {:reads [:chore]
+   :explain "The part is not finished, and no door here finishes it."}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [part (read :chore (get-in row [:data :part_id]))]
+      (if (= "done" (some-> part :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
 (def ^:private epic
   "A row whose goal door takes a form: `complete` requires a reason,
   and takes a secret `passphrase`."
@@ -1054,6 +1063,24 @@
                          (assoc-in row [:data :close_reason] (:close_reason inp)))
               :safety {:idempotent true :reversible true :confirm true
                        :consequence "The epic is shelved."}}
+     :retire {:from #{:open} :to :closed
+              :input [:map
+                      [:close_reason [:string {:min 1 :max 480}]]
+                      [:film {:optional true} [:maybe [:string {:max 200}]]]]
+              :guards [the-part-is-finished the-film-is-a-link]
+              :handler (fn [row inp _ctx]
+                         (assoc-in row [:data :close_reason] (:close_reason inp)))
+              :safety {:idempotent true :reversible true :confirm true
+                       :consequence "The epic is retired."}}
+     :scrap {:from #{:open} :to :closed
+             :input [:map
+                     [:close_reason [:string {:min 1 :max 480}]]
+                     [:film {:optional true} [:maybe [:string {:max 200}]]]]
+             :guards [the-part-is-kept the-film-is-a-link]
+             :handler (fn [row inp _ctx]
+                        (assoc-in row [:data :close_reason] (:close_reason inp)))
+             :safety {:idempotent true :reversible true :confirm true
+                      :consequence "The epic is scrapped."}}
      :reopen {:from #{:closed} :to :open :safety routine}}}))
 
 (defn- epic-engine [& [opts]]
@@ -1141,6 +1168,44 @@
     (is (= "The epic is let go. Judged when you fill the form: the-film-is-a-link."
            (:note step))
         "the consequence comes first, and the waiting guard after it")))
+
+(deftest a-confirm-goal-behind-a-row-guard-plans-its-remedy-first
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self self :action "retire"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        goal (last (:plan d))]
+    (is (= ["finish" "retire"] (mapv :door (:plan d))) (pr-str d))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan d))))
+    (is (= ["person" "confirm"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["next" "later"] (states d)))
+    (is (empty? (:needs (first (:plan d)))))
+    (is (= ["close_reason"] (:needs goal)))
+    (is (= "The epic is retired. Judged when you fill the form: the-film-is-a-link."
+           (:note goal))
+        "the refused rehearsal keeps the consequence and the waiting guard")))
+
+(deftest a-confirm-goal-refused-with-no-remedy-names-the-refusal
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "scrap"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)
+        step (first (:plan d))]
+    (is (= ["scrap"] (mapv :door (:plan d))) (pr-str d))
+    (is (not= "confirm" (some-> (:whose step) name))
+        "a door that refuses is not one to confirm")
+    (is (= ["close_reason"] (:needs step)))
+    (is (str/includes? (str (:note step)) "no door here finishes it")
+        "the step names the refusal")))
 
 (deftest a-confirm-goal-whose-partial-rehearsal-warns-names-the-warning
   (let [eng (epic-engine)
