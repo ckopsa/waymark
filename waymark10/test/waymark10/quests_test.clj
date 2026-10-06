@@ -122,6 +122,23 @@
     (is (str/includes? (str no-door) "`launch` is not a door"))
     (is (nil? (refusal #(accept! eng planner seen {} gr))))))
 
+(deftest a-grant-that-does-not-admit-the-goal-door-is-refused-at-create
+  (let [eng (fresh-engine)
+        c (chore! eng "Dishes")
+        ;; sees the row, and admits every door of it but the goal
+        reads-only (assoc (grant-seeing c)
+                          :action? (fn [_kind action]
+                                     (not= "finish" (name action))))
+        shut (refusal #(accept! eng planner c {} reads-only))]
+    (is (str/includes?
+         (str shut)
+         "your grant does not see that row or does not admit that door.")
+        "the invitation's sentence: the owner could never take the goal")
+    (is (nil? (refusal #(accept! eng planner c {:action "reopen"} reads-only)))
+        "the same grant accepts a goal door it does admit")
+    (is (nil? (refusal #(accept! eng person c)))
+        "a person acting as themselves is judged by the row alone")))
+
 (deftest an-owner-holds-at-most-twenty-active-quests
   (let [eng (fresh-engine)
         c (chore! eng "Dishes")
