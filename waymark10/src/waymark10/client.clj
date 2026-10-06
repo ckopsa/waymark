@@ -571,7 +571,9 @@
   pick, or, when neither names one, the refused call's own row when the
   remedy is on its kind. nil means nobody said — a choice for a person;
   {:unseen reason} means the pick did not read back (gone, or outside
-  the caller's grant), so the remedy is blocked, never attempted."
+  the caller's grant), so the remedy is blocked, never attempted. A
+  bound remedy that names :fields carries them on the call, and asks
+  for a patch where its door takes one, so only those fields are owed."
   [session door refused resolve choices]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
         bound (some #(when (= door (:door %)) %) (:bound refused))
@@ -586,7 +588,14 @@
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
     (cond
-      (doc? target) {:door door :doc target :input (:input pick)}
+      (doc? target)
+      (let [fields (mapv keyword (:fields bound))
+            patch? (and (seq fields)
+                        (some? (get-in target [:actions (keyword (door-action door))
+                                               :input :properties :patch])))]
+        (cond-> {:door door :doc target :input (:input pick)}
+          (seq fields) (assoc :fields fields)
+          patch? (assoc-in [:input :patch] true)))
       (problem? target)
       {:door door :unseen (or (get-in target [:problem :detail])
                               (get-in target [:problem :title])
@@ -598,14 +607,23 @@
   row in; a rehearsal's is the door's effect.to) · {:refused [remedy …]
   :bound [resolved remedy …] :doc :reason}
   · {:blocked entry} · {:stop res} (a wire failure or a divergence)."
-  [session {:keys [door doc input retry] :as call} rehearse? opts]
+  [session {:keys [door doc input retry fields] :as call} rehearse? opts]
   (let [doc (if (:self doc) (get-doc session (:self doc)) doc)
         action (keyword (door-action door))
         entry (get-in doc [:actions action])
         blocked (fn [m] {:blocked (merge {:door door :row (:self doc) :needs []
                                           :or (:or call [])}
                                          m)})
-        needs (when entry (missing-inputs entry input))]
+        ;; a remedy that names its fields owes those: what the refusal
+        ;; is missing. A patch leaves the door's other fields as stored
+        needs (when entry
+                (if (seq fields)
+                  (into []
+                        (distinct)
+                        (concat (remove #(some? (get input %)) fields)
+                                (when-not (true? (:patch input))
+                                  (missing-inputs entry input))))
+                  (missing-inputs entry input)))]
     (cond
       (not (doc? doc)) {:stop doc}
 

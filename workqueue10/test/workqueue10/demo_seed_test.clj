@@ -341,25 +341,24 @@
         ;; the sentence that child's `complete` asks for
         sentence {"ticket.complete" {:input ending}}
         on (fn [res k] (filterv #(= (self k) (:row %)) (:blocked-on res)))
-        stated (-> (:data (doc ada :q-epic))
-                   (select-keys [:title :detail :type :showcase])
-                   (assoc-in [:showcase :evidence] {:film_url film-url}))]
+        ;; a patch: the link alone, and the restate keeps the rest
+        linked {:showcase {:evidence {:film_url film-url}}}]
     ;; a rehearsal reads one denier for each door, and the epic's own
     ;; envelope names the evidence first: the children show after it
-    (testing "the first step known: the film's link, a restate with its fields to fill"
+    (testing "the first step known: the film's link, a restate that needs its showcase"
       (let [res (rehearse nil)]
         (is (:rehearsal res))
         (is (= [] (steps (:writes res))) (pr-str res))
-        (is (= [{:door "ticket.restate" :row (self :q-epic) :needs [:title :type]}]
+        (is (= [{:door "ticket.restate" :row (self :q-epic) :needs [:showcase]}]
                (mapv #(select-keys % [:door :row :needs]) (:blocked-on res)))
             (pr-str res)))
-      (let [res (rehearse {"ticket.restate" {:input stated}})]
+      (let [res (rehearse {"ticket.restate" {:input linked}})]
         (is (= [["ticket.restate" (self :q-epic)]
                 ["ticket.complete" (self :q-epic)]]
                (steps (:writes res)))
             (pr-str res)))
       (is (= film-url
-             (get-in (c/act! ada (doc ada :q-epic) :restate stated)
+             (get-in (c/act! ada (doc ada :q-epic) :restate (assoc linked :patch true))
                      [:data :showcase :evidence :film_url]))))
     (testing "the next, which no rehearsal could see before: Ada ends the child that is hers"
       (let [res (rehearse nil)]
