@@ -378,18 +378,27 @@
         (is (= [] (steps (:writes res))) (pr-str res))
         (is (= (:blocked-on res) (on res :q-seats)) (pr-str res))
         ;; still plain blocked-on entries, and not an `:unseen` door: Ada
-        ;; reads the child, and each refusal leaves her no way. Neither
-        ;; door is afforded on the deferred row, neither names a remedy,
-        ;; and neither asks her for an input, a tap or a confirm. That
-        ;; is the shape of a step that is a seat's (`whose: seat`).
-        (is (= [{:door "ticket.complete" :needs [] :or ["ticket.drop"]
-                 :reason "Available in state(s) Draft, Open; the resource is Deferred."}
+        ;; reads the child, and each refusal leaves her no way. The
+        ;; child's `complete` is shut by its state and names `resume`,
+        ;; the row's own door back to open, which her grant does not
+        ;; admit; `drop` names nothing. Neither asks her for an input,
+        ;; a tap or a confirm. That is the shape of a step that is a
+        ;; seat's (`whose: seat`), waiting on whoever holds `resume`.
+        (is (= [{:door "ticket.resume" :needs [] :or []
+                 :reason (str "ticket.resume is not afforded on " (self :q-seats) ".")}
                 {:door "ticket.drop" :needs [] :or ["ticket.complete"]
                  :reason (str "ticket.drop is not afforded on " (self :q-seats) ".")}]
                (mapv #(select-keys % [:door :needs :or :reason :confirm :held])
                      (:blocked-on res)))
             (pr-str res)))
+      (is (= ["ticket.resume"]
+             (get-in (doc ada :q-seats) [:unavailable :complete :remedies])))
       (is (nil? (get-in (doc ada :q-seats) [:actions :resume])))
+      (testing "Planner, who holds resume, plans it as resume then complete"
+        (is (= [["ticket.resume" (self :q-seats)]
+                ["ticket.complete" (self :q-seats)]]
+               (steps (:writes (c/pursue! planner (doc planner :q-seats)
+                                          :complete ending {:dry-run true}))))))
       (testing "Planner ends it"
         (is (= "open" (:state (c/act! planner (doc planner :q-seats) :resume nil))))
         (is (= "done" (:state (c/act! planner (doc planner :q-seats)
