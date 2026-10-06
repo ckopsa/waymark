@@ -844,8 +844,10 @@
   event, 0 when the log is empty. The caller keeps the answer as its
   cursor, so the read is SETTLED: seeded at the newest COMMITTED id
   alone, a lower id still in flight would commit behind the cursor and
-  never be served. → nil when the writers in flight outlasted
-  `inbox-seed-tries`: that is not an empty log, and never 0."
+  never be served. With a writer in flight it is the newest event
+  under that writer. → nil when the log has no event under the writers
+  in flight and they outlasted `inbox-seed-tries`: that is not an
+  empty log, and never 0."
   [eng]
   (when-some [rows (store/settled-transitions (:storage eng) {}
                                               {:newest-first true :limit 1}
