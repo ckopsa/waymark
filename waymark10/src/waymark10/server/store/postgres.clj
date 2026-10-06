@@ -422,6 +422,9 @@
 ;;                                   (p50 0.4 ms against 0.6 ms)
 ;;   floor in the append's INSERT     6845 appends without it, 6866 with
 ;;                                   (p50 0.6 ms both, p99 1.7 against 1.6)
+;; And the notify, on one runner (run 37479201096, no long writer):
+;;   notify in a statement of its own  4271 and 4371 appends, p50 1.0 ms
+;;   notify in the append's INSERT     5597 and 5532 appends, p50 0.8 ms
 ;; With the fold, settled readers behind a long writer: 6961 appends,
 ;; p50 0.6 ms, p99 1.0 ms. The fall from 8678 to 2917 between two CI
 ;; runs was mostly the runners; the floor's own statements took a third.
@@ -452,16 +455,20 @@
   "The append's INSERT. With floor? the same statement holds the log's
   floor first, so an append is one round trip: the INSERT reads its one
   row from a count over the floor's, and the id's default is evaluated
-  for that row, after the lock is held."
+  for that row, after the lock is held. The INSERT is itself a CTE, and
+  the statement's own SELECT notifies the channel (the last parameter)
+  of the id it returned."
   [floor?]
-  (str (when floor? (str "WITH floor AS (" hold-log-floor-sql ") "))
+  (str "WITH " (when floor? (str "floor AS (" hold-log-floor-sql "), "))
+       "appended AS ("
        "INSERT INTO waymark10_transitions"
        " (kind, resource_id, action, from_state, to_state, actor,"
        "  law_revision, input_digest, inputs, acknowledged,"
        "  judgment, after, correlation_id, idempotency_key, summary)"
        " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
        (when floor? " FROM (SELECT count(*) FROM floor) held")
-       " RETURNING id, at"))
+       " RETURNING id, at)"
+       " SELECT id, at, pg_notify(?, id::text) AS notified FROM appended"))
 
 (def ^:private append-with-floor-sql (append-sql true))
 
@@ -712,6 +719,9 @@
   (append-transition! [_ tx record]
     ;; the floor is held before the id is allocated, and to the commit:
     ;; see the log's commit order
+    ;; the outbox IS the log: the notify is in the append's statement and
+    ;; so in the write transaction, and subscribers learn of exactly the
+    ;; transitions that committed
     (let [res (jdbc/execute-one!
                tx
                [append-with-floor-sql
@@ -728,13 +738,10 @@
                 (some-> (:after record) jsonb)
                 (:correlation-id record)
                 (:idempotency-key record)
-                (:summary record)]
-               jdbc-opts)
-          id (:id res)]
-      ;; the outbox IS the log: notify rides the write transaction,
-      ;; so subscribers learn of exactly the transitions that committed
-      (jdbc/execute-one! tx ["SELECT pg_notify(?, ?)" notify-channel (str id)])
-      (assoc record :id id :at (->inst (:at res)))))
+                (:summary record)
+                notify-channel]
+               jdbc-opts)]
+      (assoc record :id (:id res) :at (->inst (:at res)))))
 
   (transitions [_ tx where opts]
     (let [read (fn [bound]
