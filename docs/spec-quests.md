@@ -187,6 +187,10 @@ pointer presses the shut door, then **Accept quest** at the recorded
 create, or **Not now** at the beat that closes a sheet no quest was
 made from.
 
+A person following live in guided mode sees the same sheet from the
+same part, read-only, and it closes with the followed person's
+(docs/spec-guided-follow.md § 2).
+
 ## What this change does not do
 
 - It plans nothing and finishes nothing: no consumer is started.
