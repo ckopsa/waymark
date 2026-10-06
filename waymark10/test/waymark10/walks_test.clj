@@ -867,6 +867,51 @@
                       (filter #(= "transition" (:type %)))
                       (mapv #(get-in % [:body :self]))))))))))
 
+(deftest a-narrowed-recorder-who-may-create-keeps-their-create-form
+  (with-registry
+    (fn [eng reg]
+      (let [seen (errand! eng "Dishes")
+            w (self-walk! eng)
+            verb (name (first (:create-action-names (get (inv/resources eng) :errand))))
+            may (assoc (vis-of seen)
+                       :action? (fn [kind action]
+                                  (and (= :errand (keyword (name kind)))
+                                       (= verb (name action)))))
+            may-not (assoc (vis-of seen) :action? (fn [_kind _action] false))
+            ui {:dialog {:self "/api/errands" :action verb}
+                :fields {:title "Towels"}}
+            beat! #(presence/report! reg person "/api/errands" ui
+                                     (:presence (walks/self-recorder eng person %)))
+            no! #(walks/record-refused! eng person %
+                                        {:self "/api/errands" :action verb}
+                                        (p/guard-refused (keyword verb) :open
+                                                         "No more errands today."
+                                                         {:guard :full} nil))
+            of (fn [type frames] (filterv #(= type (:type %)) frames))]
+        (testing "some rows and no create door: the collection is not theirs"
+          (beat! may-not)
+          (is (empty? (no! may-not)))
+          (is (empty? (frames-of eng (:id w)))))
+        (testing "some rows and the create door: the form and its refusal"
+          (beat! may)
+          (is (= 1 (count (no! may))))
+          (let [frames (frames-in eng (:id w))
+                [form] (of "ui" frames)
+                [refusal] (of "refusal" frames)]
+            (is (= verb (get-in form [:body :ui :dialog :action])))
+            (is (= "Towels" (get-in form [:body :ui :fields :title])))
+            (is (= {:self "/api/errands" :action verb}
+                   (select-keys (:body refusal) [:self :action])))))
+        (testing "the export gives them back to the recorder alone"
+          (seal! eng w)
+          (let [lines (fn [text] (mapv wire/read-json (rest (str/split-lines text))))
+                own (lines (walks/export eng (:id w) may person))
+                types (fn [ls] (set (map :type ls)))]
+            (is (= #{"ui" "refusal"} (types own)))
+            (is (= #{"/api/errands"} (set (map :self own))))
+            (is (empty? (lines (walks/export eng (:id w) may other))))
+            (is (empty? (lines (walks/export eng (:id w) may))))))))))
+
 (deftest a-walk-of-someone-else-still-records-only-from-the-follower-stream
   (with-registry
     (fn [eng reg]

@@ -178,23 +178,28 @@
   (let [data (:data row)
         kind (keyword (:target_kind data))
         rdef (get (inv/resources eng) kind)]
-    ;; No `roads` on any of the three refusals below: `sweep` is this
-    ;; route's own door and not a declared action of the definition
-    ;; kind, so the machine has no edge to read (machine/roads wants the
-    ;; action's declaration) and the envelope has no out-of-state entry
-    ;; for them to disagree with. The last two are not about the row's
-    ;; state at all — no action on the row mends them.
+    ;; No `roads` on the state refusal below: `sweep` is this route's
+    ;; own door and not a declared action of the definition kind, so
+    ;; the machine has no edge to read (machine/roads wants the action's
+    ;; declaration) and the envelope has no out-of-state entry for it to
+    ;; disagree with. The last two are not about the row's state at all,
+    ;; so they wear their own types and promise none of wrong-state's
+    ;; fields. No action on the row mends the first. The second names
+    ;; `withdraw`: the definition kind declares it, unguarded, from
+    ;; exactly `swept-from`, and a row that reaches this check is in it.
     (when-not (contains? swept-from (:state row))
       (throw (p/wrong-state :sweep (:state row) swept-from
                             (str "/api/definitions/" (:id row)))))
     (when-not rdef
-      (throw (p/problem :wrong-state 409 "Wrong state"
+      (throw (p/problem :kind-not-served 409 "Kind not served"
                         {:detail (str "This engine serves no kind "
                                       (:target_kind data)
                                       "; there is no corpus to sweep.")})))
     (when-not (= (:fingerprint_hash data) (:fingerprint-hash rdef))
-      (throw (p/problem :wrong-state 409 "Wrong state"
-                        {:detail (str "The resident code no longer expresses"
+      (throw (p/problem :code-moved 409 "Resident code moved"
+                        {:resource (str "/api/definitions/" (:id row))
+                         :remedies [:definition/withdraw]
+                         :detail (str "The resident code no longer expresses"
                                       " revision " (:revision data)
                                       " — a sweep compares the stored law to"
                                       " the code in this process, and the code"
