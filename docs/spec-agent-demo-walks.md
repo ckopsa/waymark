@@ -478,6 +478,10 @@ that moment.
   query. A `transition` is followed by the row's envelope after it.
   An invoke's dialog needs no frame of its own: the envelope already
   holds the action's input schema.
+- A transition on a quest the recorder owns, made by anyone (the
+  engine's `plan`, `finish` and `unpin` among them), is followed by
+  that quest's envelope in the recorder's self walk. The quests'
+  consumer hands it over, under the quest's grant.
 - A document is rendered under the sight the frame was recorded under.
   A walk still holds no more than its recorder saw.
 - A document over 64 KB is not recorded. One byte-equal to the last
