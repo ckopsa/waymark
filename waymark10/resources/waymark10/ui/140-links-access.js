@@ -99,7 +99,17 @@ function shutDoor(name, entry, doc) {
 async function questFromDoor(btn, name, doc) {
   if (replay || btn.hasAttribute("data-quest-busy")) return;
   btn.setAttribute("data-quest-busy", "");
-  const refused = p => toast(`${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`);
+  /* a refused create or pin is said in the door's own reason line, under
+     the bar, where it stays: a toast goes away. A door with no line
+     drawn says it in a toast. */
+  const line = document.getElementById(btn.getAttribute("aria-describedby") || "");
+  const said = line && line.querySelector(".notyet-refused");
+  if (said) said.remove();
+  const refused = p => {
+    const say = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
+    if (!line) { toast(say); return; }
+    line.append(el("span", {class: "notyet-refused", role: "alert"}, " " + say));
+  };
   try {
     const col = collectionHref(await wellKnown(), "quest");
     const res = col ? await api(col + "?page%5Bsize%5D=1") : {ok: false};
