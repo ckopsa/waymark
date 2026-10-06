@@ -1373,6 +1373,76 @@ async function accessStory() {
      (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
 
+  /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
+     walk file holds the shelve form, a schema refusal with its field's
+     message, then the guard's refusal, kept as a quest. Replay draws
+     each in the form (dlg.guidedRefuse): the message under its field,
+     then the problem box with "Accept as quest" under it, which the
+     pointer presses. The press is lit for a moment only, so the page is
+     watched while the walk plays. */
+  console.log("· replay: a recorded refusal, kept as a quest");
+  const rNote = await get(shelfNote.self);
+  const rQuest = "/api/quests/replayed-refusal";
+  const rDoor = {self: shelfNote.self, action: "shelve"};
+  const rFieldError = "the replayed shelf is not one of the shelves";
+  const rDetail = "The replayed high shelf wants a room.";
+  const rWalk = [
+    {format: "waymark-walk/1", title: "A refusal kept as a quest",
+     cast: {p1: {display: "Priya", type: "human"}}},
+    {t: 0, who: "p1", type: "move", self: shelfNote.self},
+    {t: 10, type: "doc", self: shelfNote.self, doc: rNote},
+    {t: 1500, who: "p1", type: "ui", self: shelfNote.self,
+     ui: {dialog: rDoor, fields: {shelf: "loft"}}},
+    {t: 3000, who: "p1", type: "refusal", ...rDoor,
+     title: "Input failed validation", errors: {shelf: [rFieldError]}},
+    {t: 4500, who: "p1", type: "ui", self: shelfNote.self,
+     ui: {dialog: rDoor, fields: {shelf: "high"}}},
+    {t: 6000, who: "p1", type: "refusal", ...rDoor,
+     title: "Refused", detail: rDetail, remedies: ["led_note.rename"]},
+    {t: 7500, who: "p1", type: "transition", kind: "quest", self: rQuest,
+     action: "create", from: null, to: "active", summary: "Shelve the pile"},
+    {t: 7510, type: "doc", self: rQuest,
+     doc: {self: rQuest, kind: "quest", state: "active",
+           data: {self: shelfNote.self, action: "shelve", input: {shelf: "high"},
+                  pinned: false, plan: []}}},
+    {t: 7520, who: "p1", type: "ui", self: shelfNote.self, ui: {}},
+  ].map(l => JSON.stringify(l)).join("\n") + "\n";
+  await evaljs(`(() => {
+    const seen = window.__refused = {fieldError: "", box: "", offered: false, pressed: false};
+    window.__refusedWatch = new MutationObserver(() => {
+      const g = document.querySelector("dialog[open][data-guided]");
+      if (!g) return;
+      const under = g.querySelector('[data-srverr="shelf"]')?.textContent || "";
+      if (under) seen.fieldError = under;
+      const accept = g.querySelector(".questoffer [data-quest-accept]");
+      if (!accept) return;
+      seen.offered = true;
+      seen.box = g.querySelector(".problem")?.innerText || seen.box;
+      if (accept.hasAttribute("data-replay-press")) seen.pressed = true;
+    });
+    window.__refusedWatch.observe(document.body,
+      {subtree: true, childList: true, attributes: true, characterData: true});
+    return true; })()`);
+  await evaljs(`(async () => {
+    await replayFile(new File([${JSON.stringify(rWalk)}], "refusal.ndjson"));
+    return true; })()`);
+  await waitFor(`${replayState} === "ended"`, "the refusal's replay to reach its last frame",
+                60000, `window.__refused`);
+  const rSeen = await evaljs(`(() => {
+    window.__refusedWatch.disconnect();
+    return {...window.__refused, open: !!document.querySelector("dialog[open]")}; })()`);
+  console.log("  seen during the replay: " + JSON.stringify(rSeen));
+  ok("a replayed schema refusal shows the field's message under its field",
+     rSeen.fieldError === rFieldError);
+  ok("a replayed refusal kept as a quest shows its problem box",
+     rSeen.box.includes(rDetail));
+  ok("with Accept as quest under it", rSeen.offered);
+  ok("the pointer presses Accept as quest", rSeen.pressed);
+  ok("the form closes after the press", !rSeen.open);
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
+                "the refusal's replay to stop");
+
   /* the same under a grant that admits quest and nothing else: the one
      live stream carries no row events there, so the tracker hears the
      quest on the quest's own event stream */
