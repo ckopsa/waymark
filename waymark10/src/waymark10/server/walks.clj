@@ -808,6 +808,27 @@
     (and (contains? (inv/resources eng) kind)
          (boolean (seq (recording-walks eng pid pid))))))
 
+(defn record-seen!
+  "A screen of `principal`'s that another hand changed: the document of
+  `self`, as `principal`'s own read under `sight` answers it now, goes
+  to every self walk they are recording with `docs` (`record-doc!`).
+  The quests' consumer calls it for a quest its owner is filming, since
+  the engine's `plan` and `finish` pass no write door of the owner's
+  (docs/spec-agent-demo-walks.md § 8a). → the frames written. It never
+  throws."
+  [eng principal sight self]
+  (try
+    (let [pid (str (:id principal))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal)))
+        (into []
+              (keep #(record-doc! eng % principal sight (str self) nil))
+              (recording-walks eng pid pid))
+        []))
+    (catch Exception e
+      (warn! "a screen another hand changed was not recorded — " (ex-message e))
+      [])))
+
 ;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
 
 (defn caption-problem

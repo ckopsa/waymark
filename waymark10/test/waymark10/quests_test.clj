@@ -7,6 +7,7 @@
   answers with no engine."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
@@ -719,3 +720,56 @@
     (let [d (data-of eng quest)]
       (is (empty? (:plan d)))
       (is (nil? (:planned_at d))))))
+
+;; ── the quest in its owner's walk (spec-agent-demo-walks.md § 8a) ───
+
+(defn- self-walk! [eng docs]
+  (:id (:row (inv/create! eng :walk
+                          {:followed "colton" :title "The quest, filmed" :docs docs}
+                          {:principal person}))))
+
+(defn- docs-in
+  "The `doc` frames a walk holds, oldest first → [{:self :n :doc}]."
+  [eng walk-id]
+  (let [st (:storage eng)
+        frdef (get (inv/resources eng) :walk_frame)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (vec (store/query-rows st tx :walk_frame {:walk (str walk-id)}
+                                    {:limit 100}))))
+         (map #(:data (inv/decode-row frdef %)))
+         (filter #(= "doc" (name (:type %))))
+         (map #(walk/keywordize-keys (:body %)))
+         (sort-by :n)
+         vec)))
+
+(deftest a-quest-the-engine-moves-is-recorded-in-its-owners-walk
+  (let [eng (vault-engine)
+        w (self-walk! eng true)
+        plain (self-walk! eng false)
+        {:keys [quest latch crate vault]} (vault-quest! eng)
+        self (str "/api/quests/" quest)
+        latest (fn [] (:doc (peek (docs-in eng w))))
+        steps (fn [doc] (mapv (comp name :state) (get-in doc [:data :plan])))]
+    (hear! eng)
+    (testing "the engine's first plan lands as the quest's envelope"
+      (is (= ["lift" "open" "open"] (mapv :door (get-in (latest) [:data :plan]))))
+      (is (= ["next" "later" "later"] (steps (latest))))
+      (is (every? #(= self (:self %)) (docs-in eng w))))
+    (testing "another principal's step plans again, and the walk takes that plan"
+      (move! eng :q_latch latch :lift other)
+      (hear! eng)
+      (is (= ["done" "next" "later"] (steps (latest)))))
+    (testing "the engine's finish is recorded"
+      (move! eng :q_crate crate :open person)
+      (hear! eng)
+      (move! eng :q_vault vault :open person)
+      (hear! eng)
+      (is (= "finished" (some-> (:state (latest)) name))))
+    (testing "an envelope byte-equal to the last is not recorded again"
+      (let [held (count (docs-in eng w))]
+        (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
+                                   {:from-origin? true})
+        (is (= held (count (docs-in eng w))))))
+    (testing "a walk made without docs records none"
+      (is (empty? (docs-in eng plain))))))
