@@ -198,6 +198,23 @@
     (is (str/includes? body "data-invite-ordinal"))
     (is (str/includes? body ".invite-ordinal {"))))
 
+(deftest ui-tracks-the-pinned-quest
+  ;; docs/spec-quests.md, the tracker: the pinned quest has its own row of
+  ;; the header, the count is never a total, the firehose redraws it, and
+  ;; Go opens the head step's door through the helper an invitation uses
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "<div id=\"questbar\""))
+    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, invitation}, what)"))
+    (is (str/includes? body "return openDoor({self: d.self, action: d.action, note: d.note,"))
+    (is (str/includes? body "openDoor({self: head.self, action: head.door, fields: head.needs || [],"))
+    (is (str/includes? body "\"/api/quests?state=active&pinned=true&owner=\""))
+    (is (str/includes? body "`${done} done, ${plan.length} known so far`"))
+    (is (not (str/includes? body "${done} of ${"))
+        "the count is never k of n")
+    (is (str/includes? body "onQuestFrame(ev);"))
+    (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questGo"))
+    (is (str/includes? body "\"Quest complete\""))))
+
 (deftest ui-opens-an-invitation-from-the-collection
   ;; the collection row of an open invitation to the viewer takes the
   ;; step in one tap, reading the full envelope first (summaries drop data)

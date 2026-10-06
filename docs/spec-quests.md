@@ -107,3 +107,33 @@ never a total. A reader counts "k done, n known so far": k steps in
 - It plans nothing and finishes nothing: no consumer is started.
   (Quests 1b.)
 - It adds no UI: no "Accept as quest" on a refusal and no tracker.
+
+## The tracker (Quests 5)
+
+The generic UI shows the viewer's pinned active quest in the header's
+own row (`#questbar`, `ui/120-nav-home.js`), so it is on every page and
+covers none of a page's actions. It reads the quest row and nothing
+else: `/api/quests?state=active&pinned=true&owner=<viewer>`, then that
+row's envelope.
+
+- The title links to the quest's row page.
+- "planning…" stands until `planned_at` is written.
+- The count is "k done, n known so far", with a thin bar of done over
+  known.
+- The head step is the first one not `done`. Its note stands beside the
+  count. A `seat` or `held` head, or one in `waiting`, reads "waiting
+  on <waiting_on>" with a live dot.
+- **Go** opens the head step's `door` on its `self`, with its `needs`
+  lit and its note shown. It goes through `openDoor`
+  (`ui/180-action-dialog.js`), the helper an invitation opens through.
+  Go is disabled while the head waits. It is not shown when the plan
+  has no step to take or `blocked_reason` is written; the reason is
+  shown then.
+- A small menu offers `pause`, `unpin` and `replan`, each only when the
+  row offers that door to the viewer.
+
+The tracker redraws on the live stream: a transition of the quest in
+hand reads it again, a `pin` takes whichever quest is pinned now, and
+`finish` shows "Quest complete" with the title for four seconds before
+the tracker hides. Under a grant the live stream carries no row events,
+so there the tracker is as fresh as the last page load.
