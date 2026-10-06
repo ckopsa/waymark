@@ -246,13 +246,27 @@
 ;; deliverer drain on their own cadence: a NOTIFY wakes each, and the
 ;; 2 s poll is the backstop. Printed, as above; settled=false is the
 ;; same load with no reader held to the settled log.
+;;
+;; Each case holds one active quest on the first note of its bulk, so
+;; the consumer plans it again, in transactions of its own, while the
+;; other items commit. The numbers did not move: one runner, 100 items,
+;; total / p50 / p99 in ms, the cases in this order —
+;;   no quest   settled=false 480.7 / 4.6 / 9.8    settled=true 405.2 / 3.7 / 13.2
+;;   one quest  settled=false 417.6 / 3.8 / 18.7   settled=true 409.7 / 3.7 / 9.3
+;;   no quest   settled=false 369.3 / 3.5 / 6.4    settled=true 306.5 total
+;; The cases with the quest lie between two runs without it, which
+;; differ by more (the JVM warms) than the quest adds. One quest plans
+;; again for one item of the hundred; a quest for each item is another
+;; measurement.
 
 (defn- bulk-latencies!
-  "Create n notes and shelve them in one bulk invoke. → {:total-ms the
-  call's duration, :items each item's latency in ms, sorted}; an item's
-  latency runs from the item before it to its own commit."
-  [n]
+  "Create n notes and shelve them in one bulk invoke; (before! ids) runs
+  between the two. → {:total-ms the call's duration, :items each item's
+  latency in ms, sorted}; an item's latency runs from the item before it
+  to its own commit."
+  [n before!]
   (let [ids (mapv #(:id (note! (str "bulk " %))) (range n))
+        _ (before! ids)
         marks (atom [])
         t0 (System/nanoTime)]
     (inv/bulk! *eng* :f_note :shelve {:ids ids}
@@ -283,15 +297,38 @@
                        #(store/transitions st % {} {:newest-first true :limit 1}))
                      first
                      :id))
+        quest (atom nil)
+        ;; the goal is the note's row door, so the bulk's shelve of that
+        ;; note is a move on a row the quest names and not its goal: the
+        ;; consumer plans the quest again while the other items commit
+        accept! (fn [ids]
+                  (reset! quest
+                          (:id (:row (inv/create! *eng* :quest
+                                                  {:self (str "/api/f_notes/"
+                                                              (first ids))
+                                                   :action "file"}
+                                                  {:principal elena}))))
+                  ;; its first plan is written before the bulk starts: a
+                  ;; plan written after the shelve has answered it already
+                  (await-pred #(= (newest) (cursor-of quests/consumer-name)) 10000))
+        plans (fn []
+                (->> (store/with-tx st
+                       #(store/transitions st % {:kind :quest
+                                                 :resource-id (str @quest)}
+                                           {}))
+                     (filter #(= "plan" (name (:action %))))
+                     count))
         run (fn [settled]
               (reset! hits 0)
-              (let [{:keys [total-ms items]} (bulk-latencies! n)
+              (let [{:keys [total-ms items]} (bulk-latencies! n accept!)
                     at #(nth items (min (dec (count items))
                                         (long (* % (count items)))))]
                 ;; both drains catch up before the next case writes: the
                 ;; subscription hears a create and a shelve for each note
                 (await-pred #(= (newest) (cursor-of quests/consumer-name)) 10000)
                 (await-pred #(<= (* 2 n) @hits) 10000)
+                (is (= 2 (plans))
+                    "the quest was planned at its create and again at the shelve")
                 (to-job-log! (format (str "log-order-lock bulk settled=%s items=%d"
                                           " total=%.1fms p50=%.1fms p99=%.1fms"
                                           " max=%.1fms delivered=%d")
@@ -301,7 +338,7 @@
     (try
       ;; the readers' own :settled true, answered as :settled false is:
       ;; no watermark, no wait
-      (with-redefs-fn {#'pg/settled-read (fn [_tx read _newest-first?] (read nil))}
+      (with-redefs-fn {#'pg/settled-read (fn [_tx read] (read nil))}
         #(run false))
       (testing "with the drains reading the settled log, every item still commits"
         (is (= n (count (run true)))))
