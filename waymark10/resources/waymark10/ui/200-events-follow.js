@@ -1647,6 +1647,15 @@ function replayKeeps(r, f, who, key) {
 function replaySheetMade(r, f, sheet) {
   if (f.type !== "transition" || f.kind !== "quest" || f.action !== "create")
     return false;
+  /* a sheet whose Accept was refused its create made no quest: Accept
+     is disabled from the refusal on (questSheet, 140-links-access.js),
+     so a create before that refusal, of the same goal even, was made
+     elsewhere. The sheet's frames end at the beat that closes it. */
+  for (let i = r.frames.indexOf(f) + 1; i > 0 && i < r.frames.length; i++) {
+    const g = r.frames[i];
+    if (g.type === "ui" && !(g.ui || {}).quest) break;
+    if (g.type === "refusal" && g.action === "create") return false;
+  }
   const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
   const d = (held && held.doc.data) || {};
   let goal = null;
