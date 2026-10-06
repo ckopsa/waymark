@@ -458,6 +458,160 @@
     (is (= 2 (count (:plan before))))
     (is (= before (data-of eng quest)) "the plan and its stamp are the ones first written")))
 
+;; ── Quests 2: two remedies before the goal ──────────────────────────
+
+(g/defguard the-crate-is-open
+  {:reads [:q_crate]
+   :explain "Open the crate first."
+   :remedies [{:door :q_crate/open :id '(data :crate_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [c (read :q_crate (get-in row [:data :crate_id]))]
+      (if (= "open" (some-> c :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
+(def ^:private vault
+  (r/resource
+   {:kind :q_vault
+    :plural "q_vaults"
+    :states [:shut :open]
+    :initial :shut
+    :summary "Vault · {state}"
+    :schema [:map
+             [:crate_id {:not-a-ref "quests fixture: the-crate-is-open binds its remedy to it"}
+              [:string {:max 80}]]]
+    :actions
+    {:open {:from #{:shut} :to :open
+            :guards [the-crate-is-open]
+            :safety routine}
+     :close {:from #{:open} :to :shut :safety routine}}}))
+
+(defn- vault-engine []
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore latch crate vault]})]
+    ((engine/handler eng) {:request-method :get :uri "/api/q_vaults"
+                           :headers {"x-waymark-principal" "colton"}})
+    eng))
+
+(defn- vault-quest!
+  "A shut vault behind a shut crate behind a lowered latch, and the
+  quest to open the vault: lift, open, open."
+  [eng]
+  (let [l (make! eng :q_latch {})
+        c (make! eng :q_crate {:latch_id l})
+        v (make! eng :q_vault {:crate_id c})
+        self (str "/api/q_vaults/" v)]
+    {:latch l :crate c :vault v :self self
+     :quest (:id (:row (inv/create! eng :quest {:self self :action "open"}
+                                    {:principal person})))}))
+
+(defn- move! [eng kind id action principal]
+  (inv/invoke! eng kind (str id) action {}
+               {:principal principal :idempotency-key (str (random-uuid))}))
+
+(defn- row-of [eng kind id]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (store/with-tx st
+      (fn [tx]
+        (some->> (store/load-row st tx kind (str id) {})
+                 (inv/decode-row rdef))))))
+
+(defn- invitation-of
+  "The invitation the quest names, as its row; nil when it names none."
+  [eng quest]
+  (some->> (:invitation (data-of eng quest)) str (row-of eng :invitation)))
+
+(defn- states [d] (mapv (comp name :state) (:plan d)))
+
+(deftest landing-a-step-plans-again-and-moves-the-invitation
+  (let [eng (vault-engine)
+        {:keys [quest latch crate]} (vault-quest! eng)
+        _ (hear! eng)
+        d (data-of eng quest)
+        first-one (invitation-of eng quest)]
+    (is (= ["lift" "open" "open"] (mapv :door (:plan d))) (pr-str d))
+    (is (= ["next" "later" "later"] (states d)))
+    (is (= "open" (some-> first-one :state name)) "the first step is handed to the owner")
+    (is (= (str "/api/q_latches/" latch) (get-in first-one [:data :self])))
+    (is (= "lift" (get-in first-one [:data :action])))
+    (is (= "colton" (get-in first-one [:data :subject])))
+    (is (= (str (:id quests/engine-actor)) (get-in first-one [:data :author])))
+    (move! eng :q_latch latch :lift person)
+    (hear! eng)
+    (let [d (data-of eng quest)
+          second-one (invitation-of eng quest)]
+      (is (= ["lift" "open" "open"] (mapv :door (:plan d))))
+      (is (= ["done" "next" "later"] (states d))
+          "the step taken stays at the top, then one step and the goal")
+      (is (= [1 2 3] (mapv :n (:plan d))))
+      (is (= "open" (some-> second-one :state name)))
+      (is (= (str "/api/q_crates/" crate) (get-in second-one [:data :self])))
+      (is (not= (str (:id first-one)) (str (:id second-one))))
+      (is (= "withdrawn" (name (:state (row-of eng :invitation (:id first-one)))))
+          "the old step's invitation is closed"))))
+
+(deftest landing-the-goal-finishes-the-quest-and-closes-its-invitation
+  (let [eng (vault-engine)
+        {:keys [quest latch crate vault]} (vault-quest! eng)]
+    (hear! eng)
+    (move! eng :q_latch latch :lift person)
+    (hear! eng)
+    (move! eng :q_crate crate :open person)
+    (hear! eng)
+    (let [d (data-of eng quest)
+          last-one (invitation-of eng quest)]
+      (is (= ["done" "done" "next"] (states d)))
+      (is (= (str "/api/q_vaults/" vault) (get-in last-one [:data :self])))
+      (move! eng :q_vault vault :open person)
+      (hear! eng)
+      (is (= "finished" (name (:state (row-of eng :quest quest)))))
+      (is (not= "open" (name (:state (row-of eng :invitation (:id last-one)))))))))
+
+(deftest another-principals-move-on-a-plan-row-plans-again
+  (let [eng (vault-engine)
+        {:keys [quest latch crate]} (vault-quest! eng)]
+    (hear! eng)
+    (move! eng :q_latch latch :lift other)
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (= ["done" "next" "later"] (states d)))
+      (is (= (str "/api/q_crates/" crate)
+             (get-in (invitation-of eng quest) [:data :self]))))))
+
+(deftest replaying-a-move-writes-nothing-the-second-time
+  (let [eng (vault-engine)
+        {:keys [quest latch]} (vault-quest! eng)]
+    (hear! eng)
+    (move! eng :q_latch latch :lift person)
+    (hear! eng)
+    (let [before (data-of eng quest)
+          invited (invitation-of eng quest)
+          heard (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
+                                           {:from-origin? true})]
+      (is (pos? heard))
+      (is (= before (data-of eng quest)) "the plan, its stamp and its invitation stand")
+      (is (= "open" (name (:state (row-of eng :invitation (:id invited)))))))))
+
+(deftest a-move-on-a-row-no-quest-names-plans-nothing
+  (let [eng (vault-engine)
+        {:keys [quest]} (vault-quest! eng)
+        stray (make! eng :q_latch {})]
+    (hear! eng)
+    (let [before (data-of eng quest)]
+      (move! eng :q_latch stray :lift person)
+      (hear! eng)
+      (is (= before (data-of eng quest))))))
+
+(deftest an-abandoned-quest-closes-its-invitation
+  (let [eng (vault-engine)
+        {:keys [quest]} (vault-quest! eng)]
+    (hear! eng)
+    (let [invited (invitation-of eng quest)]
+      (is (= "open" (some-> invited :state name)))
+      (take! eng quest person :abandon)
+      (hear! eng)
+      (is (= "withdrawn" (name (:state (row-of eng :invitation (:id invited)))))))))
+
 (deftest a-paused-quest-is-not-planned
   (let [eng (crate-engine)
         {:keys [quest]} (crate-quest! eng)]
