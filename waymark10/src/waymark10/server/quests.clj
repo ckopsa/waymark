@@ -596,12 +596,25 @@
 
 (defn- warnings-note
   "The warnings a door's rehearsal answered, as one sentence: each
-  guard's own reason, or its name; nil when there are none."
-  [warnings]
-  (when-some [said (seq (keep #(or (:reason %) (get % "reason")
-                                   (some-> (or (:name %) (get % "name")) name))
-                              warnings))]
-    (str "You also accept a warning: " (str/join " " said))))
+  guard's own reason, or its name; nil when there are none. `lead`
+  opens it: a confirm door's warning follows its consequence."
+  ([warnings] (warnings-note "You also accept a warning: " warnings))
+  ([lead warnings]
+   (when-some [said (seq (keep #(or (:reason %) (get % "reason")
+                                    (some-> (or (:name %) (get % "name")) name))
+                               warnings))]
+     (str lead (str/join " " said)))))
+
+(defn- warning-step-note
+  "A warning step's note, on a door that is no confirm door: the
+  warnings the owner accepts, and after them the guards that wait on
+  its form. The warnings are cut first, so the guards stay."
+  [awaiting warnings]
+  (let [said (or (warnings-note "You accept a warning: " warnings)
+                 "This door asks you to accept a warning before it opens.")]
+    (if-some [tail (clip (awaiting-note awaiting) 160)]
+      (str (clip said (- 239 (count tail))) " " tail)
+      (clip said 240))))
 
 (defn- confirm-note
   "A confirm step's note: the consequence, after it the warnings the
@@ -650,7 +663,7 @@
       ;; an advisory guard: the owner accepts its warning at the door
       (seq warnings)
       [(cond-> (assoc base :whose "confirm"
-                      :note "This door asks you to accept a warning before it opens.")
+                      :note (warning-step-note awaiting warnings))
          (seq needs) (assoc :needs (needs-of needs)))]
 
       (or (seq needs) (= no-row-chosen reason))

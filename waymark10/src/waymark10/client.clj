@@ -709,7 +709,9 @@
            :form form}
           ;; a dry-run answers its warnings beside :valid, with no
           ;; :acknowledge!: the owner accepts them at the door
-          (seq (pending res)) (blocked {:needs needs :warnings (pending res)})
+          (seq (pending res)) (blocked (cond-> {:needs needs :warnings (pending res)}
+                                         (seq (:awaiting form))
+                                         (assoc :awaiting (:awaiting form))))
           (or (problem? res) (refused? res))
           (blocked {:needs needs
                     :reason (or (get-in res [:problem :detail])

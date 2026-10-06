@@ -1234,8 +1234,12 @@
         "the consequence, then the warning to accept, then the waiting guard")))
 
 (deftest a-goal-that-is-no-confirm-door-whose-rehearsal-warns-says-a-warning-is-accepted
-  (doseq [[input needs] [[nil ["close_reason"]]
-                         [{:close_reason "Parked."} nil]]]
+  (doseq [[input needs note]
+          [[nil ["close_reason"]
+            (str "You accept a warning: The part is not finished."
+                 " Judged when you fill the form: the-film-is-a-link.")]
+           [{:close_reason "Parked."} nil
+            "You accept a warning: The part is not finished."]]]
     (testing (if input "the full rehearsal" "the partial rehearsal")
       (let [eng (epic-engine)
             part (str (chore! eng "Write the guide"))
@@ -1251,9 +1255,8 @@
         (is (= ["park"] (mapv :door (:plan d))) (pr-str d))
         (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
         (is (= needs (not-empty (:needs step))))
-        (is (= "This door asks you to accept a warning before it opens."
-               (:note step))
-            "the warning the rehearsal answered is the owner's to accept")))))
+        (is (= note (:note step))
+            "the guard's own reason, then the guard that waits on the form")))))
 
 (deftest the-mapping-names-a-confirm-entrys-warning-after-its-consequence
   (let [plan (quests/answer->plan
