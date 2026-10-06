@@ -128,6 +128,12 @@
    :summary-fn
    ;; hooks & engine weaves
    :on-create :mirror
+   ;; what the create door's FULL rehearsal answers beyond its verdict:
+   ;; `(fn [engine inp {:keys [principal grant]}])` → a map that rides
+   ;; the dry-run's body as `preview`. Asked after the create guards
+   ;; passed and outside their transaction; it writes nothing. Never in
+   ;; the fingerprint — :on-create's precedent
+   :on-rehearse
    ;; what the log carries forward past the write (spec-decision-record,
    ;; spec-time-travel): {:judgment true} retains the evidence the
    ;; guards read, {:data true} the document as it stood. ONE map, two
