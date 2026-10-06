@@ -1231,6 +1231,8 @@ async function accessStory() {
      await evaljs(`!/\\d+ of \\d+/.test(${qBar}.textContent)`));
   ok("the head step's note stands beside the count",
      await evaljs(`${qBar}.querySelector("[data-quest-note]")?.textContent`) === stepOne.note);
+  ok("no step in the tracker reads as a path",
+     await evaljs(`!/\\/api\\//.test(${qBar}.textContent)`));
   const qPageOne = await evaljs(`hereHref()`);
   await evaljs(`location.hash = "/api/led_notes"; true`);
   await waitFor(`hereHref().split("?")[0] === "/api/led_notes" && !${qBar}.hidden &&
@@ -3496,6 +3498,13 @@ async function questPhoneStory() {
       s.self === ${JSON.stringify(note.self)} &&
       !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
   await waitFor(goFor("rename"), "the remedy at the tracker's head", 30000, plan);
+  /* the head step's row is in the tracker by its title, which the page
+     reads, and no path is text (ticket 5b3fa3f7) */
+  const rowSays = `(${bar}.querySelector("[data-quest-row]")?.textContent || "")`;
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title)})`,
+                "the note's title in the tracker", 15000, `${bar}.textContent`);
+  ok("the tracker names the step's row in words, and no path",
+     await evaljs(`!/\\/api\\//.test(${bar}.textContent)`));
   const says = await evaljs(`(() => {
     const b = ${bar}, t = b.querySelector("[data-quest-title]"), cs = getComputedStyle(t);
     const line = b.querySelector("[data-quest-note]");
@@ -3568,6 +3577,9 @@ async function questPhoneStory() {
   await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
   await waitFor(goFor("shelve"), "the goal door at the tracker's head", 30000, plan);
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title + ", sorted")})`,
+                "the note's new title in the tracker", 15000, `${bar}.textContent`);
+  ok("a rename shows in the tracker: the row's new title", true);
   await sleep(600);
   await tap(await evaljs(target("#questbar [data-tracker-go]")));
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
@@ -3826,6 +3838,30 @@ async function questPhoneStory() {
       return !!s && s.door === "complete" && s.self === ${JSON.stringify(self)} &&
         !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
     await waitFor(headIs(child), "the child's Complete at the tracker's head", 30000, plan);
+    /* the tracker and the quest's page name a step's row and what its
+       door asks for in words, and no path is text (ticket 5b3fa3f7) */
+    const childTitle = JSON.stringify(`Sweep the hall ${where}`);
+    await waitFor(`(${bar}.querySelector("[data-quest-row]")?.textContent || "")
+                     .includes(${childTitle})`,
+                  "the child's title in the tracker", 15000, `${bar}.textContent`);
+    ok("the tracker names the step's row and its needs in words, and no path",
+       await evaljs(`((questHead(questDoc).needs || []).length === 0 ||
+                      /Close reason/.test(${bar}.textContent)) &&
+                     !/close_reason/.test(${bar}.textContent) &&
+                     !/\\/api\\//.test(${bar}.textContent)`));
+    const wasAt = await evaljs(`location.hash`);
+    const qPlan = `document.querySelector("[data-quest-plan]")`;
+    await evaljs(`location.hash = ${JSON.stringify("#" + made)}; true`);
+    await waitFor(`!!${qPlan} && [...${qPlan}.querySelectorAll("[data-quest-row]")]
+                     .some(a => a.textContent.includes(${childTitle}))`,
+                  "the child's title on the quest's page", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("the quest's page names each step's row and its needs in words, and no path",
+       await evaljs(`/Close reason/.test(${qPlan}.textContent) &&
+                     !/close_reason/.test(${qPlan}.textContent) &&
+                     !/\\/api\\//.test(${qPlan}.textContent)`));
+    await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);
+    await waitFor(`!${qPlan}`, "the page the quest was accepted on", 15000);
     /* the plan's last step, and whether it is `self`'s Complete with
        close_reason still owed: a miss says the plan it read */
     const endsWith = async (name, self) => {
