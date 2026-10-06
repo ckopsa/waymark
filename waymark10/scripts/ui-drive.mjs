@@ -59,9 +59,10 @@
    3. node waymark10/scripts/ui-drive.mjs access
 
    QUEST-PHONE (the quest flow on a phone: 390x844 with touch, in the
-   mobile shell, live and then as a film; against the same
-   waymark10.access-dev engine, and CI runs it in the ui-access job
-   after the access drive):
+   mobile shell, live and then as a film; then the 'not yet' button,
+   a shut door tapped into a quest, on the phone and at desktop;
+   against the same waymark10.access-dev engine, and CI runs it in the
+   ui-access job after the access drive):
    1. the access boot, on 8124
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs quest-phone
@@ -3545,10 +3546,206 @@ async function questPhoneStory() {
        getComputedStyle(${bar}).display !== "none"`));
   await noOverflow("at the film's end");
   await shot("phone-quest-film");
-  /* out of film mode, and of the phone */
-  await evaljs(`location.hash = "/api/led_notes"; location.reload(); true`);
-  await sleep(1200);
+
+  /* ── the 'not yet' button (shutDoor, 140-links-access.js) ─────────────
+     A led_task ends after its children (access_dev.clj), as a ticket
+     does: the parent's Complete is shut and names the child's Complete
+     as its way out, and its Discard is shut and names none. One tap on
+     Complete makes and pins the quest, Go walks it, and the walk she
+     records of it is filmed. Driven on the phone and then at desktop:
+     a press is a finger there and a click here. */
+  const ready = `typeof hereHref === "function" && typeof viewerId === "function" &&
+                 !!(principalId() || viewerId())`;
+  /* out of film mode: the page again, live */
+  const fresh = async what => {
+    await evaljs(`location.hash = "/api/led_tasks"; location.reload(); true`);
+    await sleep(1200);
+    await waitFor(ready, what, 15000);
+  };
+  const notYet = async (where, slug, phone) => {
+    console.log(`· the 'not yet' button ${where}`);
+    const press = async sel => phone
+      ? tap(await evaljs(target(sel)))
+      : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
+    await evaljs(`refreshQuest().catch(() => {}); true`);
+    await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);
+    const parent = await post("/api/led_tasks", {title: `Spring clean ${where}`}, h);
+    const epic = parent.doc?.self;
+    ok("priya writes a task", parent.status === 201 && !!epic);
+    const sub = await post("/api/led_tasks",
+      {title: `Sweep the hall ${where}`, parent: epic.split("/").pop()}, h);
+    const child = sub.doc?.self;
+    ok("and a child of it, not finished", sub.status === 201 && !!child);
+    const walk = await evaljs(`(async () => {
+      const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+        {followed: principalId() || viewerId(),
+         title: ${JSON.stringify("A shut door, tapped " + where)}, docs: true})});
+      if (!r.ok || !r.body || !r.body.self)
+        return {refused: r.status, body: r.body || null};
+      recording = recordingOf(r.body);
+      recordChip();
+      if (!uiSharing()) {
+        toggleShareUi();
+        sessionStorage.setItem("wm10.record.shared", "1");
+      }
+      return r.body.self; })()`);
+    if (typeof walk !== "string") console.log("  the walk's create: " + JSON.stringify(walk));
+    ok(`priya records her walk ${where}`, typeof walk === "string");
+    await sleep(600);
+    await evaljs(`location.hash = ${JSON.stringify(epic)}; true`);
+    const door = '#view button[data-quest-door="complete"]';
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(epic)} &&
+                   !!document.querySelector(${JSON.stringify(door + "[aria-describedby]")})`,
+                  "the parent's row page, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    const seat = await evaljs(`(() => {
+      const b = document.querySelector(${JSON.stringify(door)}), cs = getComputedStyle(b);
+      const line = document.getElementById(b.getAttribute("aria-describedby"));
+      const plain = [...document.querySelectorAll("#view button.blocked")]
+        .filter(p => !p.hasAttribute("data-quest-door"));
+      return {cls: b.className, text: b.textContent, disabled: b.disabled,
+              aria: b.getAttribute("aria-disabled"), self: b.dataset.questSelf,
+              border: cs.borderTopStyle, opacity: cs.opacity,
+              line: line ? line.textContent : null,
+              plain: plain.map(p => ({text: p.textContent, disabled: p.disabled,
+                                      flag: !!p.querySelector(".notyet-flag")}))}; })()`);
+    console.log("  the shut door: " + JSON.stringify(seat));
+    ok("Complete is a reachable button: dashed, flagged, not dimmed",
+       /\bblocked\b/.test(seat.cls) && /\bnotyet\b/.test(seat.cls) &&
+       seat.text.includes("⚑") && seat.border === "dashed" && seat.opacity === "1");
+    ok("it is aria-disabled and not disabled, and names its row",
+       seat.aria === "true" && seat.disabled === false && seat.self === epic);
+    ok("its reason line ends 'Not yet. Tap to make it a quest.'",
+       (seat.line || "").trim().endsWith("Not yet. Tap to make it a quest."));
+    ok("a door with no remedy is the plain disabled button",
+       seat.plain.length > 0 && seat.plain.every(p => p.disabled && !p.flag));
+    if (phone) {
+      await checkTarget("Complete ⚑", door);
+      await noOverflow("under the shut door");
+    }
+    await shot(`${slug}-notyet-door`);
+    await press(door);
+    /* a refused create or pin is a toast, which goes away: the page's
+       last words say which, when the tracker never shows */
+    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]")`,
+                  "the tracker, off the tap on Complete", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("a tap on Complete opens no form and shows the tracker",
+       await evaljs(`!document.querySelector("dialog[open]")`));
+    const made = (await pinned())[0]?.self;
+    ok("the tap leaves a quest pinned", !!made);
+    const goal = (await get(made)).data || {};
+    ok("its goal is this row and this door",
+       String(goal.self || "").split("?")[0] === epic && goal.action === "complete");
+
+    const headIs = self => `(() => {
+      const s = questDoc && questHead(questDoc);
+      return !!s && s.door === "complete" && s.self === ${JSON.stringify(self)} &&
+        !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+    await waitFor(headIs(child), "the child's Complete at the tracker's head", 30000, plan);
+    /* the plan's last step, and whether it is `self`'s Complete with
+       close_reason still owed: a miss says the plan it read */
+    const endsWith = async (name, self) => {
+      const steps = JSON.parse(await evaljs(plan)) || [];
+      const last = steps[steps.length - 1] || {};
+      console.log("  the plan: " + JSON.stringify(steps));
+      const ends = last.door === "complete" && last.self === self &&
+        (last.needs || []).flat().includes("close_reason");
+      ok(name + (ends ? "" : ": " + JSON.stringify(steps)), ends);
+    };
+    /* driven (ticket dfcd5c9a): a goal the row page draws shut is not
+       rehearsed past its refusal (client.clj, the door not afforded),
+       so the first plan holds the remedy alone, and the goal's own
+       step, with its form, is planned once the child is through */
+    await endsWith("the first plan ends with the child's Complete, which needs close_reason",
+                   child);
+    /* Go, the form, a reason, and the form's own button: → how many of
+       the form's fields were lit */
+    const close = async what => {
+      await sleep(600);
+      await press("#questbar [data-tracker-go]");
+      await waitFor(`!!document.querySelector('dialog[open] [name="close_reason"]')`,
+                    `${what}, off Go`, 15000);
+      await sleep(600);
+      const lit = await evaljs(`[...document.querySelectorAll("dialog[open] .invited")]
+        .filter(e => !e.closest(".dlgfoot")).length`);
+      if (phone) await sheetFits(what);
+      await evaljs(`(() => {
+        const i = document.querySelector('dialog[open] [name="close_reason"]');
+        i.value = "Done.";
+        i.dispatchEvent(new Event("input", {bubbles: true}));
+        i.dispatchEvent(new Event("change", {bubbles: true}));
+        return true; })()`);
+      await sleep(600);
+      await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+      await waitFor(`!document.querySelector("dialog[open]")`, `${what} to close`, 15000, refused);
+      return lit;
+    };
+    await close("the child's Complete");
+    await waitFor(headIs(epic), "the parent's Complete at the tracker's head", 30000, plan);
+    await endsWith("the plan then ends with the parent's Complete, which needs close_reason",
+                   epic);
+    const lit = await close("the parent's Complete");
+    console.log(`  the goal's form: ${lit} lit`);
+    ok("Go opens the goal's form last, with close_reason lit", lit > 0);
+    await waitFor(`!!${bar}.querySelector("[data-quest-complete]")`,
+                  `Quest complete ${where}`, 40000, plan);
+    ok("Go walks the tapped door's quest to Quest complete", true);
+    if (phone) await noOverflow("under the tapped door's Quest complete");
+    await shot(`${slug}-notyet-complete`);
+    for (let i = 0; i < 60 && (await get(made)).state !== "finished"; i++) await sleep(250);
+    ok("the parent's Complete finishes the quest", (await get(made)).state === "finished");
+    ok("and the parent is done", (await get(epic)).state === "done");
+    /* unknown until driven (ticket dfcd5c9a): whether a door shut by its
+       state alone carries remedies, and so is ever reachable */
+    console.log("  the done parent's shut doors: " +
+                JSON.stringify((await get(epic)).unavailable ?? null));
+    await sleep(1500);
+    await evaljs(`stopRecording().then(() => true)`);
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
+                   !!document.querySelector("[data-replay-walk]")`,
+                  "the sealed walk's page", 15000);
+    ok(`stop seals the walk ${where}`, (await get(walk)).state === "sealed");
+
+    console.log(`· film: the tapped door's walk ${where}`);
+    /* the press is lit for a moment: the page itself notes it, with
+       whether the replay first walked to another row (replayGesture) */
+    await evaljs(`window.__notYet = null;
+      new MutationObserver(() => {
+        const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
+        if (b && !window.__notYet)
+          window.__notYet = {self: b.dataset.questSelf,
+                             walk: !!(replay && replay.gesture && replay.gesture.walk)};
+      }).observe(document.documentElement,
+                 {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
+    await waitFor(`!!window.__notYet`, "the replay's press on Complete", 240000, why);
+    const pressed = await evaljs(`window.__notYet`);
+    console.log("  the replay's press: " + JSON.stringify(pressed));
+    ok("the replay draws the press on Complete, on the parent's own page",
+       pressed.self === epic);
+    ok("and makes no walk to the quest's row for it", pressed.walk === false);
+    await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                  `the film to end ${where}`, 240000, why);
+    ok(`film mode reaches ended ${where}`, true);
+    await shot(`${slug}-notyet-film`);
+    await fresh(`the page ${where}, out of its film`);
+  };
+
+  await fresh("the phone's page, out of its film");
+  await notYet("on a phone", "phone", true);
+  /* out of the phone: the same story at a desk */
   await send("Emulation.setTouchEmulationEnabled", {enabled: false});
+  await send("Emulation.setDeviceMetricsOverride",
+             {width: 1280, height: 800, deviceScaleFactor: 1, mobile: false});
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await waitFor(ready, "the page at desktop, as priya", 15000);
+  ok("the page is 1280 wide, out of the mobile shell",
+     await evaljs(`innerWidth === 1280 &&
+       document.documentElement.getAttribute("data-ui") !== "mobile"`));
+  await notYet("at desktop", "desktop", false);
   await send("Emulation.clearDeviceMetricsOverride");
 }
 
