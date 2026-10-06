@@ -395,18 +395,28 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     if (!remedies || !remedies.length || bulkIds) return null;
     if (questAccepting) return null;
     if (/_collection$/.test(doc.kind || "") || !doc.self) return null;
-    const slot = el("span", {class: "questoffer"});
-    wellKnown().then(async w => {
+    /* the slot says how the read ended (data-quest-offer), so a refusal
+       with no button tells why. A read that failed, and was not refused,
+       is tried one more time. */
+    const slot = el("span", {class: "questoffer", "data-quest-offer": "reading"});
+    const says = s => slot.setAttribute("data-quest-offer", s);
+    const read = async () => {
+      const w = await wellKnown();
       const col = collectionHref(w, "quest");
-      if (!col) return;
+      if (!col) return says("no-collection");
       const res = await api(col + "?page%5Bsize%5D=1");
+      if (!res.ok && (res.status === 0 || res.status >= 500))
+        throw new Error("quests read " + res.status);
       const create = res.ok && ((res.body || {}).actions || {}).create;
+      says(create ? "offered" : res.ok ? "no-create" : "refused " + res.status);
       if (!create) return;
       slot.append(el("button", {type: "button", class: "primary",
         "data-quest-accept": "",
         title: "Keep this as a goal: the engine plans the steps to it",
         onclick: () => acceptQuest(create)}, "Accept as quest"));
-    }).catch(() => {});
+    };
+    read().catch(() => new Promise(r => setTimeout(r, 400)).then(read))
+          .catch(e => says("failed: " + ((e && e.message) || e)));
     return slot;
   }
   /* one click: the goal is this row, this door and what the form
