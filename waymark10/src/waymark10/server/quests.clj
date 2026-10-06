@@ -589,11 +589,25 @@
                ".")
           240)))
 
+(defn- warnings-note
+  "The warnings a door's rehearsal answered, as one sentence: each
+  guard's own reason, or its name; nil when there are none."
+  [warnings]
+  (when-some [said (seq (keep #(or (:reason %) (get % "reason")
+                                   (some-> (or (:name %) (get % "name")) name))
+                              warnings))]
+    (str "You also accept a warning: " (str/join " " said))))
+
 (defn- confirm-note
-  "A confirm step's note: the consequence, and after it the guards that
-  wait on its form. The consequence is cut first, so the guards stay."
-  [sentence awaiting]
-  (if-some [tail (clip (awaiting-note awaiting) 160)]
+  "A confirm step's note: the consequence, after it the warnings the
+  owner accepts at the same door, and last the guards that wait on its
+  form. The consequence is cut first, so the rest stays."
+  [sentence awaiting warnings]
+  (if-some [tail (clip (some->> [(warnings-note warnings) (awaiting-note awaiting)]
+                                (remove nil?)
+                                seq
+                                (str/join " "))
+                       160)]
     (str/triml (str (clip sentence (- 239 (count tail))) " " tail))
     (clip sentence 240)))
 
@@ -601,10 +615,10 @@
   "A step on a door whose form is not filled yet: its `needs`, and on
   its note the guards that wait on them. They cannot be planned. A
   confirm door's step stays the owner's to confirm."
-  [step {:keys [needs awaiting confirm consequence]}]
+  [step {:keys [needs awaiting confirm consequence warnings]}]
   (cond-> step
     (seq needs) (assoc :needs (needs-of needs))
-    confirm (assoc :whose "confirm" :note (confirm-note consequence awaiting))
+    confirm (assoc :whose "confirm" :note (confirm-note consequence awaiting warnings))
     (and (not confirm) (seq awaiting)) (assoc :note (awaiting-note awaiting))))
 
 (defn- blocked-steps
@@ -622,7 +636,7 @@
 
       confirm
       [(cond-> (assoc base :whose "confirm"
-                      :note (confirm-note (or consequence reason) awaiting))
+                      :note (confirm-note (or consequence reason) awaiting warnings))
          (seq needs) (assoc :needs (needs-of needs)))]
 
       (or held hold)

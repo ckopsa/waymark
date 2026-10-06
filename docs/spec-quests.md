@@ -113,6 +113,22 @@ is its own step with `needs` `close_reason`: no guard declares one
 sentence for every child. The tracker's Go opens that row's dialog
 for the door with the `needs` fields lit.
 
+**A shut goal is the last step, from the first plan.** A door its row
+does not afford shows no form, so the rehearsal names no `needs` for
+it. When the goal's row does not afford the goal's door, the planner
+reads the goal from the kind's declaration (`declared-goal` in
+`waymark10/src/waymark10/server/quests.clj`) and `answer->plan` puts
+it last, after the steps that open it. Its `needs` are the door's
+required arguments in the resource definition, in the declaration's
+order, less those the quest's stored `input` gives, and of those only
+the ones an invitation may show. Its `note` stays empty, because no
+guard was asked about the form; only when a seat's step stands before
+it does it carry the planner's own sentence that more may follow. The owner's ruling of 2026-10-06
+(bd1fd962): the goal's form is the quest's last step, shown from the
+first plan. `declared-goal` answers nothing when the goal's row is of
+no served kind or the kind has no such door, and the plan is then the
+rehearsal's answer alone.
+
 **Counts.** The engine learns steps as the house moves, so a plan is
 never a total. A reader counts "k done, n known so far": k steps in
 `done`, n steps in the plan. It never says "k of n".
