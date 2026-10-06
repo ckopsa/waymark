@@ -894,7 +894,11 @@ the close of a sitting ends every key of it.
   With no `after`, it reads from the sitting's start. With
   `after=now` it answers at once, with no event, and
   `Waymark-Inbox-After` names the log's newest event: a tail of a
-  long-open sitting begins at the present.
+  long-open sitting begins at the present. That event, and the start
+  of a sitting the log does not know, is read when no write is still
+  in flight, so no lower event lands behind the cursor. When the log
+  does not settle the door answers 503 `inbox-unsettled` and names no
+  cursor, and the caller asks again.
 - It keeps only the transitions whose kind the seat's `inbox.only`
   names, with an action that kind lists; an empty list is every
   action. It keeps only the kinds the sitting's grant can read. It

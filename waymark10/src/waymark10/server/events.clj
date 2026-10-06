@@ -338,6 +338,11 @@
                             " running on the poll backstop alone"))
         d {:eng eng
            :storage storage
+           ;; a plain read on purpose: a lower id in flight at this
+           ;; moment was owed to no subscriber, since none exists yet,
+           ;; and one that subscribes with :since replays it through
+           ;; the settled backlog. It never answers nil, so 0 here is
+           ;; an empty log.
            :last-seen (atom (or (:id (first (store/with-tx storage
                                               (fn [tx]
                                                 (store/transitions
