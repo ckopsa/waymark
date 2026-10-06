@@ -1018,6 +1018,12 @@
                 :handler (fn [row inp _ctx]
                            (assoc-in row [:data :close_reason] (:close_reason inp)))
                 :safety routine}
+     :drop {:from #{:open} :to :closed
+            :input [:map [:close_reason [:string {:min 1 :max 480}]]]
+            :handler (fn [row inp _ctx]
+                       (assoc-in row [:data :close_reason] (:close_reason inp)))
+            :safety {:idempotent true :reversible true :confirm true
+                     :consequence "The epic is let go."}}
      :reopen {:from #{:closed} :to :open :safety routine}}}))
 
 (defn- epic-engine []
@@ -1064,6 +1070,30 @@
                    {:principal person :idempotency-key (str (random-uuid))})
       (hear! eng)
       (is (= "finished" (name (:state (row-of eng :quest quest))))))))
+
+(deftest a-goal-behind-an-unfinished-part-names-its-awaiting-guard-in-the-first-plan
+  (let [eng (epic-engine)
+        {:keys [quest]} (epic-quest! eng nil)
+        _ (hear! eng)
+        d (data-of eng quest)
+        goal (last (:plan d))]
+    (is (= ["finish" "complete"] (mapv :door (:plan d))) (pr-str d))
+    (is (= ["close_reason"] (:needs goal)))
+    (is (str/includes? (str (:note goal)) "the-film-is-a-link")
+        "the refused rehearsal already names the guard that waits on the form")))
+
+(deftest a-confirm-goal-with-no-input-names-its-needs
+  (let [eng (epic-engine)
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        quest (:id (:row (inv/create! eng :quest
+                                      {:self (str "/api/q_epics/" e) :action "drop"}
+                                      {:principal person})))
+        _ (hear! eng)
+        d (data-of eng quest)]
+    (is (= ["drop"] (mapv :door (:plan d))) (pr-str d))
+    (is (= ["confirm"] (mapv (comp name :whose) (:plan d))))
+    (is (= ["close_reason"] (:needs (first (:plan d)))))))
 
 (deftest a-goal-whose-input-was-given-keeps-it-and-needs-nothing
   (let [eng (epic-engine)
