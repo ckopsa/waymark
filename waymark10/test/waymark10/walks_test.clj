@@ -1201,6 +1201,78 @@
         (is (= open (exported (vis-of id))))
         (is (nil? (exported narrow)))))))
 
+(def ^:private crate
+  "A row whose door takes a map with one secret child, and a list of maps."
+  (r/resource
+   {:kind :crate
+    :plural "crates"
+    :states [:open :done]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:stock {:from #{:open} :to :open
+             :input [:map
+                     [:shelf {:x-display {:label "Shelf"}}
+                      [:map
+                       [:label {:x-display {:label "Label"}}
+                        [:string {:max 20}]]
+                       [:code {:optional true :x-secret true
+                               :x-display {:label "Code"}}
+                        [:maybe [:string {:max 12}]]]]]
+                     [:items {:optional true :x-display {:label "Items"}}
+                      [:vector
+                       [:map
+                        [:name {:x-display {:label "Name"}}
+                         [:string {:max 20}]]]]]]
+             :handler (fn [row _inp _ctx] row)
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Stock" :order 1}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Finish" :order 2}}
+     :reopen {:from #{:done} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 3}}}}))
+
+(deftest a-schema-refusal-is-recorded-with-a-nested-arguments-field-errors
+  (let [clock (atom (Instant/now))
+        eng (engine/engine
+             {:storage (memory/storage)
+              :resources [crate]
+              :now-fn (fn [] (swap! clock (fn [^Instant i] (.plusMillis i 1))))})
+        id (:id (:row (inv/create! eng :crate {:title "Crate"} {:principal person})))
+        self (str "/api/crates/" id)
+        w (self-walk! eng)
+        invalid (p/schema-invalid
+                 :stock {:shelf {:label ["should be at most 20 characters"]
+                                 :code ["should be at most 12 characters"]}
+                         :items [nil {:name ["should be a string"]}]})
+        errors-of #(some-> (:errors %) (update-keys name))
+        shelf {"shelf.label" ["should be at most 20 characters"]}
+        open (assoc shelf "items[1].name" ["should be a string"])]
+    (is (= 1 (count (walks/record-refused! eng person nil
+                                           {:self self :action "stock"} invalid))))
+    (is (= open (errors-of (:body (first (frames-in eng (:id w))))))
+        "each sentence is held by its slot's path, and the secret child's is dropped")
+    (seal! eng w)
+    (testing "the export judges a nested entry by its top-level argument"
+      (let [exported (fn [vis]
+                       (->> (:lines (export-of eng w vis))
+                            (filter #(= "refusal" (:type %)))
+                            first
+                            errors-of))
+            only (fn [admitted]
+                   (assoc (vis-of id) :arg? (fn [_kind _action arg] (= admitted arg))))]
+        (is (= open (exported nil)))
+        (is (= open (exported (vis-of id))))
+        (is (= shelf (exported (only "shelf"))))
+        (is (nil? (exported (only "title"))))))))
+
 ;; ── the screens a walk carries (docs/spec-agent-demo-walks.md § 8a) ──
 
 (defn- doc-walk! [eng]
