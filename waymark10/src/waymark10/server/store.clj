@@ -68,9 +68,11 @@
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.
     opts {:settled true} is for a reader that keeps a cursor: it
     answers only when no append is still in flight, so no lower id can
-    commit after the rows it returns, and answers no rows when the
-    writers do not finish in time — the reader asks again on its next
-    pass. Such a read runs in a transaction of its own.")
+    commit after the rows it returns, and answers nil — no rows, and
+    not the [] of a log with none to give — when the writers do not
+    finish in time: the reader asks again on its next pass, and one
+    with no next pass asks through settled-transitions. Such a read
+    runs in a transaction of its own.")
   (transitions-under-grant [st tx grant-id since until opts]
     "Log rows whose actor carries this grant (actor->>'grant') and
     whose `at` lies in [since, until] — a nil bound is open. A
@@ -246,6 +248,20 @@
   "Sugar: (with-tx st [tx] …)."
   [st f]
   (with-tx* st f))
+
+(defn settled-transitions
+  "The settled log (transitions' {:settled true}) for a reader with no
+  next pass of its own: it asks up to `tries` times, each in a
+  transaction of its own, since a read whose wait ran out leaves its
+  transaction aborted. → the rows, or nil when the writers in flight
+  outlasted every try. The caller says what a log that never settled
+  means for it; it is never an empty log."
+  [st where opts tries]
+  (loop [left (long tries)]
+    (when (pos? left)
+      (if-some [rows (with-tx st #(transitions st % where (assoc opts :settled true)))]
+        rows
+        (recur (dec left))))))
 
 (defn utc-week-start
   "The UTC ISO week bucket an instant falls in — Monday 00:00 UTC, as

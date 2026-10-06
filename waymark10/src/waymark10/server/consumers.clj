@@ -39,58 +39,75 @@
 (defn- cursor-name ^String [name*]
   (str "consumer:" (name name*)))
 
+(def ^:private seed-tries
+  "How many times a seed asks for the settled log before it leaves the
+  consumer unseeded for its next drain."
+  4)
+
 (defn- seed-cursor!
   "First registration: the consumer hears the world from now — the
-  newest transition id (0 with :from-origin?, or an empty log)."
+  newest transition id (0 with :from-origin?, or an empty log). The
+  read is SETTLED, so every id at or below the seed has committed by
+  the time the seed is written: seeded at the newest COMMITTED id
+  alone, a lower id still in flight would commit after registration
+  and never be heard. → the position, or nil when the writers in
+  flight outlasted `seed-tries`. No cursor is written then — a seed
+  that read no rows is not an empty log, and seeding it at 0 would
+  replay the whole log — and the next drain seeds."
   [eng name* from-origin?]
   (let [st (:storage eng)
         pos (if from-origin?
               0
-              (or (:id (first (store/with-tx st
-                                (fn [tx]
-                                  (store/transitions st tx {}
-                                                     {:newest-first true
-                                                      :limit 1})))))
-                  0))]
-    (store/with-tx st #(store/cursor-set! st % (cursor-name name*) pos))
-    pos))
+              (when-some [rows (store/settled-transitions
+                                st {} {:newest-first true :limit 1}
+                                seed-tries)]
+                (or (:id (first rows)) 0)))]
+    (if pos
+      (do (store/with-tx st #(store/cursor-set! st % (cursor-name name*) pos))
+          pos)
+      (do (warn! "consumer " (name name*) " not seeded: the log did not"
+                 " settle; the next drain seeds it")
+          nil))))
 
 (defn drain-consumer!
   "One synchronous drain: deliver every transition past the named
   cursor to f, checkpointing per event; a throw parks the cursor at
   the refusing event and returns. Tests call this directly for
   determinism; the registered consumer's thread calls it on every
-  wake. → the number of events processed."
+  wake. A consumer whose seed could not be read (seed-cursor!)
+  processes nothing on this drain. → the number of events processed."
   [eng name* f & [{:keys [from-origin?]}]]
   (let [st (:storage eng)
         consumer (cursor-name name*)
         cursor (or (store/with-tx st #(store/cursor-get st % consumer))
                    (seed-cursor! eng name* from-origin?))]
-    (loop [cursor cursor n 0]
-      (let [rows (store/with-tx st
-                   ;; :settled — the read stays behind writers in
-                   ;; flight, so a lower id cannot commit after the
-                   ;; cursor has passed it
-                   (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200 :settled true})))
-            outcome
-            (reduce
-             (fn [[_cursor n] t]
-               (try
-                 (f t)
-                 (store/with-tx st
-                   #(store/cursor-set! st % consumer (:id t)))
-                 [(:id t) (inc n)]
-                 (catch Exception e
-                   (warn! "consumer " (name name*) " refused event "
-                          (:id t) " (" (ex-message e)
-                          "); parking — the next drain retries it")
-                   (reduced [::parked n]))))
-             [cursor n] rows)
-            [cursor' n'] outcome]
-        (if (and (not= ::parked cursor') (= 200 (count rows)))
-          (recur cursor' (long n'))
-          n')))))
+    (if-not cursor
+      0
+      (loop [cursor cursor n 0]
+        (let [rows (store/with-tx st
+                     ;; :settled — the read stays behind writers in
+                     ;; flight, so a lower id cannot commit after the
+                     ;; cursor has passed it
+                     (fn [tx] (store/transitions st tx {:since cursor}
+                                                 {:limit 200 :settled true})))
+              outcome
+              (reduce
+               (fn [[_cursor n] t]
+                 (try
+                   (f t)
+                   (store/with-tx st
+                     #(store/cursor-set! st % consumer (:id t)))
+                   [(:id t) (inc n)]
+                   (catch Exception e
+                     (warn! "consumer " (name name*) " refused event "
+                            (:id t) " (" (ex-message e)
+                            "); parking — the next drain retries it")
+                     (reduced [::parked n]))))
+               [cursor n] rows)
+              [cursor' n'] outcome]
+          (if (and (not= ::parked cursor') (= 200 (count rows)))
+            (recur cursor' (long n'))
+            n'))))))
 
 (defn register-consumer!
   "Register a named, durable log consumer: (f transition) for every

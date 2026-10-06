@@ -14,6 +14,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -206,6 +207,69 @@
     (testing "behind a long writer a settled drain yields: appends still land"
       ;; held for the whole hold, each writer would land exactly one
       (is (< writers (count (run true true)))))))
+
+;; ── 1d. the other readers that walk the log by id ───────────────────
+
+(defn- in-the-window
+  "Two appends that commit out of id order. Calls (f low high
+  commit-low!) while the LOWER id is still in flight and the higher
+  one has committed."
+  [f]
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        appended (promise)
+        release (promise)
+        slow (future
+               (store/with-tx st
+                 (fn [tx]
+                   (deliver appended (:id (store/append-transition! st tx record)))
+                   (deref release 20000 nil))))]
+    (try
+      (let [low (deref appended 10000 nil)
+            high (:id (store/with-tx st
+                        #(store/append-transition! st % record)))]
+        (is (some? low))
+        (is (< low high))
+        (f low high (fn [] (deliver release true) @slow)))
+      (finally (deliver release true)))))
+
+(deftest a-seed-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [_low high commit-low!]
+     (let [seen (atom [])
+           f #(swap! seen conj (:id %))]
+       (testing "a first drain in the window writes no cursor"
+         (is (= 0 (consumers/drain-consumer! *eng* :f-seeded f)))
+         (is (nil? (cursor-of :f-seeded))))
+       (commit-low!)
+       (testing "once the lower id commits, the seed is the newest id"
+         (is (= 0 (consumers/drain-consumer! *eng* :f-seeded f)))
+         (is (= high (cursor-of :f-seeded)))
+         (is (empty? @seen)))))))
+
+(deftest a-replay-waits-for-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [rows (future (mapv :id (#'events/backlog (:storage *eng*) (dec low))))]
+       (testing "a replay in the window does not answer without the lower id"
+         (is (= ::waiting (deref rows 200 ::waiting))))
+       (commit-low!)
+       (testing "once the lower id commits, both are replayed, in id order"
+         (is (= [low high] (deref rows 10000 nil))))))))
+
+(deftest the-inbox-page-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [page #(mapv :id (#'seat-routes/log-after *eng* (dec low)))]
+       (testing "a page in the window answers no row"
+         (is (empty? (page))))
+       (commit-low!)
+       (testing "once the lower id commits, the page holds both, in id order"
+         (is (= [low high] (page))))))))
 
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 
