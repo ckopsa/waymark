@@ -1142,9 +1142,10 @@ async function accessStory() {
      (wtEnded.data.outcomes || []).map(o => o.outcome).join() === "answered,done,skipped");
 
   /* the quest tracker (docs/spec-quests.md, the tracker): priya accepts
-     a goal on a note of her own and pins it. The plan is written
-     through the engine's own `plan` door by a system principal, as the
-     planner writes it, so no planner runs here. */
+     a goal on a note of her own and pins it. The planner answers the
+     create with a plan of its own; the story waits for that one, then
+     writes its plans through the engine's own `plan` door by a system
+     principal, as the planner writes them. */
   console.log("· a pinned quest: the tracker rides every page");
   const sys = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
   let qCalls = 0;
@@ -1166,11 +1167,27 @@ async function accessStory() {
   const qSelf = quest.doc.self;
   await evaljs(`window.__quest = true; true`);
   ok("priya pins it", (await qPost(qSelf + "/-/pin", {}, h)).status < 400);
-  await waitFor(`!${qBar}.hidden && !!${qBar}.querySelector("[data-quest-planning]")`,
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-title]")?.textContent ===
+                   ${JSON.stringify(qTitle)}`,
                 "the tracker, off the firehose", 15000);
+  /* the planner's own plan lands first, so it cannot write over the
+     story's */
+  let qBorn = null;
+  for (let i = 0; i < 60 && !qBorn; i++) {
+    if ((await get(qSelf)).data.planned_at) qBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the create with a first plan", qBorn === true);
+  /* the planner is quicker than a page, so the row as it was born (no
+     plan, no planned_at) is drawn from the quest in hand */
   ok("a quest with no plan yet reads planning… under its title, with no Go",
-     await evaljs(`(() => { const t = ${qBar}.querySelector("[data-quest-title]");
-       return t.textContent === ${JSON.stringify(qTitle)} &&
+     await evaljs(`(() => {
+       questDoc = {...questDoc, data: {...questDoc.data, plan: [], planned_at: null}};
+       questTracker();
+       const t = ${qBar}.querySelector("[data-quest-title]");
+       return !!${qBar}.querySelector("[data-quest-planning]") &&
+         t.textContent === ${JSON.stringify(qTitle)} &&
          t.getAttribute("href") === ${JSON.stringify("#" + qSelf)} &&
          !${qBar}.querySelector("[data-quest-go]"); })()`));
   const stepOne = {n: 1, door: "rename", self: pile.self, whose: "person",
