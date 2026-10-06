@@ -35,19 +35,25 @@
   "The out-of-state refusal. `said`, when present, is the action's own
   sentence about THIS row (`:out-of-state-says`, invoke's step 5):
   appended to the machine's, never in place of it, so the states a
-  client reads off `becomes-available` and the prose still agree."
+  client reads off `becomes-available` and the prose still agree.
+  `roads`, when any, are the row's own doors that lead to a state where
+  this one opens (machine/roads): they ride as `remedies`, the same
+  ones in the same order as the envelope's out-of-state entry."
   ([action state from resource] (wrong-state action state from resource nil))
   ([action state from resource said]
+   (wrong-state action state from resource said nil))
+  ([action state from resource said roads]
    (problem :wrong-state 409 "Wrong state"
-            {:detail (str "Available in state(s) "
-                          (str/join ", " (map summary/state-label (sort from)))
-                          "; the resource is " (summary/state-label state) "."
-                          (when-some [s (some-> said str str/trim not-empty)]
-                            (str " " s)))
-             :action-attempted action
-             :state state
-             :becomes-available {:in-states (vec (sort from))}
-             :resource resource})))
+            (cond-> {:detail (str "Available in state(s) "
+                                  (str/join ", " (map summary/state-label (sort from)))
+                                  "; the resource is " (summary/state-label state) "."
+                                  (when-some [s (some-> said str str/trim not-empty)]
+                                    (str " " s)))
+                     :action-attempted action
+                     :state state
+                     :becomes-available {:in-states (vec (sort from))}
+                     :resource resource}
+              (seq roads) (assoc :remedies (vec roads))))))
 
 (defn version-conflict
   "The fence's refusal of a write whose caller read an older version.

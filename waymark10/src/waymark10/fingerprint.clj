@@ -85,7 +85,8 @@
   (cond
     (map? r) (cond-> (sorted-map "door" (remedy-fp (:door r)))
                (:id r) (assoc "id" (pr-str (:id r)))
-               (:fields r) (assoc "fields" (mapv name (:fields r)))
+               (:fields r) (assoc "fields" (mapv #(if (keyword? %) (name %) (pr-str %))
+                                                 (:fields r)))
                (:input r) (assoc "input" (into (sorted-map)
                                                (map (fn [[k f]] [(name k) (pr-str f)]))
                                                (:input r))))
