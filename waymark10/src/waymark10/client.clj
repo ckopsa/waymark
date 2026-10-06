@@ -700,7 +700,9 @@
            :bound (vec (get-in res [:problem :resolved_remedies]))
            :reason (get-in res [:problem :detail])
            :form form}
-          (warnings? res) (blocked {:needs needs :warnings (:warnings res)})
+          ;; a dry-run answers its warnings beside :valid, with no
+          ;; :acknowledge!: the owner accepts them at the door
+          (seq (:warnings res)) (blocked {:needs needs :warnings (vec (:warnings res))})
           (or (problem? res) (refused? res))
           (blocked {:needs needs
                     :reason (or (get-in res [:problem :detail])
@@ -728,7 +730,9 @@
           ;; as landing, marked, so the real run reaches it and holds
           (and rehearse? (holds/hold? (get-in res [:problem :guard])))
           {:landed doc :hold true :to (get-in entry [:effect :to])}
-          (warnings? res) (blocked {:warnings (:warnings res)})
+          ;; act! answers :warnings with :acknowledge!, a dry-run
+          ;; beside :valid: either way the door waits on the owner
+          (seq (:warnings res)) (blocked {:warnings (vec (:warnings res))})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
            :bound (vec (get-in res [:problem :resolved_remedies]))
