@@ -801,25 +801,50 @@
       (warn! "a write was not recorded in its own walk — " (ex-message e))))
   result)
 
+(defn- flat-errors
+  "One argument's errors `v` → [[path [sentence]]], `path` spelled as the
+  form names that field's widget: a map's child is `path.child` and a
+  list's entry `path[i]`, the entries that passed (nil) left out."
+  [path v]
+  (cond
+    (string? v) [[path [v]]]
+    (map? v) (mapcat (fn [[k c]]
+                       (flat-errors (if (= :malli/error k)
+                                      path
+                                      (str path "." (if (keyword? k) (name k) (str k))))
+                                    c))
+                     v)
+    (sequential? v) (if (every? string? v)
+                      (when (seq v) [[path (vec v)]])
+                      (mapcat (fn [i c]
+                                (when (some? c)
+                                  (flat-errors (str path "[" i "]") c)))
+                              (range) v))))
+
 (defn- refusal-errors
   "A schema refusal's sentences by argument, as a `refusal` frame may
   hold them → {argument [sentence]}, or nil when there are none. A
-  secret argument's entry is dropped, as presence's `clean-ui` drops
-  its value, and so is every entry when `self` names no door `action`:
-  the secret ones are then unknown."
+  nested argument's are held by the dotted path the form's own slots
+  use (`shelf.label`, `items[1].name`: `flat-errors`). A secret
+  argument's entry is dropped, as presence's `clean-ui` drops its
+  value, a nested argument's secret child with it, and so is every
+  entry when `self` names no door `action`: the secret ones are then
+  unknown."
   [eng self action errors]
   (when (map? errors)
-    (when-some [secret (presence/secret-arguments eng self action)]
-      (not-empty
-       (into {}
-             (keep (fn [[k v]]
-                     (let [arg (if (keyword? k) (name k) (str k))
-                           said (cond
-                                  (string? v) [v]
-                                  (and (sequential? v) (seq v) (every? string? v)) (vec v))]
-                       (when (and said (not (contains? secret (keyword arg))))
-                         [arg said]))))
-             errors)))))
+    (when-some [secret (presence/secret-argument-paths eng self action)]
+      (let [open? (fn [path]
+                    (let [parts (str/split (str/replace path #"\[\d+\]" "") #"\.")]
+                      (not-any? secret (reductions #(str %1 "." %2) parts))))]
+        (not-empty
+         (reduce (fn [m [path said]]
+                   (if (open? path)
+                     (update m path (fnil into []) said)
+                     m))
+                 {}
+                 (mapcat (fn [[k v]]
+                           (flat-errors (if (keyword? k) (name k) (str k)) v))
+                         errors)))))))
 
 (defn record-refused!
   "A write door's refusal (router's action route, which the connector's
@@ -1216,8 +1241,9 @@
 (defn- errors-seen
   "A refusal's field errors as `vis` may read them: the entries whose
   argument its `:arg?` admits on the refused door, and none when the
-  door names no served kind. nil `vis` reads them whole. nil when there
-  are none."
+  door names no served kind. A nested argument's entry (`shelf.label`,
+  `items[1].name`) is judged by its top-level argument. nil `vis` reads
+  them whole. nil when there are none."
   [eng vis {:keys [self action errors]}]
   (when (and (map? errors) (seq errors))
     (not-empty
@@ -1226,7 +1252,11 @@
              k (some->> plural (kind-of-plural eng))
              action (some-> action name str/trim not-empty keyword)]
          (if (and k action)
-           (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) errors)
+           (into {}
+                 (filter (fn [[arg _]]
+                           (arg? k action (or (re-find #"^[^.\[]+" (name arg))
+                                              (name arg)))))
+                 errors)
            {}))
        errors))))
 

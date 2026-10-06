@@ -528,6 +528,43 @@
                                   (dialog-door eng dself a))]
       (secret-keys (:input door) (:schema rdef)))))
 
+(defn- map-form
+  "The :map form under `form`'s :maybe and list wrappers, or nil."
+  [form]
+  (loop [f form n 0]
+    (when (and (vector? f) (< n 8))
+      (cond
+        (= :map (first f)) f
+        (contains? #{:maybe :vector :sequential :set} (first f)) (recur (peek f) (inc n))))))
+
+(defn- secret-paths
+  "The dotted paths under `prefix` this :map schema marks secret, at any
+  depth: a secret entry is named whole, and a map or a list of maps is
+  walked for its own."
+  [prefix form]
+  (for [[k e] (try (schema/entry-map form) (catch Exception _ nil))
+        :let [s (:schema e)
+              path (str prefix (name k))]
+        p (if (or (secret-props? (:properties e))
+                  (and (vector? s) (secret-props? (second s))))
+            [path]
+            (when-some [child (map-form s)]
+              (secret-paths (str path ".") child)))]
+    p))
+
+(defn secret-argument-paths
+  "`secret-arguments` with the secret children of a nested argument as
+  well → a set of dotted paths (`pin`, `shelf.code`; a list's entries
+  share their map's path), or nil when `self` names no such door."
+  [eng self action]
+  (let [dself (normalize-self self)
+        a (when (or (string? action) (keyword? action)) (not-empty (name action)))]
+    (when-some [[rdef _id door] (when (and a (valid-self? dself))
+                                  (dialog-door eng dself a))]
+      (into #{}
+            (mapcat #(secret-paths "" %))
+            (keep identity [(:input door) (:schema rdef)])))))
+
 (defn- ref-kinds
   "The plain `:kind` ref arguments of these :map schemas → {key kind}:
   an entry a picker is drawn for, one row or a list of them."
