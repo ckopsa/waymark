@@ -58,6 +58,14 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs access
 
+   QUEST-PHONE (the quest flow on a phone: 390x844 with touch, in the
+   mobile shell, live and then as a film; against the same
+   waymark10.access-dev engine, and CI runs it in the ui-access job
+   after the access drive):
+   1. the access boot, on 8124
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs quest-phone
+
    INVITATION (an open invitation taken from its collection in one
    tap, and another declined from the dialog; docs/spec-guided-follow.md
    § 3. The invitation kind is core's, so a memory engine — no
@@ -95,12 +103,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "invitation", "guided", "later"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation", "guided", "later", "quest-phone"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (["batch-a", "guided"].includes(MODE) ? "http://localhost:8123"
-   : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
+   : ["access", "invitation", "quest-phone"].includes(MODE) ? "http://localhost:8124"
    : MODE === "later" ? "http://localhost:8125"
    : "http://localhost:8010");
 
@@ -3240,11 +3248,304 @@ async function guidedStory() {
   await chrome.close();
 }
 
+/* the quest flow on a phone (docs/spec-quests.md): a 390x844 screen with
+   touch, in the mobile shell. priya keeps a refused shelve as a quest and
+   takes its two steps from the tracker's Go, as the access story's
+   recorded walk does, and here Accept as quest, Go and the menu are
+   pressed by a finger. At each of the four moments (the offer, the
+   tracker, the step's door, Quest complete) nothing scrolls sideways, and
+   SHOTS keeps a picture. The walk she records of it is then filmed at the
+   same size. */
+async function questPhoneStory() {
+  const h = {"x-waymark-principal": "priya"};
+  const sys = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  const get = async path => (await fetch(BASE + path, {headers: h})).json();
+  let calls = 0;
+  const post = async (path, body, headers) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...headers,
+                "Idempotency-Key": `ui-drive-phone-${Date.now()}-${calls++}`},
+      body: JSON.stringify(body)});
+    return {status: res.status, doc: await res.json().catch(() => null)};
+  };
+  const W = 390, H = 844;
+
+  console.log("· a phone: 390x844 with touch, the mobile shell");
+  await send("Emulation.setDeviceMetricsOverride",
+             {width: W, height: H, deviceScaleFactor: 2, mobile: true});
+  await send("Emulation.setTouchEmulationEnabled", {enabled: true, maxTouchPoints: 5});
+  /* the access drive leaves this tab signed in as its guest, sharing:
+     the phone is priya's, by the dev box, with no session and no grant */
+  await send("Network.clearBrowserCookies");
+  await send("Page.navigate", {url: BASE + "/api/-/ui?ui=mobile"});
+  await sleep(1200);
+  await evaljs(`sessionStorage.clear(); localStorage.removeItem("wm10.grant");
+    localStorage.setItem("wm10.principal", "priya"); location.reload(); true`);
+  await sleep(1200);
+  /* the page knows who reads it a moment after it is drawn */
+  await waitFor(`typeof hereHref === "function" && typeof viewerId === "function" &&
+                 !!(principalId() || viewerId())`,
+                "the page on the phone, as priya", 15000);
+  ok("the page is 390 wide, in the mobile shell",
+     await evaljs(`innerWidth === ${W} && innerHeight === ${H} &&
+       document.documentElement.getAttribute("data-ui") === "mobile"`));
+  ok("its pointer is coarse", await evaljs(`matchMedia("(pointer: coarse)").matches`));
+
+  const bar = `document.querySelector("#questbar")`;
+  const me = await evaljs(`viewerId()`);
+  ok("the phone's viewer is priya, by the dev box",
+     !!me && await evaljs(`$("#who").value === "priya"`));
+  const pinned = async () => (await get("/api/quests?state=active&pinned=true&owner=" +
+                                        encodeURIComponent(me))).data?.items || [];
+  /* a quest an earlier drive left pinned would be the tracker's: none is */
+  for (const q of await pinned()) await post(q.self + "/-/finish", {}, sys);
+  await evaljs(`refreshQuest().catch(() => {}); true`);
+  await waitFor(`${bar}.hidden === true`, "a phone with no pinned quest", 15000);
+
+  /* nothing scrolls sideways: the page, and the tracker when it is shown */
+  const widths = `(() => {
+    const d = document.documentElement, b = ${bar};
+    const out = [...b.children].filter(c => {
+      const r = c.getBoundingClientRect();
+      return r.width > 0 && (r.left < -0.5 || r.right > innerWidth + 0.5);
+    }).map(c => c.className || c.tagName);
+    return {page: d.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth,
+            bar: b.hidden || (b.scrollWidth <= b.clientWidth && out.length === 0),
+            seen: {doc: d.scrollWidth, body: document.body.scrollWidth,
+                   bar: [b.scrollWidth, b.clientWidth], out}}; })()`;
+  const noOverflow = async when => {
+    const f = await evaljs(widths);
+    if (!f.page || !f.bar) console.log(`  the widths ${when}: ` + JSON.stringify(f.seen));
+    ok(`the page does not scroll sideways ${when}`, f.page);
+    ok(`the tracker does not scroll sideways ${when}`, f.bar);
+  };
+  /* the open dialog is a sheet inside the screen, and holds no wider line */
+  const sheetFits = async name => {
+    const s = await evaljs(`(() => {
+      const g = document.querySelector("dialog[open]"), r = g.getBoundingClientRect();
+      return {left: r.left, right: r.right, wide: g.scrollWidth, room: g.clientWidth}; })()`);
+    if (s.left < -0.5 || s.right > W + 0.5 || s.wide > s.room)
+      console.log(`  ${name}: ` + JSON.stringify(s));
+    ok(`${name} is a sheet inside the screen, with nothing wider than it`,
+       s.left >= -0.5 && s.right <= W + 0.5 && s.wide <= s.room);
+  };
+  /* a touch target: where a finger lands on it, how tall it is, whether
+     all of it is on the screen, and whether the finger lands on IT */
+  const target = sel => `(() => {
+    const t = document.querySelector(${JSON.stringify(sel)});
+    if (!t) return null;
+    t.scrollIntoView({block: "nearest"});
+    const r = t.getBoundingClientRect();
+    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+    const hit = document.elementFromPoint(x, y);
+    return {x, y, h: r.height,
+            on: r.left >= -0.5 && r.top >= -0.5 &&
+                r.right <= innerWidth + 0.5 && r.bottom <= innerHeight + 0.5,
+            hit: !!hit && (hit === t || t.contains(hit))}; })()`;
+  const checkTarget = async (name, sel) => {
+    const t = await evaljs(target(sel));
+    if (!t || t.h < 44 || !t.on || !t.hit) console.log(`  ${name}: ` + JSON.stringify(t));
+    ok(`${name} is at least 44px tall`, !!t && t.h >= 44);
+    ok(`${name} is fully on screen, under the finger`, t.on && t.hit);
+    return t;
+  };
+  const tap = async t => {
+    await send("Input.dispatchTouchEvent",
+               {type: "touchStart", touchPoints: [{x: t.x, y: t.y}]});
+    await send("Input.dispatchTouchEvent", {type: "touchEnd", touchPoints: []});
+  };
+
+  console.log("· a refused door on a phone: Accept as quest");
+  const title = "Phone pile, with a name far too long for one line of a phone's tracker";
+  const made = await post("/api/led_notes", {title}, h);
+  ok("priya writes a note with a long name", made.status === 201 && !!made.doc?.self);
+  const note = made.doc;
+  /* her walk of it, with its screens, as the access story records one */
+  const walk = await evaljs(`(async () => {
+    const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+      {followed: principalId() || viewerId(),
+       title: "A quest on a phone", docs: true})});
+    if (!r.ok || !r.body || !r.body.self)
+      return {refused: r.status, body: r.body || null};
+    recording = recordingOf(r.body);
+    recordChip();
+    if (!uiSharing()) {
+      toggleShareUi();
+      sessionStorage.setItem("wm10.record.shared", "1");
+    }
+    return r.body.self; })()`);
+  if (typeof walk !== "string") console.log("  the walk's create: " + JSON.stringify(walk));
+  ok("priya records the phone's walk", typeof walk === "string");
+  /* a beat carries the form: each press waits for the one before it */
+  await sleep(600);
+  await evaljs(`location.hash = ${JSON.stringify(note.self)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(note.self)} &&
+                 document.querySelector("#view").textContent.includes(${JSON.stringify(title)}) &&
+                 !!document.querySelector('#view [data-action="shelve"]')`,
+                "the note's row page", 15000);
+  await sleep(600);
+  await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog", 15000);
+  await sleep(600);
+  /* the enum is a select or a radio group, as the form chose */
+  const shelve = async shelf => {
+    await evaljs(`(() => {
+      const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
+      const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
+      const i = radio || nodes[0];
+      if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+      return true; })()`);
+    await sleep(600);
+    await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  };
+  const refused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
+  const accept = "dialog[open] [data-quest-accept]";
+  await shelve("high");
+  await waitFor(`${refused}.includes("room") && !!document.querySelector(${JSON.stringify(accept)})`,
+                "the offer under the refusal", 15000);
+  await sleep(600);
+  await sheetFits("the refused door's dialog");
+  const offer = await checkTarget("Accept as quest", accept);
+  await noOverflow("under the offer");
+  await shot("phone-quest-offer");
+  await tap(offer);
+  await waitFor(`!document.querySelector("dialog[open]") && !${bar}.hidden &&
+                 !!${bar}.querySelector("[data-quest-title]")`,
+                "the tracker, off the tap", 15000);
+  ok("a tap on Accept as quest closes the dialog and shows the tracker", true);
+  const quest = (await pinned())[0]?.self;
+  ok("the tap leaves the quest pinned", !!quest);
+
+  console.log("· the tracker on a phone");
+  const plan = `JSON.stringify(((questDoc || {}).data || {}).plan || null)`;
+  const goFor = door => `(() => {
+    const s = questDoc && questHead(questDoc);
+    return !!s && s.door === ${JSON.stringify(door)} &&
+      s.self === ${JSON.stringify(note.self)} &&
+      !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+  await waitFor(goFor("rename"), "the remedy at the tracker's head", 30000, plan);
+  const says = await evaljs(`(() => {
+    const b = ${bar}, t = b.querySelector("[data-quest-title]"), cs = getComputedStyle(t);
+    const line = b.querySelector("[data-quest-note]");
+    return {title: t.textContent, clipped: t.scrollWidth > t.clientWidth,
+            ellipsis: cs.textOverflow === "ellipsis" && cs.whiteSpace === "nowrap" &&
+                      cs.overflowX === "hidden",
+            count: b.querySelector("[data-quest-count]")?.textContent || "",
+            note: line ? line.textContent : null,
+            noteWide: line ? line.getBoundingClientRect().width : 0,
+            needs: questHead(questDoc).needs || []}; })()`);
+  console.log("  the tracker: " + JSON.stringify(says));
+  ok("the tracker says its title, the count and the head step's note",
+     !!says.title && /^\d+ done, \d+ known so far$/.test(says.count) &&
+     !!(says.note || "").trim() && says.noteWide >= 100);
+  ok("a long title ends in an ellipsis",
+     says.ellipsis && (says.title.length < 60 || says.clipped));
+  const go = await checkTarget("Go", "#questbar [data-tracker-go]");
+  await noOverflow("under the tracker");
+  await shot("phone-quest-tracker");
+  const menu = await checkTarget("the tracker's menu", "#questbar .quest-menu summary");
+  await tap(menu);
+  await waitFor(`${bar}.querySelector(".quest-menu").open`, "the menu, off the tap", 15000);
+  const doors = await evaljs(`[...${bar}.querySelectorAll(".quest-menu-items button")].map(b => {
+    const r = b.getBoundingClientRect();
+    return {name: b.textContent.trim(), h: r.height,
+            on: r.left >= -0.5 && r.right <= innerWidth + 0.5 && r.bottom <= innerHeight + 0.5}; })`);
+  console.log("  the menu's doors: " + JSON.stringify(doors));
+  ok("each door of the menu is at least 44px tall and on screen",
+     doors.length > 0 && doors.every(d => d.h >= 44 && d.on));
+  await noOverflow("under the open menu");
+  await shot("phone-quest-menu");
+  await evaljs(`${bar}.querySelector(".quest-menu").open = false; true`);
+
+  console.log("· Go on a phone: the step's door");
+  await sleep(600);
+  await tap(go);
+  await waitFor(`!!document.querySelector('dialog[open] [name="title"]')`,
+                "the remedy's dialog, off a tap on Go", 15000);
+  await sleep(600);
+  const lit = await evaljs(`document.querySelectorAll("dialog[open] .invited").length`);
+  console.log(`  the step needs ${JSON.stringify(says.needs)}: ${lit} lit`);
+  ok("a tap on Go opens the step's door, with its needs lit",
+     says.needs.length === 0 || lit > 0);
+  await sheetFits("the step's door");
+  await noOverflow("under the step's door");
+  await shot("phone-quest-go");
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    /* a name and a room: the high shelf refuses no more */
+    set("title", ${JSON.stringify(title + ", sorted")}); set("room", "Hall");
+    return true; })()`);
+  await sleep(600);
+  await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
+  await waitFor(goFor("shelve"), "the goal door at the tracker's head", 30000, plan);
+  await sleep(600);
+  await tap(await evaljs(target("#questbar [data-tracker-go]")));
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the goal's dialog, off a tap on Go", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
+                refused);
+
+  console.log("· Quest complete on a phone");
+  /* the line stays a few seconds: it is read and pictured at once */
+  await waitFor(`!!${bar}.querySelector("[data-quest-complete]")`,
+                "Quest complete on the phone", 40000, plan)
+    .catch(async e => {
+      throw new Error(e.message + "; the quest's row is " + (await get(quest)).state);
+    });
+  ok("the tracker says Quest complete", true);
+  await noOverflow("under Quest complete");
+  await shot("phone-quest-complete");
+  for (let i = 0; i < 60 && (await get(quest)).state !== "finished"; i++) await sleep(250);
+  ok("the goal door finishes the phone's quest", (await get(quest)).state === "finished");
+  /* the consumer hands the finished quest to the walk after the move */
+  await sleep(1500);
+  await evaljs(`stopRecording().then(() => true)`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the sealed walk's page", 15000);
+  ok("stop seals the phone's walk", (await get(walk)).state === "sealed");
+
+  console.log("· film: the phone's quest walk, at 390x844");
+  const why = `({at: replay && replay.at, film: document.documentElement.getAttribute("data-film"),
+    state: document.querySelector("#replaychip")?.getAttribute("data-replay-state") ?? null})`;
+  await evaljs(`location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${bar}).display !== "none" &&
+                 !!${bar}.querySelector("[data-tracker-go]:disabled")`,
+                "the tracker in the phone's film", 240000, why);
+  ok("film mode keeps the tracker on a phone", true);
+  await noOverflow("in the film");
+  await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the phone's film to end", 240000, why);
+  ok("the film ends on the finished quest",
+     await evaljs(`innerWidth === ${W} && !!${bar}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${bar}).display !== "none"`));
+  await noOverflow("at the film's end");
+  await shot("phone-quest-film");
+  /* out of film mode, and of the phone */
+  await evaljs(`location.hash = "/api/led_notes"; location.reload(); true`);
+  await sleep(1200);
+  await send("Emulation.setTouchEmulationEnabled", {enabled: false});
+  await send("Emulation.clearDeviceMetricsOverride");
+}
+
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
 else if (MODE === "invitation") await invitationStory();
 else if (MODE === "guided") await guidedStory();
 else if (MODE === "later") await laterStory();
+else if (MODE === "quest-phone") await questPhoneStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

@@ -223,8 +223,9 @@
   #followchip .gaze-faded { opacity: .7; font-weight: 400; }
   /* the quest tracker (docs/spec-quests.md): the pinned quest's own row
      of the sticky header, so no page hides it and it covers none of a
-     page's actions. One slim line: the step's note gives way first, and
-     the buttons keep their size on a phone. */
+     page's actions. One slim line: the step's note gives way first. A
+     phone lays it out as two rows, with doors a thumb can hit
+     (040-mobile.css). */
   #questbar { flex: 1 0 100%; display: flex; align-items: center; gap: 10px;
               min-width: 0; font-size: 12px; padding-top: 4px;
               border-top: 1px solid var(--line); }
