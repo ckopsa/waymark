@@ -3688,7 +3688,7 @@ async function questPhoneStory() {
                   `document.body.innerText.slice(-400)`);
     const seen = await evaljs(`(() => {
       const g = ${sheet};
-      return {goal: g.querySelector("[data-quest-goal]").textContent,
+      return {goal: g.querySelector("[data-quest-sheet-goal]").textContent,
               why: g.querySelector("[data-quest-why]").textContent,
               steps: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent),
               turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),

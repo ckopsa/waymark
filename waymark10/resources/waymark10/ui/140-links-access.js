@@ -138,7 +138,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
     el("div", {class: "dlghead"},
       /* the door's label on this row, as its button says it; the line
          under it is the title the quest would be given */
-      el("h3", {"data-quest-goal": ""},
+      el("h3", {"data-quest-sheet-goal": ""},
         label(name, (doc.unavailable || {})[name] || {})),
       el("p", {class: "metaline", "data-quest-title-line": ""},
         p.goal ? "Quest: " + p.goal
