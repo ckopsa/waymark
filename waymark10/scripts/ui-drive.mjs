@@ -1511,8 +1511,8 @@ async function accessStory() {
      and its tracker") is a hand-written file. This one the engine
      recorded (walks.clj, `docs: true`): priya keeps the refused shelve as
      a quest and takes two steps from the tracker's Go, a second
-     principal takes one between them, and the goal door finishes the
-     quest. Every plan is the planner's own, so the counts are read off
+     principal takes the first one again between them, when it is
+     already done, and the goal door finishes the quest. Every plan is the planner's own, so the counts are read off
      the export's quest documents and none is written here. */
   console.log("· replay: a quest walk the engine recorded, with two principals");
   const rNote = (await qPost("/api/led_notes", {title: "Recorded pile"}, h)).doc;
@@ -1587,9 +1587,9 @@ async function accessStory() {
       i.dispatchEvent(new Event("input", {bubbles: true}));
       i.dispatchEvent(new Event("change", {bubbles: true}));
     };
-    /* a name and no room: the high shelf still refuses, so the remedy
-       stays the next step */
-    set("title", "Recorded pile, sorted");
+    /* a name and a room: the high shelf refuses no more, so the remedy
+       is done and the goal door is the next step */
+    set("title", "Recorded pile, sorted"); set("room", "Hall");
     return true; })()`);
   await sleep(600);
   await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
@@ -1599,18 +1599,22 @@ async function accessStory() {
   /* the plan that answers priya's step lands first: a move committed
      before that plan is written counts as answered by it, and is no
      step of the walk's */
-  await waitFor(rGoFor("rename", 1), "the remedy at the tracker's head again", 15000, rPlan);
+  await waitFor(rGoFor("shelve", 1), "the goal door at the tracker's head", 15000, rPlan);
   const rSecond = (await get(rSelf)).data.planned_at;
   ok("the planner plans again after priya's step", !!rSecond && rSecond !== rFirst);
+  /* the remedy is done and its door stays open: the second principal
+     takes it again. The plan that answers equals the one held, and it
+     is written all the same (quests.clj, plan's `:replay false`), so
+     the walk holds the move and the quest's document after it. */
   const rStep = await qPost(rNote.self + "/-/rename",
                             {title: "Recorded pile, filed", room: "Hall"}, sys);
-  ok("a second principal takes the quest's next step", rStep.status < 400);
+  ok("a second principal takes the quest's done step again", rStep.status < 400);
   if (!(await rPlanned(rSelf, rSecond)))
     throw new Error("FAILED: the planner plans again after the second principal's step: " +
       JSON.stringify({step: rStep.status, note: (await get(rNote.self)).data,
                       plan: ((await get(rSelf)).data.plan || []).map(s => s.door + " " + s.state)}));
   ok("the planner plans again after the second principal's step", true);
-  await waitFor(rGoFor("shelve", 2), "the goal door at the tracker's head", 15000, rPlan);
+  await waitFor(rGoFor("shelve", 1), "the goal door still at the tracker's head", 15000, rPlan);
   console.log("  the last plan: " + await evaljs(rPlan));
   await sleep(600);
   await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
