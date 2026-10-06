@@ -162,8 +162,14 @@ row's envelope.
 - A small menu offers `pause`, `unpin` and `replan`, each only when the
   row offers that door to the viewer.
 
-The tracker redraws on the live stream: a transition of the quest in
-hand reads it again, a `pin` takes whichever quest is pinned now, and
-`finish` shows "Quest complete" with the title for four seconds before
-the tracker hides. Under a grant the live stream carries no row events,
-so there the tracker is as fresh as the last page load.
+The tracker follows the quest in hand on that quest's own event stream
+(`/api/quests/<id>/-/events`), as a row page follows one row, for every
+viewer, granted or not: a grant that admits the quest admits its
+stream, and under a grant the live stream carries no row events. A
+transition of the quest reads it again, and `finish` shows "Quest
+complete" with the title for four seconds before the tracker hides. The
+stream closes when the tracker lets the quest go and another opens when
+it takes one up; the quest is read again each time a stream opens and
+each time the tab becomes visible. A `pin` of a quest not in hand still
+comes off the live stream, so under a grant a first pin shows at the
+next page load or the next return to the tab.
