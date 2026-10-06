@@ -162,7 +162,11 @@ beside its verdict:
   `needs`. Each step is said in words too (`in-words`): `door_label`,
   the door's display label, `row_label`, the row's label when the
   principal's grant sees the row, and `needs_labels`, the display label
-  of each of `needs` from the door's input schema. A door or a field
+  of each of `needs` from the door's input schema. A need that is a
+  dotted path into a nested map (`showcase.evidence.film_url`) is the
+  label of the field at its end ('The film'); when two needs of one
+  step end in the same label, each is said after its nearest parent's
+  ('Evidence: The film'). A door or a field
   that declares no label is its name in words. Each of a step's
   `alternatives` carries its own `door_label` and `row_label`. A
   planned quest stores `door_label` and `needs_labels` on each step of
