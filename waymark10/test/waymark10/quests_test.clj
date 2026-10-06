@@ -11,6 +11,7 @@
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.quests :as quests]
@@ -279,7 +280,7 @@
 
 (defn- seats-for
   "A seat lookup that knows one door."
-  [k action]
+  [k action _self]
   (when (= ["chore" "reopen"] [k action]) ["Planner"]))
 
 (defn- shape [plan ks]
@@ -376,6 +377,72 @@
     (is (empty? (:plan plan)))
     (is (str/includes? (str (:blocked_reason plan)) "latch.lift"))
     (is (nil? (:waiting_on plan)))))
+
+;; ── who a blocked step waits on: the grants and the seats, as read ──
+
+(defn- grant!
+  "An accepted grant for `audience`, minted as an approved ask mints one."
+  [eng audience scope]
+  (let [made (:row (inv/create! eng :grant {:audience audience :scope scope}
+                                {:principal grants/approvals-actor}))]
+    (:row (inv/invoke! eng :grant (str (:id made)) :accept nil
+                       {:principal grants/approvals-actor}))))
+
+(defn- takers
+  "Who the quest of `owner` would wait on to reopen this chore."
+  [eng owner chore-id]
+  ((#'quests/seat-lookup eng owner) "chore" "reopen" (str "/api/chores/" chore-id)))
+
+(deftest a-granted-agent-who-may-take-the-door-is-named
+  (let [eng (fresh-engine)
+        c (chore! eng "Sweep")
+        m (:row (inv/create! eng :member {:display "Planner" :actor_type "agent"}
+                             {:principal person}))]
+    (grant! eng (str (:id m)) [{:kind "chore" :actions ["reopen"]}])
+    (grant! eng "iris" [{:kind "chore" :actions ["finish"]}])
+    (is (= ["Planner"] (takers eng "colton" c))
+        "the holder is named by its member row; a grant without the door names nobody")))
+
+(deftest a-seat-whose-filter-excludes-the-row-is-not-named
+  (let [eng (fresh-engine)
+        c (chore! eng "Sweep")
+        model (:row (inv/create! eng :model
+                                 {:name "quest-frontier"
+                                  :display "quest-frontier"
+                                  :vendor "anthropic"
+                                  :tier "frontier"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        seat! (fn [nm scope]
+                (inv/create! eng :seat
+                             {:name nm
+                              :charter "Reopen a chore that was finished too soon."
+                              :scope scope
+                              :standing_ttl_seconds 604800
+                              :cadence_seconds 3600
+                              :budget_usd_per_week 5M
+                              :sitting_budget_tokens 60000
+                              :held_for [(:id model)]}
+                             {:principal person}))]
+    (seat! "done-chores" [{:kind "chore" :actions ["reopen"] :filter {:state "done"}}])
+    (seat! "all-chores" [{:kind "chore" :actions ["reopen"]}])
+    (is (= ["all-chores"] (takers eng "colton" c))
+        "the chore is open, so the seat that admits done chores cannot take its door")
+    (inv/invoke! eng :chore (str c) :finish {}
+                 {:principal person :idempotency-key (str (random-uuid))})
+    (is (= ["done-chores" "all-chores"] (takers eng "colton" c))
+        "the same seat is named once the row sits inside its filter")))
+
+(deftest the-owner-is-never-named
+  (let [eng (fresh-engine)
+        c (chore! eng "Sweep")]
+    (grant! eng "colton" [{:kind "chore" :actions ["reopen"]}])
+    (grant! eng "iris" [{:kind "chore" :actions ["reopen"]}])
+    (is (= ["iris"] (takers eng "colton" c)))
+    (is (= ["colton"] (takers eng "iris" c)))))
 
 ;; ── the consumer: fixture kinds whose remedy is BOUND to a row ──────
 

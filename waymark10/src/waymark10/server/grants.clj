@@ -2651,6 +2651,87 @@
   [vis token]
   (when vis (get (:surface vis) (str token))))
 
+;; ── who else holds a door (the quest's `waiting_on`) ────────────────
+
+(def ^:private takers-cap
+  "The most seat rows, and the most grant rows, one `door-takers` reads."
+  200)
+
+(defn- scope-admits-door?
+  "Does this scope admit `action` on the row `id` of `kind`? One scope
+  read as `visibility` reads a live grant's: the same surface, the same
+  pruning, and its `:row?`'s judgment of ids and filters. A nil `id`
+  names no row, so the kind and the action alone are judged."
+  [eng scope kind action id]
+  (let [k (name kind)
+        scope (mapv #(update % :kind scope-name) scope)
+        e (get (prune-unusable eng (surface-of {:data {:scope scope}})) k)]
+    (boolean
+     (and e
+          (contains? (:actions e) (name action))
+          (or (nil? id)
+              (and (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                   (or (nil? (:filters e))
+                       (when-some [row (load-decoded eng (keyword k) id)]
+                         (row-matches? row (:filters e)
+                                       (get (inv/resources eng) (keyword k)))))))))))
+
+(defn- display-of
+  "The display name of the member a principal id names: the row of that
+  id, or the row a binding stamped with it as `subject`; the raw id
+  when no member row answers."
+  [eng pid]
+  (or (when-some [rdef (get (inv/resources eng) :member)]
+        (nonblank
+         (get-in (or (load-decoded eng :member pid)
+                     (some->> (first (store/with-tx (:storage eng)
+                                       (fn [tx]
+                                         (store/query-rows (:storage eng) tx :member
+                                                           {:subject pid} {:limit 1}))))
+                              (inv/decode-row rdef)))
+                 [:data :display])))
+      pid))
+
+(defn door-takers
+  "Who can take `action` on the row `id` of `kind` right now, by display
+  name, `except` one principal: each active seat whose scope admits it,
+  then each principal holding an accepted, unexpired grant whose own
+  scope admits it. A seat grant is its seat's entry and is read there.
+  The own-surface kinds are nobody's by grant, so they name nobody.
+
+  The engine's own read: it conceals nothing, so it is for a sentence
+  that says whom a blocked step waits on and never for a scope a caller
+  did not name. At most `takers-cap` rows of each kind are read, oldest
+  first; no index serves a scope's kind."
+  [eng kind action id except]
+  (let [st (:storage eng)
+        now ((:now-fn eng))
+        mine (set (members/spellings-of eng except))
+        rows (fn [k where]
+               (when-some [rdef (get (inv/resources eng) k)]
+                 (mapv #(inv/decode-row rdef %)
+                       (store/with-tx st
+                         (fn [tx]
+                           (vec (store/query-rows st tx k where {:limit takers-cap})))))))
+        seats (for [s (rows :seat {:state :active})
+                    :when (and (not (contains? mine (str "seat:" (:id s))))
+                               (scope-admits-door?
+                                eng
+                                (without-entries (get-in s [:data :scope])
+                                                 (get-in s [:data :stale]))
+                                kind action id))]
+                (nonblank (get-in s [:data :name])))
+        holders (for [g (rows :grant {:state :accepted})
+                      :let [aud (nonblank (get-in g [:data :audience]))]
+                      :when (and aud
+                                 (not (seat-cited g))
+                                 (active? g now)
+                                 (not (contains? mine aud))
+                                 (scope-admits-door? eng (get-in g [:data :scope])
+                                                     kind action id))]
+                  (display-of eng aud))]
+    (into [] (comp (remove nil?) (distinct)) (concat seats holders))))
+
 ;; ── enforcement helpers (the router's consults) ─────────────────────
 
 (defn plain-field?
