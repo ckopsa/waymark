@@ -1231,6 +1231,8 @@ async function accessStory() {
      await evaljs(`!/\\d+ of \\d+/.test(${qBar}.textContent)`));
   ok("the head step's note stands beside the count",
      await evaljs(`${qBar}.querySelector("[data-quest-note]")?.textContent`) === stepOne.note);
+  ok("no step in the tracker reads as a path",
+     await evaljs(`!/\\/api\\//.test(${qBar}.textContent)`));
   const qPageOne = await evaljs(`hereHref()`);
   await evaljs(`location.hash = "/api/led_notes"; true`);
   await waitFor(`hereHref().split("?")[0] === "/api/led_notes" && !${qBar}.hidden &&
@@ -3518,6 +3520,13 @@ async function questPhoneStory() {
       s.self === ${JSON.stringify(note.self)} &&
       !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
   await waitFor(goFor("rename"), "the remedy at the tracker's head", 30000, plan);
+  /* the head step's row is in the tracker by its title, which the page
+     reads, and no path is text (ticket 5b3fa3f7) */
+  const rowSays = `(${bar}.querySelector("[data-quest-row]")?.textContent || "")`;
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title)})`,
+                "the note's title in the tracker", 15000, `${bar}.textContent`);
+  ok("the tracker names the step's row in words, and no path",
+     await evaljs(`!/\\/api\\//.test(${bar}.textContent)`));
   const says = await evaljs(`(() => {
     const b = ${bar}, t = b.querySelector("[data-quest-title]"), cs = getComputedStyle(t);
     const line = b.querySelector("[data-quest-note]");
@@ -3590,6 +3599,9 @@ async function questPhoneStory() {
   await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
   await waitFor(goFor("shelve"), "the goal door at the tracker's head", 30000, plan);
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title + ", sorted")})`,
+                "the note's new title in the tracker", 15000, `${bar}.textContent`);
+  ok("a rename shows in the tracker: the row's new title", true);
   await sleep(600);
   await tap(await evaljs(target("#questbar [data-tracker-go]")));
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
@@ -3848,6 +3860,30 @@ async function questPhoneStory() {
       return !!s && s.door === "complete" && s.self === ${JSON.stringify(self)} &&
         !!${bar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
     await waitFor(headIs(child), "the child's Complete at the tracker's head", 30000, plan);
+    /* the tracker and the quest's page name a step's row and what its
+       door asks for in words, and no path is text (ticket 5b3fa3f7) */
+    const childTitle = JSON.stringify(`Sweep the hall ${where}`);
+    await waitFor(`(${bar}.querySelector("[data-quest-row]")?.textContent || "")
+                     .includes(${childTitle})`,
+                  "the child's title in the tracker", 15000, `${bar}.textContent`);
+    ok("the tracker names the step's row and its needs in words, and no path",
+       await evaljs(`((questHead(questDoc).needs || []).length === 0 ||
+                      /Close reason/.test(${bar}.textContent)) &&
+                     !/close_reason/.test(${bar}.textContent) &&
+                     !/\\/api\\//.test(${bar}.textContent)`));
+    const wasAt = await evaljs(`location.hash`);
+    const qPlan = `document.querySelector("[data-quest-plan]")`;
+    await evaljs(`location.hash = ${JSON.stringify("#" + made)}; true`);
+    await waitFor(`!!${qPlan} && [...${qPlan}.querySelectorAll("[data-quest-row]")]
+                     .some(a => a.textContent.includes(${childTitle}))`,
+                  "the child's title on the quest's page", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("the quest's page names each step's row and its needs in words, and no path",
+       await evaljs(`/Close reason/.test(${qPlan}.textContent) &&
+                     !/close_reason/.test(${qPlan}.textContent) &&
+                     !/\\/api\\//.test(${qPlan}.textContent)`));
+    await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);
+    await waitFor(`!${qPlan}`, "the page the quest was accepted on", 15000);
     /* the plan's last step, and whether it is `self`'s Complete with
        close_reason still owed: a miss says the plan it read */
     const endsWith = async (name, self) => {
@@ -3962,7 +3998,8 @@ async function questPhoneStory() {
     const active = async () => ((await get("/api/quests?state=active&owner=" +
       encodeURIComponent(me))).data?.items || []).length;
     const before = await active();
-    /* and each sheet the replay opens, with its steps and its close */
+    /* and each sheet the replay opens, with its steps, its close and
+       the presses the replay draws on its Accept quest */
     await evaljs(`window.__notYet = null;
       window.__sheets = [];
       if (window.__sheetWatch) window.__sheetWatch.disconnect();
@@ -3970,7 +4007,7 @@ async function questPhoneStory() {
         const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
         for (const m of ms) {
           for (const n of m.addedNodes)
-            if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false, accepts: 0,
               steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
           for (const n of m.removedNodes)
             if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
@@ -3979,13 +4016,22 @@ async function questPhoneStory() {
         }
       });
       window.__sheetWatch.observe(document.body, {childList: true});
-      new MutationObserver(() => {
+      new MutationObserver(ms => {
+        for (const m of ms) {
+          const open = window.__sheets.find(s => !s.closed);
+          if (open && m.target.hasAttribute("data-replay-press") &&
+              m.target.matches("dialog[data-quest-sheet] [data-quest-accept]"))
+            open.accepts++;
+        }
         const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
         if (b && !window.__notYet)
           window.__notYet = {self: b.dataset.questSelf,
                              walk: !!(replay && replay.gesture && replay.gesture.walk)};
       }).observe(document.documentElement,
                  {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      window.__beatEvents = [];
+      if (!window.__beatWatch) document.addEventListener("waymark:film-beat",
+        window.__beatWatch = e => window.__beatEvents.push(e.detail.i));
       location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
     await waitFor(`!!window.__notYet`, "the replay's press on Complete", 240000, why);
     const pressed = await evaljs(`window.__notYet`);
@@ -3996,6 +4042,30 @@ async function questPhoneStory() {
     await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
                   `the film to end ${where}`, 240000, why);
     ok(`film mode reaches ended ${where}`, true);
+    /* the beats the film said (docs/spec-agent-demo-walks.md §8b): what
+       it pressed, and what the sheet and the tracker said */
+    const said = JSON.parse(await evaljs(`JSON.stringify({beats: window.wmFilmBeats || [],
+      events: window.__beatEvents, frames: replay ? replay.frames.length : null,
+      tracker: filmTracker()})`));
+    const beats = said.beats, lastBeat = beats[beats.length - 1] || {};
+    const presses = beats.map(b => b.pressed && b.pressed.target);
+    const flat = t => String(t).replace(/\s+/g, " ").trim();
+    console.log("  the film's beats: " + JSON.stringify(beats.map(b =>
+      [b.i, b.type, b.pressed, b.sheet && b.sheet.steps.map(s => s.label),
+       b.tracker && b.tracker.next])));
+    ok(`the film says a beat for each frame it steps to, in order, by its event ${where}`,
+       beats.length > 0 && beats.every((b, n) => !n || b.i > beats[n - 1].i) &&
+       JSON.stringify(said.events) === JSON.stringify(beats.map(b => b.i)) &&
+       (said.frames == null || lastBeat.i === said.frames - 1));
+    ok("the beats hold the press on the shut Complete and the press on Accept quest",
+       presses.includes("door:complete") && presses.includes("sheet.accept"));
+    ok("a beat's sheet lists the recorded steps, each by its door and its row",
+       beats.some(b => b.sheet && b.sheet.steps.length === seen.steps.length &&
+         b.sheet.steps.every((s, n) => !!s.label && flat(seen.steps[n]).startsWith(s.label))));
+    ok("a beat's tracker names the step at its head",
+       beats.some(b => b.tracker && !!b.tracker.next));
+    ok("the last beat says the tracker as the film leaves it",
+       JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
     const sheets = await evaljs(`window.__sheets`);
     console.log("  the replay's sheets: " + JSON.stringify(sheets));
     ok("the replay opens the quest's sheet for each tap, with the recorded steps",
@@ -4006,6 +4076,12 @@ async function questPhoneStory() {
        and the film says so where the recording did (replaySheetRefused) */
     ok("the replay says the refused Accept in the sheet, with Accept disabled",
        /at most 20 active quests/.test(sheets[2]?.said || "") && sheets[2]?.shut === true);
+    /* the quest made over the API under that sheet has the sheet's own
+       goal and is not its Accept (replaySheetMade): the one press is
+       the refused create's */
+    ok("and makes one press on Accept quest for the refused Accept" +
+       (sheets[2]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[2]?.accepts === 1);
     ok("and says no refusal in the sheets it was not said in",
        sheets.slice(0, 2).every(s => s.said === ""));
     ok("and closes each: off Not now, and off Accept quest",

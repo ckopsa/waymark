@@ -1040,3 +1040,40 @@
         "a requested ticket's sitting is the requester's cost")
     (is (== 3 (:factory spend))
         "a ticket nobody asked for, and a sitting that walked nothing, are factory's")))
+
+;; ── a seat does not file one failure twice (ticket 535d86ed) ──────────
+
+(deftest a-seat-is-warned-of-the-open-ticket-that-names-its-failure
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        seat (t/principal {:id "code-seat" :type :agent})
+        failure {:title "ui-drive is red on my pull request"
+                 :detail "The run says `FAILED: Accept closes the sheet and shows the tracker`."
+                 :type "bug"
+                 :repo "ckopsa/waymark"}
+        file! (fn [input opts]
+                (try (str (:id (:row (inv/create! eng :ticket input opts))))
+                     (catch clojure.lang.ExceptionInfo e (ex-data e))))
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"}
+                       {:principal colton})
+        first-id (file! failure {:principal colton})
+        _ (inv/invoke! eng :ticket first-id :groom {} {:principal colton})
+        warned (file! failure {:principal seat})]
+    (testing "a seat's second filing of the failure is refused with a warning"
+      (is (map? warned) (pr-str warned))
+      (is (= 409 (:status warned)) (pr-str warned))
+      (is (str/includes? (pr-str warned) "no-open-ticket-names-this-failure")
+          "the refusal names the guard to acknowledge")
+      (is (str/includes? (pr-str warned) first-id)
+          "and the ticket that already names the failure"))
+    (testing "and lands when the warning is acknowledged"
+      (is (string? (file! failure
+                          {:principal seat
+                           :acknowledged #{:no-open-ticket-names-this-failure}}))))
+    (testing "a person's identical create lands at once"
+      (is (string? (file! failure {:principal colton}))))
+    (testing "a seat naming an unrelated failure is not warned"
+      (is (string? (file! (assoc failure :detail
+                                 "The run says `FAILED: the offer under the refusal`.")
+                          {:principal seat}))))))

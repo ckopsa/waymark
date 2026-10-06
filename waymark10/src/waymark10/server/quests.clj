@@ -294,6 +294,14 @@
             :x-display {:label "Needs"
                         :help "The arguments of the door that are still to be given."}}
     [:maybe [:vector {:max 16} [:string {:min 1 :max 60}]]]]
+   [:door_label {:optional true
+                 :x-display {:label "The door, in words"
+                             :help "The door's display label, from the kind's declaration."}}
+    [:maybe [:string {:max 60}]]]
+   [:needs_labels {:optional true
+                   :x-display {:label "Needs, in words"
+                               :help "The display label of each of the needs, in their order, from the door's input schema."}}
+    [:maybe [:vector {:max 16} [:string {:max 60}]]]]
    [:waiting_on {:optional true
                  :x-display {:label "Waiting on"
                              :help "Who the step waits on, by name, when it is not the owner's."}}
@@ -310,7 +318,11 @@
               [:self {:x-display {:raw true
                                   :label "The row"
                                   :help "The row that door acts on, as its path: /api/<plural>/<id>."}}
-               [:string {:min 1 :max 300}]]]]]]
+               [:string {:min 1 :max 300}]]
+              [:door_label {:optional true
+                            :x-display {:label "The door, in words"
+                                        :help "That door's display label, from the kind's declaration."}}
+               [:maybe [:string {:max 60}]]]]]]]
    [:ended_at {:optional true
                :x-display {:label "Ended"
                            :help "When the goal step was taken, as an RFC 3339 instant. Written when the quest finishes."}}
@@ -914,36 +926,80 @@
 
 (defn- humanise [k] (str/capitalize (str/replace (name k) "_" " ")))
 
-(defn- in-words
-  "A preview's step with what a person reads beside its names:
-  `door_label`, the door's display label; `row_label`, the row's label
-  as `goal-label` reads it, when this principal's grant sees the row;
-  and `needs_labels`, the display label of each of `needs` from the
-  door's input schema, in that order. A door or a field that declares
-  no label is its name in words."
-  [eng {:keys [principal grant]} step]
-  (let [self (:self step)
-        rdef (rdef-at eng self)
-        id (id-of-path self)
-        decl (some->> (:door step) keyword (conj [:actions]) (get-in rdef))
+(defn- labels-of
+  "What the declaration of kind `rdef` says of a step, or of one of its
+  alternatives, in words: `door_label`, the door's display label, and
+  `needs_labels`, the display label of each of `needs` from the door's
+  input schema, in that order. A door or a field that declares no label
+  is its name in words. Neither reads the row, so a rename never moves
+  them."
+  [rdef step]
+  (let [decl (some->> (:door step) keyword (conj [:actions]) (get-in rdef))
         entries (some-> (:input decl) schema/entry-map)
-        seen? (if-some [row? (:row? grant)]
-                (boolean (row? (:kind rdef) id))
-                (not= :agent (:type principal)))
-        row-label (when (and rdef seen?)
-                    (clip (goal-label rdef (row-of eng (:kind rdef) id)) 120))
         door-label (clip (or (get-in decl [:display :label])
                              (some-> (:door step) humanise))
                          60)
         needs (seq (:needs step))]
-    (cond-> step
+    (cond-> {}
       door-label (assoc :door_label door-label)
-      row-label (assoc :row_label row-label)
       needs (assoc :needs_labels
                    (mapv #(clip (or (get-in entries [(keyword %) :properties :x-display :label])
                                     (humanise %))
                                 60)
                          needs)))))
+
+(defn- words-of
+  "What a person reads beside the names of a step, or of one of its
+  alternatives: the declaration's words (`labels-of`) and `row_label`,
+  the row's label as `goal-label` reads it, when this principal's grant
+  sees the row."
+  [{:keys [rdef-of read-row sees?]} step]
+  (let [self (:self step)
+        rdef (rdef-of self)
+        id (id-of-path self)
+        row-label (when (and rdef (sees? (:kind rdef) id))
+                    (clip (goal-label rdef (read-row (:kind rdef) id)) 120))]
+    (cond-> (labels-of rdef step)
+      row-label (assoc :row_label row-label))))
+
+(defn- labelled
+  "A plan's step as the quest stores it: with its `door_label` and
+  `needs_labels` (`labels-of`), and each of its `alternatives` with its
+  own `door_label`. No row's label is stored: a rename is a change to
+  the row and not to the quest, and the page draws the row itself. The
+  `plan` door's handler is lent no kind map, so the planner says the
+  words before it writes."
+  [eng step]
+  (cond-> (merge step (labels-of (rdef-at eng (:self step)) step))
+    (seq (:alternatives step))
+    (update :alternatives
+            (fn [others]
+              (mapv #(merge % (labels-of (rdef-at eng (:self %)) (select-keys % [:door])))
+                    others)))))
+
+(defn- in-words
+  "A step said in words too (`words-of`), and each of its `alternatives`
+  with its own `door_label` and `row_label`. `sight` is what the reader
+  has to read with: `:rdef-of`, a row's path to its kind's definition;
+  `:read-row`, a kind and an id to the row; and `:sees?`, whether the
+  reader's grant sees that row."
+  [sight step]
+  (cond-> (merge step (words-of sight step))
+    (seq (:alternatives step))
+    (update :alternatives
+            (fn [others]
+              (mapv #(merge % (words-of sight (select-keys % [:door :self])))
+                    others)))))
+
+(defn- sight-of
+  "The `sight` of a create door's caller, for its preview."
+  [eng {:keys [principal grant]}]
+  {:rdef-of #(rdef-at eng %)
+   :read-row #(row-of eng %1 %2)
+   :sees? (fn [k id]
+            (if-some [row? (:row? grant)]
+              (boolean (row? k id))
+              (not= :agent (:type principal))))})
 
 (defn- preview
   "What accepting this goal would make, for the create door's rehearsal
@@ -966,7 +1022,7 @@
                                           :self self
                                           :action action
                                           :input (:input inp)}})
-                   :plan (fn [steps] (mapv #(in-words eng who %) steps)))
+                   :plan (fn [steps] (mapv (partial in-words (sight-of eng who)) steps)))
            :goal (clip (str/join ": " (remove nil? [door (goal-label rdef row)])) 120)
            :shut_reason (when rdef
                           (shut-reason eng rdef id action (:input inp) who)))))
@@ -1133,7 +1189,8 @@
   (when-some [row (row-of eng kind id)]
     (when (and (active? row) (not (planned-since? t row)))
       (let [old (when-not (asked-since? row) (get-in row [:data :plan]))
-            plan (carried old (rehearsed eng row) heard)]
+            plan (update (carried old (rehearsed eng row) heard)
+                         :plan (partial mapv (partial labelled eng)))]
         (inv/invoke! eng kind (str id) :plan
                      (assoc plan :invitation (invite! eng row (:plan plan) t))
                      {:principal engine-actor
