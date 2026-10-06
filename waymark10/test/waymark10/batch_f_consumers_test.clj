@@ -231,7 +231,7 @@
 ;; A real bulk invoke writes while the quests' consumer and the webhook
 ;; deliverer drain on their own cadence: a NOTIFY wakes each, and the
 ;; 2 s poll is the backstop. Printed, as above; settled=false is the
-;; same load with the order lock taken by no reader.
+;; same load with no reader held to the settled log.
 
 (defn- bulk-latencies!
   "Create n notes and shelve them in one bulk invoke. → {:total-ms the
@@ -285,9 +285,11 @@
                                      (at 0.5) (at 0.99) (peek items) @hits))
                 items))]
     (try
-      ;; the readers' own :settled true, answered without the lock
-      (with-redefs-fn {#'pg/log-settled? (constantly true)} #(run false))
-      (testing "with the drains taking the order lock, every item still commits"
+      ;; the readers' own :settled true, answered as :settled false is:
+      ;; no watermark, no wait
+      (with-redefs-fn {#'pg/settled-read (fn [_tx read _newest-first?] (read nil))}
+        #(run false))
+      (testing "with the drains reading the settled log, every item still commits"
         (is (= n (count (run true)))))
       (finally
         (webhooks/stop-deliverer! deliverer)
