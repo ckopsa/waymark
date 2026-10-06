@@ -556,3 +556,5 @@
   [data-replay-click] { outline: 2px solid Highlight;
                         outline: -webkit-focus-ring-color auto 1px; }
   #replaycaption[data-replay-notice] { font-style: italic; }
+  /* one line for each refused row of a bulk write */
+  #replaycaption[data-replay-notice] { white-space: pre-line; }
