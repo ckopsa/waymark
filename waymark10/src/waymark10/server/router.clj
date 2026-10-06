@@ -493,8 +493,9 @@
 (defn- dry-run-response
   "A dry-run's verdict, the invoke door's shape grown optional limbs:
   {:valid …} plus :warnings (full and partial), :judged/:awaiting
-  (partial — always present there, even empty), and :verdicts
-  (bulk/batch — per item)."
+  (partial — always present there, even empty), :verdicts
+  (bulk/batch — per item), and :preview (a create whose kind declares
+  :on-rehearse — what the create would make)."
   [result]
   (json-response 200
                  (p/wire-value
@@ -503,6 +504,7 @@
                     (assoc :warnings (mapv p/prune (:warnings result)))
                     (:judged result) (assoc :judged (:judged result))
                     (:awaiting result) (assoc :awaiting (:awaiting result))
+                    (:preview result) (assoc :preview (:preview result))
                     (:verdicts result)
                     (assoc :verdicts (mapv p/prune (:verdicts result)))))
                  media-type nil))

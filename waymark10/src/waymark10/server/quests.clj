@@ -173,6 +173,10 @@
             :plan []
             :planned_at nil)))
 
+;; the create door's rehearsal answers the plan: `preview`, below the
+;; planner it reads
+(declare preview)
+
 (defn- unpinned [row]
   (assoc-in row [:data :pinned] false))
 
@@ -417,6 +421,7 @@
    :default-filters {:state "active,paused"}
    :create-guards [the-owner-sees-the-goal active-quests-are-few]
    :on-create born
+   :on-rehearse (fn [eng inp who] (preview eng inp who))
    :actions
    {:pin
     {:from #{:active} :to :active
@@ -800,6 +805,14 @@
         planned (invitations/instant-of (get-in row [:data :planned_at]))]
     (boolean (and at planned (.isBefore at planned)))))
 
+(defn- rdef-at
+  "The definition of the kind the row at `self` is of; nil when `self`
+  names no served kind."
+  [eng self]
+  (when-some [plural (:plural (invitations/parse-self self))]
+    (some #(when (= plural (some-> (:plural %) name)) %)
+          (vals (inv/resources eng)))))
+
 (defn- declared-goal
   "The goal as its kind declares it, `{:door :self :needs :confirm
   :consequence}`: the door's required arguments the stored `input` does
@@ -812,10 +825,7 @@
   no such door."
   [eng self action input]
   (let [self (str/trim (str self))
-        plural (:plural (invitations/parse-self self))
-        rdef (when plural
-               (some #(when (= plural (some-> (:plural %) name)) %)
-                     (vals (inv/resources eng))))
+        rdef (rdef-at eng self)
         door (some-> action str str/trim not-empty)]
     (when-some [decl (and door (get-in rdef [:actions (keyword door)]))]
       (let [form (:input decl)
@@ -860,6 +870,42 @@
          :blocked_reason (clip (or (get-in (ex-data e) [:waymark10/problem :detail])
                                    (ex-message e))
                                480)}))))
+
+(defn- shut-reason
+  "Why the goal's door refuses `principal` now, in the door's own
+  sentence: the door rehearsed partially, so a form not filled yet is
+  no refusal. nil when the door would open."
+  [eng rdef id action input {:keys [principal grant]}]
+  (try
+    (inv/invoke! eng (:kind rdef) (str id) (keyword action) (or input {})
+                 {:principal principal :grant grant :dry-run :partial})
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (clip (or (inv/problem-reason e) (ex-message e)) 480))))
+
+(defn- preview
+  "What accepting this goal would make, for the create door's rehearsal
+  (`:on-rehearse`): the plan `rehearsed` writes for a quest of this
+  principal under this grant, as `plan`, `plan_is_estimate` and
+  `blocked_reason`, beside `goal`, the line a quest's title defaults to,
+  and `shut_reason`, why the goal's door is shut now. A read: it makes
+  no row and no invitation, and fires no transition. The create guards
+  judged the goal before this is asked."
+  [eng inp {:keys [principal grant] :as who}]
+  (let [self (str/trim (str (:self inp)))
+        action (str/trim (str (:action inp)))
+        rdef (rdef-at eng self)
+        id (:id (invitations/parse-self self))
+        door (or (get-in rdef [:actions (keyword action) :display :label]) action)
+        row (when rdef (row-of eng (:kind rdef) id))]
+    (assoc (rehearsed eng {:data {:owner (str (:id principal))
+                                  :grant (some-> grant :id str)
+                                  :self self
+                                  :action action
+                                  :input (:input inp)}})
+           :goal (clip (str/join ": " (remove nil? [door (goal-label rdef row)])) 120)
+           :shut_reason (when rdef
+                          (shut-reason eng rdef id action (:input inp) who)))))
 
 ;; ── the plan, kept in step ──────────────────────────────────────────
 

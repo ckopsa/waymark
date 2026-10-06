@@ -3567,6 +3567,10 @@ async function questPhoneStory() {
     const press = async sel => phone
       ? tap(await evaljs(target(sel)))
       : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
+    /* the sheet a tap on a shut door opens (questSheet), and its doors */
+    const sheet = `document.querySelector("dialog[open][data-quest-sheet]")`;
+    const notNow = "dialog[open] [data-quest-decline]";
+    const acceptIt = "dialog[open] [data-quest-accept]";
     await evaljs(`refreshQuest().catch(() => {}); true`);
     await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);
     const parent = await post("/api/led_tasks", {title: `Spring clean ${where}`}, h);
@@ -3577,9 +3581,9 @@ async function questPhoneStory() {
     const child = sub.doc?.self;
     ok("and a child of it, not finished", sub.status === 201 && !!child);
     /* a refused tap (ticket e8cb4bcf): one owner holds at most 20 active
-       quests (quests.clj, active-cap), so at the cap the tap's create is
-       refused. The sentence is said in the door's reason line, under the
-       bar, and stays; no quest is pinned and no tracker shows. */
+       quests (quests.clj, active-cap), so at the cap the tap's preview is
+       refused as the create would be. The sentence is said in the sheet
+       and Accept is disabled; no quest is pinned and no tracker shows. */
     const spare = await post("/api/led_tasks", {title: `Spare room ${where}`}, h);
     const room = spare.doc?.self;
     const dust = await post("/api/led_tasks",
@@ -3605,27 +3609,25 @@ async function questPhoneStory() {
                   `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
     await sleep(600);
     await press(shutDoor);
-    const saidWhy = `(() => {
-      const b = document.querySelector(${JSON.stringify(shutDoor)});
-      const line = b && document.getElementById(b.getAttribute("aria-describedby"));
-      const s = line && line.querySelector(".notyet-refused");
-      return s ? s.textContent : ""; })()`;
-    await waitFor(`!!${saidWhy}`, "the refusal, in the door's reason line", 15000,
+    const saidWhy = `(${sheet}?.querySelector("[data-quest-refused]")?.textContent || "")`;
+    await waitFor(`!!${saidWhy}`, "the refusal, in the quest's sheet", 15000,
                   `document.body.innerText.slice(-400)`);
     const refusal = await evaljs(saidWhy);
-    console.log("  the refused tap: " + JSON.stringify(refusal));
-    ok("a refused tap says the engine's sentence under the bar, beside the reason",
+    console.log("  the refused preview: " + JSON.stringify(refusal));
+    ok("a refused preview says the engine's sentence in the sheet",
        /at most 20 active quests/.test(refusal));
-    await sleep(4000);
-    ok("the sentence stays, after a toast would have gone",
-       (await evaljs(saidWhy)) === refusal);
-    ok("the refused tap opens no form, shows no tracker and pins no quest",
-       await evaljs(`!document.querySelector("dialog[open]") && ${bar}.hidden === true`) &&
-       (await pinned()).length === 0);
+    ok("and Accept is disabled with that line",
+       await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+    if (phone) await sheetFits("the refused quest's sheet");
+    await shot(`${slug}-notyet-refused`);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the refused sheet to close, off Not now", 15000);
+    ok("the refused tap shows no tracker and pins no quest",
+       await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
     ok("the door takes a tap again",
        await evaljs(`!document.querySelector(${JSON.stringify(shutDoor)}).hasAttribute("data-quest-busy")`));
-    if (phone) await noOverflow("under the refused tap's sentence");
-    await shot(`${slug}-notyet-refused`);
+    if (phone) await noOverflow("after the refused quest's sheet");
     for (const q of held) await post(q + "/-/abandon", {}, h);
     ok("priya lets the held quests go",
        (await Promise.all(held.map(q => get(q)))).every(q => q.state === "abandoned"));
@@ -3669,8 +3671,8 @@ async function questPhoneStory() {
        seat.text.includes("⚑") && seat.border === "dashed" && seat.opacity === "1");
     ok("it is aria-disabled and not disabled, and names its row",
        seat.aria === "true" && seat.disabled === false && seat.self === epic);
-    ok("its reason line ends 'Not yet. Tap to make it a quest.'",
-       (seat.line || "").trim().endsWith("Not yet. Tap to make it a quest."));
+    ok("its reason line ends 'Not yet. Tap to see the quest.'",
+       (seat.line || "").trim().endsWith("Not yet. Tap to see the quest."));
     ok("a door with no remedy is the plain disabled button",
        seat.plain.length > 0 && seat.plain.every(p => p.disabled && !p.flag));
     if (phone) {
@@ -3679,12 +3681,53 @@ async function questPhoneStory() {
     }
     await shot(`${slug}-notyet-door`);
     await press(door);
-    /* a refused create or pin is said in the door's reason line: the
-       page's last words say which, when the tracker never shows */
-    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]")`,
-                  "the tracker, off the tap on Complete", 15000,
+    /* the tap previews: the sheet says the goal, why its door is shut,
+       and the steps with the goal's own form last. Nothing is written. */
+    await waitFor(`!!${sheet} && !!${sheet}.querySelector("[data-quest-steps] li")`,
+                  "the quest's sheet, off the tap on Complete", 15000,
                   `document.body.innerText.slice(-400)`);
-    ok("a tap on Complete opens no form and shows the tracker",
+    const seen = await evaljs(`(() => {
+      const g = ${sheet};
+      return {goal: g.querySelector("[data-quest-sheet-goal]").textContent,
+              why: g.querySelector("[data-quest-why]").textContent,
+              steps: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent),
+              turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),
+              refused: g.querySelector("[data-quest-refused]").textContent,
+              accept: g.querySelector("[data-quest-accept]").disabled}; })()`);
+    console.log("  the quest's sheet: " + JSON.stringify(seen));
+    ok("the sheet says the goal and why its door is shut",
+       /Complete/.test(seen.goal) && seen.why.replace("Not yet:", "").trim().length > 0);
+    ok("it numbers the steps, each with whose turn it is",
+       seen.steps.length >= 2 && seen.turns.length === seen.steps.length &&
+       seen.turns.every(t => t.trim().length > 0));
+    ok("the goal's own form is the last step, with close_reason asked for",
+       /close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
+    ok("Accept is offered, with no refusal said",
+       seen.accept === false && seen.refused === "");
+    if (phone) {
+      await sheetFits("the quest's sheet");
+      await checkTarget("Not now", notNow);
+      await checkTarget("Accept quest", acceptIt);
+    }
+    await shot(`${slug}-notyet-sheet`);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet to close, off Not now", 15000);
+    await sleep(600);
+    ok("Not now leaves no quest and shows no tracker",
+       await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
+    await press(door);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-quest-accept]").disabled === false`,
+                  "the quest's sheet again, off a second tap", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    await press(acceptIt);
+    /* a refused create or pin is said in the sheet: the page's last
+       words say which, when the tracker never shows */
+    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]")`,
+                  "the tracker, off Accept", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("Accept closes the sheet and shows the tracker",
        await evaljs(`!document.querySelector("dialog[open]")`));
     const made = (await pinned())[0]?.self;
     ok("the tap leaves a quest pinned", !!made);

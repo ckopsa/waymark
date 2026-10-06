@@ -2276,8 +2276,16 @@
                 (or (:create-schema rdef) (:schema rdef)))
         create-action (first (:create-action-names rdef))]
     (if dry-run
-      (create-dry-run! engine rdef model body principal acknowledged dry-run
-                       grant)
+      (let [verdict (create-dry-run! engine rdef model body principal
+                                     acknowledged dry-run grant)
+            ;; a kind that declares :on-rehearse says what the create
+            ;; would make: asked of the full rehearsal alone, after the
+            ;; guards passed and outside their transaction
+            preview (when (and (true? dry-run) (:valid? verdict))
+                      (when-some [f (:on-rehearse rdef)]
+                        (f engine (schema/decode model (or body {}))
+                           {:principal principal :grant grant})))]
+        (cond-> verdict preview (assoc :preview preview)))
       (after-write!
        engine kind create-action
        (store/with-tx (:storage engine)

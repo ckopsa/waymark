@@ -1407,3 +1407,58 @@
         "the declaration says the shut door is a confirm door")
     (is (= "The epic is sealed." (:note goal))
         "the consequence is read from the kind's declaration")))
+
+;; ── the preview: the create door, rehearsed ─────────────────────────
+
+(defn- held
+  "How many quests and invitations the store holds, and how long the
+  log of each of `rows` ([kind id]) is."
+  [eng rows]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        {:quests (count (store/query-rows st tx :quest {} {:limit 100}))
+         :invitations (count (store/query-rows st tx :invitation {} {:limit 100}))
+         :log (mapv (fn [[k id]]
+                      (count (store/transitions st tx {:kind k :resource-id id} {})))
+                    rows)}))))
+
+(deftest the-preview-of-a-shut-door-answers-the-plan-and-writes-nothing
+  (let [eng (epic-engine {:probe-reads true})
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        self (str "/api/q_epics/" e)
+        rows [[:chore part] [:q_epic e]]
+        before (held eng rows)
+        {:keys [valid? preview]} (inv/create! eng :quest
+                                              {:self self :action "complete"}
+                                              {:principal person :dry-run true})]
+    (is (true? valid?))
+    (is (= ["finish" "complete"] (mapv :door (:plan preview))) (pr-str preview))
+    (is (= [(str "/api/chores/" part) self] (mapv :self (:plan preview)))
+        "the goal is the last step")
+    (is (= ["close_reason"] (:needs (last (:plan preview))))
+        "with the fields its form will ask for")
+    (is (true? (:plan_is_estimate preview)))
+    (is (some? (not-empty (:goal preview))) "the goal is said in words")
+    (is (some? (not-empty (:shut_reason preview)))
+        "and why its door is shut now")
+    (is (= {:quests 0 :invitations 0} (select-keys before [:quests :invitations])))
+    (is (= before (held eng rows))
+        "no quest, no invitation and no transition")
+    (hear! eng)
+    (is (= before (held eng rows)) "and the planner hears of nothing")))
+
+(deftest the-preview-of-a-goal-create-refuses-answers-that-refusal
+  (let [eng (epic-engine)
+        c (chore! eng "Dishes")
+        rehearse #(inv/create! eng :quest {:self % :action "finish"}
+                               {:principal person :dry-run true})
+        unseen (refusal #(rehearse "/api/chores/no-such-row"))
+        open (refusal #(rehearse (str "/api/chores/" c)))
+        _ (dotimes [_ quests/active-cap] (accept! eng person c))
+        full (refusal #(rehearse (str "/api/chores/" c)))]
+    (is (str/includes? (str unseen) "does not see that row"))
+    (is (nil? open) "a goal create would take is no refusal")
+    (is (str/includes? (str full) "at most 20")
+        "the cap is said in the preview, not after Accept")))

@@ -562,7 +562,7 @@
           "and a replay writes nothing"))
     (testing "the reason line describes the button and says what a tap does"
       (is (str/includes? page "btn.setAttribute(\"aria-describedby\", line.id);"))
-      (is (str/includes? page "\" Not yet. Tap to make it a quest.\"")))
+      (is (str/includes? page "\" Not yet. Tap to see the quest.\"")))
     (testing "it is dashed, and 44px tall under a thumb"
       (is (str/includes? page "border: 1px dashed var(--verdigris);"))
       (is (str/includes? page "#questbar button, .questoffer button, button.notyet {")))

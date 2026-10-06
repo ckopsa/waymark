@@ -148,6 +148,37 @@ waits on ("your tap" for a held call, linked to the step's row), a
 Go opens the viewer's open invitation for that row and door, and
 goes to the step's row when there is none.
 
+## A tap previews, Accept creates
+
+A shut door that names a way out is drawn as a reachable button
+(`shutDoor` in `ui/140-links-access.js`). A tap on it makes no quest.
+It rehearses the quest's create door (`POST /api/quests?dry_run=1` with
+the goal's `self` and `action`), and the rehearsal answers a `preview`
+beside its verdict:
+
+- `plan`, `plan_is_estimate` and `blocked_reason`, in the shape of a
+  planned quest's: the plan the planner would write for this owner
+  under this grant (`rehearsed`), with the goal's own step last and its
+  `needs`;
+- `goal`, the line the quest's title defaults to;
+- `shut_reason`, the goal door's own refusal now.
+
+The preview is a read. It writes no row, makes no invitation and fires
+no transition, and there is no `proposed` state. The kind declares it
+as `:on-rehearse` (`preview` in `quests.clj`), which the create door
+asks only on a full rehearsal and only after the create guards passed.
+So a goal that create would refuse (`the-owner-sees-the-goal`,
+`active-quests-are-few`) is refused by the rehearsal with the same
+sentence.
+
+The page shows the preview in a sheet (`questSheet`): the goal as the
+door's label on this row, with `goal` under it, why it is not available
+yet, the numbered steps with whose turn each is, the
+estimate note, and **Not now** and **Accept quest**. Not now closes the
+sheet. Accept creates the quest and pins it. A refusal is said in the
+sheet, and Accept is disabled with that line. A replay opens no sheet
+and writes nothing.
+
 ## What this change does not do
 
 - It plans nothing and finishes nothing: no consumer is started.
