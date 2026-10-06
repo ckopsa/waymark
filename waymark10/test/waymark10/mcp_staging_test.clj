@@ -381,7 +381,7 @@
       (let [a (errand! h {})
             w (self-walk! h)]
         (is (tool h "waymark_invoke" {:kind "errand" :id a :action "assign"
-                                      :input {:assignee "marco" :pin "4321"}}))
+                                      :input {:assignee "marco" :pin "zq-pin-zq"}}))
         (is (= [[:move (path a)]
                 [:ui "assign" {}]
                 [:ui "assign" {:assignee "marco"}]
@@ -390,7 +390,7 @@
                (beats eng w)))
         (is (not (str/includes?
                   (pr-str (filter #(= "ui" (:type %)) (frames eng w)))
-                  "4321")))))))
+                  "zq-pin-zq")))))))
 
 (deftest a-create-types-its-form-on-the-collection
   (with-stage
