@@ -568,4 +568,4 @@
       (is (str/includes? page "#questbar button, .questoffer button, button.notyet {")))
     (testing "a replay presses it for the quest's create, and walks to no quest row"
       (is (str/includes? page "return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);"))
-      (is (str/includes? page "!replayNotice(r, f) && !replayGestureTarget(f) && f.self")))))
+      (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))

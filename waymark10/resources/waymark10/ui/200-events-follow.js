@@ -1897,11 +1897,13 @@ function replayGestureRest(r, gone) {
    applied as a move with no link is. */
 function replayWalkOf(r, f) {
   if (!f || r.walked === r.at || r.door || $("dialog[open]")) return null;
+  /* a write whose button is on the screen shown is pressed there */
+  if (f.type === "transition" && !replayNotice(r, f) && replayGestureTarget(f)) return null;
   const row = s => String(s || "").split("?")[0];
   const ui = (f.type === "ui" && f.ui) || {}, c = ui.collection;
   const list = !!ui.dialog && !!c && !!c.self;
   const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)
-    : f.type === "transition" ? !replayNotice(r, f) && !replayGestureTarget(f) && f.self
+    : f.type === "transition" ? !replayNotice(r, f) && f.self
     : f.type === "invitation" && f.action ? row(f.self) : null;
   return to && row(to) !== hereHref() ? {type: "move", who: f.who, self: to, list} : null;
 }
