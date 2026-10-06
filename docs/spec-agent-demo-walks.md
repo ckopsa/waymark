@@ -140,13 +140,23 @@ form stays open with what was typed, as it would on a person's screen.
 A refused write is recorded as a `refusal` frame, for a person's own
 write and for a staged call alike. The action route writes it
 (`walks/record-refused!`) to every self walk the caller is recording,
-under the request's own visibility. Its body is `{principal, self,
-action, title, detail, remedies}`: what the refusal's box shows, and no
-more of the problem. A rehearsal's refusal and the acknowledge wall
-record none. The export carries the frame when the exporter sees its
-`self`, with the remedies whose doors the exporter may invoke. Replay
+under the request's own visibility. The create route writes it too,
+with the collection as `self` and the create verb as `action`, so the
+recorder must see the whole kind, as for the create form's own beats.
+A bulk write records one frame for each row it refused, about that row
+and with that row's own problem, in an atomic call as in a partial
+one; a bulk call refused whole, before any row was tried, records
+none. Its body is `{principal, self,
+action, title, detail, remedies, errors}`: what the refusal's box and
+the form's fields show, and no more of the problem. `errors` holds a
+schema refusal's sentences by argument, and a secret argument's entry
+is left out, as `clean-ui` leaves out its value. A rehearsal's refusal
+and the acknowledge wall record none. The export carries the frame when
+the exporter sees its `self`, with the remedies whose doors the exporter
+may invoke and the errors whose arguments the exporter may read. Replay
 draws it in the open form with the code that draws a person's own
-refusal, and with "Accept as quest" under it when the recording keeps
+refusal, each field's message under its field, and with "Accept as
+quest" under it when the recording keeps
 the refusal as a goal. A walk recorded before this frame existed has
 that button drawn in the form's footer instead.
 

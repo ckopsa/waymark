@@ -81,6 +81,7 @@
              :safety {:idempotent true :reversible true :confirm false}}
      :complete {:from #{:open} :to :done
                 :guards [ready-gate]
+                :bulk true
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "Done is done."}}}}))
 
@@ -416,6 +417,52 @@
           (is (not (tool h "waymark_invoke" {:kind "errand" :action "rename"
                                              :input {:title "Mop"}})))
           (is (= 6 (count (frames eng w)))))))))
+
+(defn- refusals
+  "The doors a walk's `refusal` frames are about → [{:self :action}]."
+  [eng walk-id]
+  (->> (frames eng walk-id)
+       (filter #(= "refusal" (:type %)))
+       (mapv #(select-keys (:body %) [:self :action]))))
+
+(deftest a-refused-create-leaves-its-form-open-with-the-refusal
+  (with-stage
+    (fn [eng h _reg]
+      (let [w (self-walk! h)]
+        (is (not (tool h "waymark_invoke"
+                       {:kind "errand" :action "create"
+                        :input {:title "Towels"
+                                :room (apply str (repeat 41 "k"))}}))
+            "the schema refuses: a room is at most 40 characters")
+        (is (= [{:self "/api/errands" :action "create"}] (refusals eng w))
+            "one refusal, keyed as the create form is")
+        (is (= ["refusal"] (last (beats eng w)))
+            "no closing beat: the refusal is the form's last frame")
+        (is (= #{["/api/errands" "create"]}
+               (into #{} (keep #(some-> (get-in % [:body :ui :dialog])
+                                        ((juxt :self :action))))
+                     (frames eng w)))
+            "the form it answers is the one on the collection")
+        (testing "a rehearsal's refusal records none"
+          (is (not (tool h "waymark_invoke"
+                         {:kind "errand" :action "create" :dry_run true
+                          :input {:title "Towels"
+                                  :room (apply str (repeat 41 "k"))}})))
+          (is (= 1 (count (refusals eng w)))))))))
+
+(deftest a-bulk-write-records-each-row-it-refused
+  (with-stage
+    (fn [eng h _reg]
+      (let [ready (errand! h {:ready true})
+            not-ready (errand! h {})
+            w (self-walk! h)]
+        (post h "/api/errands/-/complete" {:ids [ready not-ready]})
+        (is (= [{:self (path not-ready) :action "complete"}] (refusals eng w))
+            "the row that landed has no refusal, the row refused has one")
+        (testing "an atomic call names the row that refused it"
+          (is (= 409 (:status (post h "/api/errands/-/complete"
+                                    {:ids [not-ready] :on_error "atomic"}))))
+          (is (= 2 (count (refusals eng w)))))))))
 
 ;; ── 3. when nothing is staged ───────────────────────────────────────
 

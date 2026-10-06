@@ -1575,16 +1575,18 @@ function replayKept(r, f) {
 /* a `refusal` frame: the answer the recorder's write door gave. It is
    kept (replay.refused) until its form closes, and drawn in that form
    by the live code (dlg.guidedRefuse, 180-action-dialog.js): the
-   problem box, and "Accept as quest" when the recording keeps it as a
-   goal, so the pointer presses it where the person saw it. A form not
-   drawn yet draws it when it opens (openGuidedDialog). */
+   problem box, or each field's message under its field for a schema
+   refusal (`errors`), and "Accept as quest" when the recording keeps it
+   as a goal, so the pointer presses it where the person saw it. A form
+   not drawn yet draws it when it opens (openGuidedDialog). */
 function replayRefuse(f) {
   if (!replay) return;
   replay.refused = f || null;
   const g = $("dialog[open][data-guided]:not([data-replay-invite])");
   if (!f || !g || !g.guidedRefuse ||
       g.getAttribute("data-guided") !== replayRefusedKey(f)) return;
-  g.guidedRefuse({title: f.title, detail: f.detail, remedies: f.remedies || []},
+  g.guidedRefuse({title: f.title, detail: f.detail, remedies: f.remedies || [],
+                  errors: f.errors || {}},
                  replayKept(replay, f));
 }
 /* whether the form `key` ended as a quest and not as a write: a quest's

@@ -79,6 +79,17 @@
 ;; both of its guards judge the input, so the dialog opens and the POST
 ;; refuses. The attic refuses with no remedy; the high shelf refuses a
 ;; note with no room, and rename is its remedy.
+;;
+;; restate is the path step's door (ui-drive.mjs, "a quest step whose
+;; need is a path"): its one argument is a map that holds a map, as a
+;; ticket's showcase.evidence.film_url is.
+(def ^:private showcase
+  [:maybe [:map
+           [:evidence {:optional true :x-display {:label "Evidence"}}
+            [:maybe [:map
+                     [:film_url {:optional true :x-display {:label "The film"}}
+                      [:maybe [:string {:max 500}]]]]]]]])
+
 (def ^:private shelf-holds-notes
   (g/expr {:name :shelf-holds-notes
            :when '(not= (input :shelf) "attic")
@@ -102,7 +113,8 @@
     :schema [:map
              [:title [:string {:min 1 :max 80}]]
              [:room {:optional true} [:maybe [:string {:max 40}]]]
-             [:shelf {:optional true} [:maybe [:enum "low" "high" "attic"]]]]
+             [:shelf {:optional true} [:maybe [:enum "low" "high" "attic"]]]
+             [:showcase {:optional true} showcase]]
     :actions
     {:rename {:from #{:open} :to :open
               :input [:map
@@ -117,6 +129,13 @@
               :handler (fn [row inp _ctx]
                          (assoc-in row [:data :shelf] (:shelf inp)))
               :safety {:idempotent true :reversible true :confirm false}}
+     :restate {:from #{:open} :to :open
+               :input [:map
+                       [:showcase {:optional true :x-display {:label "Showcase"}}
+                        showcase]]
+               :handler (fn [row inp _ctx]
+                          (update row :data merge (select-keys inp [:showcase])))
+               :safety {:idempotent true :reversible true :confirm false}}
      :finish {:from #{:open} :to :done
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A finished note is history."}}}}))
