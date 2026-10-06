@@ -855,6 +855,26 @@
       (warn! "a write was not recorded in its own walk — " (ex-message e))))
   result)
 
+(defn- refusal-errors
+  "A schema refusal's sentences by argument, as a `refusal` frame may
+  hold them → {argument [sentence]}, or nil when there are none. A
+  secret argument's entry is dropped, as presence's `clean-ui` drops
+  its value, and so is every entry when `self` names no door `action`:
+  the secret ones are then unknown."
+  [eng self action errors]
+  (when (map? errors)
+    (when-some [secret (presence/secret-arguments eng self action)]
+      (not-empty
+       (into {}
+             (keep (fn [[k v]]
+                     (let [arg (if (keyword? k) (name k) (str k))
+                           said (cond
+                                  (string? v) [v]
+                                  (and (sequential? v) (seq v) (every? string? v)) (vec v))]
+                       (when (and said (not (contains? secret (keyword arg))))
+                         [arg said]))))
+             errors)))))
+
 (defn record-refused!
   "A write door's refusal (router's action route, which the connector's
   invoke rides; its create route, where `self` is the collection; and
@@ -862,9 +882,11 @@
   `e` carries goes, as a
   `refusal` frame under `sight`, the request's own visibility, to every
   self walk `principal` is recording. The body is {principal, self,
-  action, title, detail, remedies}: what the refusal's box shows a
-  person, and no more of the problem. `remedies` are the door names as
-  the wire spells them. An exception that is no problem, an anonymous
+  action, title, detail, remedies, errors}: what the refusal's box and
+  the form's fields show a person, and no more of the problem.
+  `remedies` are the door names as the wire spells them, and `errors`
+  a schema refusal's sentences by argument, a secret argument's left
+  out (`refusal-errors`). An exception that is no problem, an anonymous
   write and a refusal by a walk's or a frame's own door record nothing;
   a rehearsal's refusal is not handed here. `record-frame!` writes the
   frame only when the recorder can see `self`. → the frames written. It
@@ -873,7 +895,8 @@
   (try
     (let [pid (str (:id principal))
           d (ex-data e)
-          self (str self)]
+          self (str self)
+          errors (refusal-errors eng self action (:errors d))]
       (if (and (:waymark10/problem d)
                (contains? (inv/resources eng) kind)
                (not= (:id t/anonymous) (:id principal))
@@ -883,7 +906,8 @@
                             :action (name action)
                             :title (str (:title d))}
                      (some? (:detail d)) (assoc :detail (str (:detail d)))
-                     (seq (:remedies d)) (assoc :remedies (p/wire-value (vec (:remedies d)))))]
+                     (seq (:remedies d)) (assoc :remedies (p/wire-value (vec (:remedies d))))
+                     errors (assoc :errors errors))]
           (into []
                 (keep #(record-frame! eng % sight {:type "refusal" :body body}))
                 (recording-walks eng pid pid)))
@@ -1243,6 +1267,23 @@
             action? (:action? vis)]
         (boolean (and k a action? (action? (keyword k) (keyword a)))))))
 
+(defn- errors-seen
+  "A refusal's field errors as `vis` may read them: the entries whose
+  argument its `:arg?` admits on the refused door, and none when the
+  door names no served kind. nil `vis` reads them whole. nil when there
+  are none."
+  [eng vis {:keys [self action errors]}]
+  (when (and (map? errors) (seq errors))
+    (not-empty
+     (if-some [arg? (:arg? vis)]
+       (let [[_ plural] (re-find #"/api/([^/?#]+)" (str self))
+             k (some->> plural (kind-of-plural eng))
+             action (some-> action name str/trim not-empty keyword)]
+         (if (and k action)
+           (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) errors)
+           {}))
+       errors))))
+
 (defn- export-part
   "One frame re-redacted under the exporter's visibility → the line's
   own part, or nil when nothing of it is left. Each type has one rule:
@@ -1252,8 +1293,9 @@
   invitation its pinned body names by `id` (`invitation-frame`), and
   its `suggest` keeps the keys the exporter's :arg? admits; `caption`
   presence's self rule, so the line crosses only with its `self`;
-  `refusal` that rule as well, and of its `remedies` the doors the
-  exporter's :action? admits (`remedy-seen?`); `doc`
+  `refusal` that rule as well, of its `remedies` the doors the
+  exporter's :action? admits (`remedy-seen?`), and of its `errors` the
+  arguments the exporter's :arg? admits (`errors-seen`); `doc`
   presence's self rule and `export-doc`, and the principals its rows
   name ride as ::refs for the cast."
   [{:keys [eng vis visible? own-create? redact-ui suggest]} type body]
@@ -1289,12 +1331,14 @@
                     (:field body) (assoc :field (:field body))
                     true (assoc :text (str (:text body)))))
       "refusal" (when (and self (or (visible? self) (own?)) (:action body))
-                  (let [seen (filterv #(remedy-seen? vis %) (:remedies body))]
+                  (let [seen (filterv #(remedy-seen? vis %) (:remedies body))
+                        errors (errors-seen eng vis body)]
                     (cond-> {:type "refusal" :self self
                              :action (:action body)
                              :title (str (:title body))}
                       (:detail body) (assoc :detail (str (:detail body)))
-                      (seq seen) (assoc :remedies seen))))
+                      (seq seen) (assoc :remedies seen)
+                      errors (assoc :errors errors))))
       "doc" (when (and self (visible? self) (map? (:doc body)))
               (when-some [doc (export-doc eng vis (:doc body))]
                 {:type "doc" :self self :doc doc

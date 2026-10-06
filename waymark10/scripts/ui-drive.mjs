@@ -1293,6 +1293,76 @@ async function accessStory() {
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide", 15000);
   ok("a few seconds later the tracker hides", true);
 
+  /* a step's need may be a path into a nested argument (ticket
+     45cae4d6): the fixture's restate door takes
+     showcase.evidence.film_url, a map inside a map. The form names that
+     input by its path, Go lights that one input, and the submit folds
+     the path back into one object. */
+  console.log("· a quest step whose need is a path: showcase.evidence.film_url");
+  const pNeed = "showcase.evidence.film_url";
+  const pFilm = "https://films.example/quest-reel";
+  const reel = (await qPost("/api/led_notes", {title: "Quest reel"}, h)).doc;
+  const pQuest = await qPost("/api/quests",
+    {self: reel.self, action: "finish", title: "Show the reel"}, h);
+  ok("priya accepts a second goal as a quest", pQuest.status === 201);
+  const pSelf = pQuest.doc.self;
+  ok("priya pins the second quest", (await qPost(pSelf + "/-/pin", {}, h)).status < 400);
+  let pBorn = null;
+  for (let i = 0; i < 60 && !pBorn; i++) {
+    if ((await get(pSelf)).data.planned_at) pBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the second create with a first plan", pBorn === true);
+  const pStep = {n: 1, door: "restate", self: reel.self, whose: "person",
+                 note: "Say where the film plays.", needs: [pNeed]};
+  const pPlanned = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next"}], plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes a path as a need", pPlanned.status < 400);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-note]")?.textContent ===
+                   ${JSON.stringify(pStep.note)}`,
+                "the path step's note in the tracker", 15000);
+  const pPlannedAt = (await get(pSelf)).data.planned_at;
+  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
+                "the path step's dialog", 15000);
+  const pDlg = await evaljs(`(() => {
+    const lit = [...document.querySelectorAll("dialog[open] .invited")];
+    const input = document.querySelector('dialog[open] [name="${pNeed}"]');
+    const inner = input ? input.closest('[data-subform="showcase.evidence"]') : null;
+    return {here: hereHref(), lit: lit.length,
+            holds: lit.length === 1 && !!input && lit[0].contains(input),
+            nested: !!inner && !!inner.parentElement.closest('[data-subform="showcase"]'),
+            note: document.querySelector("dialog[open] [data-invite-note]").textContent}; })()`);
+  ok("Go opens the restate door on the step's row", pDlg.here === reel.self);
+  ok("the input two levels down is named by its path", pDlg.nested);
+  ok("the path lights that one input and no other",
+     pDlg.lit === 1 && pDlg.holds && pDlg.note === pStep.note);
+  await evaljs(`(() => {
+    const i = document.querySelector('dialog[open] [name="${pNeed}"]');
+    i.value = ${JSON.stringify(pFilm)};
+    i.dispatchEvent(new Event("input", {bubbles: true}));
+    i.dispatchEvent(new Event("change", {bubbles: true}));
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`,
+                "the path step's dialog to close", 15000);
+  ok("the submit folds the path back into one nested object",
+     JSON.stringify((await get(reel.self)).data.showcase) ===
+       JSON.stringify({evidence: {film_url: pFilm}}));
+  /* the move plans the quest again: that plan lands before the finish */
+  let pAgain = null;
+  for (let i = 0; i < 60 && !pAgain; i++) {
+    if ((await get(pSelf)).data.planned_at !== pPlannedAt) pAgain = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the path step with a new plan", pAgain === true);
+  ok("the engine finishes the second quest",
+     (await qPost(pSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the second completion line", 15000);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
   /* "Accept as quest" (docs/spec-quests.md): a refused door that names
      a remedy offers to keep the goal, and one that names none does not.
      The fixture's shelve door refuses the attic with no remedy, and the
@@ -1372,6 +1442,76 @@ async function accessStory() {
   ok("the engine finishes the accepted quest",
      (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
   await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
+  /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
+     walk file holds the shelve form, a schema refusal with its field's
+     message, then the guard's refusal, kept as a quest. Replay draws
+     each in the form (dlg.guidedRefuse): the message under its field,
+     then the problem box with "Accept as quest" under it, which the
+     pointer presses. The press is lit for a moment only, so the page is
+     watched while the walk plays. */
+  console.log("· replay: a recorded refusal, kept as a quest");
+  const rNote = await get(shelfNote.self);
+  const rQuest = "/api/quests/replayed-refusal";
+  const rDoor = {self: shelfNote.self, action: "shelve"};
+  const rFieldError = "the replayed shelf is not one of the shelves";
+  const rDetail = "The replayed high shelf wants a room.";
+  const rWalk = [
+    {format: "waymark-walk/1", title: "A refusal kept as a quest",
+     cast: {p1: {display: "Priya", type: "human"}}},
+    {t: 0, who: "p1", type: "move", self: shelfNote.self},
+    {t: 10, type: "doc", self: shelfNote.self, doc: rNote},
+    {t: 1500, who: "p1", type: "ui", self: shelfNote.self,
+     ui: {dialog: rDoor, fields: {shelf: "loft"}}},
+    {t: 3000, who: "p1", type: "refusal", ...rDoor,
+     title: "Input failed validation", errors: {shelf: [rFieldError]}},
+    {t: 4500, who: "p1", type: "ui", self: shelfNote.self,
+     ui: {dialog: rDoor, fields: {shelf: "high"}}},
+    {t: 6000, who: "p1", type: "refusal", ...rDoor,
+     title: "Refused", detail: rDetail, remedies: ["led_note.rename"]},
+    {t: 7500, who: "p1", type: "transition", kind: "quest", self: rQuest,
+     action: "create", from: null, to: "active", summary: "Shelve the pile"},
+    {t: 7510, type: "doc", self: rQuest,
+     doc: {self: rQuest, kind: "quest", state: "active",
+           data: {self: shelfNote.self, action: "shelve", input: {shelf: "high"},
+                  pinned: false, plan: []}}},
+    {t: 7520, who: "p1", type: "ui", self: shelfNote.self, ui: {}},
+  ].map(l => JSON.stringify(l)).join("\n") + "\n";
+  await evaljs(`(() => {
+    const seen = window.__refused = {fieldError: "", box: "", offered: false, pressed: false};
+    window.__refusedWatch = new MutationObserver(() => {
+      const g = document.querySelector("dialog[open][data-guided]");
+      if (!g) return;
+      const under = g.querySelector('[data-srverr="shelf"]')?.textContent || "";
+      if (under) seen.fieldError = under;
+      const accept = g.querySelector(".questoffer [data-quest-accept]");
+      if (!accept) return;
+      seen.offered = true;
+      seen.box = g.querySelector(".problem")?.innerText || seen.box;
+      if (accept.hasAttribute("data-replay-press")) seen.pressed = true;
+    });
+    window.__refusedWatch.observe(document.body,
+      {subtree: true, childList: true, attributes: true, characterData: true});
+    return true; })()`);
+  await evaljs(`(async () => {
+    await replayFile(new File([${JSON.stringify(rWalk)}], "refusal.ndjson"));
+    return true; })()`);
+  await waitFor(`${replayState} === "ended"`, "the refusal's replay to reach its last frame",
+                60000, `window.__refused`);
+  const rSeen = await evaljs(`(() => {
+    window.__refusedWatch.disconnect();
+    return {...window.__refused, open: !!document.querySelector("dialog[open]")}; })()`);
+  console.log("  seen during the replay: " + JSON.stringify(rSeen));
+  ok("a replayed schema refusal shows the field's message under its field",
+     rSeen.fieldError === rFieldError);
+  ok("a replayed refusal kept as a quest shows its problem box",
+     rSeen.box.includes(rDetail));
+  ok("with Accept as quest under it", rSeen.offered);
+  ok("the pointer presses Accept as quest", rSeen.pressed);
+  ok("the form closes after the press", !rSeen.open);
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
+                "the refusal's replay to stop");
 
   /* the same under a grant that admits quest and nothing else: the one
      live stream carries no row events there, so the tracker hears the

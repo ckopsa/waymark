@@ -1167,6 +1167,40 @@
               "the one refused crosses as a cast alias")
           (is (nil? (:principal line))))))))
 
+(deftest a-schema-refusal-is-recorded-with-its-open-field-errors
+  (let [clock (atom (Instant/now))
+        eng (engine/engine
+             {:storage (memory/storage)
+              :resources [locker]
+              :now-fn (fn [] (swap! clock (fn [^Instant i] (.plusMillis i 1))))})
+        id (:id (:row (inv/create! eng :locker {:title "Locker"} {:principal person})))
+        self (str "/api/lockers/" id)
+        w (self-walk! eng)
+        invalid (p/schema-invalid :assign {:assignee ["should be a string"]
+                                           :pin ["should be at most 12 characters"]})
+        no! #(walks/record-refused! eng person nil {:self self :action %} invalid)
+        errors-of #(some-> (:errors %) (update-keys name))
+        open {"assignee" ["should be a string"]}]
+    (is (= 1 (count (no! "assign"))))
+    (no! "polish")
+    (let [[known unknown] (mapv :body (frames-in eng (:id w)))]
+      (is (= "Input failed validation" (:title known)))
+      (is (= open (errors-of known))
+          "a secret argument's sentence is dropped, as clean-ui drops its value")
+      (is (nil? (:errors unknown))
+          "a door the kind does not have says nothing of its arguments"))
+    (seal! eng w)
+    (testing "the export keeps the entries whose argument the exporter's :arg? admits"
+      (let [exported (fn [vis]
+                       (->> (:lines (export-of eng w vis))
+                            (filter #(= "refusal" (:type %)))
+                            first
+                            errors-of))
+            narrow (assoc (vis-of id) :arg? (fn [_kind _action arg] (= "title" arg)))]
+        (is (= open (exported nil)))
+        (is (= open (exported (vis-of id))))
+        (is (nil? (exported narrow)))))))
+
 ;; ── the screens a walk carries (docs/spec-agent-demo-walks.md § 8a) ──
 
 (defn- doc-walk! [eng]
