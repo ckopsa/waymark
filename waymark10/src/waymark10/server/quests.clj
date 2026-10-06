@@ -18,6 +18,20 @@
   before it writes and its key is made from what it heard, so a
   replayed transition changes nothing.
 
+  IT PLANS AGAIN AFTER EVERY MOVE ON ITS ROWS. The consumer keeps an
+  index of the rows the active quests name: the goal row and each
+  step's row. A transition on such a row that is the goal door itself
+  finishes the quest. Any other one rehearses the goal again: the steps
+  that transition ended stay at the top as `done`, and the rest are
+  the fresh rehearsal's. A transition on a row no active quest names
+  reads no quest.
+
+  ONE INVITATION FOLLOWS THE PLAN. The step the owner takes now is
+  handed to the owner as an invitation the engine authors. When that
+  step changes the old invitation is withdrawn and a new one opens. A
+  step that waits on a seat or on a tap opens none. `finish` and
+  `abandon` withdraw it.
+
   ONE PINNED QUEST PER OWNER. `pin` unpins the owner's other quests
   through their own `unpin` door, in the same transaction. Only an
   active quest is pinned: `pause`, `abandon` and `finish` unpin."
@@ -169,7 +183,40 @@
           :planned_at (or (:planned_at inp) (now-of ctx))
           :blocked_reason (:blocked_reason inp)
           :plan_is_estimate (boolean (:plan_is_estimate inp))
-          :waiting_on (:waiting_on inp)))
+          :waiting_on (:waiting_on inp)
+          :invitation (:invitation inp)))
+
+;; ── what a collection row reads ─────────────────────────────────────
+;; the plan is a vector, so it does not ride a summary row; these two
+;; lines are worked out from it at read time and do
+
+(defn- step-state [step]
+  (some-> (:state step) name))
+
+(defn progress-line
+  "The count a reader sees: k steps done, n known so far. It is never
+  \"k of n\": a plan is not a total (docs/spec-quests.md, Counts). Nil
+  until the first plan lands."
+  [row _]
+  (let [plan (get-in row [:data :plan])]
+    (when (seq plan)
+      (str (count (filter #(= "done" (step-state %)) plan))
+           " done, " (count plan) " known so far"))))
+
+(defn next-line
+  "The head step in one line: its note when it is the owner's to take,
+  or who it waits on. Nil when every known step is done."
+  [row _]
+  (let [d (:data row)
+        head (first (remove #(= "done" (step-state %)) (:plan d)))]
+    (when head
+      (if (= "waiting" (step-state head))
+        (str "waiting on "
+             (or (not-empty (:waiting_on head))
+                 (not-empty (:waiting_on d))
+                 (when (= "held" (some-> (:whose head) name)) "your tap")
+                 "someone else"))
+        (or (not-empty (:note head)) (str (:door head)))))))
 
 ;; ── the kind ────────────────────────────────────────────────────────
 
@@ -248,7 +295,12 @@
    [:waiting_on {:optional true
                  :x-display {:label "Waiting on"
                              :help "Who the head step waits on, by name. Empty when it is the owner's."}}
-    [:maybe [:string {:max 128}]]]])
+    [:maybe [:string {:max 128}]]]
+   [:invitation {:optional true
+                 :kind :invitation
+                 :x-display {:label "Invitation"
+                             :help "The invitation that hands the owner the step to take now, written by the engine. Empty when no step is the owner's."}}
+    [:maybe :waymark/ref]]])
 
 (defresource quest
   {:kind :quest
@@ -259,6 +311,16 @@
    :terminal #{:finished :abandoned}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
+   :computed {:progress
+              {:schema [:maybe [:string {:max 60}]]
+               :x-display {:label "Progress"
+                           :help "How many steps are done, and how many are known so far. More may appear."}
+               :fn progress-line}
+              :next_step
+              {:schema [:maybe [:string {:max 300}]]
+               :x-display {:label "Next"
+                           :help "The note of the step to take now, or who the quest waits on."}
+               :fn next-line}}
    :schema
    (-> [:map
         [:owner {:x-ref {:principal true}
@@ -288,7 +350,8 @@
    :filterable {:state #{:eq :in}
                 :owner #{:eq}
                 :pinned #{:eq}}
-   :sortable {:fields [:created_at] :default "-created_at"}
+   ;; the pinned quest first, then the newest
+   :sortable {:fields [:pinned :created_at] :default ["-pinned" "-created_at"]}
    :default-filters {:state "active,paused"}
    :create-guards [the-owner-sees-the-goal active-quests-are-few]
    :on-create born
@@ -564,49 +627,271 @@
                                    (ex-message e))
                                480)}))))
 
+;; ── the plan, kept in step ──────────────────────────────────────────
+
+(defn- before?
+  "Whether instant `a` is before instant `b`; false when either is
+  missing."
+  [a b]
+  (let [a (invitations/instant-of a)
+        b (invitations/instant-of b)]
+    (boolean (and a b (.isBefore a b)))))
+
+(defn- asked-since?
+  "Whether the owner asked for a new plan after the one the row holds
+  was written. The plan that answers the ask replaces the old one
+  whole: no step of it is carried."
+  [row]
+  (let [asked (get-in row [:data :replan_requested_at])
+        planned (get-in row [:data :planned_at])]
+    (boolean (and asked (or (nil? planned) (before? planned asked))))))
+
+(defn- taken
+  "A step of the old plan, as a step that was taken."
+  [step]
+  (-> (into {} (remove (comp nil? val)) step)
+      (update :whose #(some-> % name))
+      (assoc :state "done")))
+
+(defn- carried
+  "The fresh plan under the steps already taken. A step of the old plan
+  that was done stays, and so does one the heard transition ended: a
+  step on `self` whose door is `action`. They keep their order at the
+  top and the fresh steps are numbered after them."
+  [old fresh {:keys [self action]}]
+  (let [done (into []
+                   (comp (filter (fn [s]
+                                   (or (= "done" (some-> (:state s) name))
+                                       (and self
+                                            (= self (:self s))
+                                            (= action (some-> (:door s) name))))))
+                         (map taken))
+                   old)]
+    (assoc fresh :plan
+           (into []
+                 (comp (take 100)
+                       (map-indexed (fn [i s] (assoc s :n (inc (long i))))))
+                 (into done (:plan fresh))))))
+
+;; ── the invitation ──────────────────────────────────────────────────
+
+(defn- step-to-hand
+  "The step the owner is invited to take now: the `next` one, when it
+  is a person's or a confirm, or a choice that names the arguments it
+  needs. A choice of a row names no door the owner can be sent to."
+  [plan]
+  (first (filter (fn [s]
+                   (and (= "next" (:state s))
+                        (or (contains? #{"person" "confirm"} (:whose s))
+                            (and (= "choice" (:whose s)) (seq (:needs s))))))
+                 plan)))
+
+(defn- invitation-of
+  "The invitation a step becomes: the step's row, door and needs,
+  addressed to the quest's owner, with the step's note."
+  [row step]
+  (let [fields (into [] (take 8) (:needs step))]
+    (cond-> {:subject (get-in row [:data :owner])
+             :self (:self step)
+             :action (:door step)
+             :note (or (clip (:note step) 240)
+                       (clip (str "The next step of your quest: "
+                                  (get-in row [:data :title]))
+                             240))}
+      (seq fields) (assoc :fields fields))))
+
+(defn- open-invitation
+  "The quest's invitation, when it is still open; else nil."
+  [eng row]
+  (when-some [id (some-> (get-in row [:data :invitation]) str not-empty)]
+    (when-some [invitation (row-of eng invitations/kind id)]
+      (when (= "open" (some-> (:state invitation) name))
+        invitation))))
+
+(defn- same-step? [invitation want]
+  (and (= (:self want) (get-in invitation [:data :self]))
+       (= (:action want) (str/trim (str (get-in invitation [:data :action]))))
+       (= (vec (:fields want)) (vec (get-in invitation [:data :fields])))))
+
+(defn- withdraw!
+  "Take one open invitation back with the engine's hand, best effort."
+  [eng invitation-id]
+  (try
+    (inv/invoke! eng invitations/kind (str invitation-id) :withdraw {}
+                 {:principal engine-actor})
+    (catch Exception e
+      (warn! "invitation " invitation-id " could not be withdrawn ("
+             (ex-message e) ")")
+      nil)))
+
+(defn- close-invitation!
+  "Withdraw the quest's invitation when it is still open."
+  [eng row]
+  (when-some [open (open-invitation eng row)]
+    (withdraw! eng (:id open))))
+
+(defn- invite!
+  "Keep the quest's invitation in step with `plan`, and answer the id
+  of the one that stands, or nil. An open invitation for the same step
+  is kept. Any other is withdrawn, and the step to hand over opens a
+  new one. The key is made from `t`, so a replay opens no second one.
+  A create the invitation's own guards refuse is a warning: the plan
+  still lands, with no invitation."
+  [eng row plan t]
+  (when (contains? (inv/resources eng) invitations/kind)
+    (let [open (open-invitation eng row)
+          want (some->> (step-to-hand plan) (invitation-of row))]
+      (if (and open want (same-step? open want))
+        (str (:id open))
+        (do
+          (when open (withdraw! eng (:id open)))
+          (when want
+            (try
+              (some-> (inv/create! eng invitations/kind want
+                                   {:principal engine-actor
+                                    :idempotency-key (str "quest-open:" (:id row) ":" (:id t))})
+                      :row :id str)
+              (catch Exception e
+                (warn! "quest " (:id row) " could not open an invitation ("
+                       (or (inv/problem-reason e) (ex-message e)) ")")
+                nil))))))))
+
 (defn- plan!
   "Plan one quest for the transition `t` that asked. A paused, finished
   or abandoned quest is not planned. The key is made from `t`, so the
-  same transition heard twice writes one plan."
-  [eng id t]
+  same transition heard twice writes one plan. `heard` is the row and
+  the door of a move on one of the plan's rows, or nil when the quest's
+  own door asked."
+  [eng id t heard]
   (when-some [row (row-of eng kind id)]
     (when (and (active? row) (not (planned-since? t row)))
-      (inv/invoke! eng kind (str id) :plan (rehearsed eng row)
-                   {:principal engine-actor
-                    :idempotency-key (str "quest-plan:" id ":" (:id t))}))))
+      (let [old (when-not (asked-since? row) (get-in row [:data :plan]))
+            plan (carried old (rehearsed eng row) heard)]
+        (inv/invoke! eng kind (str id) :plan
+                     (assoc plan :invitation (invite! eng row (:plan plan) t))
+                     {:principal engine-actor
+                      :idempotency-key (str "quest-plan:" id ":" (:id t))})))))
+
+(defn- moved!
+  "A transition on a row quest `qid` names. The goal door itself
+  finishes the quest and closes its invitation; any other move plans
+  it again. A transition older than the quest moves nothing."
+  [eng qid t self action]
+  (when-some [row (row-of eng kind qid)]
+    (when (and (active? row) (not (before? (:at t) (:created-at row))))
+      (if (and (= self (str/trim (str (get-in row [:data :self]))))
+               (= action (str/trim (str (get-in row [:data :action])))))
+        (do (inv/invoke! eng kind (str qid) :finish {}
+                         {:principal engine-actor
+                          :idempotency-key (str "quest-finish:" qid ":" (:id t))})
+            (close-invitation! eng row))
+        (plan! eng qid t {:self self :action action})))))
+
+;; ── the index of the rows the active quests name ────────────────────
+
+(def ^:private index-cap
+  "The most active quests the index is built from."
+  10000)
+
+(defn- quest-rows
+  "The rows a quest names: its goal row and each step's row."
+  [row]
+  (into #{}
+        (keep #(some-> % str str/trim not-empty))
+        (cons (get-in row [:data :self])
+              (map :self (get-in row [:data :plan])))))
+
+(defn- indexed
+  "The index with quest `qid` naming exactly `rows`; none takes it out."
+  [index qid rows]
+  (let [qid (str qid)
+        index (reduce (fn [m r]
+                        (let [left (disj (get-in m [:by-row r] #{}) qid)]
+                          (if (seq left)
+                            (assoc-in m [:by-row r] left)
+                            (update m :by-row dissoc r))))
+                      index
+                      (get-in index [:of-quest qid]))]
+    (if (seq rows)
+      (-> (reduce (fn [m r] (update-in m [:by-row r] (fnil conj #{}) qid))
+                  index rows)
+          (assoc-in [:of-quest qid] rows))
+      (update index :of-quest dissoc qid))))
+
+(defn- built
+  "The index, read from every active quest. One read, when a consumer
+  first needs it."
+  [eng]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (reduce (fn [m raw]
+              (let [row (inv/decode-row rdef raw)]
+                (indexed m (:id row) (quest-rows row))))
+            {:by-row {} :of-quest {}}
+            (store/with-tx st
+              (fn [tx]
+                (vec (store/query-rows st tx kind {:state :active}
+                                       {:limit index-cap})))))))
+
+(defn- index-of [eng index]
+  (or @index (reset! index (built eng))))
+
+(defn- note-quest!
+  "Bring one quest's entry in a built index up to its row: an active
+  quest names its rows, any other names none."
+  [eng index qid]
+  (when (some? @index)
+    (let [row (row-of eng kind qid)]
+      (swap! index indexed qid (when (and row (active? row)) (quest-rows row))))))
 
 (def consumer-name
   "The durable cursor's name in waymark10_cursors (consumer:quests)."
   :quests)
 
 (defn handle-transition!
-  "One committed transition. A quest's own `create` or `replan` plans
-  it. Never throws: a parked cursor would stop every later quest from
-  being planned."
-  [eng t]
-  (try
-    (let [k (some-> (:kind t) keyword)
-          action (some-> (:action t) name)]
-      (when (and (contains? (inv/resources eng) kind) (:resource-id t) action)
-        (cond
-          (= kind k)
-          (when (contains? #{"create" "replan"} action)
-            (plan! eng (:resource-id t) t))
-
-          ;; Quests 2 goes here: a move of a row a plan names re-plans
-          ;; that quest, keeps its invitation and finishes it when the
-          ;; goal door was taken.
-          :else nil)))
-    (catch Exception e
-      (warn! "transition " (:id t) " could not be handled — " (ex-message e))
-      nil))
-  nil)
+  "One committed transition. A quest's own `create`, `replan` or
+  `resume` plans it, and its `abandon` or `finish` closes its
+  invitation. A transition on a row an active quest names finishes that
+  quest when it is the goal door, and plans it again otherwise. `index`
+  is the consumer's atom of those rows; without one the index is read
+  for this call alone. Never throws: a parked cursor would stop every
+  later quest from being planned."
+  ([eng t] (handle-transition! eng t (atom nil)))
+  ([eng t index]
+   (try
+     (let [rs (inv/resources eng)
+           k (some-> (:kind t) keyword)
+           id (some-> (:resource-id t) str)
+           action (some-> (:action t) name)]
+       (when (and (contains? rs kind) id action)
+         (if (= kind k)
+           (do (case action
+                 ("create" "replan" "resume") (plan! eng id t nil)
+                 ("abandon" "finish") (some->> (row-of eng kind id)
+                                             (close-invitation! eng))
+                 nil)
+               (note-quest! eng index id))
+           (when-some [rdef (get rs k)]
+             (let [self (str "/api/" (:plural rdef) "/" id)]
+               (doseq [qid (get-in (index-of eng index) [:by-row self])]
+                 (try
+                   (moved! eng qid t self action)
+                   (catch Exception e
+                     (warn! "quest " qid " could not follow transition "
+                            (:id t) " — " (ex-message e))))
+                 (note-quest! eng index qid)))))))
+     (catch Exception e
+       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
+       nil))
+   nil))
 
 (defn consumer-fn
-  "The consumer's function of one transition. Public because a test
-  drains it directly (`consumers/drain-consumer!`)."
+  "The consumer's function of one transition, with its own index of the
+  rows the active quests name. Public because a test drains it directly
+  (`consumers/drain-consumer!`)."
   [eng]
-  (fn [t] (handle-transition! eng t)))
+  (let [index (atom nil)]
+    (fn [t] (handle-transition! eng t index))))
 
 (defn start!
   "Register the durable log consumer that plans each quest. opts:

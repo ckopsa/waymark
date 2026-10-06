@@ -499,6 +499,16 @@
                color: var(--verdigris-deep); }
   .walk-steps { margin: 8px 0; padding-left: 22px; font-size: 13px; }
   .walk-steps li.current { font-weight: 600; }
+  /* a quest's plan, as a checklist on its row page */
+  .quest-steps { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+  .quest-step[data-quest-step="done"] .quest-note { text-decoration: line-through;
+                                                    opacity: .6; }
+  .quest-step[data-quest-step="next"] { font-weight: 600;
+                                        color: var(--verdigris-deep); }
+  .quest-step[data-quest-step="later"] { opacity: .5; }
+  .quest-step button { margin-left: 8px; }
+  .quest-blocked { margin: 8px 0; padding: 6px 10px; font-size: 13px;
+                   border-left: 3px solid var(--verdigris); }
   .invite-ordinal { display: inline-block; margin-right: 6px; padding: 0 5px;
                     font-family: var(--mono); font-size: 10.5px;
                     border: 1px solid var(--verdigris); border-radius: 999px;
