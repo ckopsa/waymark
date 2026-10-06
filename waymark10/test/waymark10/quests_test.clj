@@ -7,6 +7,7 @@
   answers with no engine."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
@@ -367,6 +368,55 @@
               ["finalize" "/api/plans/4" "choice" "later" ["meal_id"]]]
              (shape plan [:door :self :whose :state :needs]))))))
 
+(deftest the-mapping-puts-a-refusals-other-remedy-on-its-step
+  (let [plan (quests/answer->plan
+              {:writes []
+               :blocked-on [{:door "ticket.complete" :row "/api/tickets/7"
+                             :needs [:close_reason] :or ["ticket.drop"]}
+                            {:door "ticket.drop" :row "/api/tickets/7" :needs []
+                             :or ["ticket.complete"] :confirm true
+                             :consequence "The ticket is let go."}]
+               :stack [{:door "epic.complete" :row "/api/epics/1"}]}
+              seats-for)]
+    (is (= [[1 "complete" "/api/tickets/7" "choice" "next"]]
+           (shape plan [:n :door :self :whose :state]))
+        "drop is the other remedy, not a step after complete")
+    (is (= [{:door "drop" :self "/api/tickets/7"}]
+           (:alternatives (first (:plan plan)))))))
+
+(deftest the-mapping-says-more-may-follow-one-time-and-last
+  (testing "a seat head whose refusal named two remedies"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "chore.reopen" :row "/api/chores/9" :needs []
+                               :or ["chore.drop"]
+                               :reason "Only the planner reopens a chore."}
+                              {:door "chore.drop" :row "/api/chores/9" :needs []
+                               :or ["chore.reopen"]
+                               :reason "Only the planner drops a chore."}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]}
+                seats-for)]
+      (is (= [[1 "reopen" "seat" "waiting"]
+              [2 "finish" "person" "later"]]
+             (shape plan [:n :door :whose :state])))
+      (is (= [{:door "drop" :self "/api/chores/9"}]
+             (:alternatives (first (:plan plan)))))
+      (is (= [nil "More steps may follow once this one is done."]
+             (mapv #(when (= "person" (:whose %)) (:note %)) (:plan plan))))))
+  (testing "two doors that are somebody else's"
+    (let [plan (quests/answer->plan
+                {:writes []
+                 :blocked-on [{:door "chore.reopen" :row "/api/chores/9" :needs [] :or []
+                               :reason "Only the planner reopens a chore."}
+                              {:door "pantry.stock" :row nil :needs [] :or []
+                               :reason "Not found"}]
+                 :stack [{:door "chore.finish" :row "/api/chores/9"}]}
+                seats-for)]
+      (is (= [["reopen" "seat" "waiting"]
+              ["stock" "seat" "later"]
+              ["finish" "person" "later"]]
+             (shape plan [:door :whose :state]))))))
+
 (deftest the-mapping-says-why-a-cycle-is-blocked
   (let [plan (quests/answer->plan
               {:writes []
@@ -666,6 +716,46 @@
       (is (= "finished" (name (:state (row-of eng :quest quest)))))
       (is (not= "open" (name (:state (row-of eng :invitation (:id last-one)))))))))
 
+(deftest a-finished-quest-reads-all-done
+  (testing "the goal step is done and a step nobody took is dropped"
+    (let [eng (fresh-engine)
+          c (chore! eng "Dishes")
+          id (:id (accept! eng person c))
+          self (str "/api/chores/" c)]
+      (take! eng id quests/engine-actor :plan
+             {:plan [{:n 1 :door "reopen" :self self :whose "person" :state "done"
+                      :alternatives [{:door "drop" :self self}]}
+                     {:n 2 :door "sweep" :self self :whose "seat"
+                      :waiting_on "Planner" :state "waiting"}
+                     {:n 3 :door "finish" :self self :whose "person"
+                      :note "More steps may follow once this one is done."
+                      :state "later"}]
+              :plan_is_estimate true})
+      (is (= [{:door "drop" :self self}]
+             (:alternatives (first (:plan (data-of eng id)))))
+          "the plan door takes a step's alternatives")
+      (take! eng id quests/engine-actor :finish)
+      (let [plan (:plan (data-of eng id))]
+        (is (= [[1 "reopen" "done"] [2 "finish" "done"]]
+               (mapv (juxt :n :door (comp name :state)) plan)))
+        (is (some? (:ended_at (last plan))))
+        (is (nil? (:note (last plan)))))))
+  (testing "landing the goal door marks its own step done"
+    (let [eng (vault-engine)
+          {:keys [quest latch crate vault]} (vault-quest! eng)]
+      (hear! eng)
+      (move! eng :q_latch latch :lift person)
+      (hear! eng)
+      (move! eng :q_crate crate :open person)
+      (hear! eng)
+      (move! eng :q_vault vault :open person)
+      (hear! eng)
+      (let [d (data-of eng quest)]
+        (is (= "finished" (name (:state (row-of eng :quest quest)))))
+        (is (= ["lift" "open" "open"] (mapv :door (:plan d))))
+        (is (= ["done" "done" "done"] (states d)))
+        (is (some? (:ended_at (last (:plan d)))))))))
+
 (deftest another-principals-move-on-a-plan-row-plans-again
   (let [eng (vault-engine)
         {:keys [quest latch crate]} (vault-quest! eng)]
@@ -719,3 +809,56 @@
     (let [d (data-of eng quest)]
       (is (empty? (:plan d)))
       (is (nil? (:planned_at d))))))
+
+;; ── the quest in its owner's walk (spec-agent-demo-walks.md § 8a) ───
+
+(defn- self-walk! [eng docs]
+  (:id (:row (inv/create! eng :walk
+                          {:followed "colton" :title "The quest, filmed" :docs docs}
+                          {:principal person}))))
+
+(defn- docs-in
+  "The `doc` frames a walk holds, oldest first → [{:self :n :doc}]."
+  [eng walk-id]
+  (let [st (:storage eng)
+        frdef (get (inv/resources eng) :walk_frame)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (vec (store/query-rows st tx :walk_frame {:walk (str walk-id)}
+                                    {:limit 100}))))
+         (map #(:data (inv/decode-row frdef %)))
+         (filter #(= "doc" (name (:type %))))
+         (map #(walk/keywordize-keys (:body %)))
+         (sort-by :n)
+         vec)))
+
+(deftest a-quest-the-engine-moves-is-recorded-in-its-owners-walk
+  (let [eng (vault-engine)
+        w (self-walk! eng true)
+        plain (self-walk! eng false)
+        {:keys [quest latch crate vault]} (vault-quest! eng)
+        self (str "/api/quests/" quest)
+        latest (fn [] (:doc (peek (docs-in eng w))))
+        steps (fn [doc] (mapv (comp name :state) (get-in doc [:data :plan])))]
+    (hear! eng)
+    (testing "the engine's first plan lands as the quest's envelope"
+      (is (= ["lift" "open" "open"] (mapv :door (get-in (latest) [:data :plan]))))
+      (is (= ["next" "later" "later"] (steps (latest))))
+      (is (every? #(= self (:self %)) (docs-in eng w))))
+    (testing "another principal's step plans again, and the walk takes that plan"
+      (move! eng :q_latch latch :lift other)
+      (hear! eng)
+      (is (= ["done" "next" "later"] (steps (latest)))))
+    (testing "the engine's finish is recorded"
+      (move! eng :q_crate crate :open person)
+      (hear! eng)
+      (move! eng :q_vault vault :open person)
+      (hear! eng)
+      (is (= "finished" (some-> (:state (latest)) name))))
+    (testing "an envelope byte-equal to the last is not recorded again"
+      (let [held (count (docs-in eng w))]
+        (consumers/drain-consumer! eng :quests-replay (quests/consumer-fn eng)
+                                   {:from-origin? true})
+        (is (= held (count (docs-in eng w))))))
+    (testing "a walk made without docs records none"
+      (is (empty? (docs-in eng plain))))))

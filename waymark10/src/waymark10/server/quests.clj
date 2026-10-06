@@ -45,7 +45,9 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
+            [waymark10.server.walks :as walks]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -187,6 +189,33 @@
 (defhandler unpin-it [row _inp _ctx]
   (unpinned row))
 
+(def ^:private more-may-follow
+  "More steps may follow once this one is done.")
+
+(defn- finished-plan
+  "The plan of a quest whose goal door was taken at `now`: the steps
+  that were done, then the goal's, done. A step nobody took is dropped,
+  so a finished quest reads all done."
+  [{:keys [plan self action]} ^Instant now]
+  (let [self (str/trim (str self))
+        action (str/trim (str action))
+        done? #(= "done" (some-> (:state %) name))
+        goal (or (first (filter #(and (= self (:self %))
+                                      (= action (some-> (:door %) name)))
+                                (remove done? plan)))
+                 {:door action :self self :whose "person"})
+        goal (cond-> (assoc (into {} (remove (comp nil? val)) goal)
+                            :state "done"
+                            :ended_at (str now))
+               (= more-may-follow (:note goal)) (dissoc :note))]
+    (into []
+          (map-indexed (fn [i s] (assoc s :n (inc (long i)))))
+          (take-last 100 (conj (filterv done? plan) goal)))))
+
+(defhandler finish-it [row _inp ctx]
+  (-> (unpinned row)
+      (assoc-in [:data :plan] (finished-plan (:data row) (now-of ctx)))))
+
 (defhandler ask-replan [row _inp ctx]
   (assoc-in row [:data :replan_requested_at] (now-of ctx)))
 
@@ -262,6 +291,23 @@
                  :x-display {:label "Waiting on"
                              :help "Who the step waits on, by name, when it is not the owner's."}}
     [:maybe [:string {:max 128}]]]
+   [:alternatives {:optional true
+                   :x-display {:label "Or"
+                               :help "The other doors that would do for this step: the refusal named them beside this one. Taking any one of them is the step."}}
+    [:maybe [:vector {:max 8}
+             [:map
+              [:door {:x-display {:raw true
+                                  :label "The door"
+                                  :help "The action that would do instead."}}
+               [:string {:min 1 :max 60}]]
+              [:self {:x-display {:raw true
+                                  :label "The row"
+                                  :help "The row that door acts on, as its path: /api/<plural>/<id>."}}
+               [:string {:min 1 :max 300}]]]]]]
+   [:ended_at {:optional true
+               :x-display {:label "Ended"
+                           :help "When the goal step was taken, as an RFC 3339 instant. Written when the quest finishes."}}
+    [:maybe [:string {:max 40}]]]
    [:state {:x-display {:label "State"
                         :help "`done`: the step was taken. `next`: it is the one to take now. `waiting`: it waits on someone else. `later`: a step before it is not done."}}
     [:enum "done" "next" "waiting" "later"]]])
@@ -427,7 +473,7 @@
     :finish
     {:from #{:active} :to :finished
      :guards [the-engine-plans-it]
-     :handler unpin-it
+     :handler finish-it
      :safety {:idempotent true :reversible false :confirm false
               :final "The goal door was taken; reopening would make the record lie. Reaching the goal again is a new quest."}
      :display {:label "Finished"}}}
@@ -440,9 +486,6 @@
 (def ^:private your-tap
   "Who a held step waits on."
   "your tap")
-
-(def ^:private more-may-follow
-  "More steps may follow once this one is done.")
 
 (def ^:private no-row-chosen
   "The sentence `client/pursue!` blocks a remedy with when nobody named
@@ -480,13 +523,58 @@
                  ", so no step can be taken now.")
     nil))
 
+(defn- door-name
+  "A door as one string, `kind.action`, however the rehearsal spelled it."
+  [door]
+  (let [[k action] (door-parts door)]
+    (if k (str k "." action) (str action))))
+
+(defn- alternative-of?
+  "Whether blocked entry `b` is another remedy of the refusal entry `a`
+  came from: each names the other's door in its `:or`."
+  [a b]
+  (let [ors (fn [e] (into #{} (map door-name) (:or e)))]
+    (and (contains? (ors a) (door-name (:door b)))
+         (contains? (ors b) (door-name (:door a))))))
+
+(defn- first-remedies
+  "The blocked entries that are steps. A refusal with several remedies
+  blocks once for each, and they are ways to take ONE step: the first
+  stays and the others ride it under `::others`. A cycle or the depth
+  bound is no step, so the remedy after it is the first."
+  [blocked]
+  (reduce (fn [kept e]
+            (if-some [i (last (keep-indexed (fn [i k] (when (alternative-of? k e) i))
+                                            kept))]
+              (update-in kept [i ::others] (fnil conj []) e)
+              (conj kept e)))
+          []
+          (remove loop-reason blocked)))
+
+(defn- alternatives
+  "The other remedies of the refusal a step's entry came from, as
+  `{door, self}`: each on the row its own entry named, else the step's."
+  [entry base]
+  (let [rows (into {} (map (juxt (comp door-name :door) :row)) (::others entry))]
+    (into []
+          (comp (map (fn [d]
+                       {:door (clip (second (door-parts d)) 60)
+                        :self (clip (or (get rows (door-name d)) (:self base)) 300)}))
+                (filter (every-pred :door :self))
+                (distinct)
+                (take 8))
+          (:or entry))))
+
 (defn- blocked-steps
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
-  bound, two for a door that is somebody else's, else one."
+  bound, else one, with the refusal's other remedies on it as
+  `:alternatives`. An alternative is never a step of its own."
   [{:keys [door row reason needs confirm consequence held hold warnings] :as entry}
    goal seat-lookup]
   (let [[k action] (door-parts door)
-        base (step-of entry goal)]
+        base (step-of entry goal)
+        alts (alternatives entry base)
+        base (cond-> base (seq alts) (assoc :alternatives alts))]
     (cond
       (loop-reason entry) []
 
@@ -515,8 +603,17 @@
             who (if seats
                   (str/join ", " seats)
                   (str "someone who holds " (if (keyword? door) (str k "." action) door)))]
-        [(assoc base :whose "seat" :waiting_on (clip who 128) :note (clip reason 240))
-         (assoc (if (:door goal) goal base) :whose "person" :note more-may-follow)]))))
+        [(assoc base :whose "seat" :waiting_on (clip who 128) :note (clip reason 240))]))))
+
+(defn- with-placeholder
+  "The steps, and after a seat's step one `more-may-follow` step, last:
+  what the owner takes once the seat is through cannot be rehearsed, so
+  it is said once, on the goal's door."
+  [steps goal]
+  (if-some [seat (last (filter #(= "seat" (:whose %)) steps))]
+    (conj steps (assoc (select-keys (if (:door goal) goal seat) [:door :self])
+                       :whose "person" :note more-may-follow))
+    steps))
 
 (defn- with-states
   "Number the steps and say which is taken now: a seat's or a held step
@@ -560,7 +657,9 @@
                           (cond-> (assoc (step-of w goal) :whose "person")
                             (:hold w) (assoc :whose "held" :waiting_on your-tap)))
                         writes)
-                  (into (mapcat #(blocked-steps % goal seat-lookup)) blocked))
+                  (into (mapcat #(blocked-steps % goal seat-lookup))
+                        (first-remedies blocked))
+                  (with-placeholder goal))
         steps (with-states (into [] (comp (filter :self) (take 100)) steps))
         head (first steps)
         stopped (when-some [s (:stopped answer)]
@@ -845,6 +944,32 @@
     (let [row (row-of eng kind qid)]
       (swap! index indexed qid (when (and row (active? row)) (quest-rows row))))))
 
+(defn- record-in-walk!
+  "Hand the quest's envelope to each self walk its owner is recording
+  with `docs` (`walks/record-seen!`), whoever moved it: the engine's
+  `plan`, `finish` and `unpin` pass no write door of the owner's, and
+  the tracker a replay draws is this document. The sight is the owner's
+  as `rehearsed` rebuilds it: the quest's grant, or the owner's own
+  with none. A grant that confers nothing now records nothing. Never
+  throws."
+  [eng id]
+  (try
+    (when-some [row (row-of eng kind id)]
+      (let [{:keys [owner grant]} (:data row)
+            gid (some-> grant str not-empty)]
+        (when (walks/recording-own? eng {:id owner})
+          (when-some [who (members/principal-for eng owner)]
+            (let [vis (if gid
+                        (grants/visibility eng gid who)
+                        (grants/unscoped-visibility eng who))]
+              (when (or (nil? gid) (:grant vis))
+                (walks/record-seen!
+                 eng who vis
+                 (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))))))))
+    (catch Exception e
+      (warn! "quest " id " was not recorded in its owner's walk — " (ex-message e))
+      nil)))
+
 (def consumer-name
   "The durable cursor's name in waymark10_cursors (consumer:quests)."
   :quests)
@@ -852,7 +977,8 @@
 (defn handle-transition!
   "One committed transition. A quest's own `create`, `replan` or
   `resume` plans it, and its `abandon` or `finish` closes its
-  invitation. A transition on a row an active quest names finishes that
+  invitation. Any transition of a quest hands its envelope to the walk
+  its owner is recording (`record-in-walk!`). A transition on a row an active quest names finishes that
   quest when it is the goal door, and plans it again otherwise. `index`
   is the consumer's atom of those rows; without one the index is read
   for this call alone. Never throws: a parked cursor would stop every
@@ -871,6 +997,7 @@
                  ("abandon" "finish") (some->> (row-of eng kind id)
                                              (close-invitation! eng))
                  nil)
+               (record-in-walk! eng id)
                (note-quest! eng index id))
            (when-some [rdef (get rs k)]
              (let [self (str "/api/" (:plural rdef) "/" id)]
@@ -880,6 +1007,7 @@
                    (catch Exception e
                      (warn! "quest " qid " could not follow transition "
                             (:id t) " — " (ex-message e))))
+                 (record-in-walk! eng qid)
                  (note-quest! eng index qid)))))))
      (catch Exception e
        (warn! "transition " (:id t) " could not be handled — " (ex-message e))
