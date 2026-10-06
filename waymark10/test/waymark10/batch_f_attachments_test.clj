@@ -10,6 +10,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [waymark10.machine :as machine]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.engine :as engine]
@@ -89,6 +90,15 @@
             resp (put! aid same-size)]
         (is (= (count content) (count same-size)))
         (is (= 409 (:status resp)))
+        (let [rdef attachments/attachment
+              roads (machine/roads rdef (get-in rdef [:actions :mark_stored])
+                                   :stored)
+              env (json (req :get (str "/api/attachments/" aid)))]
+          (is (= roads (vec (:remedies (json resp))))
+              "the 409 names the machine's roads, and no others")
+          (is (= [] roads (vec (:remedies (get-in env [:unavailable :mark_stored]))))
+              "which is the envelope's answer too: the door is hidden,
+               and nothing leads back to pending"))
         (is (= sha (get-in (json (req :get (str "/api/attachments/" aid)))
                            [:data :sha256]))
             "the stored content is untouched")))))
