@@ -4111,6 +4111,95 @@ async function questPhoneStory() {
     ok("and says no refusal in it", staged[0]?.said === "" && staged[0]?.shut === false);
     ok("the connector's film makes no quest", (await active()) === left);
     await fresh(`the page ${where}, out of the connector's film`);
+
+    /* a rehearsal the create refuses (ticket 03d24d3e): priya holds her
+       20 active quests (quests.clj, active-cap) before the walk starts,
+       so the connector's rehearsed create is refused as the create would
+       be. The walk holds the sheet's beat with that answer (stage-sheet!,
+       seen {ok false}); the film says the sentence in the sheet, with
+       Accept disabled, and nowhere else. */
+    {
+      console.log(`· the connector's refused quest preview ${where}`);
+      const filled = [];
+      let over = null;
+      for (let i = 0; i < 21 && !over; i++) {
+        const q = await post("/api/quests", shutGoal, h);
+        if (q.status === 201 && q.doc?.self) filled.push(q.doc.self);
+        else over = q;
+      }
+      console.log(`  ${filled.length} quests held, then: ` + JSON.stringify(over?.doc ?? null));
+      ok("priya's active quests reach the cap, before the walk starts",
+         filled.length > 0 && !!over && over.status >= 400 && over.status < 500 &&
+         /at most 20 active quests/.test(over.doc?.detail || ""));
+      const rec = await post("/api/walks",
+        {followed: await evaljs(`principalId() || viewerId()`),
+         title: "A quest the connector is refused " + where, docs: true}, h);
+      const rWalk = rec.doc?.self;
+      if (!rWalk) console.log("  the walk's create: " + JSON.stringify(rec));
+      ok(`priya records a second walk of her own, with no page in it ${where}`,
+         rec.status === 201 && !!rWalk);
+      const res = await fetch(BASE + "/api/-/mcp", {method: "POST",
+        headers: {...h, "Content-Type": "application/json", "Accept": "application/json"},
+        body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+                              params: {name: "waymark_invoke",
+                                       arguments: {kind: "quest", action: "create",
+                                                   dry_run: true, input: shutGoal}}})});
+      const told = JSON.stringify(await res.json().catch(() => null));
+      console.log(`  the refused rehearsal: ${res.status} ` + told.slice(0, 400));
+      ok("the connector's rehearsed create is refused, with the engine's sentence",
+         /at most 20 active quests/.test(told));
+      await sleep(1500);
+      ok("priya seals the refused rehearsal's walk",
+         (await post(rWalk + "/-/seal", {}, h)).status < 400 &&
+         (await get(rWalk)).state === "sealed");
+      /* the held quests are let go after the seal, out of the recording */
+      for (const q of filled) await post(q + "/-/abandon", {}, h);
+      ok("priya lets the held quests go, out of her recording",
+         (await Promise.all(filled.map(q => get(q)))).every(q => q.state === "abandoned"));
+
+      console.log(`· film: the connector's refused quest preview ${where}`);
+      const idle = await active();
+      await evaljs(`window.__sheets = [];
+        if (window.__sheetWatch) window.__sheetWatch.disconnect();
+        window.__sheetWatch = new MutationObserver(ms => {
+          for (const m of ms)
+            for (const n of m.addedNodes)
+              if (n.nodeType === 1 && n.matches("dialog[data-quest-sheet]"))
+                window.__sheets.push({replay: !!replay, here: hereHref().split("?")[0]});
+        });
+        window.__sheetWatch.observe(document.body, {childList: true});
+        location.hash = "#" + ${JSON.stringify(rWalk)} + "?film=1"; true`);
+      await waitFor(`!!replay && /at most 20 active quests/.test(${saidWhy})`,
+                    `the refusal, in the sheet of the connector's film ${where}`, 240000, why);
+      ok("the replay opens the quest's sheet with the refusal's sentence", true);
+      ok("and Accept is disabled with that line",
+         await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+      /* the sentence is in the sheet alone, and the caption band is not
+         drawn: no refusal line, no notice and no caption beside it */
+      const alone = `(() => {
+        const n = s => (String(s || "").match(/at most 20 active quests/g) || []).length;
+        const s = document.querySelector("dialog[data-quest-sheet]");
+        const band = document.querySelector("#replaycaption");
+        return n(document.body.textContent) === n(s && s.textContent) &&
+          (!band || getComputedStyle(band).display === "none" || !band.textContent);
+      })()`;
+      ok("no refusal line, notice or caption is drawn outside the sheet", await evaljs(alone));
+      if (phone) {
+        await sheetFits("the refused sheet of the connector's film");
+        await noOverflow("under the refused sheet of the connector's film");
+      }
+      await shot(`${slug}-connector-film-refused`);
+      await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                    `the connector's refused film to end ${where}`, 240000, why);
+      ok(`the connector's refused film reaches ended ${where}`, true);
+      const shown = await evaljs(`window.__sheets`);
+      console.log("  the refused film's sheets: " + JSON.stringify(shown));
+      ok("the film opens one sheet, on the goal's own page",
+         shown.length === 1 && shown[0].replay && shown[0].here === loft);
+      ok("and still draws no refusal outside it at its end", await evaljs(alone));
+      ok("the refused film makes no quest", (await active()) === idle);
+      await fresh(`the page ${where}, out of the connector's refused film`);
+    }
   };
 
   await fresh("the phone's page, out of its film");
