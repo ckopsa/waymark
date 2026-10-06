@@ -65,7 +65,12 @@
     it, present only for a kind declaring :retain {:data true}
     (waymark10.server.decision/after-record), nil everywhere else.")
   (transitions [st tx where opts]
-    "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
+    "Log rows: where {:kind … :resource-id … :since id}, newest-last.
+    opts {:settled true} is for a reader that keeps a cursor: it
+    answers only when no append is still in flight, so no lower id can
+    commit after the rows it returns, and answers no rows when the
+    writers do not finish in time — the reader asks again on its next
+    pass. Such a read runs in a transaction of its own.")
   (transitions-under-grant [st tx grant-id since until opts]
     "Log rows whose actor carries this grant (actor->>'grant') and
     whose `at` lies in [since, until] — a nil bound is open. A

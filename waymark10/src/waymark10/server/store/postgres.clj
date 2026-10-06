@@ -11,7 +11,7 @@
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)
            (java.nio.charset StandardCharsets)
-           (java.sql Connection DriverManager Timestamp)
+           (java.sql Connection DriverManager SQLException Timestamp)
            (java.util.zip CRC32)
            (org.postgresql PGConnection)
            (org.postgresql.util PGobject)))
@@ -378,6 +378,42 @@
               (.update (.getBytes (name role-name) StandardCharsets/UTF_8)))]
     (bit-or (bit-shift-left (long lock-namespace) 32) (.getValue crc))))
 
+;; ── the log's commit order ──────────────────────────────────────────
+;; A transition's id comes from the sequence inside its writer's own
+;; transaction, so two overlapping writers can COMMIT out of id order,
+;; and a reader that walks the log by id (`id > cursor`) would step
+;; over the lower id for good. Every append therefore holds this key
+;; SHARED until its transaction ends, and a reader asking for the
+;; settled log takes it EXCLUSIVE for the length of its read: once it
+;; has the lock no allocated id is still in flight, and its statement's
+;; snapshot (READ COMMITTED, taken after the lock) sees them all.
+
+(def ^:private log-order-key (role-lock-key :transitions-log))
+
+(def ^:private settle-wait-ms
+  "How long a settled read waits for the writers in flight. Appends
+  queue behind the waiting reader, so the wait is short and the reader
+  yields; it is under Postgres's default deadlock_timeout (1s), so a
+  reader standing between two writers steps aside before either is
+  cancelled."
+  500)
+
+(defn- log-settled?
+  "Take the log's order lock exclusively in tx. → true when no append
+  is in flight; false when the wait ran out — tx is then aborted, so
+  the caller answers nothing and its next pass asks again. A settled
+  read wants a transaction of its own."
+  [tx]
+  (jdbc/execute! tx [(str "SET LOCAL lock_timeout = " (long settle-wait-ms))])
+  (try
+    (jdbc/execute-one! tx ["SELECT pg_advisory_xact_lock(?)" log-order-key])
+    true
+    (catch SQLException e
+      ;; 55P03 lock_not_available: the lock_timeout above
+      (if (= "55P03" (.getSQLState e))
+        false
+        (throw e)))))
+
 (defn- lock-connection
   "A dedicated raw JDBC connection for one role's lock — deliberately
   NOT from the Hikari pool (the listen-connection discipline): the
@@ -577,6 +613,8 @@
                            jdbc-opts))))
 
   (append-transition! [_ tx record]
+    ;; before the id is allocated, held to the commit: see log-order-key
+    (jdbc/execute-one! tx ["SELECT pg_advisory_xact_lock_shared(?)" log-order-key])
     (let [res (jdbc/execute-one!
                tx
                [(str "INSERT INTO waymark10_transitions"
@@ -616,8 +654,10 @@
                      (str " WHERE " (str/join " AND " (map first clauses))))
                    " ORDER BY id" (when (:newest-first opts) " DESC")
                    " LIMIT " (long (:limit opts 500)))]
-      (mapv transition->map
-            (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
+      (if (and (:settled opts) (not (log-settled? tx)))
+        []
+        (mapv transition->map
+              (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts)))))
 
   (transitions-under-grant [_ tx grant-id since until opts]
     ;; the window bounds `at`, which ix_wm10_t_at serves; the grant is
