@@ -625,27 +625,40 @@
                                  :followed followed}
                                 {:limit recorder-page}))))))
 
-(defn- suggest-for
-  "An invitation's suggested values as `vis` may read them: the keys its
-  `:arg?` admits on the invited step, and none when the step names no
-  served kind. nil `vis` reads them whole. nil when there are none."
-  [eng vis {:keys [self action suggest]}]
-  (when (and (map? suggest) (seq suggest))
+(defn- args-for
+  "One map of an invitation's values, keyed by the invited step's
+  arguments, as `vis` may read it: the keys its `:arg?` admits on that
+  step, and none when the step names no served kind. nil `vis` reads
+  it whole. nil when there are none."
+  [eng vis {:keys [self action]} values]
+  (when (and (map? values) (seq values))
     (if-some [arg? (:arg? vis)]
       (let [[_ plural] (re-find #"/api/([^/?#]+)/[^/?#]+" (str self))
             k (some->> plural (kind-of-plural eng))
             action (some-> action name str/trim not-empty keyword)]
         (if (and k action)
-          (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) suggest)
+          (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) values)
           {}))
-      suggest)))
+      values)))
+
+(defn- suggest-for
+  "An invitation's suggested values as `vis` may read them (`args-for`)."
+  [eng vis d]
+  (args-for eng vis d (:suggest d)))
+
+(defn- given-for
+  "An invitation's `given` values, the ones the invited person typed
+  already, as `vis` may read them: the rule of `suggest` (`args-for`)."
+  [eng vis d]
+  (args-for eng vis d (:given d)))
 
 (defn- invitation-frame
   "The `invitation` frame of one firehose event, when that event is the
   birth of an invitation the follower can see; nil otherwise. The body
   is pinned: {id, author, subject, self, action, field, fields, note,
   suggest}; a row born before `fields` carries `field` alone,
-  and `suggest` keeps only the keys the follower's `:arg?` admits. A
+  and `suggest` keeps only the keys the follower's `:arg?` admits. An
+  invitation with `given` values carries them beside it, by that rule. A
   walkthrough's step carries {walkthrough, step, of} beside them
   (docs/spec-walkthrough.md § 6)."
   [eng sight t]
@@ -662,13 +675,15 @@
                 led (cond-> (into {} (filter (comp some? val))
                                   (select-keys d [:step :of]))
                       (some? (:walkthrough d))
-                      (assoc :walkthrough (str (:walkthrough d))))]
+                      (assoc :walkthrough (str (:walkthrough d))))
+                given (given-for eng sight d)]
             {:type "invitation"
-             :body (assoc (merge (select-keys d [:author :subject :self :action
-                                                 :field :fields :note])
-                                 led)
-                          :id id
-                          :suggest (suggest-for eng sight d))}))))))
+             :body (cond-> (assoc (merge (select-keys d [:author :subject :self :action
+                                                         :field :fields :note])
+                                         led)
+                                  :id id
+                                  :suggest (suggest-for eng sight d))
+                     (seq given) (assoc :given given))}))))))
 
 (defn- invitation-birth? [t]
   (and (= "invitation" (some-> (:kind t) name))
@@ -1321,14 +1336,15 @@
   and a ui frame with every part redacted crosses as a plain move;
   `transition` events/visible-transition; `invitation` :row? on the
   invitation its pinned body names by `id` (`invitation-frame`), and
-  its `suggest` keeps the keys the exporter's :arg? admits; `caption`
+  its `suggest` and its `given` keep the keys the exporter's :arg?
+  admits; `caption`
   presence's self rule, so the line crosses only with its `self`;
   `refusal` that rule as well, of its `remedies` the doors the
   exporter's :action? admits (`remedy-seen?`), and of its `errors` the
   arguments the exporter's :arg? admits (`errors-seen`); `doc`
   presence's self rule and `export-doc`, and the principals its rows
   name ride as ::refs for the cast."
-  [{:keys [eng vis visible? own-create? redact-ui suggest]} type body]
+  [{:keys [eng vis visible? own-create? redact-ui suggest given]} type body]
   (let [self (path-of (:self body))
         ;; the recorder's own create form and its refusal (`export`)
         own? (fn [] (boolean (and own-create? (own-create? type body))))]
@@ -1348,13 +1364,15 @@
       "invitation" (let [id (:id body)]
                      (when (and id (or (nil? vis)
                                        ((:row? vis) :invitation (str id))))
-                       (let [suggested (suggest (assoc body :self self))]
+                       (let [suggested (suggest (assoc body :self self))
+                             given (given (assoc body :self self))]
                          (cond-> (assoc (select-keys body [:action :field :fields
                                                            :note :step :of])
                                         :type "invitation"
                                         ::subject (some-> (:subject body) str))
                            self (assoc :self self)
-                           (seq suggested) (assoc :suggest suggested)))))
+                           (seq suggested) (assoc :suggest suggested)
+                           (seq given) (assoc :given given)))))
       "caption" (when (and self (visible? self))
                   (cond-> {:type "caption" :self self}
                     (:action body) (assoc :action (:action body))
@@ -1417,7 +1435,8 @@
                                   (constantly false))
                    :redact-ui (presence/ui-redactor
                                eng (if own? (own-sight eng vis) vis))
-                   :suggest #(suggest-for eng vis %)}
+                   :suggest #(suggest-for eng vis %)
+                   :given #(given-for eng vis %)}
             frames (->> (store/with-tx st
                           (fn [tx]
                             (vec (store/query-rows
