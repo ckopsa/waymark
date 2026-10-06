@@ -3654,12 +3654,12 @@ async function questPhoneStory() {
         (last.needs || []).flat().includes("close_reason");
       ok(name + (ends ? "" : ": " + JSON.stringify(steps)), ends);
     };
-    /* driven (ticket dfcd5c9a): a goal the row page draws shut is not
-       rehearsed past its refusal (client.clj, the door not afforded),
-       so the first plan holds the remedy alone, and the goal's own
-       step, with its form, is planned once the child is through */
-    await endsWith("the first plan ends with the child's Complete, which needs close_reason",
-                   child);
+    /* a goal the row page draws shut is not rehearsed past its refusal
+       (client.clj, the door not afforded), so the planner reads the
+       goal's needs from the kind's declaration: the goal's own step,
+       with its form, is the last one from the first plan on */
+    await endsWith("the first plan ends with the parent's Complete, which needs close_reason",
+                   epic);
     /* Go, the form, a reason, and the form's own button: → how many of
        the form's fields were lit */
     const close = async what => {
