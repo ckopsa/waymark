@@ -441,16 +441,28 @@ function questHeadGo() {
             note: head.note}, "The step's row");
 }
 function questTracker() {
-  const bar = $("#questbar");
-  questFollow();
-  bar.textContent = "";
-  if (questDone !== null) {
-    bar.hidden = false;
-    bar.append(el("b", {"data-quest-complete": ""}, "Quest complete"),
-               el("span", {class: "quest-line"}, questDone));
+  /* a replay draws the quest its walk recorded (replayQuest,
+     200-events-follow.js): it reads nothing, follows no stream, and
+     every door is disabled */
+  if (replay) {
+    questDraw(replay.quest, replay.questDone);
+    for (const b of $("#questbar").querySelectorAll("button")) b.disabled = true;
     return;
   }
-  const doc = questDoc;
+  questFollow();
+  questDraw(questDoc, questDone);
+}
+/* the tracker of one quest document; `finished` is the title of a
+   quest that has just finished, shown in its place */
+function questDraw(doc, finished) {
+  const bar = $("#questbar");
+  bar.textContent = "";
+  if (finished != null) {
+    bar.hidden = false;
+    bar.append(el("b", {"data-quest-complete": ""}, "Quest complete"),
+               el("span", {class: "quest-line"}, finished));
+    return;
+  }
   bar.hidden = !doc;
   if (!doc) return;
   const d = doc.data || {}, plan = d.plan || [], acts = doc.actions || {};
@@ -498,6 +510,8 @@ function questTracker() {
 /* the collection is the read, so the tracker holds no quest id that
    could go stale: whichever quest is pinned now is the one shown */
 async function refreshQuest() {
+  /* a replay's tracker is its walk's: the live quest is read when it stops */
+  if (replay) return;
   const me = viewerId();
   if (!me) { questDoc = null; questTracker(); return; }
   const res = await api("/api/quests?state=active&pinned=true&owner=" +
@@ -533,7 +547,7 @@ function questFollow() {
 /* the stream's half: a transition of the quest in hand reads it again,
    and finish says so for a few seconds before the tracker hides */
 async function questRowFrame(ev) {
-  if (!questDoc) return;
+  if (!questDoc || replay) return;
   if (ev.action === "finish") {
     questDone = questTitle(questDoc);
     questDoc = null;

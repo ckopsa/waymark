@@ -684,6 +684,15 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       foot.append(lit);
       return lit;
     };
+    /* a refusal they kept as a goal (questOffer, above): a walk records
+       no refusal, so a replay has that button drawn here, unlit, with
+       nothing behind it to press, for its pointer (200-events-follow.js) */
+    dlg.guidedAccept = () => {
+      const kept = el("button", {class: "primary", type: "button",
+                                 "data-quest-accept": ""}, "Accept as quest");
+      foot.append(kept);
+      return kept;
+    };
     form.prepend(el("p", {class: "guided-note", "data-guided-note": ""},
       guided.note || `${guided.name} is filling this in`));
     /* a note beside the fields it names, as an invitation's: a replayed

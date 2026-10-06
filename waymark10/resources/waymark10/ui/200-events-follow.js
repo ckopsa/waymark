@@ -1076,6 +1076,8 @@ function startReplay(text) {
              beat: null,          // the `ui` beat last played (replayBeat)
              recorder: null,      // the cast alias whose hand the pointer is
              notice: null,        // the line of a step with no click behind it
+             quest: null,         // the pinned active quest's document (replayQuest)
+             questDone: null,     // the title of the quest that has just finished
              hopped: null,        // the frame a hop to its kind's list was made for
              walked: null,        // the frame a walk to its row was made for
              held: null,          // the frames waiting behind an open form
@@ -1114,6 +1116,8 @@ function startReplay(text) {
     }
   }
   replay = r;
+  /* the live quest's tracker gives way to the walk's own */
+  questTracker();
   /* a walk that carries its screens has them drawn by the live screen
      code, whose reads are held for as long as the replay lasts */
   apiHeld = walk.frames.some(f => f.type === "doc");
@@ -1206,6 +1210,22 @@ function replayLand(r, open) {
   }
   return note;
 }
+/* the tracker a replay draws (questTracker, 120-nav-home.js): the
+   latest quest document at or before the playhead. A pinned active
+   quest is shown. When the one shown finishes, the tracker says so
+   until another is pinned; unpinned, paused or abandoned, it hides. */
+function replayQuest(r, self, doc) {
+  if (doc.kind !== "quest") return;
+  const shown = !!r.quest && r.quest.self === self;
+  if (doc.state === "active" && (doc.data || {}).pinned) {
+    r.quest = {...doc, self};
+    r.questDone = null;
+  } else if (shown) {
+    r.quest = null;
+    r.questDone = doc.state === "finished" ? questTitle(doc) : null;
+  } else return;
+  questTracker();
+}
 function applyReplayFrame(f, landed) {
   /* no screen changes behind an open form: a `transition` or a `doc`
      recorded while the form is open waits (replay.held), so the
@@ -1230,6 +1250,7 @@ function applyReplayFrame(f, landed) {
       /* a document equal to the one held is on screen already */
       const same = JSON.stringify(replay.docs.get(self)) === JSON.stringify(f.doc);
       replay.docs.set(self, f.doc);
+      if (!same) replayQuest(replay, self, f.doc);
       if (!same && self === String(hereHref() || "").split("?")[0]) render();
     }
     replayChip();
@@ -1394,6 +1415,8 @@ function replayShows(frames, at) {
   const f = frames[at];
   if (!f || replayStill(frames, at)) return false;
   if (f.type !== "doc") return true;
+  /* a quest's document draws the tracker, which is on every screen */
+  if (f.doc && f.doc.kind === "quest") return true;
   const row = s => String(s || "").split("?")[0];
   return !!f.doc && !!row(f.self) && row(f.self) === row(hereHref());
 }
@@ -1511,6 +1534,32 @@ function replayWrote(r, key) {
   }
   return false;
 }
+/* whether the form `key` ended as a quest and not as a write: a quest's
+   `create` by the same hand, found as replayWrote finds a write, whose
+   goal is that form's door. A walk records no refusal, and the goal is
+   read from the quest's own document, which the walk holds from the
+   quest's first plan on. */
+function replayAccepted(r, key) {
+  const who = r.frames[r.at].who, t = r.frames[r.at].t || 0;
+  const kept = f => {
+    if (f.type !== "transition" || f.who !== who || f.kind !== "quest" ||
+        f.action !== "create") return false;
+    const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+    const d = (held && held.doc.data) || {};
+    return String(d.self || "").split("?")[0] + " " + d.action === key;
+  };
+  for (let i = r.at + 1; i < r.frames.length &&
+                         (r.frames[i].t || 0) - t < REPLAY_BURST_MS; i++)
+    if (kept(r.frames[i])) return true;
+  for (let i = r.at - 1; i >= 0; i--) {
+    const f = r.frames[i];
+    if (kept(f)) return true;
+    if (f.type !== "ui" || f.who !== who) continue;
+    const d = (f.ui || {}).dialog;
+    if (!d || d.self + " " + d.action !== key) return false;
+  }
+  return false;
+}
 /* a step with no click behind it: a transition by a principal other
    than the recorder (a scheduled action firing, a seat, another
    person), a `clock_shift`, and an invitation the recorder did not
@@ -1568,6 +1617,9 @@ function replayGestureTarget(f) {
     if (d) return d.self + " " + d.action === key
       ? g.guidedField(replayTypingOf(f)) : null;
     if (!replayWrote(replay, key)) return null;
+    /* a refusal kept as a goal: the press is on "Accept as quest" */
+    if (replayAccepted(replay, key))
+      return g.querySelector("[data-quest-accept]") || g.guidedAccept();
     /* the button that writes, drawn unlit until the pointer presses it */
     let write = g.querySelector("[data-replay-write]");
     if (!write) {
@@ -1591,6 +1643,11 @@ function replayGestureTarget(f) {
   }
   if (d) {
     if (d.self + " " + d.action === guidedDismissed) return null;
+    /* the tracker's head step is taken from the tracker: its Go */
+    const head = replay.quest && questHead(replay.quest);
+    const go = $("#questbar [data-tracker-go]");
+    if (go && seen(go) && head && !questWaits(head) &&
+        row(head.self) === d.self && head.door === d.action) return go;
     const doors = [...document.querySelectorAll("#view button[data-action]")]
       .filter(b => seen(b) && b.dataset.action === d.action);
     const rowOf = b => (b.closest("tr[data-self]") || {dataset: {}}).dataset.self;
@@ -1842,6 +1899,9 @@ function stopReplay(quiet) {
   replayCaption();
   replayChip();
   if (quiet) return;
+  /* the tracker is the live quest's again, read now for what moved */
+  questTracker();
+  wellKnown().then(w => (w.resources || {}).quest && refreshQuest()).catch(() => {});
   /* a hashchange renders and beats on its own */
   if (location.hash !== r.back) location.hash = r.back;
   else { render(); presenceBeat(); }

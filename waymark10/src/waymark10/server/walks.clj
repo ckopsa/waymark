@@ -829,6 +829,33 @@
       (warn! "a screen another hand changed was not recorded — " (ex-message e))
       [])))
 
+(defn record-heard!
+  "A move another hand made that `principal`'s screen answers to: the
+  transition `t` goes, as a `transition` frame under `sight`, to every
+  self walk they are recording. The quests' consumer calls it for a
+  move on a row a quest's plan names, just before that quest's document
+  (`record-seen!`), so a replay says whose move planned the quest again
+  (docs/spec-agent-demo-walks.md § 8a). A row `sight` does not admit
+  writes no frame (`record-frame!`). → the frames written. It never
+  throws."
+  [eng principal sight t]
+  (try
+    (let [pid (str (:id principal))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal))
+               (not= :derivation (::events/class t)))
+        (let [frame {:type "transition"
+                     :body (walk/keywordize-keys
+                            (events/transition-payload
+                             eng (update t :kind keyword)))}]
+          (into []
+                (keep #(record-frame! eng % sight frame))
+                (recording-walks eng pid pid)))
+        []))
+    (catch Exception e
+      (warn! "a move another hand made was not recorded — " (ex-message e))
+      [])))
+
 ;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
 
 (defn caption-problem

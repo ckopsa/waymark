@@ -2108,8 +2108,11 @@ async function guidedStory() {
                 "the walkthrough in hand and its author followed in guided mode", 15000);
   ok("Start follows the author in guided mode", true);
   await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
+  /* the stew's own door, not a row's: ada comes from the collection, and
+     its rows carry the same door for another meal until the page is drawn */
   const stewButton = `[...document.querySelectorAll("button")]
-    .find(b => !b.closest("dialog") && /^update recipe/i.test(b.textContent))`;
+    .find(b => !b.closest("dialog") && !b.closest("tr[data-self]") &&
+               /^update recipe/i.test(b.textContent))`;
   await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
                 "ada's recipe door on the stew's page");
   await A.js(`${stewButton}.click(); true`);
@@ -2491,6 +2494,130 @@ async function guidedStory() {
   ok("a list drawn late is still for its whole floor, counted from the moment it is drawn",
      late.drawn - late.hop >= 650 && late.glide - late.drawn >= 1000 - 20);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a quest kept from a refusal, and its tracker");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a walk as `docs: true` records it: the refused door's form with the
+     quest's create and pin behind it, the quest's document after each
+     plan, and another principal's step just before the plan it caused.
+     A refusal, and the engine's own plan and finish, are no frames. */
+  const questSelf = "/api/quests/replayed-quest";
+  const questName = `Shelve the stew ${tag}`;
+  const goalDoor = {self: meals[0], action: "shelve"};
+  const questSteps = [[{self: meals[1], action: "update_recipe"}, "Write the recipe"],
+                      [{self: meals[1], action: "season"}, "Season it"],
+                      [{self: meals[1], action: "taste"}, "Taste it"]];
+  const questNow = new Date().toISOString();
+  const questAt = (state, ...steps) => ({
+    self: questSelf, kind: "quest", state, summary: questName, actions: {},
+    data: {title: questName, self: goalDoor.self, action: goalDoor.action,
+           pinned: true, planned_at: questNow,
+           plan: steps.map((s, i) => ({self: questSteps[i][0].self,
+             door: questSteps[i][0].action, note: questSteps[i][1], state: s}))}});
+  const questMove = (t, who, kind, self, action) => (
+    {t, type: "transition", who, kind, self, action, from: "on_list", to: "on_list",
+     at: questNow, summary: kind === "quest" ? questName : `Guided stew ${tag}`});
+  const questForm = (t, dialog, fields) => (
+    {t, type: "ui", who: "p1", self: meals[0], ui: dialog ? {dialog, fields} : {dialog: null}});
+  const questFile = [
+    {format: "waymark-walk/1", title: "A quest kept from a refusal",
+     cast: {p1: {display: "Ada", type: "human"}, p2: {display: "Planner", type: "agent"}}},
+    {t: 0, type: "move", who: "p1", self: meals[0]},
+    questForm(10, goalDoor, {reason: "Out of season"}),
+    questMove(20, "p1", "quest", questSelf, "create"),
+    questMove(30, "p1", "quest", questSelf, "pin"),
+    questForm(40, null),
+    {t: 50, type: "doc", self: questSelf, doc: questAt("active", "next", "later")},
+    questForm(2000, questSteps[0][0], {}),
+    questForm(2010, questSteps[0][0], {recipe: "Brown the roux."}),
+    questMove(2020, "p1", "meal", meals[1], "update_recipe"),
+    questForm(2030, null),
+    {t: 2040, type: "doc", self: questSelf, doc: questAt("active", "done", "next", "later")},
+    questMove(4000, "p2", "meal", meals[1], "season"),
+    {t: 4010, type: "doc", self: questSelf, doc: questAt("active", "done", "done", "next")},
+    questForm(6000, questSteps[2][0], {}),
+    questForm(6010, questSteps[2][0], {verdict: "Good."}),
+    questMove(6020, "p1", "meal", meals[1], "taste"),
+    questForm(6030, null),
+    {t: 6040, type: "doc", self: questSelf, doc: questAt("finished", "done", "done", "done")},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every press the pointer makes on the quest's own buttons: the frame
+     it is for, and what the tracker counted then */
+  await A.js(`{ window.__questPresses = []; window.__questReads = [];
+    const to3 = replayPointerTo, fetch3 = window.fetch;
+    /* the tracker of a replay is its walk's: no quest is asked for */
+    window.fetch = (u, o) => {
+      if (replay && String(u).includes("/api/quests")) window.__questReads.push(String(u));
+      return fetch3(u, o);
+    };
+    window.replayPointerTo = (to, speed) => {
+      const what = to.hasAttribute("data-quest-accept") ? "accept"
+        : to.hasAttribute("data-tracker-go") ? "go"
+        : to.hasAttribute("data-replay-write") ? "write" : null;
+      const last = window.__questPresses[window.__questPresses.length - 1];
+      if (replay && what && !(last && last.at === replay.at && last.what === what))
+        window.__questPresses.push({at: replay.at, what,
+          count: document.querySelector("#questbar [data-quest-count]")?.textContent || null});
+      return to3(to, speed);
+    };
+    true }`);
+  const qBar2 = `document.querySelector("#questbar")`;
+  const qCount = n => `!${qBar2}.hidden &&
+    ${qBar2}.querySelector("[data-quest-count]")?.textContent === "${n}"`;
+  const qPresses = async () => JSON.parse(await A.js(`JSON.stringify(window.__questPresses)`))
+    .map(p => `${p.at} ${p.what} ${p.count}`).join("; ");
+  const qWant = "4 accept null; 6 go 0 done, 2 known so far; 9 write 0 done, 2 known so far; " +
+                "13 go 2 done, 3 known so far; 16 write 2 done, 3 known so far";
+  await A.js(`startReplay(${JSON.stringify(questFile)})`);
+  ok("a replay hides the live tracker until its walk has a quest", await A.js(`${qBar2}.hidden`));
+  await A.until(qCount("0 done, 2 known so far"), "the tracker of the quest's first plan", 40000);
+  ok("the quest's first document draws the tracker: its title, its head step, and Go disabled",
+     await A.js(`${qBar2}.querySelector("[data-quest-title]").textContent === ${JSON.stringify(questName)} &&
+       ${qBar2}.querySelector("[data-quest-note]").textContent === "Write the recipe" &&
+       ${qBar2}.querySelector("[data-tracker-go]").disabled && replay.at === 6 &&
+       !document.querySelector("dialog[open]")`));
+  await A.until(qCount("1 done, 3 known so far"), "the tracker after the first step", 40000);
+  ok("the tracker follows the plan made after the recorder's step",
+     await A.js(`${qBar2}.querySelector("[data-quest-note]").textContent === "Season it"`));
+  await A.until(`String(replay.notice || "").startsWith("Planner: ")`, "the planner's notice", 40000);
+  ok("another principal's step is a notice, and moves no screen",
+     await A.js(`hereHref() === ${JSON.stringify(meals[0])} &&
+       document.querySelector("#replaycaption").textContent.includes("Planner: ")`));
+  await A.until(qCount("2 done, 3 known so far"), "the tracker after the planner's step", 40000);
+  await A.until(`!!${qBar2}.querySelector("[data-quest-complete]")`, "Quest complete", 40000);
+  ok("the finished quest's document says Quest complete",
+     await A.js(`!${qBar2}.hidden && ${qBar2}.textContent.includes(${JSON.stringify(questName)})`));
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the quest's walk to end", 20000);
+  console.log("  the presses: " + await qPresses());
+  ok("the create is pressed on Accept as quest, and each step's form is opened from the tracker's Go",
+     (await qPresses()) === qWant);
+  ok("replaying the quest read no quest",
+     (await A.js(`window.__questReads.join(", ")`)) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· film: the tracker is in the film");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  ok("stopping gives the tracker back to the live quest",
+     await A.js(`!${qBar2}.querySelector("[data-quest-complete]")`));
+  /* the sealed walk's page in film mode, with the quest's walk as its
+     export: the export GET is the one read a film makes */
+  await A.js(`{ const walk = hereHref().split("?")[0], fetch0 = window.fetch;
+    window.fetch = (u, o) => String(u) === walk + "/export"
+      ? Promise.resolve(new Response(${JSON.stringify(questFile)}))
+      : fetch0(u, o);
+    window.__questPresses = [];
+    location.hash = "#" + walk + "?film=1"; true }`);
+  await A.until(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${qBar2}).display !== "none" &&
+                 !!${qBar2}.querySelector("[data-tracker-go]:disabled")`,
+                "the tracker in the film", 60000);
+  ok("film mode keeps the tracker", true);
+  await A.until(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the film to end", 90000);
+  ok("the film ends on the finished quest, after the same presses",
+     await A.js(`!!${qBar2}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${qBar2}).display !== "none"`) && (await qPresses()) === qWant);
   A.close();
   await chrome.close();
 }

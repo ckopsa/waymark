@@ -482,6 +482,12 @@ that moment.
   engine's `plan`, `finish` and `unpin` among them), is followed by
   that quest's envelope in the recorder's self walk. The quests'
   consumer hands it over, under the quest's grant.
+- A transition by another principal that moves such a quest (a step on
+  a row its plan names) is recorded in that walk as a `transition`
+  frame, just before the quest's envelope, when the recorder may see
+  the row. Replay shows it as a notice. Replay and film mode draw the
+  quest tracker from these envelopes and read nothing: the latest one
+  of a pinned, active quest, with every door disabled.
 - A document is rendered under the sight the frame was recorded under.
   A walk still holds no more than its recorder saw.
 - A document over 64 KB is not recorded. One byte-equal to the last
