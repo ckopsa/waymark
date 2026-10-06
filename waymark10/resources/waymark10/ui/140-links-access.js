@@ -206,7 +206,9 @@ function questSheet(btn, name, doc, create, goal, seen) {
                    blocked_reason: p.blocked_reason,
                    plan_is_estimate: p.plan_is_estimate,
                    plan: steps.map(s => ({door: s.door, self: s.self, whose: s.whose,
-                     waiting_on: s.waiting_on, needs: s.needs, note: s.note}))}}
+                     waiting_on: s.waiting_on, needs: s.needs, note: s.note,
+                     door_label: s.door_label, row_label: s.row_label,
+                     needs_labels: s.needs_labels}))}}
       : {title: (seen.body || {}).title, detail: (seen.body || {}).detail}}}});
   document.body.append(dlg);
   dlg.addEventListener("close", () => {
