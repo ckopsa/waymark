@@ -893,7 +893,9 @@ function reportDialog(report) {
    to the row, and the door's dialog opens with the named fields lit and
    the note beside them. An invitation and a quest's Go (120-nav-home.js)
    both come through here; `invitation` is what only an invitation adds,
-   and `what` names the row in the sentence that says it was not read ── */
+   and `what` names the row in the sentence that says it was not read.
+   A door taken here may be a step of the quest in hand, so the tracker
+   reads its quest again after it (questAfterGo) ── */
 async function openDoor({self, action, fields, note, suggest, invitation}, what) {
   const res = await api(self);
   if (!res.ok) {
@@ -912,7 +914,7 @@ async function openDoor({self, action, fields, note, suggest, invitation}, what)
   }
   actionDialog({name: action, entry, doc: target, suggest: suggest || {},
                 invitation: {note, fields: fields || [], ...(invitation || {})},
-                onDone: () => render()});
+                onDone: () => { render(); questAfterGo().catch(() => {}); }});
 }
 /* ── an invitation, opened in the person's own hand: the invited row,
    its door's dialog with the inputs live, and the engine answering the
