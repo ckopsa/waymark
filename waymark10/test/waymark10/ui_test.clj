@@ -338,6 +338,8 @@
       (is (str/includes? body "else if (f.event === \"move\") guidedMove(f);"))
       (is (str/includes? body "guidedDismissed = null;\n    closeGuided();\n    guidedQuestSheet(null);\n  }, GUIDED_MOVE_MS);"))
       (is (str/includes? body "clearTimeout(guidedMoveTimer);\n  applyUiFrame(f);")))
+    (testing "the ui frame already held, sent again after a move that carries no new beat, takes the close back"
+      (is (str/includes? body "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);\n    if (f.seq <= guidedSeq) return;")))
     (testing "a guided dialog's read that fails or is not answered gives its key back"
       (is (str/includes? body "await Promise.race([api(d.self),\n      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);"))
       (is (str/includes? body "} catch (_e) { res = null; }\n  finally {\n    mine = guidedOpening === key;"))

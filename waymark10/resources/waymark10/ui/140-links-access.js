@@ -165,6 +165,10 @@ function questSheet(btn, name, doc, create, goal, seen) {
                 ? el("span", {"data-quest-row": ""}, s.row_label)
                 : el("span", {class: "mono muted"}, s.self || ""),
               " · ", el("span", {"data-quest-turn": ""}, turn(s)),
+              ...(s.alternatives || []).map(a =>
+                el("small", {class: "muted", "data-quest-alt": ""},
+                  ` or ${a.door_label || title(a.door || "")}` +
+                  (a.row_label && a.row_label !== s.row_label ? ` on ${a.row_label}` : ""))),
               (s.needs || []).flat().length
                 ? el("div", {class: "muted", "data-quest-needs": ""},
                     "asks for: " + (s.needs_labels

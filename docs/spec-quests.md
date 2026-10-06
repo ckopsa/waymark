@@ -163,7 +163,15 @@ beside its verdict:
   the door's display label, `row_label`, the row's label when the
   principal's grant sees the row, and `needs_labels`, the display label
   of each of `needs` from the door's input schema. A door or a field
-  that declares no label is its name in words;
+  that declares no label is its name in words. Each of a step's
+  `alternatives` carries its own `door_label` and `row_label`. A
+  planned quest stores `door_label` and `needs_labels` on each step of
+  `plan`, and `door_label` on each alternative (`labelled`): they come
+  from the kind's declaration, so a rename never moves them. It stores
+  no `row_label`, and its document projects none: a rename is a change
+  to the row and not to the quest. The tracker and the quest's page draw
+  a step's row from the row's own summary, which the page reads and
+  reads again when the row moves;
 - `goal`, the line the quest's title defaults to;
 - `shut_reason`, the goal door's own refusal now.
 
