@@ -823,7 +823,21 @@
                                                   (first (:create-action-names rdef))
                                                   nil body e)]
                        {::held resp}
-                       (throw e))))]
+                       (do
+                         ;; a person recording their own screen has the
+                         ;; refusal of their create put in their walk,
+                         ;; as the action route does
+                         ;; (walks/record-refused!): no row exists yet,
+                         ;; so the collection is its `self`
+                         (when-not (or (:dry-run opts)
+                                       (= :warning-required
+                                          (:waymark10/problem (ex-data e))))
+                           (walks/record-refused!
+                            eng (principal-of req) (visibility-of req)
+                            {:self (str "/api/" plural)
+                             :action (first (:create-action-names rdef))}
+                            e))
+                         (throw e)))))]
       (cond
         (::held result) (::held result)
 
@@ -1316,10 +1330,22 @@
           ;; pass (count-committed!): the sitting counts the transition,
           ;; a person's reversal counts its correction, and a principal
           ;; recording their own walk has the row put in it, under this
-          ;; request's sight
+          ;; request's sight. Each row it refused gets the single door's
+          ;; refusal frame, about that row (walks/record-refused!); the
+          ;; acknowledge wall is a question and not a refusal
           result (inv/bulk! eng (:kind rdef) (keyword action) body
-                            (assoc opts :on-item
-                                   #(count-committed! eng req (:kind rdef) %)))]
+                            (assoc opts
+                                   :on-item
+                                   #(count-committed! eng req (:kind rdef) %)
+                                   :on-refused
+                                   (fn [id e]
+                                     (when-not (= :warning-required
+                                                  (:waymark10/problem (ex-data e)))
+                                       (walks/record-refused!
+                                        eng (principal-of req) (visibility-of req)
+                                        {:self (str "/api/" plural "/" id)
+                                         :action action}
+                                        e)))))]
       (cond
         (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
