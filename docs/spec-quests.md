@@ -187,6 +187,13 @@ pointer presses the shut door, then **Accept quest** at the recorded
 create, or **Not now** at the beat that closes a sheet no quest was
 made from.
 
+An agent's recording keeps the sheet too. While the caller records a
+self walk, the connector stages a rehearsed quest create
+(`waymark_invoke kind:quest action:create dry_run:true`) as that same
+`ui` beat on the goal's row, and no create form. The caller's next
+quest create for that goal is Accept, and any other staged call is Not
+now (docs/spec-agent-demo-walks.md § 2).
+
 ## What this change does not do
 
 - It plans nothing and finishes nothing: no consumer is started.

@@ -573,3 +573,112 @@
           (is (= [:ui "label" {:caption "Linen"}]
                  (last (filter #(= [:ui "label"] (vec (take 2 %)))
                                (beats eng w))))))))))
+
+;; ── the quest's sheet ───────────────────────────────────────────────
+
+;; a cross-kind read, so the goal's door is shut with its remedy bound
+;; to the crate's own latch (quests_test.clj's fixture chain)
+(g/defguard the-staged-latch-is-up
+  {:reads [:s_latch]
+   :explain "Lift the latch first."
+   :remedies [{:door :s_latch/lift :id '(data :latch_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [latch (read :s_latch (get-in row [:data :latch_id]))]
+      (if (= "up" (some-> latch :state name)) (t/allow) (t/deny)))
+    (t/allow)))
+
+(def ^:private routine {:idempotent true :reversible true :confirm false})
+
+(def ^:private latch
+  (r/resource
+   {:kind :s_latch
+    :plural "s_latches"
+    :states [:down :up]
+    :initial :down
+    :summary "Latch · {state}"
+    :schema [:map [:label {:optional true} [:maybe [:string {:max 40}]]]]
+    :actions
+    {:lift {:from #{:down} :to :up :safety routine}
+     :lower {:from #{:up} :to :down :safety routine}}}))
+
+(def ^:private crate
+  (r/resource
+   {:kind :s_crate
+    :plural "s_crates"
+    :states [:shut :open]
+    :initial :shut
+    :summary "Crate · {state}"
+    :schema [:map
+             [:latch_id {:not-a-ref "staging fixture: the-staged-latch-is-up binds its remedy to it"}
+              [:string {:max 80}]]]
+    :actions
+    {:open {:from #{:shut} :to :open
+            :guards [the-staged-latch-is-up]
+            :safety routine
+            :display {:label "Open the crate" :order 1}}
+     :close {:from #{:open} :to :shut :safety routine}}}))
+
+(defn- with-crates
+  "`with-stage`, over the fixture chain a quest can plan."
+  [f]
+  (let [clock (atom (Instant/now))
+        eng (engine/engine
+             {:storage (memory/storage)
+              :resources [latch crate]
+              :probe-reads true
+              :now-fn (fn [] (swap! clock (fn [^Instant i] (.plusMillis i 1))))})
+        reg (presence/start! eng {:hb-ms 600000})
+        h (engine/handler eng)]
+    (swap! (:runtime eng) assoc :presence reg)
+    ;; the owner is made a member, as the identity boundary makes anybody who calls
+    (h {:request-method :get :uri "/api/s_crates" :headers headers})
+    (try (f eng h reg)
+         (finally (presence/stop! reg)))))
+
+(defn- made! [h uri data]
+  (let [resp (post h uri data)]
+    (is (= 201 (:status resp)) (:body resp))
+    (last (str/split (:self (json resp)) #"/"))))
+
+(deftest a-rehearsed-quest-create-opens-the-sheet-and-the-create-accepts-it
+  (with-crates
+    (fn [eng h _reg]
+      (let [l (made! h "/api/s_latches" {})
+            crate! #(str "/api/s_crates/" (made! h "/api/s_crates" {:latch_id l}))
+            self (crate!)
+            goal {:self self :action "open"}
+            w (self-walk! h)
+            shown (fn [fs] (filterv #(#{"move" "ui" "transition"} (:type %)) fs))
+            quest #(get-in % [:body :ui :quest])]
+        (testing "the rehearsal is the tap: the gaze goes to the goal's row and the sheet opens"
+          (is (tool h "waymark_invoke" {:kind "quest" :action "create" :dry_run true
+                                        :input goal}))
+          (let [fs (shown (frames eng w))
+                q (quest (last fs))]
+            (is (= ["move" "ui"] (mapv :type fs)) (pr-str fs))
+            (is (= self (get-in (first fs) [:body :self])))
+            (is (= goal (:goal q)) (pr-str q))
+            (is (= "Open the crate" (:label q)))
+            (is (true? (get-in q [:seen :ok])))
+            (is (= ["lift" "open"]
+                   (mapv :door (get-in q [:seen :body :preview :plan]))))
+            (is (some? (not-empty (get-in q [:seen :body :preview :shut_reason]))))
+            (is (every? #(nil? (get-in % [:body :ui :dialog])) fs)
+                "no create form is opened or typed")))
+        (testing "the create that follows is Accept: the write, and the sheet closes"
+          (is (tool h "waymark_invoke" {:kind "quest" :action "create" :input goal}))
+          (let [fs (subvec (shown (frames eng w)) 2)]
+            (is (= [[:transition "create"] [:ui nil {}]] (mapv beat fs)) (pr-str fs))
+            (is (nil? (quest (last fs))))))
+        (testing "any other staged call closes an open sheet first"
+          (let [other (crate!)
+                n (count (shown (frames eng w)))]
+            (is (tool h "waymark_invoke" {:kind "quest" :action "create" :dry_run true
+                                          :input {:self other :action "open"}}))
+            (is (tool h "waymark_get" {:kind "s_latch" :id l}))
+            (let [fs (subvec (shown (frames eng w)) n)]
+              (is (= ["move" "ui" "ui" "move"] (mapv :type fs)) (pr-str fs))
+              (is (= other (get-in (quest (nth fs 1)) [:goal :self])))
+              (is (nil? (quest (nth fs 2))))
+              (is (= (str "/api/s_latches/" l) (get-in (nth fs 3) [:body :self]))))))))))

@@ -804,6 +804,24 @@
   [reg pid]
   (get-in @(:local reg) [pid :entry :self]))
 
+(defn sheet
+  "The quest's sheet `pid`'s last beat in this process shows, as
+  clean-quest stored it; nil when it shows none. It is how the connector
+  knows a staged preview is still open (docs/spec-agent-demo-walks.md
+  § 2)."
+  [reg pid]
+  (get-in @(:local reg) [pid :entry :ui :quest]))
+
+(defn door-label
+  "The display label the kind declares for `action` on `self`'s row, or
+  nil: what a shut door's button says where its envelope entry names no
+  label of its own."
+  [eng self action]
+  (let [[_ _ door] (when action
+                     (dialog-door eng (normalize-self self) action))
+        label (get-in door [:display :label])]
+    (when (string? label) label)))
+
 (defn- next-seq
   "Counts up per principal, across processes too: one past the last
   seq this entry carried, and never below the wall clock."
