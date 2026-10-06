@@ -162,6 +162,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.walks :as walks]
+            [waymark10.server.quests :as quests]
             [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
@@ -323,6 +324,12 @@
              ;; the invitation, which each person step becomes.
              {:kind :walkthrough :enroll :always
               :kinds (fn [_] [walkthroughs/walkthrough])}
+             ;; the quest (docs/spec-quests.md): a goal door a person
+             ;; accepted and the steps the engine found toward it.
+             ;; Core's beside the walkthrough, for the same reason: its
+             ;; goal is judged as an invitation's step is.
+             {:kind :quest :enroll :always
+              :kinds (fn [_] [quests/quest])}
              ;; the recorded walk and its frames (docs/spec-guided-follow.md
              ;; § 4): core's beside the invitation, whose sibling it is,
              ;; and for the transcript's reason — a record of what a
