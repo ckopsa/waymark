@@ -59,6 +59,7 @@
             [waymark10.registry :as registry]
             [waymark10.server.belief :as server-belief]
             [waymark10.server.definitions :as defs]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
@@ -341,9 +342,15 @@
 
   Idempotent in the only way that matters: an engine with no :runtime
   atom — nothing builds one, but the shape allows it — starts
-  nothing."
+  nothing.
+
+  The film rule's boot seed runs here, before the surfaces start: the
+  kind is enrolled `:always`, so every application's engine has the
+  scorecard's first rules once it has started, and not workqueue10's
+  alone. It is a seed and no running surface, so it is no hook."
   [eng]
   (when-some [rt (:runtime eng)]
+    (film-rules/ensure-seed-rules! eng)
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 
 (defn stop-runtime!

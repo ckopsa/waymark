@@ -110,6 +110,18 @@
     (is (every? (set film-rules/metric-names)
                 (map :metric film-rules/seed-rules)))))
 
+(deftest an-engine-that-is-not-workqueue10-has-the-seed-rules-after-boot
+  ;; this engine names no application kind: the seed is the engine's own
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (jdbc/execute! tx ["DELETE FROM film_rules"])))
+  (engine/start-runtime! *eng*)
+  (try
+    (is (= 8 (count film-rules/seed-rules)))
+    (doseq [{:keys [name]} film-rules/seed-rules]
+      (testing name
+        (is (= 1 (count (rows-of {:name name}))))))
+    (finally (engine/stop-runtime! *eng*))))
+
 (deftest the-seed-restates-a-row-made-before-the-fields
   (store/with-tx (:storage *eng*)
     (fn [tx]

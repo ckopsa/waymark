@@ -17,9 +17,10 @@
   person retires one.
 
   `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
-  starts with, each made once by its name. A seed row made before
-  `output` and `unless` existed gains them there, through `restate`, a
-  door only the boot seed walks."
+  starts with, each made once by its name. The engine's own start runs
+  it (`engine/start-runtime!`), so every application that enrolls the
+  kind has them. A seed row made before `output` and `unless` existed
+  gains them there, through `restate`, a door only the boot seed walks."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
