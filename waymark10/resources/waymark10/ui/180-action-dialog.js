@@ -105,9 +105,6 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       `⚠ draft from an older version of this ${pretty(kind)} — review before submitting · `));
 
   const h3 = el("h3", {}, entry.display?.label || title(name));
-  if (entry.effort && entry.effort !== "assent")
-    h3.append(el("span", {class:"effort-chip",
-      title: `effort: ${entry.effort}`}, entry.effort));
   const dlg = el("dialog", {"data-surface": "dialog", "data-action": name,
                             "data-self": (doc.self || "").split("?")[0] || null},
     el("div", {class: "dlghead"},
@@ -116,9 +113,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         el("span", {class:"mono"}, doc.state ? pretty(doc.state) : "—"),
         " → ", el("span", {class:"mono"}, pretty((entry.effect || {}).to || "?")),
         ((entry.effect || {}).terminal ? " (terminal)" : "") +
-        (bulkIds ? ` · ${bulkIds.length} selected row(s)` : "") +
-        (safety.fence ? " · fenced (If-Match)" : "") +
-        (safety.idempotent ? "" : " · idempotency-key attached"))),
+        (bulkIds ? ` · ${bulkIds.length} selected row(s)` : ""))),
     el("div", {class: "dlgbody"},
       /* how far along the walkthrough is, above the form */
       led ? el("p", {class: "walk-step", "data-walk-step": ""},
@@ -131,9 +126,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         : null,
       form, laterBox, errBox, draftBar),
     el("div", {class: "dlgfoot"},
-      el("span", {class: "hint"},
-        entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
-                                          : "draft — saved on blur") : ""),
+      /* empty on purpose: the draft bar says "draft saved" once one is */
+      el("span", {class: "hint"}),
       dryNote,
       entry.draft ? el("button", {"data-surface": "dialog.discard", onclick: async () => {
         disarmDraft();
