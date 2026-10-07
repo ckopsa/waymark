@@ -49,6 +49,14 @@
 (def scopes ["film" "shot" "beat"])
 (def roles ["friction" "turn" "payoff"])
 (def severities ["fail" "warn"])
+(def outputs ["phone" "desktop"])
+
+(def exemptions
+  "Each shot property that exempts a shot from a rule, with the field of
+  the take it is read from."
+  [["zoom" "shot.zoom"]])
+
+(def exemption-names (mapv first exemptions))
 
 (defn- asked
   "The value a create names for field `k`, or nil."
@@ -85,6 +93,16 @@
    :explain "Only a shot has a role, so a rule names a role only when its scope is shot."}
   [row inp _ctx]
   (if (and (asked row inp :role)
+           (not= "shot" (asked row inp :scope)))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard unless-goes-with-a-shot
+  {:reads []
+   :open "Leave the exemption empty, or give the rule the scope shot."
+   :explain "An exemption names a property of a shot, so a rule names one only when its scope is shot."}
+  [row inp _ctx]
+  (if (and (asked row inp :unless)
            (not= "shot" (asked row inp :scope)))
     (t/deny)
     (t/allow)))
@@ -170,6 +188,19 @@
                        "turn" "A shot where the thing changes."
                        "payoff" "A shot that shows it done."}}}
      [:maybe (into [:enum] roles)]]
+    [:output {:optional true
+              :x-display
+              {:label "Only films at this output"
+               :help "Judge only a film rendered at this output. Left empty, a film at any output is judged."
+               :choices {"phone" "A film rendered for a phone."
+                         "desktop" "A film rendered for a desktop."}}}
+     [:maybe (into [:enum] outputs)]]
+    [:unless {:optional true
+              :x-display
+              {:label "Unless the shot"
+               :help "With the scope shot: a shot that has this property passes the rule whatever it measures. Left empty, no shot is exempt."
+               :choices {"zoom" "The shot asks for a zoom."}}}
+     [:maybe (into [:enum] exemption-names)]]
     [:severity {:x-display
                 {:label "A miss is"
                  :help "fail stops the film from being sent; warn is reported beside it."
@@ -194,6 +225,7 @@
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot
+                   unless-goes-with-a-shot
                    a-person-or-a-mayor-makes-the-rule]
    :actions
    {:retire
@@ -210,6 +242,46 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 1
                :description "Score films against this rule again"}}}})
+
+;; ── the judgment ────────────────────────────────────────────────────
+
+(defn- word
+  "A field's value as a string, or nil: a row gives an enum back as a
+  keyword and a body gives it as a string."
+  [v]
+  (when (some? v) (not-empty (name v))))
+
+(defn judges?
+  "True when `rule` (a rule's data) is scored on this part of a take. A
+  rule that names an output is scored only on a film rendered at it, and
+  a rule that names a role only on a shot of it. `film` is the take's
+  film; `shot` is one of its shots, nil for a rule whose scope is film."
+  [rule film shot]
+  (let [output (word (:output rule))
+        role (word (:role rule))]
+    (and (or (nil? output) (= output (word (:output film))))
+         (or (nil? role) (= role (word (:role shot)))))))
+
+(defn exempt?
+  "True when `shot` has the property `rule` names in `unless`."
+  [rule shot]
+  (let [u (word (:unless rule))]
+    (boolean (and u (true? (get shot (keyword u)))))))
+
+(defn verdict
+  "How `value`, the rule's metric measured on this part of a take,
+  stands against `rule`: :unscored when the rule is not judged here,
+  :pass when the shot is exempt or the value holds, else :miss."
+  [rule film shot value]
+  (let [threshold (:threshold rule)]
+    (cond
+      (not (judges? rule film shot)) :unscored
+      (exempt? rule shot) :pass
+      (case (word (:op rule))
+        ">=" (>= value threshold)
+        "<=" (<= value threshold)
+        "=" (== value threshold)) :pass
+      :else :miss)))
 
 ;; ── the boot seed ───────────────────────────────────────────────────
 
@@ -229,7 +301,7 @@
     :why "A viewer reads the product's words, not an /api path, a uuid, a raw field key or [epic]."
     :origin "The owner's earlier notes on paths and field keys"}
    {:name "type-size" :metric "type_px" :op ">=" :threshold 28M
-    :scope "shot" :severity "warn"
+    :scope "shot" :output "phone" :severity "warn"
     :why "On phone output the text in focus is large enough to read without pausing."
     :origin "craft"}
    {:name "read-time" :metric "read_time_ratio" :op ">=" :threshold 1.2M
@@ -245,7 +317,7 @@
     :why "One thing changes in a shot besides the pointer, so the viewer knows where to look."
     :origin "craft"}
    {:name "focus-share" :metric "focus_share" :op ">=" :threshold 0.25M
-    :scope "shot" :severity "warn"
+    :scope "shot" :unless "zoom" :severity "warn"
     :why "What the shot is about takes a quarter of the viewport, or the shot asks for a zoom."
     :origin "craft"}
    {:name "arc" :metric "arc" :op "=" :threshold 1M

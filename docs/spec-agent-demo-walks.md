@@ -737,7 +737,14 @@ film. A rule carries `name` (a slug, unique), `metric`, `op` (`>=`,
 `<=` or `=`), `threshold` (a number), `scope` (`film`, `shot` or
 `beat`; with `shot`, an optional `role`: `friction`, `turn` or
 `payoff`), `severity` (`fail` or `warn`), `why` (one sentence) and
-`origin` (a person's words, quoted, or `craft`). Its states are
+`origin` (a person's words, quoted, or `craft`). Two more fields are
+optional. `output` (`phone` or `desktop`) is a filter like `role`: the
+rule is scored only on a film whose take says that output in
+`film.output`, and a rule with no `output` is scored at any. `unless`
+(`zoom`, with the scope `shot` only) names the shot property that
+exempts a shot: a shot whose take says `shot.zoom` is true passes the
+rule whatever it measures. `film-rules/verdict` judges both, and
+answers `:unscored`, `:pass` or `:miss`. Its states are
 `active` and `retired`. A person or the sitter of a domain's mayor
 seat makes one; only a person retires one, and only a person restores
 a retired one.
@@ -765,13 +772,13 @@ field names it is to carry.
 The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
-(`type_px >= 28` per shot, warn), `read-time`
+(`type_px >= 28` per shot, `output: phone`, warn), `read-time`
 (`read_time_ratio >= 1.2` per shot, warn), `dead-air`
 (`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
-per shot, warn), `focus-share` (`focus_share >= 0.25` per shot, warn)
-and `arc` (`arc = 1`, fail). A rule has no field for the output a film
-is rendered at or for a shot that asks for a zoom, so `type-size` and
-`focus-share` say those conditions in their `why` only.
+per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
+`unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
+rule only when none carries its name, so a `type-size` or
+`focus-share` row made before these fields existed keeps neither.
 
 ## 8a. The surfaces a scene names
 

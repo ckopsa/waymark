@@ -99,6 +99,9 @@
       (is (str/includes? (:origin fill) "top left portion"))
       (is (== 0 (:threshold leaks)))
       (is (= "fail" (clojure.core/name (:severity leaks))))))
+  (testing "type-size is for phone output, and a zoom exempts focus-share"
+    (is (= "phone" (name (:output (:data (rule-named "type-size"))))))
+    (is (= "zoom" (name (:unless (:data (rule-named "focus-share")))))))
   (testing "every seed names a metric of the vocabulary"
     (is (every? (set film-rules/metric-names)
                 (map :metric film-rules/seed-rules)))))
@@ -120,6 +123,44 @@
                           :scope "shot" :role "payoff"}
                          colton)]
     (is (= "payoff" (name (get-in made [:data :role]))))))
+
+(deftest an-exemption-needs-the-scope-shot
+  (is (some? (refusal #(make-rule! {:name "zoom-on-a-film" :unless "zoom"}
+                                   colton))))
+  (is (nil? (rule-named "zoom-on-a-film")))
+  (let [made (make-rule! {:name "phone-contrast" :metric "contrast"
+                          :op ">=" :threshold 4.5M
+                          :scope "shot" :output "phone" :unless "zoom"}
+                         colton)]
+    (is (= "phone" (name (get-in made [:data :output]))))
+    (is (= "zoom" (name (get-in made [:data :unless]))))))
+
+(defn- seed-named [name']
+  (first (filter #(= name' (:name %)) film-rules/seed-rules)))
+
+(deftest a-phone-rule-is-not-scored-on-a-desktop-take
+  (let [rule (seed-named "type-size")]
+    (is (= :unscored (film-rules/verdict rule {:output "desktop"} {} 14)))
+    (is (= :miss (film-rules/verdict rule {:output "phone"} {} 14)))
+    (is (= :pass (film-rules/verdict rule {:output "phone"} {} 28))))
+  (testing "a rule that names no output is scored at either"
+    (let [rule (seed-named "read-time")]
+      (is (= :miss (film-rules/verdict rule {:output "desktop"} {} 1.0)))
+      (is (= :miss (film-rules/verdict rule {:output "phone"} {} 1.0)))))
+  (testing "a role still narrows the shots"
+    (let [rule (assoc (seed-named "type-size") :role "payoff")]
+      (is (= :unscored
+             (film-rules/verdict rule {:output "phone"} {:role "turn"} 14)))
+      (is (= :miss
+             (film-rules/verdict rule {:output "phone"} {:role "payoff"} 14))))))
+
+(deftest a-shot-that-asks-for-zoom-passes-focus-share
+  (let [rule (seed-named "focus-share")
+        film {:output "desktop"}]
+    (is (= :pass (film-rules/verdict rule film {:zoom true} 0.1)))
+    (is (= :miss (film-rules/verdict rule film {:zoom false} 0.1)))
+    (is (= :miss (film-rules/verdict rule film {} 0.1)))
+    (is (= :pass (film-rules/verdict rule film {} 0.25)))))
 
 (deftest a-person-makes-a-rule-and-a-bare-agent-does-not
   (is (= "active" (state-of (make-rule! {:name "made-by-a-person"} colton))))
