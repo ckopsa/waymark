@@ -387,6 +387,16 @@
          :evidence (not-empty (:evidence deny))
          :becomes-available (g/becomes-available denier deny row)}))
 
+(defn- shut-display
+  "A shut door's entry wears the door's declared :display, as its open
+  entry does (ticket 90540599): the label, the order and any other mark
+  its law declares ride the row, so a client labels and orders a shut
+  door without a second document. The per-origin description stays with
+  the open entry — a shut door has no consequence to confirm."
+  [entry defn']
+  (cond-> entry
+    (seq (:display defn')) (assoc :display (:display defn'))))
+
 (defn- out-of-state-entry [rdef defn' state]
   (let [states (sort (:from defn'))
         ;; the way there, shared with the invoke's wrong-state refusal
@@ -1111,16 +1121,20 @@
                  :available
                  (if-some [field (empty-required-admission defn' row ctx)]
                    (assoc-in acc [:unavailable (:name defn')]
-                             (no-admissible-entry defn' field))
+                             (shut-display (no-admissible-entry defn' field)
+                                           defn'))
                    (assoc-in acc [:actions (:name defn')]
                              (action-entry defn' rdef self row ctx arg?)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
-                                        (unavailable-entry denier deny public-row))
+                                        (shut-display
+                                         (unavailable-entry denier deny public-row)
+                                         defn'))
                  :hidden acc))
              (if (probe-hidden-only? defn' row ctx)
                acc
                (assoc-in acc [:unavailable (:name defn')]
-                         (out-of-state-entry rdef defn' state)))))
+                         (shut-display (out-of-state-entry rdef defn' state)
+                                       defn')))))
          {:actions {} :unavailable {}}
          resolved)
         ;; the engine-injected adopt (phase 5): a row living under an
