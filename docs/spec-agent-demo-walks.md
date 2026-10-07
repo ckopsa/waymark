@@ -735,8 +735,10 @@ selector. Every interactive surface a demo can name carries
 | `nav-access` | The Access tab in the navigation bar. |
 | `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
 | `nav-jump` | The ⋯ menu's 'Jump to a kind…' line, which opens the jump box. |
+| `jump` | The jump box, drawn only while it is open. |
 | `jump.query` | The jump box's input, where the kind's name is typed. |
 | `jump.line` | One result line of the jump box; `data-row` carries the address it goes to. |
+| `jump.home` | The jump box's line that goes home; it has no address, so it has this name. |
 | `nav-shell` | The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell. |
 | `row` | One row of a collection's table; `data-self` carries its address. |
 | `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
@@ -785,7 +787,9 @@ The upload dialog says a refused upload in a `refusal` line of its own.
 The jump box is drawn only while it is open, and its lines are drawn
 again at each letter typed: a scene presses `nav-jump`, types in
 `jump.query`, and then picks `jump.line@/api/tickets`. The line that
-goes home has no address, so a scene cannot pick it by row. A press on
+goes home has no address, so it carries the name `jump.home` in place
+of `jump.line`, and a scene picks it by that name. `readSurface('jump')`
+answers what is typed, the lines as drawn and the one selected. A press on
 `report.row@/api/tickets/<id>` closes the report and goes to that row;
 `readSurface('report')` answers the same addresses. The secret
 dialog's read-only value field is left without a name and out of
@@ -817,6 +821,10 @@ screen:
 - `report`: `{heading, totals, refused: [{row, reason}]}`;
 - `upload`: `{file, ready, refused}`: the line under the file input,
   whether Upload can be pressed, and the refusal's text;
+- `jump`: `{query, lines: [{name, row, label, where, selected}], selected}`:
+  `name` is `jump.line` or `jump.home`, `row` is null for the home
+  line, and the outer `selected` is the selected line or null;
+- `jump.query`: `{text, disabled}`, where `text` is what is typed;
 - `caption` and `refusal`: the line's text;
 - any other name: `{text, disabled}`.
 

@@ -126,10 +126,14 @@
     :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
    {:name "nav-jump"
     :is "The ⋯ menu's 'Jump to a kind…' line, which opens the jump box."}
+   {:name "jump"
+    :is "The jump box, drawn only while it is open."}
    {:name "jump.query"
     :is "The jump box's input, where the kind's name is typed."}
    {:name "jump.line"
     :is "One result line of the jump box; data-row carries the address it goes to."}
+   {:name "jump.home"
+    :is "The jump box's line that goes home; it has no address, so it has this name."}
    {:name "nav-shell"
     :is "The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell."}
    {:name "row"
