@@ -637,7 +637,13 @@
   retired is not made again. An active rule that carries a seed's name
   and lacks the `output` or `unless` the seed names is restated to
   carry it; a retired one is left as it is, and so is one a person or a
-  mayor restated."
+  mayor restated.
+
+  Every engine runs this at its start, with no election. Two engines
+  that start at once on one database may both read no row for a name
+  and both create; `name` is unique by an index (`:unique [[:name]]`),
+  so the second create is refused there and one row stands. That
+  refusal is the other engine's seed, and is not reported."
   [eng]
   (when (contains? (inv/resources eng) kind)
     (doseq [rule seed-rules]
@@ -650,6 +656,7 @@
                            {:principal seed-actor})))
           (inv/create! eng kind rule {:principal seed-actor}))
         (catch Exception e
-          (binding [*out* *err*]
-            (println (str "waymark10 film rules: seed of " (:name rule)
-                          " failed — " (ex-message e)))))))))
+          (when-not (:waymark10/unique-violation (ex-data e))
+            (binding [*out* *err*]
+              (println (str "waymark10 film rules: seed of " (:name rule)
+                            " failed — " (ex-message e))))))))))

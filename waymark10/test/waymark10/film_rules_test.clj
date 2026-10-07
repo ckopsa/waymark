@@ -116,6 +116,29 @@
     (is (every? (set film-rules/metric-names)
                 (map :metric film-rules/seed-rules)))))
 
+(deftest seeds-that-run-at-once-leave-one-row-for-each-name
+  (let [names (mapv :name film-rules/seed-rules)
+        err (java.io.StringWriter.)]
+    (dotimes [_ 3]
+      (store/with-tx (:storage *eng*)
+        (fn [tx]
+          (jdbc/execute! tx (into [(str "DELETE FROM film_rules WHERE data->>'name' IN ("
+                                        (str/join ", " (repeat (count names) "?"))
+                                        ")")]
+                                  names))))
+      (let [go (java.util.concurrent.CountDownLatch. 1)
+            seeds (binding [*err* err]
+                    (mapv (fn [_]
+                            (future (.await go)
+                                    (film-rules/ensure-seed-rules! *eng*)))
+                          (range 4)))]
+        (.countDown go)
+        (run! deref seeds))
+      (doseq [name' names]
+        (is (= 1 (count (rows-of {:name name'}))) name')))
+    (testing "the create the index refused is not reported as a failed seed"
+      (is (= "" (str err))))))
+
 (deftest an-engine-that-is-not-workqueue10-has-the-seed-rules-after-boot
   ;; this engine names no application kind: the seed is the engine's own
   (store/with-tx (:storage *eng*)
