@@ -535,14 +535,17 @@
                                   (dialog-door eng dself a))]
       (secret-keys (:input door) (:schema rdef)))))
 
-(defn- map-form
-  "The :map form under `form`'s :maybe and list wrappers, or nil."
-  [form]
-  (loop [f form n 0]
-    (when (and (vector? f) (< n 8))
-      (cond
-        (= :map (first f)) f
-        (contains? #{:maybe :vector :sequential :set} (first f)) (recur (peek f) (inc n))))))
+(defn- entries-map-form
+  "`schema/map-form` of `form`, or of the entries of the list it holds
+  (under a :maybe or in an arm of an :or as well), or nil."
+  ([form] (entries-map-form form 0))
+  ([form n]
+   (when (and (vector? form) (< n 8))
+     (or (schema/map-form form)
+         (case (first form)
+           (:vector :sequential :set) (entries-map-form (peek form) (inc n))
+           (:maybe :or) (some #(entries-map-form % (inc n)) (filter vector? (rest form)))
+           nil)))))
 
 (defn- secret-paths
   "The dotted paths under `prefix` this :map schema marks secret, at any
@@ -555,7 +558,7 @@
         p (if (or (secret-props? (:properties e))
                   (and (vector? s) (secret-props? (second s))))
             [path]
-            (when-some [child (map-form s)]
+            (when-some [child (entries-map-form s)]
               (secret-paths (str path ".") child)))]
     p))
 
