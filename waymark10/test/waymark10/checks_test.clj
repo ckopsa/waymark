@@ -289,7 +289,15 @@
               (assoc base :collection-doors {:tally (assoc door :handler :tally)})))
     (testing "the key is a map of maps"
       (breaks :collection-doors (assoc base :collection-doors [:tally]))
-      (breaks :collection-doors (assoc base :collection-doors {:tally "count"})))))
+      (breaks :collection-doors (assoc base :collection-doors {:tally "count"})))
+    (testing "a door named as an action of the kind is refused, naming both"
+      (breaks :collection-doors (assoc base :collection-doors {:close door}))
+      (doseq [taken [:create :query :worksheet]]
+        (breaks :collection-doors (assoc base :collection-doors {taken door})))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"collection door :close shares its name with the action close"
+           (load-quietly (assoc base :collection-doors {:close door})))))))
 
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
