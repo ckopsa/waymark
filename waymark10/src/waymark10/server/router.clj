@@ -2289,7 +2289,7 @@
   it, and a caller whose grant does not admit the kind gets the
   collection's own not-found. The grant's actions are not asked: the
   door is a read. The body is held to the input the collection
-  advertises (film-rules/take-errors). A rehearsal is the call itself,
+  advertises (collections/door-errors). A rehearsal is the call itself,
   since nothing is written, so `dry_run` changes nothing here."
   [eng]
   (fn [req]
@@ -2302,7 +2302,7 @@
         (throw (p/problem :invalid-input 422 "Invalid input"
                           {:detail (str "Give the take as `take`: a map with "
                                         "`film` and `shots`.")})))
-      (when-some [errors (film-rules/take-errors rdef body)]
+      (when-some [errors (collections/door-errors rdef :judge body)]
         (throw (p/schema-invalid :judge errors)))
       (json-response 200 (film-rules/judge-take
                           eng tk (:row? (visibility-of req)))))))
