@@ -1264,11 +1264,15 @@ function startEvents() {
   source.addEventListener("transition", ev => {
     let t = null;
     try { t = JSON.parse(ev.data); } catch (_e) { return; }
+    /* the row in words (its summary, or its kind and states); the
+       path is the link's href and title, never its text */
+    const moved = (t.kind || "") + " " + (t.from || "·") + " → " + (t.to || "·");
+    const link = words =>
+      el("a", {href: "#" + t.self, title: t.self || ""}, words);
     document.getElementById("ticker").replaceChildren(
       el("span", {}, (t.at || "").slice(11, 19) + " · ",
         el("b", {}, ((t.actor || {}).id || "?")), " ", t.action, " · ",
-        t.kind, " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
-        el("a", {href: "#" + t.self, class: "mono"}, t.self)));
+        ...(t.summary ? [moved, " · ", link(t.summary)] : [link(moved)])));
     const hit = (SCOPE.self && t.self === SCOPE.self) ||
                 (SCOPE.kind && t.kind === SCOPE.kind);
     if (hit) {                       /* debounce a burst into one refetch */

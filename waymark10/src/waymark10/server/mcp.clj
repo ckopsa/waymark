@@ -4748,12 +4748,33 @@
   rig is up (ticket 57fda9cb)."
   120000)
 
+(def ^:private bench-fetch-retry-pause-ms
+  "How long the sit waits before it asks for the `prepare` again, when
+  the rig refused it on a network error (ticket 2576d7a1)."
+  2000)
+
+(def ^:private network-refusal-re
+  "What git says when it could not reach the forge. Such a refusal is
+  about the minute and not about the repository: the same fetch is
+  often good on the next try."
+  #"(?i)could not resolve host|temporary failure in name resolution|failed to connect to|connection timed out|connection reset|connection refused|operation timed out|network is unreachable|the remote end hung up|could not read from remote repository")
+
+(defn- network-refusal?
+  "True when the rig refused the `prepare` and its reason is a network
+  error."
+  [answer]
+  (boolean (some->> (bench-refusal answer) :reason str
+                    (re-find network-refusal-re))))
+
 (defn- prepare-answer
   "The rig's answer to `prepare`, or nil when it did not answer. A call
   that ran out the whole `timeout-ms` is tried ONCE more, because the
   rig was busy and not down: the first try's git work is often done by
   the second. A call that failed sooner (a refused connection answers
-  at once) is not tried again."
+  at once) is not tried again. A REFUSAL whose reason is a network
+  error is tried ONCE more too, after a short wait: one failed fetch
+  is no cause to stall a change (ticket 2576d7a1). When that try
+  refuses as well, or says nothing, the first refusal stands."
   ([gate-rpc arguments]
    (prepare-answer gate-rpc arguments bench-prepare-timeout-ms))
   ([gate-rpc arguments timeout-ms]
@@ -4770,8 +4791,15 @@
                                  (ex-message e)))
                       {:timed-out (>= (quot (- (System/nanoTime) t0) 1000000)
                                       (long timeout-ms))}))))
-         first-try (once)]
-     (:answer (if (:timed-out first-try) (once) first-try)))))
+         first-try (once)
+         answer (:answer (if (:timed-out first-try) (once) first-try))]
+     (if (network-refusal? answer)
+       (do (Thread/sleep (long bench-fetch-retry-pause-ms))
+           (let [again (:answer (once))]
+             (if (or (bench-payload again) (bench-refusal again))
+               again
+               answer)))
+       answer))))
 
 (defn- bench-refused-note
   "What the sit says when the rig REFUSED the prepare (bead
