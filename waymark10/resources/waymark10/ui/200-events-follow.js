@@ -2387,18 +2387,18 @@ const filmText = e => e ? e.textContent.replace(/\s+/g, " ").trim() : "";
 /* the button or the link the pointer has lit for the frame at the
    playhead, as {label, target}, or null. `label` is its own text;
    `target` is a stable name where there is one, and `nav:<path>` for a
-   link to a screen. A click on a form's field lights nothing: it is in
-   the beat's `presses` (filmField). */
+   link to a screen. The name is the element's own `data-surface` where
+   the beat says that name; a dotted 'not yet' button (`door-shut:<action>`)
+   is said as its door. A click on a form's field lights nothing: it is
+   in the beat's `presses` (filmField). */
 function filmPressed() {
   const e = $("[data-replay-press]");
   if (!e) return null;
-  const target = e.hasAttribute("data-quest-accept")
-      ? (e.closest("dialog[data-quest-sheet]") ? "sheet.accept" : "dialog.accept")
-    : e.hasAttribute("data-quest-decline") ? "sheet.decline"
-    : e.hasAttribute("data-tracker-go") ? "tracker.go"
+  const s = e.dataset.surface || "";
+  const target = /^(sheet\.(accept|decline)|dialog\.accept|tracker\.go)$/.test(s) ? s
     : e.hasAttribute("data-replay-write") ? "dialog.submit"
     : e.dataset.action ? "door:" + e.dataset.action
-    : e.dataset.questDoor ? "door:" + e.dataset.questDoor
+    : s.startsWith("door-shut:") ? "door:" + s.slice("door-shut:".length)
     : e.matches("a[href^='#']") ? "nav:" + e.getAttribute("href").slice(1)
     : null;
   return {label: filmText(e), target};
