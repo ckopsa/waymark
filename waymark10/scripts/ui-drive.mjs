@@ -4182,17 +4182,25 @@ async function questPhoneStory() {
     /* what a beat leaves out, and the ratio it does not guess (§8b):
        the film's own measure (filmMeasure) of a block drawn for it, with
        a run under a fixed bar and a run its scrolling parent clips, each
-       with the block itself as the page's answer at its centre; then of
-       the same block with a gradient behind its text */
+       with the block itself as the page's answer at its centre; a run
+       with a bar over its top and one over its bottom, which is mostly
+       covered with its centre open, and a run with a thin bar over its
+       centre only; a run under a bar that takes no pointer, and a run
+       under such a bar that draws nothing; then of the same block with
+       a gradient behind its text */
     const drawn = JSON.parse(await evaljs(`(() => {
       const d = document.createElement("div");
       d.dataset.surface = "film.case";
-      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:120px;" +
+      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:160px;" +
         "z-index:2147483000;background:#fff;font:16px/20px sans-serif";
+      const bar = (top, h, look) => "<div style='position:fixed;left:0;top:" + top +
+        "px;width:300px;height:" + h + "px;" + (look || "background:#333") + "'></div>";
       d.innerHTML = "<p>open run</p><p>barred run</p>" +
         "<div style='height:20px;overflow:hidden'><p>kept run</p><p>clipped run</p></div>" +
-        "<div style='position:fixed;left:0;top:20px;width:300px;height:20px;" +
-        "background:#333'></div>";
+        "<p>pinched run</p><p>striped run</p><p>veiled run</p><p>glass run</p>" +
+        bar(20, 20) + bar(60, 8) + bar(72, 8) + bar(89, 2) +
+        bar(100, 20, "background:#333;pointer-events:none") +
+        bar(120, 20, "pointer-events:none");
       for (const p of d.querySelectorAll("p"))
         p.style.cssText = "margin:0;padding:0;height:20px;color:#000;font-size:16px";
       document.body.prepend(d);
@@ -4207,13 +4215,19 @@ async function questPhoneStory() {
         return JSON.stringify({front: !!filmFront(), plain, gradient: read()});
       } finally { d.remove(); }
     })()`));
-    const stays = "open run kept run";
+    const stays = "open run kept run striped run glass run";
     console.log("  the drawn block's beats: " + JSON.stringify(
       {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
        gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
     ok(`a run under a fixed bar and a run its scrolling parent clips are in neither text ${where}`,
        drawn.plain.focus === stays && drawn.plain.text.includes(stays) &&
        !/barred run|clipped run/.test(drawn.plain.text));
+    ok("a run mostly covered with its centre open is in neither text, and one with its centre " +
+       "only covered is in both",
+       !/pinched run/.test(drawn.plain.text) && /striped run/.test(drawn.plain.focus || ""));
+    ok("a run under a bar that takes no pointer is in neither text, and one under such a bar " +
+       "that draws nothing is in both",
+       !/veiled run/.test(drawn.plain.text) && /glass run/.test(drawn.plain.focus || ""));
     ok("and the contrast is of the text on the colour behind it: 21",
        drawn.plain.contrast === 21);
     ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
@@ -4242,6 +4256,70 @@ async function questPhoneStory() {
     ok("the replay makes no quest", (await active()) === before);
     await shot(`${slug}-notyet-film`);
     await fresh(`the page ${where}, out of its film`);
+
+    /* the jump box by its surfaces (docs/spec-agent-demo-walks.md §8a):
+       readSurface answers the lines as drawn and the selected one, and
+       a press on jump.home goes home */
+    console.log(`· the jump box ${where}`);
+    const jump = async () => JSON.parse(await evaljs(`JSON.stringify({
+      box: readSurface("jump"), query: readSurface("jump.query"),
+      home: readSurface("jump.home"),
+      drawn: [...document.querySelectorAll("#jumplist [role='option']")].map(o =>
+        ({name: o.getAttribute("data-surface"), row: o.getAttribute("data-row"),
+          selected: o.getAttribute("aria-selected") === "true"}))})`));
+    const jumpKey = key => evaljs(`document.querySelector("#jumpq").dispatchEvent(
+      new KeyboardEvent("keydown", {key: ${JSON.stringify(key)}, bubbles: true})); true`);
+    const jumpType = text => evaljs(`{ const i = document.querySelector("#jumpq");
+      i.value = ${JSON.stringify(text)};
+      i.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+    const same = (lines, drawn) => lines.length === drawn.length &&
+      lines.every((l, n) => l.name === drawn[n].name && l.row === drawn[n].row &&
+                            l.selected === drawn[n].selected);
+    ok(`a shut jump box answers no surface ${where}`, (await jump()).box === null);
+    await evaljs(`document.dispatchEvent(new KeyboardEvent("keydown",
+      {key: "k", ctrlKey: true, bubbles: true, cancelable: true})); true`);
+    await waitFor(`(readSurface("jump")?.lines.length || 0) > 1`,
+                  `the jump box's lines ${where}`, 15000);
+    const opened = await jump();
+    console.log("  the jump box: " + JSON.stringify(opened.box).slice(0, 400));
+    ok("the open box answers an empty query and each line as drawn",
+       opened.box.query === "" && same(opened.box.lines, opened.drawn) &&
+       opened.query.text === "" && opened.query.disabled === false);
+    ok("its first line is jump.home, with no row, and is the selected one",
+       opened.box.lines[0].name === "jump.home" && opened.box.lines[0].row === null &&
+       opened.box.lines[0].label === "Home" && !!opened.home &&
+       opened.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(opened.box.selected) === JSON.stringify(opened.box.lines[0]));
+    ok("every other line is jump.line, with the row it goes to",
+       opened.box.lines.slice(1).every(l => l.name === "jump.line" && !!l.row && !!l.label));
+    await jumpKey("ArrowDown");
+    const down = await jump();
+    ok("an arrow down moves the selected line to the second",
+       same(down.box.lines, down.drawn) &&
+       down.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(down.box.selected) === JSON.stringify(down.box.lines[1]) &&
+       down.box.selected.row === opened.box.lines[1].row);
+    await jumpType("led");
+    const typed = await jump();
+    console.log("  typed 'led': " + JSON.stringify(typed.box).slice(0, 400));
+    ok("the box and jump.query answer what was typed",
+       typed.box.query === "led" && typed.query.text === "led");
+    ok("the lines are the filtered ones as drawn, with the tasks' line among them",
+       typed.box.lines.length > 0 && typed.box.lines.length < opened.box.lines.length &&
+       same(typed.box.lines, typed.drawn) &&
+       typed.box.lines.some(l => l.name === "jump.line" && l.row === "/api/led_tasks"));
+    ok("and the first of them is the selected one",
+       JSON.stringify(typed.box.selected) === JSON.stringify(typed.box.lines[0]));
+    await jumpType("");
+    await waitFor(`!!readSurface("jump.home")`, `the home line again ${where}`, 15000);
+    await shot(`${slug}-jump`);
+    await press('[data-surface="jump.home"]');
+    await waitFor(`!document.body.classList.contains("jump-open") && !location.hash.slice(1)`,
+                  `home, off the press on jump.home ${where}`, 15000,
+                  `({open: document.body.classList.contains("jump-open"), hash: location.hash})`);
+    ok(`a press on jump.home shuts the box and goes home ${where}`,
+       (await jump()).box === null);
+    await fresh(`the tasks' page ${where}, back from home`);
 
     /* the same sheet from a walk the connector records (stage-sheet!,
        server/mcp.clj; ticket 5bc2c3e4): a rehearsed quest create on a

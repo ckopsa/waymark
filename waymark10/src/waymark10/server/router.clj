@@ -1494,14 +1494,12 @@
                                         "anchor — GET /api/surfaces/" name
                                         ".")})))
       (json-response 200
-                     (surface/envelope eng sdef id
-                                       {:principal (principal-of req)
-                                        :now ((:now-fn eng))
-                                        :services (:services eng)
-                                        ;; the anchor's and the members'
-                                        ;; :computed fields read the kind
-                                        ;; map (ticket 92ba2f71)
-                                        :resources (inv/resources eng)})
+                     ;; the anchor and the member items render through
+                     ;; the ctx-opts every other read lends (ticket
+                     ;; f1951d5c): their :computed fields read the kind
+                     ;; map and the evidence reads. :visibility is nil
+                     ;; here, because a scoped request 404s above
+                     (surface/envelope eng sdef id (render-opts eng req))
                      media-type nil))))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────

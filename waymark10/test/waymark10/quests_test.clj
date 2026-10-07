@@ -1543,6 +1543,20 @@
     (is (= {:close_reason "Close reason"} (:input_labels data))
         "each key of the input, by its label in the door's input schema")))
 
+(deftest a-surface-anchored-on-a-quest-says-its-goal-door-in-words
+  (let [eng (epic-engine {:surfaces [{:name :quest-desk :anchor :quest}]})
+        {:keys [quest]} (epic-quest! eng {:close_reason "Shipped"})
+        ;; the surface route lends the ctx-opts every other read lends,
+        ;; so the anchor's registry-reading fields render there too
+        answer ((engine/handler eng) {:request-method :get
+                                      :uri (str "/api/surfaces/quest-desk/" quest)
+                                      :headers {"x-waymark-principal" "colton"}})
+        data (:data (:anchor (walk/keywordize-keys (wire/read-json (:body answer)))))]
+    (is (= 200 (:status answer)) (pr-str answer))
+    (is (= "Complete" (:action_label data)) (pr-str data))
+    (is (= {:close_reason "Close reason"} (:input_labels data))
+        "each key of the input, by its label in the door's input schema")))
+
 (deftest a-nested-need-is-named-by-its-declared-label
   (let [evidence [:map
                   [:film_url {:x-display {:label "The film"}} [:string {:max 300}]]
