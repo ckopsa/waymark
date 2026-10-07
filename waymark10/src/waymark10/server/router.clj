@@ -123,6 +123,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.walks :as walks]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
@@ -2280,6 +2281,26 @@
        :body body}
       (throw (p/not-found walks/kind id)))))
 
+(defn- film-rule-judge
+  "POST /api/film_rules/-/judge — a take scored against the active film
+  rules the caller may read (film-rules/judge-take,
+  spec-agent-demo-walks § 8d). A route and not an action, because it
+  moves no row and writes nothing: whoever may read the kind may call
+  it, and a caller whose grant does not admit the kind gets the
+  collection's own not-found."
+  [eng]
+  (fn [req]
+    (let [rdef (get (inv/resources eng) film-rules/kind)
+          _ (when-not rdef (throw (p/not-found "collection" "film_rules")))
+          _ (check-kind! req rdef)
+          tk (:take (read-body req))]
+      (when-not (map? tk)
+        (throw (p/problem :invalid-input 422 "Invalid input"
+                          {:detail (str "Give the take as `take`: a map with "
+                                        "`film` and `shots`.")})))
+      (json-response 200 (film-rules/judge-take
+                          eng tk (:row? (visibility-of req)))))))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2295,6 +2316,10 @@
     ["/api/schemas/:kind" {:get (kind-schema eng)}]
     ;; a core kind's one non-envelope answer (spec-guided-follow § 4)
     ["/api/walks/:id/export" {:get (walk-export eng)}]
+    ;; a core kind's one judging door (spec-agent-demo-walks § 8d): a
+    ;; literal second and fourth segment, so it sits ahead of the bulk
+    ;; door's /api/{plural}/-/{action}
+    ["/api/film_rules/-/judge" {:post (film-rule-judge eng)}]
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]
