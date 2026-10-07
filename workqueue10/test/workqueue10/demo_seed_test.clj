@@ -19,11 +19,13 @@
             [factory10.main :as factory]
             [waymark10.client :as c]
             [waymark10.dev :as dev]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.members :as members]
+            [waymark10.server.quests :as quests]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -409,6 +411,67 @@
       (let [res (c/pursue! ada (doc ada :q-epic) :complete ending)]
         (is (c/doc? (:done res)) (pr-str res))
         (is (= "done" (:state (doc ada :q-epic))))))))
+
+;; ── the quest's words: what the tracker and the sheet read ──────────
+;; The page draws a step's need from `needs_labels` where the plan has
+;; it: the sheet reads the preview of the create, and the tracker reads
+;; the stored plan. The epic's restate step needs a path into a nested
+;; map, and both say the label declared at its end.
+
+(def ^:private film-need ["showcase.evidence.film_url"])
+
+(defn- quest-data [eng id]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) :quest)]
+    (store/with-tx st
+      (fn [tx]
+        (some->> (store/load-row st tx :quest (str id) {})
+                 (inv/decode-row rdef)
+                 :data)))))
+
+(defn- restate-step [plan]
+  (first (filter #(= "restate" (:door %)) plan)))
+
+(deftest the-seeded-epics-restate-step-asks-for-the-film-in-words
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        refs (:refs (seed/load! eng (seed/read-seed "demo") {}))
+        session (c/connect "http://test" {:principal "ada" :handler (dev/handler eng)})
+        epic (:self (c/get-doc session
+                               (str (get-in (c/index session) [:resources :ticket :href])
+                                    "/" (get-in refs [:q-epic :id]))))
+        ada (t/principal {:id "ada" :display "Ada"})
+        goal {:self epic :action "complete"}]
+    (testing "the sheet: the preview of the quest names the need by its label"
+      (let [{:keys [preview]} (inv/create! eng :quest goal {:principal ada :dry-run true})
+            step (restate-step (:plan preview))]
+        (is (= film-need (:needs step)) (pr-str preview))
+        (is (= ["The film"] (:needs_labels step)) (pr-str preview))))
+    (let [quest (:id (:row (inv/create! eng :quest goal {:principal ada})))
+          _ (consumers/drain-consumer! eng quests/consumer-name (quests/consumer-fn eng)
+                                       {:from-origin? true})
+          held (quest-data eng quest)
+          at (first (keep-indexed #(when (= "restate" (:door %2)) %1) (:plan held)))]
+      (testing "the tracker: the stored plan names the need by its label"
+        (is (some? at) (pr-str held))
+        (is (= film-need (:needs (restate-step (:plan held)))) (pr-str held))
+        (is (= ["The film"] (:needs_labels (restate-step (:plan held)))) (pr-str held)))
+      (when at
+        (testing "a plan stored in older words is said again when the planner starts"
+          (inv/invoke! eng :quest (str quest) :plan
+                       (-> (select-keys held [:planned_at :blocked_reason :plan_is_estimate
+                                              :waiting_on :invitation])
+                           (update :planned_at str)
+                           (assoc :plan (assoc-in (vec (:plan held)) [at :needs_labels]
+                                                  ["Showcase.evidence.film url"])))
+                       {:principal quests/engine-actor
+                        :idempotency-key (str (random-uuid))})
+          (is (= ["Showcase.evidence.film url"]
+                 (:needs_labels (restate-step (:plan (quest-data eng quest)))))
+              "the plan as the older declaration said it")
+          (is (= 1 (quests/relabel! eng)) "the one plan whose words differ is written")
+          (let [after (quest-data eng quest)]
+            (is (= ["The film"] (:needs_labels (restate-step (:plan after)))))
+            (is (= (:plan held) (:plan after)) "and nothing else of the plan moved")))))))
 
 ;; ── the clone's sign-in for the quest (spec-demo-clones § 2) ────────
 

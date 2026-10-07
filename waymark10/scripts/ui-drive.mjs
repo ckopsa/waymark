@@ -1351,6 +1351,35 @@ async function accessStory() {
                  ${qBar}.querySelector("[data-quest-note]")?.textContent ===
                    ${JSON.stringify(pStep.note)}`,
                 "the path step's note in the tracker", 15000);
+  /* the need in words (ticket fa301d44). The plan door stores a plan as
+     it is given, and this one names no needs_labels: the page says the
+     path's last step and not the whole dotted path (prettyNeed,
+     ui/100-core.js). The planner stores the declared label beside the
+     need, and the page then says that one, in the tracker and on the
+     quest's own page. */
+  const pAsks = `(${qBar}.querySelector("[data-quest-needs]")?.textContent || "")`;
+  ok("a path need with no stored label reads its last step in the tracker: film url",
+     await evaljs(`${pAsks} === " · asks for film url"`));
+  const pLabelled = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next", needs_labels: ["The film"]}],
+     plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes the need's label beside it", pLabelled.status < 400);
+  await waitFor(`${pAsks} === " · asks for The film"`,
+                "the need's stored label in the tracker", 15000, pAsks);
+  ok("a path need stored with its label reads The film in the tracker", true);
+  const pWasAt = await evaljs(`location.hash`);
+  const pPlan = `document.querySelector("[data-quest-plan]")`;
+  await evaljs(`location.hash = ${JSON.stringify("#" + pSelf)}; true`);
+  await waitFor(`!!${pPlan} && !!${pPlan}.querySelector("[data-quest-needs]")`,
+                "the path step's need on the quest's page", 15000,
+                `document.body.innerText.slice(-400)`);
+  ok("the quest's page reads The film too, and no dotted path",
+     await evaljs(`${pPlan}.querySelector("[data-quest-needs]").textContent ===
+                     " · asks for The film" &&
+                   !${pPlan}.textContent.includes("showcase")`));
+  await evaljs(`location.hash = ${JSON.stringify(pWasAt)}; true`);
+  await waitFor(`location.hash === ${JSON.stringify(pWasAt)} && !${pPlan}`,
+                "the page back where the path step began", 15000);
   const pPlannedAt = (await get(pSelf)).data.planned_at;
   await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
