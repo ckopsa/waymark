@@ -1513,6 +1513,33 @@
         "beside the labels of the fields the form will ask for")
     (is (not-any? :row_label plan) "the stored plan holds no row's label")))
 
+(deftest a-nested-need-is-named-by-its-declared-label
+  (let [evidence [:map
+                  [:film_url {:x-display {:label "The film"}} [:string {:max 300}]]
+                  [:poster_url [:string {:max 300}]]]
+        rdef {:actions
+              {:restate
+               {:input [:map
+                        [:title {:x-display {:label "Title"}} [:string {:max 80}]]
+                        [:showcase {:x-display {:label "Showcase"}}
+                         [:maybe
+                          [:map
+                           [:evidence {:x-display {:label "Evidence"}} evidence]]]]
+                        [:sequel {:x-display {:label "Sequel"}}
+                         [:or [:string {:max 80}] evidence]]]}}}
+        labels #(:needs_labels (#'quests/labels-of rdef {:door "restate" :needs %}))]
+    (is (= ["The film"] (labels ["showcase.evidence.film_url"]))
+        "the label of the field at the end of the path, through a :maybe")
+    (is (= ["Title" "The film"] (labels ["title" "sequel.film_url"]))
+        "a top-level need is as it was, and an :or is walked by its map arm")
+    (is (= ["Poster url"] (labels ["showcase.evidence.poster_url"]))
+        "a nested field that declares no label is its own name in words")
+    (is (= ["Evidence: The film" "Sequel: The film"]
+           (labels ["showcase.evidence.film_url" "sequel.film_url"]))
+        "two needs that end in the same label are each said after their parent's")
+    (is (= ["No such"] (labels ["showcase.no_such"]))
+        "a path the schema does not name is its last step in words")))
+
 (deftest a-rename-of-a-steps-row-leaves-the-quests-plan-as-it-was
   (let [eng (note-engine)
         n (make! eng :q_note {:title "Unsorted mail"})

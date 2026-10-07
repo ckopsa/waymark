@@ -926,27 +926,63 @@
 
 (defn- humanise [k] (str/capitalize (str/replace (name k) "_" " ")))
 
+(defn- map-form
+  "The :map form a field's schema holds: the form itself, or the map arm
+  of a :maybe or an :or (the published schema's oneOf); nil when the
+  field is no map."
+  [form]
+  (when (vector? form)
+    (case (first form)
+      :map form
+      (:maybe :or) (some map-form (filter vector? (rest form)))
+      nil)))
+
+(defn- need-words
+  "The labels a need walks through the door's input schema, the field's
+  own last: one for an argument, and one more for each step of a dotted
+  path into a nested map argument (showcase.evidence.film_url). A step
+  that declares no label, or that the schema does not name, is its name
+  in words."
+  [entries need]
+  (loop [entries entries
+         [k & more] (str/split (name need) #"\." -1)
+         said []]
+    (let [entry (get entries (keyword k))
+          said (conj said (or (get-in entry [:properties :x-display :label])
+                              (humanise k)))]
+      (if (seq more)
+        (recur (some-> (map-form (:schema entry)) schema/entry-map) more said)
+        said))))
+
 (defn- labels-of
   "What the declaration of kind `rdef` says of a step, or of one of its
   alternatives, in words: `door_label`, the door's display label, and
   `needs_labels`, the display label of each of `needs` from the door's
-  input schema, in that order. A door or a field that declares no label
-  is its name in words. Neither reads the row, so a rename never moves
-  them."
+  input schema, in that order. A need that is a dotted path into a
+  nested map is the label of the field at its end (`need-words`), and
+  when two needs of the step end in the same label each is said after
+  its nearest parent's ('Evidence: The film'). A door or a field that
+  declares no label is its name in words. Neither reads the row, so a
+  rename never moves them."
   [rdef step]
   (let [decl (some->> (:door step) keyword (conj [:actions]) (get-in rdef))
         entries (some-> (:input decl) schema/entry-map)
         door-label (clip (or (get-in decl [:display :label])
                              (some-> (:door step) humanise))
                          60)
-        needs (seq (:needs step))]
+        needs (seq (:needs step))
+        words (map #(need-words entries %) needs)
+        shared (frequencies (map peek words))]
     (cond-> {}
       door-label (assoc :door_label door-label)
       needs (assoc :needs_labels
-                   (mapv #(clip (or (get-in entries [(keyword %) :properties :x-display :label])
-                                    (humanise %))
-                                60)
-                         needs)))))
+                   (mapv (fn [said]
+                           (clip (if (and (< 1 (count said))
+                                          (< 1 (get shared (peek said))))
+                                   (str (peek (pop said)) ": " (peek said))
+                                   (peek said))
+                                 60))
+                         words)))))
 
 (defn- words-of
   "What a person reads beside the names of a step, or of one of its

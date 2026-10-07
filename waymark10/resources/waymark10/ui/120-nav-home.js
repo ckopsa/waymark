@@ -66,12 +66,13 @@ async function renderNav(current) {
   $("#drawerbtn").classList.toggle("on", domains.length > 0);
   if (domains.length) fillDrawer(w, current, active);
   /* the tab bar has no header wordmark in reach — Home earns a tab */
-  if (MOBILE) nav.append(el("a", {href: "#",
+  if (MOBILE) nav.append(el("a", {href: "#", "data-surface": "nav-home",
     style: !current ? "font-weight:700" : ""}, "Home"));
   /* the active application as a breadcrumb back to its home */
   if (active) {
     const home = domainHome(w, active);
     if (home) nav.append(el("a", {class: "nav-domain", href: "#" + home,
+      "data-surface": "nav-domain",
       style: "color:var(--ink);font-weight:700"}, title(active)));
   }
   /* the active domain's primary kinds (a domainless primary always) */
@@ -81,7 +82,7 @@ async function renderNav(current) {
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && askKind(w))
-    nav.append(el("a", {href: "#access",
+    nav.append(el("a", {href: "#access", "data-surface": "nav-access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
   /* every other decision kind is a queue with a tab of its own (the
      ask kind's queue is the Access panel) */
@@ -108,6 +109,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
   const wrap = el("span", {class:"nav-more-wrap"});
   const menu = el("div", {class:"nav-menu", role:"menu"});
   const btn = el("button", {class:"nav-more", type:"button",
+    "data-surface": "nav-more",
     "aria-haspopup":"true", "aria-expanded":"false",
     title: "more kinds — and the machinery's own resources"}, "⋯");
   /* a deployable with enough kinds overruns the screen: cap the menu
@@ -144,7 +146,8 @@ function overflowMenu(tuckedEntries, extra = {}) {
   /* domain kinds first, then the engine's own machinery under a
      quiet divider — two tiers, one menu */
   const item = ([kind, {href}]) =>
-    el("a", {href: "#" + href, role:"menuitem", onclick: close},
+    el("a", {href: "#" + href, role:"menuitem", "data-surface": "nav." + kind,
+             onclick: close},
       ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
       title(kind) + "s");
   const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
@@ -570,7 +573,7 @@ function questDraw(doc, finished) {
   const doors = ["pause", "unpin", "replan"].filter(n => acts[n]);
   if (doors.length)
     bar.append(el("details", {class: "quest-menu"},
-      el("summary", {title: "this quest's doors", "aria-label": "quest menu"}, "⋯"),
+      el("summary", {"data-surface": "tracker.more", title: "this quest's doors", "aria-label": "quest menu"}, "⋯"),
       el("div", {class: "quest-menu-items"}, doors.map(n =>
         actionButton({name: n, entry: acts[n], doc, small: true,
                       onDone: () => { refreshQuest(); render(); }})))));

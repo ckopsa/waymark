@@ -2729,19 +2729,43 @@ async function guidedStory() {
      its old seq (presence/publish!). That frame takes the move's close
      back on bo's page, and the sheet he holds is the one he held: the
      mark tells a sheet that stayed from one closed and drawn again. */
-  await B.js(`document.querySelector("dialog[open][data-guided-quest]")
-    .dataset.heldAcrossMove = "1"; true`);
   const A2 = await openTab("ada's second tab");
   await boot(A2, "ada");
-  await A2.js(`location.hash = ${JSON.stringify(meals[0])}; true`);
-  await A2.until(`hereHref() === ${JSON.stringify(meals[0])}`,
-                 "the meal's page on ada's second tab", 15000);
-  await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meals[0])}`,
-                "ada's move to the meal, on bo's page", 15000, guidedState);
-  await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+  let a2Reads = 0;
+  const heldAcrossMove = async () => {
+    const meal = meals[a2Reads++ % meals.length];
+    await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+                  "ada's quest sheet on bo's screen, before her move", 15000, guidedState);
+    await B.js(`document.querySelector("dialog[open][data-guided-quest]")
+      .dataset.heldAcrossMove = "1"; true`);
+    await A2.js(`location.hash = ${JSON.stringify(meal)}; true`);
+    await A2.until(`hereHref() === ${JSON.stringify(meal)}`,
+                   "the meal's page on ada's second tab", 15000);
+    await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meal)}`,
+                  "ada's move to the meal, on bo's page", 15000, guidedState);
+    await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+    return await B.js(`!!document.querySelector(
+      "dialog[open][data-guided-quest][data-held-across-move]")`);
+  };
+  /* first on a page without the line that takes the close back: the
+     case must fail there, or it does not test that line. Bo's page gets
+     applyGuidedUi again from its own source with the line cut. Ada's
+     10 s heartbeat carries a new seq and takes the close back when it
+     lands inside the wait, so the move is given again; the same
+     heartbeat draws her sheet on bo's screen again after a close. */
+  const takesBack = "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);";
+  const applySrc = await B.js(`applyGuidedUi.toString()`);
+  ok("applyGuidedUi has the line that takes a move's close back",
+     applySrc.includes(takesBack));
+  await B.js(`window.applyGuidedUiWhole = applyGuidedUi;
+    applyGuidedUi = ${applySrc.replace(takesBack, "")}; true`);
+  let heldWithout = true;
+  for (let i = 0; i < 3 && heldWithout; i++) heldWithout = await heldAcrossMove();
+  await B.js(`applyGuidedUi = window.applyGuidedUiWhole; true`);
+  ok("without that line, the same move closes her sheet on bo's screen",
+     !heldWithout);
   ok("a move of ada's with no new ui beat leaves her sheet open on bo's screen",
-     await B.js(`!!document.querySelector(
-       "dialog[open][data-guided-quest][data-held-across-move]")`));
+     await heldAcrossMove());
   /* the second tab leaves: its beats would move ada's gaze under the
      cases below */
   await A2.call("Page.navigate", {url: "about:blank"});
@@ -3882,6 +3906,20 @@ async function questPhoneStory() {
        await evaljs(`/Close reason/.test(${qPlan}.textContent) &&
                      !/close_reason/.test(${qPlan}.textContent) &&
                      !/\\/api\\//.test(${qPlan}.textContent)`));
+    /* the data table under the checklist draws the goal row in words
+       and leaves the plan out: no path is visible text anywhere on the
+       page (ticket bdd37958) */
+    await waitFor(`!!document.querySelector("table.kv [data-quest-row]")`,
+                  "the goal row in the quest's data table", 15000,
+                  `document.body.innerText.slice(-400)`);
+    /* the whole page is the view and the tracker: the shell's ticker
+       under them names the last event on any row, on every screen. A
+       miss says the text the path was read in */
+    const paths = JSON.parse(await evaljs(`JSON.stringify(
+      (document.querySelector("#view").innerText + "\\n" + ${bar}.innerText)
+        .match(/.{0,60}\\/api\\/.{0,60}/g) || [])`));
+    ok("the quest's whole page shows no row path as text" +
+       (paths.length ? ": " + JSON.stringify(paths) : ""), !paths.length);
     await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);
     await waitFor(`!${qPlan}`, "the page the quest was accepted on", 15000);
     /* the plan's last step, and whether it is `self`'s Complete with
