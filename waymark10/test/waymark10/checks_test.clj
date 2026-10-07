@@ -277,6 +277,20 @@
       (breaks :computed (assoc with-score :faceted [:score]))
       (breaks :computed (assoc with-score :summary "{data.score} · {state}")))))
 
+(deftest collection-doors
+  (let [door {:summary "Count the things." :input [:map]
+              :handler (fn [_eng _body _ctx] {:count 0})}]
+    (testing "a door that declares its handler is green"
+      (is (some? (load-quietly (assoc base :collection-doors {:tally door})))))
+    (testing "a door with no handler is refused"
+      (breaks :collection-doors
+              (assoc base :collection-doors {:tally (dissoc door :handler)}))
+      (breaks :collection-doors
+              (assoc base :collection-doors {:tally (assoc door :handler :tally)})))
+    (testing "the key is a map of maps"
+      (breaks :collection-doors (assoc base :collection-doors [:tally]))
+      (breaks :collection-doors (assoc base :collection-doors {:tally "count"})))))
+
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
 

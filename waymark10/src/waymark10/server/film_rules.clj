@@ -10,8 +10,9 @@
   of the take it is read from (docs/spec-agent-demo-walks.md § 8d). A
   rule naming any other metric is refused with the list. `measure` reads
   one metric from a take, by those field names. `judge` scores a whole
-  take against the rules and answers each rule's verdict; the router
-  serves it at POST /api/film_rules/-/judge, and it writes nothing.
+  take against the rules and answers each rule's verdict; the kind
+  declares it as the collection door `judge`, so the router serves it at
+  POST /api/film_rules/-/judge, and it writes nothing.
 
   A person or the sitter of a domain's mayor seat makes a rule, and
   whoever may make one may restate its `output` and `unless`. Only a
@@ -339,6 +340,8 @@
                   :help "Who last restated the rule's output or exemption. The boot seed leaves a rule that carries this alone."}}
    [:maybe [:string {:max 128}]]])
 
+(declare judge-take)
+
 (defresource film-rule
   {:kind :film_rule
    :plural "film_rules"
@@ -365,6 +368,8 @@
    :collection-doors
    {:judge
     {:summary "Score a take against the active rules. It reads the rules and writes nothing."
+     :handler (fn [eng body ctx]
+                (judge-take eng (:take body) (:row? (:visibility ctx))))
      :input
      [:map
       [:take

@@ -1139,6 +1139,28 @@
         (named ":summary" (map (comp keyword second)
                                (re-seq summary-data-root (str (:summary r)))))))))
 
+(defn- check-collection-doors
+  "A :collection-doors entry is a route the router mounts from the
+  declaration: the entry is advertised wherever the kind is, so one
+  with no :handler would be a door every document names and nothing
+  answers."
+  [r]
+  (let [doors (:collection-doors r)]
+    (when (and (some? doors) (not (map? doors)))
+      (err r :collection-doors
+           (str ":collection-doors is {name {:input … :summary … "
+                ":handler (fn [engine body ctx] …)}}")))
+    (doseq [[dname door] (sort-by key doors)]
+      (when-not (map? door)
+        (err r :collection-doors
+             (str "collection door " dname " is not a map; declare "
+                  "{:input … :summary … :handler (fn [engine body ctx] …)}")))
+      (when-not (fn? (:handler door))
+        (err r :collection-doors
+             (str "collection door " dname " declares no :handler — "
+                  "(fn [engine body ctx] answer) is what POST /api/"
+                  "{plural}/-/" (name dname) " answers with"))))))
+
 (def ^:private view-kinds #{:deck :feed})
 
 (defn- presence-field
@@ -1988,7 +2010,7 @@
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
-          check-absent-as
+          check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-remedy-bindings])})
