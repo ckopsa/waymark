@@ -149,6 +149,15 @@
         (is (str/includes? why "shot 8"))
         (is (str/includes? why "is not an op"))))))
 
+(deftest a-shot-may-name-its-role
+  (let [eng (fresh-engine)
+        id (write! eng (assoc-in well-formed [:shots 2 :role] "turn"))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id)))))
+    (is (str/includes?
+         (why-not eng 3 {:tap {:surface "door:rename@$dishes"} :role "climax"})
+         "shot 3: `climax` is not a role; the roles are friction, turn, payoff."))))
+
 (deftest a-given-call-is-judged-and-named
   (let [eng (fresh-engine)
         stranger (write! eng (assoc-in well-formed [:given 0 :as] "nobody"))
