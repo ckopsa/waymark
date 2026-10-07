@@ -123,7 +123,6 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.transcripts :as transcripts]
-            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.walks :as walks]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
@@ -2281,31 +2280,40 @@
        :body body}
       (throw (p/not-found walks/kind id)))))
 
-(defn- film-rule-judge
-  "POST /api/film_rules/-/judge — a take scored against the active film
-  rules the caller may read (film-rules/judge-take,
-  spec-agent-demo-walks § 8d). A route and not an action, because it
-  moves no row and writes nothing: whoever may read the kind may call
-  it, and a caller whose grant does not admit the kind gets the
-  collection's own not-found. The grant's actions are not asked: the
-  door is a read. The body is held to the input the collection
-  advertises (collections/door-errors). A rehearsal is the call itself,
-  since nothing is written, so `dry_run` changes nothing here."
+(defn- collection-door
+  "POST /api/{plural}/-/{name} for a door the kind declares under
+  :collection-doors (film_rule's `judge`, spec-agent-demo-walks § 8d).
+  A route and not an action, because it moves no row and writes
+  nothing: whoever may read the kind may call it, and a caller whose
+  grant does not admit the kind gets the collection's own not-found.
+  The grant's actions are not asked: the door is a read. The body is
+  held to the input the collection advertises (collections/door-errors),
+  and then the door's declared `:handler` answers: `(fn [engine body
+  ctx])` → the JSON answer, where ctx carries the caller's :visibility
+  and :principal. A rehearsal is the call itself, since nothing is
+  written, so `dry_run` changes nothing here."
+  [eng req rdef dname]
+  (check-kind! req rdef)
+  (let [body (read-body req)]
+    (when-some [errors (collections/door-errors rdef dname body)]
+      (throw (p/schema-invalid dname errors)))
+    (json-response 200 ((get-in rdef [:collection-doors dname :handler])
+                        eng body {:visibility (visibility-of req)
+                                  :principal (principal-of req)}))))
+
+(defn- collection-action
+  "POST /api/{plural}/-/{action}: a door the kind declares under
+  :collection-doors when the name is one, and the bulk door otherwise.
+  One mount serves every declared door, so a kind that declares one has
+  its route."
   [eng]
-  (fn [req]
-    (let [rdef (get (inv/resources eng) film-rules/kind)
-          _ (when-not rdef (throw (p/not-found "collection" "film_rules")))
-          _ (check-kind! req rdef)
-          body (read-body req)
-          tk (:take body)]
-      (when-not (map? tk)
-        (throw (p/problem :invalid-input 422 "Invalid input"
-                          {:detail (str "Give the take as `take`: a map with "
-                                        "`film` and `shots`.")})))
-      (when-some [errors (collections/door-errors rdef :judge body)]
-        (throw (p/schema-invalid :judge errors)))
-      (json-response 200 (film-rules/judge-take
-                          eng tk (:row? (visibility-of req)))))))
+  (let [bulk (bulk-action eng)]
+    (fn [{{:keys [plural action]} :path-params :as req}]
+      (let [rdef (rdef-by-plural eng plural)
+            dname (keyword action)]
+        (if (contains? (:collection-doors rdef) dname)
+          (collection-door eng req rdef dname)
+          (bulk req))))))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
@@ -2322,10 +2330,6 @@
     ["/api/schemas/:kind" {:get (kind-schema eng)}]
     ;; a core kind's one non-envelope answer (spec-guided-follow § 4)
     ["/api/walks/:id/export" {:get (walk-export eng)}]
-    ;; a core kind's one judging door (spec-agent-demo-walks § 8d): a
-    ;; literal second and fourth segment, so it sits ahead of the bulk
-    ;; door's /api/{plural}/-/{action}
-    ["/api/film_rules/-/judge" {:post (film-rule-judge eng)}]
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]
@@ -2345,12 +2349,13 @@
   [["/api/:plural" {:get (collection eng) :post (create eng)}]])
 
 (defn core-plural-tail
-  "The plural grammar's catch-alls: the bulk door, the row, its event
+  "The plural grammar's catch-alls: the bulk door and the declared
+  collection doors beside it, the row, its event
   stream, invoke, batch, and the draft sub-resource. These are LAST on
   purpose — each one ends in a wildcard segment, so anything mounted
   after them is shadowed by position and never answers."
   [eng]
-  [["/api/:plural/-/:action" {:post (bulk-action eng)}]
+  [["/api/:plural/-/:action" {:post (collection-action eng)}]
    ["/api/:plural/:id" {:get (get-one eng)}]
    ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
    ;; the log, read (waymark-442.4). A literal third segment, so it

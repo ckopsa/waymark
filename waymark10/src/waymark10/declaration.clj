@@ -114,12 +114,14 @@
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
    ;; the kind's SAFE collection doors (ticket 80c6c9e2): {name {:input
-   ;; <malli> :summary "…"}}. Each is POST /api/{plural}/-/{name}, a
-   ;; route that reads and writes nothing, so it is no action: it moves
-   ;; no row, and whoever may read the kind may call it. The key is the
-   ;; ADVERTISEMENT — the collection document, the connector and the
-   ;; OpenAPI document read it — and the route is core's own. Never in
-   ;; the fingerprint — :computed's precedent
+   ;; <malli> :summary "…" :handler (fn [engine body ctx])}}. Each is
+   ;; POST /api/{plural}/-/{name}, a route that reads and writes
+   ;; nothing, so it is no action: it moves no row, and whoever may read
+   ;; the kind may call it. The key is the ADVERTISEMENT — the
+   ;; collection document, the connector and the OpenAPI document read
+   ;; it — and the MOUNT: the router checks the kind, holds the body to
+   ;; :input and answers what :handler returns. Never in the
+   ;; fingerprint — :computed's precedent
    :collection-doors
    ;; edges
    :owns :links :related
