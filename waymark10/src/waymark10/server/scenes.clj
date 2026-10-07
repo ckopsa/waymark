@@ -495,6 +495,10 @@
                           :help "One entry per expectation: what was asked, what was read, and whether it held."
                           :spelled-by-hand "An entry repeats its expectation's own keys beside what was read."}}
     [:maybe [:vector {:max 40} [:map-of :keyword :any]]]]
+   [:why {:optional true
+          :x-display {:label "Why it failed"
+                      :help "The runner's sentence for a shot that failed: the verb it could not perform, or the expectation that did not hold."}}
+    [:maybe [:string {:max 500}]]]
    [:still {:optional true
             :x-display {:raw true :label "Still" :help "Where the still of this shot is kept."}}
     [:maybe [:string {:max 500}]]]])

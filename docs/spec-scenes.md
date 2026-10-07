@@ -151,10 +151,11 @@ Filterable: `scene`, `device`. It links to its scene.
 The runner writes `scene`, `scene_version`, `device` (`phone` or
 `desktop`), `commit` (the commit of the house that was filmed), `film`
 (optional, the id of the film it made) and `shots`. Each shot result is
-`{shot, ok, pressed?, expects?, still?}`: the shot's place counted from
-1, whether it passed, the surface the runner acted on, one entry per
-expectation with what was read, and where the still is kept. A take
-that stopped holds the failing shot last.
+`{shot, ok, pressed?, expects?, why?, still?}`: the shot's place counted
+from 1, whether it passed, the surface the runner acted on, one entry
+per expectation with what was read, the runner's sentence for why a
+failed shot failed (at most 500 characters), and where the still is
+kept. A take that stopped holds the failing shot last.
 
 The engine stamps `first_failing_shot` (the first result whose `ok` is
 false) and `ok` (true when there is none). The create guard
