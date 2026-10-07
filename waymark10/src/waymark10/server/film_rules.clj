@@ -11,13 +11,15 @@
   rule naming any other metric is refused with the list. `measure` reads
   one metric from a take, by those field names.
 
-  A person or the sitter of a domain's mayor seat makes a rule. Only a
+  A person or the sitter of a domain's mayor seat makes a rule, and
+  whoever may make one may restate its `output` and `unless`. Only a
   person retires one.
 
   `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
   starts with, each made once by its name. A seed row made before
-  `output` and `unless` existed gains them there, through `restate`, a
-  door only the boot seed walks."
+  `output` and `unless` existed gains them there, through `restate`. A
+  restate by anyone else writes `restated_by`, and the seed leaves a
+  row that carries it alone."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -180,22 +182,27 @@
     (t/deny)
     (t/allow)))
 
+(defn- makes?
+  "Whether the caller of `ctx` may make a film rule: a person, the boot
+  seed, or the sitter of a domain's mayor seat."
+  [ctx]
+  (let [{:keys [type acts-for]} (:principal ctx)
+        find' (:find ctx)
+        cited (delegation/cited-seats ctx)]
+    (boolean
+     (or
+      ;; a person, a tool a person is signed in to, or the boot seed
+      (not= :agent type) (some? (not-empty (str acts-for)))
+      (nil? find')                       ; probe ctx — decline to guess
+      (some #(seq (find' :domain {:mayor (str %) :state "active"} {:limit 1}))
+            cited)))))
+
 (g/defguard a-person-or-a-mayor-makes-the-rule
   {:reads [:principal :now :grant :domain]
    :open "No door changes who the caller is: ask a person or a domain's mayor to make the rule."
    :explain "A film rule is made by a person, or by the sitter of a domain's mayor seat. Ask a person or a mayor to make the rule."}
   [_row _inp ctx]
-  (let [{:keys [type acts-for]} (:principal ctx)
-        find' (:find ctx)
-        cited (delegation/cited-seats ctx)]
-    (cond
-      ;; a person, a tool a person is signed in to, or the boot seed
-      (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
-      (nil? find') (t/allow)             ; probe ctx — decline to guess
-      (some #(seq (find' :domain {:mayor (str %) :state "active"} {:limit 1}))
-            cited)
-      (t/allow)
-      :else (t/deny))))
+  (if (makes? ctx) (t/allow) (t/deny)))
 
 (g/defguard a-person-retires-the-rule
   {:reads [:principal]
@@ -209,24 +216,31 @@
       (t/allow)
       (t/deny))))
 
-(g/defguard the-boot-seed-restates-the-rule
-  {:reads [:principal]
-   :open "No door changes who the caller is: the boot seed restates a rule. Ask a person to retire the rule and make another."
-   :explain "A rule is restated only by the boot seed, which gives a seed rule made before a field existed the value the seed names. A person who wants another rule retires this one and makes another."}
+(g/defguard a-person-or-a-mayor-restates-the-rule
+  {:reads [:principal :now :grant :domain]
+   :open "No door changes who the caller is: ask a person or a domain's mayor to restate the rule."
+   :explain "Whoever may make a film rule may restate one: a person, or the sitter of a domain's mayor seat. Ask a person or a mayor to restate the rule."}
   [_row _inp ctx]
-  (let [{:keys [id type]} (:principal ctx)]
-    (if (and (= :system type) (= seed-actor-id (str id)))
-      (t/allow)
-      (t/deny))))
+  (if (makes? ctx) (t/allow) (t/deny)))
 
 ;; ── the handler ─────────────────────────────────────────────────────
 
-(defhandler restate-rule
-  [row inp _ctx]
-  ;; a patch: a field the input leaves out keeps its stored value
-  (update row :data merge (select-keys inp [:output :unless])))
+(defn- seed?
+  "Whether `principal` is the actor the boot seed wears."
+  [{:keys [id type]}]
+  (and (= :system type) (= seed-actor-id (str id))))
 
-;; ── the fields the seed restates ────────────────────────────────────
+(defhandler restate-rule
+  [row inp ctx]
+  ;; a patch: a field the input leaves out keeps its stored value
+  (let [principal (:principal ctx)]
+    (cond-> (update row :data merge (select-keys inp [:output :unless]))
+      ;; the seed's own restate leaves no mark, so the mark means
+      ;; someone chose these values and the seed leaves them alone
+      (not (seed? principal))
+      (assoc-in [:data :restated_by] (str (:id principal))))))
+
+;; ── the fields a restate writes ─────────────────────────────────────
 
 (def ^:private output-field
   [:output {:optional true
@@ -313,7 +327,15 @@
               :x-display
               {:label "Whose note"
                :help "Who asked for the rule: a person's own words, quoted, or the word craft."}}
-     [:string {:min 1 :max 480}]]]
+     [:string {:min 1 :max 480}]]
+    ;; written by `restate`, never by the boot seed's own
+    [:restated_by {:optional true
+                   :x-ref {:principal true}
+                   :x-display
+                   {:raw true
+                    :label "Who restated it"
+                    :help "Who last restated the rule's output or exemption. The boot seed leaves a rule that carries this alone."}}
+     [:maybe [:string {:max 128}]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :metric #{:eq :in}
@@ -326,17 +348,18 @@
                    unless-goes-with-a-shot
                    a-person-or-a-mayor-makes-the-rule]
    :actions
-   {;; the boot seed's door: no person has one, so a field a row lacks
-    ;; is a field that did not exist when the row was made
+   {;; whoever may make a rule may restate it, and the boot seed walks
+    ;; this door too: the handler writes `restated_by` for everyone but
+    ;; the seed, so the seed can tell a chosen value from a missing one
     :restate
     {:from #{:active} :to :active
      :input [:map output-field unless-field]
-     :guards [unless-goes-with-a-shot the-boot-seed-restates-the-rule]
+     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The rule holds what this restate says; the values before are not kept."}
      :handler restate-rule
      :display {:label "Restate the rule" :order 5
-               :description "Give a seed rule the output or the exemption the seed names"}}
+               :description "Change the output the rule is for, or the shots it exempts"}}
 
     :retire
     {:from #{:active} :to :retired :undo :restore
@@ -441,20 +464,24 @@
 
 (defn- lacks
   "The `output` and `unless` the seed names for `rule` and `row`, a
-  decoded rule of that name, does not carry. Only the boot seed writes
-  these fields after a create, so a row without one was made before the
-  field existed; a value the row carries is never written over."
+  decoded rule of that name, does not carry. A restate by anyone but
+  the seed writes `restated_by`, so a row with no such mark and without
+  a field was made before the field existed; a row that carries the
+  mark lacks nothing, and a value a row carries is never written over."
   [rule row]
-  (into {}
-        (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
-        (select-keys rule [:output :unless])))
+  (if (some-> (get-in row [:data :restated_by]) str not-empty)
+    {}
+    (into {}
+          (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
+          (select-keys rule [:output :unless]))))
 
 (defn ensure-seed-rules!
   "The boot seed: each of `seed-rules` when no rule carries its name,
   active or retired. A second boot makes none, and a rule a person
   retired is not made again. An active rule that carries a seed's name
   and lacks the `output` or `unless` the seed names is restated to
-  carry it; a retired one is left as it is."
+  carry it; a retired one is left as it is, and so is one a person or a
+  mayor restated."
   [eng]
   (when (contains? (inv/resources eng) kind)
     (doseq [rule seed-rules]

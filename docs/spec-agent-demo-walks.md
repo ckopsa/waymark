@@ -800,9 +800,15 @@ per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
 `unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
 rule only when none carries its name. An active `type-size` or
 `focus-share` row made before these fields existed gains the field
-the seed names at the next boot, through `restate`, a door only the
-boot seed walks; a value a row carries is not written over, and a
-retired row is left as it is.
+the seed names at the next boot, through `restate`; a value a row
+carries is not written over, and a retired row is left as it is.
+
+Whoever may make a rule may restate its `output` and `unless`: a
+person, or the sitter of a domain's mayor seat. A seat with no right to
+make a rule is refused. Such a restate writes the caller's id in
+`restated_by`; the boot seed's own restate does not. The seed leaves a
+rule that carries `restated_by` alone, so a `type-size` a person
+restated to no `output` stays that way at the next boot.
 
 ## 8a. The surfaces a scene names
 
