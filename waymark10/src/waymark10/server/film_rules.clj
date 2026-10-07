@@ -265,6 +265,75 @@
 
 ;; ── the kind ────────────────────────────────────────────────────────
 
+(def ^:private made-fields
+  "The fields a create names: the kind's schema less what only `restate`
+  writes."
+  [[:name {:examples ["frame-fill"]
+           :x-display
+           {:raw true
+            :label "Rule name"
+            :help "One short slug, spelled once: no other rule may carry it."}}
+    [:string {:min 1 :max 64}]]
+   [:metric {:examples ["frame_fill"]
+             :x-display
+             {:raw true
+              :label "Metric"
+              :help "What the scorer measures: frame_fill, focus_share, type_px, contrast, read_time_ratio, dead_air_s, surfaces_changed, chrome_leaks, arc or runtime_s."}}
+    [:string {:min 1 :max 64}]]
+   [:op {:x-display {:label "Compared how"
+                     :help "How the measured value is held against the threshold."
+                     :choices {">=" "At least the threshold."
+                               "<=" "At most the threshold."
+                               "=" "Exactly the threshold."}}}
+    (into [:enum] ops)]
+   [:threshold {:examples [0.95M]
+                :x-display
+                {:label "Threshold"
+                 :help "The number the measured value is held against. For arc it is 1: the roles are in order and the last shot's goal is done."}}
+    [:decimal {:min 0 :max 100000}]]
+   [:scope {:x-display
+            {:label "Judged over"
+             :help "The whole film, each shot, or each beat."
+             :choices {"film" "The whole film, measured once."
+                       "shot" "Each shot on its own."
+                       "beat" "Each beat on its own."}}}
+    (into [:enum] scopes)]
+   [:role {:optional true
+           :x-display
+           {:label "Only shots of this role"
+            :help "With the scope shot: judge only the shots of this role. Left empty, every shot is judged."
+            :choices {"friction" "A shot that shows what is hard."
+                      "turn" "A shot where the thing changes."
+                      "payoff" "A shot that shows it done."}}}
+    [:maybe (into [:enum] roles)]]
+   output-field
+   unless-field
+   [:severity {:x-display
+               {:label "A miss is"
+                :help "fail stops the film from being sent; warn is reported beside it."
+                :choices {"fail" "The film is not sent."
+                          "warn" "The miss is reported beside the film."}}}
+    (into [:enum] severities)]
+   [:why {:examples ["A film that leaves most of the frame grey reads as broken."]
+          :x-display {:label "Why"
+                      :help "One sentence: what a film that misses this rule gets wrong."}}
+    [:string {:min 1 :max 480}]]
+   [:origin {:examples ["craft"]
+             :x-display
+             {:label "Whose note"
+              :help "Who asked for the rule: a person's own words, quoted, or the word craft."}}
+    [:string {:min 1 :max 480}]]])
+
+;; written by `restate`, never by the boot seed's own
+(def ^:private restated-by-field
+  [:restated_by {:optional true
+                 :x-ref {:principal true}
+                 :x-display
+                 {:raw true
+                  :label "Who restated it"
+                  :help "Who last restated the rule's output or exemption. The boot seed leaves a rule that carries this alone."}}
+   [:maybe [:string {:max 128}]]])
+
 (defresource film-rule
   {:kind :film_rule
    :plural "film_rules"
@@ -275,77 +344,51 @@
    :summary "{data.name} · {data.metric} {data.op} {data.threshold} · {data.severity}"
    :label-template "{data.name}"
    :unique [[:name]]
-   :schema
-   [:map
-    [:name {:examples ["frame-fill"]
-            :x-display
-            {:raw true
-             :label "Rule name"
-             :help "One short slug, spelled once: no other rule may carry it."}}
-     [:string {:min 1 :max 64}]]
-    [:metric {:examples ["frame_fill"]
-              :x-display
-              {:raw true
-               :label "Metric"
-               :help "What the scorer measures: frame_fill, focus_share, type_px, contrast, read_time_ratio, dead_air_s, surfaces_changed, chrome_leaks, arc or runtime_s."}}
-     [:string {:min 1 :max 64}]]
-    [:op {:x-display {:label "Compared how"
-                      :help "How the measured value is held against the threshold."
-                      :choices {">=" "At least the threshold."
-                                "<=" "At most the threshold."
-                                "=" "Exactly the threshold."}}}
-     (into [:enum] ops)]
-    [:threshold {:examples [0.95M]
-                 :x-display
-                 {:label "Threshold"
-                  :help "The number the measured value is held against. For arc it is 1: the roles are in order and the last shot's goal is done."}}
-     [:decimal {:min 0 :max 100000}]]
-    [:scope {:x-display
-             {:label "Judged over"
-              :help "The whole film, each shot, or each beat."
-              :choices {"film" "The whole film, measured once."
-                        "shot" "Each shot on its own."
-                        "beat" "Each beat on its own."}}}
-     (into [:enum] scopes)]
-    [:role {:optional true
-            :x-display
-            {:label "Only shots of this role"
-             :help "With the scope shot: judge only the shots of this role. Left empty, every shot is judged."
-             :choices {"friction" "A shot that shows what is hard."
-                       "turn" "A shot where the thing changes."
-                       "payoff" "A shot that shows it done."}}}
-     [:maybe (into [:enum] roles)]]
-    output-field
-    unless-field
-    [:severity {:x-display
-                {:label "A miss is"
-                 :help "fail stops the film from being sent; warn is reported beside it."
-                 :choices {"fail" "The film is not sent."
-                           "warn" "The miss is reported beside the film."}}}
-     (into [:enum] severities)]
-    [:why {:examples ["A film that leaves most of the frame grey reads as broken."]
-           :x-display {:label "Why"
-                       :help "One sentence: what a film that misses this rule gets wrong."}}
-     [:string {:min 1 :max 480}]]
-    [:origin {:examples ["craft"]
-              :x-display
-              {:label "Whose note"
-               :help "Who asked for the rule: a person's own words, quoted, or the word craft."}}
-     [:string {:min 1 :max 480}]]
-    ;; written by `restate`, never by the boot seed's own
-    [:restated_by {:optional true
-                   :x-ref {:principal true}
-                   :x-display
-                   {:raw true
-                    :label "Who restated it"
-                    :help "Who last restated the rule's output or exemption. The boot seed leaves a rule that carries this alone."}}
-     [:maybe [:string {:max 128}]]]]
+   :schema (conj (into [:map] made-fields) restated-by-field)
+   ;; the create model omits `restated_by`: a create that names it is
+   ;; refused at the schema, and the create form does not show it
+   :create-schema (into [:map] made-fields)
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :metric #{:eq :in}
                 :scope #{:eq}
                 :severity #{:eq}}
    :sortable {:fields [:name] :default "name"}
+   ;; the judging door (spec-agent-demo-walks § 8d): the take in the
+   ;; field names `metrics` reads. Every field is optional, because a
+   ;; take that lacks one leaves its rule unmeasured and is not refused
+   :collection-doors
+   {:judge
+    {:summary "Score a take against the active rules. It reads the rules and writes nothing."
+     :input
+     [:map
+      [:take
+       [:map
+        [:film {:optional true}
+         [:map
+          [:content_box {:optional true}
+           [:map [:x :double] [:y :double] [:w :double] [:h :double]]]
+          [:frame {:optional true} [:map [:w :double] [:h :double]]]
+          [:dead_air_s {:optional true} :double]
+          [:chrome_leaks {:optional true} :int]
+          [:runtime_s {:optional true} :double]
+          [:output {:optional true} (into [:enum] outputs)]]]
+        [:shots {:optional true}
+         [:vector
+          [:map
+           [:caption {:optional true} :string]
+           [:role {:optional true} (into [:enum] roles)]
+           [:goal_state {:optional true} :string]
+           [:zoom {:optional true} :boolean]
+           [:focus_box {:optional true}
+            [:map [:x :double] [:y :double] [:w :double] [:h :double]]]
+           [:viewport {:optional true} [:map [:w :double] [:h :double]]]
+           [:focus_type_px {:optional true} :double]
+           [:focus_contrast {:optional true} :double]
+           [:hold_s {:optional true} :double]
+           [:words {:optional true} :int]
+           ;; a count, or the list of names
+           [:surfaces_changed {:optional true} :any]]]]]]]}}
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot

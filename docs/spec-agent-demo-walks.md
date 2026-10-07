@@ -816,7 +816,12 @@ number for a film metric, and one number per shot for a shot metric.
 that asks for a zoom, and a shot may carry its `caption`.
 
 `POST /api/film_rules/-/judge` is the door that judges a take
-(`film-rules/judge`). It is safe: it reads the rules and writes
+(`film-rules/judge`). The kind declares it under `:collection-doors`,
+the key for a safe door on a collection, so `GET /api/film_rules` names
+`judge` under `actions` with its method, href, input schema and
+`safety`, the OpenAPI document lists the route, and `waymark_invoke`
+with the kind, the action `judge`, the input and no id answers what the
+route answers. It is safe: it reads the rules and writes
 nothing, and whoever may read `film_rule` rows may call it. Its input
 is `{take: {film, shots}}` in the field names above. Its answer is
 `{verdict, unmeasured, rules}`. `rules` holds one entry for each active

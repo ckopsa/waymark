@@ -336,7 +336,18 @@
                             :parameters [id-param]
                             :responses {"204" {:description "Discarded"}}}})
            paths)))
-     base
+     ;; the safe collection doors (:collection-doors)
+     (into base
+           (map (fn [[dname door]]
+                  [(:href door)
+                   {:post {:tags [kname]
+                           :summary (or (:summary door)
+                                        (str (name dname) " (safe collection door)"))
+                           :requestBody (body-of (:input door))
+                           :responses {"200" {:description "The door's answer; nothing is written"}
+                                       "404" (resp-ref "not_found")
+                                       "422" (resp-ref "schema_invalid")}}}]))
+           (collections/collection-doors rdef))
      (machine/actions-seq rdef))))
 
 (defn- surface-paths
