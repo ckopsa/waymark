@@ -789,6 +789,15 @@
     (is (str/includes? body "onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},"))
     (is (str/includes? body "onclick: e => exportChipClick(e, item, rel, l)},"))))
 
+(deftest ui-row-page-offers-a-walks-export-one-time
+  ;; a walk's row page draws its export as the Export button, which reads
+  ;; as the viewer and marks the walk exported: the links strip leaves
+  ;; that rel out, so no plain chip stands beside the button
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function linksStrip(doc, held = []) {"))
+    (is (str/includes? body ".filter(([rel, l]) => l && l.href && !held.includes(rel));"))
+    (is (str/includes? body "const chips = linksStrip(doc, walkExportHref(doc) ? [\"export\"] : []);"))))
+
 (deftest ui-replay-draws-an-invitation-frame
   ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
   ;; dialog read-only, with every named field lit, the note and the
