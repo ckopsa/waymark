@@ -2435,9 +2435,11 @@ const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || 
    left out when it is not drawn, when no line of it can be seen, when
    it is under `skip`, and when it is a field's value. A line can be
    seen when a part of its box is in the viewport and in every ancestor
-   that clips it (filmClip), and nothing is drawn over the centre of
-   that part (filmCovered): one point is asked for a line, so a line
-   half covered is listed, and a run with one such line is listed whole. The secret dialog says its
+   that clips it (filmClip). Five points of that part are asked
+   (filmPoints), each for what is drawn over it (filmCovered), and a run
+   is left out when more than half of the points asked for its lines
+   are covered: a run mostly covered is not listed, and a run half
+   covered or less is listed whole. The secret dialog says its
    heading and its buttons and nothing else, as readSurface does: a beat
    is kept. */
 /* the part of the viewport `p`'s text can be drawn in, as {left, top,
@@ -2470,26 +2472,70 @@ function filmClip(p) {
   }
   return c;
 }
+/* the points asked for the part of a line from (l, t) to (r, u), each
+   as {x, y}: its centre, and the four points a quarter in from its
+   corners */
+const filmPoints = (l, t, r, u) =>
+  [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]
+    .map(([a, b]) => ({x: l + (r - l) * a, y: t + (u - t) * b}));
+/* what `f` answers while every element takes the pointer, so that
+   `document.elementsFromPoint` lists the ones that take none where they
+   are drawn; null where no sheet can be adopted for it */
+function filmAllTake(f) {
+  if (!document.elementsFromPoint || !document.adoptedStyleSheets || !window.CSSStyleSheet)
+    return null;
+  /* a copy: the document's own list is live, and would keep the sheet */
+  const was = [...document.adoptedStyleSheets];
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("* { pointer-events: auto !important }");
+    document.adoptedStyleSheets = [...was, sheet];
+    return f();
+  } catch (e) {
+    return null;
+  } finally {
+    document.adoptedStyleSheets = was;
+  }
+}
+/* whether `e` draws something of its own a viewer cannot read through:
+   a background colour or image, or a picture. A box that only holds
+   others, or draws with a pseudo-element as the replay pointer does,
+   draws nothing here. */
+function filmDraws(e) {
+  if (e.checkVisibility &&
+      !e.checkVisibility({opacityProperty: true, visibilityProperty: true})) return false;
+  if (e.closest("svg") || e.matches("img, canvas, video, iframe")) return true;
+  const cs = getComputedStyle(e), c = filmRgba(cs.backgroundColor);
+  return cs.backgroundImage !== "none" || !c || c[3] > 0;
+}
 /* whether something that is not `p`'s ancestor is drawn over the point
-   (x, y) of `p`'s text: the element the page answers there, or the
-   caption band, which takes no pointer and so is asked by its rect. A
+   `q` of `p`'s text. `q` is {x, y, h}, where `h` is the element the
+   page answers there, and `stack` is what the page answers there, from
+   the top down, while every element takes the pointer (filmAllTake).
+   The point is covered by the caption band, which is asked by its rect;
+   by an element above `h` and above the text in `stack`, which takes no
+   pointer and is asked for what it draws (filmDraws); and by `h`. A
    modal is drawn over the band, and a modal's backdrop dims the page
-   and does not hide it. An element that takes no pointer is never the
-   page's answer, so it is not asked. */
-function filmCovered(p, x, y) {
+   and does not hide it. */
+function filmCovered(p, q, stack) {
   const within = e => {
     const b = e.getBoundingClientRect();
-    return x >= b.left && x < b.right && y >= b.top && y < b.bottom;
+    return q.x >= b.left && q.x < b.right && q.y >= b.top && q.y < b.bottom;
   };
+  const own = e => e.contains(p) || p.contains(e);
   const band = $("#replaycaption"), front = filmFront();
   if (band && !band.contains(p) && !(front && front.contains(p)) && within(band)) return true;
-  if (!document.elementFromPoint || getComputedStyle(p).pointerEvents === "none") return false;
-  const h = document.elementFromPoint(x, y);
-  if (!h || h.contains(p) || p.contains(h)) return false;
-  return !(h.matches("dialog") && !within(h));
+  if (!document.elementFromPoint) return false;
+  for (const e of stack) {
+    if (e === q.h || own(e)) break;
+    if (filmDraws(e)) return true;
+  }
+  if (getComputedStyle(p).pointerEvents === "none") return false;
+  if (!q.h || own(q.h)) return false;
+  return !(q.h.matches("dialog") && !within(q.h));
 }
 function filmRuns(root, skip) {
-  const runs = [], range = document.createRange();
+  const found = [], range = document.createRange();
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = w.nextNode(); n; n = w.nextNode()) {
     const p = n.parentElement, s = n.textContent.replace(/\s+/g, " ").trim();
@@ -2500,15 +2546,22 @@ function filmRuns(root, skip) {
                           : !p.getClientRects().length) continue;
     range.selectNodeContents(n);
     const c = filmClip(p);
-    const seen = [...range.getClientRects()].some(b => {
+    const pts = [...range.getClientRects()].flatMap(b => {
       const l = Math.max(b.left, c.left), t = Math.max(b.top, c.top),
             r = Math.min(b.right, c.right), u = Math.min(b.bottom, c.bottom);
-      return r > l && u > t && !filmCovered(p, (l + r) / 2, (t + u) / 2);
+      return r > l && u > t ? filmPoints(l, t, r, u) : [];
     });
-    if (!seen) continue;
-    runs.push({s, p});
+    if (!pts.length) continue;
+    if (document.elementFromPoint)
+      for (const q of pts) q.h = document.elementFromPoint(q.x, q.y);
+    found.push({s, p, pts});
   }
-  return runs;
+  const stacks = filmAllTake(() =>
+    found.map(f => f.pts.map(q => document.elementsFromPoint(q.x, q.y))));
+  return found.filter((f, i) => {
+    const covered = f.pts.filter((q, j) => filmCovered(f.p, q, stacks ? stacks[i][j] : []));
+    return covered.length * 2 <= f.pts.length;
+  }).map(({s, p}) => ({s, p}));
 }
 const filmRunsText = (runs, max) => runs.map(r => r.s).join(" ").slice(0, max);
 /* the screen's text in reading order: the modal's first, since it is
