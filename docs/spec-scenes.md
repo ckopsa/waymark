@@ -56,13 +56,20 @@ to any other tool is judged only where it names a `kind`.
 ## A shot
 
 A shot is a map with exactly one verb. Beside the verb it may hold
-`say` (the caption), `expect`, `bind` and `role`. Any other key is
-refused as an unknown verb.
+`say` (the caption), `expect`, `bind`, `role`, `speed` and `trim`. Any
+other key is refused as an unknown verb.
 
 `role` is the shot's part in the story: `friction`, `turn` or `payoff`
 (`film-rules/roles`). A shot need not have one. The film rule `arc`
 reads the roles of a take's shots, so the scene is where they are
 written.
+
+`speed` is how fast the shot's frames play in the film: a number from
+0.25 to 8, where 2 is twice as fast. `trim: true` cuts the shot's frames
+from the film. A trimmed shot is still performed, checked and kept in
+the take, and it holds no `say`, because its caption would never show.
+The engine only checks the two keys; the filmer reads them off the
+scene's shots.
 
 | Verb | Keys | What `check` judges |
 |---|---|---|
@@ -134,6 +141,9 @@ draft. The sentences:
 | a shot | unknown verb `<key>`; the verbs are open, tap, press, type, hold, wait_for, meanwhile. |
 | a shot | a shot has one verb, and this one has `<n>`. |
 | a shot | `<role>` is not a role; the roles are friction, turn, payoff. |
+| a shot | `speed` is a number from 0.25 to 8, and this one is `<speed>`. |
+| a shot | `trim` is true or false, and this one is `<trim>`. |
+| a shot | a shot with `trim` is cut from the film, so it has no `say`. |
 | `open` | `open` names `self` or `collection`. |
 | `open`, a target | `<address>` names no kind this engine serves. |
 | a target | `<name>` is not a surface in the registry (GET /api/-/ui/surfaces). |
