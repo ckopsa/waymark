@@ -10,6 +10,7 @@
             [next.jdbc :as jdbc]
             [waymark10.cli :as cli]
             [waymark10.fixtures :as fx]
+            [waymark10.server.collections :as coll]
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -59,6 +60,20 @@
 (defn- self-of [out]
   (some #(re-find #"/api/\S+" %)
         (filter #(str/starts-with? % "meal ") (str/split-lines out))))
+
+(deftest a-safe-collection-door-prints-as-safe
+  ;; the entry as the collection document advertises it: safety.safe
+  ;; and no effect (ticket 80c6c9e2)
+  (let [doc {:actions (coll/collection-doors
+                       {:plural "film_rules"
+                        :collection-doors
+                        {:judge {:summary "Score a take."}}})}
+        out (with-out-str (#'cli/print-actions doc))]
+    (is (str/includes? out "  judge  [safe]") out)
+    (testing "it is no move: no target state, no bulk, no create"
+      (is (not (str/includes? out "→")) out)
+      (is (not (str/includes? out "bulk")) out)
+      (is (not (str/includes? out "non-idempotent")) out))))
 
 (deftest cli-walks-the-wire
   (testing "index → 0, kinds listed"

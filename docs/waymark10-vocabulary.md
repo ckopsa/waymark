@@ -596,6 +596,43 @@ EMPTY rather than dropping it. Embedded collections (`embed.<rel>.*`) take
 no default filters — their href is the parent's, and their advertised
 columns drop the `default` the parent will not apply.
 
+## 13 · `:collection-doors` — a safe door on a collection
+
+```clojure
+:collection-doors
+{:judge {:summary "Score a take against the active rules. It reads the rules and writes nothing."
+         :input [:map [:take [:map …]]]}}
+```
+
+A `{name {:input <malli> :summary "…"}}` map: each entry is
+`POST /api/{plural}/-/{name}`, a route that moves no row and writes
+nothing. It is not an action: it has no `:from`, no `:to`, no guards and
+no log entry, and whoever may read the kind may call it — a scoped grant
+keeps it as it keeps `query`. The key is the ADVERTISEMENT only; the
+route itself is core's own handler. It is never in the fingerprint
+(`:computed`'s precedent). The one kind that declares it today is
+`film_rule` (`judge`, [spec](spec-agent-demo-walks.md) § 8d).
+
+The collection document names each door under `actions`, beside `create`,
+`query` and the bulk entries, with `method`, `href`, `input`, `summary`
+and `safety {safe: true, idempotent: true, reversible: true, confirm:
+false}` — and NO `effect`. `safety.safe` is the mark a reader keys on:
+
+- the OpenAPI document lists the route;
+- the connector's `waymark_invoke` with the kind, the door's name, the
+  input and no id answers what the route answers;
+- the CLI prints the entry flagged `[safe]`, with no `→ state`, and
+  `act <collection> <name> --input …` posts it and prints the answer;
+- the generic UI offers NO button for it. Its answer is a verdict, not
+  an envelope, so there is no row to land on; `collectionDoors`
+  (`ui/130-collection.js`) sorts a `safety.safe` entry away from the
+  bulk moves and the create before the bar is drawn, whatever its name.
+
+The key is for a POST on a COLLECTION. A safe GET on a ROW — a walk's
+`GET /api/walks/{id}/export` — does not belong under it or under a
+sibling key: a GET a reader may follow is a link, and it is advertised
+under the row's `links`, as the collection's `worksheet` download is.
+
 ## 14 · `:process` — the workflow as a resource
 
 One key that projects a whole step machine ([spec](spec-process.md)) —
