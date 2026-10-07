@@ -570,6 +570,29 @@
       (is (str/includes? page "return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);"))
       (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))
 
+(deftest a-row-folds-the-doors-that-are-not-everyday-ones
+  ;; f66dd175. The page is not executed here, so this pins the seams: the
+  ;; marks are read from the kind's well-known entry, a kind with none
+  ;; keeps its bar, a lit door is never folded, and an everyday door or
+  ;; the pinned quest's door stays in the bar while it is shut
+  (let [page (sut/assemble)]
+    (testing "the marks are the kind's, and a kind with none is unchanged"
+      (is (str/includes? page "return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];"))
+      (is (str/includes? page "if (!every.length) return null;"))
+      (is (str/includes? page "else if (notes) panel.append(notes);")))
+    (testing "only a shut door folds, and not an everyday one or the quest's"
+      (is (str/includes? page "[...bar.querySelectorAll(\"button.blocked[data-surface]\")]"))
+      (is (str/includes? page "return !every.includes(name) && !pinned.has(name);"))
+      (is (str/includes? page "if (d.self === self && d.action) out.add(d.action);"))
+      (is (str/includes? page "if (head && head.self === self && head.door) out.add(head.door);")))
+    (testing "the rest and the reasons are under one closed line, with their names"
+      (is (str/includes? page "`More doors (${rest.length})`),"))
+      (is (str/includes? page "el(\"div\", {class: \"actions\"}, rest), notes);"))
+      (is (str/includes? page "el(\"summary\", {class: \"muted\", \"data-surface\": \"doors-more\"},"))
+      (is (not (str/includes? page "el(\"details\", {class: \"moredoors\", open"))))
+    (testing "the row page draws the bar, and then folds it"
+      (is (str/includes? page "const more = foldDoors(bar, notes, doc);")))))
+
 (deftest the-lite-dialog-shows-no-machinery
   ;; ui_lite.html is one file, not assembled, and the bench check skips
   ;; it: the four internal strings ticket 78effb3b took out of its

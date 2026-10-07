@@ -98,6 +98,41 @@ function shutDoor(name, entry, doc) {
   btn.addEventListener("click", () => questFromDoor(btn, name, doc));
   return btn;
 }
+/* ── everyday doors (ticket f66dd175) ──────────────────────────────────
+   A kind's law may mark some doors `everyday` in their display, and the
+   kind's entry in the well-known document lists them: a shut door's
+   entry carries no display. On such a kind the bar keeps every door the
+   viewer can use now, every shut door that is everyday, and the door the
+   pinned quest names as its goal or its next step. Every other shut door
+   moves under one closed 'More doors (n)' line, and the reasons move
+   with them. Each keeps its surface name. A kind that marks none keeps
+   its bar as it is. */
+function everydayDoors(kind) {
+  return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];
+}
+function questDoors(self) {
+  const q = replay ? replay.quest : questDoc;
+  const d = (q || {}).data || {}, head = q ? questHead(q) : null;
+  const out = new Set();
+  if (d.self === self && d.action) out.add(d.action);
+  if (head && head.self === self && head.door) out.add(head.door);
+  return out;
+}
+function foldDoors(bar, notes, doc) {
+  const every = everydayDoors(doc.kind);
+  if (!every.length) return null;
+  const pinned = questDoors((doc.self || "").split("?")[0]);
+  const rest = [...bar.querySelectorAll("button.blocked[data-surface]")]
+    .filter(b => {
+      const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+      return !every.includes(name) && !pinned.has(name);
+    });
+  if (!rest.length) return null;
+  return el("details", {class: "moredoors"},
+    el("summary", {class: "muted", "data-surface": "doors-more"},
+       `More doors (${rest.length})`),
+    el("div", {class: "actions"}, rest), notes);
+}
 /* the tap: the create door is read off the quests collection, as every
    button is, and rehearsed (dry_run=1). The rehearsal writes nothing and
    answers `preview`, the plan the quest would be given; the sheet shows
