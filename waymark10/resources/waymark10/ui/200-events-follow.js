@@ -1936,7 +1936,15 @@ function replayGestureTarget(f) {
   if (sheet) {
     /* one tap on Accept quest makes the quest and then pins it: a pin
        refused under a sheet whose own create was made (replaySheetMade,
-       data-replay-accepted) is that same tap, pressed at the create */
+       data-replay-accepted) is that same tap, pressed at the create.
+       That create never carries a notice (replayNotice), so the tap is
+       not left with no press: a `refusal` frame is written to the
+       refused hand's self walk alone (walks.clj, record-refused!), a
+       followed walk of another person holds none, and in a self walk
+       the sheet's create is the recorder's own. Another hand's move
+       reaches a self walk only as a move on a row a quest's plan names
+       (record-heard!), with no document of a quest it made, and
+       replaySheetMade reads the goal from that document */
     if (f.type === "refusal" && f.action === "pin" &&
         sheet.hasAttribute("data-replay-accepted")) return null;
     if (f.type === "refusal")
