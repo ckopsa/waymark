@@ -305,7 +305,13 @@
                        (render/envelope rdef row
                                         (cond-> {:principal t/anonymous
                                                  :now ((:now-fn eng))
-                                                 :services (:services eng)}
+                                                 :services (:services eng)
+                                                 ;; the kind map, as the router's
+                                                 ;; render-opts lend it: a :computed
+                                                 ;; field's :rdef-of and a link's
+                                                 ;; target plural read it (ticket
+                                                 ;; 92ba2f71)
+                                                 :resources (:kinds @(:registry eng))}
                                           reads (assoc :evidence-reads reads)))))))]
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
