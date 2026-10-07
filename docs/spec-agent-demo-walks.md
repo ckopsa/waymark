@@ -732,7 +732,8 @@ film. A rule carries `name` (a slug, unique), `metric`, `op` (`>=`,
 `payoff`), `severity` (`fail` or `warn`), `why` (one sentence) and
 `origin` (a person's words, quoted, or `craft`). Its states are
 `active` and `retired`. A person or the sitter of a domain's mayor
-seat makes one; only a person retires one.
+seat makes one; only a person retires one, and only a person restores
+a retired one.
 
 The metric vocabulary is closed (`film-rules/metrics`). A rule that
 names any other metric is refused, and the refusal lists these. Each

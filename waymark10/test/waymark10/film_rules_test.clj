@@ -68,11 +68,14 @@
 (defn- make-rule! [extra principal]
   (:row (inv/create! *eng* :film_rule (rule-body extra) {:principal principal})))
 
-(defn- retire! [name' principal]
+(defn- move! [action name' principal]
   (let [row (rule-named name')]
-    (inv/invoke! *eng* :film_rule (str (:id row)) :retire {}
+    (inv/invoke! *eng* :film_rule (str (:id row)) action {}
                  {:principal principal
                   :if-match (inv/etag :film_rule (str (:id row)) (:version row))})))
+
+(defn- retire! [name' principal]
+  (move! :retire name' principal))
 
 (defn- state-of [row] (name (:state row)))
 
@@ -135,4 +138,10 @@
     (is (= "active" (state-of (rule-named "to-retire")))))
   (testing "a person's goes through"
     (retire! "to-retire" colton)
-    (is (= "retired" (state-of (rule-named "to-retire"))))))
+    (is (= "retired" (state-of (rule-named "to-retire")))))
+  (testing "an agent's restore is refused"
+    (is (some? (refusal #(move! :restore "to-retire" clerk))))
+    (is (= "retired" (state-of (rule-named "to-retire")))))
+  (testing "a person's restore brings the rule back"
+    (move! :restore "to-retire" colton)
+    (is (= "active" (state-of (rule-named "to-retire"))))))

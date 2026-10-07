@@ -126,7 +126,7 @@
    :nav :secondary
    :states [:active :retired]
    :initial :active
-   :terminal #{:retired}
+   :terminal #{}
    :summary "{data.name} · {data.metric} {data.op} {data.threshold} · {data.severity}"
    :label-template "{data.name}"
    :unique [[:name]]
@@ -145,7 +145,10 @@
                :help "What the scorer measures: frame_fill, focus_share, type_px, contrast, read_time_ratio, dead_air_s, surfaces_changed, chrome_leaks, arc or runtime_s."}}
      [:string {:min 1 :max 64}]]
     [:op {:x-display {:label "Compared how"
-                      :help "How the measured value is held against the threshold."}}
+                      :help "How the measured value is held against the threshold."
+                      :choices {">=" "At least the threshold."
+                                "<=" "At most the threshold."
+                                "=" "Exactly the threshold."}}}
      (into [:enum] ops)]
     [:threshold {:examples [0.95M]
                  :x-display
@@ -154,16 +157,24 @@
      [:decimal {:min 0 :max 100000}]]
     [:scope {:x-display
              {:label "Judged over"
-              :help "The whole film, each shot, or each beat."}}
+              :help "The whole film, each shot, or each beat."
+              :choices {"film" "The whole film, measured once."
+                        "shot" "Each shot on its own."
+                        "beat" "Each beat on its own."}}}
      (into [:enum] scopes)]
     [:role {:optional true
             :x-display
             {:label "Only shots of this role"
-             :help "With the scope shot: judge only the shots of this role. Left empty, every shot is judged."}}
+             :help "With the scope shot: judge only the shots of this role. Left empty, every shot is judged."
+             :choices {"friction" "A shot that shows what is hard."
+                       "turn" "A shot where the thing changes."
+                       "payoff" "A shot that shows it done."}}}
      [:maybe (into [:enum] roles)]]
     [:severity {:x-display
                 {:label "A miss is"
-                 :help "fail stops the film from being sent; warn is reported beside it."}}
+                 :help "fail stops the film from being sent; warn is reported beside it."
+                 :choices {"fail" "The film is not sent."
+                           "warn" "The miss is reported beside the film."}}}
      (into [:enum] severities)]
     [:why {:examples ["A film that leaves most of the frame grey reads as broken."]
            :x-display {:label "Why"
@@ -186,12 +197,19 @@
                    a-person-or-a-mayor-makes-the-rule]
    :actions
    {:retire
-    {:from #{:active} :to :retired
+    {:from #{:active} :to :retired :undo :restore
      :guards [a-person-retires-the-rule]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "A retired rule is not scored again, and its name stays taken."}
+     :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Retire" :style :danger :order 9
-               :description "Stop scoring films against this rule"}}}})
+               :description "Stop scoring films against this rule"}}
+    ;; retiring writes nothing but the state, so coming back is free:
+    ;; the same person who may retire a rule may restore it
+    :restore
+    {:from #{:retired} :to :active :undo :retire
+     :guards [a-person-retires-the-rule]
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Restore" :order 1
+               :description "Score films against this rule again"}}}})
 
 ;; ── the boot seed ───────────────────────────────────────────────────
 
