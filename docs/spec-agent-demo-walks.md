@@ -718,6 +718,7 @@ selector. Every interactive surface a demo can name carries
 | `dialog.later` | The form's Do this later button. |
 | `dialog.decline` | The form's Decline button for an invitation; it reads Skip in a led walk. |
 | `dialog.stop` | The form's Stop button in a led walk. |
+| `dialog.accept` | The form's Accept as quest button, offered under a refusal. |
 | `secret` | The dialog that shows a secret one time, with its Copy button. |
 | `secret.copy` | The secret dialog's first Copy button. |
 | `secret.copy-other` | The secret dialog's second copy button, where the dialog has one. |
@@ -739,7 +740,6 @@ selector. Every interactive surface a demo can name carries
 | `quest.go` | The Go button of the next step on a quest's own page. |
 | `caption` | The caption band of a replay. |
 | `refusal` | The line a refused write is said in, in a form or in the sheet. |
-| `refusal.accept` | The Accept as quest button offered under a refusal. |
 
 The fixed parts of the navigation bar are spelled with a hyphen
 (`nav-home`), so that no kind's name can make `nav.<kind>` mean one of
