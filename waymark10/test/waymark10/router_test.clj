@@ -129,13 +129,19 @@
             "plan"
             ;; docs/spec-quests.md: a goal a person accepted, and its plan
             "quest"
-            "role" "runner_link" "runner_provider" "schedule"
+            "role" "runner_link" "runner_provider"
+            ;; docs/spec-scenes.md: a demo written as shots
+            "scene"
+            "schedule"
             ;; docs/spec-scheduled-actions.md R-1: a call stored for a time
             "scheduled_action" "seat"
             ;; and the secret: a value the owner enters once and a door
             ;; call names by reference
             "secret"
-            "sitting" "subscription" "task"
+            "sitting" "subscription"
+            ;; docs/spec-scenes.md: one performance of a scene
+            "take"
+            "task"
             ;; docs/spec-transcript.md: and what a sitting said, one
             ;; row per sitting and one per line, core's beside the
             ;; sitting
