@@ -38,6 +38,8 @@
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Reopen" :order 2}}}}))
 
+;; A fixture of its own: this cast is the toy seed's, not the demo
+;; seed's, so its displays do not follow the demo cast's names.
 (def ^:private toy
   {:seed "toy"
    :version 1
