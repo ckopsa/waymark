@@ -224,6 +224,15 @@
     (testing "a plain ticket completes without a showcase"
       (is (= :available (:status (refusal (at :open) c :complete)))))))
 
+(deftest the-law-marks-the-everyday-doors
+  ;; ticket f66dd175: the bar keeps these in view while they are shut,
+  ;; and folds every other shut door under 'More doors'
+  (is (= ["block" "complete" "defer" "drop" "groom" "restate" "resume" "unblock"]
+         ((requiring-resolve 'waymark10.resource/everyday-doors) ticket)))
+  (testing "a door the law does not mark is not one"
+    (is (not (get-in ticket [:actions :merge_after :display :everyday])))
+    (is (not (get-in ticket [:actions :reparent :display :everyday])))))
+
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
     (is (= #{:prioritize :block :defer :complete :drop :merge_after :reparent}
