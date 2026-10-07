@@ -900,7 +900,21 @@
       (doseq [id ["sharebtn" "recordbtn" "replaybtn" "ledgertoggle" "grantchip"]]
         (is (str/includes? body (str "id=\"" id "\"")))))
     (testing "the theme control and the principal box are not among them"
-      (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))))
+      (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))
+    (testing "a demo engine's banner and the recording chip are not drawn"
+      ;; the recording chip is #recordbtn itself: recordChip writes the
+      ;; `■ Stop m:ss` into the button the rule above already names
+      (is (str/includes? body "html.present #demobanner { display: none !important; }"))
+      (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
+      (is (str/includes? body "function recordChip() {\n  const b = $(\"#recordbtn\");"))
+      (is (str/includes? body "b.textContent = `■ Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, \"0\")}`;")))
+    (testing "and out of presentation mode both are drawn"
+      ;; nothing but the banner's own [hidden], film mode and the
+      ;; `present` class takes either away
+      (is (= #{"#demobanner[hidden]" "html[data-film] #demobanner" "html.present #demobanner"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#demobanner(?:\[hidden\])?)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body)))))
+      (is (= #{"html.present #recordbtn"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#recordbtn)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body))))))))
 
 (deftest ui-film-mode-says-when-it-has-ended
   ;; the root element's data-film is what the camera reads: `ready` under

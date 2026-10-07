@@ -596,7 +596,12 @@ replay.
   at the end of a row's crumb (the crumb keeps its kind), the version
   line (`v2 · law r1 · …`) of a row and of a dashboard, the grant chip
   (it shows a grant's id), and the header's developer buttons: share
-  (⧉), ● Record, ▶ file and ◷ Activity. The theme control and the
+  (⧉), ● Record, ▶ file and ◷ Activity. The recording chip is that
+  Record button while a walk records (`■ Stop 0:31`), so it is hidden
+  with it. A demo engine's banner (docs/spec-demo-clones.md § 3: when
+  the engine ends, and each walk that is not exported) is hidden too:
+  it is true for the person who runs the engine and is not for a film.
+  Outside presentation mode both show. The theme control and the
   sign-in stay. It is separate from film mode, so the performer can
   record a walk with it on: recording and replay are driven by page
   functions and not by those buttons. A beat's `text` carries none of
