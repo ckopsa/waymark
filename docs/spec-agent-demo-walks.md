@@ -787,8 +787,33 @@ map per shot in order. A box is `{x, y, w, h}`; a frame and a viewport
 are `{w, h}`. `surfaces_changed` is a count or the list of names.
 `film-rules/measure` reads one metric from a take by these names: one
 number for a film metric, and one number per shot for a shot metric.
-The scorer that writes the take is not built yet; these are the field
-names it is to carry.
+`film.output` is `phone` or `desktop`, `shot.zoom` is true on a shot
+that asks for a zoom, and a shot may carry its `caption`.
+
+`POST /api/film_rules/-/judge` is the door that judges a take
+(`film-rules/judge`). It is safe: it reads the rules and writes
+nothing, and whoever may read `film_rule` rows may call it. Its input
+is `{take: {film, shots}}` in the field names above. Its answer is
+`{verdict, unmeasured, rules}`. `rules` holds one entry for each active
+rule, in order of name: the rule's `name`, `metric`, `op`, `threshold`,
+`severity` and `why`, and a `verdict`:
+
+- `pass`: the value holds, or the shot is exempt.
+- `miss`: the value does not hold.
+- `unscored`: a filter leaves the rule out, as `output` does for
+  `type-size` on a desktop film.
+- `unmeasured`: the take lacks a field the metric needs. `missing`
+  names each one, as `film.dead_air_s`. An unmeasured rule is not a
+  pass.
+
+A scored film rule carries its `value`. A rule read from each shot
+misses when any shot misses, and carries `worst`: the `index`,
+`caption` and `value` of the shot that misses by the most, or of the
+measured shot nearest to a miss when none does. The overall `verdict`
+is `red` when a `fail` rule misses, else `warn` when any rule misses,
+else `green`; `unmeasured` lists the names of the unmeasured rules
+beside it. The scorer builds the take from its measurements and reads
+this answer; it holds no operator, filter or exemption of its own.
 
 The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),

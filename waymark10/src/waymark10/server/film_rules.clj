@@ -9,7 +9,9 @@
   The vocabulary is closed: `metrics` names every metric and the field
   of the take it is read from (docs/spec-agent-demo-walks.md § 8d). A
   rule naming any other metric is refused with the list. `measure` reads
-  one metric from a take, by those field names.
+  one metric from a take, by those field names. `judge` scores a whole
+  take against the rules and answers each rule's verdict; the router
+  serves it at POST /api/film_rules/-/judge, and it writes nothing.
 
   A person or the sitter of a domain's mayor seat makes a rule. Only a
   person retires one.
@@ -82,9 +84,10 @@
   (when (and (number? a) (number? b) (pos? b)) (double (/ a b))))
 
 (defn- word
-  "A role or a state as a string, however the take spells it."
+  "A role, a state or an enum field as a string, or nil: a take and a
+  body spell one as a string, and a row gives an enum back as a keyword."
   [v]
-  (when (or (string? v) (keyword? v)) (name v)))
+  (when (or (string? v) (keyword? v)) (not-empty (name v))))
 
 (defn- counted
   "A count, from a number or from the list of the things counted."
@@ -312,12 +315,6 @@
 
 ;; ── the judgment ────────────────────────────────────────────────────
 
-(defn- word
-  "A field's value as a string, or nil: a row gives an enum back as a
-  keyword and a body gives it as a string."
-  [v]
-  (when (some? v) (not-empty (name v))))
-
 (defn judges?
   "True when `rule` (a rule's data) is scored on this part of a take. A
   rule that names an output is scored only on a film rendered at it, and
@@ -349,6 +346,164 @@
         "<=" (<= value threshold)
         "=" (== value threshold)) :pass
       :else :miss)))
+
+;; ── the judging of a take ───────────────────────────────────────────
+
+(defn- sized? [m] (some? (area m)))
+
+(def ^:private film-needs
+  "Metric → the fields of the take it is read from, each with how to
+  tell that the take carries it."
+  {"frame_fill" [["film.content_box" #(sized? (get-in % [:film :content_box]))]
+                 ["film.frame" #(sized? (get-in % [:film :frame]))]]
+   "dead_air_s" [["film.dead_air_s" #(number? (get-in % [:film :dead_air_s]))]]
+   "chrome_leaks" [["film.chrome_leaks"
+                    #(number? (get-in % [:film :chrome_leaks]))]]
+   "arc" [["shots" #(some? (seq (:shots %)))]
+          ["shot.role" #(or (empty? (:shots %))
+                           (some (comp word :role) (:shots %)))]
+          ["shot.goal_state" #(or (empty? (:shots %))
+                                 (word (:goal_state (last (:shots %)))))]]
+   "runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]})
+
+(def ^:private shot-needs
+  "Metric → the fields of one shot it is read from, each with how to
+  tell that the shot carries it."
+  {"focus_share" [["shot.focus_box" #(sized? (:focus_box %))]
+                  ["shot.viewport" #(sized? (:viewport %))]]
+   "type_px" [["shot.focus_type_px" #(number? (:focus_type_px %))]]
+   "contrast" [["shot.focus_contrast" #(number? (:focus_contrast %))]]
+   "read_time_ratio" [["shot.hold_s" #(number? (:hold_s %))]
+                      ["shot.words" #(number? (:words %))]]
+   "surfaces_changed" [["shot.surfaces_changed"
+                        #(number? (counted (:surfaces_changed %)))]]})
+
+(defn- lacking
+  "The names of the `needs` that `part` of the take does not carry."
+  [needs part]
+  (vec (keep (fn [[field has?]] (when-not (has? part) field)) needs)))
+
+(defn- badness
+  "How far `value` stands on the wrong side of the rule's threshold."
+  [rule value]
+  (let [threshold (:threshold rule)]
+    (case (word (:op rule))
+      ">=" (- threshold value)
+      "<=" (- value threshold)
+      "=" (Math/abs (double (- value threshold))))))
+
+(defn- judge-shot
+  "One shot against a rule read from each shot: its index, its caption,
+  its verdict, and the value or the fields the shot lacks."
+  [rule film index shot value]
+  (merge
+   {:index index :caption (:caption shot)}
+   (cond
+     (not (judges? rule film shot)) {:verdict :unscored}
+     (exempt? rule shot) {:verdict :pass}
+     :else
+     (let [missing (lacking (shot-needs (word (:metric rule))) shot)]
+       (cond
+         (seq missing) {:verdict :unmeasured :missing missing}
+         ;; every field is there and still no number: a shot with no
+         ;; words has nothing to read
+         (not (number? value)) {:verdict :unscored}
+         :else {:verdict (verdict rule film shot value) :value value})))))
+
+(defn- judge-shots
+  "A rule read from each shot: a miss when any shot misses, else
+  unmeasured when any shot lacks a field, else a pass when any shot
+  passes. `worst` is the shot that misses by the most, or, when none
+  misses, the measured shot nearest to a miss."
+  [rule {:keys [film shots] :as tk}]
+  (if (empty? shots)
+    {:verdict "unmeasured" :missing ["shots"]}
+    (let [judged (map (fn [index shot value]
+                        (judge-shot rule film index shot value))
+                      (range) shots (measure tk (word (:metric rule))))
+          of (fn [v] (filter #(= v (:verdict %)) judged))
+          misses (of :miss)
+          passes (of :pass)
+          missing (vec (distinct (mapcat :missing judged)))
+          measured (filter #(number? (:value %))
+                           (if (seq misses) misses passes))
+          worst (when (seq measured)
+                  (apply max-key #(badness rule (:value %)) measured))]
+      (cond-> {:verdict (cond (seq misses) "miss"
+                              (seq missing) "unmeasured"
+                              (seq passes) "pass"
+                              :else "unscored")}
+        (seq missing) (assoc :missing missing)
+        worst (assoc :worst (select-keys worst [:index :caption :value]))))))
+
+(defn- judge-film
+  "A rule read from the film once."
+  [rule {:keys [film] :as tk}]
+  (let [metric (word (:metric rule))
+        needs (film-needs metric)
+        missing (lacking needs tk)
+        value (measure tk metric)]
+    (cond
+      (seq missing) {:verdict "unmeasured" :missing missing}
+      (not (number? value)) {:verdict "unmeasured" :missing (mapv first needs)}
+      :else {:verdict (name (verdict rule film nil value)) :value value})))
+
+(defn- judge-rule
+  "One rule's entry in the answer: what the rule says, and its verdict."
+  [rule tk]
+  (let [metric (word (:metric rule))]
+    (merge
+     {:name (:name rule)
+      :metric metric
+      :op (word (:op rule))
+      :threshold (:threshold rule)
+      :severity (word (:severity rule))
+      :why (:why rule)}
+     (cond
+       ;; the output filter is the film's, so it is judged before any shot
+       (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
+       (contains? shot-readers metric) (judge-shots rule tk)
+       (contains? film-readers metric) (judge-film rule tk)
+       :else {:verdict "unmeasured" :missing []}))))
+
+(defn judge
+  "The take `tk` scored against `rules` (each a rule's data), in order
+  of name. Each rule answers its name, metric, op, threshold, severity
+  and why, and a verdict: `pass`, `miss`, `unscored` (a filter leaves
+  the rule out) or `unmeasured` (the take lacks a field the metric
+  needs; `missing` names it). A scored film rule carries its `value`; a
+  rule read from each shot carries `worst`, the index, caption and value
+  of its worst shot. The overall verdict is `red` when a fail rule
+  misses, else `warn` when any rule misses, else `green`. An unmeasured
+  rule is not a pass: `unmeasured` names each one."
+  [rules tk]
+  (let [tk (if (map? tk) tk {})
+        tk (assoc tk :shots (if (sequential? (:shots tk)) (vec (:shots tk)) []))
+        judged (mapv #(judge-rule % tk) (sort-by (comp str :name) rules))
+        missed (filter #(= "miss" (:verdict %)) judged)]
+    {:verdict (cond (some #(= "fail" (:severity %)) missed) "red"
+                    (seq missed) "warn"
+                    :else "green")
+     :unmeasured (mapv :name (filter #(= "unmeasured" (:verdict %)) judged))
+     :rules judged}))
+
+(defn judge-take
+  "The take `tk` scored against every active rule the caller may read.
+  `row?` is the caller's visibility over rows, (fn [kind id]), or nil
+  for a caller who reads them all. It reads the rules and writes
+  nothing."
+  [eng tk row?]
+  (let [rdef (get (inv/resources eng) kind)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (vec (store/query-rows st tx kind {} {:limit 100000}))))]
+    (judge (into []
+                 (comp (map #(inv/decode-row rdef %))
+                       (filter #(= "active" (word (:state %))))
+                       (filter #(or (nil? row?) (row? kind (str (:id %)))))
+                       (map :data))
+                 rows)
+           tk)))
 
 ;; ── the boot seed ───────────────────────────────────────────────────
 
