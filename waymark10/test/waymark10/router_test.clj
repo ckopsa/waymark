@@ -235,6 +235,12 @@
       (is (= ["plan.assign_meal"]
              (get-in b [:unavailable :finalize :remedies]))))
 
+    (testing "a shut door wears the display its law declares"
+      (is (= "Finalize plan"
+             (get-in b [:unavailable :finalize :display :label])))
+      (is (not (contains? (get-in b [:unavailable :reopen]) :display))
+          "a door that declares none carries none"))
+
     (testing "out-of-state actions narrate their states"
       (is (= "Available in state(s) Planned; the resource is Draft."
              (get-in b [:unavailable :reopen :reason])))
