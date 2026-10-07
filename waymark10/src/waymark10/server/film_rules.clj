@@ -24,8 +24,10 @@
   gains them there, through `restate`. A restate by anyone else writes
   `restated_by`, and the seed leaves a row that carries it alone."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -610,6 +612,19 @@
                     :else "green")
      :unmeasured (mapv :name (filter #(= "unmeasured" (:verdict %)) judged))
      :rules judged}))
+
+(defn take-errors
+  "The judging door's input contract: `body` held to the input the kind
+  advertises for `judge` under :collection-doors, closed, so a
+  misspelled field is refused and not left unmeasured. A `:double` is
+  read as any number, because that is what the advertised schema says
+  and a JSON 1080 is not a float. Field-keyed errors, or nil when the
+  body is valid."
+  [rdef body]
+  (schema/closed-errors
+   (walk/postwalk-replace {:double 'number?}
+                          (get-in rdef [:collection-doors :judge :input]))
+   body))
 
 (defn judge-take
   "The take `tk` scored against every active rule the caller may read.

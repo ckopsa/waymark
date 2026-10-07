@@ -622,3 +622,78 @@
              (wire/read-json (get-in out [:content 0 :text])))))
     (testing "it writes nothing"
       (is (= before (rows-of {}))))))
+
+(defn- scoped
+  "The grant's own closure shapes: a session that reads `kinds` and is
+  granted no action at all."
+  [& kinds]
+  (let [reads? (fn [k] (contains? (set kinds) (name k)))]
+    {:principal clerk
+     :visibility {:kind? reads?
+                  :row? (fn [k _id] (reads? k))
+                  :action? (constantly false)
+                  :arg? (constantly true)
+                  :field? (constantly true)}}))
+
+(defn- judge-tool [session args]
+  (mcp/call-tool *eng* (mcp/door *eng*) session "waymark_invoke"
+                 (merge {:kind "film_rule" :action "judge"} args)))
+
+(defn- said [out] (get-in out [:content 0 :text]))
+
+(deftest a-scoped-caller-reaches-the-judge-door-by-reading-the-kind
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [input {:input {:take grey-corner}}
+        whole (judge-tool {:principal colton} input)
+        reader (judge-tool (scoped "film_rule") input)
+        blind (judge-tool (scoped "seat") input)]
+    (testing "a grant that reads the kind and names no action is answered"
+      (is (not (:isError reader)))
+      (is (= (wire/read-json (said whole)) (wire/read-json (said reader)))))
+    (testing "a grant that does not read the kind gets the collection's not-found"
+      (is (true? (:isError blind)))
+      (is (= 404 (:status (wire/read-json (said blind))))))))
+
+(deftest the-judge-door-is-not-scheduled
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [later {:at "2027-01-04T08:30:00-06:00" :input {:take grey-corner}}
+        out (judge-tool {:principal colton} later)
+        rehearsed (judge-tool {:principal colton} (assoc later :dry_run true))]
+    (testing "`at` on a safe collection door is refused in its own sentence"
+      (doseq [o [out rehearsed]]
+        (is (true? (:isError o)))
+        (is (str/includes? (said o) "answers now and writes nothing"))
+        (is (str/includes? (said o) "cannot be scheduled"))))))
+
+(deftest the-judge-door-holds-a-take-to-its-advertised-schema
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [h (engine/handler *eng*)
+        post! (fn [body]
+                (h {:request-method :post
+                    :uri "/api/film_rules/-/judge"
+                    :headers {"x-waymark-principal" "colton"
+                              "content-type" "application/json"}
+                    :body (wire/write-json body)}))
+        wide (assoc-in grey-corner [:film :frame :w] "wide")
+        before (rows-of {})]
+    (testing "a field of the wrong type is refused, naming the field"
+      (let [resp (post! {:take wide})]
+        (is (= 422 (:status resp)))
+        (is (str/includes? (str (:body resp)) "frame"))))
+    (testing "a field the schema does not name is refused, not left unmeasured"
+      (let [resp (post! {:take (assoc grey-corner :flim {})})]
+        (is (= 422 (:status resp)))
+        (is (str/includes? (str (:body resp)) "flim")))
+      (is (= 422 (:status (post! {:take grey-corner :note "beside the take"})))))
+    (testing "the connector's call is refused the same way"
+      (let [out (judge-tool {:principal colton} {:input {:take wide}})]
+        (is (true? (:isError out)))
+        (is (str/includes? (said out) "frame"))))
+    (testing "a rehearsal is the call: dry_run answers what the call answers"
+      (let [plain (judge-tool {:principal colton} {:input {:take grey-corner}})
+            dry (judge-tool {:principal colton}
+                            {:input {:take grey-corner} :dry_run true})]
+        (is (not (:isError dry)))
+        (is (= (wire/read-json (said plain)) (wire/read-json (said dry))))))
+    (testing "it writes nothing"
+      (is (= before (rows-of {}))))))

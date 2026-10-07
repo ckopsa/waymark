@@ -2483,6 +2483,18 @@
     (cond
       refused refused
 
+      ;; a safe collection door answers now and writes nothing, so there
+      ;; is no call to store for a later time: `at` is refused here, in
+      ;; this door's own sentence, before the scheduling door is asked
+      (and (some? at) (nil? id) (not (or ids items))
+           (collection-door rdef aname))
+      (refusal (p/problem :invalid-arguments 422 "Not a call to schedule"
+                          {:detail (str "`" (name aname) "` on " (name (:kind rdef))
+                                        " answers now and writes nothing, so it "
+                                        "cannot be scheduled with `at`. Call it "
+                                        "without `at`, at the time you want the "
+                                        "answer.")}))
+
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
       (let [self (when-not (or ids items)
@@ -2518,7 +2530,9 @@
         (bulk-rows call session rdef aname args))
 
       ;; a safe collection door (:collection-doors): no row is read and
-      ;; none is moved, so the route's answer passes through as it is
+      ;; none is moved, so the route's answer passes through as it is.
+      ;; `dry_run` changes nothing: the call writes nothing, so it is
+      ;; its own rehearsal
       (and (nil? id) (collection-door rdef aname))
       (pass-through
        (call (request session :post (:href (collection-door rdef aname))
