@@ -185,8 +185,7 @@ async function renderDashboard(view, doc) {
     el("span", {class: "statechip", title: "dashboard"}, doc.state),
     el("span", {class: "version"},
       `v${meta.version}` +
-      (meta.law_revision != null ? ` · law r${meta.law_revision}` : "")),
-    el("span", {class: "version", title: doc.self}, doc.self)));
+      (meta.law_revision != null ? ` · law r${meta.law_revision}` : ""))));
   if (data.description)
     panel.append(el("p", {class: "prose slot-desc"}, data.description));
   const bar = el("div", {class: "actions"});

@@ -4243,6 +4243,70 @@ async function questPhoneStory() {
     await shot(`${slug}-notyet-film`);
     await fresh(`the page ${where}, out of its film`);
 
+    /* the jump box by its surfaces (docs/spec-agent-demo-walks.md §8a):
+       readSurface answers the lines as drawn and the selected one, and
+       a press on jump.home goes home */
+    console.log(`· the jump box ${where}`);
+    const jump = async () => JSON.parse(await evaljs(`JSON.stringify({
+      box: readSurface("jump"), query: readSurface("jump.query"),
+      home: readSurface("jump.home"),
+      drawn: [...document.querySelectorAll("#jumplist [role='option']")].map(o =>
+        ({name: o.getAttribute("data-surface"), row: o.getAttribute("data-row"),
+          selected: o.getAttribute("aria-selected") === "true"}))})`));
+    const jumpKey = key => evaljs(`document.querySelector("#jumpq").dispatchEvent(
+      new KeyboardEvent("keydown", {key: ${JSON.stringify(key)}, bubbles: true})); true`);
+    const jumpType = text => evaljs(`{ const i = document.querySelector("#jumpq");
+      i.value = ${JSON.stringify(text)};
+      i.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+    const same = (lines, drawn) => lines.length === drawn.length &&
+      lines.every((l, n) => l.name === drawn[n].name && l.row === drawn[n].row &&
+                            l.selected === drawn[n].selected);
+    ok(`a shut jump box answers no surface ${where}`, (await jump()).box === null);
+    await evaljs(`document.dispatchEvent(new KeyboardEvent("keydown",
+      {key: "k", ctrlKey: true, bubbles: true, cancelable: true})); true`);
+    await waitFor(`(readSurface("jump")?.lines.length || 0) > 1`,
+                  `the jump box's lines ${where}`, 15000);
+    const opened = await jump();
+    console.log("  the jump box: " + JSON.stringify(opened.box).slice(0, 400));
+    ok("the open box answers an empty query and each line as drawn",
+       opened.box.query === "" && same(opened.box.lines, opened.drawn) &&
+       opened.query.text === "" && opened.query.disabled === false);
+    ok("its first line is jump.home, with no row, and is the selected one",
+       opened.box.lines[0].name === "jump.home" && opened.box.lines[0].row === null &&
+       opened.box.lines[0].label === "Home" && !!opened.home &&
+       opened.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(opened.box.selected) === JSON.stringify(opened.box.lines[0]));
+    ok("every other line is jump.line, with the row it goes to",
+       opened.box.lines.slice(1).every(l => l.name === "jump.line" && !!l.row && !!l.label));
+    await jumpKey("ArrowDown");
+    const down = await jump();
+    ok("an arrow down moves the selected line to the second",
+       same(down.box.lines, down.drawn) &&
+       down.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(down.box.selected) === JSON.stringify(down.box.lines[1]) &&
+       down.box.selected.row === opened.box.lines[1].row);
+    await jumpType("led");
+    const typed = await jump();
+    console.log("  typed 'led': " + JSON.stringify(typed.box).slice(0, 400));
+    ok("the box and jump.query answer what was typed",
+       typed.box.query === "led" && typed.query.text === "led");
+    ok("the lines are the filtered ones as drawn, with the tasks' line among them",
+       typed.box.lines.length > 0 && typed.box.lines.length < opened.box.lines.length &&
+       same(typed.box.lines, typed.drawn) &&
+       typed.box.lines.some(l => l.name === "jump.line" && l.row === "/api/led_tasks"));
+    ok("and the first of them is the selected one",
+       JSON.stringify(typed.box.selected) === JSON.stringify(typed.box.lines[0]));
+    await jumpType("");
+    await waitFor(`!!readSurface("jump.home")`, `the home line again ${where}`, 15000);
+    await shot(`${slug}-jump`);
+    await press('[data-surface="jump.home"]');
+    await waitFor(`!document.body.classList.contains("jump-open") && !location.hash.slice(1)`,
+                  `home, off the press on jump.home ${where}`, 15000,
+                  `({open: document.body.classList.contains("jump-open"), hash: location.hash})`);
+    ok(`a press on jump.home shuts the box and goes home ${where}`,
+       (await jump()).box === null);
+    await fresh(`the tasks' page ${where}, back from home`);
+
     /* the same sheet from a walk the connector records (stage-sheet!,
        server/mcp.clj; ticket 5bc2c3e4): a rehearsed quest create on a
        shut goal is the tap, the create after it is Accept quest, and the
