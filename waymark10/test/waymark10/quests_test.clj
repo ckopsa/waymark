@@ -1527,6 +1527,22 @@
     (is (= {:close_reason "Close reason"} (:input_labels data))
         "each key of the input, by its label in the door's input schema")))
 
+(deftest the-envelope-a-quest-create-answers-says-its-goal-door-in-words
+  (let [eng (epic-engine)
+        e (make! eng :q_epic {:part_id (str (chore! eng "Write the guide"))})
+        row (:row (inv/create! eng :quest
+                               {:self (str "/api/q_epics/" e) :action "complete"
+                                :input {:close_reason "Shipped"}}
+                               {:principal person}))
+        ;; the engine's own render, the one a write answers and stores:
+        ;; the router's render-opts never reach it
+        answer ((:render-fn eng) (get (inv/resources eng) :quest)
+                                 (dissoc row :summary))
+        data (:data (walk/keywordize-keys (wire/read-json answer)))]
+    (is (= "Complete" (:action_label data)) (pr-str data))
+    (is (= {:close_reason "Close reason"} (:input_labels data))
+        "each key of the input, by its label in the door's input schema")))
+
 (deftest a-nested-need-is-named-by-its-declared-label
   (let [evidence [:map
                   [:film_url {:x-display {:label "The film"}} [:string {:max 300}]]

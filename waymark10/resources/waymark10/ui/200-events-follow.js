@@ -2432,11 +2432,44 @@ const filmOnScreen = b => b.width > 0 && b.height > 0 && b.right > 0 && b.bottom
 const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || null;
 /* the runs of text under `root` a viewer could read, in document order,
    each as {s, p}: its words and the element that draws them. A run is
-   left out when it is not drawn or not in the viewport, when something
-   is drawn over its centre (filmCovered), when it is under `skip`, and
-   when it is a field's value. The secret dialog says its
+   left out when it is not drawn, when no line of it can be seen, when
+   it is under `skip`, and when it is a field's value. A line can be
+   seen when a part of its box is in the viewport and in every ancestor
+   that clips it (filmClip), and nothing is drawn over the centre of
+   that part (filmCovered): one point is asked for a line, so a line
+   half covered is listed, and a run with one such line is listed whole. The secret dialog says its
    heading and its buttons and nothing else, as readSurface does: a beat
    is kept. */
+/* the part of the viewport `p`'s text can be drawn in, as {left, top,
+   right, bottom}: the viewport cut by the padding box of `p` and of
+   each ancestor that clips (`overflow` other than visible), on the axis
+   it clips. An ancestor clips a positioned box only when it holds it:
+   none clips a fixed box, and one with no position does not clip an
+   absolute one. A transform and a `clip-path` are not read. */
+function filmClip(p) {
+  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
+  let out = null;
+  for (let a = p; a && a !== document.body && a !== document.documentElement;
+       a = a.parentElement) {
+    if (out === "fixed") break;
+    const cs = getComputedStyle(a);
+    if (out === "absolute" && cs.position === "static") continue;
+    out = cs.position === "absolute" || cs.position === "fixed" ? cs.position : null;
+    /* a box that `overflow` does not apply to clips nothing */
+    if (!(a instanceof HTMLElement) ||
+        /^(inline|contents|table-(row|column|header|footer).*)$/.test(cs.display)) continue;
+    const b = a.getBoundingClientRect(), l = b.left + a.clientLeft, t = b.top + a.clientTop;
+    if (cs.overflowX !== "visible") {
+      c.left = Math.max(c.left, l);
+      c.right = Math.min(c.right, l + a.clientWidth);
+    }
+    if (cs.overflowY !== "visible") {
+      c.top = Math.max(c.top, t);
+      c.bottom = Math.min(c.bottom, t + a.clientHeight);
+    }
+  }
+  return c;
+}
 /* whether something that is not `p`'s ancestor is drawn over the point
    (x, y) of `p`'s text: the element the page answers there, or the
    caption band, which takes no pointer and so is asked by its rect. A
@@ -2466,10 +2499,13 @@ function filmRuns(root, skip) {
     if (p.checkVisibility ? !p.checkVisibility({visibilityProperty: true})
                           : !p.getClientRects().length) continue;
     range.selectNodeContents(n);
-    const b = range.getBoundingClientRect();
-    if (!filmOnScreen(b)) continue;
-    if (filmCovered(p, Math.min(Math.max(b.left + b.width / 2, 0), innerWidth - 1),
-                    Math.min(Math.max(b.top + b.height / 2, 0), innerHeight - 1))) continue;
+    const c = filmClip(p);
+    const seen = [...range.getClientRects()].some(b => {
+      const l = Math.max(b.left, c.left), t = Math.max(b.top, c.top),
+            r = Math.min(b.right, c.right), u = Math.min(b.bottom, c.bottom);
+      return r > l && u > t && !filmCovered(p, (l + r) / 2, (t + u) / 2);
+    });
+    if (!seen) continue;
     runs.push({s, p});
   }
   return runs;
