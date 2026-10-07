@@ -1050,6 +1050,11 @@ reason, and a person reads the cause on the row. The sentence for a
 bench that said nothing is for a rig that threw and for a rig that
 answered nothing at all.
 
+A refusal whose reason is a network error is not carried at once. The
+sit waits a short time and asks for the `prepare` one more time. A
+good answer then gives the `bench` and no `bench_note`. A second
+refusal is carried as written above.
+
 **R-12.30** A bench grant must be able to name less than the whole
 rig. The bench has five powers: `bench.find`, `bench.read`,
 `bench.edit`, `bench.pull` and `bench.feedback`. A seat's scope entry
