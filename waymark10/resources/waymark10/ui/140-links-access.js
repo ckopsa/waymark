@@ -338,7 +338,7 @@ function secretDialog({heading, note, value, copyOk, copyFallback,
   /* the primary Copy carries copyValue when given (the full handoff),
      else the shown value — so a lone token still copies itself */
   const primaryText = copyValue !== undefined ? copyValue : value;
-  const dlg = el("dialog", {"data-secret": ""},
+  const dlg = el("dialog", {"data-secret": "", "data-surface": "secret"},
     el("div", {class:"dlghead"}, el("h3", {}, heading)),
     el("div", {class:"dlgbody"},
       instructions || null,

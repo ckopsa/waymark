@@ -495,7 +495,10 @@
     (is (str/includes? body "dlg.questRefuse = refused;"))
     (is (str/includes? body "function replaySheetRefused(f) {"))
     (is (str/includes? body "sheet.questRefuse({title: f.title, detail: f.detail});"))
-    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-quest-accept]\") : null;"))))
+    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-quest-accept]\") : null;"))
+    ;; one tap makes the quest and then pins it: the refused pin of a
+    ;; sheet whose own create was made draws no second press
+    (is (str/includes? body "if (f.type === \"refusal\" && f.action === \"pin\" &&\n        sheet.hasAttribute(\"data-replay-accepted\")) return null;"))))
 
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
@@ -942,7 +945,10 @@
       (is (str/includes? body "\"data-quest-estimate\": \"\"")))
     (testing "Go opens the viewer's invitation for the step, else its row"
       (is (str/includes? body "if (inv) openInvitationRow(inv);"))
-      (is (str/includes? body "else go(step.self);")))))
+      (is (str/includes? body "else go(step.self);")))
+    (testing "the data table leaves the plan out and draws the goal row in words"
+      (is (str/includes? body "if (kind === \"quest\") delete plainData.plan;"))
+      (is (str/includes? body "tr.lastChild.replaceChildren(questRow(plainData.self));")))))
 
 (deftest ui-surfaces-are-the-names-the-page-sets
   ;; docs/spec-agent-demo-walks.md § 8a: the list at /api/-/ui/surfaces
