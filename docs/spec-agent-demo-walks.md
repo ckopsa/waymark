@@ -644,7 +644,12 @@ replay.
     drawn and in the viewport, in reading order, cut at 2048
     characters. An open modal's text comes first, because it is drawn
     over the page; the page's follows. A field's value is not in it,
-    and the secret dialog gives its heading and its buttons only.
+    and the secret dialog gives its heading and its buttons only. A run
+    is left out, here and in the focus text, when the centre of its
+    box is covered by an element that is not its ancestor: the page's
+    `document.elementFromPoint` there, or the caption band. A modal's
+    backdrop dims the page and does not cover it. A run that a
+    scrolling ancestor clips is still listed.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as
@@ -662,9 +667,11 @@ replay.
     focus text. `contrast` is that run's WCAG contrast ratio, to two
     places, against the background colours drawn behind it: its own
     and its ancestors', to the first opaque one, over white where
-    there is none. A background image is not read. Both are null when
-    the focus has no readable text, and `contrast` is null for a colour
-    the page cannot read as sRGB.
+    there is none. Both are null when the focus has no readable text.
+    `contrast` is null, and never a number from a colour that is not
+    what is drawn, when one of those elements has a background image
+    (a gradient is one), when a modal's backdrop lies between the run
+    and the page, and for a colour the page cannot read as sRGB.
   - `pointer` is where the replay pointer is drawn, as `{x, y}`, or
     null when there is none.
 

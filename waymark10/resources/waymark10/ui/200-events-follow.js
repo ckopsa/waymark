@@ -2432,10 +2432,29 @@ const filmOnScreen = b => b.width > 0 && b.height > 0 && b.right > 0 && b.bottom
 const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || null;
 /* the runs of text under `root` a viewer could read, in document order,
    each as {s, p}: its words and the element that draws them. A run is
-   left out when it is not drawn or not in the viewport, when it is under
-   `skip`, and when it is a field's value. The secret dialog says its
+   left out when it is not drawn or not in the viewport, when something
+   is drawn over its centre (filmCovered), when it is under `skip`, and
+   when it is a field's value. The secret dialog says its
    heading and its buttons and nothing else, as readSurface does: a beat
    is kept. */
+/* whether something that is not `p`'s ancestor is drawn over the point
+   (x, y) of `p`'s text: the element the page answers there, or the
+   caption band, which takes no pointer and so is asked by its rect. A
+   modal is drawn over the band, and a modal's backdrop dims the page
+   and does not hide it. An element that takes no pointer is never the
+   page's answer, so it is not asked. */
+function filmCovered(p, x, y) {
+  const within = e => {
+    const b = e.getBoundingClientRect();
+    return x >= b.left && x < b.right && y >= b.top && y < b.bottom;
+  };
+  const band = $("#replaycaption"), front = filmFront();
+  if (band && !band.contains(p) && !(front && front.contains(p)) && within(band)) return true;
+  if (!document.elementFromPoint || getComputedStyle(p).pointerEvents === "none") return false;
+  const h = document.elementFromPoint(x, y);
+  if (!h || h.contains(p) || p.contains(h)) return false;
+  return !(h.matches("dialog") && !within(h));
+}
 function filmRuns(root, skip) {
   const runs = [], range = document.createRange();
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -2447,7 +2466,10 @@ function filmRuns(root, skip) {
     if (p.checkVisibility ? !p.checkVisibility({visibilityProperty: true})
                           : !p.getClientRects().length) continue;
     range.selectNodeContents(n);
-    if (!filmOnScreen(range.getBoundingClientRect())) continue;
+    const b = range.getBoundingClientRect();
+    if (!filmOnScreen(b)) continue;
+    if (filmCovered(p, Math.min(Math.max(b.left + b.width / 2, 0), innerWidth - 1),
+                    Math.min(Math.max(b.top + b.height / 2, 0), innerHeight - 1))) continue;
     runs.push({s, p});
   }
   return runs;
@@ -2497,15 +2519,18 @@ function filmRgba(c) {
 }
 /* the WCAG contrast ratio of `e`'s text against the background colours
    drawn behind it: its own and its ancestors', to the first opaque one,
-   over white where none is. A background image is not read. */
+   over white where none is. Null when those colours are not what is
+   drawn: a background image (a gradient is one) on any of them, or a
+   modal's backdrop between the text and the page. */
 function filmContrast(e) {
-  const fg = filmRgba(getComputedStyle(e).color), layers = [];
-  if (!fg) return null;
+  const fg = filmRgba(getComputedStyle(e).color), layers = [], front = filmFront();
+  if (!fg || (front && !front.contains(e))) return null;
   for (let n = e; n; n = n.parentElement) {
-    const c = filmRgba(getComputedStyle(n).backgroundColor);
-    if (!c) return null;
+    const cs = getComputedStyle(n), c = filmRgba(cs.backgroundColor);
+    if (!c || cs.backgroundImage !== "none") return null;
     if (c[3] > 0) layers.push(c);
     if (c[3] >= 1) break;
+    if (n === front) return null;
   }
   const over = (top, under) => under.map((u, i) => top[i] * top[3] + u * (1 - top[3]));
   const bg = layers.reverse().reduce((under, l) => over(l, under), [255, 255, 255]);
