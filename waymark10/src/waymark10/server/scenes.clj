@@ -22,6 +22,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.types :as t]))
 
@@ -302,7 +303,7 @@
   (if-not (map? shot)
     (fail "a shot is a map with one verb.")
     (let [named (filter (set verbs) (keys shot))
-          stray (remove (into #{"say" "expect" "bind"} verbs) (keys shot))
+          stray (remove (into #{"say" "expect" "bind" "role"} verbs) (keys shot))
           verb (first named)]
       (cond
         (seq stray)
@@ -311,6 +312,11 @@
 
         (not= 1 (count named))
         (fail "a shot has one verb, and this one has " (count named) ".")
+
+        (and (contains? shot "role")
+             (not (some #{(get shot "role")} film-rules/roles)))
+        (fail (tick (get shot "role")) " is not a role; the roles are "
+              (str/join ", " film-rules/roles) ".")
 
         :else
         (let [v (get shot verb)

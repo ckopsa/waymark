@@ -56,8 +56,13 @@ to any other tool is judged only where it names a `kind`.
 ## A shot
 
 A shot is a map with exactly one verb. Beside the verb it may hold
-`say` (the caption), `expect` and `bind`. Any other key is refused as an
-unknown verb.
+`say` (the caption), `expect`, `bind` and `role`. Any other key is
+refused as an unknown verb.
+
+`role` is the shot's part in the story: `friction`, `turn` or `payoff`
+(`film-rules/roles`). A shot need not have one. The film rule `arc`
+reads the roles of a take's shots, so the scene is where they are
+written.
 
 | Verb | Keys | What `check` judges |
 |---|---|---|
@@ -128,6 +133,7 @@ draft. The sentences:
 | a shot | a shot is a map with one verb. |
 | a shot | unknown verb `<key>`; the verbs are open, tap, press, type, hold, wait_for, meanwhile. |
 | a shot | a shot has one verb, and this one has `<n>`. |
+| a shot | `<role>` is not a role; the roles are friction, turn, payoff. |
 | `open` | `open` names `self` or `collection`. |
 | `open`, a target | `<address>` names no kind this engine serves. |
 | a target | `<name>` is not a surface in the registry (GET /api/-/ui/surfaces). |
@@ -188,6 +194,7 @@ the film-link step and back to an open Complete.
   {"open": {"collection": "tickets"}, "say": "Every ticket of the house."},
   {"open": {"self": "$epic"}, "say": "The epic. Its film is not linked yet."},
   {"tap": {"surface": "door-shut:complete@$epic"},
+   "role": "friction",
    "say": "Complete is dotted: not yet. A tap asks why.",
    "expect": {"screen": [
      {"surface": "sheet", "path": "goal.action", "op": "=", "value": "complete"},
@@ -195,6 +202,7 @@ the film-link step and back to an open Complete.
      {"surface": "refusal", "path": "text", "op": "contains", "value": "film_url"}]}},
   {"hold": {"ms": 1500, "on": "sheet"}},
   {"press": {"surface": "sheet.accept"},
+   "role": "turn",
    "say": "Accept keeps the goal.",
    "expect": {"screen": [
      {"surface": "sheet", "path": "text", "op": "absent"},
@@ -214,7 +222,8 @@ the film-link step and back to an open Complete.
      {"self": "$epic", "path": "data.showcase.evidence.film_url",
       "op": "=", "value": "https://work.kopsa.info/films/quests-demo"}]}},
   {"tap": {"surface": "tracker.go"}, "say": "Back into the queue."},
-  {"wait_for": {"within_ms": 5000,
+  {"role": "payoff",
+   "wait_for": {"within_ms": 5000,
                 "expect": {"envelope": [
                   {"self": "$epic", "path": "state", "op": "=", "value": "open"}],
                  "screen": [
@@ -229,7 +238,7 @@ every verb and every op the kind declares.
 What `check` judged here: `ticket` is served; `groom` and `complete`
 are doors of it; `title`, `type`, `repo` and `showcase` are fields its
 create takes; every surface is in the registry; `$epic` is bound before
-it is read. What it did not judge: the `type` shot, because `tracker.go`
+it is read; each `role` is one of the three. What it did not judge: the `type` shot, because `tracker.go`
 left no door known; every `path`; and the plan itself. That the plan
 runs ungroom, restate, groom is this scene's expectation of the quest
 planner, and only a take can say whether it holds.
