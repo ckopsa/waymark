@@ -645,11 +645,27 @@ replay.
     characters. An open modal's text comes first, because it is drawn
     over the page; the page's follows. A field's value is not in it,
     and the secret dialog gives its heading and its buttons only. A run
-    is left out, here and in the focus text, when the centre of its
-    box is covered by an element that is not its ancestor: the page's
-    `document.elementFromPoint` there, or the caption band. A modal's
-    backdrop dims the page and does not cover it. A run that a
-    scrolling ancestor clips is still listed.
+    is left out, here and in the focus text, when no line of it can be
+    seen. What is read for a line:
+    - Its box is cut to the viewport, and to the padding box of the
+      run's element and of each ancestor that clips it (`overflow`
+      other than `visible`, on the axis it clips). So a run scrolled
+      out of a scrolling ancestor, or inside a collapsed one, is left
+      out. An ancestor clips a positioned box only when it holds it:
+      none clips a fixed box, and one with no position does not clip
+      an absolute one.
+    - One point is then asked, the centre of what is left of the box.
+      The line is covered when the page's `document.elementFromPoint`
+      there is an element that is not the run's ancestor, or when the
+      point is in the caption band. A modal's backdrop dims the page
+      and does not cover it.
+
+    A run with one line that can be seen is listed whole. What is not
+    read: a line that is half covered is listed, because one point is
+    asked for it; an element that takes no pointer (`pointer-events:
+    none`) covers nothing, the replay pointer among them, and only the
+    caption band is asked by its rect; a transform on a clipping
+    ancestor and a `clip-path` are not applied to the clip.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as
@@ -737,7 +753,14 @@ film. A rule carries `name` (a slug, unique), `metric`, `op` (`>=`,
 `<=` or `=`), `threshold` (a number), `scope` (`film`, `shot` or
 `beat`; with `shot`, an optional `role`: `friction`, `turn` or
 `payoff`), `severity` (`fail` or `warn`), `why` (one sentence) and
-`origin` (a person's words, quoted, or `craft`). Its states are
+`origin` (a person's words, quoted, or `craft`). Two more fields are
+optional. `output` (`phone` or `desktop`) is a filter like `role`: the
+rule is scored only on a film whose take says that output in
+`film.output`, and a rule with no `output` is scored at any. `unless`
+(`zoom`, with the scope `shot` only) names the shot property that
+exempts a shot: a shot whose take says `shot.zoom` is true passes the
+rule whatever it measures. `film-rules/verdict` judges both, and
+answers `:unscored`, `:pass` or `:miss`. Its states are
 `active` and `retired`. A person or the sitter of a domain's mayor
 seat makes one; only a person retires one, and only a person restores
 a retired one.
@@ -759,21 +782,29 @@ metric is read from one field of the take:
 | `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
 | `runtime_s` | The film's length in seconds. | `film.runtime_s` |
 
-The take is the scorer's piece and is not built yet; these are the
-field names it is to carry.
+A take is a map with `film`, the fields read once, and `shots`, one
+map per shot in order. A box is `{x, y, w, h}`; a frame and a viewport
+are `{w, h}`. `surfaces_changed` is a count or the list of names.
+`film-rules/measure` reads one metric from a take by these names: one
+number for a film metric, and one number per shot for a shot metric.
+The scorer that writes the take is not built yet; these are the field
+names it is to carry.
 
 The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
 starts (`engine/start-runtime!`), in every application, because the
 kind is enrolled in every one. It makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
-(`type_px >= 28` per shot, warn), `read-time`
+(`type_px >= 28` per shot, `output: phone`, warn), `read-time`
 (`read_time_ratio >= 1.2` per shot, warn), `dead-air`
 (`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
-per shot, warn), `focus-share` (`focus_share >= 0.25` per shot, warn)
-and `arc` (`arc = 1`, fail). A rule has no field for the output a film
-is rendered at or for a shot that asks for a zoom, so `type-size` and
-`focus-share` say those conditions in their `why` only.
+per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
+`unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
+rule only when none carries its name. An active `type-size` or
+`focus-share` row made before these fields existed gains the field
+the seed names at the next boot, through `restate`, a door only the
+boot seed walks; a value a row carries is not written over, and a
+retired row is left as it is.
 
 ## 8a. The surfaces a scene names
 

@@ -1497,7 +1497,11 @@
                      (surface/envelope eng sdef id
                                        {:principal (principal-of req)
                                         :now ((:now-fn eng))
-                                        :services (:services eng)})
+                                        :services (:services eng)
+                                        ;; the anchor's and the members'
+                                        ;; :computed fields read the kind
+                                        ;; map (ticket 92ba2f71)
+                                        :resources (inv/resources eng)})
                      media-type nil))))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────

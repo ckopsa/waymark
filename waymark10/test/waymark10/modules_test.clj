@@ -113,6 +113,9 @@
            ;; …and the quest (docs/spec-quests.md), core's beside the
            ;; walkthrough: its goal is judged as an invitation's step is
            :quest
+           ;; …and the scene and the take (docs/spec-scenes.md): a demo
+           ;; written as shots, and one performance of it
+           :scene :take
            ;; …and the secret: a value the owner enters once, which a
            ;; power call on core's own mcp_server names by reference
            :secret}
@@ -144,7 +147,7 @@
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :quest :secret :film_rule}
+             :walkthrough :quest :secret :film_rule :scene :take}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
