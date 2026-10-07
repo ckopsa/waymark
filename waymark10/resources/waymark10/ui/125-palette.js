@@ -69,9 +69,12 @@ async function jumpTargets() {
 }
 
 /* one row: the label with the typed letters bolded, and where it
-   lives kept quiet at the end */
+   lives kept quiet at the end. A scene names it by where it goes:
+   jump.line@/api/tickets (home's line has no address) */
 function jumpRow(t, marks, i) {
   const row = el("div", {class: "jump-item", role: "option", "data-i": i,
+                         "data-surface": "jump.line",
+                         "data-row": t.href || undefined,
                          id: "jumpopt" + i, "aria-selected": "false"});
   const set = new Set(marks);
   const label = el("span");

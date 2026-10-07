@@ -735,6 +735,8 @@ selector. Every interactive surface a demo can name carries
 | `nav-access` | The Access tab in the navigation bar. |
 | `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
 | `nav-jump` | The ⋯ menu's 'Jump to a kind…' line, which opens the jump box. |
+| `jump.query` | The jump box's input, where the kind's name is typed. |
+| `jump.line` | One result line of the jump box; `data-row` carries the address it goes to. |
 | `nav-shell` | The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell. |
 | `row` | One row of a collection's table; `data-self` carries its address. |
 | `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
@@ -749,11 +751,12 @@ selector. Every interactive surface a demo can name carries
 | `dialog.decline` | The form's Decline button for an invitation; it reads Skip in a led walk. |
 | `dialog.stop` | The form's Stop button in a led walk. |
 | `dialog.accept` | The form's Accept as quest button, offered under a refusal. |
-| `secret` | The dialog that shows a secret one time, with its Copy button. |
+| `secret` | The dialog that shows a secret one time, with its Copy button; its value field has no name, so a scene cannot read the secret. |
 | `secret.copy` | The secret dialog's first Copy button. |
 | `secret.copy-other` | The secret dialog's second copy button, where the dialog has one. |
 | `secret.close` | The secret dialog's Done button, which closes it. |
 | `report` | The dialog that reports a bulk action's verdicts. |
+| `report.row` | A refused row's link in the report dialog's table; `data-row` carries the row's address. |
 | `report.close` | The report dialog's Close button. |
 | `upload` | The dialog that uploads a file as an attachment. |
 | `upload.file` | The upload dialog's file input. |
@@ -778,6 +781,16 @@ scene presses `nav-more` first. The same holds for `nav-jump` and
 `nav-shell`, which are lines of that menu. A press on `nav-shell`
 loads the page again, so a scene's next step waits for the new page.
 The upload dialog says a refused upload in a `refusal` line of its own.
+
+The jump box is drawn only while it is open, and its lines are drawn
+again at each letter typed: a scene presses `nav-jump`, types in
+`jump.query`, and then picks `jump.line@/api/tickets`. The line that
+goes home has no address, so a scene cannot pick it by row. A press on
+`report.row@/api/tickets/<id>` closes the report and goes to that row;
+`readSurface('report')` answers the same addresses. The secret
+dialog's read-only value field is left without a name and out of
+`readSurface('secret')` on purpose: a beat is kept, and a kept beat
+must never hold the secret. A scene copies it with `secret.copy`.
 
 The same list is served as JSON at `GET /api/-/ui/surfaces`:
 `{"surfaces": [{"name": "tracker.go", "is": "…"}, …]}`. The page's own

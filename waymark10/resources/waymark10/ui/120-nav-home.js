@@ -564,8 +564,7 @@ function questDraw(doc, finished) {
       bar.append(line);
     }
     if (head && !d.blocked_reason)
-      bar.append(el("button", {class: "primary", "data-tracker-go": "",
-                               "data-surface": "tracker.go",
+      bar.append(el("button", {class: "primary", "data-surface": "tracker.go",
                                disabled: waiting ? "" : null, onclick: questHeadGo},
                     "Go"));
   }
