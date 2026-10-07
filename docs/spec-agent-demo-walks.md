@@ -654,18 +654,32 @@ replay.
       out. An ancestor clips a positioned box only when it holds it:
       none clips a fixed box, and one with no position does not clip
       an absolute one.
-    - One point is then asked, the centre of what is left of the box.
-      The line is covered when the page's `document.elementFromPoint`
+    - Five points of what is left of the box are then asked: its
+      centre, and the four points a quarter in from its corners. A
+      line with nothing left of its box is asked no point.
+    - A point is covered when the page's `document.elementFromPoint`
       there is an element that is not the run's ancestor, or when the
       point is in the caption band. A modal's backdrop dims the page
       and does not cover it.
+    - A point is also covered by an element that takes no pointer
+      (`pointer-events: none`) and is drawn over the text there. The
+      page does not answer such an element, so it is found another
+      way: for the length of the measure every element is made to
+      take the pointer, and `document.elementsFromPoint` lists what is
+      at the point from the top down. An element above the page's own
+      answer and above the text covers the point when it draws
+      something of its own: a background colour or image, or a picture
+      (`img`, `svg`, `canvas`, `video`, `iframe`). One that draws
+      nothing of its own covers nothing. The replay pointer is one:
+      its arrow is a pseudo-element, smaller than its box.
 
-    A run with one line that can be seen is listed whole. What is not
-    read: a line that is half covered is listed, because one point is
-    asked for it; an element that takes no pointer (`pointer-events:
-    none`) covers nothing, the replay pointer among them, and only the
-    caption band is asked by its rect; a transform on a clipping
-    ancestor and a `clip-path` are not applied to the clip.
+    A run is left out when more than half of the points asked for its
+    lines are covered. So a run mostly covered is not listed, and a run
+    half covered or less is listed whole. What is not read: which
+    words of a listed run are the covered ones; a line that is clipped
+    away, which is asked no point and so does not count against its
+    run; a transform on a clipping ancestor and a `clip-path`, which
+    are not applied to the clip.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as

@@ -4182,17 +4182,25 @@ async function questPhoneStory() {
     /* what a beat leaves out, and the ratio it does not guess (§8b):
        the film's own measure (filmMeasure) of a block drawn for it, with
        a run under a fixed bar and a run its scrolling parent clips, each
-       with the block itself as the page's answer at its centre; then of
-       the same block with a gradient behind its text */
+       with the block itself as the page's answer at its centre; a run
+       with a bar over its top and one over its bottom, which is mostly
+       covered with its centre open, and a run with a thin bar over its
+       centre only; a run under a bar that takes no pointer, and a run
+       under such a bar that draws nothing; then of the same block with
+       a gradient behind its text */
     const drawn = JSON.parse(await evaljs(`(() => {
       const d = document.createElement("div");
       d.dataset.surface = "film.case";
-      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:120px;" +
+      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:160px;" +
         "z-index:2147483000;background:#fff;font:16px/20px sans-serif";
+      const bar = (top, h, look) => "<div style='position:fixed;left:0;top:" + top +
+        "px;width:300px;height:" + h + "px;" + (look || "background:#333") + "'></div>";
       d.innerHTML = "<p>open run</p><p>barred run</p>" +
         "<div style='height:20px;overflow:hidden'><p>kept run</p><p>clipped run</p></div>" +
-        "<div style='position:fixed;left:0;top:20px;width:300px;height:20px;" +
-        "background:#333'></div>";
+        "<p>pinched run</p><p>striped run</p><p>veiled run</p><p>glass run</p>" +
+        bar(20, 20) + bar(60, 8) + bar(72, 8) + bar(89, 2) +
+        bar(100, 20, "background:#333;pointer-events:none") +
+        bar(120, 20, "pointer-events:none");
       for (const p of d.querySelectorAll("p"))
         p.style.cssText = "margin:0;padding:0;height:20px;color:#000;font-size:16px";
       document.body.prepend(d);
@@ -4207,13 +4215,19 @@ async function questPhoneStory() {
         return JSON.stringify({front: !!filmFront(), plain, gradient: read()});
       } finally { d.remove(); }
     })()`));
-    const stays = "open run kept run";
+    const stays = "open run kept run striped run glass run";
     console.log("  the drawn block's beats: " + JSON.stringify(
       {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
        gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
     ok(`a run under a fixed bar and a run its scrolling parent clips are in neither text ${where}`,
        drawn.plain.focus === stays && drawn.plain.text.includes(stays) &&
        !/barred run|clipped run/.test(drawn.plain.text));
+    ok("a run mostly covered with its centre open is in neither text, and one with its centre " +
+       "only covered is in both",
+       !/pinched run/.test(drawn.plain.text) && /striped run/.test(drawn.plain.focus || ""));
+    ok("a run under a bar that takes no pointer is in neither text, and one under such a bar " +
+       "that draws nothing is in both",
+       !/veiled run/.test(drawn.plain.text) && /glass run/.test(drawn.plain.focus || ""));
     ok("and the contrast is of the text on the colour behind it: 21",
        drawn.plain.contrast === 21);
     ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
