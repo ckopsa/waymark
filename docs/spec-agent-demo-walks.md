@@ -704,6 +704,8 @@ selector. Every interactive surface a demo can name carries
 | `nav-domain` | The active application's name in the navigation bar, a link to its home. |
 | `nav-access` | The Access tab in the navigation bar. |
 | `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
+| `nav-jump` | The ⋯ menu's 'Jump to a kind…' line, which opens the jump box. |
+| `nav-shell` | The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell. |
 | `row` | One row of a collection's table; `data-self` carries its address. |
 | `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
 | `door-shut:<action>` | The dotted 'not yet' button of a shut action that a quest can reach. |
@@ -717,8 +719,15 @@ selector. Every interactive surface a demo can name carries
 | `dialog.decline` | The form's Decline button for an invitation; it reads Skip in a led walk. |
 | `dialog.stop` | The form's Stop button in a led walk. |
 | `secret` | The dialog that shows a secret one time, with its Copy button. |
+| `secret.copy` | The secret dialog's first Copy button. |
+| `secret.copy-other` | The secret dialog's second copy button, where the dialog has one. |
+| `secret.close` | The secret dialog's Done button, which closes it. |
 | `report` | The dialog that reports a bulk action's verdicts. |
+| `report.close` | The report dialog's Close button. |
 | `upload` | The dialog that uploads a file as an attachment. |
+| `upload.file` | The upload dialog's file input. |
+| `upload.submit` | The upload dialog's Upload button, shut until a file is chosen. |
+| `upload.cancel` | The upload dialog's Cancel button. |
 | `sheet` | The quest sheet a tap on a dotted button opens. |
 | `sheet.step:<n>` | The sheet's step n of the plan, counted from 1. |
 | `sheet.accept` | The sheet's Accept quest button. |
@@ -735,7 +744,10 @@ selector. Every interactive surface a demo can name carries
 The fixed parts of the navigation bar are spelled with a hyphen
 (`nav-home`), so that no kind's name can make `nav.<kind>` mean one of
 them. A kind folded behind ⋯ is drawn only while the menu is open: a
-scene presses `nav-more` first.
+scene presses `nav-more` first. The same holds for `nav-jump` and
+`nav-shell`, which are lines of that menu. A press on `nav-shell`
+loads the page again, so a scene's next step waits for the new page.
+The upload dialog says a refused upload in a `refusal` line of its own.
 
 The same list is served as JSON at `GET /api/-/ui/surfaces`:
 `{"surfaces": [{"name": "tracker.go", "is": "…"}, …]}`. The page's own
@@ -756,6 +768,12 @@ screen:
 - `sheet`: `{goal, steps: [{n, label, whose, state}], shut_reason, refused}`;
 - `tracker`: `{title, next, waiting_on, progress, text}`;
 - `dialog`: `{self, action, lit: [field names]}`;
+- `secret`: `{heading, copy, copy_other}`, the heading and the labels
+  of the two copy buttons. It does not answer the secret, because a
+  beat is kept and a secret is shown one time;
+- `report`: `{heading, totals, refused: [{row, reason}]}`;
+- `upload`: `{file, ready, refused}`: the line under the file input,
+  whether Upload can be pressed, and the refusal's text;
 - `caption` and `refusal`: the line's text;
 - any other name: `{text, disabled}`.
 

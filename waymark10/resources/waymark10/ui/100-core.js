@@ -95,9 +95,10 @@ function surfaceNode(name) {
 }
 /* what a surface shows now, read from the page as drawn and said in
    its visible text: null when it is not on the screen. The sheet, the
-   tracker and the dialog answer the parts a film beat names; a caption
-   and a refusal answer their line; any other answers its text and
-   whether it can be pressed. */
+   tracker and the dialog answer the parts a film beat names, and so
+   do the secret, report and upload dialogs; a caption and a refusal
+   answer their line; any other answers its text and whether it can be
+   pressed. The secret dialog never answers the secret: a beat is kept. */
 function readSurface(name) {
   const e = surfaceNode(name);
   if (!e || !e.getClientRects().length) return null;
@@ -122,6 +123,18 @@ function readSurface(name) {
   if (base === "dialog")
     return {self: e.getAttribute("data-self"), action: e.getAttribute("data-action"),
             lit: [...e.querySelectorAll(".invited [name]")].map(f => f.name)};
+  if (base === "secret")
+    return {heading: text("h3"), copy: text('[data-surface="secret.copy"]'),
+            copy_other: text('[data-surface="secret.copy-other"]')};
+  if (base === "report")
+    return {heading: text("h3"), totals: text(".verdict-totals"),
+            refused: [...e.querySelectorAll(".verdicts tbody tr")].map(tr =>
+              ({row: (tr.querySelector("a")?.getAttribute("href") || "").slice(1) || null,
+                reason: text(".reason", tr)}))};
+  if (base === "upload")
+    return {file: text("[data-upload-chosen]"),
+            ready: !e.querySelector('[data-surface="upload.submit"]')?.disabled,
+            refused: text('[data-surface="refusal"]')};
   if (base === "caption" || base === "refusal") return text();
   return {text: text(),
           disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};

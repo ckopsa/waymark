@@ -345,15 +345,16 @@ function secretDialog({heading, note, value, copyOk, copyFallback,
       note ? el("div", {class:"muted", style:"margin-bottom:6px"}, note) : null,
       field),
     el("div", {class:"dlgfoot"},
-      el("button", {class:"primary", onclick: () =>
+      el("button", {class:"primary", "data-surface": "secret.copy", onclick: () =>
         navigator.clipboard?.writeText(primaryText).then(
           () => toast(copyOk),
           () => { field.select(); toast(copyFallback); })}, copyLabel || "Copy"),
-      copy2 ? el("button", {onclick: () =>
+      copy2 ? el("button", {"data-surface": "secret.copy-other", onclick: () =>
         navigator.clipboard?.writeText(copy2.value).then(
           () => toast(copy2.ok),
           () => { field.select(); toast(copy2.fallback); })}, copy2.label) : null,
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
+      el("button", {"data-surface": "secret.close",
+                    onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();

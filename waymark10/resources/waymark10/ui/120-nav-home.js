@@ -156,7 +156,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
      no ⌘K, and a menu is where someone looks for "where else can I
      go" (waymark-sv9v). The shortcut rides along as a hint. */
   menu.append(el("a", {role: "menuitem", href: "#", "data-nav": "jump",
-                       class: "jump-row",
+                       "data-surface": "nav-jump", class: "jump-row",
                        onclick: ev => { ev.preventDefault(); close();
                                         jumpOpen(); }},
     "Jump to a kind…",
@@ -167,7 +167,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
   system.forEach(e => menu.append(item(e)));
   /* the shell switch: a full reload with ?ui= beats the UA sniff,
      the hash (this screen) rides along */
-  menu.append(el("a", {role: "menuitem",
+  menu.append(el("a", {role: "menuitem", "data-surface": "nav-shell",
     href: location.pathname + "?ui=" + (MOBILE ? "desktop" : "mobile")
         + location.hash},
     MOBILE ? "Desktop view" : "Mobile view"));
