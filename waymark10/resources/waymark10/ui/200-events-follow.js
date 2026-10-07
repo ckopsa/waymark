@@ -1035,14 +1035,21 @@ async function demoRefresh() {
   }
   demoBanner();
 }
+/* where a walk's row says its export is: the envelope's links.export,
+   which the engine declares on a sealed walk. No address is built
+   here, and a row without the link has no export. */
+function walkExportHref(doc) {
+  return (doc && doc.kind === "walk" && doc.links?.export?.href) || null;
+}
 /* the export as a download in this browser: the one thing that leaves
    a demo clone. The walk is marked exported only once the file is
    handed to the browser. */
-async function exportWalk(self) {
+async function exportWalk(doc) {
+  const self = doc.self, href = walkExportHref(doc);
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* told below */ }
   if (text === null) { toast("This walk's export could not be read"); return; }
   const url = URL.createObjectURL(new Blob([text], {type: "application/x-ndjson"}));
@@ -2343,8 +2350,9 @@ function renderReplayDoc(view, doc) {
    and says where the page is: `ready` while the title card holds for
    FILM_TITLE_MS, `playing` once play starts by itself at 1×, and
    `ended` when the last screen has held for FILM_HOLD_MS. The camera
-   reads that and nothing else. The export GET is the one read, as it
-   is for ▶ Replay. ──────────────────────────────────────────────── */
+   reads that and nothing else. The film has an address and no row, so
+   it reads the row for its links.export and then the export; ▶ Replay
+   has the row in hand and makes the one read. ─────────────────────── */
 const FILM_TITLE_MS = 2000, FILM_HOLD_MS = 1500;
 /* the walk being filmed, by its self, or null */
 let film = null;
@@ -2826,8 +2834,10 @@ async function filmBoot() {
   filmState("");
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const row = await api(self);
+    const href = row.ok ? walkExportHref(row.body) : null;
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* never ready */ }
   const walk = parseWalk(text);
   if (!walk) return;
@@ -2846,11 +2856,12 @@ filmBoot();
 /* the two ways in: a sealed walk's row page (160-resource-surface.js),
    whose export is the one read a replay makes, and a .ndjson file the
    person picks, which makes none */
-async function replayWalk(self) {
+async function replayWalk(doc) {
+  const href = walkExportHref(doc);
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* told below */ }
   if (text === null) { toast("This walk's export could not be read"); return; }
   startReplay(text);

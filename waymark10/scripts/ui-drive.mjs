@@ -997,7 +997,10 @@ async function accessStory() {
   const walks = await get("/api/walks?state=sealed");
   ok("the boot sealed one walk", (walks.data?.items || []).length === 1);
   const walkSelf = walks.data.items[0].self;
-  const exportText = await (await fetch(BASE + walkSelf + "/export", {headers: h})).text();
+  /* the row names its export: the link is followed, not built */
+  const walkOut = (await get(walkSelf)).links?.export?.href;
+  ok("a sealed walk's envelope names its export", !!walkOut);
+  const exportText = await (await fetch(BASE + walkOut, {headers: h})).text();
   const [walkHead, ...walkFrames] = exportText.trim().split("\n").map(l => JSON.parse(l));
   ok("its export is a move, a ui frame and a transition",
      walkHead.format === "waymark-walk/1" &&
@@ -1041,6 +1044,10 @@ async function accessStory() {
   await waitFor(`!!document.querySelector("[data-replay-walk]")`,
                 "Replay on the sealed walk's row page");
   ok("a sealed walk's row page offers Replay", true);
+  ok("a sealed walk's row page shows one export control",
+     await evaljs(`document.querySelectorAll("[data-export-walk]").length === 1 &&
+       ![...document.querySelectorAll("[data-links] a.chip")]
+         .some(a => a.getAttribute("href") === ${JSON.stringify(walkOut)})`));
   await sleep(1500);   /* the row page's own reads settle first */
   await evaljs(watchFetch);
   await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
@@ -1057,7 +1064,7 @@ async function accessStory() {
   ok("the transition renders from its own frame",
      first.transition === transFrame.action && first.heading === transFrame.summary);
   ok("the replay makes no request but the export GET",
-     first.reqs.length === 1 && first.reqs[0] === "GET " + walkSelf + "/export");
+     first.reqs.length === 1 && first.reqs[0] === "GET " + walkOut);
 
   await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
   await waitFor(`!${replayState} && !document.querySelector("dialog[open]") &&
@@ -1715,7 +1722,7 @@ async function accessStory() {
                 "the sealed recorded walk's page", 15000);
   ok("stop seals the recorded walk", (await get(rWalk)).state === "sealed");
 
-  const rText = await (await fetch(BASE + rWalk + "/export", {headers: h})).text();
+  const rText = await (await fetch(BASE + (await get(rWalk)).links.export.href, {headers: h})).text();
   const [rHeader, ...rFrames] = rText.trim().split("\n").map(l => JSON.parse(l));
   const rQuestDoc = f => f.type === "doc" && (f.doc || {}).kind === "quest";
   console.log("  the frames: " + rFrames.map(f =>
@@ -1886,7 +1893,7 @@ async function accessStory() {
   await evaljs(`${rShare}.click(); true`);
   await waitFor(`${rShare}.getAttribute("aria-pressed") === "false"`,
                 "priya's share toggle off", 15000);
-  const rWalk = await (await fetch(BASE + rWalkSelf + "/export", {headers: h})).text();
+  const rWalk = await (await fetch(BASE + (await get(rWalkSelf)).links.export.href, {headers: h})).text();
   const rFrames = rWalk.trim().split("\n").slice(1).map(l => JSON.parse(l));
   console.log("  recorded: " + rFrames.map(f => f.type).join());
   const rRefusals = rFrames.filter(f => f.type === "refusal" &&
@@ -3400,7 +3407,8 @@ async function guidedStory() {
   ok("stopping gives the tracker back to the live quest",
      await A.js(`!${qBar2}.querySelector("[data-quest-complete]")`));
   /* the sealed walk's page in film mode, with the quest's walk as its
-     export: the export GET is the one read a film makes */
+     export: the film reads the row for its links.export, then that
+     export, which is the read stubbed here */
   await A.js(`{ const walk = hereHref().split("?")[0], fetch0 = window.fetch;
     window.fetch = (u, o) => String(u) === walk + "/export"
       ? Promise.resolve(new Response(${JSON.stringify(questFile)}))

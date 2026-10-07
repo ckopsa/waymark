@@ -32,7 +32,9 @@ async function renderResource(view, doc, hints) {
 
   /* the read surface up front: declared links (badges riding) and the
      surfaces this row anchors — scent before the scroll */
-  const chips = linksStrip(doc);
+  /* a walk's export is drawn below as ⬇ Export, which also marks the
+     walk exported in this browser: the strip leaves that rel out */
+  const chips = linksStrip(doc, walkExportHref(doc) ? ["export"] : []);
   if (chips) panel.append(chips);
   const surfBox = el("div", {});
   panel.append(surfBox);
@@ -108,17 +110,19 @@ async function renderResource(view, doc, hints) {
       `👁 Follow ${aud}`));
   }
   /* a sealed walk plays on this screen, read-only: its export is the
-     one read the replay makes (200-events-follow.js) */
-  if (kind === "walk" && doc.state === "sealed")
+     one read the replay makes (200-events-follow.js). The row names
+     that export under links.export, and a row that does not carry the
+     link offers neither control */
+  if (walkExportHref(doc))
     bar.append(el("button", {"data-replay-walk": "",
       title: "play this recording on this screen, read-only — nothing is written",
-      onclick: () => replayWalk(doc.self)}, "▶ Replay"));
+      onclick: () => replayWalk(doc)}, "▶ Replay"));
   /* …and leaves as a file: the download is the only copy that outlives
      a demo engine (docs/spec-demo-clones.md §3) */
-  if (kind === "walk" && doc.state === "sealed")
+  if (walkExportHref(doc))
     bar.append(el("button", {"data-export-walk": "",
       title: "download this recording as a .ndjson file",
-      onclick: () => exportWalk(doc.self)}, "⬇ Export"));
+      onclick: () => exportWalk(doc)}, "⬇ Export"));
   /* a walkthrough's row page lists every step's note in order: the
      person sees the whole path before they agree to it
      (docs/spec-walkthrough.md §5; 200-events-follow.js) */
