@@ -628,6 +628,22 @@ false}` — and NO `effect`. `safety.safe` is the mark a reader keys on:
   (`ui/130-collection.js`) sorts a `safety.safe` entry away from the
   bulk moves and the create before the bar is drawn, whatever its name.
 
+What a safe collection door does with each kind of call:
+
+- its body is held to the declared `:input`, closed, by one framework
+  function (`collections/door-errors`): a field the input does not name
+  and a field of the wrong type are refused 422, naming the field. A
+  `:double` is read as any number, as the advertised JSON Schema's
+  `number` says, so a JSON `1080` passes;
+- a scoped caller: the KIND is checked, the grant's actions are not. A
+  grant that admits the kind may call the door whatever actions it
+  lists; a grant that does not admit the kind gets the collection's own
+  not-found;
+- `at`: refused, "Not a call to schedule". The door answers now and
+  writes nothing, so there is nothing to make later;
+- `dry_run`: changes nothing. The call writes nothing, so it is its own
+  rehearsal and answers what the plain call answers.
+
 The key is for a POST on a COLLECTION. A safe GET on a ROW — a walk's
 `GET /api/walks/{id}/export` — does not belong under it or under a
 sibling key: a GET a reader may follow is a link, and it is advertised

@@ -48,6 +48,7 @@
   - waymark9's rows=none, depth= and the recomputing un-advertising
     have no v10 counterpart yet — deferred with their machinery."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.checks :as checks]
             [waymark10.machine :as machine]
             [waymark10.saved-view :as sv]
@@ -468,6 +469,21 @@
                                     :reversible true :confirm false}}
                     (:summary door) (assoc :summary (:summary door)))]))
           (:collection-doors rdef))))
+
+(defn door-errors
+  "A safe collection door's input contract: `body` held to the `:input`
+  the kind declares for the door `dname` under :collection-doors,
+  closed, so a misspelled field is refused and not passed over. A
+  `:double` is read as any number, because that is what the advertised
+  JSON Schema says and a JSON 1080 is not a float. A door that declares
+  no `:input` takes an empty map, as it advertises. Field-keyed errors,
+  or nil when the body is valid."
+  [rdef dname body]
+  (schema/closed-errors
+   (walk/postwalk-replace {:double 'number?}
+                          (or (get-in rdef [:collection-doors dname :input])
+                              [:map]))
+   body))
 
 (defn- collection-actions [rdef]
   (let [base (str "/api/" (:plural rdef))

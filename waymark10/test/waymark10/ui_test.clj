@@ -773,7 +773,11 @@
     (is (str/includes? body "localStorage.getItem(\"wm10.walk.exported\")"))
     (is (str/includes? body "markWalkExported(self);"))
     (is (str/includes? body "\"data-export-walk\""))
-    (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
+    (is (str/includes? body "onclick: () => exportWalk(doc)"))
+    ;; the export's address is the row's links.export, and a row without
+    ;; the link offers no export
+    (is (str/includes? body "doc.links?.export?.href"))
+    (is (not (str/includes? body "self + \"/export\"")))))
 
 (deftest ui-replay-draws-an-invitation-frame
   ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
@@ -855,7 +859,7 @@
     (is (str/includes? body "html[data-film] #demobanner, html[data-film] #toast { display: none !important; }"))
     (testing "the chrome is gone before the walk is read"
       (is (< (str/index-of body "filmState(\"\");")
-             (str/index-of body "const res = await fetch(self + \"/export\", {headers: principalHeaders()});\n    if (res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
+             (str/index-of body "const row = await api(self);\n    const href = row.ok ? walkExportHref(row.body) : null;\n    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;\n    if (res && res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
     (is (str/includes? body "if (filmWalkOf(raw)) {"))
     (is (str/includes? body "if (film) return;"))))
 
