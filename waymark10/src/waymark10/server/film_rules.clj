@@ -346,6 +346,41 @@
                 :scope #{:eq}
                 :severity #{:eq}}
    :sortable {:fields [:name] :default "name"}
+   ;; the judging door (spec-agent-demo-walks § 8d): the take in the
+   ;; field names `metrics` reads. Every field is optional, because a
+   ;; take that lacks one leaves its rule unmeasured and is not refused
+   :collection-doors
+   {:judge
+    {:summary "Score a take against the active rules. It reads the rules and writes nothing."
+     :input
+     [:map
+      [:take
+       [:map
+        [:film {:optional true}
+         [:map
+          [:content_box {:optional true}
+           [:map [:x :double] [:y :double] [:w :double] [:h :double]]]
+          [:frame {:optional true} [:map [:w :double] [:h :double]]]
+          [:dead_air_s {:optional true} :double]
+          [:chrome_leaks {:optional true} :int]
+          [:runtime_s {:optional true} :double]
+          [:output {:optional true} (into [:enum] outputs)]]]
+        [:shots {:optional true}
+         [:vector
+          [:map
+           [:caption {:optional true} :string]
+           [:role {:optional true} (into [:enum] roles)]
+           [:goal_state {:optional true} :string]
+           [:zoom {:optional true} :boolean]
+           [:focus_box {:optional true}
+            [:map [:x :double] [:y :double] [:w :double] [:h :double]]]
+           [:viewport {:optional true} [:map [:w :double] [:h :double]]]
+           [:focus_type_px {:optional true} :double]
+           [:focus_contrast {:optional true} :double]
+           [:hold_s {:optional true} :double]
+           [:words {:optional true} :int]
+           ;; a count, or the list of names
+           [:surfaces_changed {:optional true} :any]]]]]]]}}
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot

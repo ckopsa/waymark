@@ -14,6 +14,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -540,5 +541,39 @@
       (is (= "pass" (:verdict (rule-in answer "arc")))))
     (testing "a body with no take is refused"
       (is (= 422 (:status (post! {})))))
+    (testing "it writes nothing"
+      (is (= before (rows-of {}))))))
+
+(deftest the-collection-names-the-judge-door-and-the-connector-calls-it
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [h (engine/handler *eng*)
+        headers {"x-waymark-principal" "colton"
+                 "content-type" "application/json"}
+        door (get-in (wire/read-json
+                      (:body (h {:request-method :get
+                                 :uri "/api/film_rules"
+                                 :headers headers})))
+                     [:actions :judge])
+        route (h {:request-method :post
+                  :uri "/api/film_rules/-/judge"
+                  :headers headers
+                  :body (wire/write-json {:take grey-corner})})
+        before (rows-of {})
+        out (mcp/call-tool *eng* (mcp/door *eng*) {:principal colton}
+                           "waymark_invoke"
+                           {:kind "film_rule" :action "judge"
+                            :input {:take grey-corner}})]
+    (testing "the collection names the door, with the take's input schema"
+      (is (= "POST" (:method door)))
+      (is (= "/api/film_rules/-/judge" (:href door)))
+      (is (true? (get-in door [:safety :safe])))
+      (is (some? (get-in door [:input :properties :take :properties :film
+                               :properties :content_box])))
+      (is (some? (get-in door [:input :properties :take :properties :shots]))))
+    (testing "a connector call answers what the route answers"
+      (is (not (:isError out)))
+      (is (= 200 (:status route)))
+      (is (= (wire/read-json (:body route))
+             (wire/read-json (get-in out [:content 0 :text])))))
     (testing "it writes nothing"
       (is (= before (rows-of {}))))))

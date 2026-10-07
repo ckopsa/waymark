@@ -113,6 +113,14 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; the kind's SAFE collection doors (ticket 80c6c9e2): {name {:input
+   ;; <malli> :summary "…"}}. Each is POST /api/{plural}/-/{name}, a
+   ;; route that reads and writes nothing, so it is no action: it moves
+   ;; no row, and whoever may read the kind may call it. The key is the
+   ;; ADVERTISEMENT — the collection document, the connector and the
+   ;; OpenAPI document read it — and the route is core's own. Never in
+   ;; the fingerprint — :computed's precedent
+   :collection-doors
    ;; edges
    :owns :links :related
    ;; advertisement

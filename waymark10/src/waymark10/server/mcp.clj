@@ -645,6 +645,14 @@
     (some (fn [a] (when (= wanted (p/wire-key a)) a))
           (concat (keys (:actions rdef)) (:create-action-names rdef)))))
 
+(defn- collection-door
+  "The kind's safe collection door an agent named, in either spelling
+  (`declared-action`), as the collection document advertises it."
+  [rdef action]
+  (let [wanted (p/wire-key (keyword action))]
+    (some (fn [[dname door]] (when (= wanted (p/wire-key dname)) door))
+          (coll/collection-doors rdef))))
+
 (defn- wire-action
   "The action keyword as it comes back out of a parsed envelope."
   [aname]
@@ -1639,6 +1647,12 @@
                                  (action-digest vis rdef a))))
                        (machine/actions-seq rdef))
         :create (into [] (map name) (:create-action-names rdef))
+        ;; the safe collection doors: waymark_invoke with the kind, the
+        ;; door's name as `action`, its input and no id
+        :collection_doors (into []
+                                (map (fn [[dname door]]
+                                       (assoc door :name (name dname))))
+                                (coll/collection-doors rdef))
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}))))
 
@@ -2502,6 +2516,13 @@
         (when-some [st (stage eng session rdef)]
           (beat! st (str "/api/" (:plural rdef)) nil))
         (bulk-rows call session rdef aname args))
+
+      ;; a safe collection door (:collection-doors): no row is read and
+      ;; none is moved, so the route's answer passes through as it is
+      (and (nil? id) (collection-door rdef aname))
+      (pass-through
+       (call (request session :post (:href (collection-door rdef aname))
+                      {:body (or input {})})))
 
       (nil? id)
       (let [self (str "/api/" (:plural rdef))
