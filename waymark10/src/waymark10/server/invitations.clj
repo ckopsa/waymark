@@ -122,14 +122,6 @@
     (some? field) [(arg-name field)]
     :else []))
 
-(defn- map-form
-  "The :map form a field's schema holds, through any :maybe; nil when
-  the field is no map."
-  [form]
-  (cond
-    (and (vector? form) (= :map (first form))) form
-    (and (vector? form) (= :maybe (first form))) (recur (last form))))
-
 (defn- argument-entries
   "The schema entries `arg` walks: one for an argument, and one more for
   each step of a dotted path into a nested map argument
@@ -141,7 +133,7 @@
          walked []]
     (when-some [entry (get entries (keyword k))]
       (if (seq more)
-        (recur (some-> (map-form (:schema entry)) schema/entry-map)
+        (recur (some-> (schema/map-form (:schema entry)) schema/entry-map)
                more
                (conj walked entry))
         (conj walked entry)))))

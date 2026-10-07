@@ -189,6 +189,32 @@
         (is (str/includes? (str why) "secret")
             "the secret is the map the path walks through, not its leaf")))))
 
+;; ticket f5844de1: the walk takes the map arm of an :or, as it takes
+;; the one under a :maybe.
+
+(deftest a-dotted-argument-through-an-or-with-a-map-arm-is-showable
+  (let [rdef {:actions
+              {:rename
+               {:input [:map
+                        [:title [:string {:min 1 :max 80}]]
+                        [:showcase {:optional true}
+                         [:or
+                          [:string {:max 500}]
+                          [:map
+                           [:evidence {:optional true}
+                            [:maybe [:or
+                                     [:string {:max 500}]
+                                     [:map
+                                      [:film_url {:optional true}
+                                       [:maybe [:string {:max 500}]]]]]]]]]]]}}}
+        film "https://example.org/film"]
+    (is (= {"showcase.evidence.film_url" film}
+           (invitations/showable rdef "rename"
+                                 {"showcase.evidence.film_url" film
+                                  "showcase.evidence.reel" "x"
+                                  "title.film_url" "x"}))
+        "the path through the map arm stands, and a step that names nothing goes")))
+
 ;; docs/spec-walkthrough.md § 4: `fields`, with `field` the spelling for
 ;; a list of one. `invite!` names `field`, so a case naming `fields`
 ;; alone nulls it.
