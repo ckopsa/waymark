@@ -158,6 +158,23 @@
          (why-not eng 3 {:tap {:surface "door:rename@$dishes"} :role "climax"})
          "shot 3: `climax` is not a role; the roles are friction, turn, payoff."))))
 
+(deftest a-shot-may-name-its-speed-or-its-trim
+  (let [eng (fresh-engine)
+        end (dec (count (:shots well-formed)))
+        id (write! eng (update-in well-formed [:shots end] assoc :speed 4 :trim true))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id)))))
+    (is (str/includes?
+         (why-not eng 3 {:tap {:surface "door:rename@$dishes"} :speed 20})
+         "shot 3: `speed` is a number from 0.25 to 8, and this one is `20`."))
+    (is (str/includes?
+         (why-not eng 3 {:tap {:surface "door:rename@$dishes"} :trim "yes"})
+         "shot 3: `trim` is true or false, and this one is `yes`."))
+    (is (str/includes?
+         (why-not eng 3 {:tap {:surface "door:rename@$dishes"} :trim true
+                         :say "Rename it."})
+         "shot 3: a shot with `trim` is cut from the film, so it has no `say`."))))
+
 (deftest a-given-call-is-judged-and-named
   (let [eng (fresh-engine)
         stranger (write! eng (assoc-in well-formed [:given 0 :as] "nobody"))
