@@ -170,6 +170,12 @@ async function renderResource(view, doc, hints) {
   /* a quest row: the checklist above already draws the plan, so it
      leaves the kv table (ticket bdd37958) */
   if (kind === "quest") delete plainData.plan;
+  /* …and so do the goal's own words (action_label, input_labels): they
+     are said in the action and input rows below, and are no rows */
+  const goalDoorLabel = kind === "quest" ? plainData.action_label : null;
+  const goalInputLabels = (kind === "quest" && plainData.input_labels) || {};
+  if (kind === "quest")
+    for (const k of ["action_label", "input_labels"]) delete plainData[k];
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -188,7 +194,8 @@ async function renderResource(view, doc, hints) {
         tr.lastChild.replaceChildren(questRow(plainData.self));
   /* …and its goal door and what the door was given are said by their
      display labels, as the checklist says a step's (questStep,
-     200-events-follow.js): the labels ride the goal's own step */
+     200-events-follow.js): the envelope's own labels first, then the
+     ones that ride the goal's own step */
   if (kind === "quest") {
     const goal = ((doc.data || {}).plan || []).find(s =>
       s.self === plainData.self && s.door === plainData.action) || {};
@@ -199,12 +206,14 @@ async function renderResource(view, doc, hints) {
       if (key === "action" && plainData.action)
         tr.lastChild.replaceChildren(
           el("span", {"data-quest-door": "", title: plainData.action},
+            goalDoorLabel ||
             goal.door_label || title(plainData.action)));
       if (key === "input" && given && typeof given === "object" &&
           !Array.isArray(given) && Object.keys(given).length)
         tr.lastChild.replaceChildren(el("table", {class:"kv"},
           Object.entries(given).map(([k, v]) => el("tr", {},
             el("td", {class:"k", title: k},
+              goalInputLabels[k] ||
               (goal.needs_labels || [])[needs.indexOf(k)] || title(k)),
             el("td", {}, valueCell(v, {}))))));
     }

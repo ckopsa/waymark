@@ -728,6 +728,51 @@ The files do not become attachments of the working engine. That would
 need a byte door on the connector or a credential in the clone door,
 and the attachment cap is 10 MiB. It is a punt.
 
+### 8d. The rules a film is scored by (waymark)
+
+Each measured rule of a good demo is a `film_rule` row
+(`server/film_rules.clj`), so a critique a person makes of a film
+becomes a row and an agent can meet the scorecard without seeing the
+film. A rule carries `name` (a slug, unique), `metric`, `op` (`>=`,
+`<=` or `=`), `threshold` (a number), `scope` (`film`, `shot` or
+`beat`; with `shot`, an optional `role`: `friction`, `turn` or
+`payoff`), `severity` (`fail` or `warn`), `why` (one sentence) and
+`origin` (a person's words, quoted, or `craft`). Its states are
+`active` and `retired`. A person or the sitter of a domain's mayor
+seat makes one; only a person retires one, and only a person restores
+a retired one.
+
+The metric vocabulary is closed (`film-rules/metrics`). A rule that
+names any other metric is refused, and the refusal lists these. Each
+metric is read from one field of the take:
+
+| Metric | What it measures | Source in the take |
+|---|---|---|
+| `frame_fill` | The content box over the frame. | `film.content_box` over `film.frame` |
+| `focus_share` | The focus box's area over the viewport. | `shot.focus_box` over `shot.viewport` |
+| `type_px` | The focus text's size at output pixels. | `shot.focus_type_px` |
+| `contrast` | The focus text's WCAG contrast ratio. | `shot.focus_contrast` |
+| `read_time_ratio` | The hold over the time the words take at 3 a second. | `shot.hold_s` over `shot.words / 3` |
+| `dead_air_s` | The longest span in which nothing changes. | `film.dead_air_s` |
+| `surfaces_changed` | The named surfaces that changed in a shot, besides the pointer. | `shot.surfaces_changed` |
+| `chrome_leaks` | The count of `/api` paths, uuids, raw snake_case keys or `[epic]` in visible text. | `film.chrome_leaks` |
+| `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
+| `runtime_s` | The film's length in seconds. | `film.runtime_s` |
+
+The take is the scorer's piece and is not built yet; these are the
+field names it is to carry.
+
+The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
+each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
+`chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
+(`type_px >= 28` per shot, warn), `read-time`
+(`read_time_ratio >= 1.2` per shot, warn), `dead-air`
+(`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
+per shot, warn), `focus-share` (`focus_share >= 0.25` per shot, warn)
+and `arc` (`arc = 1`, fail). A rule has no field for the output a film
+is rendered at or for a shot that asks for a zoom, so `type-size` and
+`focus-share` say those conditions in their `why` only.
+
 ## 8a. The surfaces a scene names
 
 A scene and a browser drive address the screen by meaning, not by a
