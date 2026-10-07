@@ -124,6 +124,8 @@
     (is (= ["approval_request" "attachment" "definition"
             ;; epic aff24e84, piece 1: the domain a seat names
             "domain"
+            ;; demo scorecard: one measured rule of a good demo film
+            "film_rule"
             "grant" "held_call" "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan"

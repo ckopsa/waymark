@@ -148,6 +148,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.domains :as domains]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.maintainer :as maintainer]
@@ -347,6 +348,11 @@
               :kinds (fn [_] [walks/walk])}
              {:kind :walk_frame :enroll :always
               :kinds (fn [_] [walks/walk-frame])}
+             ;; the film rule (demo scorecard): one measured rule of a
+             ;; good demo film. Core's beside the walk a film is
+             ;; rendered from.
+             {:kind :film_rule :enroll :always
+              :kinds (fn [_] [film-rules/film-rule])}
              ;; the scheduled action (docs/spec-scheduled-actions.md
              ;; R-1): a call stored for a time. Core's beside the held
              ;; call, which it carries a typed ref to, and for the

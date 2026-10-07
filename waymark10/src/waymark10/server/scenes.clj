@@ -427,7 +427,6 @@
    :nav :secondary
    :states [:draft :ready :retired]
    :initial :draft
-   :terminal #{:retired}
    :summary "{data.title} · v{data.version} · {state}"
    :label-template "{data.title}"
    :schema
@@ -473,7 +472,12 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The scene is no longer performed. Its takes stay."}
      :display {:label "Retire" :order 3
-               :description "Stop performing this scene"}}}})
+               :description "Stop performing this scene"}}
+    :restore
+    {:from #{:retired} :to :draft
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Restore" :order 4
+               :description "Bring the scene back as a draft; it must be checked again"}}}})
 
 (def ^:private shot-result
   "What the runner saw at one shot."
@@ -503,7 +507,9 @@
    [:scene_version {:x-display {:label "Scene version"
                                 :help "The version of the scene that was performed."}}
     [:int {:min 1}]]
-   [:device {:x-display {:label "Device" :help "The device it was performed on."}}
+   [:device {:x-display {:label "Device" :help "The device it was performed on."
+                         :choices {"phone" "A phone, held upright."
+                                   "desktop" "A desktop browser window."}}}
     [:enum "phone" "desktop"]]
    [:commit {:x-display {:raw true :label "Commit" :help "The commit of the house that was filmed."}}
     [:string {:min 1 :max 64}]]
@@ -521,6 +527,7 @@
    :initial :recorded
    :terminal #{:recorded}
    :summary "{data.device} · v{data.scene_version} · {data.commit}"
+   :label-template "{data.device} · v{data.scene_version} · {data.commit}"
    :schema
    (-> [:map]
        (into take-fields)

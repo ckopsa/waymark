@@ -993,7 +993,9 @@
   "The kind's :computed fields for one DECODED row, encoded as a
   stored field of the same schema would be; the ones this request
   conceals (redacted) are never computed. Each fn reads the row and a
-  read-only ctx (:read/:find — no writes, no invoke). A field that
+  read-only ctx (:read/:find — no writes, no invoke — and :rdef-of,
+  the registry consult a write's ctx carries, where the render lends
+  its :resources). A field that
   declares `:reads? true` renders nil when this render lends no :read:
   a wrong answer is worse than none (ticket 82589f6e). A throw prints
   one warning and the field renders nil: a read never fails because
@@ -1002,7 +1004,13 @@
   (when-some [computed (not-empty (apply dissoc (:computed rdef) redacted))]
     (let [hooks (:evidence-reads ctx-opts)
           cctx {:read (or (:read ctx-opts) (:read hooks))
-                :find (or (:find ctx-opts) (:find hooks))}]
+                :find (or (:find ctx-opts) (:find hooks))
+                :rdef-of (when-some [rs (:resources ctx-opts)]
+                           (fn [token]
+                             (let [t (name token)]
+                               (or (get rs (keyword t))
+                                   (some (fn [[_ r]] (when (= t (:plural r)) r))
+                                         rs)))))}]
       (into {}
             (map (fn [[f {s :schema compute :fn reads? :reads?}]]
                    [f (when-some [v (when (or (not reads?) (:read cctx))

@@ -267,6 +267,38 @@
                  "someone else"))
         (or (not-empty (:note head)) (str (:door head)))))))
 
+;; the goal door and the keys of its input are said in words at read
+;; time too: the row stores neither label, and the plan may not hold
+;; the goal's step
+
+(declare labels-of)
+
+(defn- goal-words
+  "What the goal row's declaration says of the quest's goal door and of
+  the keys of its `input` (`labels-of`). Nil where the render lends no
+  kind map, and where the goal row is of no served kind."
+  [row ctx]
+  (let [{:keys [self action input]} (:data row)
+        plural (when self (:plural (invitations/parse-self self)))
+        rdef (when plural (some-> (:rdef-of ctx) (apply [plural])))]
+    (when rdef
+      (labels-of rdef {:door (str/trim (str action))
+                       :needs (when (map? input) (mapv name (keys input)))}))))
+
+(defn action-label
+  "The goal door's display label, from the goal row's declaration. A
+  door that declares no label is its name in words."
+  [row ctx]
+  (:door_label (goal-words row ctx)))
+
+(defn input-labels
+  "The display label of each key of `input`, under that key, from the
+  goal door's input schema. Nil when the door is given nothing."
+  [row ctx]
+  (when-some [said (:needs_labels (goal-words row ctx))]
+    (zipmap (map (comp keyword name) (keys (get-in row [:data :input])))
+            said)))
+
 ;; ── the kind ────────────────────────────────────────────────────────
 
 (def ^:private step-schema
@@ -398,7 +430,17 @@
               {:schema [:maybe [:string {:max 300}]]
                :x-display {:label "Next"
                            :help "The note of the step to take now, or who the quest waits on."}
-               :fn next-line}}
+               :fn next-line}
+              :action_label
+              {:schema [:maybe [:string {:max 60}]]
+               :x-display {:label "The goal door, in words"
+                           :help "The goal door's display label, from the declaration of the goal row's kind."}
+               :fn action-label}
+              :input_labels
+              {:schema [:maybe [:map-of :keyword [:string {:max 60}]]]
+               :x-display {:label "The door's input, in words"
+                           :help "The display label of each key of the door's input, from the goal door's input schema."}
+               :fn input-labels}}
    :schema
    (-> [:map
         [:owner {:x-ref {:principal true}

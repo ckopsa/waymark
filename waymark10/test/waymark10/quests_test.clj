@@ -19,7 +19,8 @@
             [waymark10.server.quests :as quests]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:private chore
   "The row a quest's goal is a door of."
@@ -1512,6 +1513,19 @@
     (is (= ["Close reason"] (:needs_labels goal))
         "beside the labels of the fields the form will ask for")
     (is (not-any? :row_label plan) "the stored plan holds no row's label")))
+
+(deftest a-quest-with-no-plan-yet-says-its-goal-door-and-its-input-in-words
+  (let [eng (epic-engine)
+        {:keys [quest]} (epic-quest! eng {:close_reason "Shipped"})
+        answer ((engine/handler eng) {:request-method :get
+                                      :uri (str "/api/quests/" quest)
+                                      :headers {"x-waymark-principal" "colton"}})
+        data (:data (walk/keywordize-keys (wire/read-json (:body answer))))]
+    (is (= 200 (:status answer)) (pr-str answer))
+    (is (empty? (:plan data)) "no plan has landed")
+    (is (= "Complete" (:action_label data)) (pr-str data))
+    (is (= {:close_reason "Close reason"} (:input_labels data))
+        "each key of the input, by its label in the door's input schema")))
 
 (deftest a-nested-need-is-named-by-its-declared-label
   (let [evidence [:map
