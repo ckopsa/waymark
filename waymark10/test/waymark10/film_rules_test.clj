@@ -10,6 +10,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.grants :as grants]
@@ -298,6 +299,18 @@
         (is (some? d))
         (is (str/includes? (str (:text d)) "a-person-or-a-mayor-makes-the-rule"))
         (is (nil? (rule-named "made-by-a-clerk")))))))
+
+(deftest a-create-does-not-name-who-restated-the-rule
+  (let [rdef (get (inv/resources *eng*) :film_rule)]
+    (testing "the create model leaves the field out, and the row's schema keeps it"
+      (is (not (contains? (set (schema/entry-keys (:create-schema rdef)))
+                          :restated_by)))
+      (is (contains? (set (schema/entry-keys (:schema rdef))) :restated_by))))
+  (testing "a create that names it is refused, and no row carries it"
+    (let [d (refusal #(make-rule! {:name "marked-at-birth" :restated_by "colton"}
+                                  colton))]
+      (is (some? d))
+      (is (nil? (:restated_by (:data (rule-named "marked-at-birth"))))))))
 
 ;; ── the restate ─────────────────────────────────────────────────────
 
