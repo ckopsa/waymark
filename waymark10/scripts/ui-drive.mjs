@@ -2729,19 +2729,43 @@ async function guidedStory() {
      its old seq (presence/publish!). That frame takes the move's close
      back on bo's page, and the sheet he holds is the one he held: the
      mark tells a sheet that stayed from one closed and drawn again. */
-  await B.js(`document.querySelector("dialog[open][data-guided-quest]")
-    .dataset.heldAcrossMove = "1"; true`);
   const A2 = await openTab("ada's second tab");
   await boot(A2, "ada");
-  await A2.js(`location.hash = ${JSON.stringify(meals[0])}; true`);
-  await A2.until(`hereHref() === ${JSON.stringify(meals[0])}`,
-                 "the meal's page on ada's second tab", 15000);
-  await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meals[0])}`,
-                "ada's move to the meal, on bo's page", 15000, guidedState);
-  await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+  let a2Reads = 0;
+  const heldAcrossMove = async () => {
+    const meal = meals[a2Reads++ % meals.length];
+    await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+                  "ada's quest sheet on bo's screen, before her move", 15000, guidedState);
+    await B.js(`document.querySelector("dialog[open][data-guided-quest]")
+      .dataset.heldAcrossMove = "1"; true`);
+    await A2.js(`location.hash = ${JSON.stringify(meal)}; true`);
+    await A2.until(`hereHref() === ${JSON.stringify(meal)}`,
+                   "the meal's page on ada's second tab", 15000);
+    await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meal)}`,
+                  "ada's move to the meal, on bo's page", 15000, guidedState);
+    await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+    return await B.js(`!!document.querySelector(
+      "dialog[open][data-guided-quest][data-held-across-move]")`);
+  };
+  /* first on a page without the line that takes the close back: the
+     case must fail there, or it does not test that line. Bo's page gets
+     applyGuidedUi again from its own source with the line cut. Ada's
+     10 s heartbeat carries a new seq and takes the close back when it
+     lands inside the wait, so the move is given again; the same
+     heartbeat draws her sheet on bo's screen again after a close. */
+  const takesBack = "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);";
+  const applySrc = await B.js(`applyGuidedUi.toString()`);
+  ok("applyGuidedUi has the line that takes a move's close back",
+     applySrc.includes(takesBack));
+  await B.js(`window.applyGuidedUiWhole = applyGuidedUi;
+    applyGuidedUi = ${applySrc.replace(takesBack, "")}; true`);
+  let heldWithout = true;
+  for (let i = 0; i < 3 && heldWithout; i++) heldWithout = await heldAcrossMove();
+  await B.js(`applyGuidedUi = window.applyGuidedUiWhole; true`);
+  ok("without that line, the same move closes her sheet on bo's screen",
+     !heldWithout);
   ok("a move of ada's with no new ui beat leaves her sheet open on bo's screen",
-     await B.js(`!!document.querySelector(
-       "dialog[open][data-guided-quest][data-held-across-move]")`));
+     await heldAcrossMove());
   /* the second tab leaves: its beats would move ada's gaze under the
      cases below */
   await A2.call("Page.navigate", {url: "about:blank"});
