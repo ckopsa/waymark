@@ -9,16 +9,20 @@
   The vocabulary is closed: `metrics` names every metric and the field
   of the take it is read from (docs/spec-agent-demo-walks.md § 8d). A
   rule naming any other metric is refused with the list. `measure` reads
-  one metric from a take, by those field names.
+  one metric from a take, by those field names. `judge` scores a whole
+  take against the rules and answers each rule's verdict; the router
+  serves it at POST /api/film_rules/-/judge, and it writes nothing.
 
-  A person or the sitter of a domain's mayor seat makes a rule. Only a
+  A person or the sitter of a domain's mayor seat makes a rule, and
+  whoever may make one may restate its `output` and `unless`. Only a
   person retires one.
 
   `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
   starts with, each made once by its name. The engine's own start runs
   it (`engine/start-runtime!`), so every application that enrolls the
   kind has them. A seed row made before `output` and `unless` existed
-  gains them there, through `restate`, a door only the boot seed walks."
+  gains them there, through `restate`. A restate by anyone else writes
+  `restated_by`, and the seed leaves a row that carries it alone."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -89,9 +93,10 @@
   (when (and (number? a) (number? b) (pos? b)) (double (/ a b))))
 
 (defn- word
-  "A role or a state as a string, however the take spells it."
+  "A role, a state or an enum field as a string, or nil: a take and a
+  body spell one as a string, and a row gives an enum back as a keyword."
   [v]
-  (when (or (string? v) (keyword? v)) (name v)))
+  (when (or (string? v) (keyword? v)) (not-empty (name v))))
 
 (defn- counted
   "A count, from a number or from the list of the things counted."
@@ -181,22 +186,27 @@
     (t/deny)
     (t/allow)))
 
+(defn- makes?
+  "Whether the caller of `ctx` may make a film rule: a person, the boot
+  seed, or the sitter of a domain's mayor seat."
+  [ctx]
+  (let [{:keys [type acts-for]} (:principal ctx)
+        find' (:find ctx)
+        cited (delegation/cited-seats ctx)]
+    (boolean
+     (or
+      ;; a person, a tool a person is signed in to, or the boot seed
+      (not= :agent type) (some? (not-empty (str acts-for)))
+      (nil? find')                       ; probe ctx — decline to guess
+      (some #(seq (find' :domain {:mayor (str %) :state "active"} {:limit 1}))
+            cited)))))
+
 (g/defguard a-person-or-a-mayor-makes-the-rule
   {:reads [:principal :now :grant :domain]
    :open "No door changes who the caller is: ask a person or a domain's mayor to make the rule."
    :explain "A film rule is made by a person, or by the sitter of a domain's mayor seat. Ask a person or a mayor to make the rule."}
   [_row _inp ctx]
-  (let [{:keys [type acts-for]} (:principal ctx)
-        find' (:find ctx)
-        cited (delegation/cited-seats ctx)]
-    (cond
-      ;; a person, a tool a person is signed in to, or the boot seed
-      (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
-      (nil? find') (t/allow)             ; probe ctx — decline to guess
-      (some #(seq (find' :domain {:mayor (str %) :state "active"} {:limit 1}))
-            cited)
-      (t/allow)
-      :else (t/deny))))
+  (if (makes? ctx) (t/allow) (t/deny)))
 
 (g/defguard a-person-retires-the-rule
   {:reads [:principal]
@@ -210,24 +220,31 @@
       (t/allow)
       (t/deny))))
 
-(g/defguard the-boot-seed-restates-the-rule
-  {:reads [:principal]
-   :open "No door changes who the caller is: the boot seed restates a rule. Ask a person to retire the rule and make another."
-   :explain "A rule is restated only by the boot seed, which gives a seed rule made before a field existed the value the seed names. A person who wants another rule retires this one and makes another."}
+(g/defguard a-person-or-a-mayor-restates-the-rule
+  {:reads [:principal :now :grant :domain]
+   :open "No door changes who the caller is: ask a person or a domain's mayor to restate the rule."
+   :explain "Whoever may make a film rule may restate one: a person, or the sitter of a domain's mayor seat. Ask a person or a mayor to restate the rule."}
   [_row _inp ctx]
-  (let [{:keys [id type]} (:principal ctx)]
-    (if (and (= :system type) (= seed-actor-id (str id)))
-      (t/allow)
-      (t/deny))))
+  (if (makes? ctx) (t/allow) (t/deny)))
 
 ;; ── the handler ─────────────────────────────────────────────────────
 
-(defhandler restate-rule
-  [row inp _ctx]
-  ;; a patch: a field the input leaves out keeps its stored value
-  (update row :data merge (select-keys inp [:output :unless])))
+(defn- seed?
+  "Whether `principal` is the actor the boot seed wears."
+  [{:keys [id type]}]
+  (and (= :system type) (= seed-actor-id (str id))))
 
-;; ── the fields the seed restates ────────────────────────────────────
+(defhandler restate-rule
+  [row inp ctx]
+  ;; a patch: a field the input leaves out keeps its stored value
+  (let [principal (:principal ctx)]
+    (cond-> (update row :data merge (select-keys inp [:output :unless]))
+      ;; the seed's own restate leaves no mark, so the mark means
+      ;; someone chose these values and the seed leaves them alone
+      (not (seed? principal))
+      (assoc-in [:data :restated_by] (str (:id principal))))))
+
+;; ── the fields a restate writes ─────────────────────────────────────
 
 (def ^:private output-field
   [:output {:optional true
@@ -314,7 +331,15 @@
               :x-display
               {:label "Whose note"
                :help "Who asked for the rule: a person's own words, quoted, or the word craft."}}
-     [:string {:min 1 :max 480}]]]
+     [:string {:min 1 :max 480}]]
+    ;; written by `restate`, never by the boot seed's own
+    [:restated_by {:optional true
+                   :x-ref {:principal true}
+                   :x-display
+                   {:raw true
+                    :label "Who restated it"
+                    :help "Who last restated the rule's output or exemption. The boot seed leaves a rule that carries this alone."}}
+     [:maybe [:string {:max 128}]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :metric #{:eq :in}
@@ -327,17 +352,18 @@
                    unless-goes-with-a-shot
                    a-person-or-a-mayor-makes-the-rule]
    :actions
-   {;; the boot seed's door: no person has one, so a field a row lacks
-    ;; is a field that did not exist when the row was made
+   {;; whoever may make a rule may restate it, and the boot seed walks
+    ;; this door too: the handler writes `restated_by` for everyone but
+    ;; the seed, so the seed can tell a chosen value from a missing one
     :restate
     {:from #{:active} :to :active
      :input [:map output-field unless-field]
-     :guards [unless-goes-with-a-shot the-boot-seed-restates-the-rule]
+     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The rule holds what this restate says; the values before are not kept."}
      :handler restate-rule
      :display {:label "Restate the rule" :order 5
-               :description "Give a seed rule the output or the exemption the seed names"}}
+               :description "Change the output the rule is for, or the shots it exempts"}}
 
     :retire
     {:from #{:active} :to :retired :undo :restore
@@ -355,12 +381,6 @@
                :description "Score films against this rule again"}}}})
 
 ;; ── the judgment ────────────────────────────────────────────────────
-
-(defn- word
-  "A field's value as a string, or nil: a row gives an enum back as a
-  keyword and a body gives it as a string."
-  [v]
-  (when (some? v) (not-empty (name v))))
 
 (defn judges?
   "True when `rule` (a rule's data) is scored on this part of a take. A
@@ -393,6 +413,164 @@
         "<=" (<= value threshold)
         "=" (== value threshold)) :pass
       :else :miss)))
+
+;; ── the judging of a take ───────────────────────────────────────────
+
+(defn- sized? [m] (some? (area m)))
+
+(def ^:private film-needs
+  "Metric → the fields of the take it is read from, each with how to
+  tell that the take carries it."
+  {"frame_fill" [["film.content_box" #(sized? (get-in % [:film :content_box]))]
+                 ["film.frame" #(sized? (get-in % [:film :frame]))]]
+   "dead_air_s" [["film.dead_air_s" #(number? (get-in % [:film :dead_air_s]))]]
+   "chrome_leaks" [["film.chrome_leaks"
+                    #(number? (get-in % [:film :chrome_leaks]))]]
+   "arc" [["shots" #(some? (seq (:shots %)))]
+          ["shot.role" #(or (empty? (:shots %))
+                           (some (comp word :role) (:shots %)))]
+          ["shot.goal_state" #(or (empty? (:shots %))
+                                 (word (:goal_state (last (:shots %)))))]]
+   "runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]})
+
+(def ^:private shot-needs
+  "Metric → the fields of one shot it is read from, each with how to
+  tell that the shot carries it."
+  {"focus_share" [["shot.focus_box" #(sized? (:focus_box %))]
+                  ["shot.viewport" #(sized? (:viewport %))]]
+   "type_px" [["shot.focus_type_px" #(number? (:focus_type_px %))]]
+   "contrast" [["shot.focus_contrast" #(number? (:focus_contrast %))]]
+   "read_time_ratio" [["shot.hold_s" #(number? (:hold_s %))]
+                      ["shot.words" #(number? (:words %))]]
+   "surfaces_changed" [["shot.surfaces_changed"
+                        #(number? (counted (:surfaces_changed %)))]]})
+
+(defn- lacking
+  "The names of the `needs` that `part` of the take does not carry."
+  [needs part]
+  (vec (keep (fn [[field has?]] (when-not (has? part) field)) needs)))
+
+(defn- badness
+  "How far `value` stands on the wrong side of the rule's threshold."
+  [rule value]
+  (let [threshold (:threshold rule)]
+    (case (word (:op rule))
+      ">=" (- threshold value)
+      "<=" (- value threshold)
+      "=" (Math/abs (double (- value threshold))))))
+
+(defn- judge-shot
+  "One shot against a rule read from each shot: its index, its caption,
+  its verdict, and the value or the fields the shot lacks."
+  [rule film index shot value]
+  (merge
+   {:index index :caption (:caption shot)}
+   (cond
+     (not (judges? rule film shot)) {:verdict :unscored}
+     (exempt? rule shot) {:verdict :pass}
+     :else
+     (let [missing (lacking (shot-needs (word (:metric rule))) shot)]
+       (cond
+         (seq missing) {:verdict :unmeasured :missing missing}
+         ;; every field is there and still no number: a shot with no
+         ;; words has nothing to read
+         (not (number? value)) {:verdict :unscored}
+         :else {:verdict (verdict rule film shot value) :value value})))))
+
+(defn- judge-shots
+  "A rule read from each shot: a miss when any shot misses, else
+  unmeasured when any shot lacks a field, else a pass when any shot
+  passes. `worst` is the shot that misses by the most, or, when none
+  misses, the measured shot nearest to a miss."
+  [rule {:keys [film shots] :as tk}]
+  (if (empty? shots)
+    {:verdict "unmeasured" :missing ["shots"]}
+    (let [judged (map (fn [index shot value]
+                        (judge-shot rule film index shot value))
+                      (range) shots (measure tk (word (:metric rule))))
+          of (fn [v] (filter #(= v (:verdict %)) judged))
+          misses (of :miss)
+          passes (of :pass)
+          missing (vec (distinct (mapcat :missing judged)))
+          measured (filter #(number? (:value %))
+                           (if (seq misses) misses passes))
+          worst (when (seq measured)
+                  (apply max-key #(badness rule (:value %)) measured))]
+      (cond-> {:verdict (cond (seq misses) "miss"
+                              (seq missing) "unmeasured"
+                              (seq passes) "pass"
+                              :else "unscored")}
+        (seq missing) (assoc :missing missing)
+        worst (assoc :worst (select-keys worst [:index :caption :value]))))))
+
+(defn- judge-film
+  "A rule read from the film once."
+  [rule {:keys [film] :as tk}]
+  (let [metric (word (:metric rule))
+        needs (film-needs metric)
+        missing (lacking needs tk)
+        value (measure tk metric)]
+    (cond
+      (seq missing) {:verdict "unmeasured" :missing missing}
+      (not (number? value)) {:verdict "unmeasured" :missing (mapv first needs)}
+      :else {:verdict (name (verdict rule film nil value)) :value value})))
+
+(defn- judge-rule
+  "One rule's entry in the answer: what the rule says, and its verdict."
+  [rule tk]
+  (let [metric (word (:metric rule))]
+    (merge
+     {:name (:name rule)
+      :metric metric
+      :op (word (:op rule))
+      :threshold (:threshold rule)
+      :severity (word (:severity rule))
+      :why (:why rule)}
+     (cond
+       ;; the output filter is the film's, so it is judged before any shot
+       (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
+       (contains? shot-readers metric) (judge-shots rule tk)
+       (contains? film-readers metric) (judge-film rule tk)
+       :else {:verdict "unmeasured" :missing []}))))
+
+(defn judge
+  "The take `tk` scored against `rules` (each a rule's data), in order
+  of name. Each rule answers its name, metric, op, threshold, severity
+  and why, and a verdict: `pass`, `miss`, `unscored` (a filter leaves
+  the rule out) or `unmeasured` (the take lacks a field the metric
+  needs; `missing` names it). A scored film rule carries its `value`; a
+  rule read from each shot carries `worst`, the index, caption and value
+  of its worst shot. The overall verdict is `red` when a fail rule
+  misses, else `warn` when any rule misses, else `green`. An unmeasured
+  rule is not a pass: `unmeasured` names each one."
+  [rules tk]
+  (let [tk (if (map? tk) tk {})
+        tk (assoc tk :shots (if (sequential? (:shots tk)) (vec (:shots tk)) []))
+        judged (mapv #(judge-rule % tk) (sort-by (comp str :name) rules))
+        missed (filter #(= "miss" (:verdict %)) judged)]
+    {:verdict (cond (some #(= "fail" (:severity %)) missed) "red"
+                    (seq missed) "warn"
+                    :else "green")
+     :unmeasured (mapv :name (filter #(= "unmeasured" (:verdict %)) judged))
+     :rules judged}))
+
+(defn judge-take
+  "The take `tk` scored against every active rule the caller may read.
+  `row?` is the caller's visibility over rows, (fn [kind id]), or nil
+  for a caller who reads them all. It reads the rules and writes
+  nothing."
+  [eng tk row?]
+  (let [rdef (get (inv/resources eng) kind)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (vec (store/query-rows st tx kind {} {:limit 100000}))))]
+    (judge (into []
+                 (comp (map #(inv/decode-row rdef %))
+                       (filter #(= "active" (word (:state %))))
+                       (filter #(or (nil? row?) (row? kind (str (:id %)))))
+                       (map :data))
+                 rows)
+           tk)))
 
 ;; ── the boot seed ───────────────────────────────────────────────────
 
@@ -442,20 +620,24 @@
 
 (defn- lacks
   "The `output` and `unless` the seed names for `rule` and `row`, a
-  decoded rule of that name, does not carry. Only the boot seed writes
-  these fields after a create, so a row without one was made before the
-  field existed; a value the row carries is never written over."
+  decoded rule of that name, does not carry. A restate by anyone but
+  the seed writes `restated_by`, so a row with no such mark and without
+  a field was made before the field existed; a row that carries the
+  mark lacks nothing, and a value a row carries is never written over."
   [rule row]
-  (into {}
-        (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
-        (select-keys rule [:output :unless])))
+  (if (some-> (get-in row [:data :restated_by]) str not-empty)
+    {}
+    (into {}
+          (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
+          (select-keys rule [:output :unless]))))
 
 (defn ensure-seed-rules!
   "The boot seed: each of `seed-rules` when no rule carries its name,
   active or retired. A second boot makes none, and a rule a person
   retired is not made again. An active rule that carries a seed's name
   and lacks the `output` or `unless` the seed names is restated to
-  carry it; a retired one is left as it is.
+  carry it; a retired one is left as it is, and so is one a person or a
+  mayor restated.
 
   Every engine runs this at its start, with no election. Two engines
   that start at once on one database may both read no row for a name

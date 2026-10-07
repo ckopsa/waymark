@@ -17,7 +17,8 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:dynamic *eng* nil)
 
@@ -79,6 +80,12 @@
 
 (defn- retire! [name' principal]
   (move! :retire name' principal))
+
+(defn- restate! [name' patch principal]
+  (let [row (rule-named name')]
+    (inv/invoke! *eng* :film_rule (str (:id row)) :restate patch
+                 {:principal principal
+                  :if-match (inv/etag :film_rule (str (:id row)) (:version row))})))
 
 (defn- state-of [row] (name (:state row)))
 
@@ -167,10 +174,7 @@
   (testing "a second boot restates nothing"
     (let [version (:version (rule-named "type-size"))]
       (film-rules/ensure-seed-rules! *eng*)
-      (is (= version (:version (rule-named "type-size"))))))
-  (testing "a person has no restate"
-    (is (some? (refusal #(move! :restate "type-size" colton))))
-    (is (= "phone" (name (:output (:data (rule-named "type-size"))))))))
+      (is (= version (:version (rule-named "type-size")))))))
 
 (deftest an-unknown-metric-is-refused-with-the-vocabulary
   (let [d (refusal #(make-rule! {:name "loudness-floor" :metric "loudness"}
@@ -318,6 +322,67 @@
         (is (str/includes? (str (:text d)) "a-person-or-a-mayor-makes-the-rule"))
         (is (nil? (rule-named "made-by-a-clerk")))))))
 
+;; ── the restate ─────────────────────────────────────────────────────
+
+(defn- forget-type-size! []
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (jdbc/execute! tx [(str "DELETE FROM film_rules WHERE data->>'name'"
+                              " = 'type-size'")]))))
+
+(deftest a-persons-restate-survives-the-boot-seed
+  (forget-type-size!)
+  (film-rules/ensure-seed-rules! *eng*)
+  (is (= "phone" (name (:output (:data (rule-named "type-size"))))))
+  (try
+    (restate! "type-size" {:output nil} colton)
+    (testing "the rule holds no output, and says who restated it"
+      (is (nil? (:output (:data (rule-named "type-size")))))
+      (is (= "colton" (:restated_by (:data (rule-named "type-size"))))))
+    (testing "the next boot seed leaves it alone"
+      (let [version (:version (rule-named "type-size"))]
+        (film-rules/ensure-seed-rules! *eng*)
+        (is (nil? (:output (:data (rule-named "type-size")))))
+        (is (= version (:version (rule-named "type-size"))))))
+    (finally
+      ;; the other tests read the seed's own type-size
+      (forget-type-size!)
+      (film-rules/ensure-seed-rules! *eng*))))
+
+(deftest a-mayors-sitter-restates-a-rule-and-another-seats-sitter-does-not
+  (let [mayor (open-seat! "rule-mayor")
+        _ (open-seat! "rule-clerk")
+        _ (inv/create! *eng* :domain
+                       {:name "rule-house"
+                        :charter "Keep the film rules where they apply."
+                        :budget_usd_per_week 40M
+                        :mayor (str (:id mayor))}
+                       {:principal colton})
+        mayors (t/principal {:id "rule-mayor-sitter" :type :agent
+                             :display "The mayor's sitter"})
+        clerks (t/principal {:id "rule-clerk-sitter" :type :agent
+                             :display "The clerk's sitter"})]
+    (sit! "rule-mayor" mayors)
+    (sit! "rule-clerk" clerks)
+    (make-rule! {:name "to-restate" :metric "type_px" :op ">=" :threshold 28M
+                 :scope "shot"}
+                colton)
+    (testing "a grant citing another seat is refused"
+      (let [d (refusal #(restate! "to-restate" {:output "phone"} clerks))]
+        (is (some? d))
+        (is (str/includes? (str (:text d))
+                           "a-person-or-a-mayor-restates-the-rule"))
+        (is (nil? (:output (:data (rule-named "to-restate")))))))
+    (testing "and so is a bare agent"
+      (is (some? (refusal #(restate! "to-restate" {:output "phone"} clerk))))
+      (is (nil? (:restated_by (:data (rule-named "to-restate"))))))
+    (testing "a grant citing the domain's mayor seat restates the rule"
+      (restate! "to-restate" {:output "phone" :unless "zoom"} mayors)
+      (let [data (:data (rule-named "to-restate"))]
+        (is (= "phone" (name (:output data))))
+        (is (= "zoom" (name (:unless data))))
+        (is (= "rule-mayor-sitter" (:restated_by data)))))))
+
 ;; ── the take ────────────────────────────────────────────────────────
 
 (def ^:private a-take
@@ -371,3 +436,109 @@
     (is (= [nil] (film-rules/measure {:shots [{:hold_s 4 :words 0}]}
                                      "read_time_ratio")))
     (is (nil? (film-rules/measure a-take "loudness")))))
+
+;; ── the judging of a take ───────────────────────────────────────────
+
+(def ^:private a-good-take
+  "a-take on a phone, with the turn held for its words and changing one
+  surface: it passes every seed rule."
+  (-> a-take
+      (assoc-in [:film :output] "phone")
+      (update-in [:shots 1] assoc
+                 :caption "The turn" :hold_s 5 :surfaces_changed 1)))
+
+(def ^:private grey-corner
+  "The phone film whose content sits in the top left of a grey frame."
+  (update a-good-take :film assoc
+          :frame {:w 1170 :h 2532}
+          :content_box {:x 0 :y 0 :w 390 :h 844}))
+
+(def ^:private a-small-shot
+  (assoc (first (:shots a-take))
+         :caption "Close in" :focus_box {:x 0 :y 0 :w 10 :h 10}))
+
+(defn- judged [tk] (film-rules/judge film-rules/seed-rules tk))
+
+(defn- rule-in [answer name']
+  (first (filter #(= name' (:name %)) (:rules answer))))
+
+(deftest a-take-is-judged-against-the-seed-rules
+  (testing "a good take is green, with one verdict for each rule by name"
+    (let [answer (judged a-good-take)]
+      (is (= "green" (:verdict answer)))
+      (is (= [] (:unmeasured answer)))
+      (is (= (sort (map :name film-rules/seed-rules))
+             (map :name (:rules answer))))
+      (is (every? #(= "pass" (:verdict %)) (:rules answer)))
+      (is (= {:name "frame-fill" :metric "frame_fill" :op ">="
+              :threshold 0.95M :severity "fail"}
+             (select-keys (rule-in answer "frame-fill")
+                          [:name :metric :op :threshold :severity])))
+      (is (string? (:why (rule-in answer "frame-fill"))))))
+  (testing "the grey-corner phone take is red on frame-fill with about 0.11"
+    (let [answer (judged grey-corner)
+          fill (rule-in answer "frame-fill")]
+      (is (= "red" (:verdict answer)))
+      (is (= "miss" (:verdict fill)))
+      (is (< 0.11 (:value fill) 0.112))))
+  (testing "a desktop take leaves type-size unscored"
+    (let [answer (judged (assoc-in a-good-take [:film :output] "desktop"))]
+      (is (= "unscored" (:verdict (rule-in answer "type-size"))))
+      (is (= "green" (:verdict answer)))))
+  (testing "a zoomed shot passes focus-share whatever it measures"
+    (let [zoomed (assoc a-small-shot :zoom true)
+          share #(rule-in (judged (assoc a-good-take :shots %)) "focus-share")]
+      (is (= "pass" (:verdict (share [zoomed]))))
+      (is (nil? (:worst (share [zoomed]))))
+      (is (= "miss" (:verdict (share [a-small-shot]))))
+      (is (= {:index 0 :caption "Close in"}
+             (select-keys (:worst (share [a-small-shot])) [:index :caption])))
+      (is (< (:value (:worst (share [a-small-shot]))) 0.25))
+      (testing "and is not the worst shot of a take that passes"
+        (let [mixed (share (assoc (:shots a-good-take) 0 zoomed))]
+          (is (= "pass" (:verdict mixed)))
+          (is (= 1 (:index (:worst mixed))))))))
+  (testing "a take with no dead_air_s leaves dead-air unmeasured, by name"
+    (let [answer (judged (update a-good-take :film dissoc :dead_air_s))
+          air (rule-in answer "dead-air")]
+      (is (= "unmeasured" (:verdict air)))
+      (is (= ["film.dead_air_s"] (:missing air)))
+      (is (= ["dead-air"] (:unmeasured answer)))))
+  (testing "a shot that lacks a field leaves its rule unmeasured"
+    (let [answer (judged (update-in a-good-take [:shots 2] dissoc :focus_type_px))]
+      (is (= "unmeasured" (:verdict (rule-in answer "type-size"))))
+      (is (= ["shot.focus_type_px"] (:missing (rule-in answer "type-size"))))))
+  (testing "a take whose visible text holds an /api path is red on chrome-leaks"
+    (let [answer (judged (assoc-in a-good-take [:film :chrome_leaks] 1))]
+      (is (= "red" (:verdict answer)))
+      (is (= "miss" (:verdict (rule-in answer "chrome-leaks"))))
+      (is (== 1 (:value (rule-in answer "chrome-leaks"))))))
+  (testing "a warn rule that misses names its worst shot, and the take is warn"
+    (let [answer (judged (assoc-in a-good-take [:shots 1 :surfaces_changed]
+                                   ["ticket-list" "drawer"]))
+          surface (rule-in answer "one-surface")]
+      (is (= "warn" (:verdict answer)))
+      (is (= "miss" (:verdict surface)))
+      (is (= {:index 1 :caption "The turn" :value 2} (:worst surface))))))
+
+(deftest the-judge-door-answers-and-writes-nothing
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [h (engine/handler *eng*)
+        post! (fn [body]
+                (h {:request-method :post
+                    :uri "/api/film_rules/-/judge"
+                    :headers {"x-waymark-principal" "colton"
+                              "content-type" "application/json"}
+                    :body (wire/write-json body)}))
+        before (rows-of {})
+        resp (post! {:take grey-corner})
+        answer (wire/read-json (:body resp))]
+    (testing "the door scores the take against the active rows"
+      (is (= 200 (:status resp)))
+      (is (= "red" (:verdict answer)))
+      (is (= "miss" (:verdict (rule-in answer "frame-fill"))))
+      (is (= "pass" (:verdict (rule-in answer "arc")))))
+    (testing "a body with no take is refused"
+      (is (= 422 (:status (post! {})))))
+    (testing "it writes nothing"
+      (is (= before (rows-of {}))))))
