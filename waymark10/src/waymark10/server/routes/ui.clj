@@ -156,6 +156,8 @@
     :is "The form's Decline button for an invitation; it reads Skip in a led walk."}
    {:name "dialog.stop"
     :is "The form's Stop button in a led walk."}
+   {:name "dialog.accept"
+    :is "The form's Accept as quest button, offered under a refusal."}
    {:name "secret"
     :is "The dialog that shows a secret one time, with its Copy button; its value field has no name, so a scene cannot read the secret."}
    {:name "secret.copy"
@@ -199,9 +201,7 @@
    {:name "caption"
     :is "The caption band of a replay."}
    {:name "refusal"
-    :is "The line a refused write is said in, in a form or in the sheet."}
-   {:name "refusal.accept"
-    :is "The Accept as quest button offered under a refusal."}])
+    :is "The line a refused write is said in, in a form or in the sheet."}])
 
 (defn- ui-surfaces
   "GET /api/-/ui/surfaces: the list above, as static as the page and
