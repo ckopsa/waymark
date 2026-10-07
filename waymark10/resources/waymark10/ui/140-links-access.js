@@ -172,7 +172,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
               (s.needs || []).flat().length
                 ? el("div", {class: "muted", "data-quest-needs": ""},
                     "asks for: " + (s.needs_labels
-                      || (s.needs || []).flat().map(n => title(n))).join(", "))
+                      || (s.needs || []).flat().map(n => title(prettyNeed(n)))).join(", "))
                 : null,
               s.note ? el("div", {class: "muted"}, s.note) : null)))
         : seen.ok

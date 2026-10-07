@@ -761,7 +761,7 @@ function questPlan(doc) {
       : null);
 }
 function questStep(doc, s) {
-  const needs = (s.needs_labels || (s.needs || []).map(pretty)).join(", ");
+  const needs = (s.needs_labels || (s.needs || []).map(prettyNeed)).join(", ");
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
     el("span", {class: "quest-note"}, s.note || s.door_label || pretty(s.door)));
   /* the row the step is on, in words: the row's own summary, which the

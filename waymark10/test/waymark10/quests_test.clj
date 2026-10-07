@@ -1540,6 +1540,28 @@
     (is (= ["No such"] (labels ["showcase.no_such"]))
         "a path the schema does not name is its last step in words")))
 
+(deftest a-plan-stored-in-older-words-is-said-again-when-the-planner-starts
+  (let [eng (epic-engine)
+        {:keys [quest]} (epic-quest! eng nil)
+        _ (hear! eng)
+        held (data-of eng quest)
+        stale (update (vec (:plan held)) 1 assoc :needs_labels ["Close_reason"])]
+    (take! eng quest quests/engine-actor :plan
+           (-> (select-keys held [:planned_at :blocked_reason :plan_is_estimate
+                                  :waiting_on :invitation])
+               (update :planned_at str)
+               (assoc :plan stale)))
+    (is (= ["Close_reason"] (:needs_labels (second (:plan (data-of eng quest)))))
+        "the plan as an older declaration said it")
+    (is (= 1 (quests/relabel! eng)) "the one plan whose words differ is written")
+    (let [after (data-of eng quest)]
+      (is (= ["Close reason"] (:needs_labels (second (:plan after))))
+          "the need is the label declared now")
+      (is (= (:plan held) (:plan after)) "and nothing else of the plan moved")
+      (is (= (:planned_at held) (:planned_at after))
+          "the plan is as old as it was, so a transition not yet heard still plans it"))
+    (is (= 0 (quests/relabel! eng)) "a plan in today's words is left alone")))
+
 (deftest a-rename-of-a-steps-row-leaves-the-quests-plan-as-it-was
   (let [eng (note-engine)
         n (make! eng :q_note {:title "Unsorted mail"})

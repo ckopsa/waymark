@@ -554,7 +554,7 @@ function questDraw(doc, finished) {
         el("span", {"data-quest-note": "", "data-surface": "tracker.next"},
            head ? head.note || head.door_label || pretty(head.door) : ""));
       const needs = head
-        ? head.needs_labels || (head.needs || []).flat().map(pretty) : [];
+        ? head.needs_labels || (head.needs || []).flat().map(prettyNeed) : [];
       if (head && head.self)
         line.append(el("span", {class: "quest-on muted"},
           questRow(head.self, false),
