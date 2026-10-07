@@ -644,7 +644,12 @@ replay.
     drawn and in the viewport, in reading order, cut at 2048
     characters. An open modal's text comes first, because it is drawn
     over the page; the page's follows. A field's value is not in it,
-    and the secret dialog gives its heading and its buttons only.
+    and the secret dialog gives its heading and its buttons only. A run
+    is left out, here and in the focus text, when the centre of its
+    box is covered by an element that is not its ancestor: the page's
+    `document.elementFromPoint` there, or the caption band. A modal's
+    backdrop dims the page and does not cover it. A run that a
+    scrolling ancestor clips is still listed.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as
@@ -662,9 +667,11 @@ replay.
     focus text. `contrast` is that run's WCAG contrast ratio, to two
     places, against the background colours drawn behind it: its own
     and its ancestors', to the first opaque one, over white where
-    there is none. A background image is not read. Both are null when
-    the focus has no readable text, and `contrast` is null for a colour
-    the page cannot read as sRGB.
+    there is none. Both are null when the focus has no readable text.
+    `contrast` is null, and never a number from a colour that is not
+    what is drawn, when one of those elements has a background image
+    (a gradient is one), when a modal's backdrop lies between the run
+    and the page, and for a colour the page cannot read as sRGB.
   - `pointer` is where the replay pointer is drawn, as `{x, y}`, or
     null when there is none.
 
@@ -787,8 +794,10 @@ selector. Every interactive surface a demo can name carries
 | `nav-access` | The Access tab in the navigation bar. |
 | `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
 | `nav-jump` | The ⋯ menu's 'Jump to a kind…' line, which opens the jump box. |
+| `jump` | The jump box, drawn only while it is open. |
 | `jump.query` | The jump box's input, where the kind's name is typed. |
 | `jump.line` | One result line of the jump box; `data-row` carries the address it goes to. |
+| `jump.home` | The jump box's line that goes home; it has no address, so it has this name. |
 | `nav-shell` | The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell. |
 | `row` | One row of a collection's table; `data-self` carries its address. |
 | `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
@@ -837,7 +846,9 @@ The upload dialog says a refused upload in a `refusal` line of its own.
 The jump box is drawn only while it is open, and its lines are drawn
 again at each letter typed: a scene presses `nav-jump`, types in
 `jump.query`, and then picks `jump.line@/api/tickets`. The line that
-goes home has no address, so a scene cannot pick it by row. A press on
+goes home has no address, so it carries the name `jump.home` in place
+of `jump.line`, and a scene picks it by that name. `readSurface('jump')`
+answers what is typed, the lines as drawn and the one selected. A press on
 `report.row@/api/tickets/<id>` closes the report and goes to that row;
 `readSurface('report')` answers the same addresses. The secret
 dialog's read-only value field is left without a name and out of
@@ -869,6 +880,10 @@ screen:
 - `report`: `{heading, totals, refused: [{row, reason}]}`;
 - `upload`: `{file, ready, refused}`: the line under the file input,
   whether Upload can be pressed, and the refusal's text;
+- `jump`: `{query, lines: [{name, row, label, where, selected}], selected}`:
+  `name` is `jump.line` or `jump.home`, `row` is null for the home
+  line, and the outer `selected` is the selected line or null;
+- `jump.query`: `{text, disabled}`, where `text` is what is typed;
 - `caption` and `refusal`: the line's text;
 - any other name: `{text, disabled}`.
 
