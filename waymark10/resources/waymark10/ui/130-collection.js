@@ -615,7 +615,7 @@ function itemTable(items, opts) {
         if (l && (l.download || l.external))
           cell.append(el("a", {class:"chip link-chip", href: l.href,
             target:"_blank", rel:"noopener", title: l.summary || rel,
-            onclick: e => e.stopPropagation()},
+            onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},
             (l.download ? "⭳ " : "↗ ") + title(rel)));
       row.append(cell);
     }

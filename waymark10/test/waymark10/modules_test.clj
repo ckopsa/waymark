@@ -278,10 +278,6 @@
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
-               ;; the film rules' judge (spec-agent-demo-walks § 8d):
-               ;; a take scored against the active rules, static and
-               ;; ahead of the plural grammar
-               "/api/film_rules/-/judge"
                ;; a sealed walk's export (spec-guided-follow § 4): core's
                ;; one non-envelope answer, static and ahead of the
                ;; plural grammar
@@ -337,9 +333,6 @@
                  ;; and the slot's measure: /api/{plural}/{id}/-/{action}
                  ;; would read it as an action named "measure"
                  "/api/dashboard_slots/:id/-/measure"
-                 ;; and the film rules' judge: /api/{plural}/-/{action}
-                 ;; would read it as a bulk action named "judge"
-                 "/api/film_rules/-/judge"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))

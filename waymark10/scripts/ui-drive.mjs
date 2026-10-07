@@ -3408,13 +3408,16 @@ async function guidedStory() {
      await A.js(`!${qBar2}.querySelector("[data-quest-complete]")`));
   /* the sealed walk's page in film mode, with the quest's walk as its
      export: the film reads the row for its links.export, then that
-     export, which is the read stubbed here */
-  await A.js(`{ const walk = hereHref().split("?")[0], fetch0 = window.fetch;
-    window.fetch = (u, o) => String(u) === walk + "/export"
+     export, which is the read stubbed here. The stub reads the row
+     the same way: the link is followed, not built */
+  ok("the walk to film names its export", await A.js(`(async () => {
+    const walk = hereHref().split("?")[0], fetch0 = window.fetch;
+    const out = walkExportHref(await (await fetch0(walk, {headers: principalHeaders()})).json());
+    window.fetch = (u, o) => out && String(u) === out
       ? Promise.resolve(new Response(${JSON.stringify(questFile)}))
       : fetch0(u, o);
     window.__questPresses = [];
-    location.hash = "#" + walk + "?film=1"; true }`);
+    location.hash = "#" + walk + "?film=1"; return !!out; })()`));
   await A.until(`document.documentElement.getAttribute("data-film") === "playing" &&
                  getComputedStyle(${qBar2}).display !== "none" &&
                  !!${qBar2}.querySelector("[data-surface='tracker.go']:disabled")`,
