@@ -440,7 +440,7 @@ takes no chosen identity. The seat reaches it as it reaches any power,
 through `waymark_power`.
 
 The agent acts as the seed's agent member, so the export's cast reads
-"Planner" and never a seat's id.
+"Juniper" and never a seat's id.
 
 **6b. The seat and its routine** (waymark). A seat, `demo-walker`,
 whose grant holds the clone door's powers and nothing of the working
@@ -601,7 +601,12 @@ replay.
   with it. A demo engine's banner (docs/spec-demo-clones.md § 3: when
   the engine ends, and each walk that is not exported) is hidden too:
   it is true for the person who runs the engine and is not for a film.
-  Outside presentation mode both show. The theme control and the
+  Outside presentation mode both show. A ticket title's leading
+  `[epic] ` marker is hidden the same way wherever the shell draws the
+  title: the row's heading, a list's line, the quest bar and tracker,
+  and the sheet's goal and steps. The shell draws the marker in a span
+  of its own (`.epicmark`); the stored title keeps it, and outside
+  presentation mode it shows. The theme control and the
   sign-in stay. It is separate from film mode, so the performer can
   record a walk with it on: recording and replay are driven by page
   functions and not by those buttons. A beat's `text` carries none of

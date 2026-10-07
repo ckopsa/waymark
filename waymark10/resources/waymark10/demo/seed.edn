@@ -18,17 +18,20 @@
 {:seed "demo"
  :version 1
  :cast
- {:ada  {:id "ada"  :display "Ada Example"    :type :human :household "Harbour House"
+ ;; An :id is what scenes and clone__call name, and it does not change.
+ ;; A :display is what the screen shows: Maya is `ada`, Tom is `ben`,
+ ;; Priya is `cleo`, and the house's agent Juniper is `plan`.
+ {:ada  {:id "ada"  :display "Maya Okafor"    :type :human :household "Harbour House"
          ;; a held tool call is answered by this role, and by no other
          :roles ["approver"]}
-  :ben  {:id "ben"  :display "Ben Sample"     :type :human :household "Harbour House"}
-  :cleo {:id "cleo" :display "Cleo Specimen"  :type :human :household "Harbour House"}
-  :plan {:id "plan" :display "Planner"        :type :agent :household "Harbour House"
+  :ben  {:id "ben"  :display "Tom Okafor"     :type :human :household "Harbour House"}
+  :cleo {:id "cleo" :display "Priya Shah"     :type :human :household "Harbour House"}
+  :plan {:id "plan" :display "Juniper"        :type :agent :household "Harbour House"
          :acts-for :ada}
-  :dov  {:id "dov"  :display "Dov Placeholder" :type :human :household "Orchard Flat"}
-  :eve  {:id "eve"  :display "Eve Mockup"     :type :human :household "Orchard Flat"}
-  :fay  {:id "fay"  :display "Fay Figment"    :type :human :household "Orchard Flat"}
-  :tidy {:id "tidy" :display "Tidy"           :type :agent :household "Orchard Flat"
+  :dov  {:id "dov"  :display "Daniel Reyes"   :type :human :household "Orchard Flat"}
+  :eve  {:id "eve"  :display "Elena Marsh"    :type :human :household "Orchard Flat"}
+  :fay  {:id "fay"  :display "Farah Aziz"     :type :human :household "Orchard Flat"}
+  :tidy {:id "tidy" :display "Wren"           :type :agent :household "Orchard Flat"
          :acts-for :dov}}
  ;; The servers behind the wall (docs/spec-demo-clones.md § 4). The
  ;; loader makes each one only when the boot names a wall
@@ -94,22 +97,22 @@
   ;; has a film showcase and no evidence yet, and two children that
   ;; are not finished.
   {:as :ada :kind :ticket :ref :q-epic
-   :create {:title "[epic] The house plans a dinner for its guests"
-            :detail "The guide, the seating plan, and a film of the evening being planned."
+   :create {:title "[epic] Saturday dinner for six at Harbour House"
+            :detail "Six guests on Saturday at seven. Done is a guide the house can follow, a seating plan, and a film of the evening coming together."
             :showcase {:format "film"
-                       :scene "Ada wants six guests at the table on Saturday and has a guest list on paper. Then she opens the house, and the menu, the seats and the shopping are already one plan."}
+                       :scene "Maya has six guests coming on Saturday and a guest list on an envelope. Then she opens the house, and the menu, the seats and the shopping are already one plan."}
             :type "feature" :priority 1}}
-  ;; the child Ada ends herself
+  ;; the child Maya ends herself
   {:as :ada :kind :ticket :ref :q-guide
    :create {:title "Write the guide"
-            :detail "One page that says how a guest dinner is planned in the house."
+            :detail "One page for Saturday: who cooks what, when the shopping is done, and when the table is laid."
             :type "task" :priority 1 :parent [:ref :q-epic]}}
   {:as :ada :kind :ticket :on :q-guide :action "groom"}
-  ;; the child Planner ends: it is deferred, and `resume` is a door
-  ;; Planner's grant admits and Ada's does not (the two grants below)
+  ;; the child Juniper ends: it is deferred, and `resume` is a door
+  ;; Juniper's grant admits and Maya's does not (the two grants below)
   {:as :plan :kind :ticket :ref :q-seats
    :create {:title "Draw the seating plan from the guest list"
-            :detail "Six guests, one table. Nobody sits beside the person they came with."
+            :detail "Six guests, one table. Nobody sits beside the person they came with, and Tom's mother gets the chair nearest the kitchen."
             :type "task" :priority 2 :parent [:ref :q-epic]}}
   {:as :ada :kind :ticket :on :q-seats :action "groom"}
   {:as :ada :kind :ticket :on :q-seats :action "defer"
@@ -156,14 +159,14 @@
   ;; ── the held call ──────────────────────────────────────────────
   ;; NOT an ordinary invoke: the engine mints it, as the power door
   ;; would for a call that waits on a person. The approver role answers
-  ;; a held tool call, and Ada holds it; Planner, the caller, may not
+  ;; a held tool call, and Maya holds it; Juniper, the caller, may not
   ;; answer its own. The tool's server is the `mail` row under :walled:
-  ;; Ada's Allow ends `failed` with the wall's sentence, or with the
+  ;; Maya's Allow ends `failed` with the wall's sentence, or with the
   ;; engine's no-server sentence when the boot named no wall.
   {:hold {:tool "mail__send"
           :caller [:cast :plan]
-          :why "Ben asked for the weekend menu by mail, and sending mail waits for Ada's tap."
-          :input {:to "ben@harbour-house.example"
+          :why "Tom asked for the weekend menu by mail, and sending mail waits for Maya's tap."
+          :input {:to "tom@harbour-house.example"
                   :subject "The weekend menu"}}
    :ref :held}
 
@@ -173,16 +176,16 @@
   ;; see and take, so the leash reads the tickets, admits the one door
   ;; the invitation hands over, and admits the invitation's own create.
   ;; It admits `resume` and `complete` too: the quest's deferred child
-  ;; is Planner's to end.
+  ;; is Juniper's to end.
   {:grant {:audience [:cast :plan]
            :scope [{:kind "ticket" :actions ["prioritize" "resume" "complete"]}
                    {:kind "invitation" :actions ["create"]}]}
    :ref :plan-grant}
 
   ;; ── the person's grant ─────────────────────────────────────────
-  ;; The leash Ada pursues the quest with: she reads every ticket, ends
+  ;; The leash Maya pursues the quest with: she reads every ticket, ends
   ;; one and restates one. It admits no `resume`, so the deferred child
-  ;; waits on Planner.
+  ;; waits on Juniper.
   {:grant {:audience [:cast :ada]
            :scope [{:kind "ticket" :actions ["complete" "restate"]}]}
    :ref :ada-grant}
