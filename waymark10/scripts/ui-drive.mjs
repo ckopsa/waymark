@@ -4129,6 +4129,25 @@ async function questPhoneStory() {
          b.sheet.steps.every((s, n) => !!s.label && flat(seen.steps[n]).startsWith(s.label))));
     ok("a beat's tracker names the step at its head",
        beats.some(b => b.tracker && !!b.tracker.next));
+    /* what a viewer could read and where it is (§8b): the sheet's beat
+       is about the sheet, which is on the screen whole, in type a
+       person can read */
+    const sheetBeat = beats.find(b => b.sheet && b.sheet.shut_reason &&
+                                      b.focus && b.focus.name === "sheet");
+    const tight = t => String(t || "").replace(/\s+/g, "");
+    const fr = sheetBeat?.focus.rect, vp = sheetBeat?.viewport;
+    console.log("  the sheet's beat: " + JSON.stringify(sheetBeat &&
+      {focus: [sheetBeat.focus.name, fr], viewport: vp, type_px: sheetBeat.type_px,
+       contrast: sheetBeat.contrast, pointer: sheetBeat.pointer,
+       boxes: sheetBeat.boxes.map(b => b.name), text: sheetBeat.text.slice(0, 200)}));
+    ok(`the sheet's beat has the sheet as its focus, with its rect inside the viewport ${where}`,
+       !!sheetBeat && fr.w > 0 && fr.h > 0 && fr.x >= 0 && fr.y >= 0 &&
+       fr.x + fr.w <= vp.w + 1 && fr.y + fr.h <= vp.h + 1);
+    ok("its text holds the sheet's reason",
+       !!sheetBeat && tight(sheetBeat.text).includes(tight(sheetBeat.sheet.shut_reason)));
+    ok("its focus text is 12 px or larger, with a contrast ratio and the sheet among its boxes",
+       !!sheetBeat && sheetBeat.type_px >= 12 && sheetBeat.contrast >= 1 &&
+       sheetBeat.boxes.some(b => b.name === "sheet"));
     ok("the last beat says the tracker as the film leaves it",
        JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
     const sheets = await evaljs(`window.__sheets`);
