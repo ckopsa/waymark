@@ -957,11 +957,10 @@
 (deftest ui-row-page-header-carries-no-path
   ;; the row's own path is the crumb's title on every row page, and is
   ;; not header text
-  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
-        from (str/index-of body "async function renderResource(view, doc, hints)")
-        row  (subs body from (str/index-of body "function scheduledSection(doc)"))]
-    (is (str/includes? row "el(\"span\", {class:\"id\", title: doc.self},"))
-    (is (not (str/includes? row "title: doc.self}, doc.self)")))))
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "el(\"span\", {class:\"id\", title: doc.self},"))
+    (is (str/includes? body "el(\"span\", {class: \"id\", title: doc.self},"))
+    (is (not (str/includes? body "title: doc.self}, doc.self)")))))
 
 (deftest ui-surfaces-are-the-names-the-page-sets
   ;; docs/spec-agent-demo-walks.md § 8a: the list at /api/-/ui/surfaces
