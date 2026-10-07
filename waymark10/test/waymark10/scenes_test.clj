@@ -195,6 +195,7 @@
                       {:shot 3 :ok false :pressed "door:rename"
                        :expects [{:surface "dialog" :path "action" :op "="
                                   :value "rename" :was nil :ok false}]
+                       :why "door:rename could not be pressed: Timeout 30000ms exceeded."
                        :still "stills/3.png"}]}
         made (:id (:row (inv/create! eng :take take {:principal mayor})))
         row (row-of eng :take made)]
@@ -203,6 +204,13 @@
     (is (= "phone" (get-in row [:data :device])))
     (is (= [true true false] (mapv :ok (get-in row [:data :shots]))))
     (is (= "stills/3.png" (:still (last (get-in row [:data :shots])))))
+    (is (= "door:rename could not be pressed: Timeout 30000ms exceeded."
+           (:why (last (get-in row [:data :shots])))))
+    (testing "a why over 500 characters is refused"
+      (is (some? (refusal #(inv/create! eng :take
+                                        (assoc-in take [:shots 2 :why]
+                                                  (apply str (repeat 501 "x")))
+                                        {:principal mayor})))))
     (is (= 3 (get-in row [:data :first_failing_shot])))
     (is (false? (get-in row [:data :ok])))
     (testing "a take of a version the scene never had is refused"
