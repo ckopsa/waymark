@@ -18,7 +18,7 @@
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
-    :absent-as
+    :absent-as :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :on-rehearse

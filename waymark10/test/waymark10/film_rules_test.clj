@@ -10,10 +10,12 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -115,6 +117,29 @@
   (testing "every seed names a metric of the vocabulary"
     (is (every? (set film-rules/metric-names)
                 (map :metric film-rules/seed-rules)))))
+
+(deftest seeds-that-run-at-once-leave-one-row-for-each-name
+  (let [names (mapv :name film-rules/seed-rules)
+        err (java.io.StringWriter.)]
+    (dotimes [_ 3]
+      (store/with-tx (:storage *eng*)
+        (fn [tx]
+          (jdbc/execute! tx (into [(str "DELETE FROM film_rules WHERE data->>'name' IN ("
+                                        (str/join ", " (repeat (count names) "?"))
+                                        ")")]
+                                  names))))
+      (let [go (java.util.concurrent.CountDownLatch. 1)
+            seeds (binding [*err* err]
+                    (mapv (fn [_]
+                            (future (.await go)
+                                    (film-rules/ensure-seed-rules! *eng*)))
+                          (range 4)))]
+        (.countDown go)
+        (run! deref seeds))
+      (doseq [name' names]
+        (is (= 1 (count (rows-of {:name name'}))) name')))
+    (testing "the create the index refused is not reported as a failed seed"
+      (is (= "" (str err))))))
 
 (deftest an-engine-that-is-not-workqueue10-has-the-seed-rules-after-boot
   ;; this engine names no application kind: the seed is the engine's own
@@ -298,6 +323,18 @@
         (is (some? d))
         (is (str/includes? (str (:text d)) "a-person-or-a-mayor-makes-the-rule"))
         (is (nil? (rule-named "made-by-a-clerk")))))))
+
+(deftest a-create-does-not-name-who-restated-the-rule
+  (let [rdef (get (inv/resources *eng*) :film_rule)]
+    (testing "the create model leaves the field out, and the row's schema keeps it"
+      (is (not (contains? (set (schema/entry-keys (:create-schema rdef)))
+                          :restated_by)))
+      (is (contains? (set (schema/entry-keys (:schema rdef))) :restated_by))))
+  (testing "a create that names it is refused, and no row carries it"
+    (let [d (refusal #(make-rule! {:name "marked-at-birth" :restated_by "colton"}
+                                  colton))]
+      (is (some? d))
+      (is (nil? (:restated_by (:data (rule-named "marked-at-birth"))))))))
 
 ;; ── the restate ─────────────────────────────────────────────────────
 
@@ -517,5 +554,39 @@
       (is (= "pass" (:verdict (rule-in answer "arc")))))
     (testing "a body with no take is refused"
       (is (= 422 (:status (post! {})))))
+    (testing "it writes nothing"
+      (is (= before (rows-of {}))))))
+
+(deftest the-collection-names-the-judge-door-and-the-connector-calls-it
+  (film-rules/ensure-seed-rules! *eng*)
+  (let [h (engine/handler *eng*)
+        headers {"x-waymark-principal" "colton"
+                 "content-type" "application/json"}
+        door (get-in (wire/read-json
+                      (:body (h {:request-method :get
+                                 :uri "/api/film_rules"
+                                 :headers headers})))
+                     [:actions :judge])
+        route (h {:request-method :post
+                  :uri "/api/film_rules/-/judge"
+                  :headers headers
+                  :body (wire/write-json {:take grey-corner})})
+        before (rows-of {})
+        out (mcp/call-tool *eng* (mcp/door *eng*) {:principal colton}
+                           "waymark_invoke"
+                           {:kind "film_rule" :action "judge"
+                            :input {:take grey-corner}})]
+    (testing "the collection names the door, with the take's input schema"
+      (is (= "POST" (:method door)))
+      (is (= "/api/film_rules/-/judge" (:href door)))
+      (is (true? (get-in door [:safety :safe])))
+      (is (some? (get-in door [:input :properties :take :properties :film
+                               :properties :content_box])))
+      (is (some? (get-in door [:input :properties :take :properties :shots]))))
+    (testing "a connector call answers what the route answers"
+      (is (not (:isError out)))
+      (is (= 200 (:status route)))
+      (is (= (wire/read-json (:body route))
+             (wire/read-json (get-in out [:content 0 :text])))))
     (testing "it writes nothing"
       (is (= before (rows-of {}))))))
