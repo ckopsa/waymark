@@ -135,10 +135,24 @@ never a total. A reader counts "k done, n known so far": k steps in
 
 ## What a reader sees
 
-A summary row carries no vector, so the kind works out two lines at
-read time: `progress` ("k done, n known so far") and `next_step` (the
-head step's note, or "waiting on <name>"). The collection orders the
-pinned quest first and then the newest.
+A summary row carries no vector, and the row stores no label, so the
+kind works out four fields at read time:
+
+- `progress`: "k done, n known so far".
+- `next_step`: the head step's note, or "waiting on <name>".
+- `action_label` (`action-label`): the goal door's display label. A
+  door that declares no label is its name in words.
+- `input_labels` (`input-labels`): the display label of each key of
+  `input`, under that key, from the goal door's input schema. It is
+  nil when the door is given nothing.
+
+The two labels come from the goal row's declaration, through
+`labels-of`: the kind of the goal's `self` is looked up, and its
+declaration says the door `action` and the keys of `input` in words.
+They do not come from the plan, which may not hold the goal's step.
+Both are nil where the goal row is of no served kind.
+
+The collection orders the pinned quest first and then the newest.
 
 The quest's row page shows the plan as a checklist (`questPlan` in
 `ui/200-events-follow.js`): a `done` step is struck through, the
