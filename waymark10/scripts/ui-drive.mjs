@@ -4179,6 +4179,46 @@ async function questPhoneStory() {
        sheetBeat.boxes.some(b => b.name === "sheet"));
     ok("the last beat says the tracker as the film leaves it",
        JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
+    /* what a beat leaves out, and the ratio it does not guess (§8b):
+       the film's own measure (filmMeasure) of a block drawn for it, with
+       a run under a fixed bar and a run its scrolling parent clips, each
+       with the block itself as the page's answer at its centre; then of
+       the same block with a gradient behind its text */
+    const drawn = JSON.parse(await evaljs(`(() => {
+      const d = document.createElement("div");
+      d.dataset.surface = "film.case";
+      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:120px;" +
+        "z-index:2147483000;background:#fff;font:16px/20px sans-serif";
+      d.innerHTML = "<p>open run</p><p>barred run</p>" +
+        "<div style='height:20px;overflow:hidden'><p>kept run</p><p>clipped run</p></div>" +
+        "<div style='position:fixed;left:0;top:20px;width:300px;height:20px;" +
+        "background:#333'></div>";
+      for (const p of d.querySelectorAll("p"))
+        p.style.cssText = "margin:0;padding:0;height:20px;color:#000;font-size:16px";
+      document.body.prepend(d);
+      const read = () => {
+        const b = {};
+        filmMeasure({at: d, pressed: null}, b);
+        return {text: b.text, focus: b.focus && b.focus.text, contrast: b.contrast};
+      };
+      try {
+        const plain = read();
+        d.style.backgroundImage = "linear-gradient(#fff, #000)";
+        return JSON.stringify({front: !!filmFront(), plain, gradient: read()});
+      } finally { d.remove(); }
+    })()`));
+    const stays = "open run kept run";
+    console.log("  the drawn block's beats: " + JSON.stringify(
+      {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
+       gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
+    ok(`a run under a fixed bar and a run its scrolling parent clips are in neither text ${where}`,
+       drawn.plain.focus === stays && drawn.plain.text.includes(stays) &&
+       !/barred run|clipped run/.test(drawn.plain.text));
+    ok("and the contrast is of the text on the colour behind it: 21",
+       drawn.plain.contrast === 21);
+    ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
+       drawn.gradient.focus === stays && drawn.gradient.text.includes(stays) &&
+       drawn.gradient.contrast === null);
     const sheets = await evaljs(`window.__sheets`);
     console.log("  the replay's sheets: " + JSON.stringify(sheets));
     ok("the replay opens the quest's sheet for each tap, with the recorded steps",

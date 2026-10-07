@@ -645,11 +645,27 @@ replay.
     characters. An open modal's text comes first, because it is drawn
     over the page; the page's follows. A field's value is not in it,
     and the secret dialog gives its heading and its buttons only. A run
-    is left out, here and in the focus text, when the centre of its
-    box is covered by an element that is not its ancestor: the page's
-    `document.elementFromPoint` there, or the caption band. A modal's
-    backdrop dims the page and does not cover it. A run that a
-    scrolling ancestor clips is still listed.
+    is left out, here and in the focus text, when no line of it can be
+    seen. What is read for a line:
+    - Its box is cut to the viewport, and to the padding box of the
+      run's element and of each ancestor that clips it (`overflow`
+      other than `visible`, on the axis it clips). So a run scrolled
+      out of a scrolling ancestor, or inside a collapsed one, is left
+      out. An ancestor clips a positioned box only when it holds it:
+      none clips a fixed box, and one with no position does not clip
+      an absolute one.
+    - One point is then asked, the centre of what is left of the box.
+      The line is covered when the page's `document.elementFromPoint`
+      there is an element that is not the run's ancestor, or when the
+      point is in the caption band. A modal's backdrop dims the page
+      and does not cover it.
+
+    A run with one line that can be seen is listed whole. What is not
+    read: a line that is half covered is listed, because one point is
+    asked for it; an element that takes no pointer (`pointer-events:
+    none`) covers nothing, the replay pointer among them, and only the
+    caption band is asked by its rect; a transform on a clipping
+    ancestor and a `clip-path` are not applied to the clip.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as
@@ -766,8 +782,13 @@ metric is read from one field of the take:
 | `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
 | `runtime_s` | The film's length in seconds. | `film.runtime_s` |
 
-The take is the scorer's piece and is not built yet; these are the
-field names it is to carry.
+A take is a map with `film`, the fields read once, and `shots`, one
+map per shot in order. A box is `{x, y, w, h}`; a frame and a viewport
+are `{w, h}`. `surfaces_changed` is a count or the list of names.
+`film-rules/measure` reads one metric from a take by these names: one
+number for a film metric, and one number per shot for a shot metric.
+The scorer that writes the take is not built yet; these are the field
+names it is to carry.
 
 The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
