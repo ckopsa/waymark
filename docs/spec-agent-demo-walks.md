@@ -777,8 +777,11 @@ each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 (`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
 per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
 `unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
-rule only when none carries its name, so a `type-size` or
-`focus-share` row made before these fields existed keeps neither.
+rule only when none carries its name. An active `type-size` or
+`focus-share` row made before these fields existed gains the field
+the seed names at the next boot, through `restate`, a door only the
+boot seed walks; a value a row carries is not written over, and a
+retired row is left as it is.
 
 ## 8a. The surfaces a scene names
 
