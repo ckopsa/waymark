@@ -297,12 +297,6 @@
                    border-color: var(--refusal); }
   button.danger:hover { background: var(--refusal); color: var(--on-accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  /* effort as a subtle chip riding the button, not a text suffix */
-  .effort-chip { font: 600 9.5px var(--sans); border-radius: 3px;
-                 padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
-                 background: var(--chipbg); color: var(--muted); }
-  button.primary .effort-chip, button.danger:hover .effort-chip {
-    background: var(--on-accent-wash); color: var(--on-accent); }
 
   main { margin: 18px auto; padding: 0 20px; }
   .panel { background: var(--panel); border: 1px solid var(--line);
