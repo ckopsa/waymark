@@ -1,7 +1,9 @@
 /* ── the read surface, up front: link chips with badges as scent ───── */
-function linksStrip(doc) {
+/* `held` names the rels the page draws with a control of its own: a
+   link is offered one time */
+function linksStrip(doc, held = []) {
   const rels = Object.entries(doc.links || {})
-    .filter(([, l]) => l && l.href);
+    .filter(([rel, l]) => l && l.href && !held.includes(rel));
   if (!rels.length) return null;
   const row = el("div", {class:"chips", "data-links": ""});
   for (const [rel, l] of rels)
