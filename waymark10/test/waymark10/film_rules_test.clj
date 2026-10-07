@@ -535,6 +535,38 @@
       (is (= "miss" (:verdict surface)))
       (is (= {:index 1 :caption "The turn" :value 2} (:worst surface))))))
 
+(deftest a-take-that-carries-decimals-is-judged
+  (let [phone {:frame {:w 1170 :h 2532} :output "phone"}
+        rule #(rule-in (judged {:film phone :shots [%2]}) %1)
+        scored? #(and (contains? #{"pass" "miss"} (:verdict %))
+                      (number? (:value (:worst %))))]
+    (testing "a hold over words with no exact quotient judges read-time"
+      (let [read (rule "read-time" {:caption "A" :zoom false
+                                    :hold_s 3.5M :words 7})]
+        (is (scored? read))
+        (is (< 1.49 (:value (:worst read)) 1.51)))
+      (is (scored? (rule "read-time" {:hold_s 3.5M :words 7.0M}))))
+    (testing "a decimal focus_box and viewport judge focus-share"
+      (let [share (rule "focus-share"
+                        {:focus_box {:x 0.5M :y 0.5M :w 333.3M :h 100.1M}
+                         :viewport {:w 390.7M :h 844.3M}})]
+        (is (scored? share))
+        (is (< 0.1 (:value (:worst share)) 0.11))))
+    (testing "a decimal content_box and frame judge frame-fill"
+      (let [fill (rule-in (judged {:film {:frame {:w 1170.3M :h 2532.7M}
+                                          :content_box {:w 390.1M :h 844.9M}}})
+                          "frame-fill")]
+        (is (= "miss" (:verdict fill)))
+        (is (< 0.11 (:value fill) 0.112))))
+    (testing "a divisor of zero is unmeasured, by name"
+      (let [read (rule "read-time" {:hold_s 3.5M :words 0})
+            share (rule "focus-share" {:focus_box {:w 10 :h 10}
+                                       :viewport {:w 0 :h 800}})]
+        (is (= "unmeasured" (:verdict read)))
+        (is (= ["shot.words"] (:missing read)))
+        (is (= "unmeasured" (:verdict share)))
+        (is (= ["shot.viewport"] (:missing share)))))))
+
 (deftest the-judge-door-answers-and-writes-nothing
   (film-rules/ensure-seed-rules! *eng*)
   (let [h (engine/handler *eng*)

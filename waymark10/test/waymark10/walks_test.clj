@@ -13,6 +13,7 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live :as live]
+            [waymark10.server.openapi :as openapi]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -282,6 +283,34 @@
     (testing "a walk nobody recorded answers the same not-found"
       (is (nil? (walks/export eng "no-such-walk" nil)))
       (is (= 404 (:status (get! "no-such-walk")))))))
+
+(deftest a-sealed-walk-links-its-export
+  (let [eng (fresh-engine)
+        w (walk! eng)
+        h (engine/handler eng)
+        get! (fn [uri]
+               (h {:request-method :get
+                   :uri uri
+                   :headers {"x-waymark-principal" "colton"}}))
+        links (fn []
+                (let [b (:body (get! (str "/api/walks/" (:id w))))]
+                  (:links (cond (map? b) b
+                                (string? b) (wire/read-json b)
+                                :else (wire/read-json (slurp b))))))]
+    (walks/record-frame! eng (:id w) nil {:type "move" :body {:self "/api/chores"}})
+    (testing "while it records the row names no export"
+      (is (nil? (:export (links)))))
+    (seal! eng w)
+    (testing "sealed, the envelope names the export and the link answers the file"
+      (let [link (:export (links))
+            resp (get! (:href link))]
+        (is (= (str "/api/walks/" (:id w) "/export") (:href link)))
+        (is (true? (:download link)))
+        (is (= 200 (:status resp)))
+        (is (= (walks/export eng (:id w) nil) (:body resp)))))
+    (testing "the OpenAPI document lists the route"
+      (is (some? (get-in (openapi/document eng)
+                         [:paths "/api/walks/{id}/export" :get]))))))
 
 (deftest the-cast-types-agents-and-humans
   (let [[eng tick!] (clocked-engine {})

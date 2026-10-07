@@ -90,9 +90,13 @@
   (when (and (number? w) (number? h)) (* w h)))
 
 (defn- over
-  "`a` over `b`, or nil when either is missing or `b` is not positive."
+  "`a` over `b`, or nil when either is missing or `b` is not positive.
+  The division is in doubles: a take's decimal is read as a BigDecimal,
+  and two of them may have no exact quotient."
   [a b]
-  (when (and (number? a) (number? b) (pos? b)) (double (/ a b))))
+  (when (and (number? a) (number? b) (pos? b))
+    (let [q (/ (double a) (double b))]
+      (when (Double/isFinite q) q))))
 
 (defn- word
   "A role, a state or an enum field as a string, or nil: a take and a
@@ -130,7 +134,8 @@
    "type_px" :focus_type_px
    "contrast" :focus_contrast
    "read_time_ratio" (fn [{:keys [hold_s words]}]
-                       (when (number? words) (over hold_s (/ words 3))))
+                       (when (number? words)
+                         (over hold_s (/ (double words) 3))))
    "surfaces_changed" (comp counted :surfaces_changed)})
 
 (defn measure
@@ -463,11 +468,16 @@
 
 (defn- sized? [m] (some? (area m)))
 
+(defn- roomy?
+  "True when `m` has an area above zero: a metric divides by it."
+  [m]
+  (boolean (some-> (area m) pos?)))
+
 (def ^:private film-needs
   "Metric → the fields of the take it is read from, each with how to
   tell that the take carries it."
   {"frame_fill" [["film.content_box" #(sized? (get-in % [:film :content_box]))]
-                 ["film.frame" #(sized? (get-in % [:film :frame]))]]
+                 ["film.frame" #(roomy? (get-in % [:film :frame]))]]
    "dead_air_s" [["film.dead_air_s" #(number? (get-in % [:film :dead_air_s]))]]
    "chrome_leaks" [["film.chrome_leaks"
                     #(number? (get-in % [:film :chrome_leaks]))]]
@@ -482,11 +492,13 @@
   "Metric → the fields of one shot it is read from, each with how to
   tell that the shot carries it."
   {"focus_share" [["shot.focus_box" #(sized? (:focus_box %))]
-                  ["shot.viewport" #(sized? (:viewport %))]]
+                  ["shot.viewport" #(roomy? (:viewport %))]]
    "type_px" [["shot.focus_type_px" #(number? (:focus_type_px %))]]
    "contrast" [["shot.focus_contrast" #(number? (:focus_contrast %))]]
    "read_time_ratio" [["shot.hold_s" #(number? (:hold_s %))]
-                      ["shot.words" #(number? (:words %))]]
+                      ;; the ratio divides by the words, so none is no measure
+                      ["shot.words" #(and (number? (:words %))
+                                         (pos? (:words %)))]]
    "surfaces_changed" [["shot.surfaces_changed"
                         #(number? (counted (:surfaces_changed %)))]]})
 
@@ -514,12 +526,14 @@
      (not (judges? rule film shot)) {:verdict :unscored}
      (exempt? rule shot) {:verdict :pass}
      :else
-     (let [missing (lacking (shot-needs (word (:metric rule))) shot)]
+     (let [needs (shot-needs (word (:metric rule)))
+           missing (lacking needs shot)]
        (cond
          (seq missing) {:verdict :unmeasured :missing missing}
-         ;; every field is there and still no number: a shot with no
-         ;; words has nothing to read
-         (not (number? value)) {:verdict :unscored}
+         ;; every field is there and still no number: the shot is not
+         ;; measured, as a film is not in judge-film
+         (not (number? value)) {:verdict :unmeasured
+                                :missing (mapv first needs)}
          :else {:verdict (verdict rule film shot value) :value value})))))
 
 (defn- judge-shots
