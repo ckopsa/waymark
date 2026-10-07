@@ -158,7 +158,6 @@ dialog::backdrop { background: rgba(0,0,0,0.45); }
 .field textarea { min-height: 110px; font-family: ui-monospace, monospace;
   font-size: 13px; }
 .field .err { color: var(--danger); font-size: 12.5px; margin-top: 2px; }
-.field .err.srv::before { content: "server: "; color: var(--muted); }
 .field .const { padding: 7px 9px; border: 1px dashed var(--line);
   border-radius: 7px; background: var(--chip); color: var(--muted); }
 .linkrel .badge { display: inline-block; min-width: 18px; text-align: center;
@@ -1055,9 +1054,7 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
       el("p", {class: "meta"},
         "→ " + ((entry.effect || {}).to || "?") +
         ((entry.effect || {}).terminal ? " (terminal)" : "") +
-        (bulkIds ? " · " + bulkIds.length + " selected row(s)" : "") +
-        (safety.fence ? " · fenced (If-Match)" : "") +
-        (safety.idempotent ? "" : " · idempotency-key attached"))),
+        (bulkIds ? " · " + bulkIds.length + " selected row(s)" : ""))),
     el("div", {class: "dlgbody"},
       safety.confirm
         ? el("div", {class: "consequence"},
@@ -1066,9 +1063,7 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
               "This action requires confirmation.")
         : null,
       form, errBox,
-      entry.draft ? el("p", {class: "draftnote", "data-draftnote": ""},
-                       entry.draft.shared ? "shared draft — saved on blur"
-                                          : "draft — saved on blur") : null),
+      entry.draft ? el("p", {class: "draftnote", "data-draftnote": ""}) : null),
     el("div", {class: "dlgfoot"},
       el("span", {class: "hint"}),
       entry.draft ? el("button", {onclick: async () => {
