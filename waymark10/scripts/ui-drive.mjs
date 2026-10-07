@@ -2784,7 +2784,7 @@ async function guidedStory() {
   }
   ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
      movedShut);
-  await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
+  await A.js(`document.querySelector("dialog[open] [data-surface='sheet.decline']").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
   await B.until(`!document.querySelector("[data-surface='sheet']")`,
                 "ada's sheet off bo's screen", 15000, guidedState);
@@ -3695,7 +3695,7 @@ async function questPhoneStory() {
       : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
     /* the sheet a tap on a shut door opens (questSheet), and its doors */
     const sheet = `document.querySelector("dialog[open][data-surface='sheet']")`;
-    const notNow = "dialog[open] [data-quest-decline]";
+    const notNow = 'dialog[open] [data-surface="sheet.decline"]';
     const acceptIt = '[data-surface="sheet.accept"]';
     await evaljs(`refreshQuest().catch(() => {}); true`);
     await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);

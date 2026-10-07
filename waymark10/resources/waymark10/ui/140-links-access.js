@@ -137,8 +137,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
     : "waiting on " + (s.waiting_on || "a person");
   const errBox = el("p", {class: "notyet-refused", role: "alert",
                           "data-quest-refused": "", "data-surface": "refusal"});
-  const accept = el("button", {class: "primary", "data-quest-accept": "",
-                               "data-surface": "sheet.accept"},
+  const accept = el("button", {class: "primary", "data-surface": "sheet.accept"},
     "Accept quest");
   const refused = p => {
     errBox.textContent = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
@@ -185,7 +184,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
         : null,
       errBox),
     el("div", {class: "dlgfoot"},
-      el("button", {"data-quest-decline": "", "data-surface": "sheet.decline",
+      el("button", {"data-surface": "sheet.decline",
                     onclick: () => dlg.close()}, "Not now"),
       accept));
   if (!seen.ok) refused(seen.body);
