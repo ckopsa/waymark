@@ -20,11 +20,9 @@ async function renderResource(view, doc, hints) {
     el("span", {class:"version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
-      (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : "")),
-    /* a quest's page says every row in words (ticket bdd37958): its own
-       path stays the crumb's title, and is not text */
-    kind === "quest" ? null
-      : el("span", {class:"version", title: doc.self}, doc.self)));
+      (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* the row's own path is the crumb's title, on every kind, and is
+     not header text */
   /* the viewing dots: who else is looking at this screen right now
      (painted from the known truth on mount — a presence that arrived
      before this screen rendered still shows — then repainted as
@@ -188,6 +186,29 @@ async function renderResource(view, doc, hints) {
     for (const tr of dataTable.children)
       if (tr.firstChild.getAttribute("title") === "self")
         tr.lastChild.replaceChildren(questRow(plainData.self));
+  /* …and its goal door and what the door was given are said by their
+     display labels, as the checklist says a step's (questStep,
+     200-events-follow.js): the labels ride the goal's own step */
+  if (kind === "quest") {
+    const goal = ((doc.data || {}).plan || []).find(s =>
+      s.self === plainData.self && s.door === plainData.action) || {};
+    const needs = (goal.needs || []).flat();
+    const given = plainData.input;
+    for (const tr of dataTable.children) {
+      const key = tr.firstChild.getAttribute("title");
+      if (key === "action" && plainData.action)
+        tr.lastChild.replaceChildren(
+          el("span", {"data-quest-door": "", title: plainData.action},
+            goal.door_label || title(plainData.action)));
+      if (key === "input" && given && typeof given === "object" &&
+          !Array.isArray(given) && Object.keys(given).length)
+        tr.lastChild.replaceChildren(el("table", {class:"kv"},
+          Object.entries(given).map(([k, v]) => el("tr", {},
+            el("td", {class:"k", title: k},
+              (goal.needs_labels || [])[needs.indexOf(k)] || title(k)),
+            el("td", {}, valueCell(v, {}))))));
+    }
+  }
   const dataPanel = el("div", {class:"panel"},
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
