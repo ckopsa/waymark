@@ -137,8 +137,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
     : "waiting on " + (s.waiting_on || "a person");
   const errBox = el("p", {class: "notyet-refused", role: "alert",
                           "data-quest-refused": "", "data-surface": "refusal"});
-  const accept = el("button", {class: "primary", "data-quest-accept": "",
-                               "data-surface": "sheet.accept"},
+  const accept = el("button", {class: "primary", "data-surface": "sheet.accept"},
     "Accept quest");
   const refused = p => {
     errBox.textContent = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
@@ -185,7 +184,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
         : null,
       errBox),
     el("div", {class: "dlgfoot"},
-      el("button", {"data-quest-decline": "", "data-surface": "sheet.decline",
+      el("button", {"data-surface": "sheet.decline",
                     onclick: () => dlg.close()}, "Not now"),
       accept));
   if (!seen.ok) refused(seen.body);
@@ -332,6 +331,9 @@ function reentryToken() {
    optional; the invite and guest call sites pass none and behave as before. */
 function secretDialog({heading, note, value, copyOk, copyFallback,
                        instructions, copyValue, copyLabel, copy2}) {
+  /* the value field carries no surface name, and readSurface('secret')
+     leaves it out: a kept beat never holds the secret
+     (docs/spec-agent-demo-walks.md §8a) */
   const field = el("input", {value, readonly: "true",
                              style:"width:100%;font-family:var(--mono)",
                              onclick: e => e.target.select()});

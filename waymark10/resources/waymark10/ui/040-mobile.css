@@ -39,7 +39,7 @@
     #questbar [data-quest-count] { grid-area: 1 / 2 / auto / -1;
                                    justify-self: end; }
     #questbar .quest-line { grid-area: 2 / 1; }
-    #questbar [data-tracker-go] { grid-area: 2 / 2; }
+    #questbar [data-surface='tracker.go'] { grid-area: 2 / 2; }
     #questbar .quest-menu { grid-area: 2 / 3; }
     .questoffer:not(:empty) { display: block; margin-top: 8px; }
     .questoffer button { width: 100%; }

@@ -349,7 +349,7 @@ function guidedQuestSheet(q, who) {
   dlg.querySelector(".dlgbody").prepend(
     el("p", {class: "guided-note", "data-guided-note": ""},
       `${who} has this open`));
-  dlg.querySelector("[data-quest-accept]").disabled = true;
+  dlg.querySelector("[data-surface='sheet.accept']").disabled = true;
   dlg.addEventListener("close", () => {
     if (!dlg.dataset.guidedAuto) guidedQuestDismissed = key;
   });
@@ -1900,7 +1900,7 @@ function replayGestureTarget(f) {
        the refusal's own box; the footer's is for a walk recorded before
        a walk held its refusals */
     if (replayAccepted(replay, key))
-      return g.querySelector("[data-quest-accept]") || g.guidedAccept();
+      return g.querySelector("[data-surface='dialog.accept']") || g.guidedAccept();
     /* the button that writes, drawn unlit until the pointer presses it */
     let write = g.querySelector("[data-replay-write]");
     if (!write) {
@@ -1922,12 +1922,12 @@ function replayGestureTarget(f) {
     if (f.type === "refusal" && f.action === "pin" &&
         sheet.hasAttribute("data-replay-accepted")) return null;
     if (f.type === "refusal")
-      return replaySheetRefused(f) ? sheet.querySelector("[data-quest-accept]") : null;
+      return replaySheetRefused(f) ? sheet.querySelector("[data-surface='sheet.accept']") : null;
     if (f.type === "transition")
       return replaySheetMade(replay, f, sheet) && !replayNotice(replay, f)
-        ? sheet.querySelector("[data-quest-accept]") : null;
+        ? sheet.querySelector("[data-surface='sheet.accept']") : null;
     return f.type === "ui" && !ui.quest && !sheet.hasAttribute("data-replay-accepted")
-      ? sheet.querySelector("[data-quest-decline]") : null;
+      ? sheet.querySelector("[data-surface='sheet.decline']") : null;
   }
   if (replay.door || $("dialog[open]")) return null;
   /* a tap on a shut door: the press is on that button, and the beat
@@ -1953,7 +1953,7 @@ function replayGestureTarget(f) {
     if (d.self + " " + d.action === guidedDismissed) return null;
     /* the tracker's head step is taken from the tracker: its Go */
     const head = replay.quest && questHead(replay.quest);
-    const go = $("#questbar [data-tracker-go]");
+    const go = $("#questbar [data-surface='tracker.go']");
     if (go && seen(go) && head && !questWaits(head) &&
         row(head.self) === d.self && head.door === d.action) return go;
     const doors = [...document.querySelectorAll("#view button[data-action]")]
