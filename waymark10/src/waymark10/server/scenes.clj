@@ -303,7 +303,8 @@
   (if-not (map? shot)
     (fail "a shot is a map with one verb.")
     (let [named (filter (set verbs) (keys shot))
-          stray (remove (into #{"say" "expect" "bind" "role"} verbs) (keys shot))
+          stray (remove (into #{"say" "expect" "bind" "role" "speed" "trim"} verbs)
+                        (keys shot))
           verb (first named)]
       (cond
         (seq stray)
@@ -317,6 +318,19 @@
              (not (some #{(get shot "role")} film-rules/roles)))
         (fail (tick (get shot "role")) " is not a role; the roles are "
               (str/join ", " film-rules/roles) ".")
+
+        (and (contains? shot "speed")
+             (not (and (number? (get shot "speed"))
+                       (<= 0.25 (get shot "speed") 8))))
+        (fail "`speed` is a number from 0.25 to 8, and this one is "
+              (tick (get shot "speed")) ".")
+
+        (and (contains? shot "trim") (not (boolean? (get shot "trim"))))
+        (fail "`trim` is true or false, and this one is "
+              (tick (get shot "trim")) ".")
+
+        (and (true? (get shot "trim")) (not (str/blank? (str (get shot "say")))))
+        (fail "a shot with `trim` is cut from the film, so it has no `say`.")
 
         :else
         (let [v (get shot verb)
