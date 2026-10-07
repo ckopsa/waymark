@@ -606,8 +606,15 @@ replay.
   title: the row's heading, a list's line, the quest bar and tracker,
   and the sheet's goal and steps. The shell draws the marker in a span
   of its own (`.epicmark`); the stored title keeps it, and outside
-  presentation mode it shows. The theme control and the
-  sign-in stay. It is separate from film mode, so the performer can
+  presentation mode it shows. A performed Quests take still
+  showed five more things, and they are hidden as well: the header's
+  law revision chip (`⚖ rev 1`, `#lawstamp`), the signed-in name with
+  its sign-out link (`#signedin`), the ticker's live log line at the
+  foot (`#ticker`), a row's Data section with its raw field prompts
+  (`details.rowdata`), and the reasons under the doors for the doors
+  that are shut (`.blockedwhy`, with their remedy chips: a performer
+  who needs a remedy opens it from the row it acts on). The theme
+  control and the dev principal box stay. It is separate from film mode, so the performer can
   record a walk with it on: recording and replay are driven by page
   functions and not by those buttons. A beat's `text` carries none of
   the hidden chrome, because a run that is not drawn is not read.
