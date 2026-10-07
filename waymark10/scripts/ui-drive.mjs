@@ -1351,6 +1351,35 @@ async function accessStory() {
                  ${qBar}.querySelector("[data-quest-note]")?.textContent ===
                    ${JSON.stringify(pStep.note)}`,
                 "the path step's note in the tracker", 15000);
+  /* the need in words (ticket fa301d44). The plan door stores a plan as
+     it is given, and this one names no needs_labels: the page says the
+     path's last step and not the whole dotted path (prettyNeed,
+     ui/100-core.js). The planner stores the declared label beside the
+     need, and the page then says that one, in the tracker and on the
+     quest's own page. */
+  const pAsks = `(${qBar}.querySelector("[data-quest-needs]")?.textContent || "")`;
+  ok("a path need with no stored label reads its last step in the tracker: film url",
+     await evaljs(`${pAsks} === " · asks for film url"`));
+  const pLabelled = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next", needs_labels: ["The film"]}],
+     plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes the need's label beside it", pLabelled.status < 400);
+  await waitFor(`${pAsks} === " · asks for The film"`,
+                "the need's stored label in the tracker", 15000, pAsks);
+  ok("a path need stored with its label reads The film in the tracker", true);
+  const pWasAt = await evaljs(`location.hash`);
+  const pPlan = `document.querySelector("[data-quest-plan]")`;
+  await evaljs(`location.hash = ${JSON.stringify("#" + pSelf)}; true`);
+  await waitFor(`!!${pPlan} && !!${pPlan}.querySelector("[data-quest-needs]")`,
+                "the path step's need on the quest's page", 15000,
+                `document.body.innerText.slice(-400)`);
+  ok("the quest's page reads The film too, and no dotted path",
+     await evaljs(`${pPlan}.querySelector("[data-quest-needs]").textContent ===
+                     " · asks for The film" &&
+                   !${pPlan}.textContent.includes("showcase")`));
+  await evaljs(`location.hash = ${JSON.stringify(pWasAt)}; true`);
+  await waitFor(`location.hash === ${JSON.stringify(pWasAt)} && !${pPlan}`,
+                "the page back where the path step began", 15000);
   const pPlannedAt = (await get(pSelf)).data.planned_at;
   await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
@@ -2811,7 +2840,7 @@ async function guidedStory() {
   }
   ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
      movedShut);
-  await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
+  await A.js(`document.querySelector("dialog[open] [data-surface='sheet.decline']").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
   await B.until(`!document.querySelector("[data-surface='sheet']")`,
                 "ada's sheet off bo's screen", 15000, guidedState);
@@ -3722,7 +3751,7 @@ async function questPhoneStory() {
       : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
     /* the sheet a tap on a shut door opens (questSheet), and its doors */
     const sheet = `document.querySelector("dialog[open][data-surface='sheet']")`;
-    const notNow = "dialog[open] [data-quest-decline]";
+    const notNow = 'dialog[open] [data-surface="sheet.decline"]';
     const acceptIt = '[data-surface="sheet.accept"]';
     await evaljs(`refreshQuest().catch(() => {}); true`);
     await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);
@@ -4129,6 +4158,25 @@ async function questPhoneStory() {
          b.sheet.steps.every((s, n) => !!s.label && flat(seen.steps[n]).startsWith(s.label))));
     ok("a beat's tracker names the step at its head",
        beats.some(b => b.tracker && !!b.tracker.next));
+    /* what a viewer could read and where it is (§8b): the sheet's beat
+       is about the sheet, which is on the screen whole, in type a
+       person can read */
+    const sheetBeat = beats.find(b => b.sheet && b.sheet.shut_reason &&
+                                      b.focus && b.focus.name === "sheet");
+    const tight = t => String(t || "").replace(/\s+/g, "");
+    const fr = sheetBeat?.focus.rect, vp = sheetBeat?.viewport;
+    console.log("  the sheet's beat: " + JSON.stringify(sheetBeat &&
+      {focus: [sheetBeat.focus.name, fr], viewport: vp, type_px: sheetBeat.type_px,
+       contrast: sheetBeat.contrast, pointer: sheetBeat.pointer,
+       boxes: sheetBeat.boxes.map(b => b.name), text: sheetBeat.text.slice(0, 200)}));
+    ok(`the sheet's beat has the sheet as its focus, with its rect inside the viewport ${where}`,
+       !!sheetBeat && fr.w > 0 && fr.h > 0 && fr.x >= 0 && fr.y >= 0 &&
+       fr.x + fr.w <= vp.w + 1 && fr.y + fr.h <= vp.h + 1);
+    ok("its text holds the sheet's reason",
+       !!sheetBeat && tight(sheetBeat.text).includes(tight(sheetBeat.sheet.shut_reason)));
+    ok("its focus text is 12 px or larger, with a contrast ratio and the sheet among its boxes",
+       !!sheetBeat && sheetBeat.type_px >= 12 && sheetBeat.contrast >= 1 &&
+       sheetBeat.boxes.some(b => b.name === "sheet"));
     ok("the last beat says the tracker as the film leaves it",
        JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
     const sheets = await evaljs(`window.__sheets`);
