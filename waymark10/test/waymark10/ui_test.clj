@@ -882,6 +882,26 @@
     (is (str/includes? body "if (filmWalkOf(raw)) {"))
     (is (str/includes? body "if (film) return;"))))
 
+(deftest ui-presentation-mode-hides-the-developer-detail
+  ;; docs/spec-agent-demo-walks.md §8b: window.wmPresent(true) sets
+  ;; `present` on the root element; the crumb's row id, the version
+  ;; line, the grant chip and the header's developer buttons are hidden
+  ;; with display: none, and the everyday UI keeps them
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "window.wmPresent = on => document.documentElement.classList.toggle(\"present\", on !== false);"))
+    (is (str/includes? body "html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,"))
+    (is (str/includes? body "html.present #grantchip, html.present #sharebtn, html.present #recordbtn,"))
+    (is (str/includes? body "html.present #replaybtn, html.present #ledgertoggle { display: none !important; }"))
+    (testing "the marked elements are the ones the pages draw"
+      (is (str/includes? body "el(\"span\", {class:\"idsep\"}, \" / \"),\n    el(\"span\", {class:\"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class: \"idsep\"}, \" / \"),\n    el(\"span\", {class: \"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class:\"version\"},"))
+      (is (str/includes? body "el(\"span\", {class: \"version\"},"))
+      (doseq [id ["sharebtn" "recordbtn" "replaybtn" "ledgertoggle" "grantchip"]]
+        (is (str/includes? body (str "id=\"" id "\"")))))
+    (testing "the theme control and the principal box are not among them"
+      (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))))
+
 (deftest ui-film-mode-says-when-it-has-ended
   ;; the root element's data-film is what the camera reads: `ready` under
   ;; the title card for 2 s, `playing` once play starts by itself at 1×,

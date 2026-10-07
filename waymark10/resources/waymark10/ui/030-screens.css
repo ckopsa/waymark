@@ -88,6 +88,16 @@
                    border-radius: 0; box-shadow: none; font-size: 34px;
                    line-height: 1.3; max-height: 2.6em; overflow: hidden; }
 
+  /* ── presentation mode (docs/spec-agent-demo-walks.md §8b): the detail
+     that is useful day to day and is not for a demo film. wmPresent
+     (200-events-follow.js) sets `present` on the root element; the
+     crumb's row id and its separator, the version line, the grant chip
+     and the header's developer buttons are then not drawn. Nothing
+     else is touched, so no surface the performer clicks moves ─────── */
+  html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,
+  html.present #grantchip, html.present #sharebtn, html.present #recordbtn,
+  html.present #replaybtn, html.present #ledgertoggle { display: none !important; }
+
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
             max-width: 92vw; z-index: 15; background: var(--paper);
