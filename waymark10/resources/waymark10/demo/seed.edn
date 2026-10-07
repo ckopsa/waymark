@@ -89,9 +89,10 @@
 
   ;; ── the quest ──────────────────────────────────────────────────
   ;; An epic whose `complete` is the film's goal. It stays a draft:
-  ;; `restate` is a draft's door, and the quest's last step before the
-  ;; goal restates it with the film's link. It has a film showcase and
-  ;; no evidence yet, and two children that are not finished.
+  ;; `restate` is a draft's door, and the first step the quest knows
+  ;; restates it with the film's link: the children show after it. It
+  ;; has a film showcase and no evidence yet, and two children that
+  ;; are not finished.
   {:as :ada :kind :ticket :ref :q-epic
    :create {:title "[epic] The house plans a dinner for its guests"
             :detail "The guide, the seating plan, and a film of the evening being planned."
