@@ -926,17 +926,6 @@
 
 (defn- humanise [k] (str/capitalize (str/replace (name k) "_" " ")))
 
-(defn- map-form
-  "The :map form a field's schema holds: the form itself, or the map arm
-  of a :maybe or an :or (the published schema's oneOf); nil when the
-  field is no map."
-  [form]
-  (when (vector? form)
-    (case (first form)
-      :map form
-      (:maybe :or) (some map-form (filter vector? (rest form)))
-      nil)))
-
 (defn- need-words
   "The labels a need walks through the door's input schema, the field's
   own last: one for an argument, and one more for each step of a dotted
@@ -951,7 +940,7 @@
           said (conj said (or (get-in entry [:properties :x-display :label])
                               (humanise k)))]
       (if (seq more)
-        (recur (some-> (map-form (:schema entry)) schema/entry-map) more said)
+        (recur (some-> (schema/map-form (:schema entry)) schema/entry-map) more said)
         said))))
 
 (defn- labels-of
@@ -1394,11 +1383,57 @@
   (let [index (atom nil)]
     (fn [t] (handle-transition! eng t index))))
 
+(defn relabel!
+  "Say each active quest's stored plan in the words its kinds declare
+  now (`labelled`), and write the plan again where they differ: a plan
+  stores its words, so a label the declaration changed since would else
+  stand until the next move on one of the plan's rows. The plan is
+  written as it is held, `planned_at` and all, so a transition not yet
+  heard still plans it. A paused quest is planned when it resumes.
+  Never throws. → how many plans were written."
+  [eng]
+  (try
+    (let [st (:storage eng)
+          rdef (get (inv/resources eng) kind)
+          rows (when rdef
+                 (store/with-tx st
+                   (fn [tx]
+                     (vec (store/query-rows st tx kind {:state :active}
+                                            {:limit index-cap})))))]
+      (count
+       (filterv
+        (fn [raw]
+          (let [row (inv/decode-row rdef raw)
+                held (vec (get-in row [:data :plan]))
+                said (mapv (partial labelled eng) held)]
+            (when (not= held said)
+              (try
+                (inv/invoke! eng kind (str (:id row)) :plan
+                             ;; the door's input is the wire's: an
+                             ;; instant crosses as its RFC 3339 string
+                             (-> (select-keys (:data row) (map first plan-fields))
+                                 (update :planned_at #(some-> % str))
+                                 (assoc :plan said))
+                             {:principal engine-actor
+                              :idempotency-key (str "quest-relabel:" (:id row)
+                                                    ":" (hash said))})
+                true
+                (catch Exception e
+                  (warn! "quest " (:id row) " could not be relabelled — "
+                         (or (inv/problem-reason e) (ex-message e)))
+                  false)))))
+        rows)))
+    (catch Exception e
+      (warn! "the stored plans could not be relabelled — " (ex-message e))
+      0)))
+
 (defn start!
-  "Register the durable log consumer that plans each quest. opts:
+  "Register the durable log consumer that plans each quest, after the
+  stored plans are said in the words declared now (`relabel!`). opts:
   :dispatcher, :poll-ms, :from-origin?."
   ([eng] (start! eng {}))
   ([eng opts]
+   (relabel! eng)
    (consumers/register-consumer!
     eng consumer-name (consumer-fn eng)
     (select-keys opts [:dispatcher :poll-ms :from-origin?]))))

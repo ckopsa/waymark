@@ -65,6 +65,10 @@ function localStamp(v, {seconds = false, dateOnly = false} = {}) {
          (seconds ? ":" + p(d.getSeconds()) : "");
 }
 const pretty = s => String(s).replace(/_/g, " ");
+/* a need the plan gives no label for: a dotted path into a nested map
+   (showcase.evidence.film_url) says only its last step, as the server's
+   own words do (need-words, quests.clj) */
+const prettyNeed = s => pretty(String(s).split(".").pop());
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
 const el = (tag, attrs={}, ...kids) => {
   const n = document.createElement(tag);
@@ -96,9 +100,10 @@ function surfaceNode(name) {
 /* what a surface shows now, read from the page as drawn and said in
    its visible text: null when it is not on the screen. The sheet, the
    tracker and the dialog answer the parts a film beat names, and the
-   beat reads them here (filmBeatSay, 200-events-follow.js); a caption
-   and a refusal answer their line; any other answers its text and
-   whether it can be pressed. */
+   beat reads them here (filmBeatSay, 200-events-follow.js); so do the
+   secret, report and upload dialogs; a caption and a refusal answer
+   their line; any other answers its text and whether it can be
+   pressed. The secret dialog never answers the secret: a beat is kept. */
 function readSurface(name) {
   const e = surfaceNode(name);
   if (!e || !e.getClientRects().length) return null;
@@ -134,6 +139,18 @@ function readSurface(name) {
             lit: [...new Set([...e.querySelectorAll("form .invited, form [data-typed]")]
               .map(s => s.matches("[name]") ? s : s.querySelector("[name]"))
               .map(n => n && n.getAttribute("name")).filter(Boolean))]};
+  if (base === "secret")
+    return {heading: text("h3"), copy: text('[data-surface="secret.copy"]'),
+            copy_other: text('[data-surface="secret.copy-other"]')};
+  if (base === "report")
+    return {heading: text("h3"), totals: text(".verdict-totals"),
+            refused: [...e.querySelectorAll(".verdicts tbody tr")].map(tr =>
+              ({row: (tr.querySelector("a")?.getAttribute("href") || "").slice(1) || null,
+                reason: text(".reason", tr)}))};
+  if (base === "upload")
+    return {file: text("[data-upload-chosen]"),
+            ready: !e.querySelector('[data-surface="upload.submit"]')?.disabled,
+            refused: text('[data-surface="refusal"]')};
   if (base === "caption" || base === "refusal") return text();
   return {text: text(),
           disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};

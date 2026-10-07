@@ -433,7 +433,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         : el("span", {class: "questoffer", "data-quest-offer": "offered"},
             el("button", {type: "button", class: "primary",
                           "data-quest-accept": "",
-                          "data-surface": "refusal.accept"}, "Accept as quest"));
+                          "data-surface": "dialog.accept"}, "Accept as quest"));
     /* the slot says how the read ended (data-quest-offer), so a refusal
        with no button tells why. A read that failed, and was not refused,
        is tried one more time. */
@@ -450,7 +450,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       says(create ? "offered" : res.ok ? "no-create" : "refused " + res.status);
       if (!create) return;
       slot.append(el("button", {type: "button", class: "primary",
-        "data-quest-accept": "", "data-surface": "refusal.accept",
+        "data-quest-accept": "", "data-surface": "dialog.accept",
         title: "Keep this as a goal: the engine plans the steps to it",
         onclick: () => acceptQuest(create)}, "Accept as quest"));
     };
@@ -739,7 +739,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.guidedAccept = () => {
       const kept = el("button", {class: "primary", type: "button",
                                  "data-quest-accept": "",
-                                 "data-surface": "refusal.accept"},
+                                 "data-surface": "dialog.accept"},
                       "Accept as quest");
       foot.append(kept);
       return kept;
@@ -898,7 +898,8 @@ function reportDialog(report) {
                 el("td", {class:"reason"}, r.reason || "")))))
         : el("p", {class: "validok"}, "every row succeeded")),
     el("div", {class: "dlgfoot"},
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
+      el("button", {"data-surface": "report.close",
+                    onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
 }

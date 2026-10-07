@@ -1478,7 +1478,7 @@ async function accessStory() {
     await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   };
   const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
-  const qAccept = `document.querySelector("dialog[open] [data-quest-accept]")`;
+  const qAccept = `document.querySelector("dialog[open] [data-surface='dialog.accept']")`;
   /* what the shelve door answered each time, for the timeout's trace: a
      submit closes the dialog on a 2xx and on nothing else */
   await evaljs(`(() => {
@@ -1750,7 +1750,7 @@ async function accessStory() {
       return fetch0(u, o);
     };
     window.replayPointerTo = (to, speed) => {
-      const what = to.hasAttribute("data-quest-accept") ? "accept"
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
         : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
@@ -1880,7 +1880,7 @@ async function accessStory() {
       if (!g) return;
       const under = g.querySelector('[data-srverr="shelf"]')?.textContent || "";
       if (under) seen.fieldError = under;
-      const accept = g.querySelector(".questoffer [data-quest-accept]");
+      const accept = g.querySelector(".questoffer [data-surface='dialog.accept']");
       if (!accept) return;
       seen.offered = true;
       seen.box = g.querySelector(".problem")?.innerText || seen.box;
@@ -3321,7 +3321,7 @@ async function guidedStory() {
       return fetch3(u, o);
     };
     window.replayPointerTo = (to, speed) => {
-      const what = to.hasAttribute("data-quest-accept") ? "accept"
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
         : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
@@ -3546,7 +3546,7 @@ async function questPhoneStory() {
     await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   };
   const refused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
-  const accept = "dialog[open] [data-quest-accept]";
+  const accept = "dialog[open] [data-surface='dialog.accept']";
   await shelve("high");
   await waitFor(`${refused}.includes("room") && !!document.querySelector(${JSON.stringify(accept)})`,
                 "the offer under the refusal", 15000);
