@@ -899,6 +899,22 @@
       (is (str/includes? body "el(\"span\", {class: \"version\"},"))
       (doseq [id ["sharebtn" "recordbtn" "replaybtn" "ledgertoggle" "grantchip"]]
         (is (str/includes? body (str "id=\"" id "\"")))))
+    (testing "what a performed Quests take still showed is hidden too"
+      ;; ticket 9e7c21f5: the law revision chip, the signed-in name and
+      ;; its sign-out link, the ticker, a row's Data section and the
+      ;; reasons under the doors
+      (is (str/includes? body "html.present #lawstamp, html.present #signedin, html.present #ticker,"))
+      (is (str/includes? body "html.present details.rowdata, html.present .blockedwhy { display: none !important; }"))
+      (is (str/includes? body "<span id=\"lawstamp\"></span>"))
+      (is (str/includes? body "$who.after(el(\"span\", {id: \"signedin\","))
+      (is (str/includes? body "<div id=\"ticker\"></div>"))
+      (is (str/includes? body "el(\"details\", {class:\"rowdata\", open:\"\"},\n      el(\"summary\", {class:\"muted\"}, \"Data\"),"))
+      (is (str/includes? body "dataPanel.append(el(\"details\", {class:\"rowdata\", open:\"\"},"))
+      (is (str/includes? body "const box = el(\"ul\", {class:\"blockedwhy notnow\"});"))
+      (testing "and nothing but the `present` class takes them away"
+        (is (empty? (remove #(str/starts-with? % "html.present")
+                            (map (comp str/trim second)
+                                 (re-seq #"([^\s,{}]*\s?(?:#lawstamp|#signedin|#ticker|details\.rowdata|\.blockedwhy))(?=\s*[,{])[^{}]*\{[^}]*display:\s*none" body)))))))
     (testing "the theme control and the principal box are not among them"
       (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))
     (testing "a demo engine's banner and the recording chip are not drawn"

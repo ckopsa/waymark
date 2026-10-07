@@ -1845,6 +1845,12 @@
                :reads? true
                :fn parent-scene}}
    :actions
+   ;; THE EVERYDAY DOORS (ticket f66dd175). Eight doors are marked
+   ;; `:everyday` in their display: restate, groom, block, unblock,
+   ;; defer, resume, complete and drop. They are the ones a person's
+   ;; hand walks, and a row's bar keeps them in view while they are
+   ;; shut. The others are the engine's or a change's, or a rarer
+   ;; statement, and a shut one of those is drawn under 'More doors'.
    {:restate
     {:from #{:draft} :to :draft
      :input (into [:map] stated-fields)
@@ -1853,7 +1859,7 @@
      :record true
      :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Restate" :order 2
+     :display {:label "Restate" :order 2 :everyday true
                :description "Say what needs doing again, whole"}}
 
     ;; THE STATEMENT OF A BLOCKED TICKET (ticket 470abe2a). `restate`'s
@@ -1883,7 +1889,7 @@
               the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Groom" :style :primary :order 1
+     :display {:label "Groom" :style :primary :order 1 :everyday true
                :description "It is stated well enough to build as written — into the queue"}}
 
     :ungroom
@@ -1937,7 +1943,7 @@
      :edit {:prefill [:blocked_by :then]}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
-     :display {:label "Blocked by" :order 4
+     :display {:label "Blocked by" :order 4 :everyday true
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
     ;; THE MERGE ORDER, STATED WHOLE (ticket d069bc3b). It holds the
@@ -2091,7 +2097,7 @@
     {:from #{:blocked} :to :open
      :handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Unblock" :style :primary :order 1
+     :display {:label "Unblock" :style :primary :order 1 :everyday true
                :description "Back into the queue — nothing holds this one now"}}
 
     ;; THE ENGINE'S WAY BACK FOR A DRAFT. The last blocker's ending
@@ -2136,14 +2142,14 @@
      :handler defer-the-ticket
      :edit {:prefill [:defer_until]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Defer" :order 5
+     :display {:label "Defer" :order 5 :everyday true
                :description "Not now — take it out of the queue until a day"}}
 
     :resume
     {:from #{:deferred} :to :open
      :handler resume-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Resume" :style :primary :order 1
+     :display {:label "Resume" :style :primary :order 1 :everyday true
                :description "Back into the queue now"}}
 
     ;; THE TWO ENDINGS, from `draft` or `open`. A draft may already be
@@ -2161,7 +2167,7 @@
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Complete" :style :primary :order 6
+     :display {:label "Complete" :style :primary :order 6 :everyday true
                :description "The work is done — say what was done"}}
 
     :drop
@@ -2174,7 +2180,7 @@
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Drop" :style :danger :order 7
+     :display {:label "Drop" :style :danger :order 7 :everyday true
                :description "Let this go — say why"}}
 
     ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────

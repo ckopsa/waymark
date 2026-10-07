@@ -101,6 +101,13 @@
   html.present #grantchip, html.present #sharebtn, html.present #recordbtn,
   html.present #replaybtn, html.present #ledgertoggle { display: none !important; }
   html.present #demobanner { display: none !important; }
+  /* what a performed take still showed (ticket 9e7c21f5): the header's
+     law revision chip, the signed-in name with its sign-out link, the
+     ticker's live log line, a row's Data section with its raw field
+     prompts, and the reasons under the doors for the doors that are
+     shut. The dev principal box (#who) stays */
+  html.present #lawstamp, html.present #signedin, html.present #ticker,
+  html.present details.rowdata, html.present .blockedwhy { display: none !important; }
   /* a ticket title's '[epic] ' marker (el, 100-core.js) is the tracker's
      own word and is not for a film; the stored title keeps it */
   html.present .epicmark { display: none !important; }
@@ -206,6 +213,10 @@
     dialog[data-quest-sheet] .dlgfoot button {
       min-height: 44px; font-size: 14px; padding: 8px 14px; }
   }
+  /* the shut doors that are not everyday ones, under one line (foldDoors) */
+  details.moredoors { margin: 4px 0; }
+  details.moredoors > summary { cursor: pointer; padding: 6px 0; }
+  details.moredoors > .actions { margin-top: 4px; }
   .blockedwhy { margin: 2px 0 4px; }
   .blockedwhy .item { font-size: 13px; padding: 3px 0; }
   .blockedwhy .item b { font-weight: 700; }

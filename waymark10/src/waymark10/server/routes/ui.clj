@@ -142,6 +142,8 @@
     :is "An action's button on the shown row, open or shut; data-row carries the row's address."}
    {:name "door-shut:<action>"
     :is "The dotted 'not yet' button of a shut action that a quest can reach."}
+   {:name "doors-more"
+    :is "The 'More doors (n)' line under a row's buttons, on a kind that marks everyday doors: it opens the other shut doors and the reasons."}
    {:name "dialog"
     :is "An action's open form; data-self and data-action say whose it is."}
    {:name "dialog.field:<name>"

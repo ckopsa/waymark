@@ -175,7 +175,7 @@
   "Ada as the identity gate hands her over: the seeded member's id and
   the roles her own row holds."
   [eng]
-  (t/principal {:id "ada" :display "Ada Example"
+  (t/principal {:id "ada" :display "Maya Okafor"
                 :roles (members/held-roles eng "ada")}))
 
 (defn- allow-as-ada!
@@ -396,12 +396,12 @@
       (is (= ["ticket.resume"]
              (get-in (doc ada :q-seats) [:unavailable :complete :remedies])))
       (is (nil? (get-in (doc ada :q-seats) [:actions :resume])))
-      (testing "Planner, who holds resume, plans it as resume then complete"
+      (testing "Juniper, who holds resume, plans it as resume then complete"
         (is (= [["ticket.resume" (self :q-seats)]
                 ["ticket.complete" (self :q-seats)]]
                (steps (:writes (c/pursue! planner (doc planner :q-seats)
                                           :complete ending {:dry-run true}))))))
-      (testing "Planner ends it"
+      (testing "Juniper ends it"
         (is (= "open" (:state (c/act! planner (doc planner :q-seats) :resume nil))))
         (is (= "done" (:state (c/act! planner (doc planner :q-seats)
                                       :complete ending))))))

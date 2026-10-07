@@ -161,7 +161,11 @@ async function renderResource(view, doc, hints) {
   }
   panel.append(bar);
   const notes = blockedNotes(blocked, doc);
-  if (notes) panel.append(notes);
+  /* a kind whose law marks everyday doors folds the other shut ones,
+     and the reasons with them, under one line (foldDoors) */
+  const more = foldDoors(bar, notes, doc);
+  if (more) panel.append(more);
+  else if (notes) panel.append(notes);
 
   /* the data document: fields a parts group re-renders (with buttons)
      leave the kv table */
@@ -224,7 +228,7 @@ async function renderResource(view, doc, hints) {
     }
   }
   const dataPanel = el("div", {class:"panel"},
-    el("details", {open:""},
+    el("details", {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
       dataTable));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
@@ -367,7 +371,7 @@ async function renderSurface(view, doc) {
       const partPaths = new Set(Object.keys(anchor.parts || {}));
       const plain = Object.fromEntries(
         Object.entries(anchor.data || {}).filter(([k]) => !partPaths.has(k)));
-      dataPanel.append(el("details", {open:""},
+      dataPanel.append(el("details", {class:"rowdata", open:""},
         el("summary", {class:"muted"}, "Data"), kvTable(plain, schema)));
       dataPanel.append(historySection(`${anchor.self}/-/events`));
       const footer = notNowFooter(grouped, gated, anchor);
