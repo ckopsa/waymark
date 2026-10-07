@@ -16,6 +16,7 @@
             [waymark10.registry :as registry]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
@@ -303,3 +304,99 @@
       (is (some? (:get (path "/api/surfaces/card-triage"))))
       (is (nil? (path "/api/surfaces/card-triage/{id}"))
           "the anchorless surface has no anchored door"))))
+
+;; ── 5. the render keys the surface route lends (ticket f0bab088) ────
+;; The route hands surface/envelope the ctx-opts every other read
+;; takes (router/render-opts). Three of its keys had no pin: a
+;; hand-built map without :evidence-reads, :summary-refs or
+;; :link-doors still answered 200. Kinds of its own and an engine of
+;; its own, so the suite's fixture kinds keep their shape.
+
+(def ^:private lender
+  (r/resource
+   {:kind :lender
+    :states [:open :shut]
+    :initial :open
+    :terminal #{:shut}
+    :summary "{data.name} · {state}"
+    :schema [:map
+             [:name [:string {:min 1 :max 60}]]]
+    :owns [{:kind :loan :via :lender_id}]
+    :actions
+    {:shut {:from #{:open} :to :shut
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "Shut is shut."}}}}))
+
+(def ^:private loan
+  (r/resource
+   {:kind :loan
+    :states [:out :back]
+    :initial :out
+    :terminal #{:back}
+    ;; the line reads a ref field: only :summary-refs names its row
+    :summary "{data.title} from {data.lender_id} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:lender_id {:kind :lender} :waymark/ref]]
+    :filterable {:lender_id #{:eq}}
+    ;; nil where the render lends no :read — only :evidence-reads does
+    :computed {:lender_name {:schema :string
+                             :reads? true
+                             :fn (fn [row {:keys [read]}]
+                                   (get-in (read :lender (get-in row [:data :lender_id]))
+                                           [:data :name]))}}
+    :actions
+    {:return {:from #{:out} :to :back
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "Back is back."}}}}))
+
+;; a link a module lends a kind it does not own (seams/Linking), as
+;; the engine gathers them at boot into :link-doors
+(def ^:private ledger-door
+  (reify seams/Linking
+    (lend-links [_ kind row]
+      (when (= :loan kind)
+        {"ledger" {:href (str "/api/loans/" (:id row) "/ledger")
+                   :kind "ledger"}}))))
+
+(deftest the-surface-route-lends-the-reads-the-refs-and-the-link-doors
+  (let [st (pg/storage db/dsn)]
+    (try
+      (store/with-tx st
+        (fn [tx]
+          (doseq [table ["lenders" "loans"]]
+            (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
+      (let [h (engine/handler
+               (-> (engine/engine {:storage st
+                                   :resources [lender loan]
+                                   :surfaces [{:name :loan-slip :anchor :loan}
+                                              {:name :lender-board
+                                               :anchor :lender
+                                               :members [{:name :loans :owns :loan}]}]})
+                   (update :link-doors (fnil conj []) ledger-door)))
+            ask (fn [method uri body]
+                  (h (cond-> {:request-method method :uri uri
+                              :headers {"x-waymark-principal" "priya"}}
+                       body (assoc :body (wire/write-json body)))))
+            lid (id-of (ask :post "/api/lenders" {:name "First"}))
+            loan-id (id-of (ask :post "/api/loans" {:title "Drill" :lender_id lid}))
+            slip (ask :get (str "/api/surfaces/loan-slip/" loan-id) nil)
+            anchor (:anchor (json slip))
+            item (first (get-in (json (ask :get (str "/api/surfaces/lender-board/" lid) nil))
+                                [:members :loans :items]))]
+        (is (= 200 (:status slip)) (pr-str slip))
+        (testing ":evidence-reads — the anchor's :reads? field has a :read to ask"
+          (is (= "First" (get-in anchor [:data :lender_name])) (pr-str (:data anchor))))
+        (testing ":summary-refs — a ref the summary line reads is named, not an id"
+          (is (str/starts-with? (str (:summary anchor)) "Drill from First")
+              (pr-str (:summary anchor)))
+          (is (str/starts-with? (str (:summary item)) "Drill from First")
+              "a member item carries no data, and its line is named the same way"))
+        (testing ":link-doors — a module-lent link rides the anchor and the item"
+          (is (= {:href (str "/api/loans/" loan-id "/ledger") :kind "ledger"}
+                 (get-in anchor [:links :ledger]))
+              (pr-str (:links anchor)))
+          (is (= (str "/api/loans/" loan-id "/ledger")
+                 (get-in item [:links :ledger :href]))
+              (pr-str (:links item)))))
+      (finally (pg/close! st)))))

@@ -4186,18 +4186,23 @@ async function questPhoneStory() {
        with a bar over its top and one over its bottom, which is mostly
        covered with its centre open, and a run with a thin bar over its
        centre only; a run under a bar that takes no pointer, and a run
-       under such a bar that draws nothing; then of the same block with
+       under such a bar that draws nothing; a run a `clip-path` cuts
+       away beside one it leaves, and a run a clipping parent scaled to
+       half cuts away beside one it leaves; then of the same block with
        a gradient behind its text */
     const drawn = JSON.parse(await evaljs(`(() => {
       const d = document.createElement("div");
       d.dataset.surface = "film.case";
-      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:160px;" +
+      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:200px;" +
         "z-index:2147483000;background:#fff;font:16px/20px sans-serif";
       const bar = (top, h, look) => "<div style='position:fixed;left:0;top:" + top +
         "px;width:300px;height:" + h + "px;" + (look || "background:#333") + "'></div>";
       d.innerHTML = "<p>open run</p><p>barred run</p>" +
         "<div style='height:20px;overflow:hidden'><p>kept run</p><p>clipped run</p></div>" +
         "<p>pinched run</p><p>striped run</p><p>veiled run</p><p>glass run</p>" +
+        "<div style='clip-path:inset(0 0 20px 0)'><p>shown run</p><p>cut run</p></div>" +
+        "<div style='height:20px;overflow:hidden;transform:scale(.5);" +
+        "transform-origin:0 0'><p>small run</p><p>lost run</p></div>" +
         bar(20, 20) + bar(60, 8) + bar(72, 8) + bar(89, 2) +
         bar(100, 20, "background:#333;pointer-events:none") +
         bar(120, 20, "pointer-events:none");
@@ -4215,7 +4220,7 @@ async function questPhoneStory() {
         return JSON.stringify({front: !!filmFront(), plain, gradient: read()});
       } finally { d.remove(); }
     })()`));
-    const stays = "open run kept run striped run glass run";
+    const stays = "open run kept run striped run glass run shown run small run";
     console.log("  the drawn block's beats: " + JSON.stringify(
       {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
        gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
@@ -4228,6 +4233,11 @@ async function questPhoneStory() {
     ok("a run under a bar that takes no pointer is in neither text, and one under such a bar " +
        "that draws nothing is in both",
        !/veiled run/.test(drawn.plain.text) && /glass run/.test(drawn.plain.focus || ""));
+    ok("a run a clip-path cuts away is in neither text, and the run it leaves is in both",
+       !/cut run/.test(drawn.plain.text) && /shown run/.test(drawn.plain.focus || ""));
+    ok("a run a transformed clipping parent cuts away is in neither text, and the run it " +
+       "leaves is in both",
+       !/lost run/.test(drawn.plain.text) && /small run/.test(drawn.plain.focus || ""));
     ok("and the contrast is of the text on the colour behind it: 21",
        drawn.plain.contrast === 21);
     ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
