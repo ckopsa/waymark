@@ -229,6 +229,32 @@
                :required ["items"]
                :additionalProperties false}]})))
 
+(defn- link-paths
+  "One GET per declared template link that is a route under the row's
+  own address: `/api/{plural}/{id}/…` with no other hole and no query.
+  Such a link is a safe GET a reader may follow (vocabulary § 13); a
+  link into another kind's collection is that kind's own path."
+  [rdef]
+  (let [kname (name (:kind rdef))
+        prefix (str "/api/" (:plural rdef) "/{id}/")]
+    (into {}
+          (keep (fn [{:keys [href rel summary states]}]
+                  (when (and (string? href)
+                             (str/starts-with? href prefix)
+                             (not (re-find #"[{?]" (subs href (count prefix)))))
+                    [href
+                     {:get {:tags [kname]
+                            :summary (or summary
+                                         (str "Follow the " (name rel) " link of a " kname))
+                            :parameters [id-param]
+                            :responses {"200" {:description
+                                               (if (seq states)
+                                                 (str "The link's answer, for a row that is "
+                                                      (str/join " or " (sort (map name states))))
+                                                 "The link's answer")}
+                                        "404" (resp-ref "not_found")}}}])))
+          (:links rdef))))
+
 (defn- kind-paths [rdef]
   (let [kname (name (:kind rdef))
         col (str "/api/" (:plural rdef))
@@ -336,8 +362,9 @@
                             :parameters [id-param]
                             :responses {"204" {:description "Discarded"}}}})
            paths)))
-     ;; the safe collection doors (:collection-doors)
-     (into base
+     ;; the row's own safe GETs (:links), then the safe collection
+     ;; doors (:collection-doors)
+     (into (into base (link-paths rdef))
            (map (fn [[dname door]]
                   [(:href door)
                    {:post {:tags [kname]

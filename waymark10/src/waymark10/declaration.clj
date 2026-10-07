@@ -178,9 +178,11 @@
   an :href that leaves this engine entirely (another engine's row, a
   foreign system): the same real-browser navigation as :download,
   under an honest name — a client must never read an origin hop as
-  bytes to save."
+  bytes to save. :states is a set of this kind's states: the link is
+  advertised only on a row in one of them (a walk's export, which
+  answers only once the walk is sealed)."
   [:rel :owns :edge :href :kind :summary :badge :embed :where :download
-   :external])
+   :external :states])
 
 (def ^:private link-schema
   (into [:map {:closed true}]

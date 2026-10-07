@@ -243,6 +243,11 @@
                 :recorder #{:eq}
                 :followed #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
+   ;; the one non-envelope answer: a safe GET a reader may follow, so a
+   ;; link and not a door (docs/waymark10-vocabulary.md § 13)
+   :links [{:rel "export" :href "/api/walks/{id}/export"
+            :states #{:sealed} :download true
+            :summary "The walk as a waymark-walk/1 file, newline-delimited JSON"}]
    :actions
    {:seal
     {:from #{:recording} :to :sealed

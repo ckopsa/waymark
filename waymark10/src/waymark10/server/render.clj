@@ -693,14 +693,17 @@
   map (ctx-opts :resources) for target plurals. A truthy :embed
   advertises its EFFECTIVE :limit/:max-limit (declared, else the
   framework defaults) rather than a bare true, so a client can read
-  the grid affordance's bounds straight off the envelope."
+  the grid affordance's bounds straight off the envelope. A link that
+  declares :states is left out of a row in any other state."
   [rdef row resources link-doors]
   (into (seams/lent-links link-doors (:kind rdef) row)
-        (keep (fn [{:keys [rel summary badge embed] :as ld}]
-                (when-some [entry (cond
-                                    (:edge ld) (edge-link rdef row resources ld)
-                                    (:owns ld) (owns-link rdef row resources ld)
-                                    (:href ld) (template-link row ld))]
+        (keep (fn [{:keys [rel summary badge embed states] :as ld}]
+                (when-some [entry (when (or (nil? states)
+                                            (contains? states (some-> (:state row) name keyword)))
+                                    (cond
+                                      (:edge ld) (edge-link rdef row resources ld)
+                                      (:owns ld) (owns-link rdef row resources ld)
+                                      (:href ld) (template-link row ld)))]
                   [rel (cond-> entry
                          summary (assoc :summary summary)
                          embed (assoc :embed

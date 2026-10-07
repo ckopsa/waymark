@@ -1402,6 +1402,13 @@
 (defn- check-links [r]
   (let [dkeys (data-keys r)]
     (doseq [ld (:links r)]
+      (when (contains? ld :states)
+        (when-not (and (set? (:states ld)) (seq (:states ld))
+                       (every? (into #{} (map name) (:states r))
+                               (map name (:states ld))))
+          (err r :links (str "link " (:rel ld) ": :states " (pr-str (:states ld))
+                             " must be a non-empty set of this kind's states — "
+                             "the link is advertised only on a row in one of them"))))
       (when (:badge ld)
         (when-not (contains? dkeys (:badge ld))
           (err r :links (str "link " (:rel ld) ": badge " (:badge ld)
