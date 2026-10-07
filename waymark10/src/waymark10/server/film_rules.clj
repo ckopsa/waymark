@@ -17,10 +17,12 @@
   person retires one.
 
   `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
-  starts with, each made once by its name."
+  starts with, each made once by its name. A seed row made before
+  `output` and `unless` existed gains them there, through `restate`, a
+  door only the boot seed walks."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
-            [waymark10.resource :refer [defresource]]
+            [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -60,6 +62,10 @@
   [["zoom" "shot.zoom"]])
 
 (def exemption-names (mapv first exemptions))
+
+(def seed-actor-id
+  "The id of the actor the boot seed wears."
+  "waymark10-film-rules")
 
 (defn- asked
   "The value a create names for field `k`, or nil."
@@ -206,6 +212,42 @@
       (t/allow)
       (t/deny))))
 
+(g/defguard the-boot-seed-restates-the-rule
+  {:reads [:principal]
+   :open "No door changes who the caller is: the boot seed restates a rule. Ask a person to retire the rule and make another."
+   :explain "A rule is restated only by the boot seed, which gives a seed rule made before a field existed the value the seed names. A person who wants another rule retires this one and makes another."}
+  [_row _inp ctx]
+  (let [{:keys [id type]} (:principal ctx)]
+    (if (and (= :system type) (= seed-actor-id (str id)))
+      (t/allow)
+      (t/deny))))
+
+;; ── the handler ─────────────────────────────────────────────────────
+
+(defhandler restate-rule
+  [row inp _ctx]
+  ;; a patch: a field the input leaves out keeps its stored value
+  (update row :data merge (select-keys inp [:output :unless])))
+
+;; ── the fields the seed restates ────────────────────────────────────
+
+(def ^:private output-field
+  [:output {:optional true
+            :x-display
+            {:label "Only films at this output"
+             :help "Judge only a film rendered at this output. Left empty, a film at any output is judged."
+             :choices {"phone" "A film rendered for a phone."
+                       "desktop" "A film rendered for a desktop."}}}
+   [:maybe (into [:enum] outputs)]])
+
+(def ^:private unless-field
+  [:unless {:optional true
+            :x-display
+            {:label "Unless the shot"
+             :help "With the scope shot: a shot that has this property passes the rule whatever it measures. Left empty, no shot is exempt."
+             :choices {"zoom" "The shot asks for a zoom."}}}
+   [:maybe (into [:enum] exemption-names)]])
+
 ;; ── the kind ────────────────────────────────────────────────────────
 
 (defresource film-rule
@@ -258,19 +300,8 @@
                        "turn" "A shot where the thing changes."
                        "payoff" "A shot that shows it done."}}}
      [:maybe (into [:enum] roles)]]
-    [:output {:optional true
-              :x-display
-              {:label "Only films at this output"
-               :help "Judge only a film rendered at this output. Left empty, a film at any output is judged."
-               :choices {"phone" "A film rendered for a phone."
-                         "desktop" "A film rendered for a desktop."}}}
-     [:maybe (into [:enum] outputs)]]
-    [:unless {:optional true
-              :x-display
-              {:label "Unless the shot"
-               :help "With the scope shot: a shot that has this property passes the rule whatever it measures. Left empty, no shot is exempt."
-               :choices {"zoom" "The shot asks for a zoom."}}}
-     [:maybe (into [:enum] exemption-names)]]
+    output-field
+    unless-field
     [:severity {:x-display
                 {:label "A miss is"
                  :help "fail stops the film from being sent; warn is reported beside it."
@@ -298,7 +329,19 @@
                    unless-goes-with-a-shot
                    a-person-or-a-mayor-makes-the-rule]
    :actions
-   {:retire
+   {;; the boot seed's door: no person has one, so a field a row lacks
+    ;; is a field that did not exist when the row was made
+    :restate
+    {:from #{:active} :to :active
+     :input [:map output-field unless-field]
+     :guards [unless-goes-with-a-shot the-boot-seed-restates-the-rule]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The rule holds what this restate says; the values before are not kept."}
+     :handler restate-rule
+     :display {:label "Restate the rule" :order 5
+               :description "Give a seed rule the output or the exemption the seed names"}}
+
+    :retire
     {:from #{:active} :to :retired :undo :restore
      :guards [a-person-retires-the-rule]
      :safety {:idempotent true :reversible true :confirm false}
@@ -509,7 +552,7 @@
 
 (def seed-actor
   "The actor the boot seed wears."
-  (t/principal {:id "waymark10-film-rules" :type :system
+  (t/principal {:id seed-actor-id :type :system
                 :display "Film rules"}))
 
 (def seed-rules
@@ -551,15 +594,32 @@
   (store/with-tx (:storage eng)
     (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit 100000}))))
 
+(defn- lacks
+  "The `output` and `unless` the seed names for `rule` and `row`, a
+  decoded rule of that name, does not carry. Only the boot seed writes
+  these fields after a create, so a row without one was made before the
+  field existed; a value the row carries is never written over."
+  [rule row]
+  (into {}
+        (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
+        (select-keys rule [:output :unless])))
+
 (defn ensure-seed-rules!
   "The boot seed: each of `seed-rules` when no rule carries its name,
   active or retired. A second boot makes none, and a rule a person
-  retired is not made again."
+  retired is not made again. An active rule that carries a seed's name
+  and lacks the `output` or `unless` the seed names is restated to
+  carry it; a retired one is left as it is."
   [eng]
   (when (contains? (inv/resources eng) kind)
     (doseq [rule seed-rules]
       (try
-        (when (empty? (rows-of eng {:name (:name rule)}))
+        (if-let [raw (first (rows-of eng {:name (:name rule)}))]
+          (let [row (inv/decode-row (get (inv/resources eng) kind) raw)
+                patch (lacks rule row)]
+            (when (and (seq patch) (= "active" (name (:state row))))
+              (inv/invoke! eng kind (str (:id row)) :restate patch
+                           {:principal seed-actor})))
           (inv/create! eng kind rule {:principal seed-actor}))
         (catch Exception e
           (binding [*out* *err*]

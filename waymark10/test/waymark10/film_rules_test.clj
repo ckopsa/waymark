@@ -110,6 +110,34 @@
     (is (every? (set film-rules/metric-names)
                 (map :metric film-rules/seed-rules)))))
 
+(deftest the-seed-restates-a-row-made-before-the-fields
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (jdbc/execute! tx [(str "DELETE FROM film_rules WHERE data->>'name'"
+                              " IN ('type-size', 'focus-share')")])))
+  (make-rule! {:name "type-size" :metric "type_px" :op ">=" :threshold 28M
+               :scope "shot"}
+              film-rules/seed-actor)
+  (make-rule! {:name "focus-share" :metric "focus_share" :op ">="
+               :threshold 0.25M :scope "shot"}
+              film-rules/seed-actor)
+  (is (nil? (:output (:data (rule-named "type-size")))))
+  (is (nil? (:unless (:data (rule-named "focus-share")))))
+  (film-rules/ensure-seed-rules! *eng*)
+  (testing "the rows that were there gain the fields"
+    (is (= 1 (count (rows-of {:name "type-size"}))))
+    (is (= "phone" (name (:output (:data (rule-named "type-size"))))))
+    (is (nil? (:unless (:data (rule-named "type-size")))))
+    (is (= "zoom" (name (:unless (:data (rule-named "focus-share"))))))
+    (is (nil? (:output (:data (rule-named "focus-share"))))))
+  (testing "a second boot restates nothing"
+    (let [version (:version (rule-named "type-size"))]
+      (film-rules/ensure-seed-rules! *eng*)
+      (is (= version (:version (rule-named "type-size"))))))
+  (testing "a person has no restate"
+    (is (some? (refusal #(move! :restate "type-size" colton))))
+    (is (= "phone" (name (:output (:data (rule-named "type-size"))))))))
+
 (deftest an-unknown-metric-is-refused-with-the-vocabulary
   (let [d (refusal #(make-rule! {:name "loudness-floor" :metric "loudness"}
                                 colton))]
