@@ -4188,8 +4188,9 @@ async function questPhoneStory() {
        centre only; a run under a bar that takes no pointer, and a run
        under such a bar that draws nothing; a run a `clip-path` cuts
        away beside one it leaves, and a run a clipping parent scaled to
-       half cuts away beside one it leaves; then of the same block with
-       a gradient behind its text */
+       half cuts away beside one it leaves; then of the same block under
+       an open modal, where it is inert and those two clips are read by
+       geometry; then of the same block with a gradient behind its text */
     const drawn = JSON.parse(await evaljs(`(() => {
       const d = document.createElement("div");
       d.dataset.surface = "film.case";
@@ -4216,13 +4217,25 @@ async function questPhoneStory() {
       };
       try {
         const plain = read();
+        /* a modal in the far corner, off the block: the beat's focus is
+           then not the block, so its runs are read with filmRuns */
+        const m = document.createElement("dialog");
+        m.style.cssText = "position:fixed;inset:auto 0 0 auto;margin:0;padding:0;" +
+          "border:0;width:40px;height:20px";
+        document.body.append(m);
+        let under;
+        try {
+          m.showModal();
+          under = {text: read().text, runs: filmRuns(d).map(r => r.s).join(" ")};
+        } finally { m.close(); m.remove(); }
         d.style.backgroundImage = "linear-gradient(#fff, #000)";
-        return JSON.stringify({front: !!filmFront(), plain, gradient: read()});
+        return JSON.stringify({front: !!filmFront(), plain, under, gradient: read()});
       } finally { d.remove(); }
     })()`));
     const stays = "open run kept run striped run glass run shown run small run";
     console.log("  the drawn block's beats: " + JSON.stringify(
       {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
+       under: {...drawn.under, text: drawn.under.text.slice(0, 80)},
        gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
     ok(`a run under a fixed bar and a run its scrolling parent clips are in neither text ${where}`,
        drawn.plain.focus === stays && drawn.plain.text.includes(stays) &&
@@ -4238,6 +4251,12 @@ async function questPhoneStory() {
     ok("a run a transformed clipping parent cuts away is in neither text, and the run it " +
        "leaves is in both",
        !/lost run/.test(drawn.plain.text) && /small run/.test(drawn.plain.focus || ""));
+    const underOk = !/cut run|lost run/.test(drawn.under.text + " " + drawn.under.runs) &&
+      /shown run.*small run/.test(drawn.under.runs) &&
+      /shown run.*small run/.test(drawn.under.text);
+    ok("under an open modal, where the page answers no run of the block, the two runs cut " +
+       "away are not in the beat's text or the block's runs, and the two runs left are in both" +
+       (underOk ? "" : ": " + JSON.stringify(drawn.under.runs)), underOk);
     ok("and the contrast is of the text on the colour behind it: 21",
        drawn.plain.contrast === 21);
     ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
