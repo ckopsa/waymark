@@ -2287,17 +2287,23 @@
   spec-agent-demo-walks § 8d). A route and not an action, because it
   moves no row and writes nothing: whoever may read the kind may call
   it, and a caller whose grant does not admit the kind gets the
-  collection's own not-found."
+  collection's own not-found. The grant's actions are not asked: the
+  door is a read. The body is held to the input the collection
+  advertises (film-rules/take-errors). A rehearsal is the call itself,
+  since nothing is written, so `dry_run` changes nothing here."
   [eng]
   (fn [req]
     (let [rdef (get (inv/resources eng) film-rules/kind)
           _ (when-not rdef (throw (p/not-found "collection" "film_rules")))
           _ (check-kind! req rdef)
-          tk (:take (read-body req))]
+          body (read-body req)
+          tk (:take body)]
       (when-not (map? tk)
         (throw (p/problem :invalid-input 422 "Invalid input"
                           {:detail (str "Give the take as `take`: a map with "
                                         "`film` and `shots`.")})))
+      (when-some [errors (film-rules/take-errors rdef body)]
+        (throw (p/schema-invalid :judge errors)))
       (json-response 200 (film-rules/judge-take
                           eng tk (:row? (visibility-of req)))))))
 
