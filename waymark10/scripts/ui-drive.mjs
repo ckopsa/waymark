@@ -1215,7 +1215,7 @@ async function accessStory() {
        return !!${qBar}.querySelector("[data-quest-planning]") &&
          t.textContent === ${JSON.stringify(qTitle)} &&
          t.getAttribute("href") === ${JSON.stringify("#" + qSelf)} &&
-         !${qBar}.querySelector("[data-tracker-go]"); })()`));
+         !${qBar}.querySelector("[data-surface='tracker.go']"); })()`));
   const stepOne = {n: 1, door: "rename", self: pile.self, whose: "person",
                    note: "Name the pile, then say which room it is in.",
                    needs: ["title", "room"]};
@@ -1241,7 +1241,7 @@ async function accessStory() {
   ok("the tracker is on two different pages", qPageOne.split("?")[0] !== "/api/led_notes");
 
   const qPlannedAt = (await get(qSelf)).data.planned_at;
-  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
                 "the head step's dialog", 15000);
   const qDlg = await evaljs(`({here: hereHref(),
@@ -1288,7 +1288,7 @@ async function accessStory() {
      await evaljs(`window.__quest === true`));
   const qSeat = await evaljs(`({
     waiting: ${qBar}.querySelector("[data-quest-waiting]")?.textContent,
-    go: ${qBar}.querySelector("[data-tracker-go]")?.disabled,
+    go: ${qBar}.querySelector("[data-surface='tracker.go']")?.disabled,
     doors: ["pause", "unpin", "replan"].every(n =>
       !!${qBar}.querySelector('[data-action="' + n + '"]'))})`);
   ok("a seat's head step reads waiting on, and Go is disabled",
@@ -1334,7 +1334,7 @@ async function accessStory() {
                    ${JSON.stringify(pStep.note)}`,
                 "the path step's note in the tracker", 15000);
   const pPlannedAt = (await get(pSelf)).data.planned_at;
-  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
                 "the path step's dialog", 15000);
   const pDlg = await evaljs(`(() => {
@@ -1551,7 +1551,7 @@ async function accessStory() {
     return !!s && s.door === ${JSON.stringify(door)} &&
       s.self === ${JSON.stringify(rNote.self)} &&
       questDoc.data.plan.filter(p => p.state === "done").length === ${done} &&
-      !!${qBar}.querySelector("[data-tracker-go]:not(:disabled)"); })()`;
+      !!${qBar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
   /* the planner's next plan of the quest, after the one planned at `was` */
   const rPlanned = async (self, was) => {
     for (let i = 0; i < 60; i++) {
@@ -1587,7 +1587,7 @@ async function accessStory() {
   ok("the planner plans the recorded quest", !!rFirst);
   await waitFor(rGoFor("rename", 0), "the remedy at the tracker's head", 15000, rPlan);
   console.log("  the first plan: " + await evaljs(rPlan));
-  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector('dialog[open] [name="title"]')`,
                 "the remedy's dialog, from Go", 15000);
   await sleep(600);
@@ -1628,7 +1628,7 @@ async function accessStory() {
   await waitFor(rGoFor("shelve", 1), "the goal door still at the tracker's head", 15000, rPlan);
   console.log("  the last plan: " + await evaljs(rPlan));
   await sleep(600);
-  await evaljs(`${qBar}.querySelector("[data-tracker-go]").click(); true`);
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
                 "the goal's dialog, from Go", 15000);
   await sleep(600);
@@ -1724,7 +1724,7 @@ async function accessStory() {
     };
     window.replayPointerTo = (to, speed) => {
       const what = to.hasAttribute("data-quest-accept") ? "accept"
-        : to.hasAttribute("data-tracker-go") ? "go"
+        : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
       if (replay && what && !(last && last.at === replay.at && last.what === what))
@@ -1797,7 +1797,7 @@ async function accessStory() {
     return true; })()`);
   await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
                  getComputedStyle(${qBar}).display !== "none" &&
-                 !!${qBar}.querySelector("[data-tracker-go]:disabled")`,
+                 !!${qBar}.querySelector("[data-surface='tracker.go']:disabled")`,
                 "the tracker in the recorded film", 240000, rWhy);
   ok("film mode keeps the recorded walk's tracker", true);
   await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
@@ -2688,7 +2688,7 @@ async function guidedStory() {
     {start_date: "2026-07-14", weeks: 1,
      days: [{date: "2026-07-14"}, {date: "2026-07-15"}]}, "ada"),
     201, "ada creates a plan with no meal on its days").body.self;
-  const shutDoor = '#view button[data-quest-door="finalize"]';
+  const shutDoor = '#view [data-surface="door-shut:finalize"]';
   await A.js(`location.hash = ${JSON.stringify(plan)}; true`);
   await A.until(`hereHref() === ${JSON.stringify(plan)} &&
                  !!document.querySelector(${JSON.stringify(shutDoor)})`,
@@ -2698,10 +2698,10 @@ async function guidedStory() {
                 "bo following ada to the plan", 15000, guidedState);
   await sleep(600);
   await A.js(`document.querySelector(${JSON.stringify(shutDoor)}).click(); true`);
-  const questSheetOpen = `document.querySelector("dialog[open][data-quest-sheet]")`;
+  const questSheetOpen = `document.querySelector("dialog[open][data-surface='sheet']")`;
   await A.until(`!!${questSheetOpen}`, "ada's quest sheet", 15000,
                 `document.body.innerText.slice(-400)`);
-  await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+  await B.until(`!!document.querySelector("dialog[open][data-surface='sheet'][data-guided-quest]")`,
                 "ada's quest sheet on bo's screen", 15000, guidedState);
   const sheetSays = `(() => { const g = ${questSheetOpen};
     return JSON.stringify({
@@ -2721,9 +2721,9 @@ async function guidedStory() {
   ok("the sheet is read-only on bo's screen: it says whose it is, and Accept is disabled",
      await B.js(`{ const g = ${questSheetOpen};
        (g.querySelector("[data-guided-note]")?.textContent || "").endsWith(" has this open") &&
-       g.querySelector("[data-quest-accept]").disabled === true }`));
+       g.querySelector("[data-surface='sheet.accept']").disabled === true }`));
   ok("ada's own Accept stays live",
-     await A.js(`${questSheetOpen}.querySelector("[data-quest-accept]").disabled`) === false);
+     await A.js(`${questSheetOpen}.querySelector("[data-surface='sheet.accept']").disabled`) === false);
   /* a second tab of ada's reads another row: her gaze moves and no new
      `ui` beat is made, so the server says the carried frame again under
      its old seq (presence/publish!). That frame takes the move's close
@@ -2762,7 +2762,7 @@ async function guidedStory() {
      movedShut);
   await A.js(`document.querySelector("dialog[open] [data-quest-decline]").click(); true`);
   await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
-  await B.until(`!document.querySelector("dialog[data-quest-sheet]")`,
+  await B.until(`!document.querySelector("[data-surface='sheet']")`,
                 "ada's sheet off bo's screen", 15000, guidedState);
   ok("bo's sheet closes with ada's", true);
 
@@ -3271,7 +3271,7 @@ async function guidedStory() {
     };
     window.replayPointerTo = (to, speed) => {
       const what = to.hasAttribute("data-quest-accept") ? "accept"
-        : to.hasAttribute("data-tracker-go") ? "go"
+        : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
       if (replay && what && !(last && last.at === replay.at && last.what === what))
@@ -3293,7 +3293,7 @@ async function guidedStory() {
   ok("the quest's first document draws the tracker: its title, its head step, and Go disabled",
      await A.js(`${qBar2}.querySelector("[data-quest-title]").textContent === ${JSON.stringify(questName)} &&
        ${qBar2}.querySelector("[data-quest-note]").textContent === "Write the recipe" &&
-       ${qBar2}.querySelector("[data-tracker-go]").disabled && replay.at === 6 &&
+       ${qBar2}.querySelector("[data-surface='tracker.go']").disabled && replay.at === 6 &&
        !document.querySelector("dialog[open]")`));
   await A.until(qCount("1 done, 3 known so far"), "the tracker after the first step", 40000);
   ok("the tracker follows the plan made after the recorder's step",
@@ -3329,7 +3329,7 @@ async function guidedStory() {
     location.hash = "#" + walk + "?film=1"; true }`);
   await A.until(`document.documentElement.getAttribute("data-film") === "playing" &&
                  getComputedStyle(${qBar2}).display !== "none" &&
-                 !!${qBar2}.querySelector("[data-tracker-go]:disabled")`,
+                 !!${qBar2}.querySelector("[data-surface='tracker.go']:disabled")`,
                 "the tracker in the film", 60000);
   ok("film mode keeps the tracker", true);
   await A.until(`document.documentElement.getAttribute("data-film") === "ended"`,
@@ -3670,7 +3670,7 @@ async function questPhoneStory() {
       ? tap(await evaljs(target(sel)))
       : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
     /* the sheet a tap on a shut door opens (questSheet), and its doors */
-    const sheet = `document.querySelector("dialog[open][data-quest-sheet]")`;
+    const sheet = `document.querySelector("dialog[open][data-surface='sheet']")`;
     const notNow = "dialog[open] [data-quest-decline]";
     const acceptIt = '[data-surface="sheet.accept"]';
     await evaljs(`refreshQuest().catch(() => {}); true`);
@@ -3769,7 +3769,7 @@ async function questPhoneStory() {
       const b = document.querySelector(${JSON.stringify(door)}), cs = getComputedStyle(b);
       const line = document.getElementById(b.getAttribute("aria-describedby"));
       const plain = [...document.querySelectorAll("#view button.blocked")]
-        .filter(p => !p.hasAttribute("data-quest-door"));
+        .filter(p => !(p.getAttribute("data-surface") || "").startsWith("door-shut:"));
       return {cls: b.className, text: b.textContent, disabled: b.disabled,
               aria: b.getAttribute("aria-disabled"), self: b.dataset.questSelf,
               border: cs.borderTopStyle, opacity: cs.opacity,
@@ -4004,7 +4004,7 @@ async function questPhoneStory() {
       window.__sheets = [];
       if (window.__sheetWatch) window.__sheetWatch.disconnect();
       window.__sheetWatch = new MutationObserver(ms => {
-        const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
+        const is = n => n.nodeType === 1 && n.matches("[data-surface='sheet']");
         for (const m of ms) {
           for (const n of m.addedNodes)
             if (is(n)) window.__sheets.push({replay: !!replay, closed: false, accepts: 0,
@@ -4020,7 +4020,7 @@ async function questPhoneStory() {
         for (const m of ms) {
           const open = window.__sheets.find(s => !s.closed);
           if (open && m.target.hasAttribute("data-replay-press") &&
-              m.target.matches("dialog[data-quest-sheet] [data-quest-accept]"))
+              m.target.matches("[data-surface='sheet.accept']"))
             open.accepts++;
         }
         const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
@@ -4046,7 +4046,7 @@ async function questPhoneStory() {
        it pressed, and what the sheet and the tracker said */
     const said = JSON.parse(await evaljs(`JSON.stringify({beats: window.wmFilmBeats || [],
       events: window.__beatEvents, frames: replay ? replay.frames.length : null,
-      tracker: filmTracker()})`));
+      tracker: readSurface("tracker")})`));
     const beats = said.beats, lastBeat = beats[beats.length - 1] || {};
     const presses = beats.map(b => b.pressed && b.pressed.target);
     const flat = t => String(t).replace(/\s+/g, " ").trim();
@@ -4153,7 +4153,7 @@ async function questPhoneStory() {
       window.__sheets = [];
       if (window.__sheetWatch) window.__sheetWatch.disconnect();
       window.__sheetWatch = new MutationObserver(ms => {
-        const is = n => n.nodeType === 1 && n.matches("dialog[data-quest-sheet]");
+        const is = n => n.nodeType === 1 && n.matches("[data-surface='sheet']");
         for (const m of ms) {
           for (const n of m.addedNodes)
             if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
@@ -4162,13 +4162,13 @@ async function questPhoneStory() {
           for (const n of m.removedNodes)
             if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
               said: n.querySelector("[data-quest-refused]")?.textContent || "",
-              shut: !!n.querySelector("[data-quest-accept]")?.disabled});
+              shut: !!n.querySelector("[data-surface='sheet.accept']")?.disabled});
         }
       });
       window.__sheetWatch.observe(document.body, {childList: true});
       new MutationObserver(() => {
         const b = document.querySelector(
-          "dialog[data-quest-sheet] [data-quest-accept][data-replay-press]");
+          "[data-surface='sheet.accept'][data-replay-press]");
         if (b && !window.__accept)
           window.__accept = {text: b.textContent, shut: b.disabled,
                              tracker: getComputedStyle(${bar}).display !== "none"};
@@ -4189,9 +4189,9 @@ async function questPhoneStory() {
     console.log("  the replay's Accept: " + JSON.stringify(accepted));
     ok("the pointer presses Accept quest, in the sheet, with Accept offered",
        accepted.shut === false);
-    await waitFor(`!document.querySelector("dialog[data-quest-sheet]") &&
+    await waitFor(`!document.querySelector("[data-surface='sheet']") &&
                    getComputedStyle(${bar}).display !== "none" &&
-                   !!${bar}.querySelector("[data-tracker-go]")`,
+                   !!${bar}.querySelector("[data-surface='tracker.go']")`,
                   `the pinned quest in the film's tracker ${where}`, 240000, why);
     ok("the sheet closes off Accept quest, and the quest is pinned in the tracker", true);
     if (phone) await noOverflow("with the connector's quest in the film's tracker");
@@ -4262,7 +4262,7 @@ async function questPhoneStory() {
         window.__sheetWatch = new MutationObserver(ms => {
           for (const m of ms)
             for (const n of m.addedNodes)
-              if (n.nodeType === 1 && n.matches("dialog[data-quest-sheet]"))
+              if (n.nodeType === 1 && n.matches("[data-surface='sheet']"))
                 window.__sheets.push({replay: !!replay, here: hereHref().split("?")[0]});
         });
         window.__sheetWatch.observe(document.body, {childList: true});
@@ -4271,12 +4271,12 @@ async function questPhoneStory() {
                     `the refusal, in the sheet of the connector's film ${where}`, 240000, why);
       ok("the replay opens the quest's sheet with the refusal's sentence", true);
       ok("and Accept is disabled with that line",
-         await evaljs(`${sheet}.querySelector("[data-quest-accept]").disabled === true`));
+         await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
       /* the sentence is in the sheet alone, and the caption band is not
          drawn: no refusal line, no notice and no caption beside it */
       const alone = `(() => {
         const n = s => (String(s || "").match(/at most 20 active quests/g) || []).length;
-        const s = document.querySelector("dialog[data-quest-sheet]");
+        const s = document.querySelector("[data-surface='sheet']");
         const band = document.querySelector("#replaycaption");
         return n(document.body.textContent) === n(s && s.textContent) &&
           (!band || getComputedStyle(band).display === "none" || !band.textContent);
