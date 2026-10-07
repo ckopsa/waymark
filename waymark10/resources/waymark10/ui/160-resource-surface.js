@@ -10,7 +10,8 @@ async function renderResource(view, doc, hints) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"), " / ",
+    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
   panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));

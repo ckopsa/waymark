@@ -2387,6 +2387,14 @@ function filmEnd() {
   setTimeout(filmBeatSay, FILM_HOLD_MS);
   setTimeout(() => filmState("ended"), FILM_HOLD_MS);
 }
+/* ── presentation mode (docs/spec-agent-demo-walks.md §8b): the detail a
+   demo film must not show. window.wmPresent(true) sets the class
+   `present` on the root element and wmPresent(false) takes it off;
+   030-screens.css hides the marked chrome: the crumb's row id, the
+   version line, the grant chip and the header's developer buttons.
+   Recording and replay are driven by page functions and not by those
+   buttons, so both work while it is on. ──────────────────────────── */
+window.wmPresent = on => document.documentElement.classList.toggle("present", on !== false);
 /* ── film beats (docs/spec-agent-demo-walks.md §8b): what a take showed,
    for a reader that cannot watch it. In film mode each frame the replay
    steps to is said one time: a `waymark:film-beat` CustomEvent on

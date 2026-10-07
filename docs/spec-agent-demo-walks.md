@@ -588,6 +588,19 @@ replay.
 
 - The shell's chrome is hidden: the nav's dev principal box, the replay
   chip, the demo banner and every toast.
+- **Presentation mode.** Some detail is useful day to day and is not
+  for a demo film. The page function `window.wmPresent(true)` turns the
+  mode on and `window.wmPresent(false)` turns it off; there is no query
+  flag. It sets the class `present` on the root element, and the CSS
+  hides these with `display: none` and moves nothing else: the row id
+  at the end of a row's crumb (the crumb keeps its kind), the version
+  line (`v2 · law r1 · …`) of a row and of a dashboard, the grant chip
+  (it shows a grant's id), and the header's developer buttons: share
+  (⧉), ● Record, ▶ file and ◷ Activity. The theme control and the
+  sign-in stay. It is separate from film mode, so the performer can
+  record a walk with it on: recording and replay are driven by page
+  functions and not by those buttons. A beat's `text` carries none of
+  the hidden chrome, because a run that is not drawn is not read.
 - A title card shows the walk's title for 2 s. Play starts by itself at
   1×. The last screen holds for 1.5 s.
 - **Captions on video.** A caption is a band across the bottom of the

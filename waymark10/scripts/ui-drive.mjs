@@ -3801,6 +3801,29 @@ async function questPhoneStory() {
                   "the second task's row page, with its shut Complete", 15000,
                   `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
     await sleep(600);
+    /* presentation mode (wmPresent, 200-events-follow.js; spec-agent-demo-
+       walks §8b): the crumb's id, the version line and the header's
+       developer buttons are not drawn while it is on, a beat's text
+       carries none of them, and they are drawn again when it is off */
+    const chrome = `JSON.stringify([".crumbs .id", ".version", "#sharebtn", "#recordbtn",
+      "#replaybtn", "#ledgertoggle"].map(s => { const e = document.querySelector(s);
+        return !!e && getComputedStyle(e).display !== "none"; }))`;
+    const plain = JSON.parse(await evaljs(chrome));
+    console.log("  the chrome drawn, out of presentation mode: " + JSON.stringify(plain));
+    ok("the row page draws its crumb id and its version line",
+       plain[0] && plain[1] && (phone || plain.slice(2).every(Boolean)));
+    const crumbId = await evaljs(`document.querySelector(".crumbs .id").textContent`);
+    await evaljs(`window.wmPresent(true); true`);
+    ok("presentation mode draws no crumb id, no version line and no toolbar button",
+       JSON.parse(await evaljs(chrome)).every(shown => !shown));
+    const presented = await evaljs(`filmScreenText()`);
+    console.log("  the text in presentation mode: " + JSON.stringify(presented.slice(0, 240)));
+    ok("and a beat's text carries none of them",
+       !presented.includes(crumbId) && !/v\d+ · law r\d+/.test(presented) &&
+       !/● Record|▶ file|◷ Activity/.test(presented));
+    await evaljs(`window.wmPresent(false); true`);
+    ok("out of presentation mode they are drawn again",
+       JSON.stringify(JSON.parse(await evaljs(chrome))) === JSON.stringify(plain));
     await press(shutDoor);
     const saidWhy = `(${sheet}?.querySelector("[data-quest-refused]")?.textContent || "")`;
     await waitFor(`!!${saidWhy}`, "the refusal, in the quest's sheet", 15000,
