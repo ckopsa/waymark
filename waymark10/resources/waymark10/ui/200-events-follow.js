@@ -1915,6 +1915,11 @@ function replayGestureTarget(f) {
      quest was made from is a press on Not now */
   const sheet = $("dialog[open][data-quest-sheet]");
   if (sheet) {
+    /* one tap on Accept quest makes the quest and then pins it: a pin
+       refused under a sheet whose own create was made (replaySheetMade,
+       data-replay-accepted) is that same tap, pressed at the create */
+    if (f.type === "refusal" && f.action === "pin" &&
+        sheet.hasAttribute("data-replay-accepted")) return null;
     if (f.type === "refusal")
       return replaySheetRefused(f) ? sheet.querySelector("[data-quest-accept]") : null;
     if (f.type === "transition")

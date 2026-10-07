@@ -495,7 +495,10 @@
     (is (str/includes? body "dlg.questRefuse = refused;"))
     (is (str/includes? body "function replaySheetRefused(f) {"))
     (is (str/includes? body "sheet.questRefuse({title: f.title, detail: f.detail});"))
-    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-quest-accept]\") : null;"))))
+    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-quest-accept]\") : null;"))
+    ;; one tap makes the quest and then pins it: the refused pin of a
+    ;; sheet whose own create was made draws no second press
+    (is (str/includes? body "if (f.type === \"refusal\" && f.action === \"pin\" &&\n        sheet.hasAttribute(\"data-replay-accepted\")) return null;"))))
 
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
