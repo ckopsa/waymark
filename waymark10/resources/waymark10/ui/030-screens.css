@@ -93,10 +93,14 @@
      (200-events-follow.js) sets `present` on the root element; the
      crumb's row id and its separator, the version line, the grant chip
      and the header's developer buttons are then not drawn. Nothing
-     else is touched, so no surface the performer clicks moves ─────── */
+     else is touched, so no surface the performer clicks moves. The
+     recording chip is #recordbtn while a walk records (■ Stop 0:31),
+     and a demo engine's banner (its end and its export notices) is
+     true for the person who runs the engine and is not for a film ── */
   html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,
   html.present #grantchip, html.present #sharebtn, html.present #recordbtn,
   html.present #replaybtn, html.present #ledgertoggle { display: none !important; }
+  html.present #demobanner { display: none !important; }
 
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
