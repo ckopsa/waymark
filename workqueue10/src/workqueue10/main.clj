@@ -126,6 +126,7 @@
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.domains :as domains]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seed :as seed]
@@ -975,6 +976,8 @@
         _ (runner-links/ensure-providers! eng)
         ;; domain `factory`, once: every seat that names no domain is in it
         _ (domains/ensure-factory! eng)
+        ;; the demo scorecard's first rules, each made once by its name
+        _ (film-rules/ensure-seed-rules! eng)
         ;; the bridge of Gate's deprecation, and none of it on a demo
         ;; engine — see `gate-row-on-boot!`
         _ (gate-row-on-boot! eng

@@ -99,6 +99,9 @@
            ;; …and the recorded walk and its frames (§ 4), core's
            ;; beside the invitation
            :walk :walk_frame
+           ;; …and the film rule (demo scorecard), core's beside the
+           ;; walk a film is rendered from
+           :film_rule
            ;; …and the scheduled action
            ;; (docs/spec-scheduled-actions.md R-1), core's beside the
            ;; held call it carries a ref to
@@ -141,7 +144,7 @@
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :quest :secret}
+             :walkthrough :quest :secret :film_rule}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
