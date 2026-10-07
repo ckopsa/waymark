@@ -632,6 +632,10 @@ The key is for a POST on a COLLECTION. A safe GET on a ROW — a walk's
 `GET /api/walks/{id}/export` — does not belong under it or under a
 sibling key: a GET a reader may follow is a link, and it is advertised
 under the row's `links`, as the collection's `worksheet` download is.
+The walk declares it as `{:rel "export" :href "/api/walks/{id}/export"
+:states #{:sealed} :download true}`: a link's `:states` keeps it off a
+row in any other state, and the OpenAPI document lists a template link
+under the row's own address as a GET.
 
 ## 14 · `:process` — the workflow as a resource
 
