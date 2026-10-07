@@ -4063,6 +4063,66 @@ async function questPhoneStory() {
                   "the second task's row page again, with its shut Complete", 15000,
                   `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
     await sleep(600);
+    /* first, an Accept whose create is made and whose pin is refused
+       (ticket 9d1e2615). `pin` has one guard, the-owner-moves-it
+       (quests.clj), and it never refuses the hand that made the quest;
+       a refusal is recorded in the refused hand's own walk alone
+       (walks.clj, record-refused!). So the pin a recorder is refused is
+       refused by the quest's state: `pin` leaves active only. The page's
+       pin is held on its way out, priya abandons the quest over the API,
+       and the pin then goes. The sentence is said in the sheet and
+       Accept is disabled; the walk holds the `create` and the `refusal`. */
+    await press(shutDoor);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
+                  "the second task's sheet, with Accept offered, one short of the cap", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    await evaljs(`(() => {
+      const real = window.fetch;
+      window.__pin = {url: null, answer: null};
+      const go = new Promise(done => { window.__pinGo = done; });
+      window.fetch = async (u, o) => {
+        if (!String(u).includes("/-/pin")) return real(u, o);
+        window.__pin.url = String(u);
+        await go;
+        const res = await real(u, o);
+        window.__pin.answer = {status: res.status,
+                               body: await res.clone().json().catch(() => null)};
+        return res; };
+      window.__pinUnwatch = () => { window.fetch = real; };
+      return true; })()`);
+    await press(acceptIt);
+    await waitFor(`!!window.__pin.url`, "the page's pin, held on its way out", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const unpinned = new URL(await evaljs(`window.__pin.url`), BASE).pathname
+      .replace(/\/-\/pin$/, "");
+    ok("Accept makes the quest, active and not pinned yet",
+       (await get(unpinned)).state === "active" && (await pinned()).length === 0);
+    const gone = await post(unpinned + "/-/abandon", {}, h);
+    ok("priya abandons it elsewhere, under the open sheet",
+       gone.status < 400 && (await get(unpinned)).state === "abandoned");
+    await evaljs(`window.__pinGo(); true`);
+    await waitFor(`!!${saidWhy}`, "the refused pin, in the quest's sheet", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const pinSaid = await evaljs(saidWhy);
+    const pinAnswer = await evaljs(`window.__pin.answer`);
+    await evaljs(`window.__pinUnwatch(); true`);
+    console.log("  the refused pin: " + JSON.stringify([pinSaid, pinAnswer]));
+    ok("the pin of the made quest is refused",
+       !!pinAnswer && pinAnswer.status >= 400 && pinAnswer.status < 500);
+    ok("a refused pin says the engine's sentence in the sheet",
+       !!pinAnswer?.body?.title && pinSaid.includes(pinAnswer.body.title) &&
+       pinSaid.includes(pinAnswer.body.detail || ""));
+    ok("and Accept is disabled, in the sheet still open",
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
+    if (phone) await sheetFits("the sheet of the refused pin");
+    await shot(`${slug}-notyet-pin-refused`);
+    await sleep(600);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet of the refused pin to close, off Not now", 15000);
+    ok("the refused pin leaves no quest pinned", (await pinned()).length === 0);
+    await sleep(600);
     await press(shutDoor);
     await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
                   "the second task's sheet, with Accept offered", 15000,
@@ -4276,19 +4336,32 @@ async function questPhoneStory() {
     const sheets = await evaljs(`window.__sheets`);
     console.log("  the replay's sheets: " + JSON.stringify(sheets));
     ok("the replay opens the quest's sheet for each tap, with the recorded steps",
-       sheets.length === 3 && sheets.every(s => s.replay && s.steps.length > 0) &&
+       sheets.length === 4 && sheets.every(s => s.replay && s.steps.length > 0) &&
        sheets.slice(0, 2).every(s =>
          JSON.stringify(s.steps) === JSON.stringify(seen.steps)));
-    /* the third is the second task's: its Accept was refused at the cap,
-       and the film says so where the recording did (replaySheetRefused) */
+    /* the third is the second task's: its Accept made the quest and was
+       refused its pin. One tap is one press, at the create; the refused
+       pin draws none (replayGestureTarget), its sentence is said in the
+       sheet (replaySheetRefused), and the sheet closes off Not now */
+    ok("the replay says the refused pin in the sheet, with Accept disabled",
+       !!pinSaid && sheets[2]?.said === pinSaid && sheets[2]?.shut === true);
+    ok("and makes one press on Accept quest for the made create and its refused pin" +
+       (sheets[2]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[2]?.accepts === 1);
+    ok("and closes that sheet off Not now",
+       sheets[2]?.closed === true &&
+       beats.some(b => b.pressed && b.pressed.target === "sheet.decline" &&
+                       b.i > (beats.find(p => p.sheet && p.sheet.refused)?.i ?? Infinity)));
+    /* the fourth is the second task's again: its Accept was refused at
+       the cap, and the film says so where the recording did */
     ok("the replay says the refused Accept in the sheet, with Accept disabled",
-       /at most 20 active quests/.test(sheets[2]?.said || "") && sheets[2]?.shut === true);
+       /at most 20 active quests/.test(sheets[3]?.said || "") && sheets[3]?.shut === true);
     /* the quest made over the API under that sheet has the sheet's own
        goal and is not its Accept (replaySheetMade): the one press is
        the refused create's */
     ok("and makes one press on Accept quest for the refused Accept" +
-       (sheets[2]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
-       sheets[2]?.accepts === 1);
+       (sheets[3]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[3]?.accepts === 1);
     ok("and says no refusal in the sheets it was not said in",
        sheets.slice(0, 2).every(s => s.said === ""));
     ok("and closes each: off Not now, and off Accept quest",
