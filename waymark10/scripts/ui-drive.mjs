@@ -425,6 +425,16 @@ await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=re
 await waitFor(`document.querySelector("dialog[open] [data-draftnote]")?.textContent.includes("draft saved")`,
               "draft saved note");
 ok("the draft saved on blur through the draft sub-resource", true);
+/* the dialog of a drafted door shows the person no machinery */
+ok("the dialog shows no effort chip, fence, idempotency or blur words, and no 'server:' label",
+   await evaljs(`{ const d = document.querySelector("dialog[open]");
+     const t = d.innerText;
+     !d.querySelector(".effort-chip") &&
+     !document.querySelector("button[data-effort] .effort-chip") &&
+     !["fenced (If-Match)", "idempotency-key attached", "saved on blur", "server:"]
+       .some(s => t.includes(s)) &&
+     ![...d.querySelectorAll(".err.srv")]
+       .some(e => getComputedStyle(e, "::before").content.includes("server")) }`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
   .find(b => b.textContent === "Cancel").click(); true`);
 /* reopen: the half-written effort comes back from the server */

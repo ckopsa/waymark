@@ -28,9 +28,6 @@ function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
      title: entry.display?.description || ""},
     lbl || label(name, entry),
     entry.safety?.confirm ? " …" : "");
-  if (!small && entry.effort && entry.effort !== "assent")
-    btn.append(el("span", {class:"effort-chip",
-      title: `effort: ${entry.effort}`}, entry.effort));
   btn.addEventListener("click", () =>
     actionDialog({name, entry, doc, prefill, onDone}));
   return btn;
