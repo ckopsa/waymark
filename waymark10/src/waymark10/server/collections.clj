@@ -449,6 +449,26 @@
                                         :maxItems max-items})
         (update :required (fnil conj []) "ids"))))
 
+(defn collection-doors
+  "The kind's safe collection doors (:collection-doors) as the
+  collection document advertises them: name → method, href, input
+  schema and safety. `safe` says the door reads and writes nothing, so
+  whoever may read the kind may call it."
+  [rdef]
+  (let [base (str "/api/" (:plural rdef))]
+    (into {}
+          (map (fn [[dname door]]
+                 [dname
+                  (cond-> {:method "POST"
+                           :href (str base "/-/" (name dname))
+                           :input (if (:input door)
+                                    (schema/json-schema (:input door))
+                                    {:type "object" :properties {}})
+                           :safety {:safe true :idempotent true
+                                    :reversible true :confirm false}}
+                    (:summary door) (assoc :summary (:summary door)))]))
+          (:collection-doors rdef))))
+
 (defn- collection-actions [rdef]
   (let [base (str "/api/" (:plural rdef))
         model (or (:create-schema rdef) (:schema rdef))
@@ -485,7 +505,8 @@
       :query {:method "GET"
               :href base
               :input (query-input-schema rdef)}}
-     bulk-entries)))
+     bulk-entries
+     (collection-doors rdef))))
 
 (defn create-affordance
   "One kind's create door as its collection advertises it —
@@ -835,10 +856,12 @@
         acts (collection-actions rdef)
         ;; a scoped request's collection affordances: query stays (the
         ;; kind itself is granted or this envelope never rendered),
-        ;; create and bulk entries survive only when granted
+        ;; create and bulk entries survive only when granted, and a
+        ;; safe collection door stays as query does
         acts (if vis
                (into {} (filter (fn [[aname _]]
                                   (or (= :query aname)
+                                      (contains? (:collection-doors rdef) aname)
                                       ((:action? vis) (:kind rdef) aname))))
                      acts)
                acts)
