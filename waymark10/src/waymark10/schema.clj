@@ -269,6 +269,17 @@
                    :schema (m/form child options)}]))
         (m/children (schema form) options)))
 
+(defn map-form
+  "The :map form a field's schema holds: the form itself, or the map arm
+  of a :maybe or an :or (the published schema's oneOf); nil when the
+  field is no map."
+  [form]
+  (when (vector? form)
+    (case (first form)
+      :map form
+      (:maybe :or) (some map-form (filter vector? (rest form)))
+      nil)))
+
 (defn field-schema
   "The child schema form for one key of a :map schema, nil when the
   key is not declared. Unwraps :maybe."
