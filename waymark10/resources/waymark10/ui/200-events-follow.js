@@ -2403,45 +2403,6 @@ function filmPressed() {
     : null;
   return {label: filmText(e), target};
 }
-/* the open form: its row, its door and the fields that are lit */
-function filmDialog() {
-  const g = $("dialog[open][data-guided]");
-  if (!g) return null;
-  const key = g.getAttribute("data-guided") || "", cut = key.lastIndexOf(" ");
-  const lit = [...g.querySelectorAll("form .invited, form [data-typed]")]
-    .map(s => s.matches("[name]") ? s : s.querySelector("[name]"))
-    .map(n => n && n.getAttribute("name")).filter(Boolean);
-  return {self: key.slice(0, cut), action: key.slice(cut + 1), lit: [...new Set(lit)]};
-}
-/* the open quest's sheet (questSheet, 140-links-access.js), in its own
-   words. A step's label is its door and its row; the sheet draws no
-   state for a step, so `state` is null there. */
-function filmSheet() {
-  const s = $("dialog[open][data-quest-sheet]");
-  if (!s) return null;
-  const say = q => filmText(s.querySelector(q)) || null;
-  return {goal: say("[data-quest-sheet-goal]"),
-          steps: [...s.querySelectorAll("[data-quest-steps] > li")].map((li, n) => ({
-            n: n + 1,
-            label: [li.querySelector("b"), li.querySelector("b + span")]
-              .map(filmText).filter(Boolean).join(" "),
-            whose: filmText(li.querySelector("[data-quest-turn]")) || null,
-            state: li.getAttribute("data-quest-step")})),
-          shut_reason: (say("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,
-          refused: say("[data-quest-refused]")};
-}
-/* the tracker (questDraw, 120-nav-home.js), without its menu */
-function filmTracker() {
-  const bar = $("#questbar");
-  if (!bar || bar.hidden) return null;
-  const say = q => filmText(bar.querySelector(q)) || null;
-  return {title: say("[data-quest-title]") || say("[data-quest-complete] + .quest-line"),
-          next: say("[data-quest-note]"),
-          waiting_on: (say("[data-quest-waiting]") || "").replace(/^waiting on\s*/, "") || null,
-          progress: say("[data-quest-count]"),
-          text: [...bar.children].filter(c => !c.matches(".quest-menu"))
-            .map(filmText).filter(Boolean).join(" · ")};
-}
 /* the caption band's text when it is shown, or the caption drawn beside
    a field (filmBeside) */
 function filmCaption() {
@@ -2463,8 +2424,11 @@ function filmBeatSay() {
   if (!o || !film) return;
   const f = o.f, beat = {i: o.i, t: f.t == null ? null : f.t, type: f.type};
   for (const k of ["who", "self", "action", "kind"]) if (f[k] != null) beat[k] = f[k];
+  /* the form, the sheet and the tracker are read by the page's one
+     reader of its surfaces (readSurface, 100-core.js) */
   Object.assign(beat, {pressed: o.pressed, presses: o.presses, screen: hereHref() || null,
-                       dialog: filmDialog(), sheet: filmSheet(), tracker: filmTracker(),
+                       dialog: readSurface("dialog"), sheet: readSurface("sheet"),
+                       tracker: readSurface("tracker"),
                        caption: filmCaption(), refusal: filmRefusal()});
   (window.wmFilmBeats = window.wmFilmBeats || []).push(beat);
   document.dispatchEvent(new CustomEvent("waymark:film-beat", {detail: beat}));
