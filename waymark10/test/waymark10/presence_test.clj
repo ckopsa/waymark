@@ -1101,6 +1101,24 @@
             "removed at report time: never stored, so never notified")
         (is (not (str/includes? (pr-str @(:published reg)) "8675309")))))))
 
+(deftest a-secret-under-an-or-with-a-map-arm-is-a-secret-path
+  (let [paths (fn [form] (set (#'presence/secret-paths "" form)))
+        code [:code {:optional true :x-secret true} [:maybe [:string {:max 12}]]]]
+    (is (= #{"shelf.code"}
+           (paths [:map [:shelf [:or
+                                 [:string {:max 80}]
+                                 [:map [:label [:string {:max 80}]] code]]]])))
+    (is (= #{"shelves.code"}
+           (paths [:map [:shelves [:maybe [:vector [:or
+                                                    [:map code]
+                                                    [:string {:max 80}]]]]]]))
+        "a list's entries still share their map's path")
+    (is (= #{"pin"}
+           (paths [:map
+                   [:pin {:optional true :x-secret true} [:maybe [:string {:max 12}]]]
+                   [:shelf [:or [:string {:max 80}] [:map [:label [:string {:max 80}]]]]]]))
+        "a map arm with no secret adds no path")))
+
 (deftest ui-over-the-cap-elides-longest-first
   (with-ui-reg {}
     (fn [_eng reg]

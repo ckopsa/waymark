@@ -607,8 +607,8 @@ replay.
   reads what it showed. For each frame the replay steps to, the page
   dispatches a `waymark:film-beat` CustomEvent on `document`; its
   `detail` is the beat, and `window.wmFilmBeats` is the array of every
-  beat of the take, in order. This is the contract the renderer reads
-  (8c). Outside film mode nothing is dispatched. A beat is plain JSON:
+  beat of the take, in order. This is the contract the renderer (8c)
+  and the scorer read. Outside film mode nothing is dispatched. A beat is plain JSON:
   - `i` is the frame's index and `t` its own time. `type` is the
     frame's type. `who` (the cast id), `self`, `action` and `kind` are
     there when the frame has them.
@@ -640,6 +640,36 @@ replay.
     when no tracker shows. `text` is the whole bar without its menu.
   - `caption` is the caption band's text, or the caption beside a
     field, or null. `refusal` is the refusal line on screen, or null.
+  - `text` is the text a viewer could read: every run of text that is
+    drawn and in the viewport, in reading order, cut at 2048
+    characters. An open modal's text comes first, because it is drawn
+    over the page; the page's follows. A field's value is not in it,
+    and the secret dialog gives its heading and its buttons only.
+  - `viewport` is `{w, h}`. Every rect and position in a beat is in
+    CSS pixels of the viewport, rounded.
+  - `boxes` lists every named surface in the viewport (8a) as
+    `{name, rect}`, where `rect` is its client rect `{x, y, w, h}`.
+  - `focus` is the surface the beat is about, as `{name, rect, text}`,
+    or null. It is the pressed element's surface while that element is
+    still drawn and no modal has opened over it; a pressed element
+    with no surface around it is named by the press's `target`.
+    Otherwise it is the open sheet (`sheet`), then the open form
+    (`dialog`), then the tracker (`tracker`) when it differs from the
+    beat before. So the beat of a press that opened the sheet has
+    `focus.name` = `sheet`. `text` is the focus's readable text, cut at
+    1024 characters.
+  - `type_px` is the computed font size of the largest run of the
+    focus text. `contrast` is that run's WCAG contrast ratio, to two
+    places, against the background colours drawn behind it: its own
+    and its ancestors', to the first opaque one, over white where
+    there is none. A background image is not read. Both are null when
+    the focus has no readable text, and `contrast` is null for a colour
+    the page cannot read as sRGB.
+  - `pointer` is where the replay pointer is drawn, as `{x, y}`, or
+    null when there is none.
+
+  A beat stays under about 8 KB: `text` is cut first, then the focus's
+  text, then `boxes` from its end.
 
   Every value but the frame's own (`i` to `kind`) is read from the page
   as drawn, in its visible words. The press is read as the frame is
