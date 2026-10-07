@@ -569,3 +569,12 @@
     (testing "a replay presses it for the quest's create, and walks to no quest row"
       (is (str/includes? page "return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);"))
       (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))
+
+(deftest the-lite-dialog-shows-no-machinery
+  ;; ui_lite.html is one file, not assembled, and the bench check skips
+  ;; it: the four internal strings ticket 78effb3b took out of its
+  ;; action dialog stay out only while this reads the file
+  (let [lite (slurp (io/resource "waymark10/ui_lite.html"))]
+    (doseq [s ["fenced (If-Match)" "idempotency-key attached"
+               "saved on blur" "server: "]]
+      (is (not (str/includes? lite s)) s))))
