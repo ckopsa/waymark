@@ -4012,12 +4012,11 @@ async function questPhoneStory() {
     await waitFor(`!!document.querySelector("table.kv [data-quest-row]")`,
                   "the goal row in the quest's data table", 15000,
                   `document.body.innerText.slice(-400)`);
-    /* the whole page is the view and the tracker: the shell's ticker
-       under them names the last event on any row, on every screen. A
-       miss says the text the path was read in */
+    /* the whole page, the shell's ticker included: it names the last
+       event's row in words, with the path as href and title (ticket
+       14b91354). A miss says the text the path was read in */
     const paths = JSON.parse(await evaljs(`JSON.stringify(
-      (document.querySelector("#view").innerText + "\\n" + ${bar}.innerText)
-        .match(/.{0,60}\\/api\\/.{0,60}/g) || [])`));
+      document.body.innerText.match(/.{0,60}\\/api\\/.{0,60}/g) || [])`));
     ok("the quest's whole page shows no row path as text" +
        (paths.length ? ": " + JSON.stringify(paths) : ""), !paths.length);
     await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);

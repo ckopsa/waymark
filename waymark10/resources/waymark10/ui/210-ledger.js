@@ -151,12 +151,17 @@ function scopeHit(t) {
                          (t.self || "").startsWith(SCOPE.self + "/"))) ||
          (SCOPE.kind && t.kind === SCOPE.kind);
 }
+/* the row is named in words: its summary where the event carries one,
+   its kind and states as the ledger row otherwise. The path is the
+   link's href and title, never its text */
 function tickerLine(t) {
+  const moved = (t.kind || "") + " " + (t.from || "·") + " → " + (t.to || "·");
+  const link = words =>
+    el("a", {href: "#" + t.self, title: t.self || ""}, words);
   $("#ticker").replaceChildren(
     el("span", {}, (t.at || "").slice(11, 19) + " · ",
       el("b", {}, ((t.actor || {}).id || "?")), " ", t.action || "", " · ",
-      t.kind || "", " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
-      el("a", {href: "#" + t.self, class: "mono"}, t.self || "")));
+      ...(t.summary ? [moved, " · ", link(t.summary)] : [link(moved)])));
 }
 
 const seen = new Set();  // dedupe — at-least-once delivery
