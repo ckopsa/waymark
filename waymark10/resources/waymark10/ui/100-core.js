@@ -70,6 +70,22 @@ const pretty = s => String(s).replace(/_/g, " ");
    own words do (need-words, quests.clj) */
 const prettyNeed = s => pretty(String(s).split(".").pop());
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
+/* a ticket title's '[epic] ' marker (`epic?`, factory10's ticket.clj),
+   at the head of a string or after a space in it: it is drawn in a span
+   of its own, so presentation mode (030-screens.css) hides the marker
+   and nothing else. An option and a textarea hold text only. */
+const EPIC_MARK = "[epic] ";
+const textNodes = (tag, s) => {
+  s = String(s);
+  const m = tag === "option" || tag === "textarea" ? null : /(^|\s)\[epic\] /.exec(s);
+  if (!m) return [document.createTextNode(s)];
+  const at = m.index + m[1].length;
+  const mark = document.createElement("span");
+  mark.className = "epicmark";
+  mark.textContent = EPIC_MARK;
+  return [document.createTextNode(s.slice(0, at)), mark,
+          document.createTextNode(s.slice(at + EPIC_MARK.length))];
+};
 const el = (tag, attrs={}, ...kids) => {
   const n = document.createElement(tag);
   for (const [k,v] of Object.entries(attrs)) {
@@ -77,7 +93,7 @@ const el = (tag, attrs={}, ...kids) => {
     else if (v !== undefined && v !== null) n.setAttribute(k, v);
   }
   for (const kid of kids.flat(Infinity)) if (kid != null)
-    n.append(kid.nodeType ? kid : document.createTextNode(kid));
+    n.append(...(kid.nodeType ? [kid] : textNodes(tag, kid)));
   return n;
 };
 

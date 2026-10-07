@@ -924,6 +924,11 @@
       (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
       (is (str/includes? body "function recordChip() {\n  const b = $(\"#recordbtn\");"))
       (is (str/includes? body "b.textContent = `■ Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, \"0\")}`;")))
+    (testing "a ticket title's '[epic] ' marker is not drawn, and is drawn out of the mode"
+      (is (str/includes? body "html.present .epicmark { display: none !important; }"))
+      (is (str/includes? body "mark.className = \"epicmark\";"))
+      (is (= #{"html.present .epicmark"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?\.epicmark)\s*\{" body))))))
     (testing "and out of presentation mode both are drawn"
       ;; nothing but the banner's own [hidden], film mode and the
       ;; `present` class takes either away

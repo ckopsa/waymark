@@ -108,6 +108,9 @@
      shut. The dev principal box (#who) stays */
   html.present #lawstamp, html.present #signedin, html.present #ticker,
   html.present details.rowdata, html.present .blockedwhy { display: none !important; }
+  /* a ticket title's '[epic] ' marker (el, 100-core.js) is the tracker's
+     own word and is not for a film; the stored title keeps it */
+  html.present .epicmark { display: none !important; }
 
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;

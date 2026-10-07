@@ -125,9 +125,9 @@ The seed is a cast and an ordered list of steps:
 
 ```clojure
 {:seed "demo" :version 1
- :cast  {:ada  {:id "ada"  :display "Ada Example" :type :human
+ :cast  {:ada  {:id "ada"  :display "Maya Okafor" :type :human
                 :household "Harbour House"}
-         :plan {:id "plan" :display "Planner"     :type :agent
+         :plan {:id "plan" :display "Juniper"     :type :agent
                 :household "Harbour House" :acts-for :ada}}
  :steps [{:as :ada  :kind :ticket :create {:title "…"} :ref :t1}
          {:as :ada  :kind :ticket :on :t1 :action "groom"}
@@ -274,7 +274,7 @@ grant (section 1's file: `:ada-grant` admits `complete` and `restate`,
 quest the sign-in has a second step: as Ada, open the grant whose
 audience is Ada and press "act under this grant". The UI then sends its
 id as `X-Waymark-Grant` on every request and shows the grant chip, the
-deferred child reads no `resume` door, and the step waits on Planner.
+deferred child reads no `resume` door, and the step waits on Juniper.
 
 The engine does not put the grant on by itself. A worn grant narrows
 the whole session to its scope, and Ada's other films need what it
