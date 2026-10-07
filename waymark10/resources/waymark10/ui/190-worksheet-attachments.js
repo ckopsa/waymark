@@ -153,11 +153,13 @@ async function uploadDialog({entry, doc, prefill, onDone}) {
   const props = entry.input?.properties || {};
   const mediaField = "media_type" in props ? "media_type"
                    : "mime" in props ? "mime" : null;
-  const file = el("input", {type:"file", id:"f_file"});
-  const preview = el("div", {class:"muted mono", style:"margin:6px 0"},
+  const file = el("input", {type:"file", id:"f_file", "data-surface": "upload.file"});
+  const preview = el("div", {class:"muted mono", style:"margin:6px 0",
+                             "data-upload-chosen": ""},
     "no file chosen");
-  const errBox = el("div", {});
-  const upBtn = el("button", {class:"primary", disabled:"true"}, "Upload");
+  const errBox = el("div", {"data-surface": "refusal"});
+  const upBtn = el("button", {class:"primary", disabled:"true",
+                              "data-surface": "upload.submit"}, "Upload");
   let chosen = null, reservedId = null, reservedBody = null;
   file.addEventListener("change", () => {
     chosen = file.files && file.files[0];
@@ -188,7 +190,8 @@ async function uploadDialog({entry, doc, prefill, onDone}) {
         file, preview),
       extraForm, errBox),
     el("div", {class:"dlgfoot"},
-      el("button", {onclick: () => { dlg.close(); dlg.remove();
+      el("button", {"data-surface": "upload.cancel",
+                    onclick: () => { dlg.close(); dlg.remove();
                                      if (reservedId) render(); }}, "Cancel"),
       upBtn));
   upBtn.addEventListener("click", async () => {

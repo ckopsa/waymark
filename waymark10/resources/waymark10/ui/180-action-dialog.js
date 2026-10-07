@@ -898,7 +898,8 @@ function reportDialog(report) {
                 el("td", {class:"reason"}, r.reason || "")))))
         : el("p", {class: "validok"}, "every row succeeded")),
     el("div", {class: "dlgfoot"},
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
+      el("button", {"data-surface": "report.close",
+                    onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
 }

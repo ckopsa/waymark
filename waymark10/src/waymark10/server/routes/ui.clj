@@ -124,6 +124,10 @@
     :is "The Access tab in the navigation bar."}
    {:name "nav-more"
     :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
+   {:name "nav-jump"
+    :is "The ⋯ menu's 'Jump to a kind…' line, which opens the jump box."}
+   {:name "nav-shell"
+    :is "The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell."}
    {:name "row"
     :is "One row of a collection's table; data-self carries its address."}
    {:name "door:<action>"
@@ -150,10 +154,24 @@
     :is "The form's Stop button in a led walk."}
    {:name "secret"
     :is "The dialog that shows a secret one time, with its Copy button."}
+   {:name "secret.copy"
+    :is "The secret dialog's first Copy button."}
+   {:name "secret.copy-other"
+    :is "The secret dialog's second copy button, where the dialog has one."}
+   {:name "secret.close"
+    :is "The secret dialog's Done button, which closes it."}
    {:name "report"
     :is "The dialog that reports a bulk action's verdicts."}
+   {:name "report.close"
+    :is "The report dialog's Close button."}
    {:name "upload"
     :is "The dialog that uploads a file as an attachment."}
+   {:name "upload.file"
+    :is "The upload dialog's file input."}
+   {:name "upload.submit"
+    :is "The upload dialog's Upload button, shut until a file is chosen."}
+   {:name "upload.cancel"
+    :is "The upload dialog's Cancel button."}
    {:name "sheet"
     :is "The quest sheet a tap on a dotted button opens."}
    {:name "sheet.step:<n>"
