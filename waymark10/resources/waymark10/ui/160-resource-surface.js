@@ -161,7 +161,11 @@ async function renderResource(view, doc, hints) {
   }
   panel.append(bar);
   const notes = blockedNotes(blocked, doc);
-  if (notes) panel.append(notes);
+  /* a kind whose law marks everyday doors folds the other shut ones,
+     and the reasons with them, under one line (foldDoors) */
+  const more = foldDoors(bar, notes, doc);
+  if (more) panel.append(more);
+  else if (notes) panel.append(notes);
 
   /* the data document: fields a parts group re-renders (with buttons)
      leave the kv table */

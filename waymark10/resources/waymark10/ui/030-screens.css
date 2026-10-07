@@ -206,6 +206,10 @@
     dialog[data-quest-sheet] .dlgfoot button {
       min-height: 44px; font-size: 14px; padding: 8px 14px; }
   }
+  /* the shut doors that are not everyday ones, under one line (foldDoors) */
+  details.moredoors { margin: 4px 0; }
+  details.moredoors > summary { cursor: pointer; padding: 6px 0; }
+  details.moredoors > .actions { margin-top: 4px; }
   .blockedwhy { margin: 2px 0 4px; }
   .blockedwhy .item { font-size: 13px; padding: 3px 0; }
   .blockedwhy .item b { font-weight: 700; }

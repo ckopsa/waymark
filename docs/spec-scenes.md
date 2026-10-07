@@ -100,6 +100,11 @@ whole name such as `dialog.submit`, or a stem completed, such as
 - `nav.<kind>`: the kind is one this engine serves.
 - `door:<action>` and `door-shut:<action>`: where the row's kind is
   known, the action is a door of it.
+- `doors-more`: the 'More doors (n)' line of a row whose kind marks
+  everyday doors. A shut door that is not an everyday one, and is not
+  the pinned quest's goal or next step, is drawn under that line and
+  keeps its name. A scene that taps such a door taps `doors-more`
+  first, as a person would.
 
 `$name` reads a name bound earlier: by a call's `bind`, or by a shot's
 `bind`. A name bound by a call that names a `kind`, or by an `open`,

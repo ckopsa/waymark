@@ -591,6 +591,14 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the doors the law marks everyday.
+                                           ;; A shut door's entry carries no
+                                           ;; :display, so the page reads the
+                                           ;; marks here. Absent when none is
+                                           ;; marked: that kind's wire is as
+                                           ;; it was
+                                           (seq (res/everyday-doors r))
+                                           (assoc :everyday (res/everyday-doors r))
                                            ;; a decision kind advertises
                                            ;; itself, and the field its
                                            ;; requester is stamped into
