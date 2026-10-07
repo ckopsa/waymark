@@ -2439,7 +2439,10 @@ const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || 
    (filmPoints), each for what is drawn over it (filmCovered), and a run
    is left out when more than half of the points asked for its lines
    are covered: a run mostly covered is not listed, and a run half
-   covered or less is listed whole. The secret dialog says its
+   covered or less is listed whole. Where filmClip says to ask the page
+   (`ask`), a point the page does not answer the run's element at is
+   clipped away and is not counted, and a run with no point left is
+   left out. The secret dialog says its
    heading and its buttons and nothing else, as readSurface does: a beat
    is kept. */
 /* the part of the viewport `p`'s text can be drawn in, as {left, top,
@@ -2447,19 +2450,34 @@ const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || 
    each ancestor that clips (`overflow` other than visible), on the axis
    it clips. An ancestor clips a positioned box only when it holds it:
    none clips a fixed box, and one with no position does not clip an
-   absolute one. A transform and a `clip-path` are not read. */
+   absolute one. `ask` is true when a box cannot say the clip: `p` or an
+   ancestor has a `clip-path`, or an ancestor that clips is transformed,
+   itself or by one above it. That ancestor's box is then not applied,
+   and filmRuns asks the page at each point instead. */
 function filmClip(p) {
-  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
-  let out = null;
+  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight, ask: false};
+  const up = [];
   for (let a = p; a && a !== document.body && a !== document.documentElement;
-       a = a.parentElement) {
+       a = a.parentElement) up.push({a, cs: getComputedStyle(a)});
+  /* from the top down: whether the box or one above it is transformed */
+  let turned = false;
+  for (const u of [...up].reverse()) {
+    turned = u.turned = turned ||
+      [u.cs.transform, u.cs.rotate, u.cs.scale, u.cs.translate].some(v => v && v !== "none");
+    if (u.cs.clipPath && u.cs.clipPath !== "none") c.ask = true;
+  }
+  let out = null;
+  for (const {a, cs, turned} of up) {
     if (out === "fixed") break;
-    const cs = getComputedStyle(a);
     if (out === "absolute" && cs.position === "static") continue;
     out = cs.position === "absolute" || cs.position === "fixed" ? cs.position : null;
     /* a box that `overflow` does not apply to clips nothing */
     if (!(a instanceof HTMLElement) ||
         /^(inline|contents|table-(row|column|header|footer).*)$/.test(cs.display)) continue;
+    if (turned && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
+      c.ask = true;
+      continue;
+    }
     const b = a.getBoundingClientRect(), l = b.left + a.clientLeft, t = b.top + a.clientTop;
     if (cs.overflowX !== "visible") {
       c.left = Math.max(c.left, l);
@@ -2535,7 +2553,7 @@ function filmCovered(p, q, stack) {
   return !(q.h.matches("dialog") && !within(q.h));
 }
 function filmRuns(root, skip) {
-  const found = [], range = document.createRange();
+  const found = [], range = document.createRange(), front = filmFront();
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = w.nextNode(); n; n = w.nextNode()) {
     const p = n.parentElement, s = n.textContent.replace(/\s+/g, " ").trim();
@@ -2554,13 +2572,18 @@ function filmRuns(root, skip) {
     if (!pts.length) continue;
     if (document.elementFromPoint)
       for (const q of pts) q.h = document.elementFromPoint(q.x, q.y);
-    found.push({s, p, pts});
+    /* the page answers no inert element at a point: one under an open
+       modal, or under `inert`, is not asked this way */
+    const ask = c.ask && !(front && !front.contains(p)) && !p.closest("[inert]");
+    found.push({s, p, pts, ask});
   }
   const stacks = filmAllTake(() =>
     found.map(f => f.pts.map(q => document.elementsFromPoint(q.x, q.y))));
   return found.filter((f, i) => {
-    const covered = f.pts.filter((q, j) => filmCovered(f.p, q, stacks ? stacks[i][j] : []));
-    return covered.length * 2 <= f.pts.length;
+    const at = f.pts.map((q, j) => ({q, stack: stacks ? stacks[i][j] : []}));
+    const seen = f.ask && stacks ? at.filter(a => a.stack.includes(f.p)) : at;
+    const covered = seen.filter(a => filmCovered(f.p, a.q, a.stack));
+    return seen.length > 0 && covered.length * 2 <= seen.length;
   }).map(({s, p}) => ({s, p}));
 }
 const filmRunsText = (runs, max) => runs.map(r => r.s).join(" ").slice(0, max);
