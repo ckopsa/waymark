@@ -601,16 +601,22 @@ columns drop the `default` the parent will not apply.
 ```clojure
 :collection-doors
 {:judge {:summary "Score a take against the active rules. It reads the rules and writes nothing."
-         :input [:map [:take [:map …]]]}}
+         :input [:map [:take [:map …]]]
+         :handler (fn [engine body ctx] …)}}
 ```
 
-A `{name {:input <malli> :summary "…"}}` map: each entry is
+A `{name {:input <malli> :summary "…" :handler <fn>}}` map: each entry is
 `POST /api/{plural}/-/{name}`, a route that moves no row and writes
 nothing. It is not an action: it has no `:from`, no `:to`, no guards and
 no log entry, and whoever may read the kind may call it — a scoped grant
-keeps it as it keeps `query`. The key is the ADVERTISEMENT only; the
-route itself is core's own handler. It is never in the fingerprint
-(`:computed`'s precedent). The one kind that declares it today is
+keeps it as it keeps `query`. The key is the advertisement AND the
+mount: the router serves every declared door at
+`/api/{plural}/-/{name}` — kind check, body read,
+`collections/door-errors`, then the entry's `:handler`, a
+`(fn [engine body ctx])` whose answer is the JSON body and whose `ctx`
+carries the caller's `:visibility` and `:principal`. The declaration
+checker refuses an entry with no `:handler`. It is never in the
+fingerprint (`:computed`'s precedent). The one kind that declares it today is
 `film_rule` (`judge`, [spec](spec-agent-demo-walks.md) § 8d).
 
 The collection document names each door under `actions`, beside `create`,

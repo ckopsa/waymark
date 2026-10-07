@@ -3452,16 +3452,17 @@ A kind's doors were all moves: an action takes a row from one state to
 another, and `create` and the bulk entries do the same from the
 collection. `film_rule`'s `judge` is none of these. It scores a take
 against the active rules and writes nothing, so it has no `:from`, no
-`:to`, no guards and no log entry, and core serves it as a route of its
-own (`POST /api/film_rules/-/judge`). A route no document names is a
+`:to`, no guards and no log entry, and the router mounts it from the
+declaration (`POST /api/film_rules/-/judge`): kind check, body read,
+`collections/door-errors`, then the entry's `:handler`. A route no document names is a
 route a client must construct, which client rule 1 forbids. So the kind
-declares it under `:collection-doors`, a `{name {:input … :summary …}}`
-map, and the collection document names each entry under `actions` with
+declares it under `:collection-doors`, a `{name {:input … :summary …
+:handler …}}` map, and the collection document names each entry under `actions` with
 `safety {safe: true, idempotent: true, reversible: true, confirm:
 false}` and NO `effect`. `safety.safe` is the mark a reader keys on: the
 door moves no row, and whoever may read the kind may call it, so a
 scoped grant keeps it as it keeps `query`. The key is the advertisement
-only and is never in the fingerprint. The OpenAPI document lists the
+and the mount, and is never in the fingerprint. The OpenAPI document lists the
 route, the connector's `waymark_invoke` with no id calls it, and the
 generic UI offers no button for it, because its answer is a verdict and
 not an envelope. The CLI prints the entry flagged `[safe]` with no
