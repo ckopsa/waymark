@@ -101,9 +101,10 @@ function surfaceNode(name) {
    its visible text: null when it is not on the screen. The sheet, the
    tracker and the dialog answer the parts a film beat names, and the
    beat reads them here (filmBeatSay, 200-events-follow.js); so do the
-   secret, report and upload dialogs; a caption and a refusal answer
-   their line; any other answers its text and whether it can be
-   pressed. The secret dialog never answers the secret: a beat is kept. */
+   secret, report and upload dialogs, and the jump box; a caption and a
+   refusal answer their line; any other answers its text and whether it
+   can be pressed. The secret dialog never answers the secret: a beat
+   is kept. */
 function readSurface(name) {
   const e = surfaceNode(name);
   if (!e || !e.getClientRects().length) return null;
@@ -151,6 +152,20 @@ function readSurface(name) {
     return {file: text("[data-upload-chosen]"),
             ready: !e.querySelector('[data-surface="upload.submit"]')?.disabled,
             refused: text('[data-surface="refusal"]')};
+  /* the jump box (jumpRow, 125-palette.js): what is typed, and the
+     lines as drawn. A line's `name` is jump.line, or jump.home for the
+     line that goes home, which has no `row`. */
+  if (base === "jump") {
+    const lines = [...e.querySelectorAll('[role="option"]')].map(li =>
+      ({name: li.getAttribute("data-surface"),
+        row: li.getAttribute("data-row"),
+        label: text("span", li), where: text(".jump-where", li),
+        selected: li.getAttribute("aria-selected") === "true"}));
+    return {query: e.querySelector('[data-surface="jump.query"]')?.value || "",
+            lines, selected: lines.find(l => l.selected) || null};
+  }
+  /* an input's value is not its textContent */
+  if (base === "jump.query") return {text: e.value, disabled: !!e.disabled};
   if (base === "caption" || base === "refusal") return text();
   return {text: text(),
           disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};
