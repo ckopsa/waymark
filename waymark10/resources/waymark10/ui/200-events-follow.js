@@ -2159,6 +2159,8 @@ function replayStep() {
      the presses made on the way to the frame (filmPress) */
   const owed = film ? {i: r.at, f: r.frames[r.at], pressed: filmPressed()} : null;
   if (owed) {
+    /* the pressed element itself, for the beat's focus (filmFocus) */
+    owed.at = $("[data-replay-press]");
     filmPress(owed.pressed);
     owed.presses = filmPresses;
     filmPresses = [];
@@ -2418,6 +2420,126 @@ function filmRefusal() {
     filmText($("dialog[open] [data-quest-refused]")) ||
     (band && band.textContent.split("\n").find(l => l.startsWith("Refused: "))) || null;
 }
+/* ── what a viewer could read, and where things are (§8b): the part of a
+   beat a scorer that cannot see pixels measures. All of it is read from
+   the page as drawn, in CSS pixels of the viewport. ──────────────────── */
+const FILM_TEXT_MAX = 2048, FILM_FOCUS_TEXT_MAX = 1024, FILM_BEAT_MAX = 8000;
+const filmRect = b => ({x: Math.round(b.left), y: Math.round(b.top),
+                        w: Math.round(b.width), h: Math.round(b.height)});
+const filmOnScreen = b => b.width > 0 && b.height > 0 && b.right > 0 && b.bottom > 0 &&
+  b.left < innerWidth && b.top < innerHeight;
+/* the modal drawn over the page, or null */
+const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || null;
+/* the runs of text under `root` a viewer could read, in document order,
+   each as {s, p}: its words and the element that draws them. A run is
+   left out when it is not drawn or not in the viewport, when it is under
+   `skip`, and when it is a field's value. The secret dialog says its
+   heading and its buttons and nothing else, as readSurface does: a beat
+   is kept. */
+function filmRuns(root, skip) {
+  const runs = [], range = document.createRange();
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    const p = n.parentElement, s = n.textContent.replace(/\s+/g, " ").trim();
+    if (!s || !p || (skip && skip.contains(p))) continue;
+    if (p.closest("script, style, template, textarea, [aria-hidden='true']")) continue;
+    if (p.closest("[data-secret]") && !p.closest("h3, button")) continue;
+    if (p.checkVisibility ? !p.checkVisibility({visibilityProperty: true})
+                          : !p.getClientRects().length) continue;
+    range.selectNodeContents(n);
+    if (!filmOnScreen(range.getBoundingClientRect())) continue;
+    runs.push({s, p});
+  }
+  return runs;
+}
+const filmRunsText = (runs, max) => runs.map(r => r.s).join(" ").slice(0, max);
+/* the screen's text in reading order: the modal's first, since it is
+   drawn over the page, then the page's */
+function filmScreenText() {
+  const front = filmFront();
+  return filmRunsText(front ? [...filmRuns(front), ...filmRuns(document.body, front)]
+                            : filmRuns(document.body), FILM_TEXT_MAX);
+}
+/* every named surface in the viewport (surfaceNode, 100-core.js), as
+   {name, rect} */
+function filmBoxes() {
+  const out = [];
+  for (const e of document.querySelectorAll("[data-surface]")) {
+    const b = e.getBoundingClientRect();
+    if (filmOnScreen(b)) out.push({name: e.dataset.surface, rect: filmRect(b)});
+  }
+  return out;
+}
+/* the surface the beat is about, as {name, node}, or null: the pressed
+   element's surface while it is still drawn and no modal has opened over
+   it; otherwise the open sheet, then the open form, then the tracker
+   when it is not as the beat before said it */
+function filmFocus(o, beat) {
+  const front = filmFront(), at = o.at && o.at.isConnected ? o.at : null;
+  if (at && filmOnScreen(at.getBoundingClientRect()) && (!front || front.contains(at))) {
+    const node = at.closest("[data-surface]") || at;
+    return {name: node.dataset.surface || (o.pressed && o.pressed.target) || null, node};
+  }
+  const was = (window.wmFilmBeats || []).slice(-1)[0];
+  const name = beat.sheet ? "sheet" : beat.dialog ? "dialog"
+    : beat.tracker && JSON.stringify(beat.tracker) !== JSON.stringify(was ? was.tracker : null)
+      ? "tracker" : null;
+  const node = name && surfaceNode(name);
+  return node ? {name, node} : null;
+}
+/* a computed colour as [r, g, b, a], or null for one this does not read */
+function filmRgba(c) {
+  const m = /^(rgba?\(|color\(srgb )/.exec(String(c));
+  const v = m && String(c).match(/[\d.]+/g).map(Number);
+  if (!v || v.length < 3) return null;
+  const k = m[1].startsWith("color") ? 255 : 1;
+  return [v[0] * k, v[1] * k, v[2] * k, v[3] == null ? 1 : v[3]];
+}
+/* the WCAG contrast ratio of `e`'s text against the background colours
+   drawn behind it: its own and its ancestors', to the first opaque one,
+   over white where none is. A background image is not read. */
+function filmContrast(e) {
+  const fg = filmRgba(getComputedStyle(e).color), layers = [];
+  if (!fg) return null;
+  for (let n = e; n; n = n.parentElement) {
+    const c = filmRgba(getComputedStyle(n).backgroundColor);
+    if (!c) return null;
+    if (c[3] > 0) layers.push(c);
+    if (c[3] >= 1) break;
+  }
+  const over = (top, under) => under.map((u, i) => top[i] * top[3] + u * (1 - top[3]));
+  const bg = layers.reverse().reduce((under, l) => over(l, under), [255, 255, 255]);
+  const lum = c => {
+    const [r, g, b] = c.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const a = lum(over(fg, bg)), b = lum(bg);
+  return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100;
+}
+/* the measurements of a beat: `text`, `viewport`, `boxes`, `focus`,
+   `type_px`, `contrast` and `pointer`. The beat stays under about
+   FILM_BEAT_MAX: `text` is cut first, then the focus text, then boxes. */
+function filmMeasure(o, beat) {
+  const focus = filmFocus(o, beat), runs = focus ? filmRuns(focus.node) : [];
+  let big = null;
+  for (const r of runs) {
+    const px = parseFloat(getComputedStyle(r.p).fontSize);
+    if (!big || px > big.px) big = {px, p: r.p};
+  }
+  const p = $("#replaypointer"), pb = p && p.getBoundingClientRect();
+  Object.assign(beat, {
+    text: filmScreenText(), viewport: {w: innerWidth, h: innerHeight}, boxes: filmBoxes(),
+    focus: focus ? {name: focus.name, rect: filmRect(focus.node.getBoundingClientRect()),
+                    text: filmRunsText(runs, FILM_FOCUS_TEXT_MAX)} : null,
+    type_px: big ? big.px : null, contrast: big ? filmContrast(big.p) : null,
+    pointer: pb ? {x: Math.round(pb.left), y: Math.round(pb.top)} : null});
+  const over = () => JSON.stringify(beat).length - FILM_BEAT_MAX;
+  let n = over();
+  if (n > 0) beat.text = beat.text.slice(0, Math.max(0, beat.text.length - n));
+  if (beat.focus && (n = over()) > 0)
+    beat.focus.text = beat.focus.text.slice(0, Math.max(0, beat.focus.text.length - n));
+  while (beat.boxes.length && over() > 0) beat.boxes.pop();
+}
 function filmBeatSay() {
   const o = filmBeatOwed;
   filmBeatOwed = null;
@@ -2430,6 +2552,7 @@ function filmBeatSay() {
                        dialog: readSurface("dialog"), sheet: readSurface("sheet"),
                        tracker: readSurface("tracker"),
                        caption: filmCaption(), refusal: filmRefusal()});
+  filmMeasure(o, beat);
   (window.wmFilmBeats = window.wmFilmBeats || []).push(beat);
   document.dispatchEvent(new CustomEvent("waymark:film-beat", {detail: beat}));
 }
