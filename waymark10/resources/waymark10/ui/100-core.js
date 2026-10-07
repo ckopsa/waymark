@@ -95,33 +95,45 @@ function surfaceNode(name) {
 }
 /* what a surface shows now, read from the page as drawn and said in
    its visible text: null when it is not on the screen. The sheet, the
-   tracker and the dialog answer the parts a film beat names; a caption
+   tracker and the dialog answer the parts a film beat names, and the
+   beat reads them here (filmBeatSay, 200-events-follow.js); a caption
    and a refusal answer their line; any other answers its text and
    whether it can be pressed. */
 function readSurface(name) {
   const e = surfaceNode(name);
   if (!e || !e.getClientRects().length) return null;
-  const text = (q, of = e) => {
-    const k = q ? of.querySelector(q) : of;
-    return k ? k.textContent.trim() || null : null;
-  };
+  const flat = k => k ? k.textContent.replace(/\s+/g, " ").trim() || null : null;
+  const text = (q, of = e) => flat(q ? of.querySelector(q) : of);
   const base = String(name).split("@")[0];
+  /* the sheet (questSheet, 140-links-access.js). A step's label is its
+     door and its row, or the row's path where the sheet could not name
+     it; the sheet draws no state for a step, so `state` is null. */
   if (base === "sheet")
     return {goal: text("[data-quest-sheet-goal]"),
             steps: [...e.querySelectorAll('[data-surface^="sheet.step:"]')].map((li, i) =>
               ({n: i + 1,
-                label: [text("b", li), text("[data-quest-row]", li)].filter(Boolean).join(" "),
+                label: [text("b", li), text("b + span", li)].filter(Boolean).join(" "),
                 whose: text("[data-quest-turn]", li),
                 state: li.getAttribute("data-quest-step")})),
             shut_reason: (text("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,
             refused: text("[data-quest-refused]")};
+  /* the tracker (questDraw, 120-nav-home.js); `text` is the whole bar
+     without its menu */
   if (base === "tracker")
-    return {title: text("[data-quest-title]"), next: text("[data-quest-note]"),
-            waiting_on: text("[data-quest-waiting]"),
-            progress: text("[data-quest-count]"), text: text()};
+    return {title: text("[data-quest-title]") || text("[data-quest-complete] + .quest-line"),
+            next: text("[data-quest-note]"),
+            waiting_on: (text("[data-quest-waiting]") || "").replace(/^waiting on\s*/, "") || null,
+            progress: text("[data-quest-count]"),
+            text: [...e.children].filter(c => !c.matches(".quest-menu"))
+              .map(flat).filter(Boolean).join(" · ")};
+  /* the open form. A lit field is lit on its label, or on what holds
+     it (markInvited and markTyped, 180-action-dialog.js): one name for
+     each lit place, said one time. */
   if (base === "dialog")
     return {self: e.getAttribute("data-self"), action: e.getAttribute("data-action"),
-            lit: [...e.querySelectorAll(".invited [name]")].map(f => f.name)};
+            lit: [...new Set([...e.querySelectorAll("form .invited, form [data-typed]")]
+              .map(s => s.matches("[name]") ? s : s.querySelector("[name]"))
+              .map(n => n && n.getAttribute("name")).filter(Boolean))]};
   if (base === "caption" || base === "refusal") return text();
   return {text: text(),
           disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};
