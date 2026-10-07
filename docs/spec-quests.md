@@ -171,7 +171,12 @@ beside its verdict:
   `alternatives` carries its own `door_label` and `row_label`. A
   planned quest stores `door_label` and `needs_labels` on each step of
   `plan`, and `door_label` on each alternative (`labelled`): they come
-  from the kind's declaration, so a rename never moves them. It stores
+  from the kind's declaration, so a rename never moves them. A plan
+  stored in older words is written again in the words declared now when
+  the planner starts (`relabel!`), with its `planned_at` as it was, so
+  a quest planned before a label changed need not wait for its next
+  replan; the page's own fallback for a step with no `needs_labels`
+  says only the last step of a dotted need. It stores
   no `row_label`, and its document projects none: a rename is a change
   to the row and not to the quest. The tracker and the quest's page draw
   a step's row from the row's own summary, which the page reads and

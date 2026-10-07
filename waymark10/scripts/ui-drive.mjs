@@ -1233,6 +1233,24 @@ async function accessStory() {
      await evaljs(`${qBar}.querySelector("[data-quest-note]")?.textContent`) === stepOne.note);
   ok("no step in the tracker reads as a path",
      await evaljs(`!/\\/api\\//.test(${qBar}.textContent)`));
+  /* the quest's own page says its goal door by its display label: the
+     raw action name is the cell's title, and is not its text. The cell
+     is a span: a shut door's button carries data-quest-door too. */
+  const qWas = await evaljs(`hereHref()`);
+  const qDoor = `document.querySelector("#view .kv span[data-quest-door]")`;
+  await evaljs(`location.hash = ${JSON.stringify(qSelf)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(qSelf)} && !!${qDoor}`,
+                "the quest's row page", 15000);
+  const qGoal = ((await get(qSelf)).data.plan || []).find(s =>
+    s.self === pile.self && s.door === "finish") || {};
+  const qDoorSays = qGoal.door_label || await evaljs(`title("finish")`);
+  ok("the quest page's data table says the goal door by its label, not its action name",
+     qDoorSays !== "finish" &&
+     await evaljs(`${qDoor}.textContent`) === qDoorSays &&
+     await evaljs(`${qDoor}.getAttribute("title")`) === "finish");
+  await evaljs(`location.hash = ${JSON.stringify(qWas)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify(qWas)}`,
+                "the page the story was on", 15000);
   const qPageOne = await evaljs(`hereHref()`);
   await evaljs(`location.hash = "/api/led_notes"; true`);
   await waitFor(`hereHref().split("?")[0] === "/api/led_notes" && !${qBar}.hidden &&
@@ -1414,6 +1432,15 @@ async function accessStory() {
                    .includes(${JSON.stringify(shelfTitle)}) &&
                  !!document.querySelector('#view [data-action="shelve"]')`,
                 "the note's row page", 15000);
+  /* the row's own path is the crumb's title, and is not header text */
+  ok("a row page's header shows no /api/ path as text",
+     await evaljs(`(() => {
+       const p = document.querySelector("#view .panel");
+       const head = [p.querySelector(".crumbs"), p.querySelector("h2"),
+                     ...p.querySelectorAll(".statechip, .version")];
+       return p.querySelector(".crumbs .id")?.getAttribute("title") ===
+                ${JSON.stringify(shelfNote.self)} &&
+              head.every(n => n && !n.textContent.includes("/api/")); })()`));
   const rBefore = await rSettled();
   await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
   await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
@@ -1451,7 +1478,7 @@ async function accessStory() {
     await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   };
   const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
-  const qAccept = `document.querySelector("dialog[open] [data-quest-accept]")`;
+  const qAccept = `document.querySelector("dialog[open] [data-surface='dialog.accept']")`;
   /* what the shelve door answered each time, for the timeout's trace: a
      submit closes the dialog on a 2xx and on nothing else */
   await evaljs(`(() => {
@@ -1723,7 +1750,7 @@ async function accessStory() {
       return fetch0(u, o);
     };
     window.replayPointerTo = (to, speed) => {
-      const what = to.hasAttribute("data-quest-accept") ? "accept"
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
         : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
@@ -1853,7 +1880,7 @@ async function accessStory() {
       if (!g) return;
       const under = g.querySelector('[data-srverr="shelf"]')?.textContent || "";
       if (under) seen.fieldError = under;
-      const accept = g.querySelector(".questoffer [data-quest-accept]");
+      const accept = g.querySelector(".questoffer [data-surface='dialog.accept']");
       if (!accept) return;
       seen.offered = true;
       seen.box = g.querySelector(".problem")?.innerText || seen.box;
@@ -3294,7 +3321,7 @@ async function guidedStory() {
       return fetch3(u, o);
     };
     window.replayPointerTo = (to, speed) => {
-      const what = to.hasAttribute("data-quest-accept") ? "accept"
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
         : to.getAttribute("data-surface") === "tracker.go" ? "go"
         : to.hasAttribute("data-replay-write") ? "write" : null;
       const last = window.__questPresses[window.__questPresses.length - 1];
@@ -3519,7 +3546,7 @@ async function questPhoneStory() {
     await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
   };
   const refused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
-  const accept = "dialog[open] [data-quest-accept]";
+  const accept = "dialog[open] [data-surface='dialog.accept']";
   await shelve("high");
   await waitFor(`${refused}.includes("room") && !!document.querySelector(${JSON.stringify(accept)})`,
                 "the offer under the refusal", 15000);

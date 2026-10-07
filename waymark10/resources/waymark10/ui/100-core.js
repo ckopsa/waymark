@@ -65,6 +65,10 @@ function localStamp(v, {seconds = false, dateOnly = false} = {}) {
          (seconds ? ":" + p(d.getSeconds()) : "");
 }
 const pretty = s => String(s).replace(/_/g, " ");
+/* a need the plan gives no label for: a dotted path into a nested map
+   (showcase.evidence.film_url) says only its last step, as the server's
+   own words do (need-words, quests.clj) */
+const prettyNeed = s => pretty(String(s).split(".").pop());
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
 const el = (tag, attrs={}, ...kids) => {
   const n = document.createElement(tag);
