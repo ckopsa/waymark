@@ -759,8 +759,13 @@ metric is read from one field of the take:
 | `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
 | `runtime_s` | The film's length in seconds. | `film.runtime_s` |
 
-The take is the scorer's piece and is not built yet; these are the
-field names it is to carry.
+A take is a map with `film`, the fields read once, and `shots`, one
+map per shot in order. A box is `{x, y, w, h}`; a frame and a viewport
+are `{w, h}`. `surfaces_changed` is a count or the list of names.
+`film-rules/measure` reads one metric from a take by these names: one
+number for a film metric, and one number per shot for a shot metric.
+The scorer that writes the take is not built yet; these are the field
+names it is to carry.
 
 The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),

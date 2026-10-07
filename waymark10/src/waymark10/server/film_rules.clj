@@ -8,7 +8,8 @@
 
   The vocabulary is closed: `metrics` names every metric and the field
   of the take it is read from (docs/spec-agent-demo-walks.md § 8d). A
-  rule naming any other metric is refused with the list.
+  rule naming any other metric is refused with the list. `measure` reads
+  one metric from a take, by those field names.
 
   A person or the sitter of a domain's mayor seat makes a rule. Only a
   person retires one.
@@ -54,6 +55,72 @@
   "The value a create names for field `k`, or nil."
   [row inp k]
   (some-> (or (get inp k) (get-in row [:data k])) str not-empty))
+
+;; ── the take ────────────────────────────────────────────────────────
+
+;; A take is what the scorer hands over for one film: `:film`, a map of
+;; the fields read once, and `:shots`, one map per shot in order. The
+;; field names are § 8d's. A box is {:x :y :w :h}; a frame and a
+;; viewport are {:w :h}.
+
+(defn- area
+  "The area of a box, a frame or a viewport, or nil."
+  [{:keys [w h]}]
+  (when (and (number? w) (number? h)) (* w h)))
+
+(defn- over
+  "`a` over `b`, or nil when either is missing or `b` is not positive."
+  [a b]
+  (when (and (number? a) (number? b) (pos? b)) (double (/ a b))))
+
+(defn- word
+  "A role or a state as a string, however the take spells it."
+  [v]
+  (when (or (string? v) (keyword? v)) (name v)))
+
+(defn- counted
+  "A count, from a number or from the list of the things counted."
+  [v]
+  (if (coll? v) (count v) v))
+
+(defn- arc
+  "1 when the shot roles run friction, turn, payoff and the last shot's
+  goal state is done; else 0."
+  [shots]
+  (if (and (= roles (vec (dedupe (map (comp word :role) shots))))
+           (= "done" (word (:goal_state (last shots)))))
+    1
+    0))
+
+(def ^:private film-readers
+  "Metric → how it is read from the whole take."
+  {"frame_fill" (fn [{:keys [film]}]
+                  (over (area (:content_box film)) (area (:frame film))))
+   "dead_air_s" (fn [tk] (get-in tk [:film :dead_air_s]))
+   "chrome_leaks" (fn [tk] (get-in tk [:film :chrome_leaks]))
+   "arc" (fn [tk] (arc (:shots tk)))
+   "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))})
+
+(def ^:private shot-readers
+  "Metric → how it is read from one shot of the take."
+  {"focus_share" (fn [shot]
+                   (over (area (:focus_box shot)) (area (:viewport shot))))
+   "type_px" :focus_type_px
+   "contrast" :focus_contrast
+   "read_time_ratio" (fn [{:keys [hold_s words]}]
+                       (when (number? words) (over hold_s (/ words 3))))
+   "surfaces_changed" (comp counted :surfaces_changed)})
+
+(defn measure
+  "The value of `metric` read from the take `tk`: one number for a
+  metric read from the film, and a vector with one number per shot, in
+  order, for a metric read from each shot. nil stands where the take
+  lacks the field, and for a metric outside the vocabulary."
+  [tk metric]
+  (if-some [read (film-readers metric)]
+    (read tk)
+    (when-some [read (shot-readers metric)]
+      (mapv read (:shots tk)))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
