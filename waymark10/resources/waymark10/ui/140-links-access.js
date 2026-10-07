@@ -332,6 +332,9 @@ function reentryToken() {
    optional; the invite and guest call sites pass none and behave as before. */
 function secretDialog({heading, note, value, copyOk, copyFallback,
                        instructions, copyValue, copyLabel, copy2}) {
+  /* the value field carries no surface name, and readSurface('secret')
+     leaves it out: a kept beat never holds the secret
+     (docs/spec-agent-demo-walks.md §8a) */
   const field = el("input", {value, readonly: "true",
                              style:"width:100%;font-family:var(--mono)",
                              onclick: e => e.target.select()});

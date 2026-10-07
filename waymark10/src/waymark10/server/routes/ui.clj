@@ -126,6 +126,10 @@
     :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
    {:name "nav-jump"
     :is "The ⋯ menu's 'Jump to a kind…' line, which opens the jump box."}
+   {:name "jump.query"
+    :is "The jump box's input, where the kind's name is typed."}
+   {:name "jump.line"
+    :is "One result line of the jump box; data-row carries the address it goes to."}
    {:name "nav-shell"
     :is "The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell."}
    {:name "row"
@@ -153,7 +157,7 @@
    {:name "dialog.stop"
     :is "The form's Stop button in a led walk."}
    {:name "secret"
-    :is "The dialog that shows a secret one time, with its Copy button."}
+    :is "The dialog that shows a secret one time, with its Copy button; its value field has no name, so a scene cannot read the secret."}
    {:name "secret.copy"
     :is "The secret dialog's first Copy button."}
    {:name "secret.copy-other"
@@ -162,6 +166,8 @@
     :is "The secret dialog's Done button, which closes it."}
    {:name "report"
     :is "The dialog that reports a bulk action's verdicts."}
+   {:name "report.row"
+    :is "A refused row's link in the report dialog's table; data-row carries the row's address."}
    {:name "report.close"
     :is "The report dialog's Close button."}
    {:name "upload"
