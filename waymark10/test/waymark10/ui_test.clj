@@ -779,6 +779,16 @@
     (is (str/includes? body "doc.links?.export?.href"))
     (is (not (str/includes? body "self + \"/export\"")))))
 
+(deftest ui-list-export-chip-exports-as-the-button-does
+  ;; a walk's export chip on a table row or a feed item makes the row
+  ;; page's download: as the viewer, and marked exported in this browser
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function exportChipClick(e, item, rel, l) {"))
+    (is (str/includes? body "if (!isWalk || rel !== \"export\" || !l || !l.href) return;"))
+    (is (str/includes? body "exportWalk({...item, kind: \"walk\"});"))
+    (is (str/includes? body "onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},"))
+    (is (str/includes? body "onclick: e => exportChipClick(e, item, rel, l)},"))))
+
 (deftest ui-replay-draws-an-invitation-frame
   ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
   ;; dialog read-only, with every named field lit, the note and the

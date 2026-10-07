@@ -1062,6 +1062,17 @@ async function exportWalk(doc) {
   markWalkExported(self);
   demoRefresh();
 }
+/* a list row's chip for a walk's export makes that same download: as
+   the viewer, and marked exported. Any other chip stays the plain
+   navigation it was. A list item may not say its kind, so its own
+   address answers for it. */
+function exportChipClick(e, item, rel, l) {
+  const isWalk = item.kind === "walk" ||
+    /\/walks\/[^/?#]+$/.test(item.self || "");
+  if (!isWalk || rel !== "export" || !l || !l.href) return;
+  e.preventDefault();
+  exportWalk({...item, kind: "walk"});
+}
 async function demoBoot() {
   const w = await wellKnown();
   const at = Date.parse(w.expires_at || "");
