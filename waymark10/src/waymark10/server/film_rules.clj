@@ -14,7 +14,9 @@
   person retires one.
 
   `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
-  starts with, each made once by its name."
+  starts with, each made once by its name. The engine's own start runs
+  it (`engine/start-runtime!`), so every application that enrolls the
+  kind has them."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]

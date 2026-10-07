@@ -762,7 +762,9 @@ metric is read from one field of the take:
 The take is the scorer's piece and is not built yet; these are the
 field names it is to carry.
 
-The boot seed (`film-rules/ensure-seed-rules!`) makes eight rules,
+The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
+starts (`engine/start-runtime!`), in every application, because the
+kind is enrolled in every one. It makes eight rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
 (`type_px >= 28` per shot, warn), `read-time`
