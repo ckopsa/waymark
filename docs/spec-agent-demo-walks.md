@@ -672,14 +672,25 @@ replay.
       (`img`, `svg`, `canvas`, `video`, `iframe`). One that draws
       nothing of its own covers nothing. The replay pointer is one:
       its arrow is a pseudo-element, smaller than its box.
+    - A box cannot say every clip. When the run's element or an
+      ancestor has a `clip-path`, or when an ancestor that clips is
+      transformed, itself or by one above it, the page is asked
+      instead: that ancestor's box is not applied, and a point is
+      clipped away when that same list, taken while every element
+      takes the pointer, does not hold the run's element. A point
+      clipped away is not counted, and a run with no point left is
+      left out. The page answers no inert element, so a run under an
+      open modal, or under `inert`, is not asked this way.
 
     A run is left out when more than half of the points asked for its
     lines are covered. So a run mostly covered is not listed, and a run
     half covered or less is listed whole. What is not read: which
     words of a listed run are the covered ones; a line that is clipped
     away, which is asked no point and so does not count against its
-    run; a transform on a clipping ancestor and a `clip-path`, which
-    are not applied to the clip.
+    run; a `clip-path` or a transformed clipping ancestor over an
+    inert run, and either one where the page cannot be asked (no
+    `document.elementsFromPoint`, or no sheet to adopt), where the run
+    is listed as if neither were there.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as
