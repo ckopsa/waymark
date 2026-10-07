@@ -155,7 +155,7 @@ own fires through the chair's link (R-12.36).
 Steps 2 to 4 are connector calls in the clone. Each one is the
 `arguments` of a `clone__call`, and `tool` names the connector tool.
 The examples use the demo seed: the agent member is `plan`, and its
-display name is "Planner".
+display name is "Juniper".
 
 **The walk.** `docs: true` makes each move and each write carry the
 screen it shows, so the film draws the product's own screens.
@@ -164,7 +164,7 @@ screen it shows, so the film draws the product's own screens.
 {
   "kind": "walk",
   "action": "create",
-  "input": {"followed": "plan", "title": "Planner puts the chore list first", "docs": true}
+  "input": {"followed": "plan", "title": "Juniper puts the chore list first", "docs": true}
 }
 ```
 
@@ -216,7 +216,7 @@ The seat makes these checks on the export before it renders.
 | check | what the seat reads | why |
 |---|---|---|
 | the engine is a demo | `header.engine` starts with `demo-` | a video is made only from a walk recorded in a seeded clone |
-| the cast is the seed's | each `display` in `header.cast` is a display name that `up` answered | a name that is not in the seed is a real name, or a seat's id. The agent's own entry reads "Planner" |
+| the cast is the seed's | each `display` in `header.cast` is a display name that `up` answered | a name that is not in the seed is a real name, or a seat's id. The agent's own entry reads "Juniper" |
 | the frames are there | `frames` is more than zero | a walk with no frame is a film of nothing |
 
 `render` runs only in a seeded clone, so the first check is kept by
