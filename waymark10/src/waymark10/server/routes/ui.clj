@@ -115,7 +115,15 @@
   `nav.ticket`. The page's own code is the source, and
   waymark10.ui-test fails when this list and the page part."
   [{:name "nav.<kind>"
-    :is "A kind's tab in the navigation bar."}
+    :is "A kind's tab in the navigation bar, or its line in the ⋯ menu when it has no tab."}
+   {:name "nav-home"
+    :is "The Home tab of the phone's navigation bar."}
+   {:name "nav-domain"
+    :is "The active application's name in the navigation bar, a link to its home."}
+   {:name "nav-access"
+    :is "The Access tab in the navigation bar."}
+   {:name "nav-more"
+    :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
    {:name "row"
     :is "One row of a collection's table; data-self carries its address."}
    {:name "door:<action>"
@@ -130,6 +138,22 @@
     :is "The button that writes an action's form."}
    {:name "dialog.cancel"
     :is "The button that closes an action's form and writes nothing."}
+   {:name "dialog.check"
+    :is "The form's Check button, which rehearses the write."}
+   {:name "dialog.discard"
+    :is "The form's Discard draft button."}
+   {:name "dialog.later"
+    :is "The form's Do this later button."}
+   {:name "dialog.decline"
+    :is "The form's Decline button for an invitation; it reads Skip in a led walk."}
+   {:name "dialog.stop"
+    :is "The form's Stop button in a led walk."}
+   {:name "secret"
+    :is "The dialog that shows a secret one time, with its Copy button."}
+   {:name "report"
+    :is "The dialog that reports a bulk action's verdicts."}
+   {:name "upload"
+    :is "The dialog that uploads a file as an attachment."}
    {:name "sheet"
     :is "The quest sheet a tap on a dotted button opens."}
    {:name "sheet.step:<n>"
@@ -144,10 +168,16 @@
     :is "The tracker's Go button, for the step at the plan's head."}
    {:name "tracker.next"
     :is "The tracker's line for the step at the plan's head."}
+   {:name "tracker.more"
+    :is "The tracker's ⋯ menu; the quest's own actions inside it are door:<action>."}
+   {:name "quest.go"
+    :is "The Go button of the next step on a quest's own page."}
    {:name "caption"
     :is "The caption band of a replay."}
    {:name "refusal"
-    :is "The line a refused write is said in, in a form or in the sheet."}])
+    :is "The line a refused write is said in, in a form or in the sheet."}
+   {:name "refusal.accept"
+    :is "The Accept as quest button offered under a refusal."}])
 
 (defn- ui-surfaces
   "GET /api/-/ui/surfaces: the list above, as static as the page and

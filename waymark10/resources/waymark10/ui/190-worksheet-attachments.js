@@ -180,7 +180,7 @@ async function uploadDialog({entry, doc, prefill, onDone}) {
       el("label", {}, el("b", {}, k)),
       fieldWidget(k, rawProp, prefill[k])));
   }
-  const dlg = el("dialog", {},
+  const dlg = el("dialog", {"data-surface": "upload"},
     el("div", {class:"dlghead"}, el("h3", {}, "Upload a file"),
       el("p", {class:"metaline"}, "reserved → uploaded · the bytes are written once")),
     el("div", {class:"dlgbody"},
