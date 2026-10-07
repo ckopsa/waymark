@@ -1143,9 +1143,14 @@
   "A :collection-doors entry is a route the router mounts from the
   declaration: the entry is advertised wherever the kind is, so one
   with no :handler would be a door every document names and nothing
-  answers."
+  answers. A door and the bulk door share one address, POST
+  /api/{plural}/-/{name}, and the router answers a declared door
+  first: a door named as an action would hide that action's bulk
+  door and put two entries under one key of the collection document."
   [r]
-  (let [doors (:collection-doors r)]
+  (let [doors (:collection-doors r)
+        taken (into #{"create" "query" "worksheet"}
+                    (map name) (keys (:actions r)))]
     (when (and (some? doors) (not (map? doors)))
       (err r :collection-doors
            (str ":collection-doors is {name {:input … :summary … "
@@ -1155,6 +1160,12 @@
         (err r :collection-doors
              (str "collection door " dname " is not a map; declare "
                   "{:input … :summary … :handler (fn [engine body ctx] …)}")))
+      (when (contains? taken (name dname))
+        (err r :collection-doors
+             (str "collection door " dname " shares its name with the "
+                  "action " (name dname) " — both answer at POST /api/"
+                  "{plural}/-/" (name dname) ", and the door would hide "
+                  "the action; rename one of them")))
       (when-not (fn? (:handler door))
         (err r :collection-doors
              (str "collection door " dname " declares no :handler — "
