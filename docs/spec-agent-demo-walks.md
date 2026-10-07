@@ -679,18 +679,31 @@ replay.
       clipped away when that same list, taken while every element
       takes the pointer, does not hold the run's element. A point
       clipped away is not counted, and a run with no point left is
-      left out. The page answers no inert element, so a run under an
-      open modal, or under `inert`, is not asked this way.
+      left out.
+    - The page answers no inert element, so a run under an open modal,
+      or under `inert`, is not asked this way, and no run is where the
+      page cannot be asked (no `document.elementsFromPoint`, or no
+      sheet to adopt). Those clips are then read by geometry. A point
+      is put into the box of the element that clips: the transforms on
+      it and above it are undone about the centre of its client rect.
+      The point is clipped away when it is outside that element's
+      padding box on an axis it clips, or outside its `clip-path`.
+      Geometry reads a transform in the plane (`rotate`, `scale`,
+      `transform`), and a `clip-path` of `inset()`, `circle()`,
+      `ellipse()` or `polygon()` on the border box with lengths in px
+      and in percent. A clip it cannot read is not applied.
 
     A run is left out when more than half of the points asked for its
     lines are covered. So a run mostly covered is not listed, and a run
     half covered or less is listed whole. What is not read: which
     words of a listed run are the covered ones; a line that is clipped
     away, which is asked no point and so does not count against its
-    run; a `clip-path` or a transformed clipping ancestor over an
-    inert run, and either one where the page cannot be asked (no
-    `document.elementsFromPoint`, or no sheet to adopt), where the run
-    is listed as if neither were there.
+    run; and, for a run the page is not asked for, a clip that
+    geometry cannot read, where the run is listed as if the clip were
+    not there: a `clip-path` of `path()` or `url()`, one on another
+    reference box or with a `calc()` length, the round corners of an
+    `inset()`, and a clipping ancestor or a `clip-path` under a
+    transform out of the plane.
   - `viewport` is `{w, h}`. Every rect and position in a beat is in
     CSS pixels of the viewport, rounded.
   - `boxes` lists every named surface in the viewport (8a) as

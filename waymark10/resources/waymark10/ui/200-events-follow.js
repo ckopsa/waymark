@@ -2442,7 +2442,9 @@ const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || 
    covered or less is listed whole. Where filmClip says to ask the page
    (`ask`), a point the page does not answer the run's element at is
    clipped away and is not counted, and a run with no point left is
-   left out. The secret dialog says its
+   left out. Where the page cannot be asked that (an inert run, or no
+   sheet to adopt), a point outside one of filmClip's `cuts` is clipped
+   away the same way. The secret dialog says its
    heading and its buttons and nothing else, as readSurface does: a beat
    is kept. */
 /* the part of the viewport `p`'s text can be drawn in, as {left, top,
@@ -2453,21 +2455,123 @@ const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || 
    absolute one. `ask` is true when a box cannot say the clip: `p` or an
    ancestor has a `clip-path`, or an ancestor that clips is transformed,
    itself or by one above it. That ancestor's box is then not applied,
-   and filmRuns asks the page at each point instead. */
+   and filmRuns asks the page at each point instead. `cuts` holds those
+   clips as geometry can say them, for a run the page cannot be asked
+   for: each is a function of a point {x, y} of the viewport, true when
+   the point is inside the clip. A clip geometry cannot say is not in
+   it. */
+/* `m` times what `cs` turns a box by, as a DOMMatrix: `rotate`, `scale`
+   and `transform`, without `translate`, since only the linear part is
+   used (filmLocal). Null when it is out of the plane or is not read. */
+function filmTurn(m, cs) {
+  const on = v => v && v !== "none";
+  try {
+    const own = new DOMMatrix([on(cs.rotate) ? `rotate(${cs.rotate})` : "",
+      on(cs.scale) ? `scale(${cs.scale.trim().split(/\s+/).join(",")})` : "",
+      on(cs.transform) ? cs.transform : ""].join(" ").trim());
+    return own.is2D ? m.multiply(own) : null;
+  } catch (e) {
+    return null;
+  }
+}
+/* the viewport's point `q` in the box of `a`, as {x, y} from the left
+   top corner of its border box, where `m` is filmTurn's answer for `a`
+   and each one above it: a transform in the plane keeps the centre of a
+   box at the centre of its client rect */
+function filmLocal(a, m, q) {
+  const b = a.getBoundingClientRect(), i = m.inverse();
+  const x = q.x - (b.left + b.right) / 2, y = q.y - (b.top + b.bottom) / 2;
+  return {x: i.a * x + i.c * y + a.offsetWidth / 2,
+          y: i.b * x + i.d * y + a.offsetHeight / 2};
+}
+/* whether a point of the viewport is inside the `clip-path` of `a`, as
+   a function of the point; null when geometry cannot say. It reads
+   `inset()`, `circle()`, `ellipse()` and `polygon()` on the border box,
+   with lengths in px and in percent. The round corners of an `inset()`
+   are read as square. */
+function filmPath(a, cs, m) {
+  const shape = /^(inset|circle|ellipse|polygon)\((.*)\)$/.exec(cs.clipPath.trim());
+  if (!m || !shape || !(a instanceof HTMLElement) || cs.display === "inline") return null;
+  const w = a.offsetWidth, h = a.offsetHeight;
+  const len = (s, of) => {
+    const v = /^(-?[\d.]+(?:e-?\d+)?)(px|%)$/.exec(s || "");
+    return !v ? NaN : v[2] === "px" ? +v[1] : +v[1] * of / 100;
+  };
+  const words = s => s.trim().split(/\s+/).filter(Boolean);
+  let holds;
+  if (shape[1] === "inset") {
+    const v = words(shape[2].split(/\bround\b/)[0]);
+    const t = len(v[0], h), r = len(v[1] || v[0], w), b = len(v[2] || v[0], h),
+          l = len(v[3] || v[1] || v[0], w);
+    if (v.length > 4 || [t, r, b, l].some(isNaN)) return null;
+    holds = (x, y) => x >= l && x < w - r && y >= t && y < h - b;
+  } else if (shape[1] === "polygon") {
+    const parts = shape[2].split(",").map(words);
+    const rule = parts[0].length === 1 ? parts.shift()[0] : "nonzero";
+    const at = parts.map(v => ({x: len(v[0], w), y: len(v[1], h), n: v.length}));
+    if (!/^(nonzero|evenodd)$/.test(rule) ||
+        at.some(v => v.n !== 2 || isNaN(v.x) || isNaN(v.y))) return null;
+    /* the edges that cross the line to the right of the point, counted
+       by their direction and by their number */
+    holds = (x, y) => {
+      let wound = 0, odd = false;
+      at.forEach((v, n) => {
+        const u = at[(n + 1) % at.length];
+        if ((v.y <= y) === (u.y <= y)) return;
+        const side = (u.x - v.x) * (y - v.y) - (x - v.x) * (u.y - v.y);
+        if (u.y > v.y ? side > 0 : side < 0) { wound += u.y > v.y ? 1 : -1; odd = !odd; }
+      });
+      return rule === "evenodd" ? odd : wound !== 0;
+    };
+  } else {
+    const [radii, centre] = shape[2].split(/(?:^|\s+)at\s+/), rs = words(radii);
+    const c = centre == null ? null : words(centre);
+    if (c && c.length !== 2) return null;
+    const cx = c ? len(c[0], w) : w / 2, cy = c ? len(c[1], h) : h / 2;
+    const far = k => k === "farthest-side", key = k => !k || k === "closest-side" || far(k);
+    const side = (k, at, of) =>
+      (far(k) ? Math.max : Math.min)(Math.abs(at), Math.abs(of - at));
+    let rx, ry;
+    if (shape[1] === "circle") {
+      const k = rs[0];
+      if (rs.length > 1) return null;
+      rx = ry = key(k) ? (far(k) ? Math.max : Math.min)(side(k, cx, w), side(k, cy, h))
+                       : len(k, Math.hypot(w, h) / Math.SQRT2);
+    } else {
+      if (rs.length !== 0 && rs.length !== 2) return null;
+      rx = key(rs[0]) ? side(rs[0], cx, w) : len(rs[0], w);
+      ry = key(rs[1]) ? side(rs[1], cy, h) : len(rs[1], h);
+    }
+    if ([cx, cy, rx, ry].some(isNaN)) return null;
+    holds = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
+  }
+  return q => {
+    const l = filmLocal(a, m, q);
+    return holds(l.x, l.y);
+  };
+}
 function filmClip(p) {
-  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight, ask: false};
+  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight, ask: false, cuts: []};
   const up = [];
   for (let a = p; a && a !== document.body && a !== document.documentElement;
        a = a.parentElement) up.push({a, cs: getComputedStyle(a)});
-  /* from the top down: whether the box or one above it is transformed */
-  let turned = false;
+  /* from the top down: whether the box or one above it is transformed,
+     and by what (filmTurn) */
+  let turned = false, m = window.DOMMatrix ? new DOMMatrix() : null;
   for (const u of [...up].reverse()) {
-    turned = u.turned = turned ||
+    const own =
       [u.cs.transform, u.cs.rotate, u.cs.scale, u.cs.translate].some(v => v && v !== "none");
-    if (u.cs.clipPath && u.cs.clipPath !== "none") c.ask = true;
+    turned = u.turned = turned || own;
+    if (own) m = m && filmTurn(m, u.cs);
+    u.m = m;
+    if (u.cs.clipPath && u.cs.clipPath !== "none") {
+      const cut = filmPath(u.a, u.cs, m);
+      c.ask = true;
+      if (cut) c.cuts.push(cut);
+    }
   }
   let out = null;
-  for (const {a, cs, turned} of up) {
+  for (const {a, cs, turned, m} of up) {
     if (out === "fixed") break;
     if (out === "absolute" && cs.position === "static") continue;
     out = cs.position === "absolute" || cs.position === "fixed" ? cs.position : null;
@@ -2476,6 +2580,14 @@ function filmClip(p) {
         /^(inline|contents|table-(row|column|header|footer).*)$/.test(cs.display)) continue;
     if (turned && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
       c.ask = true;
+      /* its padding box, in its own box, on the axis it clips */
+      if (m) c.cuts.push(q => {
+        const l = filmLocal(a, m, q);
+        return (cs.overflowX === "visible" ||
+                (l.x >= a.clientLeft && l.x < a.clientLeft + a.clientWidth)) &&
+               (cs.overflowY === "visible" ||
+                (l.y >= a.clientTop && l.y < a.clientTop + a.clientHeight));
+      });
       continue;
     }
     const b = a.getBoundingClientRect(), l = b.left + a.clientLeft, t = b.top + a.clientTop;
@@ -2573,15 +2685,17 @@ function filmRuns(root, skip) {
     if (document.elementFromPoint)
       for (const q of pts) q.h = document.elementFromPoint(q.x, q.y);
     /* the page answers no inert element at a point: one under an open
-       modal, or under `inert`, is not asked this way */
+       modal, or under `inert`, is not asked this way, and its points are
+       read by filmClip's `cuts` */
     const ask = c.ask && !(front && !front.contains(p)) && !p.closest("[inert]");
-    found.push({s, p, pts, ask});
+    found.push({s, p, pts, ask, cuts: c.cuts});
   }
   const stacks = filmAllTake(() =>
     found.map(f => f.pts.map(q => document.elementsFromPoint(q.x, q.y))));
   return found.filter((f, i) => {
     const at = f.pts.map((q, j) => ({q, stack: stacks ? stacks[i][j] : []}));
-    const seen = f.ask && stacks ? at.filter(a => a.stack.includes(f.p)) : at;
+    const seen = f.ask && stacks ? at.filter(a => a.stack.includes(f.p))
+                                 : at.filter(a => f.cuts.every(cut => cut(a.q)));
     const covered = seen.filter(a => filmCovered(f.p, a.q, a.stack));
     return seen.length > 0 && covered.length * 2 <= seen.length;
   }).map(({s, p}) => ({s, p}));
