@@ -892,6 +892,7 @@ function reportDialog(report) {
               el("tr", {},
                 el("td", {class:"mono"},
                   el("a", {href: "#" + r.self,
+                           "data-surface": "report.row", "data-row": r.self,
                            onclick: () => { dlg.close(); dlg.remove(); }},
                     String(r.self || "").split("/").pop().slice(0, 8))),
                 el("td", {}, el("span", {class:"verdict-refused"}, "refused")),
