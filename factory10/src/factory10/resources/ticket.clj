@@ -1461,7 +1461,7 @@
                    :help "The day this ask comes back into the queue. Empty unless the ticket is deferred."}}
     [:maybe :waymark/date]]
    [:close_reason {:optional true
-                   :examples ["Merged: github:ckopsa/waymark#41."]
+                   :examples ["Done: written, checked and sent to the person who asked."]
                    :x-display
                    {:widget "prose"
                     :label "How it ended"
@@ -1713,7 +1713,7 @@
 (def ^:private close-input
   [:map
    [:close_reason
-    {:examples ["Merged: github:ckopsa/waymark#41."]
+    {:examples ["Done: written, checked and sent to the person who asked."]
      :x-display
      {:widget "prose"
       :label "How it ended"

@@ -316,7 +316,10 @@
   .dlghead h3 { margin: 0 0 4px; font-weight: 800; font-size: 16px; }
   .dlghead .metaline { margin: 0; }
   .dlgbody { padding: 4px 18px 8px; }
+  /* the buttons wrap to a second row where one row is wider than the
+     dialog: none is cut by the screen's edge on a phone */
   .dlgfoot { padding: 12px 18px 16px; display: flex; gap: 8px;
+             flex-wrap: wrap;
              justify-content: flex-end; align-items: center; }
   .dlgfoot .hint { margin-right: auto; color: var(--muted); font-size: 12px; }
   .field { margin: 10px 0; }
