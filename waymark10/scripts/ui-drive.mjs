@@ -3826,6 +3826,16 @@ async function questPhoneStory() {
     await evaljs(`window.wmPresent(true); true`);
     ok("presentation mode draws no crumb id, no version line and no toolbar button",
        JSON.parse(await evaljs(chrome)).every(shown => !shown));
+    /* a film's caption is burned over the bottom of the frame (ticket
+       c0cb83af): no fixed strip is drawn in the bottom fifth of it */
+    const low = JSON.parse(await evaljs(`JSON.stringify(["header nav", "#ticker", "#intents",
+      "#toast", "#undostack"].filter(s => { const e = document.querySelector(s);
+        if (!e || getComputedStyle(e).display === "none") return false;
+        const r = e.getBoundingClientRect();
+        return r.height > 0 && r.bottom > innerHeight * 0.8; }))`));
+    console.log("  the strips in the bottom fifth, in presentation mode: " + JSON.stringify(low));
+    ok("presentation mode draws no tab bar, no intent card and no strip in the bottom fifth",
+       low.length === 0);
     const presented = await evaljs(`filmScreenText()`);
     console.log("  the text in presentation mode: " + JSON.stringify(presented.slice(0, 240)));
     ok("and a beat's text carries none of them",

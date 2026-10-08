@@ -111,6 +111,16 @@
   /* a ticket title's '[epic] ' marker (el, 100-core.js) is the tracker's
      own word and is not for a film; the stored title keeps it */
   html.present .epicmark { display: none !important; }
+  /* what a phone film still showed (ticket c0cb83af): the intent cards,
+     which name an actor by its id and an engine verb, and the phone's
+     bottom tab bar. A film's caption is burned over the bottom of the
+     frame, so the toast and the undo stack sit at the top while the
+     mode is on. The desktop header's nav stays */
+  html.present #intents { display: none !important; }
+  html.present[data-ui="mobile"] header nav { display: none !important; }
+  html.present #toast { top: 12px !important; bottom: auto !important; }
+  html.present #undostack { top: 64px !important; bottom: auto !important;
+                            max-height: 30vh; overflow-y: auto; }
 
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
