@@ -849,10 +849,14 @@ metric is read from one field of the take:
 | `chrome_leaks` | The count of `/api` paths, uuids, raw snake_case keys or `[epic]` in visible text. | `film.chrome_leaks` |
 | `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
 | `runtime_s` | The film's length in seconds. | `film.runtime_s` |
+| `frame_match_min` | The lowest score of a film frame against the still of the beat its caption is for, over every caption run. | the lowest `run.frame_match` |
 
-A take is a map with `film`, the fields read once, and `shots`, one
-map per shot in order. A box is `{x, y, w, h}`; a frame and a viewport
-are `{w, h}`. `surfaces_changed` is a count or the list of names.
+A take is a map with `film`, the fields read once, `shots`, one
+map per shot in order, and `runs`, one map per caption run in order. A
+box is `{x, y, w, h}`; a frame and a viewport
+are `{w, h}`. `surfaces_changed` is a count or the list of names. A
+run carries its `caption` and `frame_match`: one score, or the scores
+by frame, as `{held, mid}`, where each one counts.
 `film-rules/measure` reads one metric from a take by these names: one
 number for a film metric, and one number per shot for a shot metric.
 `film.output` is `phone` or `desktop`, `shot.zoom` is true on a shot
@@ -882,7 +886,12 @@ rule, in order of name: the rule's `name`, `metric`, `op`, `threshold`,
 A scored film rule carries its `value`. A rule read from each shot
 misses when any shot misses, and carries `worst`: the `index`,
 `caption` and `value` of the shot that misses by the most, or of the
-measured shot nearest to a miss when none does. The overall `verdict`
+measured shot nearest to a miss when none does. A rule read from each
+run holds the lowest score over the runs against the threshold, and
+carries that `value` and `worst`: the `index`, `caption` and `value` of
+the run that carries it. It is unmeasured when the take has no `runs`
+(`missing` names `runs`) or a run has no score (`run.frame_match`),
+unless a measured run already misses. The overall `verdict`
 is `red` when a `fail` rule misses, else `warn` when any rule misses,
 else `green`; `unmeasured` lists the names of the unmeasured rules
 beside it. The scorer builds the take from its measurements and reads

@@ -50,7 +50,8 @@
    ["surfaces_changed" "shot.surfaces_changed"]
    ["chrome_leaks" "film.chrome_leaks"]
    ["arc" "shot.role in order, and the last shot's goal_state"]
-   ["runtime_s" "film.runtime_s"]])
+   ["runtime_s" "film.runtime_s"]
+   ["frame_match_min" "the lowest run.frame_match"]])
 
 (def metric-names (mapv first metrics))
 
@@ -79,9 +80,9 @@
 ;; ── the take ────────────────────────────────────────────────────────
 
 ;; A take is what the scorer hands over for one film: `:film`, a map of
-;; the fields read once, and `:shots`, one map per shot in order. The
-;; field names are § 8d's. A box is {:x :y :w :h}; a frame and a
-;; viewport are {:w :h}.
+;; the fields read once, `:shots`, one map per shot in order, and
+;; `:runs`, one map per caption run in order. The field names are
+;; § 8d's. A box is {:x :y :w :h}; a frame and a viewport are {:w :h}.
 
 (defn- area
   "The area of a box, a frame or a viewport, or nil."
@@ -137,16 +138,45 @@
                          (over hold_s (/ (double words) 3))))
    "surfaces_changed" (comp counted :surfaces_changed)})
 
+(defn- lowest
+  "The lowest of the numbers in `vs`, or nil when it holds none."
+  [vs]
+  (when-some [ns' (seq (filter number? vs))]
+    (apply min ns')))
+
+(defn- frame-match
+  "The lowest frame_match score of one run. A run carries one score, or
+  the scores by frame (held and mid-span), and each one counts."
+  [run]
+  (let [v (:frame_match run)]
+    (lowest (cond (map? v) (vals v)
+                  (coll? v) v
+                  :else [v]))))
+
+(def ^:private run-readers
+  "Metric → how it is read from one run of the take. The metric is the
+  lowest of these over the runs."
+  {"frame_match_min" frame-match})
+
+(defn- runs-of
+  "The runs of the take `tk`, in order."
+  [tk]
+  (let [runs (:runs tk)]
+    (if (sequential? runs) runs [])))
+
 (defn measure
   "The value of `metric` read from the take `tk`: one number for a
-  metric read from the film, and a vector with one number per shot, in
-  order, for a metric read from each shot. nil stands where the take
+  metric read from the film, a vector with one number per shot, in
+  order, for a metric read from each shot, and the lowest number over
+  the runs for a metric read from each run. nil stands where the take
   lacks the field, and for a metric outside the vocabulary."
   [tk metric]
   (if-some [read (film-readers metric)]
     (read tk)
-    (when-some [read (shot-readers metric)]
-      (mapv read (:shots tk)))))
+    (if-some [read (shot-readers metric)]
+      (mapv read (:shots tk))
+      (when-some [read (run-readers metric)]
+        (lowest (map read (runs-of tk)))))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -284,7 +314,7 @@
              :x-display
              {:raw true
               :label "Metric"
-              :help "What the scorer measures: frame_fill, focus_share, type_px, contrast, read_time_ratio, dead_air_s, surfaces_changed, chrome_leaks, arc or runtime_s."}}
+              :help "What the scorer measures: frame_fill, focus_share, type_px, contrast, read_time_ratio, dead_air_s, surfaces_changed, chrome_leaks, arc, runtime_s or frame_match_min."}}
     [:string {:min 1 :max 64}]]
    [:op {:x-display {:label "Compared how"
                      :help "How the measured value is held against the threshold."
@@ -398,7 +428,13 @@
            [:hold_s {:optional true} :double]
            [:words {:optional true} :int]
            ;; a count, or the list of names
-           [:surfaces_changed {:optional true} :any]]]]]]]}}
+           [:surfaces_changed {:optional true} :any]]]]
+        [:runs {:optional true}
+         [:vector
+          [:map
+           [:caption {:optional true} :string]
+           ;; one score, or the scores by frame (held, mid)
+           [:frame_match {:optional true} :any]]]]]]]}}
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot
@@ -577,6 +613,35 @@
       (not (number? value)) {:verdict "unmeasured" :missing (mapv first needs)}
       :else {:verdict (name (verdict rule film nil value)) :value value})))
 
+(def ^:private run-needs
+  "Metric → the field of one run it is read from."
+  {"frame_match_min" "run.frame_match"})
+
+(defn- judge-runs
+  "A rule read from each run: the lowest value over the runs is held
+  against the threshold. A miss when it misses, else unmeasured when
+  the take has no run or any run lacks the field, else a pass. `worst`
+  is the run that carries the lowest value."
+  [rule {:keys [film] :as tk}]
+  (let [metric (word (:metric rule))
+        read (run-readers metric)
+        runs (runs-of tk)
+        judged (map-indexed (fn [index run]
+                              {:index index
+                               :caption (:caption run)
+                               :value (read run)})
+                            runs)
+        measured (filter #(number? (:value %)) judged)
+        worst (when (seq measured) (apply min-key :value measured))
+        miss? (and worst (= :miss (verdict rule film nil (:value worst))))]
+    (cond-> (cond
+              miss? {:verdict "miss"}
+              (empty? runs) {:verdict "unmeasured" :missing ["runs"]}
+              (< (count measured) (count runs))
+              {:verdict "unmeasured" :missing [(run-needs metric)]}
+              :else {:verdict "pass"})
+      worst (assoc :value (:value worst) :worst worst))))
+
 (defn- judge-rule
   "One rule's entry in the answer: what the rule says, and its verdict."
   [rule tk]
@@ -593,6 +658,7 @@
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
        (contains? shot-readers metric) (judge-shots rule tk)
        (contains? film-readers metric) (judge-film rule tk)
+       (contains? run-readers metric) (judge-runs rule tk)
        :else {:verdict "unmeasured" :missing []}))))
 
 (defn judge
@@ -602,7 +668,9 @@
   the rule out) or `unmeasured` (the take lacks a field the metric
   needs; `missing` names it). A scored film rule carries its `value`; a
   rule read from each shot carries `worst`, the index, caption and value
-  of its worst shot. The overall verdict is `red` when a fail rule
+  of its worst shot, and a rule read from each run carries the lowest
+  `value` and `worst`, the run that carries it. The overall verdict is
+  `red` when a fail rule
   misses, else `warn` when any rule misses, else `green`. An unmeasured
   rule is not a pass: `unmeasured` names each one."
   [rules tk]

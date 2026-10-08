@@ -423,7 +423,9 @@
             :focus_box {:x 0 :y 0 :w 1000 :h 800}
             :focus_type_px 36 :focus_contrast 12M
             :hold_s 5 :words 3
-            :surfaces_changed []}]})
+            :surfaces_changed []}]
+   :runs [{:caption "The list" :frame_match {:held 0.97M :mid 0.95M}}
+          {:caption "The turn" :frame_match 0.93M}]})
 
 (deftest each-metric-is-read-from-the-take
   (testing "the film's metrics are one number each"
@@ -431,7 +433,8 @@
     (is (== 0.6M (film-rules/measure a-take "dead_air_s")))
     (is (== 0 (film-rules/measure a-take "chrome_leaks")))
     (is (== 42 (film-rules/measure a-take "runtime_s")))
-    (is (== 1 (film-rules/measure a-take "arc"))))
+    (is (== 1 (film-rules/measure a-take "arc")))
+    (is (== 0.93M (film-rules/measure a-take "frame_match_min"))))
   (testing "a shot's metrics are one number per shot, in order"
     (is (= [0.25 0.5 1.0] (film-rules/measure a-take "focus_share")))
     (is (= [30 28 36] (film-rules/measure a-take "type_px")))
@@ -534,6 +537,36 @@
       (is (= "warn" (:verdict answer)))
       (is (= "miss" (:verdict surface)))
       (is (= {:index 1 :caption "The turn" :value 2} (:worst surface))))))
+
+(deftest a-take-is-judged-on-the-frame-under-each-caption
+  (let [made (make-rule! {:name "frame-shows-beat" :metric "frame_match_min"
+                          :op ">=" :threshold 0.9M :severity "fail"}
+                         colton)
+        shows #(let [answer (film-rules/judge [(:data made)] %)]
+                 [answer (rule-in answer "frame-shows-beat")])]
+    (testing "the rule is made"
+      (is (some? (rule-named "frame-shows-beat"))))
+    (testing "a take whose runs all match passes, with the lowest run named"
+      (let [[answer rule] (shows a-good-take)]
+        (is (= "green" (:verdict answer)))
+        (is (= "pass" (:verdict rule)))
+        (is (== 0.93M (:value rule)))
+        (is (= {:index 1 :caption "The turn" :value 0.93M} (:worst rule)))))
+    (testing "a run whose mid-span frame scores below 0.9 fails the take"
+      (let [[answer rule] (shows (assoc-in a-good-take [:runs 0 :frame_match :mid]
+                                           0.41M))]
+        (is (= "red" (:verdict answer)))
+        (is (= "miss" (:verdict rule)))
+        (is (= {:index 0 :caption "The list" :value 0.41M} (:worst rule)))))
+    (testing "a take rendered before frame_match is unmeasured, not failed"
+      (let [[answer rule] (shows (dissoc a-good-take :runs))
+            [_ bare] (shows (assoc a-good-take :runs [{:caption "The list"}]))]
+        (is (= "green" (:verdict answer)))
+        (is (= ["frame-shows-beat"] (:unmeasured answer)))
+        (is (= "unmeasured" (:verdict rule)))
+        (is (= ["runs"] (:missing rule)))
+        (is (= "unmeasured" (:verdict bare)))
+        (is (= ["run.frame_match"] (:missing bare)))))))
 
 (deftest a-take-that-carries-decimals-is-judged
   (let [phone {:frame {:w 1170 :h 2532} :output "phone"}
