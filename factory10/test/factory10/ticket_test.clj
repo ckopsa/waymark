@@ -815,6 +815,19 @@
         "the import keeps the id each ask carried in beads"))
   (is (= 20000 tk/detail-chars)))
 
+;; A form draws its placeholder from the field's first example, and a
+;; ticket is a household's dinner task as often as a code change: the
+;; example of `close_reason` names no repository and no pull request.
+
+(deftest the-close-reason-example-suits-any-ticket
+  (doseq [[action {:keys [input]}] (:actions ticket)
+          entry (when (vector? input) (rest input))
+          :when (and (vector? entry) (= :close_reason (first entry)))
+          example (:examples (second entry))]
+    (testing (name action)
+      (is (not (re-find #"github:|#\d" example))
+          "no repo and no pull request in a placeholder"))))
+
 ;; ── the change's `why` says its limit (ticket e527f233) ─────────────
 ;; A seat walking a ticket learns the 480 characters before it spends
 ;; a refused submit or stall on them: the help names the limit, and an

@@ -554,8 +554,8 @@ await waitFor(`document.querySelector("dialog[open] textarea[name=recipe]")`, "r
 /* the relay must be LIVE before we type — the state frame's presence
    roster is its observable arrival (without the socket, saves fall
    back to the plain PUT, which has no revision discipline to reject) */
-await waitFor(`(document.querySelector("dialog[open] [data-draftnote]")?.textContent || "")
-               .includes("editing with")`, "relay/2 socket joined", 8000);
+await waitFor(`!!document.querySelector("dialog[open] [data-draftnote] [data-roster]")`,
+              "relay/2 socket joined", 8000);
 await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=recipe]");
   ta.value = "v1 typed in this ui";
   ta.dispatchEvent(new Event("input", {bubbles: true}));
@@ -3523,6 +3523,24 @@ async function questPhoneStory() {
     ok(`${name} is a sheet inside the screen, with nothing wider than it`,
        s.left >= -0.5 && s.right <= W + 0.5 && s.wide <= s.room);
   };
+  /* the open dialog's foot: every button whole inside the screen, no
+     unnamed peer in the draft line, no repo in a placeholder */
+  const footFits = async name => {
+    const f = await evaljs(`(() => {
+      const g = document.querySelector("dialog[open]");
+      const cut = [...g.querySelectorAll(".dlgfoot button")].filter(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && (r.left < -0.5 || r.right > innerWidth + 0.5);
+      }).map(b => b.textContent);
+      return {cut,
+              note: g.querySelector("[data-draftnote]")?.textContent || "",
+              hints: [...g.querySelectorAll("[placeholder]")].map(i => i.placeholder)}; })()`);
+    if (f.cut.length) console.log(`  ${name}, cut: ` + JSON.stringify(f.cut));
+    ok(`every button of ${name} is whole inside the screen`, f.cut.length === 0);
+    ok(`${name} names no unnamed peer`, !f.note.includes("anonymous"));
+    ok(`${name} shows no repo or pull request as a placeholder`,
+       f.hints.every(h => !/github:|#\d/.test(h)));
+  };
   /* a touch target: where a finger lands on it, how tall it is, whether
      all of it is on the screen, and whether the finger lands on IT */
   const target = sel => `(() => {
@@ -3684,6 +3702,7 @@ async function questPhoneStory() {
   ok("a tap on Go opens the step's door, with its needs lit",
      says.needs.length === 0 || lit > 0);
   await sheetFits("the step's door");
+  await footFits("the step's door");
   await noOverflow("under the step's door");
   await shot("phone-quest-go");
   await evaljs(`(() => {
