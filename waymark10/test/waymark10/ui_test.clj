@@ -929,6 +929,18 @@
       (is (str/includes? body "mark.className = \"epicmark\";"))
       (is (= #{"html.present .epicmark"}
              (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?\.epicmark)\s*\{" body))))))
+    (testing "the phone's tab bar and the intent cards are not drawn, and the toast and the undo stack sit at the top"
+      ;; ticket c0cb83af: a film's caption is burned over the bottom of
+      ;; the frame, and an intent card names an actor by its id
+      (is (str/includes? body "html.present #intents { display: none !important; }"))
+      (is (str/includes? body "html.present[data-ui=\"mobile\"] header nav { display: none !important; }"))
+      (is (str/includes? body "html.present #toast { top: 12px !important; bottom: auto !important; }"))
+      (is (str/includes? body "html.present #undostack { top: 64px !important; bottom: auto !important;"))
+      (is (str/includes? body "<div id=\"toast\"></div>"))
+      (is (str/includes? body "<div id=\"intents\" aria-live=\"polite\" aria-label=\"live intents\"></div>"))
+      (is (str/includes? body "<div id=\"undostack\" aria-live=\"polite\" aria-label=\"undo the last few things you did\"></div>"))
+      (testing "and the desktop header's nav is not among them"
+        (is (not (re-find #"html\.present header nav" body)))))
     (testing "and out of presentation mode both are drawn"
       ;; nothing but the banner's own [hidden], film mode and the
       ;; `present` class takes either away
