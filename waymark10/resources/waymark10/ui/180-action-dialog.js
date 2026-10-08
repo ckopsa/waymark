@@ -198,7 +198,12 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   };
   const showPeers = participants => {
     const me = viewerId() || "anonymous";
-    const others = (participants || []).filter(p => p.id !== me);
+    /* a socket the engine could not name is no one to name: under the
+       dev box it is this page's own, which carries no principal header */
+    const others = (participants || [])
+      .filter(p => p.id !== me && p.id !== "anonymous");
+    /* the roster's arrival, for a reader that waits on the socket */
+    peers.dataset.roster = String((participants || []).length);
     peers.textContent = others.length
       ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
   };
