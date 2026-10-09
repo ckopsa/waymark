@@ -779,6 +779,18 @@
     (catch clojure.lang.ExceptionInfo e
       (if (refused? e) [] (throw e)))))
 
+(defn- settled
+  "A check run that carries a conclusion and the time it ended is
+  finished, whatever its `status` says: GitHub has left a run reading
+  `in_progress` beside `conclusion: success` and a `completed_at`, and
+  a pass that waits on the status word waits on it forever (ticket
+  9112f56e)."
+  [check]
+  (if (and (word (:conclusion check)) (word (:completed_at check))
+           (not= "completed" (word (:status check))))
+    (assoc check :status "completed")
+    check))
+
 (defn- check-runs!
   "Every check run on the head, as one page, and every commit status
   beside them. `filter=latest` is GitHub's own: a check run that ran
@@ -792,7 +804,7 @@
        (let [resp (call! this "GET"
                          (str "/repos/" repo "/commits/" sha "/check-runs")
                          {:params {:per_page page-size :filter "latest"}})]
-         (vec (:check_runs resp)))
+         (mapv settled (:check_runs resp)))
        (catch clojure.lang.ExceptionInfo e
          (if (refused? e)
            (do (swap! actions-only conj repo)
