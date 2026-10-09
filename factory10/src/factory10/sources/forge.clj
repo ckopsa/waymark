@@ -1821,6 +1821,40 @@
 (defn- red-head-line [sha names]
   (cut (str sha ": " (str/join ", " names)) 400))
 
+(defn- work-kept
+  "A MAIN-RED TICKET THAT MENDS ITSELF KEEPS THE SEAT'S WORK (ticket
+  d5000a1c). `mend` ends the ticket, and the ending closes its open
+  change through `supersede`. A flake's ticket went green that way
+  while a seat held an edit on its bench branch, and the edit was
+  lost. So the base pass asks the bench first. → the open change born
+  from this ticket, with no pull request, whose branch has edits or
+  commits ahead of the base; `:unknown` when the bench did not answer
+  for one; nil when every such change is empty, which `mend` closes as
+  before. A branch the bench refuses to read holds no work."
+  [eng policy ticket-row]
+  (let [born (str "ticket:" (:id ticket-row))
+        repo (str (get-in policy [:data :repository]))
+        changes (into {}
+                      (comp (filter #(and (= born (str (get-in % [:data :born_from])))
+                                          (= :open (state-of %))
+                                          (nil? (get-in % [:data :number]))))
+                            (map (juxt :id identity)))
+                      (concat (rows-by eng :change {:state "open" :change_id born} 50)
+                              (rows-by eng :change {:state "open" :repository repo}
+                                       200)))]
+    (reduce (fn [found change]
+              (let [status (bench/ask {:services (:services eng)} :status
+                                      {:repo repo
+                                       :branch (bench/branch-of change policy)})]
+                (cond
+                  (nil? status) :unknown
+                  (bench/refused status) found
+                  (or (pos? (long (or (:dirty status) 0)))
+                      (pos? (long (or (:ahead status) 0)))) (reduced change)
+                  :else found)))
+            nil
+            (vals changes))))
+
 (defn- seen-head? [ticket-row sha]
   (boolean (some #(str/starts-with? (str %) (str sha))
                  (get-in ticket-row [:data :red_heads]))))
@@ -2087,11 +2121,32 @@
               (cond
                 (not (and (= "red" now) (= "red" was)))
                 (if (and (= "green" now) live)
-                  (do (inv/invoke! eng :ticket (str (:id live)) :mend
-                                   {:close_reason (str base " is green again at "
-                                                       head ".")}
-                                   (base-opts))
-                      [(update census :base-closed inc) stored-ticket])
+                  (let [kept (work-kept eng policy live)]
+                    (cond
+                      (nil? kept)
+                      (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                       {:close_reason (str base " is green again at "
+                                                           head ".")}
+                                       (base-opts))
+                          [(update census :base-closed inc) stored-ticket])
+
+                      ;; its change holds work: the ticket is not ended,
+                      ;; and the sentence is written one time
+                      (and (map? kept) (= :open (state-of live))
+                           (str/blank? (str (get-in live [:data :green_note]))))
+                      (do (inv/invoke! eng :ticket (str (:id live)) :note_green
+                                       {:green_note
+                                        (str base " is green again at " head
+                                             " on its own. The change on "
+                                             (bench/branch-of kept policy)
+                                             " holds work that is not submitted,"
+                                             " so this ticket was left open.")}
+                                       (base-opts))
+                          [census stored-ticket])
+
+                      ;; noted already, or the bench did not answer:
+                      ;; the next green pass asks again
+                      :else [census stored-ticket]))
                   [census stored-ticket])
 
                 ;; red twice, on a head the known ticket already carries:

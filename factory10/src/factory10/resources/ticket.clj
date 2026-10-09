@@ -1078,6 +1078,11 @@
                (vec (take-last 50 (distinct (conj (vec heads)
                                                   (:red_head inp))))))))
 
+(defhandler note-a-green-base [row inp _ctx]
+  ;; The base went green while this ticket's change held work (ticket
+  ;; d5000a1c): the sentence is written, and the ticket is not ended.
+  (assoc-in row [:data :green_note] (str (:green_note inp))))
+
 ;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
 
 (def ^:private move-doors
@@ -1476,6 +1481,15 @@
                  :label "Red heads of the base"
                  :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
     [:maybe [:vector [:string {:max 400}]]]]
+   ;; ticket d5000a1c: written by the base pass when the base went green
+   ;; while this ticket's change held work, in place of the ending
+   [:green_note {:optional true
+                 :examples ["main is green again at 1f0c2d3e4a5b60718293a4b5c6d7e8f901234567 on its own. The change on bench/1f0c holds work that is not submitted, so this ticket was left open."]
+                 :x-display
+                 {:raw true
+                  :label "Green on its own"
+                  :help "What the base pass wrote when the base went green while this ticket's change held work that was not submitted. The ticket was left open, so its groomers decide whether that work still ships."}}
+    [:maybe [:string {:max 480}]]]
    ;; ticket d069bc3b: written by the house merge pass, as the change's
    ;; place in the line is, and cleared when nothing holds the merge
    [:merge_waits {:optional true
@@ -2290,6 +2304,25 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Red head noted" :order 15
                :description "The base went red again on a new head"}}
+
+    ;; ── GREEN ON ITS OWN, WITH WORK ON THE BENCH (ticket d5000a1c) ───
+    ;; `mend` ends the ticket, and the ending closes its open change.
+    ;; A change that holds work is not closed: the base pass walks this
+    ;; door in place of `mend`, and the ticket stays open.
+    :note_green
+    {:from #{:open} :to :open
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     ;; `note_merge`'s reason: the engine writes a first value onto a
+     ;; blank field, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
 
     :mend
     {:from #{:draft :open :in_review :blocked :deferred} :to :done
