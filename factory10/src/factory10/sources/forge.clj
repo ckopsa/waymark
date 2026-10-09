@@ -2142,11 +2142,19 @@
                                              " holds work that is not submitted,"
                                              " so this ticket was left open.")}
                                        (base-opts))
-                          [census stored-ticket])
+                          [(update census :base-kept inc) stored-ticket])
 
-                      ;; noted already, or the bench did not answer:
-                      ;; the next green pass asks again
-                      :else [census stored-ticket]))
+                      ;; the bench did not answer: the ticket is held and
+                      ;; no sentence is written on it, so the log says so
+                      ;; (ticket 6d8e3a3e). The next green pass asks again
+                      (= :unknown kept)
+                      (do (log-fn "the red-base ticket " (:id live) " of " repo
+                                  " was left open on a green " base
+                                  ": the bench did not answer for its change")
+                          [(update census :base-kept inc) stored-ticket])
+
+                      ;; noted already: the next green pass asks again
+                      :else [(update census :base-kept inc) stored-ticket]))
                   [census stored-ticket])
 
                 ;; red twice, on a head the known ticket already carries:
@@ -2377,6 +2385,7 @@
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
+   :base-kept 0
    :stale-noted 0 :floor-filed 0 :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
@@ -2515,10 +2524,12 @@
                      (:rerun-noted census) " interrupted again and left"))
               (when (pos? (long (+ (long (:base-opened census))
                                    (long (:base-noted census))
-                                   (long (:base-closed census)))))
+                                   (long (:base-closed census))
+                                   (long (:base-kept census)))))
                 (str ", " (:base-opened census) " red-base tickets opened, "
                      (:base-noted census) " red heads noted, "
-                     (:base-closed census) " closed on green"))
+                     (:base-closed census) " closed on green, "
+                     (:base-kept census) " kept on green"))
               (when (pos? (long (:floor-filed census)))
                 (str ", " (:floor-filed census) " groom-floor tickets filed"))
               (when (pos? (long (:refused census)))
