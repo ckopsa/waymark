@@ -178,6 +178,31 @@
     (is (= :open (state-of (first (tickets engine)))))
     (is (= :open (state-of (change-of engine change-id))))))
 
+(deftest a-green-base-keeps-the-draft-ticket-whose-stuck-change-holds-work
+  ;; ticket e666bd6a: the seat stalled its change, which sent the ticket
+  ;; to draft, and its edit was still on the bench branch
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (inv/invoke! engine :change change-id :stall
+                 {:why "The red test passes here, so I cannot fix it."}
+                 {:principal a-person
+                  :if-match (inv/etag :change change-id
+                                      (:version (change-of engine change-id)))})
+    (is (= :stuck (state-of (change-of engine change-id))))
+    (is (= :draft (state-of (first (tickets engine)))))
+    (head-at! w head-2 515 "success")
+    (is (= 0 (:base-closed (pass! w))) "the ticket is not ended")
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :draft (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :stuck (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
 (deftest a-green-base-ends-the-ticket-whose-change-is-empty
   (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 0})
         change-id (red-ticket-with-a-change! w)]
@@ -188,6 +213,26 @@
       (is (str/blank? (str (get-in tk [:data :green_note])))))
     (is (= :closed (state-of (change-of engine change-id)))
         "an empty change is closed with its ticket, as before")))
+
+(deftest a-green-base-keeps-the-ticket-when-the-bench-is-dark
+  ;; ticket 6d8e3a3e: the bench answers nothing, so the pass cannot tell
+  ;; an empty change from one that holds work
+  (let [{:keys [engine source] :as w} (benched-world nil)
+        change-id (red-ticket-with-a-change! w)
+        lines (atom [])
+        _ (head-at! w head-2 515 "success")
+        census (forge/pass! {:source source :engine engine
+                             :log-fn (fn [& parts]
+                                       (swap! lines conj (apply str parts)))})
+        tk (first (tickets engine))]
+    (is (= 0 (:base-closed census)))
+    (is (= 1 (:base-kept census)) "the census counts the ticket it held")
+    (is (= :open (state-of tk)))
+    (is (= :open (state-of (change-of engine change-id))))
+    (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
+    (is (= 1 (count (filter #(str/includes? % "the bench did not answer")
+                            @lines)))
+        "and one line says why it was held")))
 
 (deftest a-base-red-once-and-green-next-opens-nothing
   (let [{:keys [engine] :as w} (world)]
