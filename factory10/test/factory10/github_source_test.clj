@@ -2550,6 +2550,34 @@
     {:state state :engine engine :source source :clock clock
      :lines (atom [])}))
 
+(deftest a-check-with-a-conclusion-and-an-end-is-finished
+  ;; the shape GitHub left on ckopsa/waymark#1095: check run
+  ;; 113855755394 (ticket 9112f56e)
+  (let [{:keys [state source]} (limit-rig)
+        gate {:id 113855755394 :name "gate" :status "in_progress"
+              :conclusion "success" :head_sha limit-head
+              :started_at "2026-10-09T14:02:24Z"
+              :completed_at "2026-10-09T14:02:26Z"}
+        named (fn [n] (first (filter #(= n (:check_name %))
+                                     (forge/forge-checks source repo
+                                                         limit-head))))]
+    (gh/seed-check! state repo limit-head gate)
+    (is (= "completed" (:status (named "gate")))
+        "the conclusion and the end speak, not the status word")
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                (forge/forge-checks source repo limit-head))))
+
+    (testing "a run with no conclusion is still running"
+      (gh/seed-check! state repo limit-head
+                      {:id 113855755401 :name "image" :status "in_progress"
+                       :head_sha limit-head
+                       :started_at "2026-10-09T14:02:24Z"})
+      (is (= "in_progress" (:status (named "image"))))
+      (is (nil? (forge/check-verdict
+                 ["gate" "image"]
+                 (forge/forge-checks source repo limit-head)))))))
+
 (defn- limit-pass! [{:keys [source engine lines]}]
   (forge/pass! {:source source :engine engine
                 :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
