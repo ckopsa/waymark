@@ -325,18 +325,22 @@
   filter the kind cannot
   answer is a warning and a nil — a seat that cannot be counted for
   is a seat that says nothing, rather than a consumer that parks."
-  [eng kind filter-map]
-  (when-some [rdef (get (inv/resources eng) kind)]
-    (try
-      (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-            conds (:conds (collections/parse-query rdef params))
-            st (:storage eng)]
-        (store/with-tx st
-          (fn [tx] (store/count-matching st tx (:kind rdef) conds))))
-      (catch Exception e
-        (warn! "the count wake over " (name kind) " could not be counted — "
-               (ex-message e))
-        nil))))
+  ([eng kind filter-map] (count-under eng kind filter-map nil))
+  ;; `extra` is store conds counted under beside the filter's own: a
+  ;; judging seat's anti-join (`judged-out`)
+  ([eng kind filter-map extra]
+   (when-some [rdef (get (inv/resources eng) kind)]
+     (try
+       (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
+             conds (into (vec (:conds (collections/parse-query rdef params)))
+                         extra)
+             st (:storage eng)]
+         (store/with-tx st
+           (fn [tx] (store/count-matching st tx (:kind rdef) conds))))
+       (catch Exception e
+         (warn! "the count wake over " (name kind) " could not be counted — "
+                (ex-message e))
+         nil)))))
 
 (defn moved-under?
   "Does the row that MOVED fall under this entry's filter (R-12.22)?
@@ -853,12 +857,14 @@
 (defn- ids-under
   "`count-under`'s rows by id rather than by number, at most
   `queue-page` of them, as a set of strings; nil when the kind is not
-  served or the filter cannot be answered."
-  [eng kind filter-map]
+  served or the filter cannot be answered. `extra` is store conds read
+  under beside the filter's own (`judged-out`)."
+  [eng kind filter-map extra]
   (when-some [rdef (get (inv/resources eng) kind)]
     (try
       (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-            conds (:conds (collections/parse-query rdef params))
+            conds (into (vec (:conds (collections/parse-query rdef params)))
+                        extra)
             st (:storage eng)]
         (into #{} (map str)
               (store/with-tx st
@@ -870,33 +876,27 @@
         nil))))
 
 (defn- withheld-rows
-  "The walk row ids a sit of this seat would leave off its page:
-  `seats/unwalkable-rows`, and for a seat that walks a judgment the
-  subjects that judgment has already judged (`judgments/judged-subjects`,
-  which `mcp/walk-of` subtracts the same way). Without the second, a
-  judged subject still open in the queue read as a row to hand: a seat
-  of several slots fired again on every sitting's close, and each run
-  sat to an empty walk (ticket 871c8555). A judge of sittings is also
-  not handed its own sittings nor an unfinished one
-  (`judgments/unjudgeable-sittings`, ticket f508c646). → a set of ids."
+  "The walk row ids a sit of this seat would leave off its page after
+  the queue is read: `seats/unwalkable-rows`. → a set of ids."
   [eng seat-row]
-  (let [skip (set (seats/unwalkable-rows eng seat-row nil))]
-    (if-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
-      (-> skip
-          (into (judgments/judged-subjects eng jid))
-          (into (judgments/unjudgeable-sittings
-                 eng (raw-row eng :judgment jid) (:id seat-row))))
-      skip)))
+  (set (seats/unwalkable-rows eng seat-row nil)))
 
-(defn- handable
-  "The ids of `ids` a sit of this seat would hand, `skip` being its
-  `withheld-rows`. For a seat that walks a judgment the judged subjects
-  are left out whole, past the one page `skip` holds of them
-  (`judgments/unjudged`, ticket 245c880b)."
-  [eng seat-row skip ids]
-  (if-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
-    (judgments/unjudged eng jid skip ids)
-    (remove skip ids)))
+(defn- judged-out
+  "For a seat that walks a judgment, the conds that leave out of its
+  queue the subjects that judgment has already judged and, for a judge
+  of sittings, its own sittings and the unfinished ones
+  (`judgments/walk-conds`, which `mcp/walk-of` reads the same way,
+  ticket f508c646); nil for any other seat. Without them a judged
+  subject still open in the queue read as a row to hand: a seat of
+  several slots fired again on every sitting's close, and each run sat
+  to an empty walk (ticket 871c8555). The store answers them in the
+  queue's own query, so the count has no page of verdicts to run past
+  and the ids read are free ones (ticket 279366ee)."
+  [eng seat-row]
+  (when-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
+    (not-empty
+     (judgments/walk-conds eng (or (raw-row eng :judgment jid) {:id jid})
+                           (:id seat-row)))))
 
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
@@ -909,9 +909,8 @@
   (let [seat-id (str (:id seat-row))
         flying (long (in-flight eng seat-id at))
         queue (when-some [[kind f] (walk-query eng seat-row)]
-                (ids-under eng kind f))
-        unclaimed (count (handable eng seat-row
-                                   (withheld-rows eng seat-row) queue))]
+                (ids-under eng kind f (judged-out eng seat-row)))
+        unclaimed (count (remove (withheld-rows eng seat-row) queue))]
     {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying))}))
 
@@ -1086,16 +1085,19 @@
   and the walk's scope entry filter otherwise, both under the kind's
   defaults. Less, as the sit leaves them out, the rows another open
   sitting holds, the tickets whose change is stuck (ticket e031e479)
-  and the subjects the seat's judgment has judged (`withheld-rows`,
-  ticket 871c8555): with none of those the count is `count-under`'s,
-  and with some it is the queue's ids, at most `queue-page` of them,
-  less those. A zero here is a zero on the sit's page too."
+  (`withheld-rows`), and the subjects the seat's judgment has judged
+  (`judged-out`, ticket 871c8555). The judged are left out by the store
+  in the count's own query. With no row withheld the count is
+  `count-under`'s, and with some it is the queue's ids, at most
+  `queue-page` of them, less those. A zero here is a zero on the sit's
+  page too."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
-    (let [skip (withheld-rows eng seat-row)]
+    (let [skip (withheld-rows eng seat-row)
+          out (judged-out eng seat-row)]
       (if (empty? skip)
-        (count-under eng walk f)
-        (some->> (ids-under eng walk f) (handable eng seat-row skip) count)))))
+        (count-under eng walk f out)
+        (some->> (ids-under eng walk f out) (remove skip) count)))))
 
 (defn- unjudged-transcripts
   "How many sealed transcripts under the entry's filter record a
@@ -1162,11 +1164,12 @@
       (walk-count eng seat-row)
 
       (and walk (= walk kind))
-      (let [skip (withheld-rows eng seat-row)]
+      (let [skip (withheld-rows eng seat-row)
+            out (judged-out eng seat-row)]
         (if (empty? skip)
-          (count-under eng kind (:filter e))
-          (some->> (ids-under eng kind (:filter e))
-                   (handable eng seat-row skip)
+          (count-under eng kind (:filter e) out)
+          (some->> (ids-under eng kind (:filter e) out)
+                   (remove skip)
                    count)))
 
       :else
@@ -1180,7 +1183,7 @@
   (ticket 1a4038bf)."
   [eng seat-row ^Instant at]
   (when-some [[kind f] (walk-query eng seat-row)]
-    (when-some [queue (not-empty (ids-under eng kind f))]
+    (when-some [queue (not-empty (ids-under eng kind f nil))]
       (seats/grace-lifts-at eng seat-row queue at))))
 
 (defn- empty-walk?

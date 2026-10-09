@@ -1157,6 +1157,36 @@
                    (ids [knives flour salt])))
             "and the wake counts none of them")))))
 
+;; ── 9‴ · the store leaves the judged out of the queue (ticket 279366ee) ─
+
+(deftest judged-subjects-past-the-walk's-pages-do-not-hide-the-free-one
+  ;; the judged were subtracted after each page was read, so a walk
+  ;; stopped at its cap of pages with a free subject behind them, and
+  ;; the wake counted the first ids of the queue alone. The cap is one
+  ;; page here and the wake's page ten ids, with 150 judged ahead
+  (with-redefs-fn {#'mcp/walk-pages-max 1
+                   #'wakes/queue-page 10}
+    (fn []
+      (let [eng (fresh-engine)
+            h (engine/handler eng)
+            judgment (promoted-judgment! eng {})
+            seat (open-judge-seat! eng judgment {})
+            at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+            judged (mapv #(expense! eng (str "Vendor " %) "kitchen" (at %))
+                         (range 150))
+            free (expense! eng "Flour mill" "kitchen" (at 150))
+            _ (doseq [e judged]
+                (say! eng judgment e "keep" "Nothing to do: the amount fits."))]
+        (is (= 1 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+            "the wake counts the one free subject, behind 150 judged")
+        (let [[r answer why] (empty-sit! eng h)]
+          (is (false? (:isError r)) (text-of r))
+          (is (= 151 (get-in answer [:walk :total]))
+              "the total is still the whole queue")
+          (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows])))
+              "the free expense is handed from behind more pages than the cap")
+          (is (nil? why)))))))
+
 ;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
 
 (def ^:private empty-queue-sentence

@@ -615,6 +615,33 @@
                            " has no table on this storage (never ensured here)")
                       {:waymark10/unknown-kind true :kind kind}))))
 
+(defn- conds-sql
+  "Every cond → [sql-fragment params], for a query over `table`. A
+  :no-row cond is the anti-join: the row stays when no row of the
+  kind it names, under that kind's own conds, carries this row's id
+  (or its field's text) in the named place. It is spelled here and not
+  in `cond-sql` because it names a second table. The inner conds are
+  unqualified, and inside the subquery they read the inner table."
+  [tables table conds]
+  (map (fn [{:keys [op target field from] :as c}]
+         (if (= :no-row op)
+           (let [side (fn [t tgt f]
+                        (if (= :id tgt)
+                          (str t ".id")
+                          (str t ".data->>'"
+                               (store/definition-checked-name f) "'")))
+                 parts (map cond-sql (:conds from))]
+             [(str "NOT EXISTS (SELECT 1 FROM "
+                   (table-for tables (:kind from)) " AS j WHERE "
+                   (side "j" (:target from) (:field from))
+                   " = " (side table target field)
+                   (when (seq parts)
+                     (str " AND " (str/join " AND " (map first parts))))
+                   ")")
+              (vec (mapcat second parts))])
+           (cond-sql c)))
+       conds))
+
 (defrecord PostgresStorage [^HikariDataSource ds tables]
   store/Storage
   (with-tx* [_ f]
@@ -882,7 +909,7 @@
 
   (count-matching [_ tx kind conds]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           sql (str "SELECT count(*) AS n FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts)))))]
@@ -903,7 +930,7 @@
 
   (ids-matching [_ tx kind conds limit]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           sql (str "SELECT id FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
@@ -955,7 +982,7 @@
 
   (search-rows [_ tx kind conds {:keys [order-by desc then-by limit offset]}]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           column (fn [f]
                    (cond
                      (nil? f) "created_at"
@@ -980,7 +1007,7 @@
 
   (facet-counts [_ tx kind field conds array? absent-as]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           ;; a scalar field's absent rows count under the declared value
           absent (when-not (or (= :state field) array?) absent-as)
           expr (cond

@@ -754,7 +754,13 @@
         (let [rows (rows-of params)
               env (collections/envelope eng rdef (dissoc params "rows")
                                         (cond-> (render-opts eng req)
-                                          rows (assoc :rows rows)))]
+                                          rows (assoc :rows rows)
+                                          ;; an in-process caller's own
+                                          ;; conds (`mcp/walk-of`): no
+                                          ;; wire request carries the key
+                                          (:waymark10/extra-conds req)
+                                          (assoc :extra-conds
+                                                 (:waymark10/extra-conds req))))]
           (mark-read! eng req (str "/api/" plural))
           (json-response 200 env media-type nil))))))
 
