@@ -1242,6 +1242,96 @@
                         (not= head (str (get-in row [:data :head_sha]))))))
       (second (move-change! eng row doc)))))
 
+;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
+;;
+;; `check-verdict` answers nil while a required check has no verdict,
+;; and a green head that is behind its base does not merge either: both
+;; sit at `submitted` and say nothing. Past `held-log-minutes` on one
+;; head the pass logs why, one time for that head.
+
+(def held-log-minutes
+  "How long a submitted head may wait before the pass logs why it is
+  held: longer than an ordinary run of the checks."
+  20)
+
+(defonce ^:private held-seen (atom {}))
+
+(defn held-checks
+  "The required checks without a verdict among `checks`, as
+  [{:name :status :conclusion} …]: a check with no run at all (no
+  status), a run that has not completed, and a run that completed with
+  a conclusion `check-verdict` does not judge."
+  [required checks]
+  (into []
+        (mapcat
+         (fn [[n runs]]
+           (if (empty? runs)
+             [{:name n :status nil :conclusion nil}]
+             (keep (fn [run]
+                     (let [status (some-> (:status run) str not-empty)
+                           conclusion (some-> (:conclusion run) str not-empty)]
+                       (when-not (and (= "completed" status)
+                                      (or (contains? red-conclusions conclusion)
+                                          (contains? green-conclusions conclusion)
+                                          (= "cancelled" conclusion)))
+                         {:name n :status status :conclusion conclusion})))
+                   runs))))
+        (required-runs required checks)))
+
+(defn held-why
+  "The line a held change logs, or nil when there is nothing to say:
+  the checks without a verdict with each one's status and conclusion,
+  or, when every required check has one and `behind?` is true, that
+  the change is held only because it is behind its base."
+  [change-id head required checks behind?]
+  (let [held (held-checks required checks)]
+    (cond
+      (seq held)
+      (str "the checks of " change-id " at " head " have no verdict: "
+           (str/join ", "
+                     (map (fn [{:keys [name status conclusion]}]
+                            (if status
+                              (str name " (status " status ", conclusion "
+                                   (or conclusion "none") ")")
+                              (str name " (no run)")))
+                          held)))
+
+      (true? behind?)
+      (str change-id " at " head " is held only because it is behind its "
+           "base; its required checks are green"))))
+
+(defn held-due
+  "[seen' due?] for one held change: `seen` is change id → {:head :since
+  :said}. The wait counts from the first pass that saw this head held,
+  and it is due one time, when the wait reaches `limit` minutes at
+  `now`. A new head starts the wait again."
+  [seen id head ^java.time.Instant now limit]
+  (let [was (get seen id)
+        same? (= head (:head was))
+        ^java.time.Instant since (if same? (:since was) now)
+        said? (boolean (and same? (:said was)))
+        due? (and (not said?)
+                  (>= (.toMinutes (java.time.Duration/between since now))
+                      (long limit)))]
+    [(assoc seen id {:head head :since since :said (or said? due?)}) due?]))
+
+(defn- log-held!
+  "Logs why a submitted head is held, when its wait is due (`held-due`).
+  `checked` is the head's verdict: with one, the base is compared, and a
+  forge that does not answer says nothing."
+  [eng source row repo head required checks checked log-fn]
+  (let [[seen due?] (held-due @held-seen (str (:id row)) head (now-of eng)
+                              held-log-minutes)]
+    (reset! held-seen seen)
+    (when due?
+      (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
+            behind? (when (and checked base (satisfies? ForgeCompare source))
+                      (try (boolean (forge-behind? source repo base head))
+                           (catch Exception _ nil)))]
+        (when-some [line (held-why (get-in row [:data :change_id]) head
+                                   required checks behind?)]
+          (log-fn line))))))
+
 (defn- failing-pass!
   "Every submitted or failing change of a repository with an active
   policy → its head's checks, read against the policy, and at most one
@@ -1288,6 +1378,15 @@
                                 (when (and (= :failing (state-of row))
                                            (queue-left? row required checks))
                                   {:verdict :started})))
+                   ;; a submitted head with no verdict, or green and
+                   ;; still here, says why past the bound (ticket
+                   ;; 5b1c2c88)
+                   _ (if (and (not landing)
+                              (= :submitted (state-of row))
+                              (or (nil? checked) (= :green (:verdict checked))))
+                       (log-held! eng source row repo head required checks
+                                  checked log-fn)
+                       (swap! held-seen dissoc (str (:id row))))
                    ;; every required check finished on a house change:
                    ;; wake the merge pass (ticket 6e190062)
                    _ (when (and checked (bench/house-pass-merges? policy))
