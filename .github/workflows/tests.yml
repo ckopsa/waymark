@@ -726,7 +726,10 @@ jobs:
     name: test10 (shard ${{ matrix.shard.id }})
     services:
       postgres:
-        image: postgres:16
+        # Docker Hub's library image, from the ECR Public mirror: an
+        # anonymous pull from Docker Hub is rate limited by runner IP,
+        # and a 429 there reddens the gate with no fault in the change.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_test
@@ -909,7 +912,7 @@ jobs:
     name: test-queue (shard ${{ matrix.shard.id }})
     services:
       postgres:
-        image: postgres:16
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_test
@@ -1142,7 +1145,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_ui_test
@@ -1265,7 +1268,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_ui_test
