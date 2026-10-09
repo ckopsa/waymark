@@ -645,6 +645,47 @@
         (is (= 5 (#'wakes/entry-count eng (raw-of eng :seat (:id judge)) either))
             "open,sealed counts the four unjudged sealed and the open one")))))
 
+(deftest a-judges-count-over-transcripts-has-no-page-to-run-past
+  ;; the count read the newest 500 sealed transcripts and the oldest 500
+  ;; said verdicts, so an unjudged sitting older than 500 judged ones
+  ;; was counted by nobody (ticket 2abff5f9)
+  (let [eng (fresh-engine)
+        judgment (sitting-judgment! eng)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]
+                :wake_on [seal-count]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
+        waiting (sealed-sitting! eng worker model grant)]
+    (is (= 1 (n)) "one sealed transcript, its sitting unjudged")
+    (dotimes [_ 501]
+      (judge-sitting! eng judgment (sealed-sitting! eng worker model grant)))
+    (is (= 1 (n))
+        "501 judged sittings sealed after it, and the one waiting still counts")
+    (judge-sitting! eng judgment waiting)
+    (is (= 0 (n)) "judged, it counts no more")))
+
 ;; ── a judge of sittings is handed only what it can read (ticket f508c646) ──
 
 (def ^:private no-transcript-sentence

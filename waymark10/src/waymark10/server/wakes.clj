@@ -1104,31 +1104,44 @@
   sitting this judgment has not judged (ticket c9edc5bd), or nil when
   they cannot be read. Only fired sittings keep a transcript
   (`keep_transcripts` fired), so this is the fired sittings still
-  waiting on the judge. The newest `judgments/judged-page` sealed transcripts
-  are read, the unjudged being the fresh end of the table; the entry's
+  waiting on the judge. The entry's
   filter is read through `collections/parse-query`, as `count-under`
   reads it — so a comma value is any-of — and its own `state` replaces
-  `sealed`. `own` is the judging seat's own sittings
-  (`judgments/own-sittings`): the walk never hands one, so a wake never
-  counts one (ticket f508c646)."
-  [eng judgment-id filter-map own]
+  `sealed`. The store counts them in that one query (ticket 2abff5f9),
+  under two anti-joins on the transcript's `sitting`: no standing
+  (`said`) verdict of the judgment on it, `judgments/walk-conds`' rule,
+  and no sitting of the judging seat `seat-id` with that id: the walk
+  never hands the seat its own sitting, so a wake never counts one
+  (ticket f508c646). No page of transcripts, verdicts or sittings
+  bounds the count."
+  [eng judgment-id filter-map seat-id]
   (when-some [rdef (when (serves? eng :transcript)
                      (get (inv/resources eng) :transcript))]
     (try
       (let [params (merge {"state" "sealed"}
                           (into {} (map (fn [[f v]] [(name f) (str v)]))
                                 filter-map))
-            conds (:conds (collections/parse-query rdef params
-                                                   {:defaults? false}))
-            judged (into (judgments/judged-subjects eng judgment-id) own)
+            conds (cond-> (vec (:conds (collections/parse-query
+                                        rdef params {:defaults? false})))
+                    (serves? eng :verdict)
+                    (conj {:target :data :field :sitting :op :no-row
+                           :from {:kind :verdict :target :data
+                                  :field :subject_id
+                                  :conds [{:target :state :op :=
+                                           :value "said"}
+                                          {:target :data :field :judgment
+                                           :cast "text" :op :=
+                                           :value (str judgment-id)}]}})
+
+                    (and seat-id (serves? eng :sitting))
+                    (conj {:target :data :field :sitting :op :no-row
+                           :from {:kind :sitting :target :id
+                                  :conds [{:target :data :field :seat
+                                           :cast "text" :op :=
+                                           :value (str seat-id)}]}}))
             st (:storage eng)]
-        (->> (store/with-tx st
-               (fn [tx] (store/search-rows st tx :transcript conds
-                                           {:limit judgments/judged-page
-                                            :desc true})))
-             (map #(str (get-in % [:data :sitting])))
-             (judgments/unjudged eng judgment-id judged)
-             count))
+        (store/with-tx st
+          (fn [tx] (store/count-matching st tx :transcript conds))))
       (catch Exception e
         (warn! "the unjudged transcripts could not be counted — "
                (ex-message e))
@@ -1157,8 +1170,7 @@
         [walk f] (when seat-row (walk-query eng seat-row))]
     (cond
       (and judgment (= :transcript kind))
-      (unjudged-transcripts eng (:id judgment) (:filter e)
-                            (judgments/own-sittings eng (:id seat-row)))
+      (unjudged-transcripts eng (:id judgment) (:filter e) (:id seat-row))
 
       (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
