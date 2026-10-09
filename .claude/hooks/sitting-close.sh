@@ -327,11 +327,17 @@ for index, path in enumerate(paths):
                     taken, queued = queued, []
                     pending -= {agent for agent in pending
                                 if any(agent in was for _, was in taken)}
-                elif queued:  # dequeue or remove: the named one, or the oldest
+                elif queued:
+                    # A dequeue takes the named one, or the oldest. A remove
+                    # takes the named one or nothing: taking an unrelated
+                    # line off would let an unread message stop holding
+                    # the close.
                     at = next((i for i, (had, _) in enumerate(queued)
-                               if body is not None and had == body), 0)
-                    was = queued.pop(at)[1]
-                    pending -= {agent for agent in pending if agent in was}
+                               if body is not None and had == body),
+                              None if operation == "remove" else 0)
+                    if at is not None:
+                        was = queued.pop(at)[1]
+                        pending -= {agent for agent in pending if agent in was}
                 continue
             # A later line that names a pending agent is its hand-back
             # (the task notification). The launch's own answer names it

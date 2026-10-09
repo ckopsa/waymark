@@ -377,6 +377,55 @@
           (is (= 1 (count @tallied)) "the close is not a tally")))
       (finally (.stop server 0)))))
 
+(defn- queue-line
+  "One queue-operation line; a dequeue carries no content."
+  ([operation] {:type "queue-operation" :operation operation})
+  ([operation content] (assoc (queue-line operation) :content content)))
+
+(defn- closes-after
+  "How many closes a Stop sends after these transcript lines, in a place
+  and at a door of its own."
+  [lines]
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)]
+    (try
+      (let [{:keys [exit out err]}
+            (run-hook! dir (transcript! dir port lines)
+                       {:hook_event_name "Stop"})]
+        (is (zero? exit) err)
+        (is (str/blank? out))
+        (count @seen))
+      (finally (.stop server 0)))))
+
+(deftest a-remove-takes-its-own-line-or-nothing
+  (let [first- (queue-line "enqueue" "the first message")
+        second- (queue-line "enqueue" "the second message")]
+    (testing "a remove that matches no queued line takes nothing, and the Stop holds"
+      (is (zero? (closes-after [first- (queue-line "remove" "another message")])))
+      (is (zero? (closes-after [first- second-
+                                (queue-line "remove" "another message")
+                                (queue-line "dequeue")]))
+          "the queue is as it was: one dequeue does not empty it")
+      (is (= 1 (closes-after [first- second-
+                              (queue-line "remove" "another message")
+                              (queue-line "dequeue")
+                              (queue-line "dequeue")]))))
+    (testing "a matching remove takes its own entry, not the oldest"
+      (is (zero? (closes-after [first- second-
+                                (queue-line "remove" "the second message")]))
+          "the first is still queued")
+      (is (= 1 (closes-after [first- second-
+                              (queue-line "remove" "the second message")
+                              (queue-line "remove" "the first message")]))))
+    (testing "a dequeue stays FIFO"
+      (is (= 1 (closes-after [first- second-
+                              (queue-line "dequeue")
+                              (queue-line "remove" "the second message")])))
+      (is (zero? (closes-after [first- second-
+                                (queue-line "dequeue")
+                                (queue-line "remove" "the first message")]))
+          "the dequeue took the first, so the second is still queued"))))
+
 (defn- bash-call
   "A Bash call, in the background or not, and the harness's answer."
   [background? answer]
