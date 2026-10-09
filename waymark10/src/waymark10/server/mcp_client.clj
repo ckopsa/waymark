@@ -8,7 +8,9 @@
 
   • `::close` stops it (a stdio client kills its process);
   • `::dead?` says whether the failure that just happened is the
-    kind the row must go dark for. The http client answers true on
+    kind the row must go dark for. A problem that carries its own
+    verdict (`judged`) is judged by that, whoever called since: an
+    http row's calls run side by side. The http client answers true on
     every failure: a server that did not answer over the wire is
     dark until a person marks it live (R-8). The stdio client
     answers true only after `max-deaths` deaths inside one window,
@@ -106,10 +108,29 @@
                              " grant was judged here either way.")})
     words)))
 
+(defn- judged
+  "The same problem, carrying the client's own verdict on it: `fatal`
+  says whether the row must go dark for this failure. The verdict
+  rides the problem's cause, beside what the server said (`saying`),
+  so the call that failed is judged by what it threw and not by state
+  another call may have written since."
+  [problem fatal]
+  (let [c (ex-cause problem)]
+    (ex-info (ex-message problem) (ex-data problem)
+             (ex-info (str (some-> c ex-message))
+                      (assoc (some-> c ex-data) ::fatal (boolean fatal))))))
+
 (defn dead?
-  "Should the row go dark for the failure this client just had?"
-  [client]
-  (if-some [f (::dead? (meta client))] (boolean (f)) true))
+  "Should the row go dark for the failure this client just had? `e` is
+  the problem the call threw: the verdict its client put on it
+  (`judged`) answers. A problem with no verdict, and no problem at
+  all, ask the client about its last failure."
+  ([client] (dead? client nil))
+  ([client e]
+   (let [d (some-> e ex-cause ex-data)]
+     (cond
+       (contains? d ::fatal) (boolean (::fatal d))
+       :else (if-some [f (::dead? (meta client))] (boolean (f)) true)))))
 
 (defn close!
   "Stop a client. A client with nothing to stop ignores it."
@@ -190,23 +211,30 @@
                   (.build))
          ;; :last is the kind of the last failure: :wire (the server
          ;; did not answer, or answered outside 2xx) is fatal for the
-         ;; row; :rpc (a JSON-RPC error on a call that arrived) is not
+         ;; row; :rpc (a JSON-RPC error on a call that arrived) is not.
+         ;; Calls run side by side, so each problem carries its own
+         ;; kind (`judged`) and :last answers only a caller with no
+         ;; problem in hand
          state (atom {:session nil :id 0 :last nil})
+         ;; one handshake at a time: a caller that finds another's
+         ;; under way waits for it and reuses its session
+         gate (Object.)
          next-id! #(:id (swap! state update :id inc))
          fail! (fn fail!
                  ([kind detail] (fail! kind detail nil))
                  ([kind detail words]
                   (swap! state assoc :last kind)
-                  (throw (unreachable detail words))))
-         raw! (fn [msg]
-                (try (post-message! http url (:session @state)
+                  (throw (judged (unreachable detail words) (= :wire kind)))))
+         raw! (fn [session msg]
+                (try (post-message! http url session
                                     (when headers-fn (headers-fn))
                                     (timeout-of timeout-ms) msg)
                      (catch Exception e
                        (fail! :wire (ex-message e)))))
          handshake! (fn []
                       (let [{:keys [status session-id answer] :as resp}
-                            (raw! {:jsonrpc "2.0" :id (next-id!)
+                            (raw! nil
+                                  {:jsonrpc "2.0" :id (next-id!)
                                    :method "initialize"
                                    :params {:protocolVersion protocol-version
                                             :capabilities {}
@@ -219,20 +247,35 @@
                                    (str context (if s (str " " s) "."))
                                    (when s {:sentence s :context context}))))
                         (swap! state assoc :session session-id)
-                        (raw! {:jsonrpc "2.0"
-                               :method "notifications/initialized"})))
-         request! (fn [method params]
-                    (raw! {:jsonrpc "2.0" :id (next-id!)
+                        (raw! session-id
+                              {:jsonrpc "2.0"
+                               :method "notifications/initialized"})
+                        session-id))
+         ;; the session to call on, opened when there is none
+         open! (fn []
+                 (or (:session @state)
+                     (locking gate
+                       (or (:session @state) (handshake!)))))
+         ;; the session to call on after `stale` answered 404: the one
+         ;; another caller opened meanwhile, else a new one
+         renew! (fn [stale]
+                  (locking gate
+                    (let [now (:session @state)]
+                      (if (and now (not= now stale))
+                        now
+                        (do (swap! state assoc :session nil)
+                            (handshake!))))))
+         request! (fn [session method params]
+                    (raw! session
+                          {:jsonrpc "2.0" :id (next-id!)
                            :method method :params params}))]
      (with-meta
        (fn rpc [method params]
-         (when (nil? (:session @state)) (handshake!))
-         (let [{:keys [status] :as resp} (request! method params)
+         (let [session (open!)
+               {:keys [status] :as resp} (request! session method params)
                {:keys [status answer] :as resp}
                (if (= 404 (long status))
-                 (do (swap! state assoc :session nil)
-                     (handshake!)
-                     (request! method params))
+                 (request! (renew! session) method params)
                  resp)
                s (refusal-sentence resp)]
            (cond
@@ -424,8 +467,9 @@
           (cond
             (identical? ::timeout out)
             (do (reset! timed-out true)
-                (throw (unreachable (str method " did not answer in "
-                                         bound " ms."))))
+                (throw (judged (unreachable (str method " did not answer in "
+                                                 bound " ms."))
+                               true)))
 
             (contains? out :threw)
             (do (reset! timed-out false)
