@@ -813,6 +813,10 @@
                                  ((:conds-of vis) (:kind rdef)))]
                 (into conds fconds)
                 conds)
+        ;; conds the engine itself adds for this one read: a judging
+        ;; walk's anti-join (ticket 279366ee). No query parameter
+        ;; spells them, so neither the hrefs nor the filter echo do
+        conds (into conds (:extra-conds ctx-opts))
         st (:storage eng)
         {:keys [rows total]}
         (store/with-tx st

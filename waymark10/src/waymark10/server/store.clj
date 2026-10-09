@@ -147,7 +147,13 @@
     "COUNT of the kind's rows matching every cond — the maintainer's
     aggregate read. A cond is {:target :state|:id|:data, :field name,
     :cast sql-type, :op :=|:<|:<=|:>=|:>|:in, :value v | :values [vs]};
-    :data values cross as strings and cast server-side.")
+    :data values cross as strings and cast server-side. One more op
+    names a second kind, the anti-join: {:op :no-row, :target :id|:data,
+    :field name, :from {:kind k, :target :id|:data, :field name, :conds
+    [conds]}} keeps the row when NO row of k under those conds carries
+    this row's id (or its field's text) in the named place. The
+    collection's four reads answer it: count-matching, ids-matching,
+    search-rows and facet-counts.")
   (sum-matching [st tx kind of conds]
     "Exact SUM of the :of data field over the cond-matched rows (same
     grammar as count-matching) — the :sum aggregate's read (batch C's
