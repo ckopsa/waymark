@@ -129,7 +129,9 @@
                             :services {:bench-rpc
                                        (fn [_method _params]
                                          {:structuredContent {:result status}})}})]
-    (inv/create! eng :repo_policy {:repository repo :required_checks ["gate"]}
+    ;; the pattern admits `bench/the-red-base`, so `submit` opens on it
+    (inv/create! eng :repo_policy {:repository repo :required_checks ["gate"]
+                                   :branch_pattern "bench/*"}
                  {:principal a-person})
     {:state state :engine eng :source (gh/fake-source state {:repos repo})}))
 
@@ -203,25 +205,37 @@
         (pass! w)
         (is (= (:version tk) (:version (first (tickets engine)))))))))
 
-(defn- force-ticket-state!
-  "The one ticket stands in `state`, as a submit beside it would leave it."
-  [eng state]
-  (let [st (:storage eng)
-        id (str (:id (first (tickets eng))))]
-    (store/with-tx st
-      (fn [tx]
-        (let [row (store/load-row st tx :ticket id {})]
-          (store/save-row! st tx :ticket
-                           (assoc row :state state
-                                  :version (inc (long (:version row))))
-                           (:version row)))))))
+(defn- stick-on-a-failed-landing!
+  "THE PATH PRODUCTION TAKES (ticket 900ee2f2). The seat's `submit`
+  sends the ticket out for review. The landing fails before the pull
+  request opens, so the change has no number and its work is still on
+  the branch. The forge pass reads that as red, and on the last round
+  the policy gives it walks `stick`, which leaves the ticket in review.
+  Under the ceiling it walks `fail`, which sends the ticket back to the
+  queue. `stick` is walked here with the mirror's hand, as the pass
+  walks it."
+  [eng change-id]
+  (inv/invoke! eng :change change-id :submit
+               {:why "Fix the red test."}
+               {:principal a-person
+                :idempotency-key (str (random-uuid))
+                :if-match (inv/etag :change change-id
+                                    (:version (change-of eng change-id)))})
+  (inv/invoke! eng :change change-id :stick
+               {:why "The checks went red on the last round the policy gives: landing:pull_request."
+                :failing_checks ["landing:pull_request"]
+                :landing_error "The pull request did not open."}
+               {:principal mirror/source-principal}))
 
 (deftest a-green-base-keeps-the-ticket-under-review-whose-change-holds-work
   ;; ticket 1188f3ed: the ticket is out for review, and a change born
   ;; from it with no pull request still holds an edit on its branch
   (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
         change-id (red-ticket-with-a-change! w)]
-    (force-ticket-state! engine :in_review)
+    (stick-on-a-failed-landing! engine change-id)
+    (is (= :in_review (state-of (first (tickets engine))))
+        "the change's own doors left the ticket in review")
+    (is (nil? (get-in (change-of engine change-id) [:data :number])))
     (head-at! w head-2 516 "success")
     (let [census (pass! w)]
       (is (= 0 (:base-closed census)) "the ticket is not ended")
@@ -231,7 +245,7 @@
       (is (= :in_review (state-of tk)))
       (is (str/includes? note (str "main is green again at " head-2)))
       (is (str/includes? note "bench/the-red-base"))
-      (is (= :open (state-of (change-of engine change-id)))
+      (is (= :stuck (state-of (change-of engine change-id)))
           "and its change is not superseded")
       (testing "the next green pass writes the sentence no second time"
         (pass! w)
