@@ -1461,6 +1461,14 @@
      [:maybe [:string {:max 500}]]]
     ;; the seat's own mint writes it and the forge never does
     ;; (waymark-fp62.6.3.14)
+    ;;
+    ;; A SECOND LIVE ROW WITH THE SAME `born_from` IS NOT REFUSED HERE
+    ;; (ticket 5aa79167), and no caller needs one: the sit's mint
+    ;; (waymark10.server.mcp/minted-change) is the only writer and looks
+    ;; for a live row first, the forge's mint, `adopt` and `fold` never
+    ;; write the field, and factory10.bench-test builds its duplicates by
+    ;; hand; one that is born anyway, when that lookup misses, is closed
+    ;; by the merge (`close-the-duplicates!`) and by the ticket's ending.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
    :actions
