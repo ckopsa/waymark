@@ -583,6 +583,40 @@
       (finally
         (.countDown latch)))))
 
+;; ── a tool that waits on purpose outlives the row's bound ───────────
+
+(deftest a-slow-tool-answers-past-the-rows-timeout
+  (let [tools [{:name "read" :description "Read a file."
+                :inputSchema {:type "object" :properties {}}}
+               {:name "test_result" :description "Read a run."
+                :inputSchema {:type "object" :properties {}}}]
+        latch (CountDownLatch. 1)
+        rig (fn [method params]
+              (case method
+                "tools/list" {:tools tools}
+                "tools/call" (do (if (= "read" (:name params))
+                                   (.await latch)
+                                   (Thread/sleep 900))
+                                 {:content [{:type "text" :text "pending"}]
+                                  :isError false})))
+        eng (fresh-engine {:clients {"bench" rig} :timeout-ms 300})
+        _ (a-server! eng {:name "bench"
+                          :powers [{:power "bench.read"
+                                    :tools ["read" "test_result"]
+                                    :why false}]})]
+    (try
+      (let [out (servers/call! eng "bench__test_result" {})]
+        (is (false? (:isError out))
+            "the rig's wait is longer than the row's bound, and it answers"))
+      (is (= :live (:state (servers/row-by-name eng "bench")))
+          "a wait is not a death: the row is not marked dark")
+      (let [e (refused #(servers/call! eng "bench__read" {}))]
+        (is (p/problem? e))
+        (is (= 502 (:status (ex-data e)))
+            "every other tool of the row keeps the row's bound"))
+      (finally
+        (.countDown latch)))))
+
 ;; ── the stdio client's death policy (R-3) ───────────────────────────
 
 (deftest a-stdio-process-that-dies-is-restarted-and-dark-after-three-deaths

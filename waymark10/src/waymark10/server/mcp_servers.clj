@@ -729,6 +729,23 @@
           (let [now (row-by-name eng (get-in row [:data :name]))]
             (when (= :live (:state now)) {:row now})))))))
 
+(def ^:private slow-tool-timeout-ms
+  "The tools that hold a call open on purpose, by prefixed name, and
+  the bound each gets in place of the row's own. The rig's
+  `bench__test_result` waits up to 40 s for a run to finish before it
+  answers `pending`, which is longer than the 30 s every other call
+  gets: the forward timed out first, the seat read a timeout where the
+  rig meant `pending`, and the timeout marked the row dark (ticket
+  4d075b02)."
+  {"bench__test_result" 60000})
+
+(defn- call-bound
+  "The bound of one tools/call: a caller's own binding first, then the
+  slow tool's, and nil — the client's own — for every other call."
+  [row bare]
+  (or client/*call-timeout-ms*
+      (get slow-tool-timeout-ms (str (get-in row [:data :name]) "__" bare))))
+
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
@@ -754,7 +771,9 @@
                        (get-in row [:data :tools]))
           {:keys [args values]} (secrets/resolve-refs! eng schema args)]
       (try
-        (secrets/scrub (wire! seam row "tools/call" {:name bare :arguments args})
+        (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)]
+                         (wire! seam row "tools/call"
+                                {:name bare :arguments args}))
                        values)
         (catch Exception e
           (when (and (p/problem? e) (fatal? seam row))
