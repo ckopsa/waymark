@@ -4,7 +4,9 @@
 # (linux/amd64 + linux/arm64 → ghcr.io/ckopsa/localfire:<short sha>).
 # Nothing here is arch-specific: nodesource and npm pick the build
 # platform's Node and Claude Code.
-FROM clojure:temurin-21-tools-deps-bookworm-slim
+# The base is Docker Hub's library image, from the ECR Public mirror:
+# an anonymous pull from Docker Hub is rate limited, and CI has none.
+FROM public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
 
 # The one pin for the CLI every fired session runs. Bump it here.
 # 2.1.284 is the first checked with `claude mcp add --client-id
