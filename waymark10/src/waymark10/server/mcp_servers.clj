@@ -151,7 +151,8 @@
 ;; ── the client registry ─────────────────────────────────────────────
 
 (defonce ^:private clients
-  ;; row id → {:key config :client fn :lock Object}
+  ;; row id → {:key config :client fn :lock Object}; :lock is nil for
+  ;; an http row
   (atom {}))
 
 (defonce ^:private build-lock (Object.))
@@ -227,7 +228,9 @@
 
 (defn client-for
   "The row's client entry {:client :lock}, built on first use and
-  rebuilt when the row's transport fields moved."
+  rebuilt when the row's transport fields moved. A stdio row has a
+  lock, because its calls share one pipe. An http row has none: each
+  call is its own request, so one that waits holds up no other."
   [seam row]
   (let [id (str (:id row))
         k (config-key row)]
@@ -235,7 +238,9 @@
       (let [e (get @clients id)]
         (if (and e (= k (:key e)))
           e
-          (let [fresh {:key k :client (build-client seam row) :lock (Object.)}]
+          (let [fresh {:key k :client (build-client seam row)
+                       :lock (when (= "stdio" (str (get-in row [:data :transport])))
+                               (Object.))}]
             (when e (client/close! (:client e)))
             (swap! clients assoc id fresh)
             fresh))))))
@@ -250,11 +255,13 @@
     nil))
 
 (defn- wire!
-  "One call on a row's client, under the row's lock. Throws the
-  client's problem."
+  "One call on a row's client, under the row's lock when it has one.
+  Throws the client's problem."
   [seam row method params]
   (let [{:keys [client lock]} (client-for seam row)]
-    (locking lock (client method params))))
+    (if lock
+      (locking lock (client method params))
+      (client method params))))
 
 (defn- fatal?
   "Did the row's client call its last failure fatal?"
