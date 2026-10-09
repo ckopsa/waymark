@@ -529,7 +529,7 @@
 
 (defn- request
   "One ring request wearing the session's already-resolved identity."
-  [session method uri {:keys [query body headers]}]
+  [session method uri {:keys [query body headers conds]}]
   (cond-> {:request-method method
            :uri uri
            :headers (or headers {})
@@ -539,6 +539,8 @@
     ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
     (:sitting session) (assoc :waymark10/sitting (:sitting session))
     query (assoc :query-string query)
+    ;; store conds a collection read adds to its own (`walk-of`)
+    conds (assoc :waymark10/extra-conds conds)
     body (assoc :body (wire/write-json body))))
 
 (defn- body-text [resp]
@@ -3347,8 +3349,10 @@
 
   A SEAT THAT SAYS A JUDGMENT WALKS THE JUDGMENT'S QUEUE (R-4): the
   judgment's `queue` rides as the filter, the subjects already judged
-  are subtracted, and the answer carries the `judgment` block beside
-  the rows. The subtraction can empty a page, so that read asks for a
+  are left out by the store in that same query (`judgments/walk-conds`,
+  ticket 279366ee), and the answer carries the `judgment` block beside
+  the rows. The claimed and the stuck rows are subtracted after the
+  read. That subtraction can empty a page, so the read asks for a
   WHOLE page and the cap bites after the minus rather than before it.
   It can empty that whole page too, so the read goes on to the queue's
   next pages, `walk-pages-max` at most, until the rows are found or
@@ -3431,12 +3435,18 @@
                      only-state (assoc "state" only-state))
             ;; one page of the queue: the first is the request it has
             ;; always been, and a later one names its number
+            ;; a judgment's queue is asked for less its judged subjects:
+            ;; the store answers that anti-join in the page's own query,
+            ;; so no page of judged rows is read (ticket 279366ee)
+            without (when judgment
+                      (not-empty (judgments/walk-conds eng judgment (:id seat))))
             page (fn [k]
                    (let [resp (call (request session :get (str "/api/" (:plural rdef))
                                              {:query (query-string
                                                       (cond-> params
                                                         (> k 1) (assoc "page[number]"
-                                                                       (str k))))}))
+                                                                       (str k))))
+                                              :conds without}))
                          doc (when (<= 200 (:status resp 500) 299)
                                (verbatim-json resp))]
                      (when (collection-doc? doc) doc)))
@@ -3444,25 +3454,9 @@
         (when doc
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
-                       (into (into (set claimed) (keys stuck))
-                             ;; and, for a judge of sittings, its own
-                             ;; and the unfinished ones (ticket f508c646)
-                             (when judgment
-                               (into (judgments/judged-subjects eng (:id judgment))
-                                     (judgments/unjudgeable-sittings
-                                      eng judgment (:id seat)))))
+                       (into (set claimed) (keys stuck))
                        #{})
-                ;; `judged-subjects` is one page of the said verdicts:
-                ;; past it a subject is asked for by name, once (ticket
-                ;; 245c880b)
-                past-the-page? (and judgment
-                                    (>= (count skip)
-                                        (long judgments/judged-page)))
-                judged? (memoize #(judgments/standing-verdict?
-                                   eng (:id judgment) %))
-                free? #(let [id (id-of %)]
-                         (not (or (contains? skip id)
-                                  (and past-the-page? (judged? id)))))
+                free? #(not (contains? skip (id-of %)))
                 ;; the subtraction can empty a whole page while free
                 ;; rows wait on the next, so the read goes on until the
                 ;; firing's rows are found or the queue ends (ticket
@@ -3471,6 +3465,21 @@
                 ;; pages would hide it in a long queue (ticket 59582777)
                 named? #(= (str only) (id-of %))
                 total (long (or (get-in doc ["data" "total"]) 0))
+                ;; the answer's `total` stays the queue as the list page
+                ;; shows it, judged subjects and all: one count beside
+                ;; the read that left them out
+                queue-total (or (when without
+                                  (let [resp (call (request
+                                                    session :get
+                                                    (str "/api/" (:plural rdef))
+                                                    {:query (query-string
+                                                             (assoc params
+                                                                    "page[size]" "1"))}))
+                                        d (when (<= 200 (:status resp 500) 299)
+                                            (verbatim-json resp))]
+                                    (when (collection-doc? d)
+                                      (get-in d ["data" "total"]))))
+                                (get-in doc ["data" "total"]))
                 queue (loop [k 1
                              acc (vec (get-in doc ["data" "items"]))]
                         (if (or (>= (* k (long asked)) total)
@@ -3519,7 +3528,7 @@
                                queue)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
-                     "total" (get-in doc ["data" "total"])
+                     "total" queue-total
                      "rows" (mapv walk-row items)}
               judgment (assoc "judgment" (judgment-block judgment))
               (seq withheld) (assoc "withheld" withheld))))))))
