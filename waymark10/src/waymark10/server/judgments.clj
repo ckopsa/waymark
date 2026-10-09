@@ -69,9 +69,9 @@
 (def judged-page
   "The most standing verdicts one walk subtracts by in one read. A
   judgment whose said verdicts outrun this is still subtracted whole:
-  past the page each candidate is asked for by name (`unjudged`). The
-  count wake reads the same bound for its sealed transcripts
-  (`wakes/unjudged-transcripts`)."
+  past the page each candidate is asked for by name (`unjudged`). No
+  walk and no wake reads it now: both ask the store's anti-join
+  (`walk-conds`, `wakes/unjudged-transcripts`)."
   500)
 
 (defn judged-subjects
@@ -86,8 +86,8 @@
   the whole of the reopen's queue mechanism: this one rule, read the
   same way, and no second list of subjects to re-admit.
 
-  The count wake over transcripts reads it (`wakes/unjudged-transcripts`).
-  The sit's walk and the wake's count of that walk ask the store for
+  The sit's walk, the wake's count of that walk and the count wake
+  over transcripts (`wakes/unjudged-transcripts`) ask the store for
   the same rule as an anti-join (`walk-conds`), which has no page."
   [eng judgment-id]
   (if (serves? eng :verdict)
