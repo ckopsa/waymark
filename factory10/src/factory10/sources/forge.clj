@@ -1846,7 +1846,20 @@
   from this ticket, with no pull request, whose branch has edits or
   commits ahead of the base; `:unknown` when the bench did not answer
   for one; nil when every such change is empty, which `mend` closes as
-  before. A branch the bench refuses to read holds no work."
+  before.
+
+  WHAT THE RIG ANSWERS (read 2026-10-09, ticket e768af15). `status` is
+  read from the branch's worktree: `dirty`, `ahead`, `behind`, `head`.
+  For a branch with no worktree it answers no counts. It refuses with
+  `no_worktree`, and it does not read `ahead` from the branch alone.
+  `stall` asks the rig for nothing, so the stall itself removes no
+  worktree. The rig's own code is not in this repository, so whether
+  it removes one later is not read here.
+
+  So a refusal is read by the change's state. An open change the rig
+  refuses was never prepared and holds no work. A stuck or a failing
+  change was worked on, and a refusal does not say its branch is
+  empty: it is `:unknown`."
   [eng policy ticket-row]
   (let [born (str "ticket:" (:id ticket-row))
         repo (str (get-in policy [:data :repository]))
@@ -1869,7 +1882,8 @@
                                        :branch (bench/branch-of change policy)})]
                 (cond
                   (nil? status) :unknown
-                  (bench/refused status) found
+                  (bench/refused status)
+                  (if (= "open" (some-> (state-of change) name)) found :unknown)
                   (or (pos? (long (or (:dirty status) 0)))
                       (pos? (long (or (:ahead status) 0)))) (reduced change)
                   :else found)))
