@@ -121,7 +121,12 @@ jobs:
         # Makefile's `-dirty` suffix has no counterpart by construction.
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # The builder's own image comes from Google's mirror of Docker Hub:
+      # an anonymous pull of docker.io/moby/buildkit is rate-limited by
+      # runner IP, and a 429 there reddens the build before it starts.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       # Skipped on pull_request: a fork's PR has no write token, and a
       # PR's job here is to prove the image still builds, not to publish
@@ -181,7 +186,10 @@ jobs:
       tag: ${{ needs.arch.outputs.tag }}
 
     steps:
+      # The mirror, for the legs' reason.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       # Skipped on pull_request for the legs' reason: nothing was pushed,
       # so there is nothing to join. The job still answers success.
