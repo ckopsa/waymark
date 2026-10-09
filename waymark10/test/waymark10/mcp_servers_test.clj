@@ -661,8 +661,9 @@
   "An MCP server on loopback that answers `initialize` slowly, each with
   its own session id, and lands every method it was sent on `seen`.
   `boom` answers a JSON-RPC error and `down` answers HTTP 500.
+  `sessionless?` leaves the session id off every answer.
   → [server url seen]."
-  []
+  [& {:keys [sessionless?]}]
   (let [seen (atom [])
         server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
         answer! (fn [^HttpExchange ex status session body]
@@ -686,7 +687,9 @@
                result #(hash-map :jsonrpc "2.0" :id (:id msg) :result %)]
            (case method
              "initialize" (do (Thread/sleep 300)
-                              (answer! ex 200 (str "session-" n)
+                              (answer! ex 200
+                                       (when-not sessionless?
+                                         (str "session-" n))
                                        (result {:capabilities {}})))
              "notifications/initialized" (answer! ex 202 nil nil)
              "tools/list" (answer! ex 200 nil (result {:tools []}))
@@ -711,6 +714,22 @@
       (is (= [] (:tools (deref b 10000 ::late))) "and so does the second")
       (is (= 1 (count (filter #{"initialize"} @seen)))
           "the second caller waited for the first handshake and reused it")
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
+
+(deftest a-server-that-gives-no-session-id-is-initialized-once
+  (let [[^HttpServer server url seen] (session-server! :sessionless? true)
+        c (client/http-client url {:timeout-ms 5000})
+        initializes #(count (filter #{"initialize"} @seen))]
+    (try
+      (is (= [] (:tools (c "tools/list" {}))) "the first call answers")
+      (is (= [] (:tools (c "tools/list" {}))) "and so does the second")
+      (is (= 1 (initializes))
+          "the second call reused the handshake, with no session id to hold")
+      (client/close! c)
+      (is (= [] (:tools (c "tools/list" {}))))
+      (is (= 2 (initializes)) "a closed client handshakes again")
       (finally
         (client/close! c)
         (.stop server 0)))))

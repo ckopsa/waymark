@@ -215,7 +215,11 @@
          ;; Calls run side by side, so each problem carries its own
          ;; kind (`judged`) and :last answers only a caller with no
          ;; problem in hand
-         state (atom {:session nil :id 0 :last nil})
+         ;; :open says the handshake was made, apart from :session: a
+         ;; server may answer `initialize` with no session id. :round
+         ;; counts the handshakes, so a caller can tell the one it
+         ;; called on from a later one
+         state (atom {:session nil :open false :round 0 :id 0 :last nil})
          ;; one handshake at a time: a caller that finds another's
          ;; under way waits for it and reuses its session
          gate (Object.)
@@ -246,24 +250,33 @@
                             (fail! :wire
                                    (str context (if s (str " " s) "."))
                                    (when s {:sentence s :context context}))))
-                        (swap! state assoc :session session-id)
-                        (raw! session-id
-                              {:jsonrpc "2.0"
-                               :method "notifications/initialized"})
-                        session-id))
-         ;; the session to call on, opened when there is none
+                        (let [opened (swap! state
+                                            #(-> %
+                                                 (assoc :session session-id
+                                                        :open true)
+                                                 (update :round inc)))]
+                          (raw! session-id
+                                {:jsonrpc "2.0"
+                                 :method "notifications/initialized"})
+                          opened)))
+         ;; the handshake to call on (its :session and :round), made
+         ;; when there is none
          open! (fn []
-                 (or (:session @state)
+                 (let [now @state]
+                   (if (:open now)
+                     now
                      (locking gate
-                       (or (:session @state) (handshake!)))))
-         ;; the session to call on after `stale` answered 404: the one
-         ;; another caller opened meanwhile, else a new one
+                       (let [now @state]
+                         (if (:open now) now (handshake!)))))))
+         ;; the handshake to call on after `stale` answered 404: the
+         ;; one another caller made meanwhile, else a new one
          renew! (fn [stale]
                   (locking gate
-                    (let [now (:session @state)]
-                      (if (and now (not= now stale))
+                    (let [now @state]
+                      (if (and (:open now)
+                               (not= (:round now) (:round stale)))
                         now
-                        (do (swap! state assoc :session nil)
+                        (do (swap! state assoc :session nil :open false)
                             (handshake!))))))
          request! (fn [session method params]
                     (raw! session
@@ -271,11 +284,12 @@
                            :method method :params params}))]
      (with-meta
        (fn rpc [method params]
-         (let [session (open!)
-               {:keys [status] :as resp} (request! session method params)
+         (let [opened (open!)
+               {:keys [status] :as resp}
+               (request! (:session opened) method params)
                {:keys [status answer] :as resp}
                (if (= 404 (long status))
-                 (request! (renew! session) method params)
+                 (request! (:session (renew! opened)) method params)
                  resp)
                s (refusal-sentence resp)]
            (cond
@@ -293,7 +307,7 @@
              :else (do (swap! state assoc :last nil)
                        (:result answer)))))
        {::dead? (fn [] (= :wire (:last @state)))
-        ::close (fn [] (swap! state assoc :session nil))}))))
+        ::close (fn [] (swap! state assoc :session nil :open false))}))))
 
 ;; ── stdio ───────────────────────────────────────────────────────────
 
