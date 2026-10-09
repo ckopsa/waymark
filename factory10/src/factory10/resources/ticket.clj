@@ -2311,7 +2311,10 @@
     ;; door in place of `mend`, and the ticket stays where it is. A seat
     ;; that stalled its change sent the ticket to draft, and a person
     ;; may have blocked or deferred it since (ticket e666bd6a): a
-    ;; self-loop, spelled once for each state it serves.
+    ;; self-loop, spelled once for each state it serves. A ticket under
+    ;; review is served too (ticket 1188f3ed): `work-kept` reads every
+    ;; change born from the ticket, and one with no pull request may
+    ;; hold work beside the submitted one.
     :note_green
     {:from #{:open} :to :open
      :guards [only-the-base-pass-writes-this]
@@ -2322,6 +2325,19 @@
               [:string {:min 1 :max 480}]]]
      ;; `note_merge`'s reason: the engine writes a first value onto a
      ;; blank field, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_in_review
+    {:from #{:in_review} :to :in_review
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Green on its own" :order 17
