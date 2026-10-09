@@ -29,7 +29,9 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.io File)
+  (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (java.io File)
+           (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)
@@ -652,6 +654,89 @@
           "and the first answers when its wait ends")
       (finally
         (.countDown latch)))))
+
+;; ── the http client under two callers (ticket 08b88006) ─────────────
+
+(defn- session-server!
+  "An MCP server on loopback that answers `initialize` slowly, each with
+  its own session id, and lands every method it was sent on `seen`.
+  `boom` answers a JSON-RPC error and `down` answers HTTP 500.
+  → [server url seen]."
+  []
+  (let [seen (atom [])
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        answer! (fn [^HttpExchange ex status session body]
+                  (when session
+                    (.add (.getResponseHeaders ex) "mcp-session-id" session))
+                  (if body
+                    (let [bs (.getBytes ^String (wire/write-json body)
+                                        StandardCharsets/UTF_8)]
+                      (.add (.getResponseHeaders ex)
+                            "Content-Type" "application/json")
+                      (.sendResponseHeaders ex status (alength bs))
+                      (with-open [o (.getResponseBody ex)] (.write o bs)))
+                    (do (.sendResponseHeaders ex status -1) (.close ex))))]
+    (.createContext
+     server "/mcp"
+     (reify HttpHandler
+       (handle [_ ex]
+         (let [msg (wire/read-json (slurp (.getRequestBody ex)))
+               method (str (:method msg))
+               n (count (filter #{"initialize"} (swap! seen conj method)))
+               result #(hash-map :jsonrpc "2.0" :id (:id msg) :result %)]
+           (case method
+             "initialize" (do (Thread/sleep 300)
+                              (answer! ex 200 (str "session-" n)
+                                       (result {:capabilities {}})))
+             "notifications/initialized" (answer! ex 202 nil nil)
+             "tools/list" (answer! ex 200 nil (result {:tools []}))
+             "boom" (answer! ex 200 nil
+                             {:jsonrpc "2.0" :id (:id msg)
+                              :error {:code -32000 :message "no"}})
+             "down" (answer! ex 500 nil nil))))))
+    (.start server)
+    [server (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/mcp")
+     seen]))
+
+(deftest two-first-calls-on-one-http-client-make-one-initialize
+  (let [[^HttpServer server url seen] (session-server!)
+        c (client/http-client url {:timeout-ms 5000})
+        go (CountDownLatch. 1)
+        call! #(future (.await go) (c "tools/list" {}))
+        a (call!)
+        b (call!)]
+    (try
+      (.countDown go)
+      (is (= [] (:tools (deref a 10000 ::late))) "the first caller answers")
+      (is (= [] (:tools (deref b 10000 ::late))) "and so does the second")
+      (is (= 1 (count (filter #{"initialize"} @seen)))
+          "the second caller waited for the first handshake and reused it")
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
+
+(deftest an-http-failure-is-judged-by-the-problem-it-threw
+  (let [[^HttpServer server url _] (session-server!)
+        c (client/http-client url {:timeout-ms 5000})]
+    (try
+      (let [wire-failure (refused #(c "down" {}))
+            rpc-failure (refused #(c "boom" {}))]
+        (is (p/problem? wire-failure))
+        (is (p/problem? rpc-failure))
+        (testing "each keeps its verdict whatever the client did since"
+          (is (true? (client/dead? c wire-failure))
+              "a wire failure is fatal after a later rpc error")
+          (is (= [] (:tools (c "tools/list" {}))))
+          (is (true? (client/dead? c wire-failure))
+              "and after a later answer")
+          (is (false? (client/dead? c rpc-failure))
+              "a JSON-RPC error is not")
+          (refused #(c "down" {}))
+          (is (false? (client/dead? c rpc-failure))
+              "nor after a later wire failure")))
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
 
 ;; ── the stdio client's death policy (R-3) ───────────────────────────
 

@@ -264,9 +264,9 @@
       (client method params))))
 
 (defn- fatal?
-  "Did the row's client call its last failure fatal?"
-  [seam row]
-  (client/dead? (:client (client-for seam row))))
+  "Did the row's client call the failure `e` fatal?"
+  [seam row e]
+  (client/dead? (:client (client-for seam row)) e))
 
 ;; ── the rows ────────────────────────────────────────────────────────
 
@@ -783,7 +783,7 @@
                                 {:name bare :arguments args}))
                        values)
         (catch Exception e
-          (when (and (p/problem? e) (fatal? seam row))
+          (when (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e)))
           (throw e))))))
 
@@ -1411,7 +1411,7 @@
             (inv/invoke! eng :mcp_server (str (:id row)) :discover
                          {:seen_hash hash} {:principal engine-actor})))
         (catch Exception e
-          (if (and (p/problem? e) (fatal? seam row))
+          (if (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e))
             (warn! "discover of " (get-in row [:data :name]) " failed ("
                    (ex-message e) ")")))))))
