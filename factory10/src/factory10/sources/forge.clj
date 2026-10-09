@@ -1815,6 +1815,20 @@
   {:open :note_red
    :in_review :note_red_in_review})
 
+(def ^:private green-note-doors
+  "The door that writes the green note on the ticket, read from its
+  state. A seat's stall sends the ticket to draft, and a person may
+  have blocked or deferred it since (ticket e666bd6a)."
+  {:open :note_green
+   :draft :note_green_draft
+   :blocked :note_green_blocked
+   :deferred :note_green_deferred})
+
+(def ^:private work-holding
+  "The states of a change that the ticket's ending closes when it has
+  no pull request, as ticket.clj's `unmerged` names them."
+  ["open" "stuck" "failing"])
+
 (defn- cut [s n]
   (let [s (str s)] (subs s 0 (min (count s) (long n)))))
 
@@ -1826,7 +1840,9 @@
   d5000a1c). `mend` ends the ticket, and the ending closes its open
   change through `supersede`. A flake's ticket went green that way
   while a seat held an edit on its bench branch, and the edit was
-  lost. So the base pass asks the bench first. → the open change born
+  lost. So the base pass asks the bench first. A stuck or a failing
+  change is closed by the ending as an open one is, so it is read the
+  same way (ticket e666bd6a). → the open, stuck or failing change born
   from this ticket, with no pull request, whose branch has edits or
   commits ahead of the base; `:unknown` when the bench did not answer
   for one; nil when every such change is empty, which `mend` closes as
@@ -1836,12 +1852,17 @@
         repo (str (get-in policy [:data :repository]))
         changes (into {}
                       (comp (filter #(and (= born (str (get-in % [:data :born_from])))
-                                          (= :open (state-of %))
+                                          (some #{(some-> (state-of %) name)}
+                                                work-holding)
                                           (nil? (get-in % [:data :number]))))
                             (map (juxt :id identity)))
-                      (concat (rows-by eng :change {:state "open" :change_id born} 50)
-                              (rows-by eng :change {:state "open" :repository repo}
-                                       200)))]
+                      (mapcat (fn [state]
+                                (concat (rows-by eng :change
+                                                 {:state state :change_id born} 50)
+                                        (rows-by eng :change
+                                                 {:state state :repository repo}
+                                                 200)))
+                              work-holding))]
     (reduce (fn [found change]
               (let [status (bench/ask {:services (:services eng)} :status
                                       {:repo repo
@@ -2132,9 +2153,10 @@
 
                       ;; its change holds work: the ticket is not ended,
                       ;; and the sentence is written one time
-                      (and (map? kept) (= :open (state-of live))
+                      (and (map? kept) (green-note-doors (state-of live))
                            (str/blank? (str (get-in live [:data :green_note]))))
-                      (do (inv/invoke! eng :ticket (str (:id live)) :note_green
+                      (do (inv/invoke! eng :ticket (str (:id live))
+                                       (green-note-doors (state-of live))
                                        {:green_note
                                         (str base " is green again at " head
                                              " on its own. The change on "
