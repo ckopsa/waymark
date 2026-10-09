@@ -290,8 +290,13 @@
     (is (= :stuck (state-of (change-of engine change-id)))
         "and its change is not superseded")
     (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
-    (is (= 1 (count (filter #(str/includes? % "the bench did not answer")
-                            @lines))))))
+    ;; ticket 7984a8b1: the line names the refusal and the branch
+    (is (= 1 (count (filter #(str/includes?
+                              % (str "the bench refused no_worktree for its"
+                                     " change on bench/the-red-base"))
+                            @lines))))
+    (is (not-any? #(str/includes? % "the bench did not answer") @lines)
+        "a refusal is not a dark bench")))
 
 (deftest a-green-base-ends-the-ticket-whose-open-change-the-bench-refuses
   ;; an open change the rig refuses was never prepared: it holds no work
