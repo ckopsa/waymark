@@ -1818,8 +1818,11 @@
 (def ^:private green-note-doors
   "The door that writes the green note on the ticket, read from its
   state. A seat's stall sends the ticket to draft, and a person may
-  have blocked or deferred it since (ticket e666bd6a)."
+  have blocked or deferred it since (ticket e666bd6a). A ticket under
+  review may have a second change beside its submitted one, with no
+  pull request and work on its branch (ticket 1188f3ed)."
   {:open :note_green
+   :in_review :note_green_in_review
    :draft :note_green_draft
    :blocked :note_green_blocked
    :deferred :note_green_deferred})

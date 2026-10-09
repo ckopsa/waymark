@@ -203,6 +203,40 @@
         (pass! w)
         (is (= (:version tk) (:version (first (tickets engine)))))))))
 
+(defn- force-ticket-state!
+  "The one ticket stands in `state`, as a submit beside it would leave it."
+  [eng state]
+  (let [st (:storage eng)
+        id (str (:id (first (tickets eng))))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :ticket id {})]
+          (store/save-row! st tx :ticket
+                           (assoc row :state state
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(deftest a-green-base-keeps-the-ticket-under-review-whose-change-holds-work
+  ;; ticket 1188f3ed: the ticket is out for review, and a change born
+  ;; from it with no pull request still holds an edit on its branch
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (force-ticket-state! engine :in_review)
+    (head-at! w head-2 516 "success")
+    (let [census (pass! w)]
+      (is (= 0 (:base-closed census)) "the ticket is not ended")
+      (is (= 1 (:base-kept census))))
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :in_review (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :open (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
 (deftest a-green-base-ends-the-ticket-whose-change-is-empty
   (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 0})
         change-id (red-ticket-with-a-change! w)]
