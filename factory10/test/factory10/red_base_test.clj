@@ -9,6 +9,7 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]
             [factory10.main :as main]
+            [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
             [waymark10.server.engine :as engine]
@@ -118,6 +119,75 @@
       (let [before (:version (policy-of engine))]
         (is (= 0 (:base-closed (pass! w))))
         (is (= before (:version (policy-of engine))))))))
+
+(defn- benched-world
+  "`world`, with a bench that answers `status` for every branch."
+  [status]
+  (let [state (gh/fake-state)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))
+                            :services {:bench-rpc
+                                       (fn [_method _params]
+                                         {:structuredContent {:result status}})}})]
+    (inv/create! eng :repo_policy {:repository repo :required_checks ["gate"]}
+                 {:principal a-person})
+    {:state state :engine eng :source (gh/fake-source state {:repos repo})}))
+
+(defn- red-ticket-with-a-change!
+  "The base is red for two passes, and a seat's change is open beside
+  the ticket that opened. → the change's id."
+  [{:keys [engine] :as w}]
+  (head-at! w head-1 511 "failure")
+  (pass! w)
+  (pass! w)
+  (let [born (str "ticket:" (:id (first (tickets engine))))]
+    (str (:id (:row (inv/create! engine :change
+                                 {:change_id born
+                                  :repository repo
+                                  :head_branch "bench/the-red-base"
+                                  :born_from born}
+                                 {:principal mirror/source-principal}))))))
+
+(defn- change-of [eng id]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/load-row st tx :change id {})))))
+
+(deftest a-green-base-keeps-the-ticket-whose-change-holds-work
+  ;; ticket d5000a1c: the red was a flake, and the seat's edit was on
+  ;; the bench branch when the next merge's run went green
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 512 "success")
+    (is (= 0 (:base-closed (pass! w))) "the ticket is not ended")
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :open (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :open (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
+(deftest a-green-base-keeps-the-ticket-whose-change-has-commits
+  (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 2})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 513 "success")
+    (is (= 0 (:base-closed (pass! w))))
+    (is (= :open (state-of (first (tickets engine)))))
+    (is (= :open (state-of (change-of engine change-id))))))
+
+(deftest a-green-base-ends-the-ticket-whose-change-is-empty
+  (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 514 "success")
+    (is (= 1 (:base-closed (pass! w))))
+    (let [tk (first (tickets engine))]
+      (is (= :done (state-of tk)))
+      (is (str/blank? (str (get-in tk [:data :green_note])))))
+    (is (= :closed (state-of (change-of engine change-id)))
+        "an empty change is closed with its ticket, as before")))
 
 (deftest a-base-red-once-and-green-next-opens-nothing
   (let [{:keys [engine] :as w} (world)]
