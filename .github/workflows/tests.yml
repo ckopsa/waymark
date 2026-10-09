@@ -479,6 +479,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -517,10 +518,13 @@ jobs:
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       # Also after a retry that passed: the first attempt's hs_err is
       # still on disk, and a green job is no reason to lose it.
+      # Only after a checkout that succeeded: this is a local action, and
+      # a job that died before checkout has no action.yml to run.
       - name: JVM crash report
         if: >-
-          failure() || steps.check-queue.outputs.retried == 'true' ||
-          steps.calendar10.outputs.retried == 'true' || steps.localfire.outputs.retried == 'true'
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.check-queue.outputs.retried == 'true' ||
+           steps.calendar10.outputs.retried == 'true' || steps.localfire.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: quick
@@ -545,6 +549,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -563,10 +568,12 @@ jobs:
           bash scripts/jvm-retry.sh "test-factory factory10" factory10 "$RUNNER_TEMP/factory10.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       # Also after a retry that passed, as in `quick`.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
         if: >-
-          failure() || steps.check-factory.outputs.retried == 'true' ||
-          steps.factory10.outputs.retried == 'true'
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.check-factory.outputs.retried == 'true' ||
+           steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-factory
@@ -736,6 +743,7 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -859,8 +867,11 @@ jobs:
       # the banner in the log above is eight lines of it. Keep the rest.
       # Also after a retry that passed: the first attempt's hs_err is
       # still on disk, and a green job is no reason to lose it.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
-        if: failure() || steps.run-shard.outputs.retried == 'true'
+        if: >-
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.run-shard.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test10-${{ matrix.shard.id }}
@@ -915,6 +926,7 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -1029,8 +1041,11 @@ jobs:
           bash scripts/jvm-retry.sh "test-queue shard ${{ matrix.shard.id }}" workqueue10 shard-output.txt \
             clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}"
       # Also after a retry that passed, as in test10.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
-        if: failure() || steps.run-shard.outputs.retried == 'true'
+        if: >-
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.run-shard.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-queue-${{ matrix.shard.id }}
