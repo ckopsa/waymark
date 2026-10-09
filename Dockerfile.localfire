@@ -47,16 +47,20 @@ RUN HOME=/app clojure -P -M:serve
 COPY --chown=localfire:localfire localfire/src/ src/
 
 # The seat place, baked in: the image moves with every change to seat/,
-# so the node never clones it. It is the same three files
-# .github/workflows/seat-place.yml assembles: seat/ holds CLAUDE.md and
-# .claude/settings.json, and the hook's one source is the repo root's
-# .claude/hooks/sitting-close.sh.
+# so the node never clones it. It is what seat/ ships, and the hook:
+# seat/ holds CLAUDE.md, .claude/settings.json and inbox-feed.sh (the
+# inbox door's one client, docs/seat-inbox-feed.md), and the hook's one
+# source is the repo root's .claude/hooks/sitting-close.sh. A file
+# added to seat/ fails the list below until it is named here.
 COPY seat/ /srv/waymark-seat/
+COPY --chmod=755 seat/inbox-feed.sh /srv/waymark-seat/inbox-feed.sh
 COPY --chmod=755 .claude/hooks/sitting-close.sh /srv/waymark-seat/.claude/hooks/sitting-close.sh
 RUN test "$(cd /srv/waymark-seat && find . -type f | LC_ALL=C sort | tr '\n' ' ')" \
-      = "./.claude/hooks/sitting-close.sh ./.claude/settings.json ./CLAUDE.md " \
+      = "./.claude/hooks/sitting-close.sh ./.claude/settings.json ./CLAUDE.md ./inbox-feed.sh " \
  && test -x /srv/waymark-seat/.claude/hooks/sitting-close.sh \
- && bash -n /srv/waymark-seat/.claude/hooks/sitting-close.sh
+ && bash -n /srv/waymark-seat/.claude/hooks/sitting-close.sh \
+ && test -x /srv/waymark-seat/inbox-feed.sh \
+ && bash -n /srv/waymark-seat/inbox-feed.sh
 
 ENV HOME=/data
 EXPOSE 8112
