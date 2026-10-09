@@ -617,6 +617,42 @@
       (finally
         (.countDown latch)))))
 
+;; ── a call that waits on an http row does not hold up the next ──────
+
+(deftest a-waiting-call-does-not-delay-a-second-call-to-the-same-http-row
+  (let [tools [{:name "read" :description "Read a file."
+                :inputSchema {:type "object" :properties {}}}
+               {:name "test_result" :description "Read a run."
+                :inputSchema {:type "object" :properties {}}}]
+        waiting (CountDownLatch. 1)
+        latch (CountDownLatch. 1)
+        rig (fn [method params]
+              (case method
+                "tools/list" {:tools tools}
+                "tools/call" (do (when (= "test_result" (:name params))
+                                   (.countDown waiting)
+                                   (.await latch))
+                                 {:content [{:type "text" :text (:name params)}]
+                                  :isError false})))
+        eng (fresh-engine {:clients {"bench" rig} :timeout-ms 300})
+        _ (a-server! eng {:name "bench"
+                          :powers [{:power "bench.read"
+                                    :tools ["read" "test_result"]
+                                    :why false}]})
+        slow (future (servers/call! eng "bench__test_result" {}))]
+    (try
+      (is (.await waiting 5 TimeUnit/SECONDS) "the slow call is on the wire")
+      (let [out (deref (future (servers/call! eng "bench__read" {}))
+                       5000 ::queued)]
+        (is (not= ::queued out)
+            "the second call answers while the first still waits")
+        (is (false? (:isError out))))
+      (.countDown latch)
+      (is (false? (:isError (deref slow 5000 ::queued)))
+          "and the first answers when its wait ends")
+      (finally
+        (.countDown latch)))))
+
 ;; ── the stdio client's death policy (R-3) ───────────────────────────
 
 (deftest a-stdio-process-that-dies-is-restarted-and-dark-after-three-deaths
