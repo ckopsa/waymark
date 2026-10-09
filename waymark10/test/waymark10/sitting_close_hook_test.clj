@@ -308,6 +308,75 @@
                  (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
 
+(def ^:private absorbed-notification
+  "The task notification's `content` in transcript ad132b38, cut as its
+  enqueue and its remove both carry it."
+  "<task-notification>\n<task-id>a4752f1271760cdc2</task-id>…")
+
+(def ^:private real-queue
+  "Every queue-operation line of transcript ad132b38-3c0f-45ee-9a11-e7b7b3a090f1,
+  by its seq, with long `content` cut to its opening. A dequeue carries
+  no content; a remove carries its enqueue's."
+  (into (sorted-map)
+        (for [[seq- operation timestamp more]
+              [[0 "enqueue" "2026-10-09T02:46:45.054Z"
+                {:content "First, run `echo $CLAUDE_CODE_SESSION_ID`…"}]
+               [1 "enqueue" "2026-10-09T02:46:45.063Z"
+                {:content "<routine-fire-payload>…"}]
+               [2 "dequeue" "2026-10-09T02:46:45.324Z" nil]
+               [3 "dequeue" "2026-10-09T02:46:45.325Z" nil]
+               [64 "enqueue" "2026-10-09T02:49:22.922Z"
+                {:content "<agent-message from=\"a4752f1271760cdc2\">…"}]
+               [69 "enqueue" "2026-10-09T02:49:25.663Z"
+                {:content absorbed-notification}]
+               [71 "dequeue" "2026-10-09T02:49:27.423Z" nil]
+               [83 "remove" "2026-10-09T02:49:36.281Z"
+                {:content absorbed-notification :reason "absorbed_mid_turn"
+                 :commandUuid "…" :deliveryId "…"}]]]
+          [seq- (merge {:type "queue-operation" :operation operation
+                        :timestamp timestamp
+                        :sessionId "3c70a8fa-1065-5566-af22-27fce34f1932"}
+                       more)])))
+
+(deftest the-queue-hold-reads-the-real-queue-lines
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        door (str "http://127.0.0.1:" port "/api/-/sittings/close")
+        tallied (atom [])
+        through (fn [seq-] (vals (subseq real-queue <= seq-)))]
+    (.createContext server "/api/-/sittings/tally"
+                    (reify HttpHandler
+                      (handle [_ ex]
+                        (swap! tallied conj (wire/read-json (slurp (.getRequestBody ex))))
+                        (answer! ex 200 "{}"))))
+    (try
+      (testing "through seq 68, the file as the Stop read it: seq 64 alone holds the close"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (through 68))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "and with the door in the environment that Stop tallies"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (through 68))
+                         {:hook_event_name "Stop"}
+                         {:extra {"WAYMARK_SEAT_URL" door}})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))
+          (is (= [counts] (map #(select-keys % (keys counts)) @tallied)))))
+      (testing "through seq 83 and a last turn: nothing is queued, so the Stop closes"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (through 83))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (= 1 (count @seen)))
+          (is (= counts (select-keys (:body (first @seen)) (keys counts))))
+          (is (= 1 (count @tallied)) "the close is not a tally")))
+      (finally (.stop server 0)))))
+
 (defn- bash-call
   "A Bash call, in the background or not, and the harness's answer."
   [background? answer]
