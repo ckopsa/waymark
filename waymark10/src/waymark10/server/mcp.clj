@@ -3452,7 +3452,17 @@
                                      (judgments/unjudgeable-sittings
                                       eng judgment (:id seat)))))
                        #{})
-                free? #(not (contains? skip (id-of %)))
+                ;; `judged-subjects` is one page of the said verdicts:
+                ;; past it a subject is asked for by name, once (ticket
+                ;; 245c880b)
+                past-the-page? (and judgment
+                                    (>= (count skip)
+                                        (long judgments/judged-page)))
+                judged? (memoize #(judgments/standing-verdict?
+                                   eng (:id judgment) %))
+                free? #(let [id (id-of %)]
+                         (not (or (contains? skip id)
+                                  (and past-the-page? (judged? id)))))
                 ;; the subtraction can empty a whole page while free
                 ;; rows wait on the next, so the read goes on until the
                 ;; firing's rows are found or the queue ends (ticket

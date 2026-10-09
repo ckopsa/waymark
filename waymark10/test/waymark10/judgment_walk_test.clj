@@ -1125,6 +1125,38 @@
                 "judgment.")
            why))))
 
+;; ── 9″ · the judged are left out past the page (ticket 245c880b) ─────
+
+(deftest a-judged-subject-past-the-page-of-verdicts-is-not-handed-again
+  ;; `judged-subjects` reads the oldest `judged-page` said verdicts: a
+  ;; judgment that had said more handed its newer subjects again, and
+  ;; the guard refused each verdict. The page is one verdict long here
+  (with-redefs [judgments/judged-page 1]
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          judgment (promoted-judgment! eng {})
+          _ (open-judge-seat! eng judgment {})
+          knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+          flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+          salt (expense! eng "Salt works" "kitchen" "2026-09-18T09:00:00Z")
+          ids #(mapv (comp str :id) %)
+          _ (say! eng judgment knives "keep" "Nothing to do: the amount fits.")
+          [r answer _] (empty-sit! eng h)]
+      (testing "three subjects, one judged: the other two are handed"
+        (is (false? (:isError r)) (text-of r))
+        (is (= (ids [flour salt]) (mapv :id (get-in answer [:walk :rows])))))
+      (doseq [e [flour salt]]
+        (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+      (testing "all three judged, two of them past the page: none is handed"
+        (let [[r answer _] (empty-sit! eng h)]
+          (is (false? (:isError r)) (text-of r))
+          (is (empty? (get-in answer [:walk :rows]))))
+        (is (= [] (judgments/unjudged
+                   eng (:id judgment)
+                   (judgments/judged-subjects eng (:id judgment))
+                   (ids [knives flour salt])))
+            "and the wake counts none of them")))))
+
 ;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
 
 (def ^:private empty-queue-sentence
