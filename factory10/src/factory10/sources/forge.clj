@@ -1849,8 +1849,9 @@
   same way (ticket e666bd6a). → the open, stuck or failing change born
   from this ticket, with no pull request, whose branch has edits or
   commits ahead of the base; `:unknown` when the bench did not answer
-  for one; nil when every such change is empty, which `mend` closes as
-  before.
+  for one; `[:refused name branch]` when the bench refused for one
+  that may hold work; nil when every such change is empty, which
+  `mend` closes as before.
 
   WHAT THE RIG ANSWERS (read 2026-10-09, ticket e768af15). `status` is
   read from the branch's worktree: `dirty`, `ahead`, `behind`, `head`.
@@ -1863,7 +1864,8 @@
   So a refusal is read by the change's state. An open change the rig
   refuses was never prepared and holds no work. A stuck or a failing
   change was worked on, and a refusal does not say its branch is
-  empty: it is `:unknown`."
+  empty: it is not known either, and the answer carries the refusal
+  and the branch so the log names both (ticket 7984a8b1)."
   [eng policy ticket-row]
   (let [born (str "ticket:" (:id ticket-row))
         repo (str (get-in policy [:data :repository]))
@@ -1881,13 +1883,15 @@
                                                  200)))
                               work-holding))]
     (reduce (fn [found change]
-              (let [status (bench/ask {:services (:services eng)} :status
-                                      {:repo repo
-                                       :branch (bench/branch-of change policy)})]
+              (let [branch (bench/branch-of change policy)
+                    status (bench/ask {:services (:services eng)} :status
+                                      {:repo repo :branch branch})]
                 (cond
                   (nil? status) :unknown
                   (bench/refused status)
-                  (if (= "open" (some-> (state-of change) name)) found :unknown)
+                  (if (= "open" (some-> (state-of change) name))
+                    found
+                    [:refused (bench/refused status) branch])
                   (or (pos? (long (or (:dirty status) 0)))
                       (pos? (long (or (:ahead status) 0)))) (reduced change)
                   :else found)))
@@ -2192,6 +2196,17 @@
                                   " was left open on a green " base
                                   ": the bench did not answer for its change")
                           [(update census :base-kept inc) stored-ticket])
+
+                      ;; the bench refused: held the same way, and the
+                      ;; line names the refusal and the branch (ticket
+                      ;; 7984a8b1)
+                      (vector? kept)
+                      (let [[_ refusal branch] kept]
+                        (log-fn "the red-base ticket " (:id live) " of " repo
+                                " was left open on a green " base
+                                ": the bench refused " refusal
+                                " for its change on " branch)
+                        [(update census :base-kept inc) stored-ticket])
 
                       ;; noted already: the next green pass asks again
                       :else [(update census :base-kept inc) stored-ticket]))
