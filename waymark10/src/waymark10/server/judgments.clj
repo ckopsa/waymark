@@ -67,11 +67,11 @@
 (defn- serves? [eng kind] (contains? (inv/resources eng) kind))
 
 (def judged-page
-  "The most standing verdicts one walk subtracts by. A judgment whose
-  said verdicts outrun this in a single queue has more decided
-  subjects than one page can hold, and the honest fix there is a
-  narrower `queue`, not a longer read. The count wake reads the same
-  bound for its sealed transcripts (`wakes/unjudged-transcripts`)."
+  "The most standing verdicts one walk subtracts by in one read. A
+  judgment whose said verdicts outrun this is still subtracted whole:
+  past the page each candidate is asked for by name (`unjudged`). The
+  count wake reads the same bound for its sealed transcripts
+  (`wakes/unjudged-transcripts`)."
   500)
 
 (defn judged-subjects
@@ -98,6 +98,36 @@
                                         :state "said"}
                                        {:limit judged-page}))))
     #{}))
+
+(defn standing-verdict?
+  "Does this judgment hold a standing (`said`) verdict on this one
+  subject? The guard's own question (`verdict/one-standing-verdict-per-subject`),
+  asked by name, so it has no page to run past."
+  [eng judgment-id subject-id]
+  (boolean
+   (and (serves? eng :verdict)
+        (seq (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :verdict
+                                          {:judgment (str judgment-id)
+                                           :subject_id (str subject-id)
+                                           :state "said"}
+                                          {:limit 1})))))))
+
+(defn unjudged
+  "The ids of `ids` a walk of this judgment may hand, in their order:
+  not in `skip` (the walk's subtraction, `judged-subjects` among it),
+  and with no standing verdict. `judged-subjects` is one page, the
+  OLDEST `judged-page` said verdicts, so a judgment that has said more
+  than that left its newer subjects in the walk, and each was handed
+  again and refused by the guard (ticket 245c880b). A `skip` as large
+  as the page may be that page run out, so each id it does not hold is
+  then asked for by name (`standing-verdict?`); a smaller one is the
+  whole of the judged and nothing more is read."
+  [eng judgment-id skip ids]
+  (let [ids (remove #(contains? skip %) ids)]
+    (if (>= (count skip) (long judged-page))
+      (into [] (remove #(standing-verdict? eng judgment-id %)) ids)
+      (vec ids))))
 
 (defn own-sittings
   "The sitting ids of this seat, the newest `judged-page` of them. A

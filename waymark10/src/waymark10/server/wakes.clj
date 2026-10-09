@@ -888,6 +888,16 @@
                  eng (raw-row eng :judgment jid) (:id seat-row))))
       skip)))
 
+(defn- handable
+  "The ids of `ids` a sit of this seat would hand, `skip` being its
+  `withheld-rows`. For a seat that walks a judgment the judged subjects
+  are left out whole, past the one page `skip` holds of them
+  (`judgments/unjudged`, ticket 245c880b)."
+  [eng seat-row skip ids]
+  (if-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
+    (judgments/unjudged eng jid skip ids)
+    (remove skip ids)))
+
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
   open sittings and the runs on their way to a sit; `:free` is the rows
@@ -900,7 +910,8 @@
         flying (long (in-flight eng seat-id at))
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f))
-        unclaimed (count (remove (withheld-rows eng seat-row) queue))]
+        unclaimed (count (handable eng seat-row
+                                   (withheld-rows eng seat-row) queue))]
     {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying))}))
 
@@ -1084,7 +1095,7 @@
     (let [skip (withheld-rows eng seat-row)]
       (if (empty? skip)
         (count-under eng walk f)
-        (some->> (ids-under eng walk f) (remove skip) count)))))
+        (some->> (ids-under eng walk f) (handable eng seat-row skip) count)))))
 
 (defn- unjudged-transcripts
   "How many sealed transcripts under the entry's filter record a
@@ -1113,7 +1124,8 @@
                (fn [tx] (store/search-rows st tx :transcript conds
                                            {:limit judgments/judged-page
                                             :desc true})))
-             (remove #(contains? judged (str (get-in % [:data :sitting]))))
+             (map #(str (get-in % [:data :sitting])))
+             (judgments/unjudged eng judgment-id judged)
              count))
       (catch Exception e
         (warn! "the unjudged transcripts could not be counted — "
@@ -1153,7 +1165,9 @@
       (let [skip (withheld-rows eng seat-row)]
         (if (empty? skip)
           (count-under eng kind (:filter e))
-          (some->> (ids-under eng kind (:filter e)) (remove skip) count)))
+          (some->> (ids-under eng kind (:filter e))
+                   (handable eng seat-row skip)
+                   count)))
 
       :else
       (count-under eng kind (:filter e)))))
