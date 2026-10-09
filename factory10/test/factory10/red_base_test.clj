@@ -234,6 +234,40 @@
                             @lines)))
         "and one line says why it was held")))
 
+(deftest a-green-base-keeps-the-ticket-whose-stuck-change-the-bench-refuses
+  ;; ticket e768af15: the rig answers `no_worktree` for a branch with no
+  ;; worktree, which does not say a stalled change's branch is empty
+  (let [{:keys [engine source] :as w} (benched-world {:refused "no_worktree"})
+        change-id (red-ticket-with-a-change! w)
+        lines (atom [])
+        _ (inv/invoke! engine :change change-id :stall
+                       {:why "The red test passes here, so I cannot fix it."}
+                       {:principal a-person
+                        :if-match (inv/etag :change change-id
+                                            (:version (change-of engine change-id)))})
+        _ (head-at! w head-2 516 "success")
+        census (forge/pass! {:source source :engine engine
+                             :log-fn (fn [& parts]
+                                       (swap! lines conj (apply str parts)))})
+        tk (first (tickets engine))]
+    (is (= 0 (:base-closed census)) "the ticket is not ended")
+    (is (= 1 (:base-kept census)))
+    (is (= :draft (state-of tk)))
+    (is (= :stuck (state-of (change-of engine change-id)))
+        "and its change is not superseded")
+    (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
+    (is (= 1 (count (filter #(str/includes? % "the bench did not answer")
+                            @lines))))))
+
+(deftest a-green-base-ends-the-ticket-whose-open-change-the-bench-refuses
+  ;; an open change the rig refuses was never prepared: it holds no work
+  (let [{:keys [engine] :as w} (benched-world {:refused "no_worktree"})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 517 "success")
+    (is (= 1 (:base-closed (pass! w))))
+    (is (= :done (state-of (first (tickets engine)))))
+    (is (= :closed (state-of (change-of engine change-id))))))
+
 (deftest a-base-red-once-and-green-next-opens-nothing
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 601 "failure")
