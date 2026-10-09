@@ -214,6 +214,26 @@
     (is (= :closed (state-of (change-of engine change-id)))
         "an empty change is closed with its ticket, as before")))
 
+(deftest a-green-base-keeps-the-ticket-when-the-bench-is-dark
+  ;; ticket 6d8e3a3e: the bench answers nothing, so the pass cannot tell
+  ;; an empty change from one that holds work
+  (let [{:keys [engine source] :as w} (benched-world nil)
+        change-id (red-ticket-with-a-change! w)
+        lines (atom [])
+        _ (head-at! w head-2 515 "success")
+        census (forge/pass! {:source source :engine engine
+                             :log-fn (fn [& parts]
+                                       (swap! lines conj (apply str parts)))})
+        tk (first (tickets engine))]
+    (is (= 0 (:base-closed census)))
+    (is (= 1 (:base-kept census)) "the census counts the ticket it held")
+    (is (= :open (state-of tk)))
+    (is (= :open (state-of (change-of engine change-id))))
+    (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
+    (is (= 1 (count (filter #(str/includes? % "the bench did not answer")
+                            @lines)))
+        "and one line says why it was held")))
+
 (deftest a-base-red-once-and-green-next-opens-nothing
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 601 "failure")
