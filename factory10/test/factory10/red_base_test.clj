@@ -178,6 +178,31 @@
     (is (= :open (state-of (first (tickets engine)))))
     (is (= :open (state-of (change-of engine change-id))))))
 
+(deftest a-green-base-keeps-the-draft-ticket-whose-stuck-change-holds-work
+  ;; ticket e666bd6a: the seat stalled its change, which sent the ticket
+  ;; to draft, and its edit was still on the bench branch
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (inv/invoke! engine :change change-id :stall
+                 {:why "The red test passes here, so I cannot fix it."}
+                 {:principal a-person
+                  :if-match (inv/etag :change change-id
+                                      (:version (change-of engine change-id)))})
+    (is (= :stuck (state-of (change-of engine change-id))))
+    (is (= :draft (state-of (first (tickets engine)))))
+    (head-at! w head-2 515 "success")
+    (is (= 0 (:base-closed (pass! w))) "the ticket is not ended")
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :draft (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :stuck (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
 (deftest a-green-base-ends-the-ticket-whose-change-is-empty
   (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 0})
         change-id (red-ticket-with-a-change! w)]
