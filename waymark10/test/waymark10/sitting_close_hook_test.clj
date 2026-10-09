@@ -259,6 +259,55 @@
                  (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
 
+(def ^:private queued-hand-back
+  "The agent's hand-back as the session's queue takes it in."
+  {:type "queue-operation" :operation "enqueue"
+   :content "<agent-message from=\"ag-1\">\nThe hook is mapped.\n</agent-message>"})
+
+(def ^:private read-hand-back
+  "The queue gives the hand-back up, and the turn it wakes."
+  [{:type "queue-operation" :operation "dequeue"}
+   {:type "user"
+    :message {:role "user"
+              :content "<agent-message from=\"ag-1\">\nThe hook is mapped.\n</agent-message>"}}
+   {:type "assistant" :requestId "r-b"
+    :message {:role "assistant"
+              :content [{:type "text" :text "Read the report."}]
+              :usage {:input_tokens 20 :output_tokens 4
+                      :cache_read_input_tokens 0
+                      :cache_creation_input_tokens 0}}}])
+
+(deftest a-fired-run-closes-only-when-its-queue-is-read
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)]
+    (try
+      (testing "a stop with the agent's hand-back still queued neither closes nor holds"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (concat launch [queued-hand-back]))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "a queued message holds the close with no launch behind it"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port [queued-hand-back])
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (zero? (count @seen)))))
+      (testing "the stop after it was dequeued and answered closes once, with the whole run"
+        (let [{:keys [exit out err]}
+              (run-hook! dir (transcript! dir port (concat launch [queued-hand-back]
+                                                           read-hand-back))
+                         {:hook_event_name "Stop"})]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (is (= 1 (count @seen)))
+          (is (= {:input_tokens 135 :output_tokens 33 :cache_read_tokens 3000
+                  :cache_write_tokens 400 :turns 4}
+                 (select-keys (:body (first @seen)) (keys counts))))))
+      (finally (.stop server 0)))))
+
 (defn- bash-call
   "A Bash call, in the background or not, and the harness's answer."
   [background? answer]
