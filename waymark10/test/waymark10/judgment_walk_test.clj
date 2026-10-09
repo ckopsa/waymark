@@ -413,7 +413,7 @@
 ;; ── 4 · a reopened verdict puts its subject back in the queue ───────
 ;;
 ;; The walk subtracts subjects with a SAID verdict and nothing else
-;; (`mcp/judged-subjects`), so a reopen — which moves the standing
+;; (`judgments/walk-conds`), so a reopen — which moves the standing
 ;; verdict to overruled and writes nothing in its place — hands the
 ;; subject back by that one rule. And because the reopen is an
 ;; ordinary transition, the seat that walks the judgment wakes on it
@@ -1169,34 +1169,32 @@
 ;; ── 9″ · the judged are left out past the page (ticket 245c880b) ─────
 
 (deftest a-judged-subject-past-the-page-of-verdicts-is-not-handed-again
-  ;; `judged-subjects` reads the oldest `judged-page` said verdicts: a
+  ;; the judged were once read a page of said verdicts at a time: a
   ;; judgment that had said more handed its newer subjects again, and
-  ;; the guard refused each verdict. The page is one verdict long here
-  (with-redefs [judgments/judged-page 1]
-    (let [eng (fresh-engine)
-          h (engine/handler eng)
-          judgment (promoted-judgment! eng {})
-          _ (open-judge-seat! eng judgment {})
-          knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
-          flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
-          salt (expense! eng "Salt works" "kitchen" "2026-09-18T09:00:00Z")
-          ids #(mapv (comp str :id) %)
-          _ (say! eng judgment knives "keep" "Nothing to do: the amount fits.")
-          [r answer _] (empty-sit! eng h)]
-      (testing "three subjects, one judged: the other two are handed"
+  ;; the guard refused each verdict. The store's anti-join
+  ;; (`judgments/walk-conds`) has no page, so the sit's walk and the
+  ;; wake's count of it leave out every subject with a said verdict
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        salt (expense! eng "Salt works" "kitchen" "2026-09-18T09:00:00Z")
+        ids #(mapv (comp str :id) %)
+        _ (say! eng judgment knives "keep" "Nothing to do: the amount fits.")
+        [r answer _] (empty-sit! eng h)]
+    (testing "three subjects, one judged: the other two are handed"
+      (is (false? (:isError r)) (text-of r))
+      (is (= (ids [flour salt]) (mapv :id (get-in answer [:walk :rows])))))
+    (doseq [e [flour salt]]
+      (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+    (testing "all three judged: none is handed"
+      (let [[r answer _] (empty-sit! eng h)]
         (is (false? (:isError r)) (text-of r))
-        (is (= (ids [flour salt]) (mapv :id (get-in answer [:walk :rows])))))
-      (doseq [e [flour salt]]
-        (say! eng judgment e "keep" "Nothing to do: the amount fits."))
-      (testing "all three judged, two of them past the page: none is handed"
-        (let [[r answer _] (empty-sit! eng h)]
-          (is (false? (:isError r)) (text-of r))
-          (is (empty? (get-in answer [:walk :rows]))))
-        (is (= [] (judgments/unjudged
-                   eng (:id judgment)
-                   (judgments/judged-subjects eng (:id judgment))
-                   (ids [knives flour salt])))
-            "and the wake counts none of them")))))
+        (is (empty? (get-in answer [:walk :rows]))))
+      (is (= 0 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+          "and the wake counts none of them"))))
 
 ;; ── 9‴ · the store leaves the judged out of the queue (ticket 279366ee) ─
 
