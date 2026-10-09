@@ -2405,6 +2405,49 @@
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
 
+;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
+
+(deftest a-change-waiting-on-checks-names-the-ones-without-a-verdict
+  (let [checks [{:check_name "gate" :status "in_progress"}
+                {:check_name "lint" :status "completed" :conclusion "success"}
+                {:check_name "scan" :status "completed" :conclusion "stale"}]]
+    (is (= [{:name "gate" :status "in_progress" :conclusion nil}
+            {:name "scan" :status "completed" :conclusion "stale"}
+            {:name "tests" :status nil :conclusion nil}]
+           (forge/held-checks ["gate" "lint" "scan" "tests"] checks)))
+    (is (= (str "the checks of change-1 at abc have no verdict: "
+                "gate (status in_progress, conclusion none), "
+                "scan (status completed, conclusion stale), tests (no run)")
+           (forge/held-why "change-1" "abc" ["gate" "lint" "scan" "tests"]
+                           checks nil)))
+    (is (= [] (forge/held-checks ["lint"] checks))
+        "a check with a verdict is not named")))
+
+(deftest a-change-held-only-because-it-is-behind-its-base-says-so
+  (let [green [{:check_name "gate" :status "completed" :conclusion "success"}]]
+    (is (= (str "change-1 at abc is held only because it is behind its "
+                "base; its required checks are green")
+           (forge/held-why "change-1" "abc" ["gate"] green true)))
+    (is (nil? (forge/held-why "change-1" "abc" ["gate"] green false))
+        "a green head level with its base has nothing to say")
+    (is (re-find #"have no verdict: gate \(status queued"
+                 (forge/held-why "change-1" "abc" ["gate"]
+                                 [{:check_name "gate" :status "queued"}] true))
+        "a head that still waits on a check is not held only by its base")))
+
+(deftest a-held-change-is-due-one-time-past-the-bound
+  (let [t0 (java.time.Instant/parse "2026-10-09T10:00:00Z")
+        at #(.plusSeconds t0 (* 60 (long %)))
+        [s1 due1] (forge/held-due {} "c" "abc" (at 0) 20)
+        [s2 due2] (forge/held-due s1 "c" "abc" (at 19) 20)
+        [s3 due3] (forge/held-due s2 "c" "abc" (at 20) 20)
+        [s4 due4] (forge/held-due s3 "c" "abc" (at 40) 20)
+        [s5 due5] (forge/held-due s4 "c" "def" (at 41) 20)
+        [_ due6] (forge/held-due s5 "c" "def" (at 61) 20)]
+    (is (= [false false true false false true]
+           [due1 due2 due3 due4 due5 due6])
+        "due when the wait reaches the bound, one time for each head")))
+
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]
