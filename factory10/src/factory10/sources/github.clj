@@ -670,6 +670,19 @@
                 (ex-message e) ")")
          nil)))
 
+(defn- settled
+  "A check run that carries a conclusion and the time it ended is
+  finished, whatever its `status` says: GitHub has left a run reading
+  `in_progress` beside `conclusion: success` and a `completed_at`, and
+  a pass that waits on the status word waits on it forever (ticket
+  9112f56e). A workflow run and a job of the Actions read are judged
+  the same way (ticket b5e8bbd8)."
+  [check]
+  (if (and (word (:conclusion check)) (word (:completed_at check))
+           (not= "completed" (word (:status check))))
+    (assoc check :status "completed")
+    check))
+
 (defn job->check
   "One Actions job → the check run shape this source reads. A job's
   page names its run and itself, which is what `job-of` looks for in
@@ -695,7 +708,7 @@
     (into []
           (mapcat
            (fn [run]
-             (map #(job->check sha %)
+             (map #(settled (job->check sha %))
                   (:jobs (call! this "GET"
                                 (str "/repos/" repo "/actions/runs/"
                                      (:id run) "/jobs")
@@ -728,7 +741,8 @@
                              {}
                              runs))]
     (mapv (fn [run]
-            (let [status (word (:status run))
+            (let [run (settled run)
+                  status (word (:status run))
                   conclusion (word (:conclusion run))]
               (cond-> {:run_id (whole (:id run))
                        :status status
@@ -778,18 +792,6 @@
                             {:params {:per_page page-size}})))
     (catch clojure.lang.ExceptionInfo e
       (if (refused? e) [] (throw e)))))
-
-(defn- settled
-  "A check run that carries a conclusion and the time it ended is
-  finished, whatever its `status` says: GitHub has left a run reading
-  `in_progress` beside `conclusion: success` and a `completed_at`, and
-  a pass that waits on the status word waits on it forever (ticket
-  9112f56e)."
-  [check]
-  (if (and (word (:conclusion check)) (word (:completed_at check))
-           (not= "completed" (word (:status check))))
-    (assoc check :status "completed")
-    check))
 
 (defn- check-runs!
   "Every check run on the head, as one page, and every commit status

@@ -2578,6 +2578,39 @@
                  ["gate" "image"]
                  (forge/forge-checks source repo limit-head)))))))
 
+(deftest an-actions-run-or-job-with-a-conclusion-and-an-end-is-finished
+  ;; the same shape, read through Actions where the check-runs route
+  ;; refuses the token (ticket b5e8bbd8)
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        ended {:status "in_progress"
+               :started_at "2026-10-09T14:02:24Z"
+               :completed_at "2026-10-09T14:02:26Z"}
+        named (fn [n] (first (filter #(= n (:check_name %))
+                                     (forge/forge-checks source repo
+                                                         limit-head))))]
+    (gh/checks-answer! state repo 403)
+    (gh/seed-run! state repo limit-head
+                  (assoc ended :id 900 :workflow_id 11 :head_sha limit-head
+                         :conclusion "failure"))
+    (gh/seed-job! state repo 900
+                  (assoc ended :id 7001 :run_id 900 :name "gate"
+                         :conclusion "failure" :head_sha limit-head))
+    (gh/seed-job! state repo 900
+                  {:id 7002 :run_id 900 :name "image" :status "in_progress"
+                   :head_sha limit-head
+                   :started_at "2026-10-09T14:02:24Z"})
+    (testing "a job"
+      (is (= "completed" (:status (named "gate")))
+          "the conclusion and the end speak, not the status word")
+      (is (= "in_progress" (:status (named "image")))
+          "a job with no conclusion is still running"))
+    (testing "a workflow run"
+      (let [[run] (forge/forge-runs source repo limit-head)]
+        (is (= "completed" (:status run)))
+        (is (= ["gate" "image"] (mapv :name (:jobs run)))
+            "its jobs are read, as a finished red run's are")))))
+
 (defn- limit-pass! [{:keys [source engine lines]}]
   (forge/pass! {:source source :engine engine
                 :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
