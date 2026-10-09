@@ -66,93 +66,13 @@
 
 (defn- serves? [eng kind] (contains? (inv/resources eng) kind))
 
-(def judged-page
-  "The most standing verdicts one walk subtracts by in one read. A
-  judgment whose said verdicts outrun this is still subtracted whole:
-  past the page each candidate is asked for by name (`unjudged`). No
-  walk and no wake reads it now: both ask the store's anti-join
-  (`walk-conds`, `wakes/unjudged-transcripts`)."
-  500)
-
-(defn judged-subjects
-  "The subject ids this judgment has already spoken on: every verdict
-  of it still `said`. An `overruled` row is not here on purpose — a
-  correction overrules the first and the second verdict is the one
-  standing, so a subject leaves the queue once and stays gone.
-
-  …until its verdict is REOPENED. `verdict.reopen` moves the standing
-  row to `overruled` and writes nothing in its place, so this set no
-  longer holds the subject and the next walk hands it back. That is
-  the whole of the reopen's queue mechanism: this one rule, read the
-  same way, and no second list of subjects to re-admit.
-
-  The sit's walk, the wake's count of that walk and the count wake
-  over transcripts (`wakes/unjudged-transcripts`) ask the store for
-  the same rule as an anti-join (`walk-conds`), which has no page."
-  [eng judgment-id]
-  (if (serves? eng :verdict)
-    (into #{}
-          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :verdict
-                                       {:judgment (str judgment-id)
-                                        :state "said"}
-                                       {:limit judged-page}))))
-    #{}))
-
-(defn standing-verdict?
-  "Does this judgment hold a standing (`said`) verdict on this one
-  subject? The guard's own question (`verdict/one-standing-verdict-per-subject`),
-  asked by name, so it has no page to run past."
-  [eng judgment-id subject-id]
-  (boolean
-   (and (serves? eng :verdict)
-        (seq (store/with-tx (:storage eng)
-               (fn [tx] (store/query-rows (:storage eng) tx :verdict
-                                          {:judgment (str judgment-id)
-                                           :subject_id (str subject-id)
-                                           :state "said"}
-                                          {:limit 1})))))))
-
-(defn unjudged
-  "The ids of `ids` a walk of this judgment may hand, in their order:
-  not in `skip` (the walk's subtraction, `judged-subjects` among it),
-  and with no standing verdict. `judged-subjects` is one page, the
-  OLDEST `judged-page` said verdicts, so a judgment that has said more
-  than that left its newer subjects in the walk, and each was handed
-  again and refused by the guard (ticket 245c880b). A `skip` as large
-  as the page may be that page run out, so each id it does not hold is
-  then asked for by name (`standing-verdict?`); a smaller one is the
-  whole of the judged and nothing more is read."
-  [eng judgment-id skip ids]
-  (let [ids (remove #(contains? skip %) ids)]
-    (if (>= (count skip) (long judged-page))
-      (into [] (remove #(standing-verdict? eng judgment-id %)) ids)
-      (vec ids))))
-
-(defn own-sittings
-  "The sitting ids of this seat, the newest `judged-page` of them. A
-  seat judging its own sitting is no judgment, so a judge of sittings
-  is never handed one of these and never wakes for one (ticket
-  f508c646)."
-  [eng seat-id]
-  (if (and seat-id (serves? eng :sitting))
-    (into #{}
-          (map #(str (:id %)))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :sitting
-                                       {:seat (str seat-id)}
-                                       {:limit judged-page
-                                        :newest-first true}))))
-    #{}))
-
 (defn walk-conds
   "The conds that leave out of this judgment's queue what a walk of it
   by this seat never hands, for the store to answer in the queue's own
   query (ticket 279366ee). First, every subject with a standing (`said`)
-  verdict of the judgment: `judged-subjects`' rule as an anti-join, so
-  a reopened subject comes back the same way and no page of verdicts
-  bounds it. Then, for a judge of sittings and whatever its `queue`
+  verdict of the judgment, as an anti-join: an `overruled` row is not
+  among them, so a reopened subject comes back by this one rule and no
+  page of verdicts bounds it. Then, for a judge of sittings and whatever its `queue`
   says: the seat's own sittings, every sitting still open, and every
   sitting whose transcript is still being written (ticket f508c646).
   What is left of those is a closed sitting with a sealed transcript,

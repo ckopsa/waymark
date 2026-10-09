@@ -10,7 +10,6 @@
             [factory10.mirror :as mirror]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.judgments :as judgments]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -82,16 +81,17 @@
     (is (= head-a (get-in (verified! w) [:data :subject_head])))))
 
 (deftest a-new-head-reopens-the-verdict-on-the-old-one
-  (let [{:keys [eng change judgment] :as w} (world)]
+  (let [{:keys [eng change] :as w} (world)]
     (verified! w)
-    (is (contains? (judgments/judged-subjects eng judgment) change)
+    (is (= "said" (state-of-the-verdict eng change))
         "judged, the change is out of the queue")
     (observe! w {:head_sha head-b})
     (let [v (first (verdicts-on eng change))]
       (is (= "overruled" (name (:state v))))
       (is (= "head moved 2fba27a -> a667ef3" (get-in v [:data :reopen_note]))))
     (testing "and the judging seat's walk holds the change again"
-      (is (not (contains? (judgments/judged-subjects eng judgment) change))))
+      (is (not-any? #(= "said" (name (:state %))) (verdicts-on eng change))
+          "no said verdict stands on it, so the walk's anti-join lets it through"))
     (testing "the next verdict keeps the new head"
       (is (= head-b (get-in (verified! w) [:data :subject_head]))))))
 
