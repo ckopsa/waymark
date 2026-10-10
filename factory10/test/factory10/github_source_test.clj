@@ -2696,6 +2696,36 @@
       (is (true? (get-in (the-change engine) [:data :behind_base])))
       (is (= 1 (count (held-lines r)))))))
 
+;; ticket 93072465: the count and the next compare's time were kept in
+;; the process alone, so a restart asked at once and said the line again
+(deftest a-failing-compare-keeps-its-backoff-across-a-restart
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))
+        failing (fn [] (filterv #(re-find #"has thrown" %) @lines))]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (dotimes [_ 2]
+      (minutes-later! r 1)
+      (held-pass! r))
+    (is (= 3 (asked)))
+    (is (= 1 (count (failing))))
+    (is (= 3 (get-in (the-change engine) [:data :held_threw])))
+    ;; a restart: the process forgets every head it saw
+    (reset! @#'forge/held-seen {})
+    (held-pass! r)
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 3 (asked)) "the wait the third error earned is still kept")
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 4 (asked)) "and the compare is asked when it ends")
+    (is (= 4 (get-in (the-change engine) [:data :held_threw]))
+        "the count goes on from the row's")
+    (is (= 1 (count (failing))) "the failing line is not said again")))
+
 ;; ── the held reason and its clock are on the row (ticket b256d053) ──
 
 (defn- held-world
