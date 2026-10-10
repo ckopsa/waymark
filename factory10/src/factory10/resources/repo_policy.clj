@@ -768,13 +768,16 @@
     [:maybe [:string {:max 500}]]]
    ;; the GitHub source's cursor for this repository (ticket c07b581f):
    ;; stored, so a boot starts where the last pass stopped and does not
-   ;; read every pull request again
+   ;; read every pull request again. It is GitHub's stamp and never the
+   ;; engine's clock (`github/high-water`), so it stands still while no
+   ;; pull request moves: an old cursor is a quiet repository, and the
+   ;; pass's own clock is `base_checked_at` (ticket 028b292e)
    [:forge_cursor {:optional true
                    :examples ["2026-10-01T20:32:00Z"]
                    :x-display
                    {:raw true
                     :label "Pull requests read up to"
-                    :help "The newest change GitHub showed the source in this repository. The next pass asks for what moved after it."}}
+                    :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Base read at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
     [:maybe [:string {:max 64}]]]
    ;; the base branch's own state (ticket ade81ae9), so a person reads
    ;; whether main is red without opening GitHub
@@ -808,7 +811,7 @@
                       :examples ["2026-09-27T19:30:00Z"]
                       :x-display
                       {:label "Base read at"
-                       :help "When the pass last wrote the base's state, which it does when that state moves."}}
+                       :help "When the pass last read the base branch's head, by the engine's clock. Every pass that reads it writes this, whether or not the state moved, so a time that stands still here means the pass stopped or could not read the base."}}
     [:maybe :waymark/instant]]
    ;; one deploy at a time (ticket 47217098): the merge pass writes the
    ;; house's merges here, and the forge pass takes each off once the
