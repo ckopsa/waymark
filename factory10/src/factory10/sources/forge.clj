@@ -1342,7 +1342,11 @@
   counts from the row's `held_since`: a process that has not seen this
   head takes that time, and a head the row does not name is stamped.
   `checked` is the head's verdict: with one, the base is compared, and a
-  forge that does not answer says nothing."
+  forge that does not answer says nothing. What the compare answered is
+  written as `behind_base` too: the staleness pass compares only a head
+  that lacks a check, so a green head would say it is behind in prose
+  alone and the merge line would never bring it forward (ticket
+  14e72c6e). A head first seen held drops the last head's answer."
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
@@ -1355,13 +1359,19 @@
       (bench/mark-row! eng :change id
                        {:held_head head
                         :held_since (str (get-in seen [id :since]))
-                        :held_reason nil}
+                        :held_reason nil
+                        :behind_base nil}
                        #{}))
     (when due?
       (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
             behind? (when (and checked base (satisfies? ForgeCompare source))
                       (try (boolean (forge-behind? source repo base head))
                            (catch Exception _ nil)))]
+        (when (some? behind?)
+          (bench/mark-row! eng :change id
+                           {:behind_base behind?
+                            :base_compared_at (str (now-of eng))}
+                           #{:base_compared_at}))
         (when-some [line (held-why (get-in row [:data :change_id]) head
                                    required checks behind?)]
           (log-fn line)
