@@ -884,9 +884,10 @@
                          {:label "The front waits on"
                           :choices {"update" "It was just brought up to date, and its checks run on the new head"
                                     "checks" "Its checks are still running"
+                                    "github" "Its checks are green, and GitHub has not judged it mergeable yet"
                                     "merge" "It was offered the merge, and GitHub has not merged it yet"
                                     "train" "It rides a train, and the train's checks run"}}}
-    [:maybe [:enum "update" "checks" "merge" "train"]]]
+    [:maybe [:enum "update" "checks" "github" "merge" "train"]]]
    [:line_waiting {:optional true
                    :examples [2]
                    :x-display

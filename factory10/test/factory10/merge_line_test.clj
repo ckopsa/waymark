@@ -197,7 +197,13 @@
 
 (deftest the-front-says-what-it-waits-on
   (is (= "update" (bench/front-waits-on {:state "behind"})))
-  (is (= "checks" (bench/front-waits-on {:state "waiting"})))
+  (is (= "checks" (bench/front-waits-on {:state "waiting"}))
+      "a rig that names no waits_on keeps the old reading")
+  (is (= "checks" (bench/front-waits-on {:state "waiting" :waits_on "checks"
+                                          :pending ["gate"]})))
+  (is (= "github" (bench/front-waits-on {:state "waiting" :waits_on "github"}))
+      "green checks GitHub has not judged wait on GitHub, not on checks")
+  (is (= "update" (bench/front-waits-on {:state "behind" :waits_on "github"})))
   (is (= "merge" (bench/front-waits-on {:refused "merge_refused"
                                          :reason "GitHub has not merged it"}))))
 
