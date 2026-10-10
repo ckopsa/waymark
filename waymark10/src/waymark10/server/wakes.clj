@@ -940,6 +940,29 @@
          (let [{:keys [busy free]} (slots eng seat-row at)]
            (and (< (long busy) max-open) (pos? (long free)))))))
 
+(defn- runs-to-start
+  "How many runs one release of a seat with several slots may start at
+  `at`: no more than it has slots free, and no more than it has rows to
+  hand them (`slots`). A release sends one run for each waiting text and
+  one for the wake of no text, and three of them over two free rows
+  started a run that sat to a walk its siblings had taken (ticket
+  8c071e14). Never less than one: the release was already judged to
+  fire. nil for a seat of one slot, which sends as it always did."
+  [eng seat-row ^Instant at]
+  (let [max-open (long (max-open-of seat-row))]
+    (when (< 1 max-open)
+      (let [{:keys [busy free]} (slots eng seat-row at)]
+        (max 1 (min (- max-open (long busy)) (long free)))))))
+
+(defn- left-waiting
+  "`data` with only the sends a release had no row for still waiting:
+  `kept` is their texts in order, nil for the wake of no text."
+  [data kept]
+  (let [texts (vec (keep identity kept))]
+    (cond-> (assoc (schedules/clear-wake data) :wake_pending true)
+      (seq texts) (assoc :wake_texts texts :wake_text (first texts))
+      (and (seq texts) (some nil? kept)) (assoc :wake_textless true))))
+
 (declare empty-walk? grace-lift)
 
 (defn- wake-seat!
@@ -1239,6 +1262,8 @@
   A seat of several slots is held by `damped?` rather than by the two
   walls above, and `slot?` (a sitting of it closed) lets it fire with
   NOTHING pending when a slot and a row for it are free (`free-slot?`).
+  Its release starts at most `runs-to-start` runs, and the sends past
+  that keep waiting (`left-waiting`) for a slot and a row of their own.
   → true when a fire went out."
   ([eng seat-row schedule-row key at]
    (release! eng seat-row schedule-row key at false))
@@ -1281,9 +1306,17 @@
                       (get-in schedule-row [:data :wake_textless])
                       (conj [nil (str key ":queue")]))
                     [[nil key]])
+            room (runs-to-start eng seat-row at)
+            [sends kept] (if room (split-at room sends) [sends nil])
             sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
         (when (some true? sent)
-          (stamp-fired! eng schedule-row at true)
+          (if (seq kept)
+            ;; no free row for these yet: they wait for the next release
+            (stamp-fired! eng
+                          (update schedule-row :data left-waiting
+                                  (map first kept))
+                          at false)
+            (stamp-fired! eng schedule-row at true))
           true))))))
 
 (defn release-linked!
