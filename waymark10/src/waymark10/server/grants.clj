@@ -2330,6 +2330,30 @@
     (boolean (and (seat-cited row)
                   (not= (get-in row [:data :audience]) (:id principal))))))
 
+(defn as-the-seats-sitter
+  "`principal` as it sits under `grant-id` where no session is there to
+  declare a model: a planner hears a principal id and holds no session,
+  and a seat held for named models serves nothing to a hand that
+  declares none (`resolve-seat`, wall 2). So the principal takes the
+  name of the first model the grant's seat is held for —
+  `substitute_for` for a substitute — which is the claim its sitter's
+  own session makes. The principal comes back as it was when it declares
+  a model already, when the grant is not its own or cites no seat, and
+  when the seat names no model."
+  [eng grant-id principal]
+  (or (when-not (nonblank (:model principal))
+        (when-some [row (when grant-id (load-decoded eng :grant grant-id))]
+          (when (= (get-in row [:data :audience]) (:id principal))
+            (when-some [seat (some->> (seat-cited row) (load-decoded eng :seat))]
+              (when-some [held (some (fn [id]
+                                       (nonblank (get-in (load-decoded eng :model (str id))
+                                                         [:data :name])))
+                                     (get-in seat [:data (if (true? (get-in row [:data :substitute]))
+                                                           :substitute_for
+                                                           :held_for)]))]
+                (assoc principal :model held))))))
+      principal))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an

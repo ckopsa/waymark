@@ -2681,7 +2681,9 @@
   now. With no grant it wears `grants/unscoped-visibility`, which is
   `wrap-identity`'s own else-branch: nothing for a person, the worn
   grant or the bootstrap surface for an agent. With a grant id it wears
-  `grants/visibility` for that grant. The router lets a dead grant
+  `grants/visibility` for that grant, as the model its seat is held for
+  when the grant cites one (`grants/as-the-seats-sitter`): no session is
+  here to declare it. The router lets a dead grant
   through as a scope of nothing; here it is refused by name, because a
   plan of nothing would read as a goal with no way to it. No sitting
   rides: a rehearsal counts on nobody's.
@@ -2700,6 +2702,7 @@
                                                 " is a member here, so there is "
                                                 "nobody to rehearse as.")})))
         gid (some-> grant str not-empty)
+        who (if gid (grants/as-the-seats-sitter eng gid who) who)
         vis (if gid
               (let [v (grants/visibility eng gid who)]
                 (when-not (:grant v)
