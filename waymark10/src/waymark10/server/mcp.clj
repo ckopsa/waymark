@@ -5936,7 +5936,10 @@
   (try
     (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
-                         (dropped-bytes result))
+                         (dropped-bytes result)
+                         ;; an answer that is no error: the close reads
+                         ;; it against the last refusal (ticket 28a5d117)
+                         (not (and (map? result) (true? (:isError result)))))
       (when-some [run (cancelled-run tool-name result)]
         (seats/add-cancelled-run! eng sitting-id run)))
     (catch Exception e

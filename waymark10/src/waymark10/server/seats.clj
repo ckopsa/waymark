@@ -252,7 +252,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns. idle: none of these; it moved nothing."))
 
@@ -265,7 +265,7 @@
          " of the bytes served dropped. rewalk: a row it walked was walked by "
          rewalk-sittings " or more earlier sittings of the seat that did not submit. over_budget: it cost over $"
          cost-usd ". refusals_high: " refusals
-         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>.")))
+         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>, and so does one that a later answered call spared from refused_out.")))
 
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
@@ -1758,6 +1758,19 @@
                   (.isAfter moved at)))
               transitions)))
 
+(defn- answered-since?
+  "Did the sitting recover from its newest refusal and end cleanly: a
+  call answered after it (`last_answer_at` is newer than
+  `last_refusal`), and the close carries a note. A seat that retried
+  once, read what it came for and said it had nothing to do was not
+  stopped by the refusal."
+  [data]
+  (let [^java.time.Instant refused (->instant (get-in data [:last_refusal :at]))
+        ^java.time.Instant answered (->instant (:last_answer_at data))]
+    (boolean (and refused answered
+                  (.isAfter answered refused)
+                  (some-> (:note data) str not-empty)))))
+
 (defn- served-of
   "One count of `served` (`:calls`, `:bytes`, `:dropped`), summed over
   the named tools, or over every tool when none is named."
@@ -1795,12 +1808,15 @@
         turns (long (or (:turns data) 0))
         served (:served data)
         refusal (:last_refusal data)
+        refused-last (refused-last? data transitions)
+        ;; a later call answered and the close said so: not refused out
+        recovered (boolean (and refused-last (answered-since? data)))
         outcome (cond
                   (delivered? transitions delivers) "submitted"
                   (change-moved? transitions "stall") "stalled"
                   (or (= "missed" closed) (true? (:missed data))
                       (and (zero? turns) (empty? served))) "never_sat"
-                  (refused-last? data transitions) "refused_out"
+                  (and refused-last (not recovered)) "refused_out"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
@@ -1823,8 +1839,10 @@
               (>= (long (or (:refusals data) 0)) refusals)
               (conj "refusals_high")
 
-              ;; which law refused it out, beside the outcome
-              (= "refused_out" outcome)
+              ;; which law refused it out, beside the outcome; a sitting
+              ;; that recovered keeps the record of what refused it
+              (or (= "refused_out" outcome)
+                  (and recovered (contains? #{"cut_short" "idle"} outcome)))
               (into (keep (fn [[label v]]
                             (when-some [s (some-> v str not-empty)]
                               (str label ":" s))))
@@ -4530,6 +4548,15 @@
                     {:label "Last call"
                      :spelled-by-hand "Stamped by the engine on every call counted against an open sitting; the sweep ends a fired sitting silent past its seat's idle limit."}}
      [:maybe :waymark/instant]]
+    ;; THE LAST ANSWER (ticket 28a5d117). Stamped by the MCP door on a
+    ;; tool call that answered and was not a refusal, so the close can
+    ;; tell a sitting its last refusal stopped from one that called
+    ;; again and was answered.
+    [:last_answer_at {:optional true
+                      :x-display
+                      {:label "Last answer"
+                       :spelled-by-hand "Stamped by the engine on each tool call that answered without an error; the close reads it against the last refusal."}}
+     [:maybe :waymark/instant]]
     ;; THE TRACE OF THE FIRING'S KEY (R-12.37). The sit that spends a
     ;; firing's key keeps its hash here, on the sitting it opened and
     ;; not on the seat, so a run that loses its bind to a restart may
@@ -5717,12 +5744,19 @@
   only when it is more than nothing, so a tool nobody shaped keeps the
   two counts it always had.
 
+  `answered?` is the fifth and it is optional too (ticket 28a5d117):
+  true when the answer was not a refusal, and then the same write
+  stamps `last_answer_at`. The stamp is the wall clock's, as
+  `last_refusal`'s is, because the close compares the two.
+
   → the tool's new line, {:calls n :bytes b} and `:dropped` when
   there is one, or nil when there was nothing to count: an unknown id,
   a sitting already closed, a call with no tool name, or a kind this
   engine does not serve."
   ([eng sitting-id tool bytes] (add-served! eng sitting-id tool bytes 0))
   ([eng sitting-id tool bytes dropped]
+   (add-served! eng sitting-id tool bytes dropped false))
+  ([eng sitting-id tool bytes dropped answered?]
    (let [tool (some-> tool str not-empty)
          bytes (long (or bytes 0))
          dropped (long (or dropped 0))]
@@ -5740,9 +5774,12 @@
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                     (-> (:data row)
-                                         (assoc-in [:served k] line)
-                                         (assoc :last_call_at (call-stamp eng)))
+                                     (cond-> (-> (:data row)
+                                                 (assoc-in [:served k] line)
+                                                 (assoc :last_call_at (call-stamp eng)))
+                                       answered?
+                                       (assoc :last_answer_at
+                                              (str (java.time.Instant/now))))
                                      nil)
                  line)))))))))
 
