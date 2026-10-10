@@ -352,7 +352,9 @@
 (deftest the-mapping-makes-one-seat-step-of-an-unseen-wait
   (testing "with nothing unseen the cycle is the reason no step can be taken"
     (is (= "The way to ticket.reopen leads back to ticket.reopen, so no step can be taken now."
-           (:blocked_reason (quests/answer->plan unseen-answer seats-for unseen-goal)))))
+           (:blocked_reason (quests/answer->plan unseen-answer seats-for unseen-goal))))
+    (is (not-any? :unseen (:plan (quests/answer->plan unseen-answer seats-for unseen-goal)))
+        "no step is marked unseen when nothing is"))
   (testing "a cycle and its alternative become one seat step and no reason"
     (let [plan (quests/answer->plan unseen-answer seats-for unseen-goal
                                     {:waiting_on "Juniper"})]
@@ -360,6 +362,8 @@
               [2 "complete" "/api/epics/1" "person" "later" nil]]
              (shape plan [:n :door :self :whose :state :waiting_on])))
       (is (= unseen-sentence (:note (first (:plan plan)))))
+      (is (= [true nil] (mapv :unseen (:plan plan)))
+          "the engine marks the unseen step, and not the goal's own on the same door and row")
       (is (every? (comp empty? :alternatives) (:plan plan))
           "the cycle's other remedy is no way to the goal")
       (is (nil? (:blocked_reason plan)))

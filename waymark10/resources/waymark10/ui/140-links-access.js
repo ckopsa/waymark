@@ -166,15 +166,17 @@ async function questFromDoor(btn, name, doc) {
    Accept creates the quest and pins it, and the tracker shows it
    (120-nav-home.js). A refused rehearsal, create or pin is said in the
    sheet, and Accept is disabled with that line. */
+/* a wait on a row the owner cannot see: the engine marks the step
+   (`unseen`, answer->plan, quests.clj). Its door and row are the goal's
+   own, so it is said by its note alone: the door's label beside the
+   seat's name would say the seat takes the goal's door. The sheet and
+   the quest's page (questStep, 200-events-follow.js) read it here and
+   nowhere else; the tracker says a waiting head by who it waits on. */
+function questUnseen(s) { return !!s && s.unseen === true; }
 function questSheet(btn, name, doc, create, goal, seen) {
   const p = (seen.ok && (seen.body || {}).preview) || {};
   const steps = p.plan || [];
-  /* a wait on a row the owner cannot see is a seat's step on the goal's
-     own door and row (answer->plan, quests.clj). It is said by its note
-     alone: the door's label beside the seat's name would say the seat
-     takes the goal's door. */
-  const unseen = s => s.whose === "seat" && !!s.note && !!goal
-    && s.self === goal.self && s.door === goal.action;
+  const unseen = questUnseen;
   const turn = s => s.whose === "person" || s.whose === "confirm" ? "yours"
     : unseen(s) ? "waiting on " + (s.waiting_on || "someone else")
     : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
@@ -269,6 +271,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
                    plan_is_estimate: p.plan_is_estimate,
                    plan: steps.map(s => ({door: s.door, self: s.self, whose: s.whose,
                      waiting_on: s.waiting_on, needs: s.needs, note: s.note,
+                     unseen: s.unseen,
                      door_label: s.door_label, row_label: s.row_label,
                      needs_labels: s.needs_labels}))}}
       : {title: (seen.body || {}).title, detail: (seen.body || {}).detail}}}});

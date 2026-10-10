@@ -226,7 +226,7 @@
                                       (= action (some-> (:door %) name)))
                                 ;; the unseen wait stands on the goal's row
                                 ;; and door, and is not the goal's step
-                                (remove #(or (done? %) (= unseen-note (:note %)))
+                                (remove #(or (done? %) (:unseen %) (= unseen-note (:note %)))
                                         plan)))
                  {:door action :self self :whose "person"})
         goal (cond-> (assoc (into {} (remove (comp nil? val)) goal)
@@ -357,6 +357,10 @@
                  :x-display {:label "Waiting on"
                              :help "Who the step waits on, by name, when it is not the owner's."}}
     [:maybe [:string {:max 128}]]]
+   [:unseen {:optional true
+             :x-display {:label "Unseen wait"
+                         :help "True when the step waits on a row the owner's grant does not read. Its door and row are the goal's own and are not the step's, so the step is said by its note alone."}}
+    [:maybe :boolean]]
    [:alternatives {:optional true
                    :x-display {:label "Or"
                                :help "The other doors that would do for this step: the refusal named them beside this one. Taking any one of them is the step."}}
@@ -885,7 +889,8 @@
                               :waiting_on (clip (or (not-empty (:waiting_on unseen))
                                                     someone-else)
                                                 128)
-                              :note unseen-note)))
+                              :note unseen-note
+                              :unseen true)))
         steps (if (and (seq before) (or (seq (:needs frame)) (goal? frame)))
                 (let [form (with-form (assoc goal :whose "person") frame)]
                   (conj before

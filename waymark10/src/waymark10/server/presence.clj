@@ -692,7 +692,7 @@
   plan: the step's names, and beside them the words a person reads
   (`in-words`, quests.clj). The page's recorder keeps the same ones
   (questSheet, ui/140-links-access.js; docs/spec-guided-follow.md §1)."
-  [:door :self :whose :waiting_on :needs :note
+  [:door :self :whose :waiting_on :needs :note :unseen
    :door_label :row_label :needs_labels])
 
 (defn sheet-step

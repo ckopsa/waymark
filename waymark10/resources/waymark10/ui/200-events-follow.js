@@ -765,8 +765,10 @@ function questStep(doc, s) {
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
     el("span", {class: "quest-note"}, s.note || s.door_label || pretty(s.door)));
   /* the row the step is on, in words: the row's own summary, which the
-     page reads (questRow, 120-nav-home.js). Its path is never text. */
-  if (s.self)
+     page reads (questRow, 120-nav-home.js). Its path is never text.
+     An unseen wait stands on the goal's row and is not on it
+     (questUnseen, 140-links-access.js), so it names no row. */
+  if (s.self && !questUnseen(s))
     row.append(el("small", {class: "muted quest-alt"}, " · ", questRow(s.self)));
   /* the refusal's other remedies: any one of them is this step */
   if (s.state !== "done")
