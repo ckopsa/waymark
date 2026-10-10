@@ -16,6 +16,7 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
             [waymark10.server.quests :as quests]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -978,6 +979,74 @@
             "the owner's walk holds the other principal's move")
         (is (= (inc filmed) (count (docs-in eng w)))
             "and the quest's document after it")))))
+
+;; ── an agent owner whose goal waits on a row its grant does not read ─
+
+;; the shape of factory10's `children-are-finished`: the remedy is bound
+;; to the part only where the grant worn reads it, so under a grant that
+;; does not, the remedy falls back to the refused row and the rehearsal
+;; ends in a cycle
+(g/defguard the-jobs-part-is-finished
+  {:reads [:q_job :grant]
+   :evidence [:part_id]
+   :explain "Finish the part first."
+   :remedies [{:door :q_job/finish :id '(evidence :part_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [id (some-> (get-in row [:data :part_id]) str not-empty)
+          part (when id (read :q_job id))
+          row? (:row? (:grant ctx))]
+      (cond
+        (or (nil? part) (= "done" (some-> part :state name))) (t/allow)
+        (and row? (not (row? :q_job id))) (t/deny)
+        :else (t/deny {:evidence {:part_id id}})))
+    (t/allow)))
+
+(def ^:private job
+  "A row that ends after its part, which is a row of the same kind."
+  (r/resource
+   {:kind :q_job
+    :plural "q_jobs"
+    :states [:open :done]
+    :initial :open
+    :summary "Job · {state}"
+    :schema [:map
+             [:part_id {:optional true
+                        :not-a-ref "quests fixture: the-jobs-part-is-finished binds its remedy to it"}
+              [:maybe [:string {:max 80}]]]]
+    :actions
+    {:finish {:from #{:open} :to :done
+              :guards [the-jobs-part-is-finished]
+              :safety routine}
+     :reopen {:from #{:done} :to :open :safety routine}}}))
+
+(deftest an-agent-owners-goal-waits-on-the-row-its-grant-does-not-read
+  (let [eng (engine/engine {:storage (memory/storage) :resources [job]})
+        part (make! eng :q_job {})
+        whole (make! eng :q_job {:part_id part})
+        self (str "/api/q_jobs/" whole)
+        m (:row (inv/create! eng :member {:display "Planner" :actor_type "agent"}
+                             {:principal person}))
+        gid (str (:id (grant! eng (str (:id m))
+                              [{:kind "q_job" :actions ["finish"] :ids [whole]}])))
+        agent (members/principal-for eng (str (:id m)))
+        worn (:grant (grants/visibility eng gid agent))
+        quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
+                                      {:principal agent :grant worn})))]
+    (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (= :agent (:type agent)) "the owner is an agent")
+      (is (not ((:row? worn) :q_job part)) "the part is outside the owner's grant")
+      (is (= [(str "/api/q_jobs/" part)] (mapv :self (:waits_on d)))
+          (str "the engine, judging as the owner with no grant worn, finds the row: "
+               (pr-str d)))
+      (is (= [["finish"]] (mapv :doors (:waits_on d))))
+      (is (= "iris" (:waiting_on d)) "the step waits on who can finish the part")
+      (is (nil? (:blocked_reason d)) "and the cycle's sentence is not kept")
+      (is (seq (:plan d)))
+      (is (= #{self} (set (map :self (:plan d))))
+          "no step names the row the owner does not read"))))
 
 ;; ── the goal's form is the last step ────────────────────────────────
 
