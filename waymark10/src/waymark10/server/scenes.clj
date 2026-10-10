@@ -344,10 +344,43 @@
             (fail p)
             st'))))))
 
+(defn- wearing-problem
+  "Why a scene's `wearing` cannot stand, as `wearing <key>: <why>`; nil
+  when every entry can. A key is a cast id, and a value is a grant id as
+  written or the `$bind` of a given that reads kind `grant`. Nothing is
+  resolved here: the performer reads the grant after the givens run."
+  [scene people]
+  (let [reads (into {}
+                    (keep (fn [c]
+                            (when (and (map? c) (some? (get c "bind")))
+                              [(str (get c "bind"))
+                               (and (contains? #{"waymark_get" "waymark_query"}
+                                               (get c "tool"))
+                                    (= "grant" (some-> (get-in c ["arguments" "kind"])
+                                                       str)))])))
+                    (get scene "given"))]
+    (some (fn [[who grant]]
+            (let [grant (str grant)
+                  nm (when (str/starts-with? grant "$") (subs grant 1))
+                  why (cond
+                        (not (some #{who} people))
+                        (str (tick who) " is not in the cast.")
+
+                        (nil? nm) nil
+
+                        (not (contains? reads nm))
+                        (str (tick grant) " names no given.")
+
+                        (not (get reads nm))
+                        (str (tick grant) " is bound by a given that does not read kind `grant`."))]
+              (when why (str "wearing " (tick who) ": " why))))
+          (get scene "wearing"))))
+
 (defn problem-of
-  "The first call or shot of a scene's data that cannot be performed,
-  as `given N: <why>` or `shot N: <why>`; nil when every one can.
-  `rdef-of` is the ctx's registry consult."
+  "The first call, `wearing` entry or shot of a scene's data that cannot
+  be performed, as `given N: <why>`, `wearing <key>: <why>` or
+  `shot N: <why>`; nil when every one can. `rdef-of` is the ctx's
+  registry consult."
   [data rdef-of]
   (let [scene (plain data)
         people (mapv str (get scene "cast"))
@@ -359,8 +392,12 @@
                             st')))
                       st
                       (map-indexed vector items)))
-        st (run {:bound {}} "given" call-step (get scene "given"))]
-    (:problem (if (:problem st) st (run st "shot" shot-step (get scene "shots"))))))
+        st (run {:bound {}} "given" call-step (get scene "given"))
+        worn (when-not (:problem st) (wearing-problem scene people))]
+    (:problem (cond
+                (:problem st) st
+                worn (fail worn)
+                :else (run st "shot" shot-step (get scene "shots"))))))
 
 ;; ── guards and handlers ─────────────────────────────────────────────
 
@@ -429,6 +466,12 @@
                         :help "Setup calls made before filming, in order: {as, tool, arguments, bind?}."
                         :spelled-by-hand "Each call's arguments are its tool's own, so no fixed sub-form can offer them."}}
     [:maybe [:vector {:max 40} [:map-of :keyword :any]]]]
+   [:wearing {:optional true
+              :x-display {:raw true
+                          :label "Wearing"
+                          :help "The grant each cast member wears when filming starts: a cast id to a grant id, or to the `$bind` of a given that reads the grant."
+                          :spelled-by-hand "Each key is a cast id of this scene, so no fixed sub-form can offer them."}}
+    [:maybe [:map-of :keyword [:string {:min 1 :max 128}]]]]
    [:shots {:x-display {:raw true
                         :label "Shots"
                         :help "The filmed moments, in order. Each has one verb, and may have `say`, `expect` and `bind`."
