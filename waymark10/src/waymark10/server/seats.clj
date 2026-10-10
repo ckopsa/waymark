@@ -2437,7 +2437,7 @@
     [:row {:optional true
            :x-display
            {:label "The row it named"
-            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting of the seat already holds it."}}
+            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting already holds it, of this seat or of another seat that walks the same kind."}}
      [:string {:min 1 :max 128}]]]])
 
 (def ^:private delivers-help
@@ -4660,14 +4660,15 @@
                               :help "The instant after which this token is refused, when the sitting has not closed before it."}}
                 [:string {:max 40}]]]]]]
     ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
-    ;; walk here, and a second sitting of the same seat opened while
-    ;; this one is open walks past them to the next rows. The claim
+    ;; walk here, and a second sitting opened while this one is open,
+    ;; of this seat or of another seat that walks the same kind, walks
+    ;; past them to the next rows. The claim
     ;; ends with the sitting: only an OPEN sitting's rows are read.
     [:walked_rows {:optional true
                    :x-display
                    {:raw true
                     :label "The rows it was handed"
-                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
+                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting is not handed them, whether it is of this seat or of another seat that walks the same kind."}}
      [:maybe [:vector [:string {:max 128}]]]]
     ;; A WAKE THAT WALKED NOTHING. The sit stamps this when the walk it
     ;; hands has no rows at all — an empty queue, a queue whose every
