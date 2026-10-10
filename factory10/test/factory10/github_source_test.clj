@@ -2589,6 +2589,65 @@
       (is (= the-head (get-in row [:data :green_head]))
           "the rest of the change's pass ran"))))
 
+;; ticket 443bcbc2: the due pass was the one compare a held green head
+;; got, so one forge error left it waiting on `checks` for good
+(deftest a-compare-that-throws-on-the-due-pass-is-asked-again
+  (let [{:keys [engine state] :as r} (held-log-world [a-held-green])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (nil? (get-in (the-change engine) [:data :behind_base]))
+        "the due compare threw and wrote nothing")
+    (gh/fail-path! state nil)
+    (minutes-later! r 1)
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (true? (get-in row [:data :behind_base])))
+      (is (some? (get-in row [:data :base_compared_at])))
+      (is (= [(str change-id " at " the-head " is held only because it is"
+                   " behind its base; its required checks are green")]
+             (held-lines r))
+          "the line is said on the pass that got the answer")
+      (is (= "behind" (:state (bench/head-answer row {:state "waiting"})))))
+    (testing "a head that is behind is not compared or said again"
+      (let [asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                        (gh/requests state))))
+            before (asked)]
+        (minutes-later! r (inc forge/held-compare-minutes))
+        (held-pass! r)
+        (is (= before (asked)))
+        (is (= 1 (count (held-lines r))))))))
+
+(deftest a-held-green-head-level-with-its-base-is-compared-again-later
+  (let [{:keys [engine state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))]
+    (gh/seed-ancestor! state repo the-head "main")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (false? (get-in (the-change engine) [:data :behind_base])))
+    (is (= [] (held-lines r)))
+    (let [before (asked)]
+      (minutes-later! r 1)
+      (held-pass! r)
+      (is (= before (asked)) "not again inside the bound"))
+    ;; the base moves: the head no longer holds it
+    (swap! state update-in [:repos repo :ancestors] dissoc the-head)
+    (minutes-later! r forge/held-compare-minutes)
+    (held-pass! r)
+    (is (true? (get-in (the-change engine) [:data :behind_base])))
+    (is (= 1 (count (held-lines r))) "and the pass says so one time")))
+
+(deftest a-held-head-is-compared-again-by-what-the-compare-answered
+  (let [now (java.time.Instant/parse "2026-10-10T10:00:00Z")]
+    (is (nil? (forge/held-again true now)))
+    (is (= now (forge/held-again nil now)) "no answer: the next pass")
+    (is (= (.plusSeconds now (* 60 (long forge/held-compare-minutes)))
+           (forge/held-again false now)))))
+
 ;; ── the held reason and its clock are on the row (ticket b256d053) ──
 
 (defn- held-world
