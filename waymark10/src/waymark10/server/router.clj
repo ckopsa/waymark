@@ -2266,18 +2266,35 @@
   (ticket b5d51b4d). It counts no transition and no refusal. Mounted by
   `handler` only: the MCP door already stamps every tools/call through
   `seats/add-served!`. Best-effort, the mind-the-wall! posture — a
-  stamp that could fail a read would be worse than none."
+  stamp that could fail a read would be worse than none.
+
+  The stamp is written once the read has answered (ticket 3ff10737):
+  a status below 400 stamps `last_answer_at` in the same write, so a
+  sitting that recovers from a refusal over plain HTTP is judged as
+  one that recovers through the connector is. A read that threw is
+  still a call, and answered nothing."
   [handler eng]
-  (fn [req]
-    (when (= :get (:request-method req))
-      (try
-        (when-some [sitting-id (counted-sitting-id eng req)]
-          (seats/stamp-call! eng sitting-id))
-        (catch Exception e
-          (binding [*out* *err*]
-            (println "waymark10 router: could not stamp the sitting's read -"
-                     (ex-message e))))))
-    (handler req)))
+  (let [stamp! (fn [req resp]
+                 (try
+                   (when-some [sitting-id (counted-sitting-id eng req)]
+                     (seats/stamp-call! eng sitting-id
+                                        (let [status (:status resp)]
+                                          (and (number? status)
+                                               (< (long status) 400)))))
+                   (catch Exception e
+                     (binding [*out* *err*]
+                       (println "waymark10 router: could not stamp the sitting's read -"
+                                (ex-message e))))))]
+    (fn [req]
+      (if (= :get (:request-method req))
+        (let [resp (try
+                     (handler req)
+                     (catch Throwable t
+                       (stamp! req nil)
+                       (throw t)))]
+          (stamp! req resp)
+          resp)
+        (handler req)))))
 
 (defn- walk-export
   "GET /api/walks/{id}/export — a sealed walk as `waymark-walk/1`,
