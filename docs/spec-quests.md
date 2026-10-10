@@ -113,6 +113,19 @@ is its own step with `needs` `close_reason`: no guard declares one
 sentence for every child. The tracker's Go opens that row's dialog
 for the door with the `needs` fields lit.
 
+**A row the owner cannot read is one seat's step, with no address.**
+When the goal waits on a row outside the owner's grant, the refusal
+binds no row the owner reads and the owner's rehearsal ends in a
+cycle. The engine then judges the goal door once more with no grant
+worn (`unseen-waits`) and keeps the row and the doors that would end
+the wait in `waits_on`, a `:secret` field of the quest that no read
+shows. The plan carries one step for it: `whose` `seat`, `waiting_on`
+the names of those who can take those doors (`grants/door-takers`),
+on the goal's own door and row, with a note that says someone else
+holds the next step. It holds no id, title or link of the row. The
+consumer's index names the rows of `waits_on`, so a move on one plans
+the quest again.
+
 **A shut goal is the last step, from the first plan.** A door its row
 does not afford shows no form, so the rehearsal names no `needs` for
 it. When the goal's row does not afford the goal's door, the planner

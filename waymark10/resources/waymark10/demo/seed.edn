@@ -183,11 +183,13 @@
    :ref :plan-grant}
 
   ;; ── the person's grant ─────────────────────────────────────────
-  ;; The leash Maya pursues the quest with: she reads every ticket, ends
-  ;; one and restates one. It admits no `resume`, so the deferred child
-  ;; waits on Juniper.
+  ;; The leash Maya pursues the quest with: she reads the epic and the
+  ;; guide, named by id, ends one and restates one. The seating plan is
+  ;; outside it, so the quest waits on Juniper and never shows her that
+  ;; row.
   {:grant {:audience [:cast :ada]
-           :scope [{:kind "ticket" :actions ["complete" "restate"]}]}
+           :scope [{:kind "ticket" :actions ["complete" "restate"]
+                    :ids [[:ref :q-epic] [:ref :q-guide]]}]}
    :ref :ada-grant}
 
   ;; ── the invitation ─────────────────────────────────────────────

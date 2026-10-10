@@ -28,6 +28,16 @@
   and the owner's walk records the move. A transition on a row no
   active quest names reads no quest.
 
+  A ROW THE OWNER CANNOT READ IS THE ENGINE'S TO KNOW. When the goal
+  waits on a row outside the owner's grant, the owner's rehearsal ends
+  in a cycle. The engine then judges the goal door once more with no
+  grant worn (`unseen-waits`) and keeps that row and its doors in
+  `waits_on`, a `:secret` field no read shows. The plan carries one
+  seat's step on the goal's own row, waiting on whoever can take those
+  doors, and the index names that row too, so a move on it plans the
+  quest again. The owner learns that someone else holds the next step,
+  and never which row.
+
   ONE INVITATION FOLLOWS THE PLAN. The step the owner takes now is
   handed to the owner as an invitation the engine authors. When that
   step changes the old invitation is withdrawn and a new one opens. A
@@ -199,6 +209,11 @@
 (def ^:private more-may-follow
   "More steps may follow once this one is done.")
 
+(def ^:private unseen-note
+  "The note of the step that waits on a row the owner's grant does not
+  read. It says whose the step is, and never which row."
+  "Someone else holds the next step, on a row outside what you can see.")
+
 (defn- finished-plan
   "The plan of a quest whose goal door was taken at `now`: the steps
   that were done, then the goal's, done. A step nobody took is dropped,
@@ -209,7 +224,10 @@
         done? #(= "done" (some-> (:state %) name))
         goal (or (first (filter #(and (= self (:self %))
                                       (= action (some-> (:door %) name)))
-                                (remove done? plan)))
+                                ;; the unseen wait stands on the goal's row
+                                ;; and door, and is not the goal's step
+                                (remove #(or (done? %) (= unseen-note (:note %)))
+                                        plan)))
                  {:door action :self self :whose "person"})
         goal (cond-> (assoc (into {} (remove (comp nil? val)) goal)
                             :state "done"
@@ -233,7 +251,8 @@
           :blocked_reason (:blocked_reason inp)
           :plan_is_estimate (boolean (:plan_is_estimate inp))
           :waiting_on (:waiting_on inp)
-          :invitation (:invitation inp)))
+          :invitation (:invitation inp)
+          :waits_on (not-empty (vec (:waits_on inp)))))
 
 ;; ── what a collection row reads ─────────────────────────────────────
 ;; the plan is a vector, so it does not ride a summary row; these two
@@ -410,7 +429,22 @@
                  :kind :invitation
                  :x-display {:label "Invitation"
                              :help "The invitation that hands the owner the step to take now, written by the engine. Empty when no step is the owner's."}}
-    [:maybe :waymark/ref]]])
+    [:maybe :waymark/ref]]
+   ;; the engine's own: the owner's grant does not read these rows, so
+   ;; no read of the quest may name them
+   [:waits_on {:optional true
+               :secret true
+               :x-display {:label "Waits on, unseen"
+                           :help "The rows the goal waits on that the owner's grant does not read, each with the doors that would end the wait. The engine's own: no read shows it."}}
+    [:maybe [:vector {:max 16}
+             [:map
+              [:self {:x-display {:raw true
+                                  :label "The row"
+                                  :help "The row the goal waits on, as its path: /api/<plural>/<id>."}}
+               [:string {:min 1 :max 300}]]
+              [:doors {:x-display {:label "The doors"
+                                   :help "The actions on that row that would end the wait."}}
+               [:vector {:max 8} [:string {:min 1 :max 60}]]]]]]]])
 
 (defresource quest
   {:kind :quest
@@ -552,6 +586,10 @@
   "Who a held step waits on."
   "your tap")
 
+(def ^:private someone-else
+  "Who an unseen step waits on when nobody who can take it is named."
+  "someone else")
+
 (def ^:private no-row-chosen
   "The sentence `client/pursue!` blocks a remedy with when nobody named
   the row it acts on: a choice. An entry with any other sentence is a
@@ -601,6 +639,23 @@
   (let [ors (fn [e] (into #{} (map door-name) (:or e)))]
     (and (contains? (ors a) (door-name (:door b)))
          (contains? (ors b) (door-name (:door a))))))
+
+(defn- cycle?
+  "Whether the rehearsal gave this branch up because it led back to a
+  door already on the way."
+  [entry]
+  (= "cycle" (some-> (:reason entry) name)))
+
+(defn- without-the-way-back
+  "The blocked entries less each cycle and the other remedies of the
+  refusal it came from. A refusal that binds no row the owner reads
+  sends each remedy to the refused row itself, so those entries name a
+  door on the goal's row that is no way to the goal."
+  [blocked]
+  (let [cycles (filterv cycle? blocked)]
+    (into []
+          (remove (fn [e] (or (cycle? e) (some #(alternative-of? % e) cycles))))
+          blocked)))
 
 (defn- first-remedies
   "The blocked entries that are steps. A refusal with several remedies
@@ -787,9 +842,17 @@
   nil: with it the goal is the last step all the same, with the
   declaration's needs, and no guard is on its note because none was
   asked about the form. A door declared a confirm door is the owner's
-  to confirm, with the declared consequence as its note."
-  [answer seat-lookup & [declared]]
-  (let [blocked (vec (:blocked-on answer))
+  to confirm, with the declared consequence as its note.
+
+  `unseen` is given when the goal waits on a row the owner's grant does
+  not read (`unseen-waits`): `{:waiting_on}`, the names of those who can
+  take it. The cycle the owner's rehearsal ended in is then no step and
+  no reason (`without-the-way-back`). One seat's step stands for the
+  wait, on the goal's own door and row, because the plan may hold no
+  address of the row it waits on."
+  [answer seat-lookup & [declared unseen]]
+  (let [blocked (cond-> (vec (:blocked-on answer))
+                  unseen without-the-way-back)
         goal? (fn [entry]
                 (and declared
                      (= (select-keys declared [:door :self])
@@ -807,7 +870,7 @@
         writes (if (and (seq writes) (nil? frame) (empty? blocked) (not (:stopped answer)))
                  (conj (pop writes) (owed (peek writes)))
                  writes)
-        goal (some-> (or frame (peek writes) (first blocked))
+        goal (some-> (or frame (peek writes) (first (:blocked-on answer)))
                      (step-of nil))
         before (into (mapv (fn [w]
                              (cond-> (with-form (assoc (step-of w goal) :whose "person") w)
@@ -815,6 +878,14 @@
                            writes)
                      (mapcat #(blocked-steps % goal seat-lookup))
                      (first-remedies blocked))
+        before (cond-> before
+                 (and unseen (:self goal))
+                 (conj (assoc goal
+                              :whose "seat"
+                              :waiting_on (clip (or (not-empty (:waiting_on unseen))
+                                                    someone-else)
+                                                128)
+                              :note unseen-note)))
         steps (if (and (seq before) (or (seq (:needs frame)) (goal? frame)))
                 (let [form (with-form (assoc goal :whose "person") frame)]
                   (conj before
@@ -915,9 +986,75 @@
                  :needs (into [] (comp (filter #(contains? shown %)) (map name)) required)}
           confirm (assoc :confirm true :consequence sentence))))))
 
+(defn- unseen-waits
+  "The rows the goal waits on that its owner's grant does not read, as
+  `[{:self :doors}]`: the engine's own read, kept in the quest's
+  `waits_on` and never said to the owner. The goal door is judged once
+  more as the owner with no grant worn, so a guard that leaves a row out
+  of a grant's sight (`children-are-finished`) binds its remedies to it,
+  and each remedy bound to a row the grant does not read is a door that
+  would end the wait. None when no grant is worn, when the door would
+  open, or when the refusal binds no such row. Never throws."
+  [eng {:keys [owner grant self action input]}]
+  (try
+    (let [gid (some-> grant str not-empty)
+          who (when gid (members/principal-for eng owner))
+          row? (when who (get-in (grants/visibility eng gid who) [:grant :row?]))
+          self (str/trim (str self))
+          rdef (rdef-at eng self)
+          id (id-of-path self)
+          door (some-> action str str/trim not-empty)]
+      (when (and row? rdef id door)
+        (let [st (:storage eng)
+              kind (:kind rdef)
+              version (:version (store/with-tx st
+                                  (fn [tx] (store/load-row st tx kind (str id) {}))))]
+          (try
+            (inv/invoke! eng kind (str id) (keyword door) (or input {})
+                         (cond-> {:principal who :dry-run :partial}
+                           version (assoc :if-match (inv/etag kind (str id) version))))
+            nil
+            (catch clojure.lang.ExceptionInfo e
+              (let [bound (keep (fn [remedy]
+                                  (let [[k action] (door-parts (:door remedy))
+                                        at (some->> k keyword (get (inv/resources eng)))
+                                        rid (some-> (:id remedy) str not-empty)]
+                                    (when (and at action rid
+                                               (not (row? (:kind at) rid)))
+                                      [(str "/api/" (:plural at) "/" rid) action])))
+                                (:resolved-remedies (ex-data e)))]
+                (into []
+                      (comp (map (fn [[path found]]
+                                   {:self path
+                                    :doors (into []
+                                                 (comp (map second) (distinct) (take 8))
+                                                 found)}))
+                            (take 16))
+                      (group-by first bound))))))))
+    (catch Exception e
+      (warn! "the rows a quest waits on unseen could not be read — " (ex-message e))
+      nil)))
+
+(defn- unseen-takers
+  "Who can take a door of `waits` (`unseen-waits`), by name and at most
+  three: whom the owner's step waits on. nil when nobody is named."
+  [eng lookup waits]
+  (->> (for [{:keys [self doors]} waits
+             :let [k (some-> (rdef-at eng self) :kind name)]
+             :when k
+             door doors
+             who (lookup k door self)]
+         who)
+       distinct
+       (take 3)
+       (str/join ", ")
+       not-empty))
+
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its
-  grant. The rehearsal is partial, so a goal whose form is not filled
+  grant. A rehearsal that ends in a cycle is read once more by the
+  engine (`unseen-waits`): the plan then carries `:waits_on`, which is
+  the engine's own and is stored and never shown. The rehearsal is partial, so a goal whose form is not filled
   is still judged by the guards that read none of it, and is the last
   step with its `needs`; with a whole input it is the full rehearsal.
   A goal its row does not afford is the last step too, its `needs` read
@@ -927,10 +1064,16 @@
   [eng row]
   (let [{:keys [owner grant self action input]} (:data row)]
     (try
-      (answer->plan (mcp/rehearse eng {:principal owner :grant grant}
-                                  self action input {:dry-run :partial})
-                    (seat-lookup eng owner)
-                    (declared-goal eng self action input))
+      (let [answer (mcp/rehearse eng {:principal owner :grant grant}
+                                 self action input {:dry-run :partial})
+            lookup (seat-lookup eng owner)
+            waits (when (some cycle? (:blocked-on answer))
+                    (seq (unseen-waits eng (:data row))))]
+        (cond-> (answer->plan answer lookup
+                              (declared-goal eng self action input)
+                              (when waits
+                                {:waiting_on (unseen-takers eng lookup waits)}))
+          waits (assoc :waits_on (vec waits))))
       (catch clojure.lang.ExceptionInfo e
         {:plan []
          :plan_is_estimate true
@@ -1084,11 +1227,13 @@
         id (:id (invitations/parse-self self))
         door (or (get-in rdef [:actions (keyword action) :display :label]) action)
         row (when rdef (row-of eng (:kind rdef) id))]
-    (assoc (update (rehearsed eng {:data {:owner (str (:id principal))
-                                          :grant (some-> grant :id str)
-                                          :self self
-                                          :action action
-                                          :input (:input inp)}})
+    ;; `waits_on` is the engine's own, and a preview is the owner's to read
+    (assoc (update (dissoc (rehearsed eng {:data {:owner (str (:id principal))
+                                                  :grant (some-> grant :id str)
+                                                  :self self
+                                                  :action action
+                                                  :input (:input inp)}})
+                           :waits_on)
                    :plan (fn [steps] (mapv (partial in-words (sight-of eng who)) steps)))
            :goal (clip (str/join ": " (remove nil? [door (goal-label rdef row)])) 120)
            :shut_reason (when rdef
@@ -1287,12 +1432,14 @@
   10000)
 
 (defn- quest-rows
-  "The rows a quest names: its goal row and each step's row."
+  "The rows a quest names: its goal row and each step's row, and the
+  rows of its engine-only `waits_on`, which its owner does not read."
   [row]
   (into #{}
         (keep #(some-> % str str/trim not-empty))
         (cons (get-in row [:data :self])
-              (map :self (get-in row [:data :plan])))))
+              (concat (map :self (get-in row [:data :plan]))
+                      (map :self (get-in row [:data :waits_on]))))))
 
 (defn- indexed
   "The index with quest `qid` naming exactly `rows`; none takes it out."
