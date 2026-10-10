@@ -1262,6 +1262,21 @@
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; a submitted head that waits (ticket b256d053): the forge pass
+    ;; stamps the head and the time it first saw it held, counts the wait
+    ;; from that time, writes why when the wait is long, and clears all
+    ;; three when the head is no longer held
+    [:held_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:held_since {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    [:held_reason {:optional true
+                   :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
+                   :x-display
+                   {:widget "prose"
+                    :label "Why its head waits"
+                    :help "Why this submitted head has not merged after a long wait: the required checks that have no verdict yet, or that it is only behind its base. Empty while the wait is short, and when the head is not held."}}
+     [:maybe [:string {:max 500}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display

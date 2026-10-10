@@ -2448,6 +2448,55 @@
            [due1 due2 due3 due4 due5 due6])
         "due when the wait reaches the bound, one time for each head")))
 
+;; ── the held reason and its clock are on the row (ticket b256d053) ──
+
+(defn- held-world
+  "`missing-world` with `gate` still running, read by an engine whose
+  clock is `clock`."
+  [clock]
+  (-> (missing-world [{:id 41752098850 :name "gate" :status "in_progress"
+                       :head_sha the-head}])
+      (update :engine assoc :now-fn (fn [] @clock))))
+
+(defn- logging-pass!
+  "One pass whose log lines land in `lines`."
+  [{:keys [source engine]} lines]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& xs] (swap! lines conj (apply str xs)))}))
+
+(deftest the-held-reason-is-written-on-the-change
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :held_head])))
+      (is (nil? (get-in row [:data :held_reason]))
+          "nothing is said inside the bound"))
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (let [reason (get-in (the-change engine) [:data :held_reason])]
+      (is (re-find #"have no verdict: gate \(status in_progress" (str reason)))
+      (is (some #{reason} @lines) "the row carries the line the pass logs"))))
+
+(deftest the-held-wait-counts-from-the-row-across-a-restart
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since])))
+    ;; a restart: the process forgets every head it saw
+    (reset! @#'forge/held-seen {})
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since]))
+        "the wait is not started again")
+    (is (some #(re-find #"have no verdict: gate" %) @lines)
+        "due on the first pass after the restart")))
+
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]
