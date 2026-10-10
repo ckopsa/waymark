@@ -675,8 +675,9 @@
   finished, whatever its `status` says: GitHub has left a run reading
   `in_progress` beside `conclusion: success` and a `completed_at`, and
   a pass that waits on the status word waits on it forever (ticket
-  9112f56e). A workflow run and a job of the Actions read are judged
-  the same way (ticket b5e8bbd8)."
+  9112f56e). A job of the Actions read is judged the same way (ticket
+  b5e8bbd8); a workflow run has no `completed_at`, and `latest-runs!`
+  reads its conclusion alone."
   [check]
   (if (and (word (:conclusion check)) (word (:completed_at check))
            (not= "completed" (word (:status check))))
@@ -730,7 +731,10 @@
 (defn- latest-runs!
   "The latest workflow run of each workflow on the head, newest first
   as GitHub lists them, with the jobs of a run that finished and did
-  not pass (ticket 22f91244)."
+  not pass (ticket 22f91244). A run that carries a conclusion is
+  finished, whatever its `status` says: GitHub sets a conclusion only
+  when a run has ended, and a workflow run has no `completed_at` to ask
+  for beside it (ticket 62e29b7b)."
   [this repo sha]
   (let [runs (:workflow_runs
               (call! this "GET" (str "/repos/" repo "/actions/runs")
@@ -741,9 +745,8 @@
                              {}
                              runs))]
     (mapv (fn [run]
-            (let [run (settled run)
-                  status (word (:status run))
-                  conclusion (word (:conclusion run))]
+            (let [conclusion (word (:conclusion run))
+                  status (if conclusion "completed" (word (:status run)))]
               (cond-> {:run_id (whole (:id run))
                        :status status
                        :conclusion conclusion}

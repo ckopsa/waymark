@@ -2224,6 +2224,50 @@
     (is (= :failing (:state (the-change engine))))
     (is (nil? (get-in (the-change engine) [:data :rerun_head])))))
 
+(deftest a-run-with-a-conclusion-is-finished
+  ;; GitHub's own run shape: `updated_at` and no `completed_at`
+  ;; (ticket 62e29b7b)
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        run (fn [id] (first (filter #(= id (:run_id %))
+                                    (forge/forge-runs source repo the-head))))]
+    (gh/seed-run! state repo the-head
+                  {:id 900 :workflow_id 11 :head_sha the-head
+                   :status "in_progress" :conclusion "success"
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:02:26Z"})
+    (gh/seed-run! state repo the-head
+                  {:id 901 :workflow_id 12 :head_sha the-head
+                   :status "in_progress" :conclusion "cancelled"
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:02:26Z"})
+    (gh/seed-job! state repo 901
+                  {:id 7001 :run_id 901 :name "test10 (shard 3)"
+                   :status "completed" :conclusion "cancelled" :steps []})
+    (gh/seed-run! state repo the-head
+                  {:id 902 :workflow_id 13 :head_sha the-head
+                   :status "in_progress" :conclusion nil
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:01:00Z"})
+    (gh/seed-job! state repo 902
+                  {:id 7002 :run_id 902 :name "test10 (shard 3)"
+                   :status "in_progress" :steps []})
+    (is (= "completed" (:status (run 900)))
+        "the conclusion speaks, not the status word")
+    (is (= "success" (:conclusion (run 900))))
+    (testing "a finished run that did not pass carries its jobs"
+      (is (= "completed" (:status (run 901))))
+      (is (= ["test10 (shard 3)"] (mapv :name (:jobs (run 901)))))
+      (is (forge/interrupted-run? (run 901))))
+    (testing "a run with no conclusion still waits"
+      (is (= "in_progress" (:status (run 902))))
+      (is (nil? (:conclusion (run 902))))
+      (is (not (contains? (run 902) :jobs)))
+      (is (not (forge/interrupted-run? (run 902)))))))
+
 (deftest a-run-is-interrupted-only-with-no-red-job
   (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})]
     (is (forge/interrupted-run? (run {:conclusion "timed_out"})))
@@ -2404,6 +2448,98 @@
 (deftest missing-checks-counts-only-checks-with-no-run
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
+
+;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
+
+(deftest a-change-waiting-on-checks-names-the-ones-without-a-verdict
+  (let [checks [{:check_name "gate" :status "in_progress"}
+                {:check_name "lint" :status "completed" :conclusion "success"}
+                {:check_name "scan" :status "completed" :conclusion "stale"}]]
+    (is (= [{:name "gate" :status "in_progress" :conclusion nil}
+            {:name "scan" :status "completed" :conclusion "stale"}
+            {:name "tests" :status nil :conclusion nil}]
+           (forge/held-checks ["gate" "lint" "scan" "tests"] checks)))
+    (is (= (str "the checks of change-1 at abc have no verdict: "
+                "gate (status in_progress, conclusion none), "
+                "scan (status completed, conclusion stale), tests (no run)")
+           (forge/held-why "change-1" "abc" ["gate" "lint" "scan" "tests"]
+                           checks nil)))
+    (is (= [] (forge/held-checks ["lint"] checks))
+        "a check with a verdict is not named")))
+
+(deftest a-change-held-only-because-it-is-behind-its-base-says-so
+  (let [green [{:check_name "gate" :status "completed" :conclusion "success"}]]
+    (is (= (str "change-1 at abc is held only because it is behind its "
+                "base; its required checks are green")
+           (forge/held-why "change-1" "abc" ["gate"] green true)))
+    (is (nil? (forge/held-why "change-1" "abc" ["gate"] green false))
+        "a green head level with its base has nothing to say")
+    (is (re-find #"have no verdict: gate \(status queued"
+                 (forge/held-why "change-1" "abc" ["gate"]
+                                 [{:check_name "gate" :status "queued"}] true))
+        "a head that still waits on a check is not held only by its base")))
+
+(deftest a-held-change-is-due-one-time-past-the-bound
+  (let [t0 (java.time.Instant/parse "2026-10-09T10:00:00Z")
+        at #(.plusSeconds t0 (* 60 (long %)))
+        [s1 due1] (forge/held-due {} "c" "abc" (at 0) 20)
+        [s2 due2] (forge/held-due s1 "c" "abc" (at 19) 20)
+        [s3 due3] (forge/held-due s2 "c" "abc" (at 20) 20)
+        [s4 due4] (forge/held-due s3 "c" "abc" (at 40) 20)
+        [s5 due5] (forge/held-due s4 "c" "def" (at 41) 20)
+        [_ due6] (forge/held-due s5 "c" "def" (at 61) 20)]
+    (is (= [false false true false false true]
+           [due1 due2 due3 due4 due5 due6])
+        "due when the wait reaches the bound, one time for each head")))
+
+;; ── the held reason and its clock are on the row (ticket b256d053) ──
+
+(defn- held-world
+  "`missing-world` with `gate` still running, read by an engine whose
+  clock is `clock`."
+  [clock]
+  (-> (missing-world [{:id 41752098850 :name "gate" :status "in_progress"
+                       :head_sha the-head}])
+      (update :engine assoc :now-fn (fn [] @clock))))
+
+(defn- logging-pass!
+  "One pass whose log lines land in `lines`."
+  [{:keys [source engine]} lines]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& xs] (swap! lines conj (apply str xs)))}))
+
+(deftest the-held-reason-is-written-on-the-change
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :held_head])))
+      (is (nil? (get-in row [:data :held_reason]))
+          "nothing is said inside the bound"))
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (let [reason (get-in (the-change engine) [:data :held_reason])]
+      (is (re-find #"have no verdict: gate \(status in_progress" (str reason)))
+      (is (some #{reason} @lines) "the row carries the line the pass logs"))))
+
+(deftest the-held-wait-counts-from-the-row-across-a-restart
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since])))
+    ;; a restart: the process forgets every head it saw
+    (reset! @#'forge/held-seen {})
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since]))
+        "the wait is not started again")
+    (is (some #(re-find #"have no verdict: gate" %) @lines)
+        "due on the first pass after the restart")))
 
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
