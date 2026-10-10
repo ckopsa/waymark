@@ -3402,7 +3402,7 @@ On the active `repo_policy` of each repository with a line:
 |---|---|
 | `line_front` | the id of the front change |
 | `line_front_pr` | the front's pull request number |
-| `line_front_waiting` | `update` (it was brought up to date and CI runs; also a head the rig calls `waiting` that the mirror read green and behind its base, `head-answer`), `checks` (its checks run), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs; also a head the rig calls `waiting` that the mirror read green and behind its base, `head-answer`), `checks` (its checks run; the rig's `waiting` with `waits_on: checks`, or with no `waits_on`), `github` (the rig's `waiting` with `waits_on: github`: its checks are green and GitHub has not judged it mergeable yet), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
 | `line_waiting` | how many other changes stand in the line |
 | `line_at` | when the pass last wrote the line; it rides a write and never causes one |
 

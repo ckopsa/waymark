@@ -1202,11 +1202,15 @@
 (defn front-waits-on
   "One word for what the front waits on, from its merge answer: `update`
   when the pass asked to bring it up to date and CI runs, `checks` while
-  its checks run, `merge` when it was offered and GitHub has not merged
-  it yet."
+  its checks run, `github` when its checks are green and GitHub has not
+  judged it mergeable yet, `merge` when it was offered and GitHub has
+  not merged it yet. A `waiting` answer says which of the two in its
+  `waits_on`; one that carries none (a rig not yet deployed) reads as
+  `checks`."
   [answer]
   (cond (behind? answer) "update"
-        (= "waiting" (answer-state answer)) "checks"
+        (= "waiting" (answer-state answer))
+        (if (= "github" (some-> (:waits_on answer) name)) "github" "checks")
         :else "merge"))
 
 (defn- parked-reason [seen id]
