@@ -914,7 +914,10 @@
                 When the rows a guard waits on are outside the caller's
                 sight (unseen children), that fallback tries the refused
                 row itself, the same guard refuses it, and the rehearsal
-                ends in a cycle block, by design.
+                ends in a cycle block, by design. The quest planner
+                reads past that block on the server with the engine's
+                own read (`quests/unseen-waits`) and plans a step that
+                waits; this client never sees those rows.
     :choices    {remedy-door {:id row-id :input {…}}} — as :resolve, and
                 asked first; where the refusal bound the row, its
                 :input still fills what the binding left unset (the

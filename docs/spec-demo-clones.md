@@ -269,12 +269,17 @@ door refuses a route on a clone that restored a snapshot.
 person an unscoped member: she holds every door a person may take,
 `resume` on the quest's deferred child among them, because no ticket
 guard tells a person from an agent there. The seed tells them apart by
-grant (section 1's file: `:ada-grant` admits `complete` and `restate`,
-`:plan-grant` admits `resume`). So for the session that records the
+grant (section 1's file: `:ada-grant` admits `complete` and `restate`
+on `:q-epic` and `:q-guide`, which it names by id, and the seating plan
+is outside it; `:plan-grant` admits `resume`). So for the session that records the
 quest the sign-in has a second step: as Maya, open the grant whose
 audience is Maya and press "act under this grant". The UI then sends its
 id as `X-Waymark-Grant` on every request and shows the grant chip, the
 deferred child reads no `resume` door, and the step waits on Juniper.
+Maya's own rehearsal ends in a cycle there, because the refusal binds no
+row her grant reads. The engine finds the seating plan with a read of
+its own (`quests/unseen-waits`), keeps that row in the quest's
+`waits_on`, and never shows it to her.
 
 The engine does not put the grant on by itself. A worn grant narrows
 the whole session to its scope, and Maya's other films need what it
