@@ -2573,21 +2573,15 @@
           "the merge line brings the front up to date"))))
 
 (deftest a-compare-that-throws-does-not-cost-the-held-change-its-pass
-  (let [asked (atom 0)
-        {:keys [engine lines] :as r}
-        (-> (held-log-world [a-held-green])
-            (update :source update :call
-                    (fn [call]
-                      (fn [method path opts]
-                        (if (re-find #"/compare/" (str path))
-                          (do (swap! asked inc)
-                              (throw (ex-info "github unreachable" {})))
-                          (call method path opts))))))]
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))]
+    (gh/fail-path! state #"/compare/")
     (held-pass! r)
     (minutes-later! r (inc forge/held-log-minutes))
     (let [census (held-pass! r)
           row (the-change engine)]
-      (is (= 1 @asked) "the due pass asked the forge for the compare")
+      (is (= 1 (asked)) "the due pass asked the forge for the compare")
       (is (= [] (held-lines r)) "a forge that does not answer says nothing")
       (is (not-any? #(re-find #"did not move the change" %) @lines))
       (is (= 0 (:refused census)))

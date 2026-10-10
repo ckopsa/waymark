@@ -1268,7 +1268,8 @@
 
 (defn fake-state
   "A fresh in-memory GitHub. Script it with `seed-pull!`,
-  `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!` and `down!`;
+  `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!`,
+  `fail-path!` and `down!`;
   read it back with `requests` and `labels-pushed`."
   []
   (atom {:repos {} :logs {} :log-mode :text :labels [] :requests []
@@ -1314,6 +1315,14 @@
   read walks (ticket 47217098). Any other pair of commits has diverged."
   [state repo head sha]
   (swap! state update-in [:repos repo :ancestors head] (fnil conj #{}) sha))
+
+(defn fail-path!
+  "Make every request whose path `pattern` finds throw, as a GitHub
+  that does not answer that one route. The request is recorded first,
+  so `requests` still says it was asked. nil lifts every such failure."
+  [state pattern]
+  (swap! state update :failing
+         (fn [ps] (if pattern (conj (vec ps) pattern) []))))
 
 (defn seed-run!
   "One workflow run on one head, for the Actions read the source makes
@@ -1433,6 +1442,8 @@
             ;; the blob host the job log redirects to
             :anonymous (boolean anonymous)})
     (when (:down @state)
+      (throw (ex-info "github unreachable" {})))
+    (when (some #(re-find % (str path)) (:failing @state))
       (throw (ex-info "github unreachable" {})))
     (when-some [status (some->> path (re-matches repo-path) second
                                 (get (:refused @state)))]
