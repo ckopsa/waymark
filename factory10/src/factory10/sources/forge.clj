@@ -1262,6 +1262,11 @@
   443bcbc2)."
   20)
 
+(def held-compare-errors
+  "How many compares of one held head may throw in a row before the pass
+  logs that the compare is failing (ticket dfd181ae)."
+  3)
+
 (defonce ^:private held-seen (atom {}))
 
 (defn held-checks
@@ -1326,18 +1331,32 @@
                            :head head :since since :said (or said? due?)))
      due?]))
 
+(defn held-backoff
+  "The minutes a held head waits for its next compare after `threw`
+  compares in a row threw: none after the first, so one forge error
+  costs one pass, then 1, 2, 4 … and `held-compare-minutes` at most."
+  [threw]
+  (let [n (long threw)]
+    (if (< n 2)
+      0
+      (min (long held-compare-minutes)
+           (bit-shift-left 1 (min 20 (- n 2)))))))
+
 (defn held-again
   "When a held head is compared to its base again, after a compare that
   answered `behind?` at `now`: nil when it is behind, since nothing but
   a new head changes that; `held-compare-minutes` later when it holds
   its base, which may still move; and the next pass when there was no
   answer, because the forge threw or the head has no verdict yet
-  (ticket 443bcbc2)."
-  [behind? ^java.time.Instant now]
-  (cond
-    (true? behind?) nil
-    (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
-    :else now))
+  (ticket 443bcbc2). `threw` is how many compares of this head threw in
+  a row, this one counted: the wait is then `held-backoff` minutes, so
+  a forge that keeps throwing is asked less often (ticket dfd181ae)."
+  ([behind? now] (held-again behind? now 0))
+  ([behind? ^java.time.Instant now threw]
+   (cond
+     (true? behind?) nil
+     (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
+     :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
 
 (def ^:private held-fields [:held_head :held_since :held_reason])
 
@@ -1372,7 +1391,10 @@
   The compare is asked again on a later pass, at the time `held-again`
   names, so one forge error or a base that moves after the due pass
   does not leave a green head waiting on `checks` (ticket 443bcbc2);
-  such a pass says a line only when the head is now behind."
+  such a pass says a line only when the head is now behind. Compares
+  that throw in a row are counted for the head and wait longer each
+  time, and the pass that counts `held-compare-errors` of them logs one
+  line that the compare is failing (ticket dfd181ae)."
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
@@ -1394,11 +1416,22 @@
     (when (or due? again?)
       (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
             compares? (boolean (and base (satisfies? ForgeCompare source)))
-            behind? (when (and checked compares?)
-                      (try (boolean (forge-behind? source repo base head))
-                           (catch Exception _ nil)))]
-        (swap! held-seen assoc-in [id :again]
-               (when compares? (held-again behind? now)))
+            answer (when (and checked compares?)
+                     (try {:behind (boolean (forge-behind? source repo base head))}
+                          (catch Exception e {:error e})))
+            behind? (:behind answer)
+            threw (if (:error answer)
+                    (inc (long (or (get-in seen [id :threw]) 0)))
+                    0)]
+        (swap! held-seen update id assoc
+               :again (when compares? (held-again behind? now threw))
+               :threw threw)
+        (when (= threw (long held-compare-errors))
+          (log-fn (str "the compare of " (get-in row [:data :change_id])
+                       " at " head " to " base " has thrown " threw
+                       " passes in a row (" (ex-message (:error answer))
+                       "); it is asked less often, " held-compare-minutes
+                       " minutes apart at most, until the forge answers")))
         (when (some? behind?)
           (bench/mark-row! eng :change id
                            {:behind_base behind?

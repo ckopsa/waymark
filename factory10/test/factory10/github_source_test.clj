@@ -2648,6 +2648,54 @@
     (is (= (.plusSeconds now (* 60 (long forge/held-compare-minutes)))
            (forge/held-again false now)))))
 
+;; ticket dfd181ae: a compare route that kept throwing cost a held green
+;; head one request on every pass, and no line said so
+(deftest a-compare-that-keeps-throwing-waits-longer-each-time
+  (let [now (java.time.Instant/parse "2026-10-10T10:00:00Z")
+        later (fn [m] (.plusSeconds now (* 60 (long m))))]
+    (is (= [0 0 1 2 4 8 16 forge/held-compare-minutes
+            forge/held-compare-minutes]
+           (mapv forge/held-backoff [0 1 2 3 4 5 6 7 40])))
+    (is (= now (forge/held-again nil now 1)) "one error: the next pass")
+    (is (= (later 2) (forge/held-again nil now 3)))
+    (is (= (later forge/held-compare-minutes) (forge/held-again nil now 9)))
+    (is (nil? (forge/held-again true now 9)))
+    (is (= (later forge/held-compare-minutes)
+           (forge/held-again false now 9)))))
+
+(deftest a-compare-that-keeps-throwing-is-asked-a-bounded-number-of-times
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))
+        failing (fn [] (filterv #(re-find #"has thrown" %) @lines))]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= 1 (asked)))
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 2 (asked)) "one error is asked again on the next pass")
+    (is (= [] (failing)))
+    (held-pass! r)
+    (is (= 2 (asked)) "the second error in a row waits")
+    ;; an hour of passes a minute apart, the forge failing throughout
+    (dotimes [_ 59]
+      (minutes-later! r 1)
+      (held-pass! r))
+    (is (= 8 (asked)) "the waits double up to the bound")
+    (is (= 1 (count (failing))) "and the log says so one time")
+    (is (re-find (re-pattern (str "has thrown " forge/held-compare-errors
+                                  " passes in a row"))
+                 (first (failing))))
+    (is (nil? (get-in (the-change engine) [:data :behind_base])))
+    (testing "a forge that answers again is heard at the next compare"
+      (gh/fail-path! state nil)
+      (minutes-later! r forge/held-compare-minutes)
+      (held-pass! r)
+      (is (true? (get-in (the-change engine) [:data :behind_base])))
+      (is (= 1 (count (held-lines r)))))))
+
 ;; ── the held reason and its clock are on the row (ticket b256d053) ──
 
 (defn- held-world
