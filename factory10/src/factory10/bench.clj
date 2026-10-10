@@ -708,12 +708,19 @@
   green on a submitted change's head, so a rig's `red` for that very head
   is the failing round's, carried over: it reads as `behind`, and the
   change stands in the line and may ride a train. A head that moved since
-  the green read keeps the rig's red until its own checks are read."
+  the green read keeps the rig's red until its own checks are read.
+  A rig's `waiting` for that very head, when the mirror also read it
+  behind its base (`behind_base`), waits on no check: it reads as
+  `behind` too, so the front is brought up to date or rides a train
+  (ticket fc997a92)."
   [change answer]
-  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
-    (if (and (= "red" (answer-state answer))
-             head
-             (= head (some-> (get-in change [:data :green_head]) str)))
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+        state (answer-state answer)]
+    (if (and head
+             (= head (some-> (get-in change [:data :green_head]) str))
+             (or (= "red" state)
+                 (and (= "waiting" state)
+                      (true? (get-in change [:data :behind_base])))))
       (assoc answer :state "behind")
       answer)))
 
