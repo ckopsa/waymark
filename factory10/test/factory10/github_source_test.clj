@@ -2448,6 +2448,85 @@
            [due1 due2 due3 due4 due5 due6])
         "due when the wait reaches the bound, one time for each head")))
 
+;; the same line, through the pass itself (ticket da550baa)
+
+(def ^:private a-held-green
+  {:id 41752098951 :name "gate" :status "completed" :conclusion "success"
+   :head_sha the-head})
+
+(defn- held-world
+  "`missing-world` with `checks` on its head, an engine on a clock the
+  test holds, and the lines the pass logs."
+  [checks]
+  (let [clock (atom (java.time.Instant/now))]
+    (-> (missing-world checks)
+        (update :engine assoc :now-fn #(deref clock))
+        (assoc :clock clock :lines (atom [])))))
+
+(defn- held-pass! [{:keys [source engine lines]}]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
+
+(defn- minutes-later! [{:keys [clock]} n]
+  (swap! clock (fn [^java.time.Instant t] (.plusSeconds t (* 60 (long n))))))
+
+(defn- held-lines [{:keys [lines]}]
+  (filterv #(re-find #"have no verdict|is held only because" %) @lines))
+
+(deftest a-pass-logs-a-running-required-check-one-time-past-the-bound
+  (let [{:keys [engine] :as r}
+        (held-world [{:id 41752098950 :name "gate" :status "in_progress"
+                      :head_sha the-head}])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (held-pass! r)
+    (is (= [] (held-lines r)) "the first pass starts the wait and says nothing")
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= [(str "the checks of " change-id " at " the-head
+                 " have no verdict: gate (status in_progress, conclusion none)")]
+           (held-lines r)))
+    (is (= :submitted (:state (the-change engine))))
+    (testing "a later pass on the same head does not say it again"
+      (minutes-later! r (inc forge/held-log-minutes))
+      (held-pass! r)
+      (is (= 1 (count (held-lines r)))))))
+
+(deftest a-pass-logs-a-green-head-that-is-behind-its-base
+  (let [{:keys [engine] :as r} (held-world [a-held-green])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (held-pass! r)
+    (is (= [] (held-lines r)))
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= [(str change-id " at " the-head " is held only because it is behind"
+                 " its base; its required checks are green")]
+           (held-lines r))
+        "the fake's compare answers diverged for a head with no ancestor seeded")
+    (is (= :submitted (:state (the-change engine))))))
+
+(deftest a-compare-that-throws-does-not-cost-the-held-change-its-pass
+  (let [asked (atom 0)
+        {:keys [engine lines] :as r}
+        (-> (held-world [a-held-green])
+            (update :source update :call
+                    (fn [call]
+                      (fn [method path opts]
+                        (if (re-find #"/compare/" (str path))
+                          (do (swap! asked inc)
+                              (throw (ex-info "github unreachable" {})))
+                          (call method path opts))))))]
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (let [census (held-pass! r)
+          row (the-change engine)]
+      (is (= 1 @asked) "the due pass asked the forge for the compare")
+      (is (= [] (held-lines r)) "a forge that does not answer says nothing")
+      (is (not-any? #(re-find #"did not move the change" %) @lines))
+      (is (= 0 (:refused census)))
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :green_head]))
+          "the rest of the change's pass ran"))))
+
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]
