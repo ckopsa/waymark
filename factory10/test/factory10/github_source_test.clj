@@ -2775,6 +2775,44 @@
     (is (some #(re-find #"have no verdict: gate" %) @lines)
         "due on the first pass after the restart")))
 
+;; ticket 1a72eea8: the pass clears the wait only on a change it still
+;; reads, so one that merged or closed while held kept its reason
+(defn- ends-while-held!
+  "A change held past the bound, whose pull request then reads as
+  `pull` says: the row after the pass that follows."
+  [pull]
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [state engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (is (some? (get-in (the-change engine) [:data :held_reason]))
+        "the head is held, and the row says why")
+    (gh/seed-pull! state repo
+                   (merge a-pull-request
+                          {:state "closed"
+                           :updated_at "2026-09-18T15:00:00Z"}
+                          pull)
+                   {:files the-files :reviews the-reviews})
+    (pass! r)
+    (the-change engine)))
+
+(deftest a-change-that-merges-while-held-drops-what-the-wait-said
+  (let [row (ends-while-held! {:merged_at "2026-09-18T15:00:00Z"})]
+    (is (= :merged (:state row)))
+    (is (nil? (get-in row [:data :held_reason])))
+    (is (nil? (get-in row [:data :held_head])))
+    (is (nil? (get-in row [:data :held_since])))))
+
+(deftest a-change-that-closes-while-held-drops-what-the-wait-said
+  (let [row (ends-while-held! {})]
+    (is (= :closed (:state row)))
+    (is (nil? (get-in row [:data :held_reason])))
+    (is (nil? (get-in row [:data :held_head])))
+    (is (nil? (get-in row [:data :held_since])))))
+
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]
