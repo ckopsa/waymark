@@ -2548,6 +2548,30 @@
         "the fake's compare answers diverged for a head with no ancestor seeded")
     (is (= :submitted (:state (the-change engine))))))
 
+;; ticket 14e72c6e: #1095 stood green, with no check missing and no
+;; `behind_base` on its row, so the merge line read the rig's `waiting`
+;; as a wait on checks and never brought it up to date
+(deftest a-green-head-held-behind-its-base-says-so-on-the-row
+  (let [{:keys [engine] :as r} (held-log-world [a-held-green])
+        waiting {:state "waiting"}]
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= the-head (get-in row [:data :green_head])))
+      (is (= [] (get-in row [:data :missing_checks])))
+      (is (nil? (get-in row [:data :behind_base]))
+          "no compare is made inside the bound")
+      (is (= "waiting" (:state (bench/head-answer row waiting)))))
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= [] (get-in row [:data :missing_checks])))
+      (is (true? (get-in row [:data :behind_base])))
+      (is (some? (get-in row [:data :base_compared_at])))
+      (is (re-find #"is held only because it is behind"
+                   (str (get-in row [:data :held_reason]))))
+      (is (= "behind" (:state (bench/head-answer row waiting)))
+          "the merge line brings the front up to date"))))
+
 (deftest a-compare-that-throws-does-not-cost-the-held-change-its-pass
   (let [asked (atom 0)
         {:keys [engine lines] :as r}
