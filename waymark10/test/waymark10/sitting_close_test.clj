@@ -514,6 +514,37 @@
       (is (= ["refused:guard-refused" "refused_by:still-open"]
              (:flags (health refused [])))))))
 
+(deftest a-sitting-that-recovers-from-a-refusal-is-not-refused-out
+  ;; ticket 28a5d117, the shape of sitting d485f99e: one 422 on a power
+  ;; call, then an answered call, then a close with no transition
+  (let [t0 (java.time.Instant/parse "2026-10-09T23:40:00Z")
+        t1 (.plusSeconds t0 60)
+        refused (assoc a-sat :refusals 1 :last_refusal
+                       {:type "invalid-arguments" :at (str t0)})
+        note "Nothing waiting in the chat; the plan is still in draft."
+        recovered (assoc refused :last_answer_at (str t1) :note note)
+        health #(seats/sitting-health % [] [])]
+    (testing "an answered call after the refusal, and a note: idle"
+      (is (= "idle" (:outcome (health recovered))))
+      (is (= ["refused:invalid-arguments"] (:flags (health recovered)))
+          "the refusal is still recorded"))
+    (testing "it has the outcome it would have had without the refusal"
+      (is (= "cut_short"
+             (:outcome (health (assoc recovered :closed_by "hook" :turns 9))))))
+    (testing "a sitting whose last call was refused stays refused_out"
+      (is (= "refused_out" (:outcome (health (assoc refused :note note))))
+          "no call answered at all")
+      (is (= "refused_out"
+             (:outcome (health (assoc recovered :last_answer_at
+                                      (str (.minusSeconds t0 30))))))
+          "the answer came before the refusal")
+      (is (= "refused_out"
+             (:outcome (health (assoc recovered :last_answer_at (str t0)))))
+          "the refused call's own moment is no later answer"))
+    (testing "a close with no note stays refused_out"
+      (is (= "refused_out" (:outcome (health (dissoc recovered :note)))))
+      (is (= "refused_out" (:outcome (health (assoc recovered :note ""))))))))
+
 (deftest a-seat-names-its-own-delivery
   (let [judged [{:kind :verdict :action :judge
                  :at (java.time.Instant/parse "2026-10-01T10:00:00Z")}]
