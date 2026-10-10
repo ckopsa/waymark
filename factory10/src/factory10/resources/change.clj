@@ -255,6 +255,22 @@
               (println "factory10 change merge: the duplicate" (:id dup)
                        "was not closed -" (ex-message e)))))))))
 
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
+
+(defn- without-the-wait
+  "The row without what the forge pass said of its held head. That pass
+  clears these only on a change it still reads, at submitted or failing,
+  so a door that ends the change drops them itself (ticket 1a72eea8)."
+  [row]
+  (reduce (fn [row k]
+            (cond-> row
+              (some? (get-in row [:data k])) (assoc-in [:data k] nil)))
+          row held-fields))
+
+(defhandler drop-what-the-wait-said [row _inp _ctx]
+  (without-the-wait row))
+
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
   ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
   ;; waymark-fp62.6.3.14, spec-seat.md R-12.32). The seat is told to
@@ -288,7 +304,7 @@
             (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
   (close-the-duplicates! row ctx)
-  row)
+  (without-the-wait row))
 
 ;; ── the ticket follows its change's review (ticket 2e869934) ─────────
 
@@ -323,7 +339,8 @@
   ;; so a reader of a closed duplicate sees which change did the work
   ;; (ticket 3ec37f66). Its ticket already ended with that merge, so
   ;; nothing is sent back.
-  (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
+  (assoc-in (without-the-wait row)
+            [:data :superseded_by] (str (:superseded_by inp))))
 
 (defhandler fold-into-the-house-row [row inp _ctx]
   ;; A row the forge minted beside a house row on the same branch
@@ -340,7 +357,7 @@
   ;; the queue again, where the seat that wrote the change wakes on its
   ;; `return`, and a person can ungroom it.
   (move-the-ticket! row ctx #{:in_review} :return)
-  row)
+  (without-the-wait row))
 
 (defhandler shelve-the-ticket [row inp ctx]
   ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
@@ -1265,7 +1282,8 @@
     ;; a submitted head that waits (ticket b256d053): the forge pass
     ;; stamps the head and the time it first saw it held, counts the wait
     ;; from that time, writes why when the wait is long, and clears all
-    ;; three when the head is no longer held
+    ;; three when the head is no longer held; a door that merges or
+    ;; closes the change drops them too (ticket 1a72eea8)
     [:held_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     [:held_since {:optional true :x-display {:hidden true}}
@@ -1643,6 +1661,7 @@
      :edit {:draft {:shared true :live true}}
      :guards [no-pull-request-to-close
               only-a-person-closes-a-change]
+     :handler drop-what-the-wait-said
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open."}
      :display {:label "Close" :style :danger :order 30
