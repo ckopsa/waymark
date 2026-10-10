@@ -5104,21 +5104,32 @@
   (ticket 900764ce): a READ through the router is activity the idle
   sweep must see, but it is neither a transition nor a refusal, and
   `served` is the MCP door's per-tool ledger. The same MAINTENANCE
-  write as `bump-counter!` — document only, version untouched. → the
-  stamp, or nil when there was nothing to stamp: no id, an unknown
-  id, a sitting already closed, or a kind this engine does not serve."
-  [eng sitting-id]
-  (when (and sitting-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :sitting
-                                        (str sitting-id) {:for-update true})]
-          (when (= :open (:state row))
-            (let [at (call-stamp eng)]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) :last_call_at at)
-                                  nil)
-              at)))))))
+  write as `bump-counter!` — document only, version untouched.
+
+  `answered?` is optional (ticket 3ff10737): true when the read was
+  not refused, and then the same write stamps `last_answer_at`, as
+  `add-served!` does for the MCP door. That stamp is the wall clock's,
+  because the close compares it with `last_refusal`'s.
+
+  → the stamp, or nil when there was nothing to stamp: no id, an
+  unknown id, a sitting already closed, or a kind this engine does not
+  serve."
+  ([eng sitting-id] (stamp-call! eng sitting-id false))
+  ([eng sitting-id answered?]
+   (when (and sitting-id (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (when (= :open (:state row))
+             (let [at (call-stamp eng)]
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   (cond-> (assoc (:data row) :last_call_at at)
+                                     answered?
+                                     (assoc :last_answer_at
+                                            (str (java.time.Instant/now))))
+                                   nil)
+               at))))))))
 
 (defn claim-sitting!
   "Claim an open sitting for the connector session whose hash is
