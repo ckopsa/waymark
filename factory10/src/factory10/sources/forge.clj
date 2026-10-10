@@ -1249,7 +1249,9 @@
 ;; sit at `submitted` and say nothing. Past `held-log-minutes` on one
 ;; head the pass logs why, one time for that head, and writes it on the
 ;; change as `held_reason`. The wait counts from `held_since` on the row
-;; (ticket b256d053), so a restart does not start it again.
+;; (ticket b256d053), so a restart does not start it again. The next
+;; compare's time and the count of compares that threw are on the row as
+;; `held_again` and `held_threw` for the same reason (ticket 93072465).
 
 (def held-log-minutes
   "How long a submitted head may wait before the pass logs why it is
@@ -1358,7 +1360,8 @@
      (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
      :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
 
-(def ^:private held-fields [:held_head :held_since :held_reason])
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
 
 (defn- held-kept
   "The time the row says `head` was first seen held, or nil when the row
@@ -1367,6 +1370,19 @@
   (when (= head (some-> (get-in row [:data :held_head]) str))
     (try (java.time.Instant/parse (str (get-in row [:data :held_since])))
          (catch Exception _ nil))))
+
+(defn- held-kept-compare
+  "What the row says of its held head's compares, for a process that
+  has not seen that head: {:again :threw :said}, or nil when the row
+  names no next compare. A row that names one has had its due pass, so
+  the process does not take it again (ticket 93072465)."
+  [row]
+  (when-some [again (try (some-> (get-in row [:data :held_again])
+                                 str not-empty java.time.Instant/parse)
+                         (catch Exception _ nil))]
+    {:again again
+     :threw (long (or (get-in row [:data :held_threw]) 0))
+     :said true}))
 
 (defn- clear-held!
   "A head that is no longer held: the process forgets it, and the row
@@ -1394,13 +1410,18 @@
   such a pass says a line only when the head is now behind. Compares
   that throw in a row are counted for the head and wait longer each
   time, and the pass that counts `held-compare-errors` of them logs one
-  line that the compare is failing (ticket dfd181ae)."
+  line that the compare is failing (ticket dfd181ae). That count and
+  the next compare's time are written on the row as `held_threw` and
+  `held_again`, and a process that has not seen this head takes them
+  from there, so a restart neither asks sooner than the wait allowed
+  nor says the failing line again (ticket 93072465)."
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
         was (cond-> @held-seen
               (and kept (not= head (get-in @held-seen [id :head])))
-              (assoc id {:head head :since kept :said false}))
+              (assoc id (merge {:head head :since kept :said false}
+                               (held-kept-compare row))))
         ^java.time.Instant now (now-of eng)
         [seen due?] (held-due was id head now held-log-minutes)
         ^java.time.Instant again (get-in seen [id :again])
@@ -1411,6 +1432,8 @@
                        {:held_head head
                         :held_since (str (get-in seen [id :since]))
                         :held_reason nil
+                        :held_again nil
+                        :held_threw nil
                         :behind_base nil}
                        #{}))
     (when (or due? again?)
@@ -1422,10 +1445,13 @@
             behind? (:behind answer)
             threw (if (:error answer)
                     (inc (long (or (get-in seen [id :threw]) 0)))
-                    0)]
-        (swap! held-seen update id assoc
-               :again (when compares? (held-again behind? now threw))
-               :threw threw)
+                    0)
+            again (when compares? (held-again behind? now threw))]
+        (swap! held-seen update id assoc :again again :threw threw)
+        (bench/mark-row! eng :change id
+                         {:held_again (some-> again str)
+                          :held_threw (when (pos? threw) threw)}
+                         #{})
         (when (= threw (long held-compare-errors))
           (log-fn (str "the compare of " (get-in row [:data :change_id])
                        " at " head " to " base " has thrown " threw

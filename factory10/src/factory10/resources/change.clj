@@ -1270,6 +1270,13 @@
      [:maybe [:string {:max 64}]]]
     [:held_since {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 40}]]]
+    ;; the held head's compare (ticket 93072465): when the pass asks it
+    ;; again, and how many compares in a row threw, so a restart keeps
+    ;; the backoff; cleared with the three around them
+    [:held_again {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    [:held_threw {:optional true :x-display {:hidden true}}
+     [:maybe [:int {:min 0}]]]
     [:held_reason {:optional true
                    :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
                    :x-display
