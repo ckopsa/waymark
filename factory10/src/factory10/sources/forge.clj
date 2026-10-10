@@ -1247,7 +1247,9 @@
 ;; `check-verdict` answers nil while a required check has no verdict,
 ;; and a green head that is behind its base does not merge either: both
 ;; sit at `submitted` and say nothing. Past `held-log-minutes` on one
-;; head the pass logs why, one time for that head.
+;; head the pass logs why, one time for that head, and writes it on the
+;; change as `held_reason`. The wait counts from `held_since` on the row
+;; (ticket b256d053), so a restart does not start it again.
 
 (def held-log-minutes
   "How long a submitted head may wait before the pass logs why it is
@@ -1315,14 +1317,46 @@
                       (long limit)))]
     [(assoc seen id {:head head :since since :said (or said? due?)}) due?]))
 
+(def ^:private held-fields [:held_head :held_since :held_reason])
+
+(defn- held-kept
+  "The time the row says `head` was first seen held, or nil when the row
+  names another head or none."
+  [row head]
+  (when (= head (some-> (get-in row [:data :held_head]) str))
+    (try (java.time.Instant/parse (str (get-in row [:data :held_since])))
+         (catch Exception _ nil))))
+
+(defn- clear-held!
+  "A head that is no longer held: the process forgets it, and the row
+  drops what it said about the wait."
+  [eng row]
+  (swap! held-seen dissoc (str (:id row)))
+  (when (some #(some? (get-in row [:data %])) held-fields)
+    (bench/mark-row! eng :change (str (:id row))
+                     (zipmap held-fields (repeat nil)) #{})))
+
 (defn- log-held!
-  "Logs why a submitted head is held, when its wait is due (`held-due`).
+  "Logs why a submitted head is held, when its wait is due (`held-due`),
+  and writes the same line on the change as `held_reason`. The wait
+  counts from the row's `held_since`: a process that has not seen this
+  head takes that time, and a head the row does not name is stamped.
   `checked` is the head's verdict: with one, the base is compared, and a
   forge that does not answer says nothing."
   [eng source row repo head required checks checked log-fn]
-  (let [[seen due?] (held-due @held-seen (str (:id row)) head (now-of eng)
-                              held-log-minutes)]
+  (let [id (str (:id row))
+        kept (held-kept row head)
+        was (cond-> @held-seen
+              (and kept (not= head (get-in @held-seen [id :head])))
+              (assoc id {:head head :since kept :said false}))
+        [seen due?] (held-due was id head (now-of eng) held-log-minutes)]
     (reset! held-seen seen)
+    (when-not kept
+      (bench/mark-row! eng :change id
+                       {:held_head head
+                        :held_since (str (get-in seen [id :since]))
+                        :held_reason nil}
+                       #{}))
     (when due?
       (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
             behind? (when (and checked base (satisfies? ForgeCompare source))
@@ -1330,7 +1364,10 @@
                            (catch Exception _ nil)))]
         (when-some [line (held-why (get-in row [:data :change_id]) head
                                    required checks behind?)]
-          (log-fn line))))))
+          (log-fn line)
+          (bench/mark-row! eng :change id
+                           {:held_reason (subs line 0 (min 500 (count line)))}
+                           #{}))))))
 
 (defn- failing-pass!
   "Every submitted or failing change of a repository with an active
@@ -1386,7 +1423,7 @@
                               (or (nil? checked) (= :green (:verdict checked))))
                        (log-held! eng source row repo head required checks
                                   checked log-fn)
-                       (swap! held-seen dissoc (str (:id row))))
+                       (clear-held! eng row))
                    ;; every required check finished on a house change:
                    ;; wake the merge pass (ticket 6e190062)
                    _ (when (and checked (bench/house-pass-merges? policy))
