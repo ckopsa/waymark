@@ -169,7 +169,14 @@ async function questFromDoor(btn, name, doc) {
 function questSheet(btn, name, doc, create, goal, seen) {
   const p = (seen.ok && (seen.body || {}).preview) || {};
   const steps = p.plan || [];
+  /* a wait on a row the owner cannot see is a seat's step on the goal's
+     own door and row (answer->plan, quests.clj). It is said by its note
+     alone: the door's label beside the seat's name would say the seat
+     takes the goal's door. */
+  const unseen = s => s.whose === "seat" && !!s.note && !!goal
+    && s.self === goal.self && s.door === goal.action;
   const turn = s => s.whose === "person" || s.whose === "confirm" ? "yours"
+    : unseen(s) ? "waiting on " + (s.waiting_on || "someone else")
     : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
     : "waiting on " + (s.waiting_on || "a person");
   const errBox = el("p", {class: "notyet-refused", role: "alert",
@@ -196,8 +203,9 @@ function questSheet(btn, name, doc, create, goal, seen) {
         ? el("ol", {class: "quest-sheet-steps", "data-quest-steps": ""},
             ...steps.map((s, i) => el("li", {title: s.self || "",
                                              "data-surface": "sheet.step:" + (i + 1)},
-              el("b", {}, s.door_label || title(s.door || "")), " ",
-              s.row_label
+              el("b", {}, unseen(s) ? s.note : s.door_label || title(s.door || "")), " ",
+              unseen(s) ? null
+                : s.row_label
                 ? el("span", {"data-quest-row": ""}, s.row_label)
                 : el("span", {class: "mono muted"}, s.self || ""),
               " · ", el("span", {"data-quest-turn": ""}, turn(s)),
@@ -210,7 +218,7 @@ function questSheet(btn, name, doc, create, goal, seen) {
                     "asks for: " + (s.needs_labels
                       || (s.needs || []).flat().map(n => title(prettyNeed(n)))).join(", "))
                 : null,
-              s.note ? el("div", {class: "muted"}, s.note) : null)))
+              s.note && !unseen(s) ? el("div", {class: "muted"}, s.note) : null)))
         : seen.ok
           ? el("p", {"data-quest-blocked": ""},
               p.blocked_reason || "The engine found no step yet.")
