@@ -1256,6 +1256,12 @@
   held: longer than an ordinary run of the checks."
   20)
 
+(def held-compare-minutes
+  "How long a held green head that holds its base waits before the pass
+  compares it again, so a base that moves later is seen (ticket
+  443bcbc2)."
+  20)
+
 (defonce ^:private held-seen (atom {}))
 
 (defn held-checks
@@ -1306,7 +1312,8 @@
   "[seen' due?] for one held change: `seen` is change id → {:head :since
   :said}. The wait counts from the first pass that saw this head held,
   and it is due one time, when the wait reaches `limit` minutes at
-  `now`. A new head starts the wait again."
+  `now`. A new head starts the wait again, and drops what else the
+  process kept for the last one."
   [seen id head ^java.time.Instant now limit]
   (let [was (get seen id)
         same? (= head (:head was))
@@ -1315,7 +1322,22 @@
         due? (and (not said?)
                   (>= (.toMinutes (java.time.Duration/between since now))
                       (long limit)))]
-    [(assoc seen id {:head head :since since :said (or said? due?)}) due?]))
+    [(assoc seen id (assoc (if same? was {})
+                           :head head :since since :said (or said? due?)))
+     due?]))
+
+(defn held-again
+  "When a held head is compared to its base again, after a compare that
+  answered `behind?` at `now`: nil when it is behind, since nothing but
+  a new head changes that; `held-compare-minutes` later when it holds
+  its base, which may still move; and the next pass when there was no
+  answer, because the forge threw or the head has no verdict yet
+  (ticket 443bcbc2)."
+  [behind? ^java.time.Instant now]
+  (cond
+    (true? behind?) nil
+    (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
+    :else now))
 
 (def ^:private held-fields [:held_head :held_since :held_reason])
 
@@ -1346,14 +1368,21 @@
   written as `behind_base` too: the staleness pass compares only a head
   that lacks a check, so a green head would say it is behind in prose
   alone and the merge line would never bring it forward (ticket
-  14e72c6e). A head first seen held drops the last head's answer."
+  14e72c6e). A head first seen held drops the last head's answer.
+  The compare is asked again on a later pass, at the time `held-again`
+  names, so one forge error or a base that moves after the due pass
+  does not leave a green head waiting on `checks` (ticket 443bcbc2);
+  such a pass says a line only when the head is now behind."
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
         was (cond-> @held-seen
               (and kept (not= head (get-in @held-seen [id :head])))
               (assoc id {:head head :since kept :said false}))
-        [seen due?] (held-due was id head (now-of eng) held-log-minutes)]
+        ^java.time.Instant now (now-of eng)
+        [seen due?] (held-due was id head now held-log-minutes)
+        ^java.time.Instant again (get-in seen [id :again])
+        again? (boolean (and (not due?) again (not (.isBefore now again))))]
     (reset! held-seen seen)
     (when-not kept
       (bench/mark-row! eng :change id
@@ -1362,18 +1391,22 @@
                         :held_reason nil
                         :behind_base nil}
                        #{}))
-    (when due?
+    (when (or due? again?)
       (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
-            behind? (when (and checked base (satisfies? ForgeCompare source))
+            compares? (boolean (and base (satisfies? ForgeCompare source)))
+            behind? (when (and checked compares?)
                       (try (boolean (forge-behind? source repo base head))
                            (catch Exception _ nil)))]
+        (swap! held-seen assoc-in [id :again]
+               (when compares? (held-again behind? now)))
         (when (some? behind?)
           (bench/mark-row! eng :change id
                            {:behind_base behind?
-                            :base_compared_at (str (now-of eng))}
+                            :base_compared_at (str now)}
                            #{:base_compared_at}))
-        (when-some [line (held-why (get-in row [:data :change_id]) head
-                                   required checks behind?)]
+        (when-some [line (when (or due? (true? behind?))
+                           (held-why (get-in row [:data :change_id]) head
+                                     required checks behind?))]
           (log-fn line)
           (bench/mark-row! eng :change id
                            {:held_reason (subs line 0 (min 500 (count line)))}
