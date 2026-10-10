@@ -6563,8 +6563,50 @@
                    sort
                    first))))))))
 
+(defn- other-seats-rows
+  "The walk row ids the open sittings of OTHER seats that walk this
+  seat's kind were handed (ticket 40d8f04c). Two seats over one queue
+  are two offices on one row: without this each sit hands the row the
+  other already works, and both runs edit one branch. The hold is the
+  open sitting's alone - a closed or swept sitting of another seat
+  holds nothing, and the grace stays the seat's own. → a set of ids."
+  [st tx seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+        seat-id (str (:id seat-row))
+        walks-it? (memoize
+                   (fn [id]
+                     (= walk (some-> (store/load-row st tx :seat id {})
+                                     (get-in [:data :walk])
+                                     str))))]
+    (if-not walk
+      #{}
+      (into #{}
+            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
+                  (filter #(some-> (get-in % [:data :seat]) str not-empty
+                                   walks-it?))
+                  (mapcat #(get-in % [:data :walked_rows]))
+                  (keep #(some-> % str not-empty)))
+            (store/query-rows st tx :sitting
+                              {:state :open}
+                              {:limit open-sitting-page
+                               :newest-first true})))))
+
+(defn other-seats-row-ids
+  "The part of `claimed-rows` an open sitting of ANOTHER seat holds
+  (`other-seats-rows`), so a walk they emptied can say so. → a set of
+  ids."
+  [eng seat-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (other-seats-rows st tx (store/load-row st tx :seat (str seat-id) {})))))
+    #{}))
+
 (defn claimed-rows
-  "The walk row ids the OTHER open sittings of this seat were handed:
+  "The walk row ids the OTHER open sittings of this seat were handed,
+  and the ones the open sittings of another seat over the same kind
+  were (`other-seats-rows`):
   the rows a second run of the seat must not walk again. A fire and a
   wake that land together start two runs, and without this both sits
   answer the same first row, so both work one branch and the next row
@@ -6579,8 +6621,9 @@
       (store/with-tx st
         (fn [tx]
           (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
-                  (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                               sitting-id ((:now-fn eng))))
+                  (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                     sitting-id ((:now-fn eng)))
+                        (other-seats-rows st tx seat-row)))
                 (comp (remove #(= (str sitting-id) (str (:id %))))
                       (mapcat #(get-in % [:data :walked_rows]))
                       (keep #(some-> % str not-empty)))
@@ -6916,8 +6959,13 @@
   so every claim of one seat runs one at a time: two sits of the seat
   at the same instant cannot both find a row free and both write it.
 
+  Two seats over one kind lock two seat rows, so the rows asked for are
+  read FOR UPDATE as well, in the order of their ids: the sits of two
+  seats that ask for one row run one at a time too, and the second
+  reads the first one's claim (`other-seats-rows`, ticket 40d8f04c).
+
   The claim is all or nothing. When a row asked for is already held by
-  another open sitting of the seat, nothing is written, and the answer
+  another open sitting, nothing is written, and the answer
   says which rows are held, so the sit reads its walk again past them.
   → {:claimed? bool :taken #{ids other open sittings hold}}."
   [eng seat-id sitting-id row-ids]
@@ -6928,12 +6976,18 @@
       (store/with-tx st
         (fn [tx]
           (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
+                _ (when-some [walk (some-> (get-in seat-row [:data :walk])
+                                           str not-empty keyword)]
+                    (when (get (inv/resources eng) walk)
+                      (doseq [id (sort ids)]
+                        (store/load-row st tx walk id {:for-update true}))))
                 open (store/query-rows st tx :sitting
                                        {:seat (str seat-id) :state :open}
                                        {:limit open-sitting-page
                                         :newest-first true})
-                taken (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                                         sitting-id ((:now-fn eng)))
+                taken (into (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                               sitting-id ((:now-fn eng)))
+                                  (other-seats-rows st tx seat-row))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))

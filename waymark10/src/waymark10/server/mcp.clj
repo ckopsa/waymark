@@ -3679,6 +3679,21 @@
                              (contains? graced (get % "id"))
                              (assoc "reason" graced-reason))))))
 
+(def ^:private other-seat-reason
+  "an open sitting of another seat that walks this kind holds it")
+
+(defn- with-other-seat-reasons
+  "The walk, its `withheld` rows that an open sitting of ANOTHER seat
+  holds named for that seat's sitting rather than for this seat's own
+  (ticket 40d8f04c)."
+  [walk elsewhere]
+  (cond-> walk
+    (and (seq elsewhere) (seq (get walk "withheld")))
+    (update "withheld"
+            (partial mapv #(cond-> %
+                             (contains? elsewhere (get % "id"))
+                             (assoc "reason" other-seat-reason))))))
+
 (def ^:private change-beside-the-walk-note
   "What a seat whose rows are ASKS does with the change beside them
   (R-12.32). The row it works is the ask; the door that ends the
@@ -3700,8 +3715,8 @@
   "What a sit is told when every open row of its walk is held by
   another open sitting of the seat: the run has nothing to do, and
   stopping at once is the cheap end of it."
-  (str "Every open row of your walk is held by another open sitting of "
-       "this seat, so there is nothing for you to walk. Say so and stop."))
+  (str "Every open row of your walk is held by another open sitting, "
+       "so there is nothing for you to walk. Say so and stop."))
 
 (defn- named-row-withheld-note
   "What a sit is told when the row its fire text named is not in its
@@ -3719,7 +3734,7 @@
   instead, and must not walk the one the text names."
   [row-id]
   (str " The row your fire text names, " row-id ", is held by another "
-       "open sitting of this seat. Walk the row below instead of it."))
+       "open sitting. Walk the row below instead of it."))
 
 (def ^:private claim-tries
   "How many times one sit reads its walk again past the rows another
@@ -3762,7 +3777,9 @@
                     {:claimed? true :taken taken})
             seen (into (set taken) (:taken claim))
             said (fn [w]
-                   {:walk (with-graced-reasons w graced)
+                   {:walk (-> (with-graced-reasons w graced)
+                              (with-other-seat-reasons
+                                (seats/other-seats-row-ids eng seat-id)))
                     :named-held? (boolean (and named (contains? seen named)))
                     ;; named, held by nobody, and still not handed: the
                     ;; walk withheld it and the queue's rows stand in
