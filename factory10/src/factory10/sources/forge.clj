@@ -1965,8 +1965,9 @@
   "The door that writes the green note on the ticket, read from its
   state. A seat's stall sends the ticket to draft, and a person may
   have blocked or deferred it since (ticket e666bd6a). A ticket under
-  review may have a second change beside its submitted one, with no
-  pull request and work on its branch (ticket 1188f3ed)."
+  review has a stuck change with no pull request and work on its
+  branch when a submit's landing failed on the last round: `stick`
+  leaves the ticket in review (tickets 1188f3ed, 900ee2f2)."
   {:open :note_green
    :in_review :note_green_in_review
    :draft :note_green_draft
