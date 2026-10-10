@@ -331,6 +331,55 @@
              (shape plan [:door :self :whose :state])))
       (is (= "someone who holds pantry.stock" (:waiting_on plan))))))
 
+(def ^:private unseen-answer
+  "A rehearsal that ended on a row its owner cannot read: the refusal
+  bound no row, so each of its two remedies was sent to the goal's row,
+  and the first led back to itself."
+  {:writes []
+   :blocked-on [{:door "ticket.reopen" :row "/api/epics/1" :needs []
+                 :or ["ticket.drop"] :reason "cycle"}
+                {:door "ticket.drop" :row "/api/epics/1" :needs []
+                 :or ["ticket.reopen"] :reason "Not found"}]
+   :stack [{:door "epic.complete" :row "/api/epics/1"}]})
+
+(def ^:private unseen-goal
+  {:door "complete" :self "/api/epics/1" :needs []})
+
+(def ^:private unseen-sentence
+  "Someone else holds the next step, on a row outside what you can see.")
+
+(deftest the-mapping-makes-one-seat-step-of-an-unseen-wait
+  (testing "with nothing unseen the cycle is the reason no step can be taken"
+    (is (= "The way to ticket.reopen leads back to ticket.reopen, so no step can be taken now."
+           (:blocked_reason (quests/answer->plan unseen-answer seats-for unseen-goal)))))
+  (testing "a cycle and its alternative become one seat step and no reason"
+    (let [plan (quests/answer->plan unseen-answer seats-for unseen-goal
+                                    {:waiting_on "Juniper"})]
+      (is (= [[1 "complete" "/api/epics/1" "seat" "waiting" "Juniper"]
+              [2 "complete" "/api/epics/1" "person" "later" nil]]
+             (shape plan [:n :door :self :whose :state :waiting_on])))
+      (is (= unseen-sentence (:note (first (:plan plan)))))
+      (is (every? (comp empty? :alternatives) (:plan plan))
+          "the cycle's other remedy is no way to the goal")
+      (is (nil? (:blocked_reason plan)))
+      (is (= "Juniper" (:waiting_on plan)))))
+  (testing "nobody named reads someone else"
+    (let [plan (quests/answer->plan unseen-answer seats-for unseen-goal
+                                    {:waiting_on nil})]
+      (is (= ["seat" "waiting" "someone else"]
+             (first (shape plan [:whose :state :waiting_on]))))
+      (is (= "someone else" (:waiting_on plan)))))
+  (testing "a depth block stays"
+    (let [plan (quests/answer->plan
+                (update unseen-answer :blocked-on conj
+                        {:door "pantry.stock" :row "/api/pantries/2" :needs []
+                         :or [] :reason "depth"})
+                seats-for unseen-goal {:waiting_on "Juniper"})]
+      (is (= "The way to pantry.stock is longer than the engine follows, so no step can be taken now."
+             (:blocked_reason plan)))
+      (is (not-any? #{"reopen" "drop"} (map :door (:plan plan))))
+      (is (some #(= unseen-sentence (:note %)) (:plan plan))))))
+
 (deftest the-mapping-marks-a-confirm-a-hold-and-a-choice
   (testing "a confirm door carries its consequence and is the owner's next"
     (let [plan (quests/answer->plan
