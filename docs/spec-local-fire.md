@@ -93,7 +93,7 @@ and reads nothing in it.
 |---|---|
 | routine | one name on the server, bound to one CLI model. The local copy of "one Routine for each model" |
 | run | one firing of a routine: one headless Claude Code process, one session id, one record on disk |
-| the place | a clone of the seat's place, `ckopsa/waymark-seat`: `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/sitting-close.sh`, and nothing else |
+| the place | a clone of the seat's place, `ckopsa/waymark-seat`: `CLAUDE.md`, `.claude/settings.json`, `.claude/hooks/sitting-close.sh`, `inbox-feed.sh`, and nothing else |
 | the run page | the server's page for one run, the URL the engine writes as `last_run_url` |
 | the spawner | the seam that starts a process from an argument vector and a working directory. The tests replace it. Its handle waits through `await-exit`, not `wait`: a protocol method named `wait` collides with the three final `wait` overloads every object inherits, and the compiler refuses the call site |
 
@@ -199,7 +199,7 @@ second timeout, and a run takes minutes.
 directory of its own, `{runs-dir}/{uuid}/place`, which is a copy of the
 place. The server writes one file beside the copy, `{runs-dir}/{uuid}/
 mcp.json`, naming the engine's MCP door under `:mcp`. The place itself
-stays three files, so the seat-place workflow's count still holds.
+stays four files, so the seat-place workflow's count still holds.
 
 **R-5.4** The argument vector must be this, with the config's values in
 it:
