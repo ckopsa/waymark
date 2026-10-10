@@ -771,14 +771,23 @@
    ;; read every pull request again. It is GitHub's stamp and never the
    ;; engine's clock (`github/high-water`), so it stands still while no
    ;; pull request moves: an old cursor is a quiet repository, and the
-   ;; pass's own clock is `base_checked_at` (ticket 028b292e)
+   ;; pass's own clock is `forge_pass_at` (tickets 028b292e, e674e558)
    [:forge_cursor {:optional true
                    :examples ["2026-10-01T20:32:00Z"]
                    :x-display
                    {:raw true
                     :label "Pull requests read up to"
-                    :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Base read at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
+                    :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Forge pass ran at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
     [:maybe [:string {:max 64}]]]
+   ;; the pass's own clock (ticket e674e558): `base_checked_at` stands
+   ;; still on a held pass and on a base that was not read, so the pass
+   ;; stamps this at its end, whatever it read
+   [:forge_pass_at {:optional true
+                    :examples ["2026-10-10T02:46:00Z"]
+                    :x-display
+                    {:label "Forge pass ran at"
+                     :help "When the forge pass last ran over this repository, by the engine's clock. Every pass writes this at its end, also a pass whose calls were held by GitHub's rate limit and a pass GitHub did not answer, so a time that stands still here means the pass stopped. What the GitHub source could not read and Base read at say what the pass read."}}
+    [:maybe :waymark/instant]]
    ;; the base branch's own state (ticket ade81ae9), so a person reads
    ;; whether main is red without opening GitHub
    [:base_state {:optional true

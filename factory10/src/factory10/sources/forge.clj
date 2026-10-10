@@ -2673,6 +2673,24 @@
      census
      (bench/policies eng :active))))
 
+(defn- stamp-pass!
+  "The pass's own clock on the policy of each repository it ran over,
+  with a maintenance write as `base_checked_at` is: a held pass and a
+  repository that did not answer are stamped too, so a stamp that
+  stands still is a pass that stopped (ticket e674e558)."
+  [eng repositories log-fn]
+  (let [ran (into #{} (map str) repositories)
+        at (now-of eng)]
+    (doseq [row (bench/policies eng :active)
+            :let [repo (str (get-in row [:data :repository]))]
+            :when (contains? ran repo)]
+      (try
+        (bench/mark-row! eng :repo_policy (str (:id row))
+                         {:forge_pass_at at} #{})
+        (catch Exception e
+          (log-fn "the policy of " repo " was not stamped with the pass ("
+                  (ex-message e) ")"))))))
+
 (defn pass!
   "One pass of the factory mirror.
 
@@ -2730,6 +2748,7 @@
               (catch Exception e [census e])))
           census (if held census (base-pass! eng source census log-fn))
           census (floor-pass! eng census log-fn)
+          _ (stamp-pass! eng repositories log-fn)
           _ (when thrown (throw thrown))
           census (merge (assoc census :calls (forge-calls source))
                         (budget-of source))]

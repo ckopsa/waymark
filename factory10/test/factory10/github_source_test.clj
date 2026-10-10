@@ -2987,6 +2987,21 @@
           (is (pos? (long (:calls census))))
           (is (true? (:complete? census))))))))
 
+(deftest every-pass-stamps-the-policy-and-a-held-pass-does-too
+  ;; ticket e674e558: `base_checked_at` stands still on a held pass
+  (let [{:keys [state engine] :as w} (limit-rig)
+        policy #(one-row engine :repo_policy {:repository repo})
+        stamp #(get-in (policy) [:data :forge_pass_at])]
+    (limit-pass! w)
+    (is (some? (stamp)) "a pass that read the repository stamps its policy")
+    (bench/mark-row! engine :repo_policy (str (:id (policy)))
+                     {:forge_pass_at nil} #{})
+    (is (nil? (stamp)))
+    (gh/throttle! state limit-reset)
+    (let [census (limit-pass! w)]
+      (is (= (str limit-reset) (:held-until census)))
+      (is (some? (stamp)) "the held pass ran, and the policy says when"))))
+
 (deftest an-unchanged-answer-is-a-304-and-costs-nothing
   (let [{:keys [state source]} (limit-rig)
         _ (gh/budget! state {:remaining 4321 :limit 5000 :reset limit-reset})
