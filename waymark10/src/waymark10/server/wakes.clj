@@ -916,7 +916,9 @@
 
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
-  open sittings and the runs on their way to a sit; `:free` is the rows
+  open sittings and the runs on their way to a sit, less the sittings
+  whose sit handed them nothing (`seats/busy-sitting-count`, ticket
+  cc2f8e7f): those wait only for the hook's close; `:free` is the rows
   of its walk the sit would hand (no open sitting holds them, no stuck
   change stands beside them and no verdict of its judgment stands on
   them, `withheld-rows`), less the
@@ -932,7 +934,7 @@
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f (judged-out eng seat-row)))
         unclaimed (count (remove (withheld-rows eng seat-row) queue))]
-    {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
+    {:busy (+ (long (seats/busy-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying sitting-down))}))
 
 (defn- damped?
