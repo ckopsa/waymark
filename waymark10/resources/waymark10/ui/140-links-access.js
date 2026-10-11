@@ -177,8 +177,11 @@ function questSheet(btn, name, doc, create, goal, seen) {
   const p = (seen.ok && (seen.body || {}).preview) || {};
   const steps = p.plan || [];
   const unseen = questUnseen;
-  const turn = s => s.whose === "person" || s.whose === "confirm" ? "yours"
-    : unseen(s) ? "waiting on " + (s.waiting_on || "someone else")
+  /* whose turn, by the tracker's own judgment (questWaits,
+     120-nav-home.js): a step that does not wait is the reader's, a
+     choice as much as a write or a confirm */
+  const turn = s => unseen(s) ? "waiting on " + (s.waiting_on || "someone else")
+    : !questWaits(s) ? "yours"
     : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
     : "waiting on " + (s.waiting_on || "a person");
   const errBox = el("p", {class: "notyet-refused", role: "alert",

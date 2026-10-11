@@ -1749,6 +1749,27 @@
     (hear! eng)
     (is (= before (held eng rows)) "and the planner hears of nothing")))
 
+(deftest the-preview-under-a-grant-that-admits-the-steps-door-says-the-step-is-the-readers
+  (let [eng (epic-engine {:probe-reads true})
+        part (str (chore! eng "Write the guide"))
+        e (make! eng :q_epic {:part_id part})
+        gid (str (:id (grant! eng (:id person)
+                              [{:kind "chore" :actions ["finish"]}
+                               {:kind "q_epic" :actions ["complete"]}])))
+        worn (:grant (grants/visibility eng gid person))
+        {:keys [valid? preview]} (inv/create! eng :quest
+                                              {:self (str "/api/q_epics/" e)
+                                               :action "complete"}
+                                              {:principal person :grant worn
+                                               :dry-run true})
+        plan (:plan preview)]
+    (is (true? valid?))
+    (is (= ["finish" "complete"] (mapv :door plan)) (pr-str preview))
+    (is (every? #{"person" "confirm" "choice"} (map (comp name :whose) plan))
+        "each step is the reader's, as the tracker judges it after Accept")
+    (is (= "next" (:state (first plan))) "and the first is taken now")
+    (is (nil? (:waiting_on preview)) "so the preview waits on nobody")))
+
 (def ^:private ledger
   "A row whose goal door is fenced: `lock` asks for the version its
   caller read."
