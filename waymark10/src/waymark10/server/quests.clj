@@ -1004,7 +1004,9 @@
   [eng {:keys [owner grant self action input]}]
   (try
     (let [gid (some-> grant str not-empty)
-          who (when gid (members/principal-for eng owner))
+          who (when gid
+                (some->> (members/principal-for eng owner)
+                         (grants/as-the-seats-sitter eng gid)))
           worn (when who (:grant (grants/visibility eng gid who)))
           row? (:row? worn)
           self (str/trim (str self))
@@ -1512,7 +1514,8 @@
        (let [{:keys [owner grant]} (:data row)
              gid (some-> grant str not-empty)]
          (when (walks/recording-own? eng {:id owner})
-           (when-some [who (members/principal-for eng owner)]
+           (when-some [who (cond->> (members/principal-for eng owner)
+                             gid (grants/as-the-seats-sitter eng gid))]
              (let [vis (if gid
                          (grants/visibility eng gid who)
                          (grants/unscoped-visibility eng who))]

@@ -1216,6 +1216,61 @@
       (is (= #{self} (set (map :self (:plan d))))
           "no step names the row the owner does not read"))))
 
+;; a seat held for a model serves nothing to a principal that declares
+;; none, and the planner hears a principal id and holds no session: it
+;; plans as the model the seat is held for
+(deftest the-sitter-of-a-seat-held-for-a-model-gets-a-plan
+  (let [eng (engine/engine {:storage (memory/storage) :resources [job]})
+        part (make! eng :q_job {})
+        whole (make! eng :q_job {:part_id part})
+        self (str "/api/q_jobs/" whole)
+        model (make! eng :model {:name "quest-held"
+                                 :display "quest-held"
+                                 :vendor "anthropic"
+                                 :tier "frontier"
+                                 :price_input_per_mtok 3M
+                                 :price_output_per_mtok 15M
+                                 :price_cache_read_per_mtok 0.3M
+                                 :price_cache_write_per_mtok 3.75M})
+        seat (make! eng :seat {:name "job-finisher"
+                               :charter "Finish the job this seat is given."
+                               :scope [{:kind "q_job" :actions ["finish"] :ids [whole]}]
+                               :standing_ttl_seconds 604800
+                               :cadence_seconds 3600
+                               :budget_usd_per_week 5M
+                               :sitting_budget_tokens 60000
+                               :held_for [model]})
+        m (:row (inv/create! eng :member {:display "Planner" :actor_type "agent"}
+                             {:principal person}))
+        made (:row (inv/create! eng :grant {:audience (str (:id m)) :seat seat}
+                                {:principal grants/approvals-actor}))
+        gid (str (:id (:row (inv/invoke! eng :grant (str (:id made)) :accept nil
+                                         {:principal grants/approvals-actor}))))
+        agent (members/principal-for eng (str (:id m)))
+        sitter (assoc agent :model "quest-held")
+        worn (:grant (grants/visibility eng gid sitter))
+        quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
+                                      {:principal sitter :grant worn})))]
+    (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (nil? (:model agent)) "the planner's principal declares no model")
+      (is (not (when-some [row? (get-in (grants/visibility eng gid agent) [:grant :row?])]
+                 (row? :q_job whole)))
+          "and the seat serves nothing to a principal that declares none")
+      (is (= "quest-held" (:model (grants/as-the-seats-sitter eng gid agent)))
+          "so the planner takes the model the seat is held for")
+      (is (= other (grants/as-the-seats-sitter eng gid other))
+          "and nobody else does under that grant")
+      (is (seq (:plan d)) (str "the sitter of a held seat gets a plan: " (pr-str d)))
+      (is (= "finish" (:door (last (:plan d)))) "that ends on the goal")
+      (is (= #{self} (set (map :self (:plan d))))
+          "no step names the row the seat does not read")
+      (is (= [(str "/api/q_jobs/" part)] (mapv :self (:waits_on d)))
+          "the engine finds the row the goal waits on, as it does under a grant with a scope")
+      (is (= "iris" (:waiting_on d)) "the step waits on who can finish the part")
+      (is (nil? (:blocked_reason d)) "and the plan says no reason it cannot be made"))))
+
 ;; ── the goal's form is the last step ────────────────────────────────
 
 (g/defguard the-part-is-finished
