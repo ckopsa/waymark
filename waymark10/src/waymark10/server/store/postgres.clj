@@ -537,60 +537,73 @@
   holder calls (start-fn) and holds until released or the session dies
   (checked every retry interval), then (stop-fn handle) runs and the
   session closes — releasing the lock, so the peer's next try takes
-  over."
+  over. A Throwable from start-fn, the lock or the hold is warned with
+  the role's name and the role contends again after :retry-ms: an
+  Error must not end the only thread that elects this role here. The
+  thread says so when it ends, whatever ended it."
   [^HikariDataSource ds role-name {:keys [retry-ms start-fn stop-fn]
                                    :or {retry-ms 5000}}]
   (let [key (role-lock-key role-name)
         running (atom true)
         held? (atom false)
         starts (atom 0)
+        thrown (fn [^Throwable e]
+                 (str (.getName (class e)) ": " (ex-message e)))
         t (Thread.
            ^Runnable
            (fn []
-             (while @running
-               (let [conn (try (lock-connection ds)
-                               (catch Exception e
-                                 (when @running
-                                   (warn! "role " (name role-name)
-                                          ": no lock connection ("
-                                          (ex-message e) "); retrying"))
-                                 nil))]
-                 (if (nil? conn)
-                   (try (Thread/sleep (long retry-ms))
-                        (catch InterruptedException _ nil))
-                   (try
-                     ;; contend
-                     (loop []
-                       (when (and @running (not (try-lock? conn key)))
-                         (Thread/sleep (long retry-ms))
-                         (recur)))
-                     ;; hold
-                     (when @running
-                       (swap! starts inc)
-                       (reset! held? true)
-                       (let [handle (start-fn)]
-                         (try
-                           (loop []
-                             (when (and @running (.isValid ^Connection conn 2))
-                               (Thread/sleep (long retry-ms))
-                               (recur)))
-                           (finally
-                             (reset! held? false)
-                             (try (when stop-fn (stop-fn handle))
-                                  (catch Exception e
-                                    (warn! "role " (name role-name)
-                                           " stop-fn: " (ex-message e))))))))
-                     (catch InterruptedException _ nil)
-                     (catch Exception e
+             (try
+               (while @running
+                 (let [conn (try (lock-connection ds)
+                                 (catch Throwable e
+                                   (when @running
+                                     (warn! "role " (name role-name)
+                                            ": no lock connection ("
+                                            (thrown e) "); retrying"))
+                                   nil))]
+                   (if (nil? conn)
+                     (try (Thread/sleep (long retry-ms))
+                          (catch InterruptedException _ nil))
+                     (try
+                       ;; contend
+                       (loop []
+                         (when (and @running (not (try-lock? conn key)))
+                           (Thread/sleep (long retry-ms))
+                           (recur)))
+                       ;; hold
                        (when @running
-                         (warn! "role " (name role-name) " loop: "
-                                (ex-message e))
-                         (try (Thread/sleep (long retry-ms))
-                              (catch InterruptedException _ nil))))
-                     (finally
-                       ;; closing the session releases the lock
-                       (try (.close ^Connection conn)
-                            (catch Exception _ nil))))))))
+                         (swap! starts inc)
+                         (reset! held? true)
+                         (let [handle (start-fn)]
+                           (try
+                             (loop []
+                               (when (and @running (.isValid ^Connection conn 2))
+                                 (Thread/sleep (long retry-ms))
+                                 (recur)))
+                             (finally
+                               (reset! held? false)
+                               (try (when stop-fn (stop-fn handle))
+                                    (catch Exception e
+                                      (warn! "role " (name role-name)
+                                             " stop-fn: " (ex-message e))))))))
+                       (catch InterruptedException _ nil)
+                       (catch Throwable e
+                         (when @running
+                           (warn! "role " (name role-name) " loop: "
+                                  (thrown e) "; contending again")
+                           (try (Thread/sleep (long retry-ms))
+                                (catch InterruptedException _ nil))))
+                       (finally
+                         ;; a start-fn that threw never reached the hold
+                         (reset! held? false)
+                         ;; closing the session releases the lock
+                         (try (.close ^Connection conn)
+                              (catch Exception _ nil)))))))
+               (warn! "role " (name role-name)
+                      ": election thread ended, released")
+               (catch Throwable e
+                 (warn! "role " (name role-name)
+                        ": election thread ended on " (thrown e)))))
            (str "waymark10-role-" (name role-name)))]
     (doto ^Thread t (.setDaemon true) (.start))
     {:role role-name :thread t :running running :held? held? :starts starts}))
