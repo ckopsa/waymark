@@ -2068,3 +2068,33 @@
         (is ((:row? vis) kind (:id row)) "the owner reads their own row")
         (is (not ((:row? theirs) kind (:id row)))
             "a principal the row does not name cannot read it")))))
+
+(deftest an-owners-door-opens-on-the-owners-row-alone-under-a-grant-that-names-the-kind
+  (doseq [[kind make] owned-kinds]
+    (testing (name kind)
+      (let [eng (owned-engine)
+            c (chore! eng "Dishes")
+            row (make eng c (:grant (wearing eng person)))
+            rdef (get (inv/resources eng) kind)
+            ;; a grant that names the owned kind to READ, with none of its doors
+            reading (fn [principal]
+                      (grants/visibility
+                       eng
+                       (str (:id (grant! eng (:id principal)
+                                         [{:kind "chore" :actions ["finish"]}
+                                          {:kind (name kind) :actions []}])))
+                       principal))
+            vis (reading person)
+            theirs (reading stranger)
+            doors (remove (set (map name (:create-action-names rdef)))
+                          (map name (:actions (:own-surface rdef))))]
+        (is (contains? (:surface theirs) (name kind)) "the grant names the kind")
+        (is ((:row? theirs) kind (:id row)) "so its wearer reads another's row")
+        (is (every? #((:action-on? vis) kind % (:id row)) doors)
+            "the owner moves their own row through the owner's doors")
+        (is (every? #((:action-on? (:grant vis)) kind % (:id row)) doors)
+            "and the guards read the same answer")
+        (is (not-any? #((:action-on? theirs) kind % (:id row)) doors)
+            "no owner's door opens on a row its owner field does not name")
+        (is (not-any? #((:action-on? (:grant theirs)) kind % (:id row)) doors)
+            "and the guards read the same answer")))))

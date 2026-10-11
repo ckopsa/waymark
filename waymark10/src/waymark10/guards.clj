@@ -1040,6 +1040,9 @@
                       (clojure.core/and (some? g)
                                         ((:action? g) kind action)
                                         (clojure.core/or
+                                         (nil? (:action-on? g))
+                                         ((:action-on? g) kind action (:id row)))
+                                        (clojure.core/or
                                          (nil? (:id row))
                                          ((:row? g) kind (:id row))))
                       (t/allow)
@@ -1058,6 +1061,8 @@
                                    (list 't/deny {:vars {:problem own-said}})
                                    (list 'and '(some? g)
                                          (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:action-on? g))
+                                               (list '(:action-on? g) kind action '(:id row)))
                                          (list 'or '(nil? (:id row))
                                                (list '(:row? g) kind '(:id row))))
                                    '(t/allow)
@@ -1146,6 +1151,9 @@
                       (clojure.core/and (some? g)
                                         ((:action? g) kind action)
                                         (clojure.core/or
+                                         (nil? (:action-on? g))
+                                         ((:action-on? g) kind action (:id row)))
+                                        (clojure.core/or
                                          (nil? (:id row))
                                          ((:row? g) kind (:id row))))
                       (t/allow)
@@ -1161,6 +1169,8 @@
                                    '(t/allow)
                                    (list 'and '(some? g)
                                          (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:action-on? g))
+                                               (list '(:action-on? g) kind action '(:id row)))
                                          (list 'or '(nil? (:id row))
                                                (list '(:row? g) kind '(:id row))))
                                    '(t/allow)

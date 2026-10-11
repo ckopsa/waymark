@@ -349,7 +349,9 @@
     (cond
       (or (nil? rdef) (nil? action)
           (not (admits? :action? kind action))
-          (and id (not (admits? :row? kind id))))
+          (and id (not (admits? :row? kind id)))
+          (and id (:action-on? grant)
+               (not (admits? :action-on? kind action id))))
       {:problem (str "there is no door `" (:action target) "` on `" (:kind target) "`"
                      (when id (str " for the row `" id "`"))
                      " that you may schedule.")}

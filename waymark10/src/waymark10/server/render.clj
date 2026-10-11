@@ -1158,7 +1158,13 @@
         ;; non-granted actions do not exist — dropped from both maps,
         ;; the engine-injected adopt included
         granted? (when visibility
-                   (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
+                   (let [on? (:action-on? visibility)]
+                     (fn [[aname _]]
+                       (and ((:action? visibility) (:kind rdef) aname)
+                            ;; an owner's door is drawn on the
+                            ;; owner's row alone
+                            (or (nil? on?)
+                                (on? (:kind rdef) aname (:id row)))))))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
         ;; hashed/hrow/public-row are built above the probe (the reasons

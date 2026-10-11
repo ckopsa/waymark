@@ -336,11 +336,16 @@
 (defn check-action!
   "A scoped request invoking a non-granted action: the action does not
   exist (never a 403 — a refusal that names the gate would leak what
-  concealment hides)."
+  concealment hides). A request that addresses one row is judged on
+  that row: a door only the own-surface confers does not exist on a
+  row the principal does not own."
   [req rdef action]
   (when-some [vis (visibility-of req)]
-    (when-not ((:action? vis) (:kind rdef) action)
-      (throw (p/no-such-action (:kind rdef) action)))))
+    (let [id (get-in req [:path-params :id])
+          on? (:action-on? vis)]
+      (when-not (and ((:action? vis) (:kind rdef) action)
+                     (or (nil? id) (nil? on?) (on? (:kind rdef) action id)))
+        (throw (p/no-such-action (:kind rdef) action))))))
 
 (defn- url-decode ^String [^String s]
   (URLDecoder/decode s StandardCharsets/UTF_8))
@@ -1331,6 +1336,15 @@
           _ (check-kind! req rdef)
           _ (check-action! req rdef (keyword action))
           body (read-body req)
+          ;; an owner's door is judged on each row the call names, as
+          ;; the single door judges its one row
+          _ (when-some [on? (:action-on? (visibility-of req))]
+              (let [ids (if (contains? body :items)
+                          (keep #(when (map? %) (:id %)) (:items body))
+                          (:ids body))]
+                (doseq [id (when (sequential? ids) ids) :when (some? id)]
+                  (when-not (on? (:kind rdef) (keyword action) (str id))
+                    (throw (p/no-such-action (:kind rdef) (keyword action)))))))
           ;; batch B (flagged): grant-denied args 422 here too — the
           ;; bulk body minus its ids (and its on_error) is the
           ;; per-item input; in the items shape each item's own

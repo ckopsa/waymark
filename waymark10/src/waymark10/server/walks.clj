@@ -1250,7 +1250,10 @@
         k (:kind rdef)
         [_ id] (re-matches #"/api/[^/?#]+/([^/?#]+).*" (str (:self doc)))
         field? (or (:field? vis) (constantly true))
-        action? (or (:action? vis) (constantly true))
+        action? (let [kind? (or (:action? vis) (constantly true))
+                      on? (:action-on? vis)]
+                  (fn [kd a]
+                    (and (kind? kd a) (or (nil? on?) (on? kd a id)))))
         only (fn [d part ok?]
                (if (map? (get d part))
                  (update d part
