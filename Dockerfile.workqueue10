@@ -1,6 +1,8 @@
 # Serves the workqueue10 app: a waymark10 engine on http-kit.
 # Build:  make image-queue   (buildx arm64 → docker.kopsa.info/workqueue10:<tag>)
-FROM clojure:temurin-21-tools-deps-bookworm-slim
+# The base is Docker Hub's library image, from the ECR Public mirror:
+# an anonymous pull from Docker Hub is rate limited, and CI has none.
+FROM public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
 
 WORKDIR /app
 

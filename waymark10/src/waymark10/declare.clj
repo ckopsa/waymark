@@ -321,11 +321,19 @@
 ;; the same :vars the split spelling writes by hand.
 
 (defn refuse
-  "The blocking sentence of a defguard: severity :refuse."
-  [sentence]
-  (when (or (not (string? sentence)) (str/blank? sentence))
-    (werr "refuse takes the refusal sentence — a guard explains itself"))
-  {:severity :refuse :explain sentence})
+  "The blocking sentence of a defguard: severity :refuse. A second
+  argument is the way out the refusal carries: {:remedies [:kind/action
+  …]}, the doors that change the verdict, or {:open \"…\"}, the
+  sentence that says no door does."
+  ([sentence] (refuse sentence nil))
+  ([sentence way-out]
+   (when (or (not (string? sentence)) (str/blank? sentence))
+     (werr "refuse takes the refusal sentence — a guard explains itself"))
+   (when-not (and (or (nil? way-out) (map? way-out))
+                  (every? #{:remedies :open} (keys way-out)))
+     (werr (str "refuse's way out is {:remedies [:kind/action …]} or "
+                "{:open \"…\"}; " (pr-str way-out) " is neither")))
+   (merge {:severity :refuse :explain sentence} way-out)))
 
 (defn warn
   "The advisory sentence of a defguard: severity :warning, always
@@ -396,7 +404,9 @@
                      :when w
                      :explain (:explain clause)
                      :severity (:severity clause)}
-              (seq vars) (assoc :vars vars)))))
+              (seq vars) (assoc :vars vars)
+              (:remedies clause) (assoc :remedies (:remedies clause))
+              (:open clause) (assoc :open (:open clause))))))
 
 (defmacro defguard
   "A sentence-first expression guard:

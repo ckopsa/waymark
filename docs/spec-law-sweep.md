@@ -307,7 +307,10 @@ kind declaring `:adoption :never` explaining why its page is empty; and the cap.
   guard as a named punt. Harmless there, fatal here: if the resident code no
   longer expresses the proposal, *"under proposed"* would be a third law nobody
   proposed, and the report would be confident nonsense. The door refuses with
-  that sentence.
+  that sentence, as `code-moved` (409): it names the definition as `resource`
+  and `definition.withdraw` as its one remedy. A `target_kind` this engine does
+  not serve answers `kind-not-served` (409), with no remedy. Neither is a
+  `wrong-state`: the row's state is not what is wrong.
 - **A concealment refusal, not a projection.** A grant-scoped caller is refused
   at the door (404, the worksheet-upload posture) rather than having the sweep
   narrowed to their grant: a sweep names the ids and summaries of every row of a
@@ -326,8 +329,8 @@ convenience: the sweep reads rows through the storage protocol and nothing
 else, and the test is the proof that the surface is portable. It pins the
 flipped row, the old law's own explain as the `because`, the delegated
 derivation report, the empty schema/state pages with their note, the
-collection-grammar filter, the 409/404/anonymous doors and the residency
-refusal.
+collection-grammar filter, the 409/404/anonymous doors, and the residency and
+kind-not-served refusals by type, in `ex-data` and on the wire.
 
 `packs/law-sweep` pays the half a conformance driver *can* pay — a driver has
 one classpath, so it can never stage a hold. It walks every definition row this

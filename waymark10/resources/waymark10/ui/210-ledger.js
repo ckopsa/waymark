@@ -76,7 +76,8 @@ function historySection(streamHref) {
     el("summary", {class:"muted"}, "History ", count), body);
   let loaded = false;
   const load = () => {
-    if (loaded) return;
+    /* a replay's screen reads nothing (100-core.js, apiHeld) */
+    if (loaded || apiHeld) return;
     loaded = true;
     body.append(el("span", {class:"muted"}, "…"));
     fetchReplay(streamHref).then(frames => {
@@ -150,12 +151,17 @@ function scopeHit(t) {
                          (t.self || "").startsWith(SCOPE.self + "/"))) ||
          (SCOPE.kind && t.kind === SCOPE.kind);
 }
+/* the row is named in words: its summary where the event carries one,
+   its kind and states as the ledger row otherwise. The path is the
+   link's href and title, never its text */
 function tickerLine(t) {
+  const moved = (t.kind || "") + " " + (t.from || "·") + " → " + (t.to || "·");
+  const link = words =>
+    el("a", {href: "#" + t.self, title: t.self || ""}, words);
   $("#ticker").replaceChildren(
     el("span", {}, (t.at || "").slice(11, 19) + " · ",
       el("b", {}, ((t.actor || {}).id || "?")), " ", t.action || "", " · ",
-      t.kind || "", " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
-      el("a", {href: "#" + t.self, class: "mono"}, t.self || "")));
+      ...(t.summary ? [moved, " · ", link(t.summary)] : [link(moved)])));
 }
 
 const seen = new Set();  // dedupe — at-least-once delivery
@@ -184,6 +190,11 @@ function onRowFrame({event, id, data: ev}) {
   if (seen.has(key)) return;
   seen.add(key);
   tickerLine(ev);
+  /* a walkthrough in hand hears its own row, and its next step
+     (200-events-follow.js) */
+  onLedFrame(ev);
+  /* the pinned quest's tracker hears its own row (120-nav-home.js) */
+  onQuestFrame(ev);
   const isFollowed = !!(followId && ev.actor && ev.actor.id === followId);
   let lawLine = false;
   if (ev.kind === "definition") {

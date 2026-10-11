@@ -387,14 +387,27 @@
          :evidence (not-empty (:evidence deny))
          :becomes-available (g/becomes-available denier deny row)}))
 
-(defn- out-of-state-entry [defn' state]
-  (let [states (sort (:from defn'))]
+(defn- shut-display
+  "A shut door's entry wears the door's declared :display, as its open
+  entry does (ticket 90540599): the label, the order and any other mark
+  its law declares ride the row, so a client labels and orders a shut
+  door without a second document. The per-origin description stays with
+  the open entry — a shut door has no consequence to confirm."
+  [entry defn']
+  (cond-> entry
+    (seq (:display defn')) (assoc :display (:display defn'))))
+
+(defn- out-of-state-entry [rdef defn' state]
+  (let [states (sort (:from defn'))
+        ;; the way there, shared with the invoke's wrong-state refusal
+        roads (machine/roads rdef defn' state)]
     ;; humanized state labels: reasons are prose, not tokens; the
     ;; machine-readable states ride becomes_available
-    {:reason (str "Available in state(s) "
-                  (str/join ", " (map summary/state-label states))
-                  "; the resource is " (summary/state-label state) ".")
-     :becomes-available {:in-states (mapv name states)}}))
+    (cond-> {:reason (str "Available in state(s) "
+                          (str/join ", " (map summary/state-label states))
+                          "; the resource is " (summary/state-label state) ".")
+             :becomes-available {:in-states (mapv name states)}}
+      (seq roads) (assoc :remedies roads))))
 
 (defn action-availability
   "Is one named action OPEN on this row right now, for the principal
@@ -409,7 +422,10 @@
 
   → `{:status :available}`, `{:status :unavailable :reason \"…\"
   :denier <the guard that said so, or nil>}`, `{:status :hidden}`, or
-  nil when this kind declares no such non-bulk action.
+  nil when this kind declares no such non-bulk action. An unavailable
+  answer carries `:remedies` when the refusal names a way out: the
+  denier's own, or, out of state, the row's doors that lead to a state
+  where this one opens.
 
   THE DENIER RIDES ALONG because a caller may need to know WHAT KIND
   of shut it is, and a guard's own `:reads` is the honest way to ask:
@@ -447,14 +463,17 @@
                            {:status :unavailable
                             :reason (:reason (no-admissible-entry defn' field))}
                            {:status :available})
-              :unavailable {:status :unavailable
-                            :reason (g/render-reason denier deny row)
-                            :denier denier}
+              :unavailable (cond-> {:status :unavailable
+                                    :reason (g/render-reason denier deny row)
+                                    :denier denier}
+                             (seq (g/remedy-doors denier))
+                             (assoc :remedies (g/remedy-doors denier)))
               :hidden {:status :hidden}))
           (if (probe-hidden-only? defn' row ctx)
             {:status :hidden}
-            {:status :unavailable
-             :reason (:reason (out-of-state-entry defn' state))}))))))
+            (let [entry (out-of-state-entry rdef defn' state)]
+              (cond-> {:status :unavailable :reason (:reason entry)}
+                (:remedies entry) (assoc :remedies (:remedies entry))))))))))
 
 ;; ── parts: placed actions re-rendered per data item ─────────────────
 
@@ -684,14 +703,17 @@
   map (ctx-opts :resources) for target plurals. A truthy :embed
   advertises its EFFECTIVE :limit/:max-limit (declared, else the
   framework defaults) rather than a bare true, so a client can read
-  the grid affordance's bounds straight off the envelope."
+  the grid affordance's bounds straight off the envelope. A link that
+  declares :states is left out of a row in any other state."
   [rdef row resources link-doors]
   (into (seams/lent-links link-doors (:kind rdef) row)
-        (keep (fn [{:keys [rel summary badge embed] :as ld}]
-                (when-some [entry (cond
-                                    (:edge ld) (edge-link rdef row resources ld)
-                                    (:owns ld) (owns-link rdef row resources ld)
-                                    (:href ld) (template-link row ld))]
+        (keep (fn [{:keys [rel summary badge embed states] :as ld}]
+                (when-some [entry (when (or (nil? states)
+                                            (contains? states (some-> (:state row) name keyword)))
+                                    (cond
+                                      (:edge ld) (edge-link rdef row resources ld)
+                                      (:owns ld) (owns-link rdef row resources ld)
+                                      (:href ld) (template-link row ld)))]
                   [rel (cond-> entry
                          summary (assoc :summary summary)
                          embed (assoc :embed
@@ -813,17 +835,141 @@
 
 (def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
 
+(def ^:private uuid-shaped
+  #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+(defn- summary-ref-target
+  "[kind id] of the row one summary field's value names, nil when it
+  names none: a plain `:kind` ref, a `{:kind-from f}` ref whose sibling
+  f holds the kind, or a `{:principal true}` ref spelled `kind:id`."
+  [props data v]
+  (let [xr (:x-ref props)]
+    (cond
+      (:kind props) [(:kind props) v]
+      (:kind-from xr) (when-some [k (get data (:kind-from xr))]
+                        [(keyword (name k)) v])
+      (:principal xr) (let [[k id] (str/split v #":" 2)]
+                        (when (and id (not (str/blank? k)))
+                          [(keyword k) id])))))
+
+(defn- name-summary-refs
+  "The row with each ref field its summary template reads holding the
+  NAME of the row it mentions instead of its id (ticket 2f35a7b5): the
+  head of the target's own summary line, as the ctx-opts hook
+  (fn [kind id]) → {:summary …} answers it — one instance a request,
+  so a page of N rows naming one seat reads that seat once. A ref the
+  hook does not answer (deleted, outside the reader's grant) reads
+  `<kind> 1a2b3c4d`, never the whole uuid. A hashed field is a token,
+  not an id, and is left alone; no hook, no change."
+  [rdef row hashed ref-summary]
+  (if-not ref-summary
+    row
+    (let [entries (schema/entry-map (:schema rdef))
+          data (:data row)]
+      (reduce
+       (fn [row [_ f]]
+         (let [f (keyword f)
+               v (get data f)
+               v (if (uuid? v) (str v) v)
+               [kind id] (when (and (string? v)
+                                    (not (contains? (or hashed #{}) f)))
+                           (summary-ref-target
+                            (:properties (get entries f)) data v))]
+           (if-not kind
+             row
+             (let [line (:summary (ref-summary kind id))
+                   label (if (string? line)
+                           (first (str/split line #" · " 2))
+                           (when (re-matches uuid-shaped id)
+                             (str (name kind) " " (subs id 0 8))))]
+               (cond-> row
+                 (not (str/blank? label)) (assoc-in [:data f] label))))))
+       row
+       (re-seq summary-data-token (str (:summary rdef)))))))
+
 (defn- project-summary
   "The honesty trap, closed (ns docstring): a summary template that
   reads a redacted field renders as the honest generic line, never as
-  the template over hidden values."
-  [rdef row redacted]
-  (if (and (seq redacted)
-           (some #(contains? redacted (keyword (second %)))
-                 (re-seq summary-data-token (str (:summary rdef)))))
-    (str (summary/state-label (:kind rdef)) " · "
-         (summary/state-label (:state row)))
-    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
+  the template over hidden values. A ref field the template reads is
+  named, not printed as an id (name-summary-refs)."
+  ([rdef row redacted hashed ref-summary]
+   (let [named #(assoc (name-summary-refs rdef row hashed ref-summary)
+                       :kind (:kind rdef))]
+     (cond
+       (and (seq redacted)
+            (some #(contains? redacted (keyword (second %)))
+                  (re-seq summary-data-token (str (:summary rdef)))))
+       (str (summary/state-label (:kind rdef)) " · "
+            (summary/state-label (:state row)))
+
+       ;; a :summary-fn reads fields its template does not name, so under
+       ;; ANY redaction the template answers and the composer does not
+       (seq redacted)
+       (summary/render (:summary rdef) (named))
+
+       :else
+       (summary/line rdef (named)))))
+  ;; THE LINE A TEMPLATE CANNOT SAY (ticket ea061a48). A kind's
+  ;; :summary-line is `(fn [row ctx])` → the line, or nil for the
+  ;; template. It is asked only where a render lends its ctx-opts — the
+  ;; envelope — and reads the clock (:now) and other rows (:read), which
+  ;; the template grammar has neither of. It is handed the row WITHOUT
+  ;; its redacted fields, so it can say nothing the projection hides; a
+  ;; blank answer or a throw falls back to the template, and a read
+  ;; never fails because of it.
+  ([rdef row redacted hashed ref-summary ctx-opts]
+   (or (when-some [line (:summary-line rdef)]
+         (try
+           (some-> (line (cond-> row
+                           (seq redacted)
+                           (update :data #(apply dissoc % redacted)))
+                         {:now (:now ctx-opts)
+                          :read (or (:read ctx-opts)
+                                    (:read (:evidence-reads ctx-opts)))})
+                   str not-empty)
+           (catch Exception e
+             (binding [*out* *err*]
+               (println (str "waymark10 summary line [" (name (:kind rdef))
+                             "] failed on " (:id row) ": " (ex-message e))))
+             nil)))
+       (project-summary rdef row redacted hashed ref-summary))))
+
+(defn target-summary
+  "One row's summary line as THIS visibility may read it — the
+  envelope's own :summary without the probe, for the reader that only
+  wants the label of a row another row names (ticket 6ef1473c). The
+  same honesty holds: a template over a redacted or secret field
+  answers the generic line, over a hashed one its token."
+  [rdef row visibility]
+  (let [secret (not-empty (schema/secret-fields (:schema rdef)))
+        redacted (not-empty (into (set (redacted-fields rdef visibility))
+                                  secret))
+        hashed (not-empty (reduce disj (set (hashed-fields rdef visibility))
+                                  (or secret #{})))]
+    ;; a ref this row's own summary reads is not followed a second row
+    ;; deep: it reads `<kind> 1a2b3c4d`
+    (project-summary rdef (hash-view rdef row visibility hashed) redacted
+                     hashed (constantly nil))))
+
+(defn- ref-labels
+  "The envelope's `refs` block: for each plain `:kind` ref field this
+  reader holds a value in, the target's {:href :summary} as the
+  ctx-opts :ref-summary hook answers it. The hook answers nil for a
+  row the reader's grant does not admit, and that field is then ABSENT
+  — its id stays bare, exactly as a failed read would leave it. A
+  listed ref and a hashed one (a token, not an id) are left alone; no
+  hook, no block."
+  [rdef enc-data hashed ref-summary]
+  (when ref-summary
+    (into {}
+          (keep (fn [{:keys [field kind listed]}]
+                  (let [v (get enc-data field)]
+                    (when (and (not listed)
+                               (or (string? v) (uuid? v))
+                               (not (contains? hashed field)))
+                      (when-some [entry (ref-summary kind (str v))]
+                        [field entry])))))
+          (schema/ref-fields (:schema rdef)))))
 
 (defn- project-display
   "Top-level :display, resolved per row (the recorded demand, landed:
@@ -860,7 +1006,9 @@
   "The kind's :computed fields for one DECODED row, encoded as a
   stored field of the same schema would be; the ones this request
   conceals (redacted) are never computed. Each fn reads the row and a
-  read-only ctx (:read/:find — no writes, no invoke). A field that
+  read-only ctx (:read/:find — no writes, no invoke — and :rdef-of,
+  the registry consult a write's ctx carries, where the render lends
+  its :resources). A field that
   declares `:reads? true` renders nil when this render lends no :read:
   a wrong answer is worse than none (ticket 82589f6e). A throw prints
   one warning and the field renders nil: a read never fails because
@@ -869,7 +1017,13 @@
   (when-some [computed (not-empty (apply dissoc (:computed rdef) redacted))]
     (let [hooks (:evidence-reads ctx-opts)
           cctx {:read (or (:read ctx-opts) (:read hooks))
-                :find (or (:find ctx-opts) (:find hooks))}]
+                :find (or (:find ctx-opts) (:find hooks))
+                :rdef-of (when-some [rs (:resources ctx-opts)]
+                           (fn [token]
+                             (let [t (name token)]
+                               (or (get rs (keyword t))
+                                   (some (fn [[_ r]] (when (= t (:plural r)) r))
+                                         rs)))))}]
       (into {}
             (map (fn [[f {s :schema compute :fn reads? :reads?}]]
                    [f (when-some [v (when (or (not reads?) (:read cctx))
@@ -894,7 +1048,10 @@
   never narration) — :resources (batch A), the engine's kind map for
   link target plurals — and optionally :read/:find (ns docstring),
   the probe-reads hooks the probe ctx carries verbatim (:sum rides
-  beside them)."
+  beside them). :ref-summary (ticket 6ef1473c) is NOT one of those: it
+  is `(fn [kind id])` → {:href :summary} or nil, scoped to the
+  reader's grant, and when present the envelope carries a `refs` block
+  of {field {href, summary}} for its plain `:kind` refs (ref-labels)."
   [rdef row {:keys [principal now services visibility resources]
              :as ctx-opts}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
@@ -964,16 +1121,20 @@
                  :available
                  (if-some [field (empty-required-admission defn' row ctx)]
                    (assoc-in acc [:unavailable (:name defn')]
-                             (no-admissible-entry defn' field))
+                             (shut-display (no-admissible-entry defn' field)
+                                           defn'))
                    (assoc-in acc [:actions (:name defn')]
                              (action-entry defn' rdef self row ctx arg?)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
-                                        (unavailable-entry denier deny public-row))
+                                        (shut-display
+                                         (unavailable-entry denier deny public-row)
+                                         defn'))
                  :hidden acc))
              (if (probe-hidden-only? defn' row ctx)
                acc
                (assoc-in acc [:unavailable (:name defn')]
-                         (out-of-state-entry defn' state)))))
+                         (shut-display (out-of-state-entry rdef defn' state)
+                                       defn')))))
          {:actions {} :unavailable {}}
          resolved)
         ;; the engine-injected adopt (phase 5): a row living under an
@@ -997,7 +1158,13 @@
         ;; non-granted actions do not exist — dropped from both maps,
         ;; the engine-injected adopt included
         granted? (when visibility
-                   (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
+                   (let [on? (:action-on? visibility)]
+                     (fn [[aname _]]
+                       (and ((:action? visibility) (:kind rdef) aname)
+                            ;; an owner's door is drawn on the
+                            ;; owner's row alone
+                            (or (nil? on?)
+                                (on? (:kind rdef) aname (:id row)))))))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
         ;; hashed/hrow/public-row are built above the probe (the reasons
@@ -1036,13 +1203,19 @@
                   field?)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
-        parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)]
+        parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)
+        ;; the ref labels read over enc-data — what LEFT the building —
+        ;; so a redacted ref field names no target here either
+        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
               :self self
               :state (name state)
-              :summary (project-summary rdef hrow redacted)
+              :summary (project-summary rdef hrow redacted hashed
+                                        (or (:summary-refs ctx-opts)
+                                            (:ref-summary ctx-opts))
+                                        ctx-opts)
               :data enc-data
               :fields fields
               :actions actions
@@ -1054,6 +1227,7 @@
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
                       (:law-revision row) (assoc :law-revision (:law-revision row)))}
        (seq parts) (assoc :parts parts)
+       (seq refs) (assoc :refs refs)
        (:display rdef) (assoc :display (project-display rdef hrow redacted))))))
 
 (defn envelope-stub
@@ -1063,7 +1237,7 @@
   State, summary, links and meta stay — they cost nothing (and they
   project like the full envelope's: batch B's redaction holds at
   every depth)."
-  [rdef row {:keys [resources visibility link-doors]}]
+  [rdef row {:keys [resources visibility link-doors summary-refs]}]
   (let [secret (not-empty (schema/secret-fields (:schema rdef)))
         redacted (not-empty (into (set (redacted-fields rdef visibility))
                                   secret))
@@ -1076,7 +1250,7 @@
       :kind (name (:kind rdef))
       :self (str "/api/" (:plural rdef) "/" (:id row))
       :state (name (:state row))
-      :summary (project-summary rdef hrow redacted)
+      :summary (project-summary rdef hrow redacted hashed summary-refs)
       :actions nil
       :unavailable nil
       :links (render-links rdef public-row resources link-doors)
@@ -1086,7 +1260,8 @@
               (:law-revision row) (assoc :law-revision (:law-revision row)))})))
 
 (defn envelope-summary
-  "Depth summary: the full envelope minus data AND parts — state,
+  "Depth summary: the full envelope minus data, parts AND refs (a ref
+  label names a data field, so it leaves with data) — state,
   summary, fields (the bounded grid-column projection — envelope
   only ever dissocs \"data\"/\"parts\" here, so fields rides through
   unchanged), the COMPLETE actions/unavailable partition, links and
@@ -1096,4 +1271,4 @@
   [rdef row ctx-opts]
   (if (= :none (:rows ctx-opts))
     (envelope-stub rdef row ctx-opts)
-    (dissoc (envelope rdef row ctx-opts) "data" "parts")))
+    (dissoc (envelope rdef row ctx-opts) "data" "parts" "refs")))

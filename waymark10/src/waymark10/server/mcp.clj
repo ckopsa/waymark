@@ -137,6 +137,7 @@
             [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.client :as client]
+            [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
@@ -144,9 +145,11 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -154,6 +157,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.walks :as walks]
             [waymark10.text :as text]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -371,7 +375,8 @@
                           {:created now :touched now :bound nil
                            :app-ui (boolean (:app-ui declared))
                            :client-name (:client-name declared)
-                           :client-version (:client-version declared)}))))
+                           :client-version (:client-version declared)
+                           :client-caps (:client-caps declared)}))))
       id)))
 
 (defn touch-session!
@@ -524,7 +529,7 @@
 
 (defn- request
   "One ring request wearing the session's already-resolved identity."
-  [session method uri {:keys [query body headers]}]
+  [session method uri {:keys [query body headers conds]}]
   (cond-> {:request-method method
            :uri uri
            :headers (or headers {})
@@ -534,6 +539,8 @@
     ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
     (:sitting session) (assoc :waymark10/sitting (:sitting session))
     query (assoc :query-string query)
+    ;; store conds a collection read adds to its own (`walk-of`)
+    conds (assoc :waymark10/extra-conds conds)
     body (assoc :body (wire/write-json body))))
 
 (defn- body-text [resp]
@@ -639,6 +646,14 @@
   (let [wanted (p/wire-key (keyword action))]
     (some (fn [a] (when (= wanted (p/wire-key a)) a))
           (concat (keys (:actions rdef)) (:create-action-names rdef)))))
+
+(defn- collection-door
+  "The kind's safe collection door an agent named, in either spelling
+  (`declared-action`), as the collection document advertises it."
+  [rdef action]
+  (let [wanted (p/wire-key (keyword action))]
+    (some (fn [[dname door]] (when (= wanted (p/wire-key dname)) door))
+          (coll/collection-doors rdef))))
 
 (defn- wire-action
   "The action keyword as it comes back out of a parsed envelope."
@@ -855,6 +870,16 @@
                   :required ["kind"]
                   :additionalProperties false}})
 
+(def ^:private caption-arg
+  "The `caption` argument of the staged tools
+  (docs/spec-agent-demo-walks.md § 3)."
+  {:type "string"
+   :description (str "One line, at most 140 characters, about this step, "
+                     "for a self walk you are recording: it is written "
+                     "before the call's beats and stays until the next "
+                     "caption. An empty one clears it. With no recording "
+                     "walk it does nothing.")})
+
 (def ^:private query-tool
   {:name "waymark_query"
    :title "Query a collection"
@@ -892,6 +917,7 @@
                           :description "A declared sortable field; prefix with - for descending."}
                    :page_size {:type "integer" :minimum 1}
                    :page_number {:type "integer" :minimum 1}
+                   :caption caption-arg
                    :rows {:type "string" :enum ["none"]
                           :description "\"none\" returns totals and facets without the rows."}
                    :fields {:type "array" :items {:type "string"} :minItems 1
@@ -919,17 +945,23 @@
         "meta blocks. Use summary to read a row's values when you "
         "already know the kind's doors from waymark_schema; use "
         "envelope before acting, since the consequence sentence and "
-        "each action's availability on THIS row live only there.")
+        "each action's availability on THIS row live only there. "
+        "\"export\" is for a sealed walk: what its export file is — "
+        "format, header, frames, bytes, sha256, href — with its first "
+        "lines up to 64 KB and `truncated` when that was not all of "
+        "it. The whole file is read at href over HTTP.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
+                               :caption caption-arg
                                :depth {:type "string" :enum ["full" "summary"]
                                        :description "summary drops data and parts."}
-                               :return {:type "string" :enum ["envelope" "summary"]
+                               :return {:type "string" :enum ["envelope" "summary" "export"]
                                         :description (str "envelope (default): the row's "
                                                           "document, byte for byte. summary: "
                                                           "id/kind/state/summary/data only, "
-                                                          "without the actions block.")}}
+                                                          "without the actions block. export: "
+                                                          "a sealed walk's file, described.")}}
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
@@ -962,7 +994,16 @@
         "whose doors you know; use envelope when the next step "
         "depends on what the row affords after the move. A refusal, "
         "a dry_run verdict and a bulk report come back the same under "
-        "both.")
+        "both.\n\n"
+        "at: do this LATER. With `at` the call is not made: the engine "
+        "checks it now as it would judge it now, stores it as a "
+        "scheduled_action, and answers {scheduled, scheduled_action, "
+        "run_at, zone, validity, summary} — an answer, not a refusal. "
+        "What the door would refuse now is refused now, with the door's "
+        "own sentence. dry_run with `at` rehearses that check and "
+        "writes nothing. One row or one create at a time: `at` with "
+        "ids or items is refused. Cancel or reschedule it on the "
+        "scheduled_action row.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string"}
@@ -1003,6 +1044,11 @@
                                                 "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
+                   :caption caption-arg
+                   :caption_field {:type "string"
+                                   :description (str "With caption: one argument of the "
+                                                     "action, not a secret one. The caption "
+                                                     "is shown beside that field.")}
                    :if_version {:type "string"
                                 :description (str "The version you read: the row's etag or "
                                                   "meta.version. An edit door then refuses "
@@ -1014,6 +1060,39 @@
                    :dry_run {:type "boolean"
                              :description (str "Rehearse: validate schema and guards, "
                                                "write nothing, answer a verdict.")}
+                   :at {:type "string"
+                        :description (str "When to make this call instead of now: RFC 3339 "
+                                          "with an offset (2026-10-02T08:30:00-06:00), or a "
+                                          "local date and time (2026-10-02T08:30) read in "
+                                          "`zone`. At least one minute and at most 366 days "
+                                          "ahead. The engine never guesses UTC.")}
+                   :zone {:type "string"
+                          :description (str "With at: the IANA zone a local time is written "
+                                            "in and shown in, e.g. America/Denver. Left out, "
+                                            "a local time is read in the zone on your member row.")}
+                   :validity {:type "string" :enum ["strict" "state" "conditions"]
+                              :description (str "With at: what must still hold at the time. "
+                                                "state (default): the row is still in the state "
+                                                "it is in now. strict: nothing about the row "
+                                                "changed since. conditions: state, and every "
+                                                "entry of `conditions` holds.")}
+                   :conditions {:type "object"
+                                :description (str "With at and validity conditions: your own "
+                                                  "conditions over the row's fields, as the map "
+                                                  "waymark_query takes as `filter` for that kind "
+                                                  "(priority_gte: \"2\"). All must hold at the "
+                                                  "time, or the call is skipped. Not for a create.")}
+                   :expect_state {:type "string"
+                                  :description (str "With at: the state the row is expected to be "
+                                                    "in at the time, when it is not in it now.")}
+                   :expect_refusals {:type "array" :items {:type "string"}
+                                     :description (str "With at: guard names, as a refusal spells "
+                                                       "them, that would refuse the call now and "
+                                                       "are expected to lift by its time.")}
+                   :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                                   :description (str "With at: how late the run may be when the "
+                                                     "engine was down at its time. An hour unless "
+                                                     "said, a day at most.")}
                    :acknowledge {:type "string"
                                  :description (str "The consequence sentence, echoed "
                                                    "exactly — required when "
@@ -1250,7 +1329,29 @@
                  (str "Cut each text part at this many characters. Say 4000 "
                       "for a mail message: it is enough to decide with, and "
                       "you can ask again for the whole of the one message "
-                      "that needs it.")}}
+                      "that needs it.")}
+     :at {:type "string"
+          :description
+          (str "When to make this call instead of now: RFC 3339 with an "
+               "offset (2026-10-02T08:30:00-06:00), or a local date and "
+               "time (2026-10-02T08:30) read in `zone`. The call is not "
+               "made: it is stored as a scheduled_action, and the answer "
+               "is {scheduled, scheduled_action, run_at}. A tool that "
+               "waits on a person is approved now, for that time.")}
+     :zone {:type "string"
+            :description
+            (str "With at: the IANA zone a local time is written in and "
+                 "shown in, e.g. America/Denver.")}
+     :validity {:type "string" :enum ["strict" "state"]
+                :description
+                (str "With at: what must still hold at the time. state "
+                     "(default): the tool is still among your powers and "
+                     "its server is serving. strict: and the server's row "
+                     "has not changed since.")}
+     :grace_seconds {:type "integer" :minimum 0 :maximum 86400
+                     :description
+                     (str "With at: how late the run may be when the engine "
+                          "was down at its time. An hour unless said.")}}
     :required ["tool"]
     :additionalProperties false}})
 
@@ -1267,14 +1368,18 @@
 (defn app-declaration
   "What an `initialize` said about its client, as the session entry
   keeps it: whether the io.modelcontextprotocol/ui extension names
-  `app-mime`, and the clientInfo, so a person can read what a host says."
+  `app-mime`, and the clientInfo, so a person can read what a host says.
+  `:client-caps` is the shape of everything it declared, for the client
+  whose `:app-ui` is false: of clientInfo only the name and the version
+  are kept, and of the capabilities no value but the extension lists."
   [params]
   (let [mimes (get-in params [:capabilities :extensions
                               (keyword "io.modelcontextprotocol/ui") :mimeTypes])]
     {:app-ui (boolean (and (sequential? mimes)
                            (some #(= app-mime (str %)) mimes)))
      :client-name (some-> (get-in params [:clientInfo :name]) str)
-     :client-version (some-> (get-in params [:clientInfo :version]) str)}))
+     :client-version (some-> (get-in params [:clientInfo :version]) str)
+     :client-caps (sessions/caps-shape (:capabilities params))}))
 
 (defn- app-session?
   "Does this session get the app tools? Its client declared the
@@ -1344,9 +1449,11 @@
 
 (def ^:private app-fragments
   "The page's ordered fragments, by ui_assembly.clj's pattern; the look
-  is the generic UI's own 020-base.css, by path."
+  is the generic UI's own 020-base.css, by path, and the page's own
+  030-app.css over it, which names that file's tokens and no colour."
   ["waymark10/mcp_app/010-head.html"
    "waymark10/ui/020-base.css"
+   "waymark10/mcp_app/030-app.css"
    "waymark10/mcp_app/050-shell.html"
    "waymark10/mcp_app/100-bridge.js"
    "waymark10/ui/900-tail.html"])
@@ -1438,7 +1545,9 @@
         ;; the powers a scope entry may NARROW, and by which fields
         ;; (waymark-fp62.6.3.5). A token absent from this map takes no
         ;; filter at all, so an agent asks for it whole or not at all.
-        constraints (gate/power-constraints eng)]
+        constraints (gate/power-constraints eng)
+        ;; and the fields among them whose filter values are globs
+        globs (gate/power-glob-constraints eng)]
     (cond-> {:posture (str "When something your task needs is absent, file "
                            "an approval_request now — anchored, for "
                            "everything at once — rather than reporting "
@@ -1459,6 +1568,15 @@
                                     "the whole rig, and add one entry per "
                                     "narrowing you need; a power absent here "
                                     "takes no filter at all"))
+      (seq globs)
+      (assoc :glob_constraints globs
+             :glob_constraints_note (str "the constraint fields whose "
+                                         "`filter` value may be a glob "
+                                         "(automation.school_*), in the "
+                                         "path's own grammar; `path` "
+                                         "always takes globs, and every "
+                                         "other field matches exact "
+                                         "comma-separated values"))
       (and vis (:grant vis))
       (assoc :anchor {:grant_id (:grant-id vis)
                       :note (str "the grant you are wearing — pass it as "
@@ -1544,8 +1662,254 @@
                                  (action-digest vis rdef a))))
                        (machine/actions-seq rdef))
         :create (into [] (map name) (:create-action-names rdef))
+        ;; the safe collection doors: waymark_invoke with the kind, the
+        ;; door's name as `action`, its input and no id
+        :collection_doors (into []
+                                (map (fn [[dname door]]
+                                       (assoc door :name (name dname))))
+                                (coll/collection-doors rdef))
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}))))
+
+;; ── staging (docs/spec-agent-demo-walks.md § 2) ─────────────────────
+;;
+;; While, and only while, the session's principal has a self walk in
+;; `recording`, the calls it already makes are shown: each reports to
+;; its own presence in process, the call `presence-report` makes for a
+;; browser, with `walks/self-recorder`'s tap built from the session's
+;; visibility. Nothing is posted over HTTP, no stream is opened, and
+;; nothing sleeps: the recording keeps the beats' true times and replay
+;; paces them (`REPLAY_BURST_GAP`). There is no tool for it and no
+;; argument that turns it on. Creating the self walk is the opt-in.
+
+(def ^:private typed-beats
+  "The most beats one staged dialog types. A call with more arguments
+  types all but the last beat one by one, and the rest in the last."
+  12)
+
+(defn- stage*
+  "What a staged beat needs, {:reg :principal :tap :visible? :summary-of}, or nil
+  when this call makes no beat: the engine's presence registry is not
+  running, the session is anonymous, the kind is the recording's own
+  (`walks/record-own!`'s rule), or the principal is recording no self
+  walk. It never throws."
+  [eng session rdef]
+  (try
+    (let [principal (:principal session)
+          reg (some-> (:runtime eng) deref :presence)]
+      (when (and reg principal
+                 (not= (:id t/anonymous) (:id principal))
+                 (not (contains? #{"walk" "walk_frame"}
+                                 (some-> (:kind rdef) name)))
+                 (walks/recording-own? eng principal))
+        (when-some [rec (walks/self-recorder eng principal (:visibility session))]
+          {:reg reg
+           :principal principal
+           :tap (:presence rec)
+           :visible? (presence/self-visible? eng (:visibility session))
+           ;; a ref's row by its summary line, as the session may read it
+           :summary-of (let [read (walks/ref-summaries eng (:visibility session))]
+                         (fn [k id] (:summary (read k id))))})))
+    (catch Exception _ nil)))
+
+(defn- beat!
+  "One staged beat: `self`, and a `ui` part when the call shows one. A
+  self the session could not GET makes none: the gate `presence-report`
+  keeps for a browser on a private kind, kept for every kind here. It
+  never throws: a walk that could not take a frame does not fail the
+  call it shows. `since`, {:from self}, is where the gaze was before
+  the call (`gaze-before`), for a call whose own read moves it."
+  ([st self ui] (beat! st self ui nil))
+  ([{:keys [reg principal tap visible?]} self ui since]
+  (try
+    (when (visible? self)
+      (presence/report! reg principal self ui tap since))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp staging: a beat was not reported -"
+                 (ex-message e)))))
+  nil))
+
+(defn- gaze-before
+  "Where the stage's principal is looking now, as {:from self}, read
+  before a call whose route marks the gaze itself: a grant-scoped GET
+  is its caller's gaze already (`presence/read!`), and that door has no
+  tap, so the beat after it would find the gaze on the row and the walk
+  would take no `move`. It never throws."
+  [{:keys [reg principal]}]
+  (try
+    {:from (presence/gaze reg (:id principal))}
+    (catch Exception _ nil)))
+
+(defn- sheet-close!
+  "The beat that closes the quest's sheet, when the stage's principal
+  has one open: a `ui` beat with no `quest` part, on the row the gaze is
+  on. With no sheet open it makes none. It never throws."
+  [{:keys [reg principal] :as st}]
+  (try
+    (when (presence/sheet reg (:id principal))
+      (when-some [self (presence/gaze reg (:id principal))]
+        (beat! st self {:dialog nil})))
+    (catch Exception _ nil))
+  nil)
+
+(defn- stage
+  "`stage*` for a call that is not the sheet's own: a quest's sheet a
+  rehearsal left open closes first, as Not now does on a person's
+  screen."
+  [eng session rdef]
+  (when-some [st (stage* eng session rdef)]
+    (sheet-close! st)
+    st))
+
+(defn- quest-goal
+  "The goal a quest's create names in `input`, {:self :action} as the
+  page's tap spells it (the row's href with no query), or nil when the
+  input names no row's door."
+  [input]
+  (let [given (when (map? input)
+                (into {} (map (fn [[k v]] [(keyword (name k)) v])) input))
+        self (presence/normalize-self (:self given))
+        action (:action given)]
+    (when (and (string? self) (str/starts-with? self "/api/")
+               (or (string? action) (keyword? action))
+               (seq (name action)))
+      {:self (first (str/split self #"\?")) :action (name action)})))
+
+(defn- stage-sheet!
+  "A rehearsed quest create's beat: the quest's sheet, as the page's tap
+  on a shut door reports it (questSheet, ui/140-links-access.js). The
+  gaze moves to the goal's row and the `ui` beat carries `quest`
+  {goal, label, seen {ok, body}}: the label is the goal door's own on
+  its row, and `body` is the rehearsal's `preview` or the refusal's
+  title and detail. An answer with neither makes no beat, and so does a
+  goal row the session could not GET (`beat!`). → `resp`, its body read
+  to text so the answer reads it again. It never throws."
+  [eng call session st goal since resp]
+  (let [resp (assoc resp :body (body-text resp))]
+    (try
+      (let [ok? (<= 200 (:status resp 500) 299)
+            body (body-json resp)
+            p (when ok? (:preview body))]
+        (when (or (map? p) (and (not ok?) (map? body)))
+          (let [env-resp (call (request session :get (:self goal) {}))
+                entry (when (<= 200 (:status env-resp 500) 299)
+                        (get-in (body-json env-resp)
+                                [:unavailable (wire-action (keyword (:action goal)))]))
+                label (or (get-in entry [:display :label])
+                          (presence/door-label eng (:self goal) (:action goal)))
+                shut (or (:shut_reason p) (:reason entry))
+                seen (if ok?
+                       {:ok true
+                        :body {:preview
+                               (cond-> (assoc (select-keys p [:goal :blocked_reason
+                                                              :plan_is_estimate])
+                                              :plan (mapv presence/sheet-step
+                                                          (filter map? (:plan p))))
+                                 shut (assoc :shut_reason shut))}}
+                       {:ok false :body (select-keys body [:title :detail])})]
+            (beat! st (:self goal)
+                   {:quest (cond-> {:goal goal :seen seen}
+                             (string? label) (assoc :label label))}
+                   since))))
+      (catch Exception _ nil))
+    resp))
+
+(defn- typed-steps
+  "The `fields` of each typing beat, in order: each adds one value, and
+  past `typed-beats` arguments the last adds all that are left."
+  [given ks]
+  (let [n (count ks)]
+    (map #(select-keys given (take % ks))
+         (if (> n (long typed-beats))
+           (concat (range 1 typed-beats) [n])
+           (range 1 (inc n))))))
+
+(defn- stage-dialog!
+  "An invoke's beats before its write: the gaze moves to `self`, the
+  form opens with no value, and each argument is typed in the order of
+  the action's input schema (`presence/typed-keys`, which leaves a
+  secret one out). A create's `self` is the collection, and its form is
+  the kind's create. When the last beat already shows this form with
+  these values (a rehearsal typed them, or a refused call left them),
+  nothing is typed again. Each typing beat names in `focus` the
+  argument it adds (the last of them, when it adds several), so a
+  replay lights that field. A typing beat also carries `labels`: the
+  summary line of the row each ref argument it shows names, as the
+  session may read it (`presence/ref-labels`), so a replay names the
+  row and not its id. A row the session may not see has no label. An
+  action the kind does not declare opens no form, and only the gaze
+  moves."
+  [eng st self aname input]
+  (let [dialog {:self self :action (name aname)}
+        ks (presence/typed-keys eng self (name aname) input)
+        given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
+        labels (when ks
+                 (try (presence/ref-labels eng self (name aname)
+                                           (select-keys given ks) (:summary-of st))
+                      (catch Exception _ nil)))
+        typed (fn [fields]
+                (let [named (not-empty (select-keys labels (keys fields)))]
+                  (cond-> {:dialog dialog :fields fields}
+                    named (assoc :labels named))))
+        shown? (and ks
+                    (try (presence/shows? (:reg st) (:id (:principal st))
+                                          (assoc (typed (select-keys given ks))
+                                                 :focus (some-> (last ks) name)))
+                         (catch Exception _ false)))]
+    (if (or (nil? ks) shown?)
+      (beat! st self nil)
+      (do (beat! st self {:dialog dialog :fields {}})
+          (doseq [fields (typed-steps given ks)]
+            (beat! st self (assoc (typed fields)
+                                  :focus (name (nth ks (dec (count fields)))))))))))
+
+(defn- stage-close!
+  "The beat after a write that landed: the form closes. A refused call
+  and a rehearsal make none, so the form stays open with what was
+  typed, as it would on a person's screen."
+  [st self]
+  (beat! st self {:dialog nil}))
+
+(defn- lift-caption
+  "An invoke's `caption` and `caption_field` may also ride inside `input`
+  (docs/spec-agent-demo-walks.md § 3): a client holding a tool list from
+  before the two arguments shipped cannot send them beside it. → `args`
+  with each one moved out of `input`; the one beside `input` wins when
+  the call carries both. A key the door's own input declares is the
+  door's argument and stays where it is."
+  [rdef aname {:keys [input] :as args}]
+  (let [form (or (get-in rdef [:actions aname :input]) (:schema rdef))
+        declared (when (vector? form)
+                   (into #{} (comp (filter vector?) (map first) (filter keyword?))
+                         (rest form)))
+        lifted (when (map? input)
+                 (into [] (comp (filter #(#{"caption" "caption_field"} (name %)))
+                                (remove #(contains? declared (keyword (name %)))))
+                       (keys input)))]
+    (reduce (fn [a k]
+              (let [top (keyword (name k))]
+                (cond-> (update a :input dissoc k)
+                  (not (contains? a top)) (assoc top (get input k)))))
+            args lifted)))
+
+(defn- stage-caption!
+  "A call's `caption` (docs/spec-agent-demo-walks.md § 3): one `caption`
+  frame in the caller's recording self walk, written before the call's
+  beats and anchored to the step's own `self`: the screen for a query,
+  the row for a get, the form for an invoke, and beside `caption_field`
+  when the call names one. → nil, or the refusal when the caption
+  cannot be shown (`walks/caption-problem`). With no recording self
+  walk the arguments are accepted and do nothing."
+  [eng session rdef self aname {:keys [caption caption_field]}]
+  (when (and (some? caption) (stage* eng session rdef))
+    (let [c {:self self :action (some-> aname name) :field caption_field
+             :text caption}]
+      (if-some [why (walks/caption-problem eng c)]
+        (refusal (p/problem :invalid-arguments 422 "That caption cannot be shown"
+                            {:detail why}))
+        (do (walks/caption! eng (:principal session) (:visibility session) c)
+            nil)))))
 
 (defn- query [eng call session args]
   (let [{:keys [kind page_size page_number rows]} args
@@ -1565,37 +1929,151 @@
                  (assoc "fields" (let [f (:fields args)]
                                    (if (string? f)
                                      f
-                                     (str/join "," (map str f))))))]
-    (answer
-     (call (request session :get (str "/api/" (:plural rdef))
-                    {:query (query-string params)}))
-     return
-     #(when (collection-doc? %) (collection-summary %)))))
+                                     (str/join "," (map str f))))))
+        self (str "/api/" (:plural rdef))
+        ;; captioned (§ 3): the line is written before the call's beats
+        refused (stage-caption! eng session rdef self nil args)
+        resp (when-not refused
+               (call (request session :get self {:query (query-string params)})))]
+    ;; staged (§ 2): the gaze goes to the collection, and its screen
+    ;; says what was asked. A query for totals alone shows nothing
+    (when (and (<= 200 (:status resp 500) 299)
+               (not= "none" (some-> rows str)))
+      (when-some [st (stage eng session rdef)]
+        (beat! st self
+               {:collection (cond-> {:self self}
+                              (map? (:filter args)) (assoc :filter (:filter args))
+                              (:sort args) (assoc :sort (str (:sort args)))
+                              (integer? page_number) (assoc :page page_number))})))
+    (or refused
+        (answer resp return #(when (collection-doc? %) (collection-summary %))))))
+
+;; return: export — a sealed walk's file, described and not carried
+;; (docs/spec-agent-demo-walks.md § 4). The export is a route and not an
+;; action, so no tool reached it. A megabyte of frames in a model's
+;; context is cost and no use, so the answer is the file's size, its
+;; digest and its first lines; `href` is where the whole of it is read.
+
+(def export-lines-cap
+  "How many bytes of a walk's export ride the answer as `lines`."
+  (* 64 1024))
+
+(defn- export-sha256 [^bytes bs]
+  (apply str (map #(format "%02x" %)
+                  (.digest (MessageDigest/getInstance "SHA-256") bs))))
+
+(defn- first-lines
+  "The first of `lines` that fit in `cap` bytes, each counted with its
+  newline."
+  [lines cap]
+  (let [cap (long cap)]
+    (loop [kept [] used 0 more (seq lines)]
+      (if-some [l (first more)]
+        (let [used (+ used 1 (alength (.getBytes ^String l StandardCharsets/UTF_8)))]
+          (if (> used cap)
+            kept
+            (recur (conj kept l) used (next more))))
+        kept))))
+
+(defn- export-digest
+  "What an agent needs to know about a walk's export, read off the
+  route's own bytes: `bytes` and `sha256` are of the whole file, and
+  `lines` is its first lines, the header line among them."
+  [href ^String text]
+  (let [bs (.getBytes text StandardCharsets/UTF_8)
+        all (str/split-lines text)
+        lines (first-lines all export-lines-cap)
+        header (try (j/read-value (first all) verbatim-mapper)
+                    (catch Exception _ nil))]
+    (array-map "format" (get header "format")
+               "header" header
+               "frames" (max 0 (dec (count all)))
+               "bytes" (alength bs)
+               "sha256" (export-sha256 bs)
+               "href" href
+               "lines" lines
+               "truncated" (< (count lines) (count all)))))
+
+(defn- not-sealed
+  "The refusal for an export of a walk that is not sealed. A recording
+  walk names `seal` as the remedy; a purged one has no frames left."
+  [state]
+  (p/problem
+   :wrong-state 409 "Wrong state"
+   (if (= "recording" state)
+     {:detail (str "Only a sealed walk exports; this walk is recording. "
+                   "Seal it first: waymark_invoke with kind \"walk\" and "
+                   "action \"seal\".")
+      :state state
+      :becomes-available {:in-states ["sealed"]}
+      :remedies ["walk.seal"]}
+     {:detail (str "Only a sealed walk exports; this walk is " state
+                   ", and its frames are gone.")
+      :state state})))
+
+(defn- walk-export
+  "`waymark_get` with `return: \"export\"`. The row is read first, so a
+  walk the session cannot see answers the row's own not-found; the
+  export is then the route's answer under the session's visibility,
+  the same bytes GET /api/walks/{id}/export gives."
+  [eng call session {:keys [kind id]}]
+  (let [rdef (rdef-of eng kind)]
+    (when-not (= walks/kind (:kind rdef))
+      (throw (p/problem :invalid-argument 422 "Invalid argument"
+                        {:detail (str "return: \"export\" reads a sealed walk; "
+                                      (name (:kind rdef)) " has no export.")
+                         :argument "return"
+                         :given "export"})))
+    (let [self (str "/api/" (:plural rdef) "/" id)
+          row (call (request session :get self {}))]
+      (if-not (<= 200 (:status row 500) 299)
+        (pass-through row)
+        (let [state (str (get (verbatim-json row) "state"))]
+          (if (not= "sealed" state)
+            (refusal (not-sealed state))
+            (let [href (str self "/export")
+                  resp (call (request session :get href {}))]
+              (if (<= 200 (:status resp 500) 299)
+                (result (j/write-value-as-string
+                         (export-digest href (body-text resp))
+                         verbatim-mapper))
+                (pass-through resp)))))))))
 
 (defn- get-row [eng call session {:keys [kind id depth] :as args}]
-  (let [return (return-of args)
-        rdef (rdef-of eng kind)]
-    (answer
-     (call (request session :get (str "/api/" (:plural rdef) "/" id)
-                    {:query (when depth (query-string {"depth" (str depth)}))}))
-     return
-     #(when (row-doc? %) (row-summary %)))))
+  (if (= "export" (some-> (:return args) str))
+    (walk-export eng call session args)
+    (let [return (return-of args)
+          rdef (rdef-of eng kind)
+          self (str "/api/" (:plural rdef) "/" id)
+          ;; captioned (§ 3): the line is written before the call's beat
+          refused (stage-caption! eng session rdef self nil args)
+          ;; staged (§ 2): the stage is set before the read, which moves
+          ;; a scoped caller's gaze with no frame (`gaze-before`)
+          st (when-not refused (stage eng session rdef))
+          since (some-> st gaze-before)
+          resp (when-not refused
+                 (call (request session :get self
+                                {:query (when depth (query-string {"depth" (str depth)}))})))]
+      ;; the gaze goes to the row that was read
+      (when (and st (<= 200 (:status resp 500) 299))
+        (beat! st self nil since))
+      (or refused
+          (answer resp return #(when (row-doc? %) (row-summary %)))))))
 
 ;; the confirm gate — the one refusal this namespace issues in its own
 ;; voice, and the reason the spec calls MCP a safety surface rather
 ;; than a convenience: the engine already computes the sentence, and
 ;; echoing it is the price of a dangerous verb.
 
-(defn- consequence-of
+(def ^:private consequence-of
   "The confirm gate's text, read off the row's own rendered entry — the
   declaration's `:consequence` rides the wire as display.description,
   a per-origin map already resolved against this row's state. Same
   accessor waymark10.client uses, and it must stay the same one: two
-  readings of one sentence is a gate that can be walked around."
-  [entry]
-  (or (get-in entry [:display :description])
-      (get-in entry [:display :label])
-      "This action requires confirmation."))
+  readings of one sentence is a gate that can be walked around. It is
+  `confirm/consequence-of`, which a namespace this one requires may
+  call without requiring this one."
+  confirm/consequence-of)
 
 (defn- confirm-refusal [aname sentence given]
   (p/problem
@@ -1773,8 +2251,9 @@
   reaches this one for approval_request, which is how it asks for
   everything else — so the create verb had to be reachable, and
   `waymark_invoke` with no id is where it went rather than a seventh
-  tool."
-  [call session rdef aname input dry-run warnings return]
+  tool. `seen`, when given, is shown the route's answer before it is
+  read and answers the one to read (`stage-sheet!`)."
+  [call session rdef aname input dry-run warnings return & [seen]]
   (let [names (set (map p/wire-key (:create-action-names rdef)))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
@@ -1783,15 +2262,16 @@
                                         (pr-str (mapv name (:create-action-names rdef)))
                                         ", not " (pr-str (name aname)) ".")}))
       (answer
-       (call (request session :post (str "/api/" (:plural rdef))
-                      {:body (or input {})
-                       :query (when dry-run "dry_run=1")
-                       :headers (cond-> {"idempotency-key"
-                                         (origin-key (get-in session [:principal :id])
-                                                     (random-uuid))}
-                                  (seq warnings)
-                                  (assoc "waymark-acknowledge"
-                                         (str/join "," (map name warnings))))}))
+       ((or seen identity)
+        (call (request session :post (str "/api/" (:plural rdef))
+                       {:body (or input {})
+                        :query (when dry-run "dry_run=1")
+                        :headers (cond-> {"idempotency-key"
+                                          (origin-key (get-in session [:principal :id])
+                                                      (random-uuid))}
+                                   (seq warnings)
+                                   (assoc "waymark-acknowledge"
+                                          (str/join "," (map name warnings))))})))
        return
        #(when (row-doc? %) (invoke-summary aname nil %))))))
 
@@ -1911,6 +2391,77 @@
                            :headers (invoke-headers session nil nil
                                                     acknowledge_warnings)}))))))))
 
+(def ^:private schedule-keys
+  "The scheduler's fields `waymark_invoke` carries beside `at` (R-7.2),
+  spelled as the scheduled_action create spells them."
+  [:zone :validity :conditions :expect_state :expect_refusals :grace_seconds
+   :acknowledge :acknowledge_warnings])
+
+(defn- in-zone
+  "An instant as the wire spells it, written on the clock of `zone`: a
+  scheduler reads its own time and not UTC (R-7.2). What this cannot
+  read is answered as it came."
+  [run-at zone]
+  (try
+    (.format java.time.format.DateTimeFormatter/ISO_OFFSET_DATE_TIME
+             (.atZone (java.time.Instant/parse (str run-at))
+                      (java.time.ZoneId/of (str zone))))
+    (catch Exception _ run-at)))
+
+(defn- schedule-call
+  "`at` on waymark_invoke, and on waymark_power with `{tool}` for its
+  target (docs/spec-scheduled-actions.md R-7.2, R-4.4): the
+  call is not made. It is written as a scheduled_action create — the
+  kind, the action and the id become its `target`, `at` its `run_at` —
+  and POSTed to that kind's own collection, so the scheduling check,
+  the zone rules, the limits and the grant are judged by the one door
+  that judges them, and its refusal comes back as it wrote it.
+
+  The answer to a stored call is an ANSWER, not a refusal: the row's
+  id, `run_at` on the scheduler's clock, the rule and the summary line.
+  `dry_run` rehearses the same create and passes its verdict through.
+  Many rows at once are refused here: a scheduled bulk call is a
+  scheduled job, and that is its own design.
+
+  The create carries the sitting this session is bound to, as an
+  invoke does, so the stored call is that sitting's act and its answer
+  is one served answer on it. The run at `run_at` counts on no sitting
+  (R-4.2)."
+  [eng call session target {:keys [ids items at input dry_run] :as args}]
+  (if (or ids items)
+    (refusal (p/problem :invalid-arguments 422 "One call at a time"
+                        {:detail (str "`at` schedules one call: one row's action, or one create. "
+                                      "A scheduled bulk call is a scheduled job, which is not "
+                                      "built. Give `id` in place of ids or items, one call for "
+                                      "each row.")}))
+    (let [sdef (rdef-of eng "scheduled_action")
+          resp (call (assoc (request session :post (str "/api/" (:plural sdef))
+                                     {:body (cond-> (into {:target target
+                                                           :run_at at}
+                                                          (filter (comp some? val))
+                                                          (select-keys args schedule-keys))
+                                              input (assoc :input input))
+                                      :query (when dry_run "dry_run=1")
+                                      :headers {"idempotency-key"
+                                                (origin-key (get-in session [:principal :id])
+                                                            (random-uuid))}})
+                            :waymark10/sitting
+                            (bound-sitting eng (:mcp-session-id session))))
+          row (when (and (not dry_run) (<= 200 (:status resp 500) 299))
+                (body-json resp))
+          ;; the envelope carries the address, not the id
+          sid (id-of-self (:self row))]
+      (if sid
+        (value-result {:scheduled true
+                       :scheduled_action sid
+                       :run_at (in-zone (get-in row [:data :run_at])
+                                        (get-in row [:data :zone]))
+                       :zone (get-in row [:data :zone])
+                       :validity (get-in row [:data :validity])
+                       :summary (:summary row)})
+        ;; a refusal, or a rehearsal's verdict: the door's own words
+        (pass-through resp)))))
+
 (defn- invoke
   "Read the row, then move it.
 
@@ -1926,12 +2477,54 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id ids items action input dry_run acknowledge
-                            acknowledge_warnings if_version] :as args}]
+  [eng call session {:keys [kind id ids items action dry_run acknowledge
+                            acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
-        aname (or (declared-action rdef action) (keyword action))]
+        aname (or (declared-action rdef action) (keyword action))
+        ;; a caption inside `input` is the call's own (§ 3): it leaves
+        ;; `input` here, before the form is typed and the door judges it
+        args (lift-caption rdef aname args)
+        input (:input args)
+        ;; captioned (§ 3): the line is written before the call's beats,
+        ;; on the row's form, or on the collection for a create and a
+        ;; bulk call. The two arguments go no further than here
+        refused (stage-caption! eng session rdef
+                                (str "/api/" (:plural rdef)
+                                     (when (and id (not (or ids items)))
+                                       (str "/" id)))
+                                aname args)
+        args (dissoc args :caption :caption_field)]
     (cond
+      refused refused
+
+      ;; a safe collection door answers now and writes nothing, so there
+      ;; is no call to store for a later time: `at` is refused here, in
+      ;; this door's own sentence, before the scheduling door is asked
+      (and (some? at) (nil? id) (not (or ids items))
+           (collection-door rdef aname))
+      (refusal (p/problem :invalid-arguments 422 "Not a call to schedule"
+                          {:detail (str "`" (name aname) "` on " (name (:kind rdef))
+                                        " answers now and writes nothing, so it "
+                                        "cannot be scheduled with `at`. Call it "
+                                        "without `at`, at the time you want the "
+                                        "answer.")}))
+
+      ;; `at`: the call is stored for its time, not made (R-7.2)
+      (some? at)
+      (let [self (when-not (or ids items)
+                   (str "/api/" (:plural rdef) (when id (str "/" id))))
+            st (when self (stage eng session rdef))
+            _ (when st (stage-dialog! eng st self aname input))
+            res (schedule-call eng call session
+                               (cond-> {:kind (name (:kind rdef)) :action (name aname)}
+                                 id (assoc :id (str id)))
+                               args)]
+        ;; staged (§ 2): the scheduled_action it made is the write
+        (when (and st (not dry_run) (not (:isError res)))
+          (stage-close! st self))
+        res)
+
       (and (or ids items) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
                           {:detail (str "id names one row; ids and items name many. "
@@ -1945,10 +2538,54 @@
       ;; nothing to project there and the report passes through as
       ;; it is under both spellings
       (or ids items)
-      (bulk-rows call session rdef aname args)
+      (do
+        ;; staged (§ 2): the gaze goes to the collection, then the writes
+        (when-some [st (stage eng session rdef)]
+          (beat! st (str "/api/" (:plural rdef)) nil))
+        (bulk-rows call session rdef aname args))
+
+      ;; a safe collection door (:collection-doors): no row is read and
+      ;; none is moved, so the route's answer passes through as it is.
+      ;; `dry_run` changes nothing: the call writes nothing, so it is
+      ;; its own rehearsal
+      (and (nil? id) (collection-door rdef aname))
+      (pass-through
+       (call (request session :post (:href (collection-door rdef aname))
+                      {:body (or input {})})))
 
       (nil? id)
-      (create-row call session rdef aname input dry_run acknowledge_warnings return)
+      (let [self (str "/api/" (:plural rdef))
+            raw (stage* eng session rdef)
+            ;; staged (§ 2): a quest's create is the quest's sheet, not
+            ;; the quests create form. Rehearsed, it is the tap on the
+            ;; goal's shut door, and the sheet opens with what the
+            ;; rehearsal answered; made while that sheet is open, it is
+            ;; Accept, and the sheet closes after the write
+            goal (when (and raw (= "quest" (name (:kind rdef)))
+                            (contains? (set (map p/wire-key (:create-action-names rdef)))
+                                       (p/wire-key aname)))
+                   (quest-goal input))
+            preview? (boolean (and goal dry_run))
+            accept? (boolean
+                     (and goal (not dry_run)
+                          (= goal (try (:goal (presence/sheet (:reg raw)
+                                                              (:id (:principal raw))))
+                                       (catch Exception _ nil)))))
+            sheet? (or preview? accept?)
+            ;; any other create closes a sheet left open (Not now)
+            st (when raw (when-not sheet? (sheet-close! raw)) raw)
+            since (when preview? (gaze-before st))
+            ;; staged (§ 2): the form opens on the collection and is
+            ;; typed before the write, so a refusal leaves it open
+            _ (when (and st (not sheet?)) (stage-dialog! eng st self aname input))
+            res (create-row call session rdef aname input dry_run
+                            acknowledge_warnings return
+                            (when preview?
+                              #(stage-sheet! eng call session st goal since %)))]
+        ;; staged (§ 2): the create landed, so the form closes
+        (when (and st (not dry_run) (not (:isError res)))
+          (if accept? (sheet-close! st) (stage-close! st self)))
+        res)
 
       :else
       (let [self (str "/api/" (:plural rdef) "/" id)
@@ -1970,52 +2607,54 @@
                 fenced? (boolean
                          (or (get-in entry [:safety :fence])
                              (get-in rdef [:actions aname :safety :fence])))
-                sentence (consequence-of entry)]
+                sentence (consequence-of entry)
+                st (stage eng session rdef)]
+            ;; staged (§ 2): the form opens and is typed before the
+            ;; confirm gate and the write, so a refusal leaves it open
+            (when st (stage-dialog! eng st self aname input))
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
               (refusal (confirm-refusal aname sentence acknowledge))
-              (answer
-               ;; the sitting this session is bound to rides the request,
-               ;; so a wall judges THIS sitting and not the newest under
-               ;; the seat's shared grant (ticket 51dfd10b)
-               (call (assoc (request session :post
-                                     (or (:href entry) (str self "/-/" (name aname)))
-                                     {:body (or input {})
-                                      :query (when dry_run "dry_run=1")
-                                      :headers (cond-> (invoke-headers
-                                                        session fenced?
-                                                        (get-in env-resp [:headers "ETag"])
-                                                        acknowledge_warnings)
-                                                 ;; the version the CALLER read, not
-                                                 ;; this read's: an edit door holds
-                                                 ;; the write to it (ticket 5120da15)
-                                                 (some? if_version)
-                                                 (assoc "if-match" (str if_version)))})
-                            :waymark10/sitting
-                            (bound-sitting eng (:mcp-session-id session))))
-               return
-               ;; `from` and the changed set come off the row as READ —
-               ;; the same read the gate and the ETag came from
-               #(when (row-doc? %)
-                  (invoke-summary aname (verbatim-json env-resp) %))))))))))
+              ;; the sitting this session is bound to rides the request,
+              ;; so a wall judges THIS sitting and not the newest under
+              ;; the seat's shared grant (ticket 51dfd10b)
+              (let [resp (call (assoc (request session :post
+                                               (or (:href entry) (str self "/-/" (name aname)))
+                                               {:body (or input {})
+                                                :query (when dry_run "dry_run=1")
+                                                :headers (cond-> (invoke-headers
+                                                                  session fenced?
+                                                                  (get-in env-resp [:headers "ETag"])
+                                                                  acknowledge_warnings)
+                                                           ;; the version the CALLER read, not
+                                                           ;; this read's: an edit door holds
+                                                           ;; the write to it (ticket 5120da15)
+                                                           (some? if_version)
+                                                           (assoc "if-match" (str if_version)))})
+                                      :waymark10/sitting
+                                      (bound-sitting eng (:mcp-session-id session))))]
+                ;; staged (§ 2): the write landed, so the form closes
+                (when (and st (not dry_run) (<= 200 (:status resp 500) 299))
+                  (stage-close! st self))
+                (answer
+                 resp
+                 return
+                 ;; `from` and the changed set come off the row as READ —
+                 ;; the same read the gate and the ETag came from
+                 #(when (row-doc? %)
+                    (invoke-summary aname (verbatim-json env-resp) %)))))))))))
 
 ;; ── waymark_pursue (GRAIL 3/3): a goal in one call ──────────────────
 
-(defn- pursue-session
-  "A waymark10.client session whose transport is this door, wearing the
-  caller's identity exactly as `invoke` does: the resolved principal
-  and visibility, the bound sitting on every request, and
-  `origin-key`'s signature on every POST. So each step the pursuit
-  takes is an ordinary invoke — judged by the caller's grant, counted
-  on the caller's sitting — and nothing the caller could not do by
-  hand."
-  [eng call session]
-  (let [ident (-> (request session :get "/" {})
-                  (assoc :waymark10/sitting
-                         (bound-sitting eng (:mcp-session-id session)))
-                  (select-keys [:waymark10/principal :waymark10/visibility
-                                :waymark10/sitting]))
-        pid (get-in session [:principal :id])]
+(defn- door-session
+  "A waymark10.client session whose transport is this door, wearing
+  `ident` — the resolved `:waymark10/principal`, and the
+  `:waymark10/visibility` and `:waymark10/sitting` when there are any —
+  on every request, and `origin-key`'s signature on every POST. The one
+  builder under `pursue-session` (a request's caller) and `rehearse` (a
+  caller rebuilt from ids), so the two cannot come to differ."
+  [call ident]
+  (let [pid (get-in ident [:waymark10/principal :id])]
     (client/connect
      "mcp:"
      {:presence false
@@ -2025,6 +2664,77 @@
                          (update :headers assoc "idempotency-key"
                                  (origin-key pid (or (get-in req [:headers "idempotency-key"])
                                                      (random-uuid)))))))})))
+
+(defn- pursue-session
+  "The door's session wearing the caller's identity exactly as `invoke`
+  does: the resolved principal and visibility, and the bound sitting on
+  every request. So each step the pursuit takes is an ordinary invoke —
+  judged by the caller's grant, counted on the caller's sitting — and
+  nothing the caller could not do by hand."
+  [eng call session]
+  (door-session
+   call
+   (-> (request session :get "/" {})
+       (assoc :waymark10/sitting
+              (bound-sitting eng (:mcp-session-id session)))
+       (select-keys [:waymark10/principal :waymark10/visibility
+                     :waymark10/sitting]))))
+
+(defn rehearse
+  "GRAIL's rehearsal for a caller named by ids, outside a request: what
+  a durable consumer calls, since it hears a principal id and holds no
+  session. `self` is the href the goal starts from (a row's, or a
+  collection's for a create) and `action` a door it advertises. Answers
+  `client/pursue!`'s `:dry-run true` answer — `{:writes :blocked-on
+  :stack :rehearsal :first-estimate}` — and writes nothing; a start the
+  caller cannot read answers `{:stopped res}` in the same shape.
+
+  The caller is rebuilt as the router would resolve it. The principal
+  is `members/principal-for`'s, so its roles are the member's own, read
+  now. With no grant it wears `grants/unscoped-visibility`, which is
+  `wrap-identity`'s own else-branch: nothing for a person, the worn
+  grant or the bootstrap surface for an agent. With a grant id it wears
+  `grants/visibility` for that grant, as the model its seat is held for
+  when the grant cites one (`grants/as-the-seats-sitter`): no session is
+  here to declare it. The router lets a dead grant
+  through as a scope of nothing; here it is refused by name, because a
+  plan of nothing would read as a goal with no way to it. No sitting
+  rides: a rehearsal counts on nobody's.
+
+  `opts` may carry `:dry-run :partial`, which is `client/pursue!`'s: a
+  goal whose input lacks a required field is rehearsed all the same,
+  and answers the fields it still needs.
+
+  Throws a problem: 404 when nobody named `principal` is a member, 403
+  when the grant is gone, another's, unaccepted, expired or revoked, and
+  the gate's own 403 for a suspended member."
+  [eng {:keys [principal grant]} self action input & [{:keys [dry-run]}]]
+  (let [who (or (members/principal-for eng principal)
+                (throw (p/problem :rehearse-no-such-member 404 "No such member"
+                                  {:detail (str "Nobody named " (pr-str principal)
+                                                " is a member here, so there is "
+                                                "nobody to rehearse as.")})))
+        gid (some-> grant str not-empty)
+        who (if gid (grants/as-the-seats-sitter eng gid who) who)
+        vis (if gid
+              (let [v (grants/visibility eng gid who)]
+                (when-not (:grant v)
+                  (throw (p/problem :rehearse-grant-not-live 403 "The grant confers nothing"
+                                    {:detail (str "Grant " (pr-str gid) " is gone, is "
+                                                  "not " (:id who) "'s, or is not "
+                                                  "accepted and unexpired now, so "
+                                                  "nothing can be rehearsed under it.")})))
+                v)
+              (grants/unscoped-visibility eng who))
+        cs (door-session (door eng)
+                         (cond-> {:waymark10/principal who}
+                           vis (assoc :waymark10/visibility vis)))
+        start (client/get-doc cs self)]
+    (if-not (client/doc? start)
+      ;; concealed, gone, or never here — the engine's own refusal
+      {:stopped start :writes [] :rehearsal true :first-estimate true}
+      (client/pursue! cs start (wire-action (keyword (name action))) input
+                      {:dry-run (if (= :partial dry-run) :partial true)}))))
 
 (defn- pursue
   "waymark_pursue: waymark10.client/pursue! over this door. A remedy
@@ -2631,6 +3341,12 @@
                     (get-in judgment [:data :verdicts]))
    "remedy_max" (get-in judgment [:data :remedy_max])})
 
+(def ^:private walk-pages-max
+  "The most pages of its queue one walk reads past the rows it
+  subtracts (ticket f175f8c5). A queue whose first page is all judged,
+  claimed or stuck rows has its free rows on a later one."
+  10)
+
 (defn- walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
@@ -2649,9 +3365,14 @@
 
   A SEAT THAT SAYS A JUDGMENT WALKS THE JUDGMENT'S QUEUE (R-4): the
   judgment's `queue` rides as the filter, the subjects already judged
-  are subtracted, and the answer carries the `judgment` block beside
-  the rows. The subtraction can empty a page, so that read asks for a
+  are left out by the store in that same query (`judgments/walk-conds`,
+  ticket 279366ee), and the answer carries the `judgment` block beside
+  the rows. The claimed and the stuck rows are subtracted after the
+  read. That subtraction can empty a page, so the read asks for a
   WHOLE page and the cap bites after the minus rather than before it.
+  It can empty that whole page too, so the read goes on to the queue's
+  next pages, `walk-pages-max` at most, until the rows are found or
+  the queue ends (ticket f175f8c5).
 
   nil when the seat walks nothing, when `walk` names a kind this
   engine does not serve, or when the read does not answer 2xx: a
@@ -2681,7 +3402,10 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed. A named OPEN ticket whose
+  row is not in the queue or is claimed. The read goes on through the
+  queue's pages until that row is seen or the queue ends, past
+  `walk-pages-max`: the row a fire named may sit on any page (ticket
+  59582777). A named OPEN ticket whose
   change is submitted is withheld as the plain walk withholds it
   (ticket 6ca380da).
 
@@ -2721,27 +3445,76 @@
                     (dissoc (str only)))
             subtract? (or judgment (seq claimed) (seq stuck))
             asked (if (or subtract? (seq held) only) coll/page-size-max n)
-            resp (call (request session :get (str "/api/" (:plural rdef))
-                                {:query (query-string
-                                         (cond-> {"page[size]" (str asked)}
-                                           judgment (merge (queue-params
-                                                            judgment))
-                                           walk-filter (merge
-                                                        (filter-params
-                                                         walk-filter))
-                                           only-state (assoc "state"
-                                                             only-state)))}))
-            doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
-        (when (collection-doc? doc)
+            params (cond-> {"page[size]" (str asked)}
+                     judgment (merge (queue-params judgment))
+                     walk-filter (merge (filter-params walk-filter))
+                     only-state (assoc "state" only-state))
+            ;; one page of the queue: the first is the request it has
+            ;; always been, and a later one names its number
+            ;; a judgment's queue is asked for less its judged subjects:
+            ;; the store answers that anti-join in the page's own query,
+            ;; so no page of judged rows is read (ticket 279366ee)
+            without (when judgment
+                      (not-empty (judgments/walk-conds eng judgment (:id seat))))
+            page (fn [k]
+                   (let [resp (call (request session :get (str "/api/" (:plural rdef))
+                                             {:query (query-string
+                                                      (cond-> params
+                                                        (> k 1) (assoc "page[number]"
+                                                                       (str k))))
+                                              :conds without}))
+                         doc (when (<= 200 (:status resp 500) 299)
+                               (verbatim-json resp))]
+                     (when (collection-doc? doc) doc)))
+            doc (page 1)]
+        (when doc
           (let [id-of #(id-of-self (get % "self"))
                 skip (if subtract?
-                       (into (into (set claimed) (keys stuck))
-                             (when judgment
-                               (judgments/judged-subjects eng (:id judgment))))
+                       (into (set claimed) (keys stuck))
                        #{})
-                items (cond->> (remove #(contains? skip (id-of %))
-                                       (get-in doc ["data" "items"]))
-                        only (filter #(= (str only) (id-of %))))
+                free? #(not (contains? skip (id-of %)))
+                ;; the subtraction can empty a whole page while free
+                ;; rows wait on the next, so the read goes on until the
+                ;; firing's rows are found or the queue ends (ticket
+                ;; f175f8c5). A named row is looked for on every page
+                ;; until it is seen: it is one row, and the cap on
+                ;; pages would hide it in a long queue (ticket 59582777)
+                named? #(= (str only) (id-of %))
+                total (long (or (get-in doc ["data" "total"]) 0))
+                ;; the answer's `total` stays the queue as the list page
+                ;; shows it, judged subjects and all: one count beside
+                ;; the read that left them out
+                queue-total (or (when without
+                                  (let [resp (call (request
+                                                    session :get
+                                                    (str "/api/" (:plural rdef))
+                                                    {:query (query-string
+                                                             (assoc params
+                                                                    "page[size]" "1"))}))
+                                        d (when (<= 200 (:status resp 500) 299)
+                                            (verbatim-json resp))]
+                                    (when (collection-doc? d)
+                                      (get-in d ["data" "total"]))))
+                                (get-in doc ["data" "total"]))
+                queue (loop [k 1
+                             acc (vec (get-in doc ["data" "items"]))]
+                        (if (or (>= (* k (long asked)) total)
+                                (if only
+                                  (some named? acc)
+                                  (or (not subtract?)
+                                      (>= (count (filter free? acc)) n)
+                                      (>= k (long walk-pages-max)))))
+                          acc
+                          (let [more (get-in (page (inc k)) ["data" "items"])
+                                seen (into #{} (map id-of) acc)]
+                            (if (empty? more)
+                              acc
+                              (recur (inc k)
+                                     (into acc
+                                           (remove #(contains? seen (id-of %)))
+                                           more))))))
+                items (cond->> (filter free? queue)
+                        only (filter named?))
                 ;; the rows this sitting already walks, while they are
                 ;; still in the queue, are kept first and the queue's
                 ;; next rows fill what room is left: a re-sit is handed
@@ -2768,10 +3541,10 @@
                                            (contains? claimed? id)
                                            {"id" id
                                             "reason" "another open sitting of this seat holds it"}))))
-                               (get-in doc ["data" "items"]))]
+                               queue)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
-                     "total" (get-in doc ["data" "total"])
+                     "total" queue-total
                      "rows" (mapv walk-row items)}
               judgment (assoc "judgment" (judgment-block judgment))
               (seq withheld) (assoc "withheld" withheld))))))))
@@ -2827,13 +3600,53 @@
                      " the window rolls.")
        "lifts_at" (some-> (seat-routes/lifts-at eng seat now) str)})))
 
+(defn- walk-filter-left-out
+  "What the walk's filter left out of an empty walk (ticket 6ea8f277):
+  the walked kind read once more AS THE SITTER with the filter taken
+  off — the judgment's `queue` for a seat that says a judgment, the
+  scope entry's filter for every other — so the count is the kind's
+  own queue under the seat's own grant.
+  → {\"kind\" \"filter\" \"count\"}, or nil.
+
+  nil when the walk was not empty under its filter, when rows were
+  withheld (they are the reason then), when the walk has no filter,
+  and when the read without it counts no row. A row the grant does
+  not admit is not on that page either, so it is never counted and
+  never named: what a grant conceals stays absent here as at every
+  other door."
+  [eng call session seat walk]
+  (when (and walk
+             (empty? (get walk "withheld"))
+             (not (some-> (get walk "total") pos?)))
+    (when-some [rdef (get (inv/resources eng) (keyword (get walk "kind")))]
+      (let [judgment (row-of eng :judgment (get-in seat [:data :judgment]))
+            params (not-empty
+                    (if judgment
+                      (queue-params judgment)
+                      (some-> (seats/walk-filter seat) filter-params)))]
+        (when params
+          (let [resp (call (request session :get (str "/api/" (:plural rdef))
+                                    {:query (query-string {"page[size]" "1"})}))
+                doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))
+                total (when (collection-doc? doc) (get-in doc ["data" "total"]))]
+            (when (and (number? total) (pos? total))
+              {"kind" (get walk "kind")
+               "filter" (str/join ", " (map (fn [[k v]] (str k "=" v))
+                                           (sort-by key params)))
+               "count" total})))))))
+
 (defn- walked-nothing-why
   "One sentence for a sitting its walk handed no rows (ticket
   ae64b57c): the queue rows the walk left out, each with its reason —
   the `withheld` the sit already answers — or that the queue had no
   rows under the walk's filter, or that no queue was read at all. The
-  sit keeps it on the sitting as `walked_nothing_why`."
-  [walk]
+  sit keeps it on the sitting as `walked_nothing_why`.
+
+  `left-out` is `walk-filter-left-out`'s answer: when the filter, and
+  not an empty queue, left the walk empty, the sentence names the
+  filter and counts the rows the seat can see past it (ticket
+  6ea8f277)."
+  [walk left-out]
   (let [withheld (get walk "withheld")
         total (get walk "total")
         s (cond
@@ -2846,9 +3659,22 @@
                                      withheld))
                  ".")
 
+            ;; a judgment's queue keeps the subjects it has judged, so
+            ;; an empty walk over it is the judge having caught up
+            (and (number? total) (pos? total) (get walk "judgment"))
+            (str "The queue held " total " rows under the walk's filter, and "
+                 "each one the walk read already carries a standing verdict "
+                 "of this judgment.")
+
             (and (number? total) (pos? total))
             (str "The queue held " total " rows under the walk's filter, and "
                  "none was free to hand.")
+
+            left-out
+            (let [n (get left-out "count")]
+              (str "Your walk filter (" (get left-out "filter") ") leaves out "
+                   n " " (get left-out "kind") (if (= 1 n) " row" " rows")
+                   " this seat can see."))
 
             :else
             "The queue held no rows under the walk's filter and the seat's grant.")]
@@ -2868,6 +3694,21 @@
             (partial mapv #(cond-> %
                              (contains? graced (get % "id"))
                              (assoc "reason" graced-reason))))))
+
+(def ^:private other-seat-reason
+  "an open sitting of another seat that walks this kind holds it")
+
+(defn- with-other-seat-reasons
+  "The walk, its `withheld` rows that an open sitting of ANOTHER seat
+  holds named for that seat's sitting rather than for this seat's own
+  (ticket 40d8f04c)."
+  [walk elsewhere]
+  (cond-> walk
+    (and (seq elsewhere) (seq (get walk "withheld")))
+    (update "withheld"
+            (partial mapv #(cond-> %
+                             (contains? elsewhere (get % "id"))
+                             (assoc "reason" other-seat-reason))))))
 
 (def ^:private change-beside-the-walk-note
   "What a seat whose rows are ASKS does with the change beside them
@@ -2890,8 +3731,8 @@
   "What a sit is told when every open row of its walk is held by
   another open sitting of the seat: the run has nothing to do, and
   stopping at once is the cheap end of it."
-  (str "Every open row of your walk is held by another open sitting of "
-       "this seat, so there is nothing for you to walk. Say so and stop."))
+  (str "Every open row of your walk is held by another open sitting, "
+       "so there is nothing for you to walk. Say so and stop."))
 
 (defn- named-row-withheld-note
   "What a sit is told when the row its fire text named is not in its
@@ -2909,7 +3750,7 @@
   instead, and must not walk the one the text names."
   [row-id]
   (str " The row your fire text names, " row-id ", is held by another "
-       "open sitting of this seat. Walk the row below instead of it."))
+       "open sitting. Walk the row below instead of it."))
 
 (def ^:private claim-tries
   "How many times one sit reads its walk again past the rows another
@@ -2952,7 +3793,9 @@
                     {:claimed? true :taken taken})
             seen (into (set taken) (:taken claim))
             said (fn [w]
-                   {:walk (with-graced-reasons w graced)
+                   {:walk (-> (with-graced-reasons w graced)
+                              (with-other-seat-reasons
+                                (seats/other-seats-row-ids eng seat-id)))
                     :named-held? (boolean (and named (contains? seen named)))
                     ;; named, held by nobody, and still not handed: the
                     ;; walk withheld it and the queue's rows stand in
@@ -3118,8 +3961,8 @@
   (str "The bench did not open, because this seat's scope does not "
        "name one repository. A seat that walks something other than a "
        "change reads its repository from its own bench powers: every "
-       "bench entry that writes (bench.edit, bench.pull, bench.feedback, "
-       "bench.rerun) "
+       "bench entry that writes (bench.edit, bench.edit_many, bench.pull, "
+       "bench.feedback, bench.rerun) "
        "must carry a filter with the same one repo, and every bench.find "
        "and bench.read entry must name that repo too, alone or with "
        "others after a comma. Work from the rows, and say what you "
@@ -3139,8 +3982,13 @@
   The reading powers (`bench.find`, `bench.read`) only have to include
   it, and may name other repositories beside it (R-12.32). `bench.rerun`
   re-runs the checks of the branch the seat pushed, so it chooses the
-  repository the way `bench.pull` does."
-  #{"bench.edit" "bench.pull" "bench.feedback" "bench.rerun"})
+  repository the way `bench.pull` does. `bench.edit_many` is many
+  `bench.edit`s in one call: it writes the same worktree, so it chooses
+  the repository the way the single edit does, and a seat that holds
+  the batch and not the single edit still chooses by what it writes
+  with (ticket d4b13a7f)."
+  #{"bench.edit" "bench.edit_many" "bench.pull" "bench.feedback"
+    "bench.rerun"})
 
 (defn- entry-repos
   "The repositories one bench entry's filter names, trimmed and in
@@ -3150,6 +3998,18 @@
   (when-some [v (get-in entry [:filter :repo])]
     (not-empty (into [] (comp (map str/trim) (remove str/blank?))
                      (str/split (str v) #",")))))
+
+(defn- choosing-entries
+  "The entries that may choose a repository, out of `entries`. An entry
+  narrowed to a `path` is an addition - one more file the seat may
+  touch - so it does not choose where its power has an entry with no
+  path (ticket d30c390f). A power whose every entry carries a path
+  still chooses by them."
+  [entries]
+  (let [path? #(some? (get-in % [:filter :path]))
+        general (into #{} (comp (remove path?) (map (comp str :kind))) entries)]
+    (filterv #(not (and (path? %) (contains? general (str (:kind %)))))
+             entries)))
 
 (defn- seat-repositories
   "The repository this seat works and the ones it may only read, read
@@ -3167,7 +4027,8 @@
                          (get-in seat [:data :scope]))
         writes? #(contains? bench-write-tokens (str (:kind %)))
         reads (filterv (complement writes?) entries)
-        choosers (or (not-empty (filterv writes? entries)) reads)
+        choosers (choosing-entries
+                  (or (not-empty (filterv writes? entries)) reads))
         named (mapv #(some-> (get-in % [:filter :repo]) str str/trim) choosers)
         repo (when (and (seq named)
                         (every? #(not (str/blank? (str %))) named)
@@ -3327,13 +4188,19 @@
   (or (row-said row "repo") (row-said row "repository")))
 
 (defn- seat-reaches-repo?
-  "Does every bench entry of this seat name `repo`? An entry with no
-  repo filter names none, so a seat with one reaches nothing by a row."
+  "Does every bench power this seat holds have an entry that names
+  `repo`? The entries are grouped by `kind`, and one entry of each is
+  enough: an entry narrowed to a path in another repository is one more
+  file the seat may touch, and does not shut the bench (ticket
+  d30c390f). An entry with no repo filter names none, so a power held
+  only by such entries reaches nothing by a row."
   [seat repo]
   (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
                          (get-in seat [:data :scope]))]
     (boolean (and (seq entries)
-                  (every? #(some #{repo} (entry-repos %)) entries)))))
+                  (every? (fn [[_ held]]
+                            (some #(some #{repo} (entry-repos %)) held))
+                          (group-by (comp str :kind) entries))))))
 
 (defn- several-repositories?
   "Does every CHOOSING entry of the seat name the SAME two or more
@@ -3347,7 +4214,7 @@
   (let [entries (filterv #(str/starts-with? (str (:kind %)) bench-power-prefix)
                          (get-in seat [:data :scope]))
         writes (filterv #(contains? bench-write-tokens (str (:kind %))) entries)
-        choosers (or (not-empty writes) entries)
+        choosers (choosing-entries (or (not-empty writes) entries))
         sets (mapv (comp set entry-repos) choosers)]
     (boolean (and (seq choosers)
                   (apply = sets)
@@ -3775,15 +4642,37 @@
   sentence a seat can act on."
   2048)
 
+(def ^:private finding-remedy
+  "The words a finding of the rig's closes with when it names a tool to
+  read more with: `read more with bench__log {job: \"gate\"}`. The one
+  group is the tool's name, as the power door spells it."
+  #"(?s)[\s;,:]*\bread more with (\w+)(?:\s*\{[^{}]*\})?\.?\s*\z")
+
+(defn- message-the-seat-can-follow
+  "A finding's message, without its closing remedy when that remedy
+  names a tool the seat's grant does not hold (ticket 9b16e766). The
+  rig writes the remedy for whoever holds its log read; a seat that
+  does not met `No power` when it followed it. `held` is the set of
+  tool names in the sit's `bench.tools`, so a seat that is granted the
+  tool reads the remedy again with no change here."
+  [message held]
+  (when-some [said (some-> message str)]
+    (let [[remedy tool] (re-find finding-remedy said)]
+      (if (and remedy (not (contains? held tool)))
+        (subs said 0 (- (count said) (count remedy)))
+        said))))
+
 (defn- feedback-said
   "One finding of the rig's, as the sit carries it: the source, the
   severity, the message, and the locations when the rig named any.
   THE ENGINE ADDS NOTHING AND JUDGES NOTHING — a finding is the rig's
-  reading of what the submit caused, and the order is the rig's too."
-  [finding]
+  reading of what the submit caused, and the order is the rig's too.
+  The one thing it takes away is a closing remedy that names a tool
+  outside `held` (`message-the-seat-can-follow`)."
+  [finding held]
   (cond-> {"source" (some-> (:source finding) str)
            "severity" (some-> (:severity finding) str)
-           "message" (some-> (:message finding) str)}
+           "message" (message-the-seat-can-follow (:message finding) held)}
     (seq (:locations finding)) (assoc "locations" (:locations finding))))
 
 (defn- interrupted-finding?
@@ -3840,21 +4729,23 @@
   parts of the forge it could not reach. A refusal, a dark Gate and a
   rig that faults each mean nil, and the sit then answers no
   `feedback` at all — a seat that cannot see the checks is not a sit
-  that refuses."
-  [gate-rpc repo branch]
+  that refuses. `tools` is the sit's `bench.tools`: a finding names no
+  tool that map does not hold."
+  [gate-rpc repo branch tools]
   (try
     (when-some [got (bench-payload
                      (gate-rpc "tools/call"
                                {:name (gate/bench-tool :feedback)
                                 :arguments {:repo repo :branch branch
                                             :log_bytes feedback-log-bytes}}))]
-      (let [findings (take feedback-findings-ceiling (:findings got))]
+      (let [findings (take feedback-findings-ceiling (:findings got))
+            held (set (vals tools))]
         (cond-> {"pull_request"
                  (when-some [pr (:pull_request got)]
                    {"number" (:number pr)
                     "state" (some-> (:state pr) str)
                     "url" (some-> (:url pr) str)})
-                 "findings" (mapv feedback-said findings)
+                 "findings" (mapv #(feedback-said % held) findings)
                  "unavailable" (mapv str (:unavailable got))}
           ;; dead CI gets the one instruction that answers it
           (some interrupted-finding? findings)
@@ -3900,6 +4791,67 @@
   (str "The bench did not answer, so there is no worktree in this "
        "answer. Do not try to read or edit files; work from the rows, "
        "and say what you could not do."))
+
+(def ^:private bench-prepare-timeout-ms
+  "How long the sit waits on the rig's `prepare`, in place of the 30 s
+  every other bench call gets. The rig serialises git work per
+  repository, so a fetch, a first worktree or another seat's git call
+  on the same repository can hold a prepare well past 30 s while the
+  rig is up (ticket 57fda9cb)."
+  120000)
+
+(def ^:private bench-fetch-retry-pause-ms
+  "How long the sit waits before it asks for the `prepare` again, when
+  the rig refused it on a network error (ticket 2576d7a1)."
+  2000)
+
+(def ^:private network-refusal-re
+  "What git says when it could not reach the forge. Such a refusal is
+  about the minute and not about the repository: the same fetch is
+  often good on the next try."
+  #"(?i)could not resolve host|temporary failure in name resolution|failed to connect to|connection timed out|connection reset|connection refused|operation timed out|network is unreachable|the remote end hung up|could not read from remote repository")
+
+(defn- network-refusal?
+  "True when the rig refused the `prepare` and its reason is a network
+  error."
+  [answer]
+  (boolean (some->> (bench-refusal answer) :reason str
+                    (re-find network-refusal-re))))
+
+(defn- prepare-answer
+  "The rig's answer to `prepare`, or nil when it did not answer. A call
+  that ran out the whole `timeout-ms` is tried ONCE more, because the
+  rig was busy and not down: the first try's git work is often done by
+  the second. A call that failed sooner (a refused connection answers
+  at once) is not tried again. A REFUSAL whose reason is a network
+  error is tried ONCE more too, after a short wait: one failed fetch
+  is no cause to stall a change (ticket 2576d7a1). When that try
+  refuses as well, or says nothing, the first refusal stands."
+  ([gate-rpc arguments]
+   (prepare-answer gate-rpc arguments bench-prepare-timeout-ms))
+  ([gate-rpc arguments timeout-ms]
+   (let [once (fn []
+                (let [t0 (System/nanoTime)]
+                  (try
+                    {:answer (binding [mcp-client/*call-timeout-ms* timeout-ms]
+                               (gate-rpc "tools/call"
+                                         {:name (gate/bench-tool :prepare)
+                                          :arguments arguments}))}
+                    (catch Exception e
+                      (binding [*out* *err*]
+                        (println "waymark10 bench prepare failed -"
+                                 (ex-message e)))
+                      {:timed-out (>= (quot (- (System/nanoTime) t0) 1000000)
+                                      (long timeout-ms))}))))
+         first-try (once)
+         answer (:answer (if (:timed-out first-try) (once) first-try))]
+     (if (network-refusal? answer)
+       (do (Thread/sleep (long bench-fetch-retry-pause-ms))
+           (let [again (:answer (once))]
+             (if (or (bench-payload again) (bench-refusal again))
+               again
+               answer)))
+       answer))))
 
 (defn- bench-refused-note
   "What the sit says when the rig REFUSED the prepare (bead
@@ -3993,16 +4945,8 @@
           ;; the prepare's whole answer is kept, because a REFUSAL is
           ;; an answer: the sit says its reason rather than the
           ;; sentence for a bench that was silent (waymark-fp62.6.3.11)
-          answer (try
-                   (gate-rpc "tools/call"
-                             {:name (gate/bench-tool :prepare)
-                              :arguments {:repo repo :branch branch
-                                          :base base}})
-                   (catch Exception e
-                     (binding [*out* *err*]
-                       (println "waymark10 bench prepare failed -"
-                                (ex-message e)))
-                     nil))
+          answer (prepare-answer gate-rpc
+                                 {:repo repo :branch branch :base base})
           made (bench-payload answer)
           refusal (bench-refusal answer)
           means (submit-means policy)
@@ -4025,7 +4969,8 @@
                                                  str not-empty)
                                          (some? (get-in change [:data :number])))))
                        (feedback-of gate-rpc (str (or (:repo made) repo))
-                                    (str (or (:branch made) branch))))
+                                    (str (or (:branch made) branch))
+                                    (bench-tools-of eng seat)))
                      change)
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
@@ -4215,6 +5160,15 @@
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
                 (seats/keep-fire-key! eng (:id sitting) (:key args)))
+            ;; … and what this session's client declared at initialize
+            ;; rides the sitting, written at every sit (ticket b9f90987):
+            ;; one read then answers why a host got no waymark_show
+            _ (when sitting
+                (seats/stamp-client! eng (:id sitting)
+                                     {:client-name (:client-name session)
+                                      :client-version (:client-version session)
+                                      :app-ui (:app-ui session)
+                                      :app-tools (app-session? eng session)}))
             ;; g'' · the transcript's key (docs/spec-transcript.md R-4):
             ;; born with the first sit, a fresh key at each sit after,
             ;; and nil when the seat keeps no transcript of this
@@ -4223,10 +5177,19 @@
             transcript-key (when sitting
                              (transcripts/issue-key! eng seat sitting))
             ;; g''' · the inbox's key, for a seat that declares an
-            ;; `inbox`: a fresh key at each sit, alive while the
-            ;; sitting is open (seats/issue-inbox-key!)
+            ;; `inbox` and for every interactive seat: a fresh key at
+            ;; each sit, alive while the sitting is open. A re-sit of
+            ;; the same harness session stops no earlier key
+            ;; (seats/issue-inbox-key!)
             inbox-key (when sitting
-                        (seats/issue-inbox-key! eng seat sitting))
+                        (seats/issue-inbox-key! eng seat sitting harness))
+            ;; g'''' · the outside feed's token, for a seat that declares
+            ;; a `feed_url`: a fresh token at each sit, alive while the
+            ;; sitting is open and 35 minutes at most. A re-sit stops
+            ;; no earlier token: the one a stream is using answers
+            ;; until its own end (seats/issue-feed-token!)
+            feed (when sitting
+                   (seats/issue-feed-token! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
             _ (bind-session! eng sid {:seat seat-id :sitter sitter
@@ -4254,10 +5217,12 @@
             (when-not halted
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
-            ;; such — no rows free, an empty queue, or a seat at a wall
-            ;; — so seat health counts an idle wake without reading an
-            ;; absent `walked_rows`. The rows this sitting already
-            ;; holds count: a re-sit of a sitting that walked is not it.
+            ;; such — no rows free, or an empty queue — so seat health
+            ;; counts an idle wake without reading an absent
+            ;; `walked_rows`. A seat at a wall was not let walk: it is
+            ;; stamped `halted` and not `walked_nothing`. The rows this
+            ;; sitting already holds count: a re-sit of a sitting that
+            ;; walked is not it.
             _ (when sitting
                 (seats/stamp-walked-nothing!
                  eng (:id sitting)
@@ -4265,7 +5230,12 @@
                       (empty? (get-in sitting [:data :walked_rows])))
                  ;; … with the reason it was empty, and a seat at a
                  ;; wall stamped with the wall instead (ticket ae64b57c)
-                 {:why (walked-nothing-why walk) :halted halted}))
+                 ;; … and with the rows its filter left out, counted
+                 ;; under the seat's own grant (ticket 6ea8f277)
+                 {:why (walked-nothing-why
+                        walk
+                        (walk-filter-left-out eng call sitter-sees seat walk))
+                  :halted halted}))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)
@@ -4340,6 +5310,12 @@
                                (:origin session)
                                ""))
                     "key" inbox-key})
+            feed
+            (assoc "feed"
+                   {"url" (:url feed)
+                    "token" (:token feed)
+                    "expires_at" (:expires_at feed)
+                    "note" (:note feed)})
             halted (assoc "halted" halted)
             walk (assoc "walk" walk)
             said (assoc "change" said)
@@ -4530,7 +5506,7 @@
 (def ^:private app-law
   "The doors a show admits on a kind, and the fields the page shows."
   {:held_call {:doors ["allow" "refuse"]
-               :fields [:tool :why :shown :changes :call :door]}
+               :fields [:tool :why :changes :call :door]}
    :approval_request {:doors ["approve" "deny"]
                       :fields [:task :scope :seat :substitute :expires_at
                                :requested_by :waits_on :note]}})
@@ -4587,6 +5563,47 @@
                :text (str "This row is in front of your person now. The tap is "
                           "theirs; read the row again to see what they chose.")}))))
 
+(defn- boolean-input?
+  "Whether a door's input property is a boolean, bare or nullable. A
+  boolean is the engine's flag (`patch` on an edit door) and never a
+  person's words, so the page draws no box for one."
+  [prop]
+  (boolean (some #(let [t (:type %)]
+                    (if (coll? t) (some #{"boolean"} t) (= "boolean" t)))
+                 (cons prop (concat (:oneOf prop) (:anyOf prop))))))
+
+(defn- app-row
+  "One row's envelope as the PERSON reads it, or nil when the kind is
+  not served or the read is refused."
+  [eng call person kind id]
+  (when-some [plural (:plural (get (inv/resources eng) (keyword (name kind))))]
+    (try (let [resp (call (request person :get (str "/api/" plural "/" id) nil))]
+           (when (= 200 (:status resp)) (body-json resp)))
+         (catch Exception _ nil))))
+
+(defn- held-words
+  "A held call in words: `:title` for the page's heading (who asks, and
+  for what) and `:door` for its one-line door field. `caller`
+  (`seat:<id>`) resolves to the seat's name and the door's row to its
+  summary, both read as the PERSON; a refused read leaves the bare id."
+  [eng call person data]
+  (let [caller (str (:caller data))
+        {:keys [kind action id]} (:door data)
+        who (or (when (str/starts-with? caller "seat:")
+                  (get-in (app-row eng call person :seat (subs caller 5))
+                          [:data :name]))
+                caller)
+        row (when (and kind id) (:summary (app-row eng call person kind id)))
+        words #(str/replace (str %) "_" " ")]
+    {:title (if action
+              (str who " wants to " (words action) " "
+                   (cond row (str "‘" row "’")
+                         id (str (words kind) " " id)
+                         :else (words kind)))
+              (str who " wants to call " (:tool data)))
+     :door (when action
+             (str/join " · " (remove nil? [action kind (or row id)])))}))
+
 (defn- app-read
   "waymark_app_read: one row as the PERSON sees it, the law's doors on
   its kind, and the ticket, which rides `structuredContent` alone. A
@@ -4595,12 +5612,17 @@
   [eng call session {:keys [kind id]}]
   (let [rdef (rdef-of eng kind)
         law (get app-law (:kind rdef))
-        resp (call (request (person-session eng session) :get
+        person (person-session eng session)
+        resp (call (request person :get
                             (str "/api/" (:plural rdef) "/" id) nil))]
     (if-not (= 200 (:status resp))
       (pass-through resp)
       (let [env (body-json resp)
             ^Instant now ((:now-fn eng))
+            held (when (= :held_call (:kind rdef))
+                   (held-words eng call person (:data env)))
+            base (some-> (:app-url (:oidc eng)) str str/trim not-empty
+                         (str/replace #"/+$" ""))
             door (fn [aname]
                    (let [entry (get-in env [:actions (keyword aname)])
                          props (get-in entry [:input :properties])]
@@ -4608,7 +5630,13 @@
                               :label (or (get-in entry [:display :label]) aname)
                               :style (get-in entry [:display :style])
                               :available (some? entry)
-                              :inputs (mapv name (keys props))
+                              ;; a box for each input a person words:
+                              ;; never `patch`, never a boolean
+                              :inputs (vec (for [[k v] props
+                                                 :when (not (or (= "patch" (name k))
+                                                                (boolean-input? v)))]
+                                             (name k)))
+                              :required (mapv name (get-in entry [:input :required]))
                               ;; what a text box may hold, where the door says
                               :lengths (into {} (for [[k v] props
                                                       :when (:maxLength v)]
@@ -4621,9 +5649,16 @@
                 :id (str id)
                 :state (:state env)
                 :summary (:summary env)
+                :title (:title held)
+                ;; the row's own page, the hash route `held/ui-link` builds
+                :link (when base (str base "/#/api/" (:plural rdef) "/" id))
                 :fields (vec (for [f (:fields law)
-                                   :let [v (get-in env [:data f])]
-                                   :when (some? v)]
+                                   :let [v (if (and held (= :door f))
+                                             (:door held)
+                                             (get-in env [:data f]))]
+                                   ;; an empty `call` says nothing
+                                   :when (and (some? v)
+                                              (not (and (coll? v) (empty? v))))]
                                {:label (name f) :value v}))
                 :doors (mapv door (:doors law))
                 :ticket (sign-ticket
@@ -4766,12 +5801,19 @@
                      ;; rides in from here, exactly as the bench's
                      ;; office does.
                      who {:caller (:id (:principal session))
+                          :principal (:principal session)
                           :sitting (bound-sitting
                                     eng (:mcp-session-id session))}]
-                 (-> (gate/invoke-for gate-rpc (:visibility session) tname
-                                      sent who)
-                     (shaped args)
-                     (rig-dropped))))
+                 (if (some? (:at args))
+                   ;; `at`: the call is stored for its time, not made
+                   ;; (R-7.2, R-4.4)
+                   (schedule-call eng call session {:tool tname}
+                                  (assoc (select-keys args (conj schedule-keys :at))
+                                         :input sent))
+                   (-> (gate/invoke-for gate-rpc (:visibility session) tname
+                                        sent who)
+                       (shaped args)
+                       (rig-dropped)))))
 
      ;; the sit needs the Gate caller too, for the bench it prepares
      ;; (R-12.29) — the one body that is not in `bodies`
@@ -4927,7 +5969,10 @@
   (try
     (when-some [sitting-id (calling-sitting eng session)]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
-                         (dropped-bytes result))
+                         (dropped-bytes result)
+                         ;; an answer that is no error: the close reads
+                         ;; it against the last refusal (ticket 28a5d117)
+                         (not (and (map? result) (true? (:isError result)))))
       (when-some [run (cancelled-run tool-name result)]
         (seats/add-cancelled-run! eng sitting-id run)))
     (catch Exception e

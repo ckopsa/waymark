@@ -29,3 +29,18 @@
                (fn [[_ path]]
                  (let [v (lookup row path)]
                    (if (some? v) (str v) "—")))))
+
+(defn line
+  "The row's summary line. A kind whose line no template can say — one
+  that leaves a part out, or orders its parts by what the row holds —
+  declares :summary-fn beside :summary: a pure fn of the row that
+  answers the line (ticket b5a9b790). The template stays the fallback:
+  a composer that throws or answers nothing renders the template,
+  never a crash."
+  [rdef row]
+  (or (when-some [f (:summary-fn rdef)]
+        (try
+          (let [s (f row)]
+            (when-not (str/blank? s) s))
+          (catch Exception _ nil)))
+      (render (:summary rdef) row)))

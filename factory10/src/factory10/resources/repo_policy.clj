@@ -54,7 +54,10 @@
             [factory10.bench :as bench]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
-            [waymark10.types :as t]))
+            [waymark10.holds :as holds]
+            [waymark10.types :as t])
+  (:import (java.time Duration Instant ZoneOffset)
+           (java.time.format DateTimeFormatter)))
 
 (set! *warn-on-reflection* true)
 
@@ -130,6 +133,85 @@
     (if which
       (t/deny {:vars {:which which}})
       (t/allow))))
+
+(def ^:private hosted-workflow-path
+  "What one entry of `hosted_workflows` looks like: a workflow file,
+  as a path from the repository root."
+  #"\.github/workflows/[\w.-]+\.ya?ml")
+
+(defguardfn the-hosted-workflows-are-workflow-paths
+  {:reads []
+   :vars [:which]
+   :open "No other door changes this verdict. Restate the policy with each hosted workflow as a path from the repository root, such as .github/workflows/tofu.yml, or leave the list empty for no exception."
+   :explain "The bench's rig lets a workflow run on a GitHub-hosted runner only when this list names its file. The entry {which} is not a workflow file under .github/workflows, so the rig would match nothing by it."}
+  ;; ticket 0de73a7a: the list is an exception to the house's rule that
+  ;; CI runs on its own runners, so an entry that names no workflow file
+  ;; is refused here, where a person reads why, and is not carried to a
+  ;; rig that would match nothing by it.
+  [_row inp _ctx]
+  (let [which (first (remove #(re-matches hosted-workflow-path (str %))
+                             (get inp :hosted_workflows)))]
+    (if (some? which)
+      (t/deny {:vars {:which (str which)}})
+      (t/allow))))
+
+(defguardfn only-a-person-widens-the-hosted-workflows
+  {:reads [:principal :within]
+   :hold true
+   :vars [:added]
+   :explain "Adding {added} to the hosted workflows is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. The list is an exception to the house's rule that CI runs on its own runners, and a longer list is a wider exception."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that removes entries, or leaves the list as it stands, is not held."}
+  ;; ticket 407323ef: a delegate is the person's hand for the policy's
+  ;; numbers, but an entry ADDED here lets one more workflow run on a
+  ;; GitHub-hosted runner, and that is the person's own yes. The input
+  ;; is judged against the stored list, so a removal and an unchanged
+  ;; list pass. ci_run's `only-a-person-reclassifies` one kind over:
+  ;; every hand but an agent's passes, and the one agent call this
+  ;; admits is the engine's replay of the held call its person allowed.
+  [row inp ctx]
+  (let [stored (set (map str (get-in row [:data :hosted_workflows])))
+        added (remove stored (map str (get inp :hosted_workflows)))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? added) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:added (str/join ", " added)}}))))
+
+(defguardfn only-a-person-loosens-the-merge-gate
+  {:reads [:principal :within]
+   :hold true
+   :vars [:what]
+   :explain "A restate that {what} is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. Auto-merge and the required checks are what stands between a green change and the base branch, and a policy with fewer of them merges more."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that turns auto_merge off, adds a required check, or leaves both as they stand, is not held."}
+  ;; ticket 68643356: the hosted-workflows hold's two siblings. A
+  ;; delegate's restate widens the policy when it moves auto_merge from
+  ;; a stored false to true, or when it leaves out a required check the
+  ;; stored row names; both are judged against the stored row, so the
+  ;; narrowing direction passes. The replay of the call the person
+  ;; allowed is the one agent call this admits, and one Allow answers
+  ;; this hold and the one above, because both ask about the same call.
+  ;;
+  ;; THE CREATE DOOR IS NOT HELD, here or for hosted_workflows: a create
+  ;; widens nothing, because `repository` is unique and so there is no
+  ;; stored policy to compare with, and the delegate's grant for the
+  ;; create door is the person's yes to the first statement.
+  [row inp ctx]
+  (let [turned-on? (and (false? (get-in row [:data :auto_merge]))
+                        (not (false? (get inp :auto_merge true))))
+        kept (set (map str (get inp :required_checks [])))
+        dropped (->> (get-in row [:data :required_checks])
+                     (map str)
+                     (remove str/blank?)
+                     (remove kept))
+        what (cond-> []
+               turned-on? (conj "turns auto_merge on")
+               (seq dropped) (conj (str "drops " (str/join ", " dropped)
+                                        " from the required checks")))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? what) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:what (str/join " and " what)}}))))
 
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
@@ -366,6 +448,26 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario a-hosted-workflow-is-a-workflow-path
+  "The exception names workflow files. An entry that is no path under
+   .github/workflows is refused, even from the person."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :hosted_workflows ["tofu.yml"])
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-hosted-workflows-are-workflow-paths}})
+
+(defscenario the-person-names-the-hosted-workflows
+  "…and a list of workflow paths is the person's to state."
+  {:kind    :repo_policy
+   :attempt :restate
+   :row     {:state :active :data a-policy}
+   :input   (assoc a-policy :hosted_workflows [".github/workflows/tofu.yml"
+                                               ".github/workflows/ansible.yml"])
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── the fields, spelled once and read by two doors ──────────────────
 
 (def ^:private formatter-choices
@@ -491,6 +593,16 @@
                         {:label "Rounds for one change"
                          :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
     [:int {:min 1 :max 20}]]
+   ;; a required check nobody runs (ticket bc3ff12c). OPTIONAL for the
+   ;; reason merge_wait_seconds is: a row that predates it reads as 30
+   ;; (bench's `queued-check-minutes-of`)
+   [:queued_check_minutes {:optional true
+                           :default 30
+                           :examples [30]
+                           :x-display
+                           {:label "Minutes a check may sit queued"
+                            :help "The longest a required check may stay queued on a submitted change. Past it the change goes back to its seat as failing, because no runner took the check."}}
+    [:int {:min 1 :max 1440}]]
    ;; the merge train (ticket 394d0602, slice a of 3deb06ed). Both
    ;; OPTIONAL for the reason merge_wait_seconds is: a row that
    ;; predates them reads as line / 4 (bench's `merge-strategy-of` and
@@ -586,6 +698,16 @@
                 :x-display {:label "Timeout in seconds"
                             :help "How long the command may run, from 10 to 1800 seconds. Leave it empty for the rig's default."}}
       [:int {:min 10 :max 1800}]]]]
+   ;; the house-runners exception (ticket 0de73a7a). OPTIONAL: a row
+   ;; without it, or with an empty list, grants none, and enroll then
+   ;; sends no `hosted_workflows`.
+   [:hosted_workflows {:optional true
+                       :examples [[".github/workflows/tofu.yml"]]
+                       :x-display
+                       {:raw true
+                        :label "Workflows allowed on GitHub-hosted runners"
+                        :help "Workflow files that may run on GitHub-hosted runners, as paths from the repository root, one for each row. The house runs CI on its own runners. Name a workflow here only when it must not go down with them, such as one that deploys or repairs those runners. Empty means no exception."}}
+    [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -614,6 +736,13 @@
                   {:label "Open at the floor"
                    :help "How many tickets were open when the engine last filed a floor ticket."}}
     [:maybe [:int {:min 0}]]]
+   [:floor_ticket {:optional true
+                   :examples ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                   :x-display
+                   {:raw true
+                    :label "The floor ticket"
+                    :help "The ticket the engine filed the last time the open queue fell below the floor. While it is draft or open, no second floor ticket is filed, whatever its title says now."}}
+    [:maybe [:string {:max 64}]]]
    [:enrolled_at {:optional true
                   :examples ["2026-09-19T14:00:00Z"]
                   :x-display
@@ -637,6 +766,28 @@
                    :label "What the GitHub source could not read"
                    :help "The status and the route of the last pass that could not read this repository's pull requests, and when. Empty when the last pass read them."}}
     [:maybe [:string {:max 500}]]]
+   ;; the GitHub source's cursor for this repository (ticket c07b581f):
+   ;; stored, so a boot starts where the last pass stopped and does not
+   ;; read every pull request again. It is GitHub's stamp and never the
+   ;; engine's clock (`github/high-water`), so it stands still while no
+   ;; pull request moves: an old cursor is a quiet repository, and the
+   ;; pass's own clock is `forge_pass_at` (tickets 028b292e, e674e558)
+   [:forge_cursor {:optional true
+                   :examples ["2026-10-01T20:32:00Z"]
+                   :x-display
+                   {:raw true
+                    :label "Pull requests read up to"
+                    :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Forge pass ran at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
+    [:maybe [:string {:max 64}]]]
+   ;; the pass's own clock (ticket e674e558): `base_checked_at` stands
+   ;; still on a held pass and on a base that was not read, so the pass
+   ;; stamps this at its end, whatever it read
+   [:forge_pass_at {:optional true
+                    :examples ["2026-10-10T02:46:00Z"]
+                    :x-display
+                    {:label "Forge pass ran at"
+                     :help "When the forge pass last ran over this repository, by the engine's clock. Every pass writes this at its end, also a pass whose calls were held by GitHub's rate limit and a pass GitHub did not answer, so a time that stands still here means the pass stopped. What the GitHub source could not read and Base read at say what the pass read."}}
+    [:maybe :waymark/instant]]
    ;; the base branch's own state (ticket ade81ae9), so a person reads
    ;; whether main is red without opening GitHub
    [:base_state {:optional true
@@ -669,7 +820,7 @@
                       :examples ["2026-09-27T19:30:00Z"]
                       :x-display
                       {:label "Base read at"
-                       :help "When the pass last wrote the base's state, which it does when that state moves."}}
+                       :help "When the pass last read the base branch's head, by the engine's clock. Every pass that reads it writes this, whether or not the state moved, so a time that stands still here means the pass stopped or could not read the base."}}
     [:maybe :waymark/instant]]
    ;; one deploy at a time (ticket 47217098): the merge pass writes the
    ;; house's merges here, and the forge pass takes each off once the
@@ -733,9 +884,10 @@
                          {:label "The front waits on"
                           :choices {"update" "It was just brought up to date, and its checks run on the new head"
                                     "checks" "Its checks are still running"
+                                    "github" "Its checks are green, and GitHub has not judged it mergeable yet"
                                     "merge" "It was offered the merge, and GitHub has not merged it yet"
                                     "train" "It rides a train, and the train's checks run"}}}
-    [:maybe [:enum "update" "checks" "merge" "train"]]]
+    [:maybe [:enum "update" "checks" "github" "merge" "train"]]]
    [:line_waiting {:optional true
                    :examples [2]
                    :x-display
@@ -786,6 +938,84 @@
       [:pr_run {:optional true} [:maybe :boolean]]
       [:started_at :waymark/instant]]]]])
 
+;; ── the summary line: where the merge line stands ───────────────────
+;; A list panel shows a row's summary line and nothing else (ticket
+;; b5a9b790), so the line says what the row already holds: what needs a
+;; person first (a red base, a held deploy), then the front of the
+;; merge line, then the count behind it.
+
+(def ^:private summary-budget
+  "The longest summary line, in characters. A part that does not fit is
+  left out whole, and so is every part after it."
+  100)
+
+(defn- instant-of
+  "A stored instant as an Instant, whether the row came decoded or as
+  its wire string. nil for what cannot be read."
+  ^Instant [v]
+  (cond
+    (nil? v) nil
+    (instance? Instant v) v
+    (instance? java.util.Date v) (.toInstant ^java.util.Date v)
+    :else (try (Instant/parse (str v)) (catch Exception _ nil))))
+
+(def ^:private ^DateTimeFormatter since-format
+  (.withZone (DateTimeFormatter/ofPattern "MM-dd HH:mm'Z'") ZoneOffset/UTC))
+
+(defn- waited
+  "How long since `since`, in the one unit a panel row has room for."
+  [^Instant since ^Instant now]
+  (let [m (max 0 (.toMinutes (Duration/between since now)))]
+    (cond
+      (< m 60) (str m "m")
+      (< m (* 48 60)) (str (quot m 60) "h")
+      :else (str (quot m (* 24 60)) "d"))))
+
+(defn summary-line
+  "The policy's summary line, composed from the row's data: the
+  repository, then a red base and a held or red deploy, then the front
+  pull request and what it waits on, then how many stand behind it,
+  then the deploy or base state when nothing above said it, then
+  `manual merge` when the house does not merge here. Pure: `now` is
+  the caller's clock."
+  [data state now]
+  (let [{:keys [repository base_state base_checked_at deploy_state
+                deploy_waits_on deploy_waiting_since line_front_pr
+                line_front_waiting line_waiting auto_merge]} data
+        red-base? (= "red" base_state)
+        since (instant-of deploy_waiting_since)
+        deploy (cond
+                 since (str "deploy waiting " (waited since now))
+                 (seq deploy_waits_on) "deploy waiting"
+                 (= "red" deploy_state) "deploy red")
+        parts [(when (= "retired" (some-> state name)) "retired")
+               (when red-base?
+                 (if-some [at (instant-of base_checked_at)]
+                   (str "base red since " (.format since-format at))
+                   "base red"))
+               deploy
+               (if line_front_pr
+                 (str "#" line_front_pr " front"
+                      (when line_front_waiting
+                        (str ", waiting on " line_front_waiting)))
+                 "line empty")
+               (when line_front_pr (str (or line_waiting 0) " behind"))
+               (cond
+                 deploy nil
+                 (= "green" deploy_state) "deploy green"
+                 (and base_state (not red-base?)) (str "base " base_state))
+               (when (false? auto_merge) "manual merge")]]
+    (reduce (fn [line part]
+              (let [longer (str line " · " part)]
+                (if (<= (count longer) summary-budget)
+                  longer
+                  (reduced line))))
+            (str repository)
+            (remove nil? parts))))
+
+(defn- summary-of-row [row]
+  (summary-line (:data row) (:state row) (Instant/now)))
+
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
 (defresource repo-policy
@@ -800,7 +1030,10 @@
    ;; tap, because a repository the house stops working is a
    ;; repository it may work again.
    :terminal #{}
+   ;; the template is the fallback, and what a redacted read answers;
+   ;; the line a reader sees is the composed one (waymark10.summary/line)
    :summary "{data.repository} · {state}"
+   :summary-fn summary-of-row
    :label-template "{data.repository}"
    :display {:title "{data.repository}"}
    :filterable {:state #{:eq :in} :repository #{:eq}}
@@ -817,7 +1050,8 @@
    :create-schema (into [:map] policy-fields)
    :create-guards [a-person-or-their-delegate-states-the-policy
                    the-house-merges-only-what-a-check-tested
-                   the-test-selection-pattern-compiles]
+                   the-test-selection-pattern-compiles
+                   the-hosted-workflows-are-workflow-paths]
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
@@ -827,7 +1061,12 @@
      :input (into [:map] policy-fields)
      :guards [a-person-or-their-delegate-states-the-policy
               the-house-merges-only-what-a-check-tested
-              the-test-selection-pattern-compiles]
+              the-test-selection-pattern-compiles
+              the-hosted-workflows-are-workflow-paths
+              ;; last, so a call that is held is one the walls above
+              ;; would let the person's Allow run
+              only-a-person-widens-the-hosted-workflows
+              only-a-person-loosens-the-merge-gate]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes

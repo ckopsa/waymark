@@ -123,18 +123,22 @@ work.
 | `cadence_seconds` | int | how often the schedule fires the seat. The fixed wake cost. |
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
+| `feed_url` | string, optional, an https URL | an outside inbox that streams this seat's subscription deliveries. The sit answers a short-lived token for it. R-16.7. |
+| `inbox` | map `{only, cues}`, optional | what the engine holds for this seat's sittings to pull. `only` is a map from a kind to the actions on it that count; an empty list is every action. `cues` is a list of at most 20 entries `{kind, actions, filter, note}`: a standing note, from 1 to 280 characters, that the inbox door attaches to each event the entry matches. A cue's kind, actions and filter are judged as a `wake_on` entry's are, and its empty `actions` is every action. An inbox that states `cues` and no `only` keeps the default `only` of an interactive seat. R-12.38. |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
 | `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
 | `rows_per_firing` | int, default 20 | the most rows one firing moves to a leaf. The walk's cap. |
 | `stale` | list of scope entries | written by the sweep. A person never writes it. |
 | `halt` | map, optional | `{reason, since, detail}`, written by the router at a wall and cleared when it lifts. R-7.7. |
-| `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. No door writes it. The engine never answers it. R-12.37. |
+| `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. The first sit removes the entry and keeps the hash on the sitting it opened, so the same session can sit again in that sitting. No door writes it. The engine never answers it. R-12.37. |
 | `schedule` | schedule ref | the means by which a sitting is created for this seat. Engine-written. R-12.0. |
 | `merged_into` | seat ref | the seat this one merged into |
 | `wake_on` | list of entries `{kind, actions, filter, settle_seconds}`, optional | the transitions that fire the seat, each entry in the shape of a scope entry. A walk seat with no `wake_on` behaves as one computed entry: the walk's kind, with the action `create`. `settle_seconds`, a whole number from 1 to 604800, optional, makes an entry fire on the trailing edge. R-12.22. |
 | `fire_interval_seconds` | int, default 300 | the gap: the engine fires the seat at most once in this many seconds. R-12.22. |
 | `max_open_sittings` | int, 1 to 10, default 1 | the damper's count: the engine does not fire while the seat's open sittings plus its fires on their way have reached it. R-12.22. |
+| `health_window` | int, 1 to 100, default 10 | how many of the seat's last closed sittings its `health` is counted over. |
+| `health` | map, written by the engine | the rollup of those sittings, written again at each close: `sittings`, `outcomes` (a count for each outcome), `submit_rate`, `cost_usd`, `cost_per_submit`, `flags` (a count for each flag), `merged_prs` (the seat's changes merged since the window's first sitting started), `cost_per_merge`, `last_submit_at`, `last_outcome` and `computed_at`. No door writes it. The seat collection carries it, so one read of `/api/seats` answers every seat's health. |
 
 There is no `must` list and no `never` list. The first draft had
 both. Each sentence the model must pre-load is fuel, and each rule
@@ -321,6 +325,16 @@ the seat's `sitting_idle_seconds`, with `closed_by` `sweep` and the
 note `silent since {last_call_at}`. The two cadences above stay as
 the outer bound.
 
+A sitting's calls are the connector's (the owner's ruling,
+2026-10-01). The connector is the one door that names the calling
+sitting and keeps its tally, its refusals and its walls, so the stamp
+above is written there. A sitter's call over plain HTTP is its
+bearer's, the delegate's or the person's, and not the seat's: it
+stamps no sitting, and there is no `x-waymark-sitting` header. A
+delegate that presents a seat's grant as `X-Waymark-Grant` at the
+HTTP door must be refused `403` with a sentence that names the
+connector as the seat's door.
+
 **R-7.7** A hard stop must raise an alert. The owner's ruling,
 2026-09-17: the three walls of R-5.2 (the seat not active, the model
 outside its list, the budget reached) stay hard, and each must reach
@@ -398,7 +412,7 @@ seat's own sitter writes here."
 | `price_cache_read_per_mtok` | decimal | dollars per million cache-read tokens |
 | `price_cache_write_per_mtok` | decimal | dollars per million cache-write tokens |
 | `notes` | string | free prose |
-| `sitter_key` | string, secret, optional | the chair key a firing sends to `waymark_sit`. Two doors write it. The engine never answers it. R-12.34. |
+| `sitter_key` | string, secret, optional | the chair key a session sends to `waymark_sit` when it has no key of a firing (R-12.37). Two doors write it. The engine never answers it. R-12.34. |
 | `fire_url` | string, optional | the fire endpoint of this model's Routine. A person writes it. R-12.34. |
 | `fire_token` | string, secret, optional | the token a fire carries. A person writes it. The engine never answers it. R-12.34. |
 
@@ -445,9 +459,15 @@ and `abandoned` are terminal.
 | `harness_session` | string | the harness's id for the session that sat. Written at `create` from `waymark_sit`, or at `close` from the hook's report (R-12.17). |
 | `transitions` | int | committed transitions under the grant while the sitting was open. The engine counts. |
 | `refusals` | int | 409s served under the grant while the sitting was open. The engine counts. |
+| `served` | map from tool name to a map of `calls`, `bytes` and an optional `dropped`, each an int of 0 or more | what the MCP door answered this sitting, tool by tool: `calls` is how many times the door answered that tool, and `bytes` is the UTF-8 length of the text of those answers. `dropped` is the bytes the door removed because a caller asked for a smaller answer; a tool nobody shaped carries no `dropped`. The keys are open, and the map starts empty. Engine-written on each answer, on an open sitting only; no door writes it. R-10.6a. |
 | `mode` | enum `fired`, `interactive` | the seat's mode, copied at birth. Engine-written. R-10.8. |
 | `person` | string, optional, up to 200 | the member the delegate acts for, when the sitter is a delegate. Engine-written. |
+| `fire_key_hash` | string, secret, optional, up to 64 | the SHA-256 of the key of the firing that opened this sitting, base64url and unpadded. The engine keeps the hash and never the key. The same session can sit again in this sitting with that key, and the hash answers only while the sitting is open. Engine-written by the sit that spends the key, as a maintenance write, on an open sitting only. The engine never answers it. R-12.37. |
 | `tallied_at` | instant, optional | when the harness last tallied this open sitting. Engine-written. R-12.25. |
+| `walked_rows` | list of row ids, optional | the rows of the walk that the sit handed this sitting. They are this sitting's own until it closes: a second open sitting walks past them, whether it is of this seat or of another seat that walks the same kind, and a re-sit is handed them back. Engine-written at the sit, on an open sitting only. |
+| `walked_nothing` | boolean, optional | `true` when the sit handed this sitting no rows and the sitting holds no `walked_rows`. It covers these causes: no queue was read, because the seat walks no kind or its grant does not admit the kind; the queue held no rows under the walk's filter and the seat's grant; every row the queue offered was left out, because another open sitting holds it, of this seat or of another seat that walks the same kind, or its change is stuck; the queue held rows and none was free to hand. It does not cover a seat at a wall: a halted sit is stamped with `halted` and not with this field. A re-sit that is handed a row takes the stamp off. Engine-written at the sit, on an open sitting only. |
+| `walked_nothing_why` | string, optional, up to 480 | one sentence beside `walked_nothing`: the cause, and each row left out with its reason. Engine-written at the sit, and taken off with `walked_nothing`. |
+| `halted` | map, optional | the wall the sit found its seat against: `wall` (string, up to 64), which wall; `detail` (string, optional, up to 480), the sentence that says why; `lifts_at` (string, optional, up to 64), when the wall lifts, absent when no roll of the window lifts it. A halted sit is stamped with this field in place of `walked_nothing`, because it was not let walk. A re-sit that is not halted takes the stamp off. Engine-written at the sit, on an open sitting only. |
 | `cost_usd` | decimal | written at close, and again at each tally of an open sitting (R-12.27) |
 | `prices` | map | the four prices used at close, or at the last tally |
 | `note` | string | one sentence on what the sitting did |
@@ -637,6 +657,7 @@ loop script.
 | `wake_pending` | boolean, optional | a match waits for the damper to lift (R-12.22). Engine-written. |
 | `wake_fired_at` | instant, optional | when the engine last fired the seat for a matching transition (R-12.22). Engine-written. |
 | `wake_due_at` | instant, optional | when a waiting wake may go out, for an entry that settles (R-12.22). Engine-written. |
+| `wake_first_at` | instant, optional | when the first match of the waiting settled wake came; `wake_due_at` is never asked past it plus the entry's `max_wait_seconds` (R-12.22). Engine-written. |
 | `last_halted_wake` | instant, optional | when a matching transition last found the seat's week of fuel spent; that wake waits as `wake_pending` until the window rolls. Engine-written. |
 
 States: `pending` (no copy yet), `live`, `paused`, `broken` (the
@@ -861,8 +882,25 @@ key finds its sitting among the open sittings, by hash. The door is
 outside the require-auth gate for a GET, as the transcript door is for
 a POST.
 
+An interactive seat that states no `inbox` has one by default, derived
+and never stored: every action of `ticket`, `change`, `held_call`,
+`approval_request`, `seat` and `sitting`. A fired seat has an inbox
+only when it states one. A sit that reuses the open sitting for the
+same harness `session` mints a new key and leaves the earlier keys
+answering, so a stream is not cut; a new sitting gets a fresh key, and
+the close of a sitting ends every key of it.
+
 - The door reads the transition log after the event `after` names.
-  With no `after`, it reads from the sitting's start.
+  With no `after`, it reads from the sitting's start. With
+  `after=now` it answers at once, with no event, and
+  `Waymark-Inbox-After` names the log's newest event: a tail of a
+  long-open sitting begins at the present. That event, and the start
+  of a sitting the log does not know, is read under every write still
+  in flight, so no lower event lands behind the cursor: while a write
+  is in flight it is the newest event below that write, and the tail
+  then serves the events above it. When the log has no event below
+  the writes in flight and does not settle, the door answers 503
+  `inbox-unsettled` and names no cursor, and the caller asks again.
 - It keeps only the transitions whose kind the seat's `inbox.only`
   names, with an action that kind lists; an empty list is every
   action. It keeps only the kinds the sitting's grant can read. It
@@ -873,6 +911,13 @@ a POST.
   `event` is the log's own id, the value the next `after` names. The
   header `Waymark-Inbox-After` names the last event the door read,
   matched or not, so a tail whose answer was empty can go on from it.
+- A line carries `cue` when a cue of the seat's `inbox.cues` matches
+  the event. A cue matches by its kind and its action, and an empty
+  list is every action. A cue that states a `filter` matches only when
+  the row, as it stands when the door serves the line, is under that
+  filter. `cue` is the notes of every cue that matches, in the cues'
+  order, joined with ` · `. A line that no cue matches has no `cue`.
+  Cues never change which events the door serves.
 - `wait`, from 0 to 25, holds the request. The door answers as soon
   as a matching event lands, or answers empty when the wait runs out.
 - It answers 401 with `No open sitting answers this inbox key.` when
@@ -1004,6 +1049,11 @@ that reason in `bench_note`: "The bench refused to open the worktree:
 reason, and a person reads the cause on the row. The sentence for a
 bench that said nothing is for a rig that threw and for a rig that
 answered nothing at all.
+
+A refusal whose reason is a network error is not carried at once. The
+sit waits a short time and asks for the `prepare` one more time. A
+good answer then gives the `bench` and no `bench_note`. A second
+refusal is carried as written above.
 
 **R-12.30** A bench grant must be able to name less than the whole
 rig. The bench has five powers: `bench.find`, `bench.read`,
@@ -1442,6 +1492,18 @@ entry carries no settle. An entry with no `settle_seconds` fires on
 the match, as it always did. The engine must refuse a
 `settle_seconds` below 1, at `create` and at `restate`.
 
+A settle has a cap. The first match of a waiting settled wake writes
+`wake_first_at`, and a later match must not move `wake_due_at` past
+`wake_first_at` plus the entry's `max_wait_seconds`, a whole number
+from 1 to 604800, optional, which is three times `settle_seconds`
+when the entry names none. So matches that arrive faster than the
+settle batch into one fire and cannot hold the seat back for ever.
+The seat's `cadence_seconds` is the backstop: while a settled wake
+waits, the engine fires the seat when a whole cadence has passed
+since its last fire, or since `wake_first_at` for a seat that never
+fired, whatever `wake_due_at` says. The fire clears `wake_first_at`
+with the other two marks.
+
 A conversation is what the settle is for. The house mirrors a family
 chat as one row, and each reply moves that row. The first reply is
 the middle of the conversation and not the end of it, so a seat woken
@@ -1483,6 +1545,15 @@ The damper of R-12.22 applies with no change. The engine does not
 fire while the seat's busy count has reached `max_open_sittings`, and
 it fires at most once in `fire_interval_seconds`. A match the damper stops sets
 `wake_pending`, and one fire goes out when the damper lifts.
+
+The close of a seat's sitting is a further evaluation point. When a
+sitting closes (door, hook or sweep) and nothing is pending, the
+engine counts each of that seat's `at_least` entries once, under the
+same filter, and fires the seat under the same damper when one holds:
+a close inside `fire_interval_seconds` sets `wake_pending`. When none
+holds, nothing fires. The close is not a transition of the counted
+kind, and a count wake still has no clock. A transition wake is not
+replayed on close.
 
 The cadence stays. A seat with a count wake and a cadence fires when
 the queue reaches the size, or when the interval passes, whichever
@@ -1641,7 +1712,9 @@ Key: {the key of this firing}
 
 One `waymark_sit` spends the key. The call must carry the key and the
 seat, as R-12.36 says. The engine takes the hash off the seat row at
-that sit. A second sit with the same key is refused. The refusal is
+that sit. A second sit with the same key is refused, with the one
+exception this rule gives below: the same harness session sits again in
+the sitting that key opened, while that sitting is open. The refusal is
 the uniform sentence of R-12.14: no seat answers this key. An unknown
 key, an expired key and a spent key all read the same.
 
@@ -1980,11 +2053,11 @@ law. The seat lives in a row, because it is fluid.
 ```clojure
 (defresource inbox_item
   {:kind :inbox_item
-   :states [:queued :researched :action_item :dismissed]
+   :states [:queued :opened :researched :action_item :dismissed]
    :initial :queued
    :terminal #{:action_item}                   ; dismissed keeps the person's door open
    :over {:accomplished #{:action_item} :let-go #{:dismissed}}
-   :default-filters {:state "queued"}          ; the queue is the collection
+   :default-filters {:state "queued,opened"}   ; the queue is the collection
    :sortable {:fields [:received_at] :default "received_at"}
    :schema [:map
             [:message_id  [:string]]           ; the address in the inbox
@@ -1992,25 +2065,29 @@ law. The seat lives in a row, because it is fluid.
             [:sender      [:string]]
             [:received_at :waymark/instant]
             [:summary     {:optional true} [:maybe [:string {:max 480}]]] ; written by research
-            [:body_excerpt {:optional true} [:maybe [:string {:max 4000}]]] ; read by research, for the model
+            [:body_excerpt {:optional true} [:maybe [:string {:max 4000}]]] ; read by open, for the model
             [:body_cut    {:optional true} [:maybe [:int {:min 0}]]]        ; what the cap removed
+            [:body_read   {:optional true} [:maybe :boolean]]               ; false when open read nothing
             [:task        {:optional true :kind :task} [:maybe :waymark/ref]] ; stamped by yes
             [:reason      {:optional true} [:maybe [:string {:max 240}]]]]  ; written by no
    :actions
-   {:research {:from #{:queued} :to :researched
+   {:open     {:from #{:queued} :to :opened               ; no input: the engine reads
+               :handler open-the-message
+               :display {:label "Open" :order 1}}
+    :research {:from #{:opened} :to :researched
                :input [:map [:summary [:string {:min 1 :max 480}]]]
-               :display {:label "Research" :order 1}}
+               :display {:label "Research" :order 2}}
     :yes      {:from #{:researched} :to :action_item
                :input [:map [:action_item [:string {:min 1 :max 200}]]
                              [:due_at {:optional true} [:maybe :waymark/instant]]]
                :touches [{:kind :task :action :create}]   ; the task is born here
                :handler yes->task                         ; ctx :create, outer principal
-               :display {:label "Yes, action item" :order 2}}
+               :display {:label "Yes, action item" :order 3}}
     :no       {:from #{:researched} :to :dismissed
                :input [:map [:reason {:optional true} [:maybe [:string {:max 240}]]]]
-               :display {:label "No" :order 3}}
+               :display {:label "No" :order 4}}
     :reopen   {:from #{:dismissed} :to :researched         ; the person's correction
-               :display {:label "Reopen" :order 4}}}})
+               :display {:label "Reopen" :order 5}}}})
 ```
 
 As built (commit 4d9b05f): the framework refuses a door out of a
@@ -2021,10 +2098,13 @@ whether the work is over gets the same answer. The deviation is
 recorded on the kind in `:deviations`.
 
 The tree is enforced by the machine, not by the prompt. At `queued`,
-the envelope offers one door: research. At `researched`, it offers
-two: yes and no. At a leaf, it offers none to the sitter. The model
-cannot skip research, because the yes door is absent until it is
-done. It cannot make a task except through yes, which demands the
+the envelope offers one door: open. It takes no input, the engine
+reads the message, and the answer is the row with the excerpt on it.
+At `opened`, the envelope offers one door: research. At `researched`,
+it offers two: yes and no. At a leaf, it offers none to the sitter.
+The model cannot write a summary before the message is read, because
+the research door is absent until open is done. It cannot skip
+research, because the yes door is absent until it is done. It cannot make a task except through yes, which demands the
 action item in one sentence. `:touches` advertises the task birth,
 and the conformance library checks that it fired. `reopen` is the
 person's door: a reopen after a `no` is a correction, and the query
@@ -2044,7 +2124,7 @@ inbox headers through the `email.read` power at the cadence and
 mints one `inbox_item` per new message id, and none for a message
 with a list-unsubscribe header. Headers only.
 
-The WHOLE body is still never stored. The research door reads the
+The WHOLE body is still never stored. The open door reads the
 message itself, through the sitter's own `email.read` power, and
 keeps the first 4,000 characters of the plain text in `body_excerpt`
 with `body_cut` beside it (section 17, "Research is an engine
@@ -2059,10 +2139,10 @@ The person restates the seat. No deploy.
 
 ```json
 {
-  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Research first. Then say yes with the action item in one sentence, or no. A request that names Colton and asks for something is a yes.",
+  "charter": "You triage Colton's inbox. For each message the queue offers, take the one door the envelope shows. Open first, then research. Then say yes with the action item in one sentence, or no. A request that names Colton and asks for something is a yes.",
   "scope": [
     {"kind": "email.read", "actions": []},
-    {"kind": "inbox_item", "actions": ["research", "yes", "no"]}
+    {"kind": "inbox_item", "actions": ["open", "research", "yes", "no"]}
   ],
   "held_for": ["<model row id for Sonnet 5>"],
   "walk": "inbox_item",
@@ -2096,13 +2176,16 @@ change.
 **One firing, row by row.** The session opens one sitting, reads the
 seat row, then reads the queue:
 
-1. The envelope of the first row offers one door, research. The
-   model reads the message through `waymark_power`, then invokes
-   research with a summary.
-2. The envelope now carries the summary and offers yes and no. The
+1. The envelope of the first row offers one door, open. The model
+   invokes it with no input. The engine reads the message, and the
+   answer carries the excerpt.
+2. The envelope now offers one door, research. The model reads the
+   excerpt, then invokes research with a summary. When `body_read`
+   is false, it reads the message through `waymark_power` first.
+3. The envelope now carries the summary and offers yes and no. The
    model takes one.
-3. The row is at a leaf. The model moves to the next row.
-4. After twenty rows, or an empty queue, the session says so and
+4. The row is at a leaf. The model moves to the next row.
+5. After twenty rows, or an empty queue, the session says so and
    ends. The hook closes the sitting.
 
 The envelope holds one row at a time, never the queue. The rows
@@ -2374,7 +2457,8 @@ above. The cases:
     (R-5.2, R-7.4)
 16. A sitting left open past two cadences is marked abandoned by the
     boot sweep. (R-7.6)
-17. On a walk seat, a `queued` row's envelope offers only research,
+17. On a walk seat, a `queued` row's envelope offers only open, an
+    `opened` row's offers only research,
     a `researched` row's offers only yes and no, and a leaf offers
     none to the sitter. A `yes` births exactly one task and stamps
     it. (R-12.9, section 13.8)
@@ -2761,7 +2845,7 @@ trusts.
   same bytes again — 1.79M cache-read tokens over 25 turns, 62
   percent of the 0.58 USD. The bill is the sum, over the turns, of
   everything read before, so the largest early answer is the lever.
-  The research handler therefore reads the message itself, through
+  The open handler therefore reads the message itself, through
   the Gate proxy under the sitter's own `email.read` grant (the ctx
   `:power` hook), and writes `body_excerpt` — 4,000 characters of
   plain text — with `body_cut` beside it. One fetch for each row
@@ -3318,7 +3402,7 @@ On the active `repo_policy` of each repository with a line:
 |---|---|
 | `line_front` | the id of the front change |
 | `line_front_pr` | the front's pull request number |
-| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs; also a head the rig calls `waiting` that the mirror read green and behind its base, `head-answer`), `checks` (its checks run; the rig's `waiting` with `waits_on: checks`, or with no `waits_on`), `github` (the rig's `waiting` with `waits_on: github`: its checks are green and GitHub has not judged it mergeable yet), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
 | `line_waiting` | how many other changes stand in the line |
 | `line_at` | when the pass last wrote the line; it rides a write and never causes one |
 
@@ -3444,3 +3528,86 @@ branch is refused `not_train`. None force-pushes a base. The house
 calls them as it calls `merge` and `update_branch`, and a missing
 power leaves the train standing for the next pass. The fake rig in
 `factory10/test/factory10/bench_test.clj` serves the same answers.
+
+## 16. The key check door
+
+A service outside the engine admits a caller by a seat's key and holds
+no copy of it. It asks the engine on each connection, so `revoke_key`
+and `offer_key` on the seat cut that service's callers too. Before this
+door every route that read a seat key acted on a sitting (close, tally)
+or opened one (`waymark_sit`).
+
+**R-16.1** `POST /api/-/seats/verify` with the JSON body
+`{"key": "<seat key>"}` answers 200 and exactly
+`{"live": true|false, "seat": "<name>"|null}`. `live` is true when an
+active seat's `sitter_key` is exactly that key; `seat` is that seat's
+`name`. Nothing else of the seat row is answered, and the key is never
+echoed.
+
+**R-16.2** The door opens no sitting, mints no grant and writes no row,
+except the renewal of R-16.8, which writes the sitting's feed token
+outside the log.
+
+**R-16.3** A key that matches nothing, a key the seat revoked and the
+key of a parked seat answer the same body, `{"live": false, "seat":
+null}`, off the same constant-time read of every active seat
+(`seats/seat-by-key`). A one-time fire key is not a seat key and
+answers the same.
+
+**R-16.4** The caller proves itself as a service: the header
+`Waymark-Subscription-Secret` carries the signing secret of an active
+`subscription`. No header, a secret no subscription holds and a
+subscription that is paused, failed or revoked answer 401 with one
+sentence, before any seat is read. A subscription with no secret is not
+a caller.
+
+**R-16.5** Each subscription may ask about 120 keys in one clock
+minute. Past that the door answers 429 with `Retry-After`, in seconds.
+The count is kept by each engine process.
+
+**R-16.6** A revoke is read on the next ask: the door reads the seat
+rows each time and caches nothing.
+
+**R-16.7** A seat may state `feed_url`, the https address of an outside
+inbox. It is not the seat's `inbox`, which the engine holds itself, and
+the sit's `inbox` answer is unchanged by it. When the seat has a
+`feed_url`, `waymark_sit` answers a top-level `feed`:
+`{"url", "token", "expires_at", "note"}`. A sit that reuses an open
+sitting answers a fresh token, and the earlier ones answer until their
+own ends, so a stream that is using one is not cut. The sitting keeps
+hashes alone, so a sit cannot answer an earlier token again.
+
+- `token` is 128 random bits. The sitting keeps its SHA-256 alone
+  (`feed_token_hash`, and `feed_tokens_earlier` for the tokens before
+  the newest), written outside the log, and the transcript door redacts
+  each token from an uploaded line.
+- `expires_at` is 35 minutes after the sit. The token also stops when
+  its sitting leaves `open`, by the close door, the sweep or an
+  abandon, whichever is first.
+- This door answers `{"live": true, "seat": "<name>"}` for a token that
+  has not stopped, as it does for the seat's key, under the same limit
+  (R-16.5). A stopped token answers `{"live": false, "seat": null}`,
+  and the outside inbox turns that into its own 401.
+- No other door reads the token: it sits in no seat, closes no sitting,
+  pulls no inbox and is no bearer for the API or the connector.
+
+The session sends `Authorization: Bearer <token>` to `feed_url` and to
+no other address.
+
+**R-16.8** A feed token renews itself through this door. When the door
+judges a feed token that is live and has less than half its life left,
+the answer also carries `next_token` and `next_expires_at`, 35 minutes
+after the ask. The token that was asked about is not stopped: it
+answers until its own end, so there is no gap. A sitting holds at most
+12 live tokens; past that the door renews nothing and a sit drops the
+oldest. A closed sitting ends every token it minted.
+
+A service checks `Authorization: Bearer <seat key>` from its own caller
+this way:
+
+```bash
+curl -s https://work.kopsa.info/api/-/seats/verify \
+  -H "Waymark-Subscription-Secret: $SUBSCRIPTION_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d "{\"key\": \"$SEAT_KEY\"}"
+```

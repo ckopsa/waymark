@@ -819,11 +819,12 @@
       (is (= 1 (:abandoned (defs/sweep-seats! eng))))
       (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
 
-(deftest a-sitting-that-only-reads-over-the-router-is-not-swept
-  ;; ticket 900764ce: a GET through the router under the seat's grant
-  ;; is activity, so a sitter that only reads over HTTP keeps its
-  ;; sitting open past sitting_idle_seconds while each read is inside
-  ;; the window
+(deftest a-sitters-plain-http-read-is-its-bearers-not-the-seats
+  ;; ticket b5d51b4d, the owner's decision of 2026-10-01 on the
+  ;; follow-up to 900764ce: the seat's view is the connector's alone.
+  ;; A delegate that presents the seat's grant over plain HTTP is
+  ;; refused by name and that read is no call of the sitting's; the
+  ;; same read through the connector answers, and is one
   (let [at (clock)
         eng (fresh-engine at)
         h (engine/handler eng)
@@ -835,35 +836,37 @@
         headers (assoc (bearer colton)
                        "x-waymark-grant" (str (:grant sat))
                        "x-waymark-model" "chair-test-model")
-        ;; the calling sitting rides the request, as the owner's
-        ;; decision names it: `:waymark10/sitting`
-        read! #(h {:request-method :get :uri "/api/meals" :headers headers
-                   :waymark10/sitting sitting})
+        ;; a plain HTTP request, as a client can make it: only the
+        ;; connector names the calling sitting
+        read! #(h {:request-method :get :uri "/api/meals" :headers headers})
         last-call #(str (get-in (row-of eng :sitting sitting)
                                 [:data :last_call_at]))
         at! (fn [s] (reset! at (Instant/parse s)))]
 
-    (testing "each read moves last_call_at"
-      (doseq [s ["2026-09-17T09:08:00Z" "2026-09-17T09:16:00Z"
-                 "2026-09-17T09:24:00Z"]]
-        (at! s)
-        ;; the stamp judges the calling sitting, not the answer: a read
-        ;; the law narrows is still the sitter at work
-        (read!)
-        (is (= s (last-call)))))
-
-    (testing "reads past the idle limit, each inside the window, keep it open"
-      (at! "2026-09-17T09:34:00Z")
-      (is (= 0 (:abandoned (defs/sweep-seats! eng))))
+    (testing "the plain-HTTP read under the seat's grant is refused by name"
+      (at! "2026-09-17T09:08:00Z")
+      (let [resp (read!)]
+        (is (= 403 (:status resp)))
+        (is (str/includes? (str (:detail (json resp))) "connector")
+            "the sentence names the connector as the seat's door"))
       (let [row (row-of eng :sitting sitting)]
-        (is (= :open (:state row)))
-        (is (zero? (long (or (get-in row [:data :transitions]) 0)))
-            "a read is not a transition")
+        (is (= "2026-09-17T09:00:00Z" (last-call))
+            "the refused read is not the sitting's call")
+        (is (zero? (long (or (get-in row [:data :transitions]) 0))))
         (is (zero? (long (or (get-in row [:data :refusals]) 0)))
-            "a read is not a refusal")))
+            "the tally is the connector's: this refusal is not counted")))
 
-    (testing "a sitting that stops reading is swept as today"
-      (at! "2026-09-17T09:34:01Z")
+    (testing "the same read through the connector answers, and is the sitting's"
+      (let [q (tool h (with-session sid) "waymark_query" {:kind "meal"})]
+        (is (= 200 (:status q)))
+        (is (not (:isError q))))
+      (is (= "2026-09-17T09:08:00Z" (last-call))))
+
+    (testing "a plain-HTTP read does not keep the sitting open"
+      (at! "2026-09-17T09:18:00Z")
+      (is (= 0 (:abandoned (defs/sweep-seats! eng))))
+      (read!)
+      (at! "2026-09-17T09:18:01Z")
       (is (= 1 (:abandoned (defs/sweep-seats! eng))))
       (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
 

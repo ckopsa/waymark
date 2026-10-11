@@ -162,8 +162,12 @@
           stale (checks/stale-waiver-problems cen)
           tokens (checks/remedy-token-problems rdefs)
           unmatched (checks/unmatched-waiver-warnings cen)]
+      ;; an unwaived dead end is an ERROR, not a warning (ticket
+      ;; e7d1d3ab): printed and not counted, a new one passed the gate,
+      ;; and the gap closed on two guards came back on a third. The
+      ;; waiver list carries the old debt; a new guard answers or fails.
       (doseq [d (:dead-ends cen)]
-        (println (str "  " (usability/remedy-warning d))))
+        (println (str "  ✗ " (usability/remedy-warning d))))
       (println (str "  [remedies] " (checks/census-line cen)))
       ;; an unmatched waiver is counted, not recited: this report runs
       ;; over ONE application's kinds, so most of a framework-wide
@@ -183,7 +187,7 @@
                     (count enrollment-warnings))
        :scenarios (reduce + 0 (map (comp :checked :scenarios) all-rows))
        :broken (reduce + 0 (map (comp count :violations :scenarios) all-rows))
-       :remedy-errors (+ (count stale) (count tokens))
+       :remedy-errors (checks/remedy-error-count cen tokens)
        :census cen})))
 
 (defn -main [& args]

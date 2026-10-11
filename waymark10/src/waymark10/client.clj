@@ -55,6 +55,7 @@
   swaps in a ring handler as the transport — the tests drive the
   full contract against a real engine without a socket."
   (:require [clojure.string :as str]
+            [waymark10.confirm :as confirm]
             [waymark10.holds :as holds]
             [waymark10.wire :as wire])
   (:import (java.net URI)
@@ -285,13 +286,10 @@
   [doc action]
   (get-in doc [:unavailable (keyword action) :reason]))
 
-(defn- consequence-of
+(def ^:private consequence-of
   "The confirm gate's text: the declaration's :consequence rides the
-  wire as display.description."
-  [entry]
-  (or (get-in entry [:display :description])
-      (get-in entry [:display :label])
-      "This action requires confirmation."))
+  wire as display.description. The one reading, shared with the server."
+  confirm/consequence-of)
 
 (defn- attempt-key
   "The logical attempt: same action href + same input = same attempt,
@@ -459,23 +457,26 @@
   :verdicts […]}, per item) or {:problem …}; refuses locally on an
   undeclared action exactly like act!. act!'s confirm gate calls
   this itself; the fn stays public for callers pre-validating
-  outside a confirm flow."
-  [session doc action input]
-  (let [aname (keyword action)
-        entry (get-in doc [:actions aname])]
-    (if (nil? entry)
-      {:refused {:code :unknown-action
-                 :action (name aname)
-                 :reason (or (why-not doc aname)
-                             (str (:kind doc) " does not afford "
-                                  (name aname) "."))}}
-      (post! session
-             (str (:href entry)
-                  (if (str/includes? (:href entry) "?") "&" "?")
-                  "dry_run=1")
-             input
-             (act-headers doc entry nil nil)
-             true))))
+  outside a confirm flow. `mode` :partial asks the door to judge only
+  what the input gives: a missing field is no error, and the guards
+  that read one are named under :awaiting, not judged."
+  ([session doc action input] (dry-run session doc action input nil))
+  ([session doc action input mode]
+   (let [aname (keyword action)
+         entry (get-in doc [:actions aname])]
+     (if (nil? entry)
+       {:refused {:code :unknown-action
+                  :action (name aname)
+                  :reason (or (why-not doc aname)
+                              (str (:kind doc) " does not afford "
+                                   (name aname) "."))}}
+       (post! session
+              (str (:href entry)
+                   (if (str/includes? (:href entry) "?") "&" "?")
+                   (if (= :partial mode) "dry_run=partial" "dry_run=1"))
+              input
+              (act-headers doc entry nil nil)
+              true)))))
 
 ;; ── plan (rule 7) ───────────────────────────────────────────────────
 
@@ -543,9 +544,10 @@
 (defn- door-action [door] (second (str/split (str door) #"\." 2)))
 
 (defn- trail
-  "The stack as a person reads it: which door waits on which row."
+  "The stack as a person reads it: which door waits on which row. A
+  goal rehearsed partially carries its form: :needs and :awaiting."
   [stack]
-  (mapv (fn [f] {:door (:door f) :row (get-in f [:doc :self])}) stack))
+  (mapv (fn [f] (merge {:door (:door f) :row (get-in f [:doc :self])} (:form f))) stack))
 
 (defn- missing-inputs
   "The required fields of a door's declared input this input leaves
@@ -573,7 +575,9 @@
   pick, or, when neither names one, the refused call's own row when the
   remedy is on its kind. nil means nobody said — a choice for a person;
   {:unseen reason} means the pick did not read back (gone, or outside
-  the caller's grant), so the remedy is blocked, never attempted."
+  the caller's grant), so the remedy is blocked, never attempted. A
+  bound remedy that names :fields carries them on the call, and asks
+  for a patch where its door takes one, so only those fields are owed."
   [session door refused resolve choices]
   (let [same-kind? (= (door-kind door) (door-kind (:door refused)))
         bound (some #(when (= door (:door %)) %) (:bound refused))
@@ -588,11 +592,28 @@
                  (let [d (remedy-doc session (door-kind door) (door-action door) pick)]
                    (if (and (nil? d) same-kind?) (:doc refused) d)))]
     (cond
-      (doc? target) {:door door :doc target :input (:input pick)}
+      (doc? target)
+      (let [fields (mapv keyword (:fields bound))
+            patch? (and (seq fields)
+                        (some? (get-in target [:actions (keyword (door-action door))
+                                               :input :properties :patch])))]
+        (cond-> {:door door :doc target :input (:input pick)}
+          (seq fields) (assoc :fields fields)
+          patch? (assoc-in [:input :patch] true)))
       (problem? target)
       {:door door :unseen (or (get-in target [:problem :detail])
                               (get-in target [:problem :title])
                               "That row did not answer.")})))
+
+(defn- input-at
+  "What `input` holds at a remedy's `field`: a name, or a dotted path
+  into a nested field (showcase.evidence.film_url)."
+  [input field]
+  (reduce (fn [m k]
+            (when (map? m)
+              (if-some [v (get m (keyword k))] v (get m k))))
+          input
+          (str/split (name field) #"\.")))
 
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
@@ -600,14 +621,30 @@
   row in; a rehearsal's is the door's effect.to) · {:refused [remedy …]
   :bound [resolved remedy …] :doc :reason}
   · {:blocked entry} · {:stop res} (a wire failure or a divergence)."
-  [session {:keys [door doc input retry] :as call} rehearse? opts]
+  [session {:keys [door doc input retry fields] :as call} rehearse? opts]
   (let [doc (if (:self doc) (get-doc session (:self doc)) doc)
         action (keyword (door-action door))
         entry (get-in doc [:actions action])
         blocked (fn [m] {:blocked (merge {:door door :row (:self doc) :needs []
                                           :or (:or call [])}
                                          m)})
-        needs (when entry (missing-inputs entry input))]
+        ;; the warnings an answer still owes: one the caller named in
+        ;; :acknowledge is accepted already, and a dry-run sends no
+        ;; acknowledgement, so it answers that warning all the same
+        pending (fn [res]
+                  (let [accepted (into #{} (map name) (:acknowledge opts))]
+                    (vec (remove #(contains? accepted (some-> (:name %) name))
+                                 (:warnings res)))))
+        ;; a remedy that names its fields owes those: what the refusal
+        ;; is missing. A patch leaves the door's other fields as stored
+        needs (when entry
+                (if (seq fields)
+                  (into []
+                        (distinct)
+                        (concat (remove #(some? (input-at input %)) fields)
+                                (when-not (true? (:patch input))
+                                  (missing-inputs entry input))))
+                  (missing-inputs entry input)))]
     (cond
       (not (doc? doc)) {:stop doc}
 
@@ -624,10 +661,63 @@
       ;; the pursuit stops here, rehearsed or real, and names the
       ;; sentence — it is never acknowledged on anyone's behalf
       (and (get-in entry [:safety :confirm]) (not (:confirm! opts)))
-      (blocked {:confirm true
-                :consequence (consequence-of entry)
-                :reason (str "safety.confirm is true — a person must approve: "
-                             (consequence-of entry))})
+      (let [stop {:confirm true :consequence (consequence-of entry)}
+            reason (str "safety.confirm is true — a person must approve: "
+                        (consequence-of entry))]
+        (if-not (and rehearse? (:partial call) (seq needs))
+          (blocked (assoc stop :reason reason))
+          ;; a partial rehearsal's goal names the form it owes. A dry-run
+          ;; writes nothing, so it is sent through the confirm door: the
+          ;; guards that wait on the form, and a refusal, are known
+          ;; before the person confirms
+          (let [res (dry-run session doc action input :partial)
+                awaiting (vec (or (:awaiting res) (get-in res [:problem :awaiting])))
+                ;; an advisory guard that warned: the person accepts it
+                ;; at the same door, so it rides the confirm entry
+                warnings (vec (or (:warnings res) (get-in res [:problem :warnings])))
+                form (cond-> (assoc stop :needs needs)
+                       (seq awaiting) (assoc :awaiting awaiting)
+                       (seq warnings) (assoc :warnings warnings))]
+            (cond
+              (or (transport? res) (diverged res)) {:stop res}
+              (seq (get-in res [:problem :remedies]))
+              {:refused (vec (get-in res [:problem :remedies])) :doc doc
+               :bound (vec (get-in res [:problem :resolved_remedies]))
+               :reason (get-in res [:problem :detail])
+               :form form}
+              (or (problem? res) (refused? res))
+              (blocked {:needs needs
+                        :reason (or (get-in res [:problem :detail])
+                                    (get-in res [:refused :reason])
+                                    (get-in res [:problem :title]))})
+              :else (blocked (assoc form :reason reason))))))
+
+      ;; the goal of a partial rehearsal: its form is filled last, so
+      ;; the guards that read no missing field are judged now, and the
+      ;; door counts as landing with its :needs still owed
+      (and (seq needs) rehearse? (:partial call))
+      (let [res (dry-run session doc action input :partial)
+            ;; a refusal names the waiting guards on its problem
+            form {:needs needs :awaiting (vec (or (:awaiting res)
+                                                  (get-in res [:problem :awaiting])))}]
+        (cond
+          (or (transport? res) (diverged res)) {:stop res}
+          (seq (get-in res [:problem :remedies]))
+          {:refused (vec (get-in res [:problem :remedies])) :doc doc
+           :bound (vec (get-in res [:problem :resolved_remedies]))
+           :reason (get-in res [:problem :detail])
+           :form form}
+          ;; a dry-run answers its warnings beside :valid, with no
+          ;; :acknowledge!: the owner accepts them at the door
+          (seq (pending res)) (blocked (cond-> {:needs needs :warnings (pending res)}
+                                         (seq (:awaiting form))
+                                         (assoc :awaiting (:awaiting form))))
+          (or (problem? res) (refused? res))
+          (blocked {:needs needs
+                    :reason (or (get-in res [:problem :detail])
+                                (get-in res [:refused :reason])
+                                (get-in res [:problem :title]))})
+          :else {:landed doc :to (get-in entry [:effect :to]) :form form}))
 
       (seq needs) (blocked {:needs needs})
 
@@ -649,7 +739,9 @@
           ;; as landing, marked, so the real run reaches it and holds
           (and rehearse? (holds/hold? (get-in res [:problem :guard])))
           {:landed doc :hold true :to (get-in entry [:effect :to])}
-          (warnings? res) (blocked {:warnings (:warnings res)})
+          ;; act! answers :warnings with :acknowledge!, a dry-run
+          ;; beside :valid: either way the door waits on the owner
+          (seq (pending res)) (blocked {:warnings (pending res)})
           (seq (get-in res [:problem :remedies]))
           {:refused (vec (get-in res [:problem :remedies])) :doc doc
            :bound (vec (get-in res [:problem :resolved_remedies]))
@@ -706,7 +798,8 @@
   [session stack rehearse? {:keys [resolve choices max-depth max-steps expect] :or {max-depth 8} :as opts}]
   (let [act-opts (select-keys opts [:confirm! :acknowledge])
         max-steps (or max-steps (* 4 max-depth))
-        write-of (fn [f] {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)})]
+        write-of (fn [f] (merge {:door (:door f) :row (get-in f [:doc :self]) :input (:input f)}
+                                (:form f)))]
     (loop [stack stack writes [] blocked [] at nil expect expect steps 0]
       (let [top (peek stack)]
         (cond
@@ -727,7 +820,7 @@
               (recur (conj (pop stack)
                            (assoc top :doc (:doc out) :reason (:reason out)
                                   :remedies (seq (:refused out)) :all (:refused out)
-                                  :bound (:bound out)))
+                                  :bound (:bound out) :form (:form out)))
                      writes blocked at expect steps)
 
               (:blocked out)
@@ -739,7 +832,7 @@
                   (recur stack' writes blocked' at' expect steps)))
 
               :else
-              (let [w (cond-> (write-of top) (:hold out) (assoc :hold true))
+              (let [w (cond-> (merge (write-of top) (:form out)) (:hold out) (assoc :hold true))
                     writes' (conj writes w)
                     expected (first expect)
                     row (get-in top [:doc :self])
@@ -818,6 +911,13 @@
                 :doc), asked only where the refusal's resolved remedies
                 bound no row. With neither, a remedy on the refused
                 call's own kind acts on its row; any other is a choice.
+                When the rows a guard waits on are outside the caller's
+                sight (unseen children), that fallback tries the refused
+                row itself, the same guard refuses it, and the rehearsal
+                ends in a cycle block, by design. The quest planner
+                reads past that block on the server with the engine's
+                own read (`quests/unseen-waits`) and plans a step that
+                waits; this client never sees those rows.
     :choices    {remedy-door {:id row-id :input {…}}} — as :resolve, and
                 asked first; where the refusal bound the row, its
                 :input still fills what the binding left unset (the
@@ -827,7 +927,13 @@
     :max-steps  attempts one real run may make across its re-rehearsals
                 (default 4 × :max-depth); past it the run answers
                 {:stopped {:step-bound n} …}
-    :dry-run    rehearse only: the writes it would make, every choice
+    :dry-run    rehearse only: the writes it would make, every choice.
+                :partial rehearses a goal whose input lacks a required
+                field all the same: the door is asked to judge only
+                what was given, its remedies are followed, and the
+                goal's write (or its :stack frame, when a remedy
+                blocks) carries :needs, the fields still owed, and
+                :awaiting, the guards that wait on them
     :confirm! :acknowledge  ride every act! (rules 2 and 6)
   → {:done doc :writes […]}, or {:blocked-on [{:door :row :needs
   [input …] :or [alternative remedy …] (:reason)}] :stack […] :writes
@@ -840,7 +946,8 @@
   true and the :held_call id."
   ([session doc action input] (pursue! session doc action input {}))
   ([session doc action input opts]
-   (let [call {:door (door-of doc action) :doc doc :input input}
+   (let [call (cond-> {:door (door-of doc action) :doc doc :input input}
+                (= :partial (:dry-run opts)) (assoc :partial true))
          rehearsal (walk session [call] true opts)]
      (if (or (:dry-run opts) (not (contains? rehearsal :done)))
        (-> rehearsal (dissoc :done) (assoc :rehearsal true :first-estimate true))

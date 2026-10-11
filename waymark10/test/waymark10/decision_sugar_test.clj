@@ -95,6 +95,11 @@
                         :x-display {:label "Waits on"
                                     :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
              [:maybe :waymark/ref]]
+            [:domain {:optional true
+                      :not-a-ref "The domain's NAME, as the seat's domain row spells it: never a row id."
+                      :x-display {:label "The requester's domain"
+                                  :help "The name of the domain the requesting seat was in when it asked. The engine stamps it at birth. An ask with none filters as factory."}}
+             [:string {:min 1 :max 120}]]
             [:expires_at {:optional true
                           :x-display
                           {:label "Good until"
@@ -142,7 +147,9 @@
                     [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :grant_id #{:eq}
+                :domain #{:eq}
                 :requested_by #{:eq}}
+   :absent-as {:domain "factory"}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "offered"}
    :links [{:rel "grant" :kind :grant
@@ -298,7 +305,12 @@
   ;; create wall here and on :grant, reads :own-surface :grantable off
   ;; the registry instead of a literal naming three app kinds — same
   ;; refusals, new body, new hash. Re-pinned from CI (PR #531).
-  "3d25b716c8193b5347bd234f410bc4f170cd484604b112b597e90a87a8bb7007")
+  ;;
+  ;; THE LAW MOVED AGAIN (ticket de862cf9, epic aff24e84 piece 3): the
+  ;; ask gained `domain`, the name of its requester's seat's domain,
+  ;; filterable by :eq with :absent-as factory. Re-pinned from the
+  ;; bench's run 37167345732, where this assertion alone failed.
+  "971f54aabbba09bbbc3a5700aae484785e1502ba78a9cf25aa67d7c2ea068d5a")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

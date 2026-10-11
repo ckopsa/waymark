@@ -75,8 +75,29 @@
 
 (def ^:dynamic *h* nil)
 
+;; the suite-local fan: ten plain :kind refs on one row, so the refs
+;; block is asked for all ten in the one GET (ticket 6ef1473c)
+(def ^:private fan-fields
+  (mapv #(keyword (str "p" % "_id")) (range 10)))
+
+(def fan
+  (r/resource
+   {:kind :ba_fan
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.name} · {state}"
+    :schema (into [:map [:name [:string {:min 1 :max 40}]]]
+                  (map (fn [f] [f {:kind :ba_project} :waymark/ref]))
+                  fan-fields)
+    :actions
+    {:finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished fan is history."}}}}))
+
 (def ^:private tables
   ["meals" "plans" "ba_projects" "ba_tickets" "ba_days" "ba_rosters"
+   "ba_fans"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 
@@ -92,7 +113,7 @@
         (let [eng (engine/engine {:storage st
                                   :resources [fx/meal fx/plan
                                               bafx/ba-project bafx/ba-ticket
-                                              bafx/ba-day roster]})]
+                                              bafx/ba-day roster fan]})]
           (binding [*h* (engine/handler eng)]
             (f)))
         (finally (pg/close! st))))))
@@ -395,3 +416,61 @@
     (testing "recall: an open numeric field"
       (is (= "recall" (get-in env [:actions :estimate :effort]))))
     (is (empty? (ob/effort-violations env)))))
+
+;; ── refs ────────────────────────────────────────────────────────────
+
+(def ^:private agent-headers
+  {"x-waymark-principal" "batch-a-agent" "x-waymark-actor-type" "agent"
+   "content-type" "application/json"})
+
+(defn- req-as [hdrs method uri body]
+  (*h* (cond-> {:request-method method :uri uri :headers hdrs}
+         body (assoc :body (wire/write-json body)))))
+
+(defn- id-of [env] (last (str/split (:self env) #"/")))
+
+(deftest refs-carry-the-target-summary-under-the-readers-grant
+  (let [project (created "/api/ba_projects" {:name "Ref labels"})
+        ticket (created "/api/ba_tickets" {:title "Label me"
+                                           :project_id (id-of project)})]
+    (testing "a visible target renders its summary and href"
+      (is (str/starts-with? (:summary project) "Ref labels"))
+      (is (= {:project_id {:href (:self project)
+                           :summary (:summary project)}}
+             (:refs (:body (get-json (:self ticket)))))))
+    (testing "a summary has no data, so it carries no refs block"
+      (is (not (contains? (:body (get-json (str (:self ticket)
+                                                "?depth=summary")))
+                          :refs))))
+    (testing "a grant-hidden target is omitted, so the ref stays bare"
+      ;; the grant admits :ba_ticket alone — the project the ticket
+      ;; names does not exist for this reader
+      (let [gid (id-of (created "/api/grants"
+                                {:audience "batch-a-agent"
+                                 :scope [{:kind "ba_ticket"
+                                          :actions ["estimate"]}]}))
+            accepted (req-as agent-headers :post
+                             (str "/api/grants/" gid "/-/accept") nil)
+            scoped (assoc agent-headers "x-waymark-grant" gid)
+            resp (req-as scoped :get (:self ticket) nil)
+            env (json resp)]
+        (is (= 200 (:status accepted)))
+        (is (= 200 (:status resp)))
+        (is (= 404 (:status (req-as scoped :get (:self project) nil))))
+        (is (= (id-of project) (get-in env [:data :project_id])))
+        (is (not (contains? env :refs)))))
+    (testing "a row with ten refs reads its summaries in the one GET"
+      (let [projects (mapv #(created "/api/ba_projects" {:name (str "Fan " %)})
+                           (range 10))
+            fan-row (created "/api/ba_fans"
+                             (into {:name "ten"}
+                                   (map vector fan-fields
+                                        (map id-of projects))))
+            refs (:refs (:body (get-json (:self fan-row))))]
+        (is (= (set fan-fields) (set (keys refs))))
+        (is (= (mapv :self projects)
+               (mapv #(get-in refs [% :href]) fan-fields)))
+        (is (= (mapv :summary projects)
+               (mapv #(get-in refs [% :summary]) fan-fields)))
+        (is (= 10 (count (set (map :summary (vals refs)))))
+            "each field wears its OWN target's line")))))

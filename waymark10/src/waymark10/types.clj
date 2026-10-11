@@ -131,7 +131,7 @@
   {:kind :action} of the write this ctx was opened inside of by a
   ctx :invoke / :create door, nil at the wire — waymark-jfv.20), plus
   engine-injected hooks in later phases (:actor-of, :last-transition,
-  :rate, :read, :find, :sum, :invoke, :power).
+  :rate, :read, :find, :sum, :invoke, :follow-up, :power).
 
   `:power` is the engine's own hand on an external power
   (waymark-fp62.7.16): a function of a tool name and its arguments

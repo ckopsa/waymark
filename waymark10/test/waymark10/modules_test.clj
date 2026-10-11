@@ -90,12 +90,35 @@
            ;; provider, a fire URL and a held token, which no
            ;; application's vocabulary names either
            :runner_link :runner_provider
+           ;; …and the domain (epic aff24e84, piece 1), which the seat
+           ;; carries a typed ref to
+           :domain
            ;; …and the invitation (docs/spec-guided-follow.md § 3),
            ;; the held call's sibling hand-off, which a grant names
            :invitation
            ;; …and the recorded walk and its frames (§ 4), core's
            ;; beside the invitation
-           :walk :walk_frame}
+           :walk :walk_frame
+           ;; …and the film rule (demo scorecard), core's beside the
+           ;; walk a film is rendered from
+           :film_rule
+           ;; …and the scheduled action
+           ;; (docs/spec-scheduled-actions.md R-1), core's beside the
+           ;; held call it carries a ref to
+           :scheduled_action
+           ;; …and the walkthrough (docs/spec-walkthrough.md § 1): an
+           ;; ordered run of invitation-shaped steps, core's beside
+           ;; the invitation each step is judged as
+           :walkthrough
+           ;; …and the quest (docs/spec-quests.md), core's beside the
+           ;; walkthrough: its goal is judged as an invitation's step is
+           :quest
+           ;; …and the scene and the take (docs/spec-scenes.md): a demo
+           ;; written as shots, and one performance of it
+           :scene :take
+           ;; …and the secret: a value the owner enters once, which a
+           ;; power call on core's own mcp_server names by reference
+           :secret}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -122,7 +145,9 @@
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
-             :judgment :verdict :invitation :walk :walk_frame}
+             :domain
+             :judgment :verdict :invitation :walk :walk_frame :scheduled_action
+             :walkthrough :quest :secret :film_rule :scene :take}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -222,6 +247,9 @@
                "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               ;; the names a scene addresses the page by, beside the
+               ;; page that carries them
+               "/api/-/ui/surfaces"
                ;; the prose fields' render door, beside the page that
                ;; calls it
                "/api/-/render/markdown"
@@ -244,6 +272,9 @@
                ;; …and the fourth, a seat's inbox (spec-seat.md
                ;; R-12.38): its own key, one sitting's events
                "/api/-/sittings/inbox"
+               ;; …and the question a service asks about a seat's key:
+               ;; under the seats' own word, since it opens no sitting
+               "/api/-/seats/verify"
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
@@ -297,6 +328,8 @@
                  "/api/-/sittings/transcript"
                  ;; and the inbox door (R-12.38)
                  "/api/-/sittings/inbox"
+                 ;; and the seat key's verify door, static beside them
+                 "/api/-/seats/verify"
                  ;; and the slot's measure: /api/{plural}/{id}/-/{action}
                  ;; would read it as an action named "measure"
                  "/api/dashboard_slots/:id/-/measure"
@@ -367,11 +400,16 @@
             ;; sits beside it: the held calls' expiry (R-14, R-7)
             :mcp-discover :held-call-expiry :notifier
             ;; the invitations' resolution and expiry
-            ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
-            :invitations :invitation-expiry :walk-retention
+            ;; (spec-guided-follow § 3), the walkthroughs' consumer
+            ;; (spec-walkthrough § 3), the quests' consumer
+            ;; (spec-quests), and the walks' retention (§ 4)
+            :invitations :invitation-expiry :walkthroughs :quests :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
+            ;; and its seventh: the scheduled actions' clock
+            ;; (spec-scheduled-actions R-5)
+            :scheduled-actions
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
@@ -418,7 +456,9 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :walk-retention :seat-clock
+            :invitations :invitation-expiry :walkthroughs :quests :walk-retention
+            :seat-clock
+            :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]
            (hook-order [:jobs])))
     (is (empty? (filter #{:curtain :presence :intents} (hook-order [:jobs])))))

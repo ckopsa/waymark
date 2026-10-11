@@ -4,7 +4,8 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.properties :as prop]
             [waymark10.fingerprint :as fp]
-            [waymark10.gen-forms :as gf]))
+            [waymark10.gen-forms :as gf]
+            [waymark10.server.jobs :as jobs]))
 
 (def trials 200)
 
@@ -249,3 +250,27 @@
           f (with-meta (fn [_ _ _] :allow) {:waymark10/form form})]
       (is (= (waymark10.wire/sha256-hex (pr-str form))
              (fp/callable-hash "anywhere" f))))))
+
+(deftest editing-a-framework-defguards-body-moves-its-kinds-fingerprint
+  ;; 552c4173: job, definition and subscription carry their guards as
+  ;; g/defguard, so the body rides the declaration as a form and the
+  ;; form is the law. Pinned on :job's :start door.
+  (let [h (comp fp/fingerprint-hash fp/fingerprint-of)
+        rebuild (fn [f]
+                  (update-in jobs/job [:actions :start :guards]
+                             (fn [gs] (mapv #(update % :check f) gs))))
+        check (-> jobs/job :actions :start :guards first :check)
+        form (:waymark10/form (meta check))
+        edited (rebuild #(vary-meta % assoc :waymark10/form
+                                    (concat form '((t/allow)))))]
+    (is (some? form) "the guard's body reached the declaration as a form")
+    (is (= (h jobs/job)
+           (h (rebuild #(with-meta (fn [_ _ _] nil) (meta %)))))
+        "an unedited rebuild — another fn object, the same form — is no revision")
+    (is (not= (h jobs/job) (h edited))
+        "one more expression in the body is a revision")
+    (is (= ["machine.actions.start.guards.0.check"]
+           (mapv :path (:changed (fp/diff-fingerprints
+                                  (fp/fingerprint-of jobs/job)
+                                  (fp/fingerprint-of edited)))))
+        "…and the diff pins it to that guard's check")))

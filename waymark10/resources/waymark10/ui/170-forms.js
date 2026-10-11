@@ -22,13 +22,12 @@ function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
             : entry.effort === "assent" ? "primary" : "";
   const btn = el("button",
     {class: cls, "data-action": name, "data-effort": entry.effort || "",
+     "data-surface": "door:" + name,
+     "data-row": ((doc || {}).self || "").split("?")[0] || null,
      style: small ? "font-size:12px;padding:3px 8px" : "",
      title: entry.display?.description || ""},
     lbl || label(name, entry),
     entry.safety?.confirm ? " …" : "");
-  if (!small && entry.effort && entry.effort !== "assent")
-    btn.append(el("span", {class:"effort-chip",
-      title: `effort: ${entry.effort}`}, entry.effort));
   btn.addEventListener("click", () =>
     actionDialog({name, entry, doc, prefill, onDone}));
   return btn;
@@ -156,8 +155,9 @@ function fieldWidget(name, rawProp, value) {
    own widget named parent.child (the enum a select wearing its choices,
    a string an input, a property-less map-of still the JSON box), and
    collectValues folds them back into one object, omitting a sub-form
-   left entirely blank. One level: a map inside a map inside a map has
-   not been declared anywhere in the house. */
+   left entirely blank. It nests: a map inside the map is a sub-form
+   inside the sub-form, its inputs named by the whole path
+   (showcase.evidence.film_url), and ui-drive's access story drives one. */
 function subformWidget(name, prop, value) {
   const box = el("div", {class: "subform", "data-subform": name});
   const required = new Set((prop.required || []).map(String));
@@ -175,6 +175,7 @@ function subformWidget(name, prop, value) {
        carries the recipe until wireOptions walks the finished form */
     markOptions(widget, subRaw);
     box.append(el("div", {class: "field", "data-field": path,
+                          "data-surface": "dialog.field:" + path,
                           "data-when": w ? w.sib : null,
                           "data-when-value": w ? w.val : null},
       el("label", {title: path}, el("b", {}, xd.label || sub),
@@ -242,6 +243,10 @@ function listWidget(name, prop, items, value, makeRow) {
     const i = seq++;
     const row = el("div", {class: "listrow", "data-row": i});
     row.append(build(name + "[" + i + "]", seed));
+    /* the entry's own slot, named by the row's path: a refusal that
+       names the entry itself (held_for[1]) and no sub-field of it
+       lands here, found through rowPath like a sub-field's is */
+    row.append(el("div", {class: "err srv", "data-srverr": name + "[" + i + "]"}));
     row.append(el("button", {type: "button", class: "listdrop",
                              "aria-label": "remove this entry",
                              onclick: () => { row.remove(); refresh(); }}, "✕"));
@@ -261,6 +266,32 @@ function listWidget(name, prop, items, value, makeRow) {
   box.append(rows, add);
   refresh();
   return box;
+}
+/* A row is named by its mint order (items[2] stays items[2] when the
+   row above it goes), and the server names an entry by its POSITION in
+   the array it was sent: collectValues closes the hole a removed row
+   and a row left blank each leave. So a refusal's items[1] is the
+   second row that SENT something, whatever that row is named. This
+   turns the server's path into the form's, one list at a time so a
+   list inside a row is counted among its own rows; a path that names
+   no row on screen comes back as it was. */
+function sentRows(box) {
+  return [...box.querySelectorAll(":scope > .listrows > .listrow")].filter(row =>
+    [...row.querySelectorAll("[name]")].some(node =>
+      !node.closest(".field.off") && node.value !== "" && node.value !== null));
+}
+function rowPath(form, path) {
+  let out = "", rest = String(path);
+  for (;;) {
+    const m = rest.match(/^([^\[]*)\[(\d+)\]/);
+    if (!m) return out + rest;
+    const list = out + m[1];
+    const box = form.querySelector('[data-list="' + list + '"]');
+    const row = box && sentRows(box)[Number(m[2])];
+    if (!row) return path;
+    out = list + "[" + row.getAttribute("data-row") + "]";
+    rest = rest.slice(m[0].length);
+  }
 }
 /* the items' own x-ref, when this property is a LIST of refs — the
    advertisement schema.clj carries onto the items of a
@@ -697,6 +728,7 @@ function buildForm(schema, prefill, kind) {
     const xd = rawProp["x-display"] || prop["x-display"] || {};
     const w = whenOf(xd);
     form.append(el("div", {class: "field", "data-field": name,
+                           "data-surface": "dialog.field:" + name,
                            "data-when": w ? w.sib : null,
                            "data-when-value": w ? w.val : null},
       el("label", {title: name}, el("b", {}, xd.label || name),

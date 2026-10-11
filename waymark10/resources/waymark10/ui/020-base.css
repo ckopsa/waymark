@@ -211,16 +211,61 @@
                border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   #grantchip button { border: none; background: none; color: var(--warn);
                       padding: 0 0 0 6px; font-weight: 700; cursor: pointer; }
-  #followchip, #replaychip {
+  #followchip, #walkchip, #replaychip {
                 background: var(--verdigris-wash); color: var(--verdigris-deep);
                 border-radius: 999px; padding: 3px 12px; font-size: 12px;
                 font-weight: 600; display: none; white-space: nowrap; }
-  #followchip button, #replaychip button, #replaychip select {
+  #followchip button, #walkchip button, #replaychip button, #replaychip select {
                        border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
-  #followchip a { color: var(--verdigris-deep); }
+  #followchip a, #walkchip a { color: var(--verdigris-deep); }
   #followchip .gaze-faded { opacity: .7; font-weight: 400; }
+  /* the quest tracker (docs/spec-quests.md): the pinned quest's own row
+     of the sticky header, so no page hides it and it covers none of a
+     page's actions. One slim line: the step's note gives way first. A
+     phone lays it out as two rows, with doors a thumb can hit
+     (040-mobile.css). */
+  #questbar { flex: 1 0 100%; display: flex; align-items: center; gap: 10px;
+              min-width: 0; font-size: 12px; padding-top: 4px;
+              border-top: 1px solid var(--line); }
+  #questbar[hidden] { display: none; }
+  #questbar .quest-title { font-weight: 700; color: var(--verdigris-deep);
+                           white-space: nowrap; overflow: hidden;
+                           text-overflow: ellipsis; max-width: 40%; }
+  #questbar [data-quest-count] { white-space: nowrap; }
+  #questbar .quest-meter { flex: 0 0 56px; height: 4px; border-radius: 2px;
+                           background: var(--line); overflow: hidden; }
+  #questbar .quest-meter i { display: block; height: 100%;
+                             background: var(--verdigris-deep); }
+  #questbar .quest-line { flex: 1 1 0; min-width: 0; overflow: hidden;
+                          text-overflow: ellipsis; white-space: nowrap; }
+  /* the head step's line: its note, then its row and its needs in
+     words, which give way first and take half the line at most */
+  #questbar .quest-head { display: flex; gap: 6px; }
+  #questbar .quest-head [data-quest-note] { flex: 1 1 0; min-width: 0;
+                                            overflow: hidden;
+                                            text-overflow: ellipsis; }
+  #questbar .quest-head .quest-on { flex: 0 1 auto; min-width: 0;
+                                    max-width: 50%; overflow: hidden;
+                                    text-overflow: ellipsis; }
+  #questbar .quest-live { display: inline-block; width: 7px; height: 7px;
+                          border-radius: 50%; margin-right: 6px;
+                          background: var(--verdigris-deep);
+                          animation: quest-live 1.6s ease-in-out infinite; }
+  @keyframes quest-live { 50% { opacity: .25; } }
+  #questbar button { font-size: 12px; padding: 2px 10px; }
+  #questbar button[disabled] { opacity: .5; cursor: default; }
+  #questbar .quest-menu { position: relative; }
+  #questbar .quest-menu summary { cursor: pointer; list-style: none;
+                                  padding: 0 6px; font-weight: 700; }
+  #questbar .quest-menu-items { position: absolute; right: 0; top: 100%;
+                                z-index: 6; display: flex; gap: 4px;
+                                flex-direction: column; padding: 6px;
+                                background: var(--panel);
+                                border: 1px solid var(--line);
+                                border-radius: var(--radius); }
+  @media (max-width: 600px) { #questbar .quest-meter { display: none; } }
   /* presence: who else is looking at THIS screen — ephemeral dots off
      the /-/presence stream, never law */
   [data-presence] { margin-top: 6px; }
@@ -252,12 +297,6 @@
                    border-color: var(--refusal); }
   button.danger:hover { background: var(--refusal); color: var(--on-accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
-  /* effort as a subtle chip riding the button, not a text suffix */
-  .effort-chip { font: 600 9.5px var(--sans); border-radius: 3px;
-                 padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
-                 background: var(--chipbg); color: var(--muted); }
-  button.primary .effort-chip, button.danger:hover .effort-chip {
-    background: var(--on-accent-wash); color: var(--on-accent); }
 
   main { margin: 18px auto; padding: 0 20px; }
   .panel { background: var(--panel); border: 1px solid var(--line);
@@ -441,4 +480,46 @@
   .prose-tabs button[aria-pressed="true"] { font-weight: 600;
     background: var(--verdigris-wash); border-color: var(--verdigris);
     color: var(--verdigris-deep); }
+  /* a demo engine's end (docs/spec-demo-clones.md §3): a note until 15
+     minutes are left, a warning from there, and the last one at 5 */
+  #demobanner { margin: 0 0 12px; padding: 8px 12px; font-size: 13px;
+                border: 1px solid var(--line); border-radius: var(--radius);
+                background: var(--chipbg); color: var(--ink); }
+  #demobanner[hidden] { display: none; }
+  #demobanner[data-demo-level="warn"] { background: var(--warn-wash);
+    border-color: var(--warn); color: var(--warn); }
+  #demobanner[data-demo-level="last"] { background: var(--refusal-wash);
+    border-color: var(--refusal); color: var(--refusal); font-weight: 600; }
+  #demobanner a { color: inherit; }
+  /* a further invited field's place in the author's reading order
+     (docs/spec-walkthrough.md §4) */
+  /* a walkthrough (docs/spec-walkthrough.md §5): the step line above an
+     invited form, the mark in the invitation list, the row page's steps */
+  .walk-step { margin: 0 0 8px; font-size: 12px; font-weight: 600;
+               color: var(--verdigris-deep); }
+  .walk-mark { display: inline-block; margin-right: 6px; padding: 0 6px;
+               font-family: var(--mono); font-size: 10.5px;
+               border: 1px solid var(--verdigris); border-radius: 999px;
+               color: var(--verdigris-deep); }
+  .walk-steps { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+  .walk-steps li.current { font-weight: 600; }
+  /* a quest's plan, as a checklist on its row page */
+  .quest-steps { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+  .quest-step[data-quest-step="done"] .quest-note { text-decoration: line-through;
+                                                    opacity: .6; }
+  .quest-step[data-quest-step="next"] { font-weight: 600;
+                                        color: var(--verdigris-deep); }
+  .quest-step[data-quest-step="later"] { opacity: .5; }
+  .quest-step .quest-alt { font-size: 11px; font-weight: 400; }
+  .quest-step button { margin-left: 8px; }
+  .quest-blocked { margin: 8px 0; padding: 6px 10px; font-size: 13px;
+                   border-left: 3px solid var(--verdigris); }
+  .invite-ordinal { display: inline-block; margin-right: 6px; padding: 0 5px;
+                    font-family: var(--mono); font-size: 10.5px;
+                    border: 1px solid var(--verdigris); border-radius: 999px;
+                    color: var(--verdigris-deep); }
+  /* how far along a walkthrough's step is, above the form
+     (docs/spec-walkthrough.md §6) */
+  .invite-step { margin: 0 0 8px; font-family: var(--mono); font-size: 11.5px;
+                 color: var(--verdigris-deep); }
 

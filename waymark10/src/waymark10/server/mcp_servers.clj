@@ -80,6 +80,14 @@
   like a secret (a space, a colon, more than 64 characters) refuses
   at create and at restate.
 
+  THE CALL NAMES ITS CALLER. The power door binds `*caller*` around
+  its forward, and the http client's headers read it on every request:
+  X-Waymark-Seat, X-Waymark-Principal, X-Waymark-Acts-For and
+  X-Waymark-Sitting (`caller-headers`). The engine writes all four from
+  the session, never from the call's arguments, so a caller cannot
+  spell them. A row with `send_caller` false sends none of them. The
+  engine's own hand binds nothing and sends nothing.
+
   THE CADENCE. `start-discover-sweeper!` re-reads every live row's
   tools/list on an interval and walks the `discover` door only when
   the hash moved, so an unchanged list costs no transition. The hash
@@ -95,6 +103,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.problems :as p]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -142,7 +151,8 @@
 ;; ── the client registry ─────────────────────────────────────────────
 
 (defonce ^:private clients
-  ;; row id → {:key config :client fn :lock Object}
+  ;; row id → {:key config :client fn :lock Object}; :lock is nil for
+  ;; an http row
   (atom {}))
 
 (defonce ^:private build-lock (Object.))
@@ -150,17 +160,50 @@
 (defn- config-key [row]
   (let [d (:data row)]
     [(str (:transport d)) (:url d) (:command d) (vec (:args d))
-     (:auth_env d) (boolean (:passthrough d))]))
+     (:auth_env d) (boolean (:passthrough d)) (false? (:send_caller d))]))
+
+(def ^:dynamic *caller*
+  "Who makes the power call on this thread: {:principal :caller
+  :sitting}, bound by the power door around its forward and read by
+  the http client on every request. nil is the engine's own hand."
+  nil)
+
+(defn- header-safe
+  "A header value holds printable ASCII only: anything else is dropped."
+  [s]
+  (str/replace (str s) #"[^\x20-\x7e]" ""))
+
+(defn caller-headers
+  "The four headers that name who made a power call, from what the
+  session knows and never from the call's arguments. A seat's sitter is
+  `seat:<id>` with the display `<name> (seat)`; any other principal
+  answers an empty X-Waymark-Seat."
+  [{:keys [principal caller sitting]}]
+  (let [pid (str (or (:id principal) caller))
+        seat (when (str/starts-with? pid "seat:") (subs pid 5))
+        seat-name (str/replace (str (:display principal)) #" \(seat\)$" "")]
+    (update-vals
+     {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
+      "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
+                                 "; id=" pid)
+      "X-Waymark-Acts-For" (str (:acts-for principal))
+      "X-Waymark-Sitting" (str sitting)}
+     header-safe)))
 
 (defn- headers-fn
-  "The http client's extra headers, read from the environment on
-  every call (R-9). nil when the row names no variable."
-  [env-name]
-  (when-not (str/blank? (str env-name))
+  "The http client's extra headers, read on every call: the
+  Authorization the environment holds (R-9), and the caller's four
+  when the power door bound one and the row did not opt out."
+  [d]
+  (let [env-name (:auth_env d)
+        send-caller? (not (false? (:send_caller d)))]
     (fn []
-      (let [v (System/getenv (str env-name))]
-        (when-not (str/blank? (str v))
-          {"Authorization" (str v)})))))
+      (merge (when-not (str/blank? (str env-name))
+               (let [v (System/getenv (str env-name))]
+                 (when-not (str/blank? (str v))
+                   {"Authorization" (str v)})))
+             (when (and send-caller? *caller*)
+               (caller-headers *caller*))))))
 
 (defn- build-client [seam row]
   (let [d (:data row)
@@ -179,13 +222,15 @@
 
               :else
               (client/http-client (str (:url d))
-                                  {:headers-fn (headers-fn (:auth_env d))
+                                  {:headers-fn (headers-fn d)
                                    :timeout-ms timeout}))]
     (client/with-timeout raw timeout)))
 
 (defn client-for
   "The row's client entry {:client :lock}, built on first use and
-  rebuilt when the row's transport fields moved."
+  rebuilt when the row's transport fields moved. A stdio row has a
+  lock, because its calls share one pipe. An http row has none: each
+  call is its own request, so one that waits holds up no other."
   [seam row]
   (let [id (str (:id row))
         k (config-key row)]
@@ -193,7 +238,9 @@
       (let [e (get @clients id)]
         (if (and e (= k (:key e)))
           e
-          (let [fresh {:key k :client (build-client seam row) :lock (Object.)}]
+          (let [fresh {:key k :client (build-client seam row)
+                       :lock (when (= "stdio" (str (get-in row [:data :transport])))
+                               (Object.))}]
             (when e (client/close! (:client e)))
             (swap! clients assoc id fresh)
             fresh))))))
@@ -208,16 +255,18 @@
     nil))
 
 (defn- wire!
-  "One call on a row's client, under the row's lock. Throws the
-  client's problem."
+  "One call on a row's client, under the row's lock when it has one.
+  Throws the client's problem."
   [seam row method params]
   (let [{:keys [client lock]} (client-for seam row)]
-    (locking lock (client method params))))
+    (if lock
+      (locking lock (client method params))
+      (client method params))))
 
 (defn- fatal?
-  "Did the row's client call its last failure fatal?"
-  [seam row]
-  (client/dead? (:client (client-for seam row))))
+  "Did the row's client call the failure `e` fatal?"
+  [seam row e]
+  (client/dead? (:client (client-for seam row)) e))
 
 ;; ── the rows ────────────────────────────────────────────────────────
 
@@ -324,14 +373,15 @@
 (defn- passthrough? [row]
   (true? (get-in row [:data :passthrough])))
 
-(defn resolve-tool
-  "A prefixed tool name → {:row :bare :entry :token :why}, or nil
+(defn resolve-among
+  "Over rows already read, as a guard holds them inside its own
+  transaction (docs/spec-scheduled-actions.md R-4.4): a prefixed tool name → {:row :bare :entry :token :why}, or nil
   when no row answers to it. The row wearing the prefix wins. When
   none does, a passthrough row answers the full name: the one whose
   powers name it, else the first."
-  [eng tool]
+  [rs tool]
   (let [tool (str tool)
-        rs (rows eng)
+        rs (remove #(= :retired (:state %)) rs)
         by-prefix (when-some [[prefix bare] (split-name tool)]
                     (some (fn [row]
                             (when (and (= prefix (str (get-in row [:data :name])))
@@ -354,6 +404,11 @@
                ;; `approval person` demands one too
                :why (boolean (and entry (why-demanded? entry)))
                :approval (if entry (approval-of entry) :none))))))
+
+(defn resolve-tool
+  "`resolve-among`, over every row of this engine that is not retired."
+  [eng tool]
+  (resolve-among (rows eng) tool))
 
 (defn capability-of
   "The power token a prefixed tool name is bound to, or nil."
@@ -503,6 +558,31 @@
         (keep (fn [[tk fields]] (when (seq fields) [tk (vec (sort fields))])))
         (constraints-of-rows (rows eng))))
 
+(defn glob-fields
+  "The constraint fields this powers entry says take GLOBS, as a set of
+  names. A filter value on one of them is read in the path's own glob
+  grammar; on every other field it is an exact word. An entry that
+  names none answers the empty set, so no grant on it widens."
+  [entry]
+  (into #{} (comp (map str) (remove str/blank?)) (:glob_constraints entry)))
+
+(defn power-glob-constraints
+  "Every power token with a constraint field that takes globs, and
+  those fields, sorted → {token [field …]}. A token that names none is
+  ABSENT, as in `power-constraints`: discover publishes this map beside
+  that one, and a field missing from it is a field to name exact values
+  on."
+  [eng]
+  (into (sorted-map)
+        (keep (fn [[tk fields]] (when (seq fields) [tk (vec (sort fields))])))
+        (reduce (fn [m [tk fields]] (update m tk (fnil into #{}) fields))
+                {}
+                (for [row (rows eng)
+                      e (get-in row [:data :powers])
+                      :let [tk (str (:power e))]
+                      :when (not (str/blank? tk))]
+                  [tk (glob-fields e)]))))
+
 ;; ── the registry beside the rows (waymark-fp62.10.4) ────────────────
 ;;
 ;; Since this leg the powers list is the FIRST vocabulary: a dotted
@@ -605,6 +685,16 @@
              (ex-message e) ")")))
   (drop-client! (:id row)))
 
+(defn- dark-words
+  "What the server said on the probe that just failed (`client/said`),
+  with the dark row named in its context. nil when it said nothing."
+  [row refusal]
+  (some-> (client/said refusal)
+          (update :context #(str "server " (get-in row [:data :name])
+                                 " is dark: " %))))
+
+(declare revived)
+
 (defn revive!
   "One live probe of a row the engine darkened: tools/list on a fresh
   client, and when the server answers, the engine's own `mark_live`,
@@ -618,45 +708,95 @@
   the other's refusal is caught, and the row read afterwards is live
   either way."
   [eng row]
+  (:row (revived eng row)))
+
+(defn- revived
+  "`revive!`'s probe, with both of its answers: {:row row} when the
+  server answered and the row is live, {:refusal e} when the probe
+  threw, and nil when there was no probe to make or `mark_live` did
+  not land."
+  [eng row]
   (when (and (= :dark (:state row)) (not (person-darkened? row)))
     (let [seam (seam-of eng)
-          answered? (try
-                      (fetch-tools! seam row)
-                      true
-                      (catch Exception _
-                        (drop-client! (:id row))
-                        false))]
-      (when answered?
-        (try
-          (inv/invoke! eng :mcp_server (str (:id row)) :mark_live nil
-                       {:principal engine-actor})
-          (catch Exception e
-            (warn! "mark_live for " (get-in row [:data :name])
-                   " did not land (" (ex-message e) ")")))
-        (let [now (row-by-name eng (get-in row [:data :name]))]
-          (when (= :live (:state now)) now))))))
+          refusal (try
+                    (fetch-tools! seam row)
+                    nil
+                    (catch Exception e
+                      (drop-client! (:id row))
+                      e))]
+      (if refusal
+        {:refusal refusal}
+        (do
+          (try
+            (inv/invoke! eng :mcp_server (str (:id row)) :mark_live nil
+                         {:principal engine-actor})
+            (catch Exception e
+              (warn! "mark_live for " (get-in row [:data :name])
+                     " did not land (" (ex-message e) ")")))
+          (let [now (row-by-name eng (get-in row [:data :name]))]
+            (when (= :live (:state now)) {:row now})))))))
+
+(def ^:private slow-tool-timeout-ms
+  "The tools that hold a call open on purpose, by prefixed name, and
+  the bound each gets in place of the row's own. The rig's
+  `bench__test_result` waits up to 40 s for a run to finish before it
+  answers `pending`, which is longer than the 30 s every other call
+  gets: the forward timed out first, the seat read a timeout where the
+  rig meant `pending`, and the timeout marked the row dark (ticket
+  4d075b02)."
+  {"bench__test_result" 60000})
+
+(defn- call-bound
+  "The bound of one tools/call: a caller's own binding first, then the
+  slow tool's, and nil — the client's own — for every other call."
+  [row bare]
+  (or client/*call-timeout-ms*
+      (get slow-tool-timeout-ms (str (get-in row [:data :name]) "__" bare))))
 
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
   name. A dark row gets one live probe first (`revive!`): when the
   server answers the row is live again and the call goes out, and
-  otherwise the call refuses 503. A failure the client calls fatal
-  marks the row dark and rethrows."
+  otherwise the call refuses 503, carrying what the server said on
+  that probe (`dark-words`). A failure the client calls fatal marks
+  the row dark and rethrows."
   [eng tool args]
   (let [{:keys [row bare] :as hit} (resolve-tool eng tool)]
     (when (nil? hit)
       (throw (p/not-found "power" (str tool))))
     (let [row (if (= :dark (:state row))
-                (or (revive! eng row) (throw (dark-problem row)))
+                (let [{live :row refusal :refusal} (revived eng row)]
+                  (or live
+                      (throw (client/saying (dark-problem row)
+                                            (dark-words row refusal)))))
                 row)
-          seam (seam-of eng)]
+          seam (seam-of eng)
+          ;; a secret ref becomes its value here and nowhere earlier,
+          ;; so every stored copy of the call keeps the id
+          schema (some #(when (= bare (:name %)) (:input_schema %))
+                       (get-in row [:data :tools]))
+          {:keys [args values]} (secrets/resolve-refs! eng schema args)]
       (try
-        (wire! seam row "tools/call" {:name bare :arguments (or args {})})
+        (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)]
+                         (wire! seam row "tools/call"
+                                {:name bare :arguments args}))
+                       values)
         (catch Exception e
-          (when (and (p/problem? e) (fatal? seam row))
+          (when (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e)))
           (throw e))))))
+
+(defn check-secret-refs!
+  "Refuses when an `x-secret-ref` argument of this call names no secret
+  row. `call!` would refuse the same at the forward; this is the same
+  judgment made early, before a call is held for a person's tap."
+  [eng tool args]
+  (when-some [{:keys [row bare]} (resolve-tool eng tool)]
+    (secrets/check-refs! eng
+                         (some #(when (= bare (:name %)) (:input_schema %))
+                               (get-in row [:data :tools]))
+                         args)))
 
 (defn engine-of
   "The engine behind a dispatcher, a delay, an engine-ref or the
@@ -816,7 +956,7 @@
 
 (def restatable
   "The fields a restate states again (R-8)."
-  [:url :command :args :auth_env :powers :note])
+  [:url :command :args :auth_env :send_caller :powers :note])
 
 (defhandler restate-server [row inp ctx]
   (let [row (reduce (fn [r f]
@@ -973,6 +1113,14 @@
                   :examples [["repo" "path"]]
                   :x-display {:label "Constraints"
                               :help "The tool input fields a grant's filter may name for this power — repo, path. Leave it empty and no grant may filter this power at all."}}
+    [:maybe [:vector [:string {:min 1 :max 60}]]]]
+   ;; ticket b9c1b8e4: which of those fields take a GLOB. The door
+   ;; matches a filter value exactly on every field but path unless
+   ;; the entry names the field here, so no existing grant widens.
+   [:glob_constraints {:optional true
+                       :examples [["entity_id"]]
+                       :x-display {:label "Glob constraints"
+                                   :help "The constraints whose filter values are globs, such as automation.school_* on entity_id. A field left out matches exact values only. The path field always takes globs."}}
     [:maybe [:vector [:string {:min 1 :max 60}]]]]])
 
 (defn entry-approval-agrees?
@@ -1058,6 +1206,10 @@
                            :label "Auth variable"
                            :help "The NAME of an environment variable on the engine's host that holds the Authorization header value. Never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:send_caller {:optional true
+                  :x-display {:label "Send the caller"
+                              :help "False for an upstream that must not see who calls: the engine then sends no X-Waymark-Seat, X-Waymark-Principal, X-Waymark-Acts-For or X-Waymark-Sitting header. Empty means true."}}
+    [:maybe :boolean]]
    [:passthrough {:optional true
                   :x-display {:label "Passthrough"
                               :help "True only on the row named gate: its tools already wear their prefixes, and the engine adds nothing in front."}}
@@ -1133,6 +1285,10 @@
                :x-display {:raw true :label "Auth variable"
                            :help "The NAME of the environment variable, never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:send_caller {:optional true
+                  :x-display {:label "Send the caller"
+                              :help "False to send the server no caller headers."}}
+    [:maybe :boolean]]
    [:powers {:optional true
              :x-display {:label "Powers"
                          :help "The whole policy, stated again: which tools each power token admits, and what a call must pass before it goes out."}}
@@ -1255,7 +1411,7 @@
             (inv/invoke! eng :mcp_server (str (:id row)) :discover
                          {:seen_hash hash} {:principal engine-actor})))
         (catch Exception e
-          (if (and (p/problem? e) (fatal? seam row))
+          (if (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e))
             (warn! "discover of " (get-in row [:data :name]) " failed ("
                    (ex-message e) ")")))))))

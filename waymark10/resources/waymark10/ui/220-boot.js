@@ -36,6 +36,7 @@ function onPresenceFrame({event, data: f}) {
   /* guided follow (200-events-follow.js): the followed principal's
      screen state, applied — a snapshot's entry carries its last ui */
   if (f.event === "ui") applyGuidedUi(f);
+  else if (f.event === "move") guidedMove(f);
   else if (f.event === "snapshot" && followUi && followId) {
     guidedSeq = -1;
     const p = PRESENCE.get(followId);
@@ -72,6 +73,8 @@ async function presenceBeat() {
   /* a replay (200-events-follow.js) writes nothing, not even where
      this tab looks: the screen shows a recording, not a gaze */
   if (replay) return;
+  /* nor does a film's page, before its replay starts */
+  if (film) return;
   const here = hereHref();
   /* the viewer, not the dev box: a person signed in by session cookie
      beats too — the server resolves the cookie, and principalHeaders

@@ -12,6 +12,7 @@
             [waymark10.batch-a-fixtures :as bafx]
             [waymark10.dev :as dev]
             [waymark10.fixtures :as fx]
+            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -44,4 +45,42 @@
   (let [eng (dev/scratch! [fx/meal])]
     (engine/start! eng port)
     (println (str "held-call engine: http://localhost:" port "/api/-/ui"))
+    eng))
+
+(def ^:private later-ticket
+  "The later drive's row: a ticket a person grooms, with one field a
+  condition can read."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:draft :open]
+    :initial :draft
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+     [:priority {:x-display {:label "Priority"}} [:int {:min 0 :max 4}]]]
+    :filterable {:state #{:eq :in}
+                 :priority #{:eq :in :ne :range}}
+    :actions
+    {:groom {:from #{:draft} :to :open
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Groom" :order 1}}
+     :ungroom {:from #{:open} :to :draft
+               :safety {:idempotent true :reversible true :confirm false}
+               :display {:label "Ungroom" :order 2}}}}))
+
+(defn start-later!
+  "The later drive's engine: a memory engine (dev/scratch!, no database)
+  serving a ticket beside core's scheduled_action kind
+  (docs/spec-scheduled-actions.md R-7.3). Nothing is seeded here: the
+  drive writes its ticket through the API.
+
+    clojure -Sdeps '{:aliases {:fx {:extra-paths [\"test\"]}}}' -M:fx -e \\
+      \"(do ((requiring-resolve 'waymark10.batch-a-dev/start-later!) 8125) nil) @(promise)\""
+  [port]
+  (let [eng (dev/scratch! [later-ticket])]
+    (engine/start! eng port)
+    (println (str "later engine: http://localhost:" port "/api/-/ui"))
     eng))

@@ -3,12 +3,15 @@ function label(name, entry) { return entry.display?.label || title(name); }
 
 async function renderResource(view, doc, hints) {
   hints = hints || {};
+  /* the ref labels this envelope carries, before any cell asks */
+  noteRefs(doc);
   const panel = el("div", {class:"panel"});
   const kind = doc.kind;
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"), " / ",
+    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
   panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));
@@ -18,8 +21,9 @@ async function renderResource(view, doc, hints) {
     el("span", {class:"version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
-      (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : "")),
-    el("span", {class:"version", title: doc.self}, doc.self)));
+      (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* the row's own path is the crumb's title, on every kind, and is
+     not header text */
   /* the viewing dots: who else is looking at this screen right now
      (painted from the known truth on mount — a presence that arrived
      before this screen rendered still shows — then repainted as
@@ -29,7 +33,9 @@ async function renderResource(view, doc, hints) {
 
   /* the read surface up front: declared links (badges riding) and the
      surfaces this row anchors — scent before the scroll */
-  const chips = linksStrip(doc);
+  /* a walk's export is drawn below as ⬇ Export, which also marks the
+     walk exported in this browser: the strip leaves that rel out */
+  const chips = linksStrip(doc, walkExportHref(doc) ? ["export"] : []);
   if (chips) panel.append(chips);
   const surfBox = el("div", {});
   panel.append(surfBox);
@@ -76,12 +82,9 @@ async function renderResource(view, doc, hints) {
   /* refused actions keep their seats in the bar, dimmed; their honest
      reasons render just below, at the point of intent */
   const {blocked, grouped, gated} = splitRefusals(doc);
-  for (const [name, entry] of blocked)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
-  for (const [name, entry] of gated)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
+  /* one that names a way out is a tap away from a quest (shutDoor) */
+  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+    bar.append(shutDoor(name, entry, doc));
   /* the grant scope (wire 10): a grant row is a scope SELECTOR its
      audience presents via X-Waymark-Grant — this session can put it on */
   if (kind === "grant") {
@@ -108,11 +111,26 @@ async function renderResource(view, doc, hints) {
       `👁 Follow ${aud}`));
   }
   /* a sealed walk plays on this screen, read-only: its export is the
-     one read the replay makes (200-events-follow.js) */
-  if (kind === "walk" && doc.state === "sealed")
+     one read the replay makes (200-events-follow.js). The row names
+     that export under links.export, and a row that does not carry the
+     link offers neither control */
+  if (walkExportHref(doc))
     bar.append(el("button", {"data-replay-walk": "",
       title: "play this recording on this screen, read-only — nothing is written",
-      onclick: () => replayWalk(doc.self)}, "▶ Replay"));
+      onclick: () => replayWalk(doc)}, "▶ Replay"));
+  /* …and leaves as a file: the download is the only copy that outlives
+     a demo engine (docs/spec-demo-clones.md §3) */
+  if (walkExportHref(doc))
+    bar.append(el("button", {"data-export-walk": "",
+      title: "download this recording as a .ndjson file",
+      onclick: () => exportWalk(doc)}, "⬇ Export"));
+  /* a walkthrough's row page lists every step's note in order: the
+     person sees the whole path before they agree to it
+     (docs/spec-walkthrough.md §5; 200-events-follow.js) */
+  if (kind === "walkthrough") panel.append(walkthroughSteps(doc));
+  /* a quest's row page shows its plan as a checklist, with Go on the
+     step to take now (docs/spec-quests.md; 200-events-follow.js) */
+  if (kind === "quest") panel.append(questPlan(doc));
   /* an open invitation addressed to this viewer: one tap lands on the
      invited row with its door open in their own hand */
   if (kind === "invitation" && doc.state === "open" &&
@@ -143,7 +161,11 @@ async function renderResource(view, doc, hints) {
   }
   panel.append(bar);
   const notes = blockedNotes(blocked, doc);
-  if (notes) panel.append(notes);
+  /* a kind whose law marks everyday doors folds the other shut ones,
+     and the reasons with them, under one line (foldDoors) */
+  const more = foldDoors(bar, notes, doc);
+  if (more) panel.append(more);
+  else if (notes) panel.append(notes);
 
   /* the data document: fields a parts group re-renders (with buttons)
      leave the kv table */
@@ -154,6 +176,15 @@ async function renderResource(view, doc, hints) {
      the raw report leave the kv table for their own panel */
   if (kind === "worksheet")
     for (const k of ["lines", "report", "tally"]) delete plainData[k];
+  /* a quest row: the checklist above already draws the plan, so it
+     leaves the kv table (ticket bdd37958) */
+  if (kind === "quest") delete plainData.plan;
+  /* …and so do the goal's own words (action_label, input_labels): they
+     are said in the action and input rows below, and are no rows */
+  const goalDoorLabel = kind === "quest" ? plainData.action_label : null;
+  const goalInputLabels = (kind === "quest" && plainData.input_labels) || {};
+  if (kind === "quest")
+    for (const k of ["action_label", "input_labels"]) delete plainData[k];
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -162,10 +193,44 @@ async function renderResource(view, doc, hints) {
         : "The plan — what apply would do"),
       worksheetReport(doc)));
   view.append(...partsSections(doc));
+  if (kind !== "scheduled_action") view.append(scheduledSection(doc));
+  const dataTable = kvTable(plainData, hints);
+  /* …and its goal row is drawn in words, as the checklist draws a
+     step's row (questRow, 120-nav-home.js): the path is never text */
+  if (kind === "quest" && plainData.self)
+    for (const tr of dataTable.children)
+      if (tr.firstChild.getAttribute("title") === "self")
+        tr.lastChild.replaceChildren(questRow(plainData.self));
+  /* …and its goal door and what the door was given are said by their
+     display labels, as the checklist says a step's (questStep,
+     200-events-follow.js): the envelope's own labels first, then the
+     ones that ride the goal's own step */
+  if (kind === "quest") {
+    const goal = ((doc.data || {}).plan || []).find(s =>
+      s.self === plainData.self && s.door === plainData.action) || {};
+    const needs = (goal.needs || []).flat();
+    const given = plainData.input;
+    for (const tr of dataTable.children) {
+      const key = tr.firstChild.getAttribute("title");
+      if (key === "action" && plainData.action)
+        tr.lastChild.replaceChildren(
+          el("span", {"data-quest-door": "", title: plainData.action},
+            goalDoorLabel ||
+            goal.door_label || title(plainData.action)));
+      if (key === "input" && given && typeof given === "object" &&
+          !Array.isArray(given) && Object.keys(given).length)
+        tr.lastChild.replaceChildren(el("table", {class:"kv"},
+          Object.entries(given).map(([k, v]) => el("tr", {},
+            el("td", {class:"k", title: k},
+              goalInputLabels[k] ||
+              (goal.needs_labels || [])[needs.indexOf(k)] || title(k)),
+            el("td", {}, valueCell(v, {}))))));
+    }
+  }
   const dataPanel = el("div", {class:"panel"},
-    el("details", {open:""},
+    el("details", {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
-      kvTable(plainData, hints)));
+      dataTable));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
@@ -173,8 +238,63 @@ async function renderResource(view, doc, hints) {
   const footer = notNowFooter(grouped, gated, doc);
   if (footer) dataPanel.append(footer);
   view.append(dataPanel);
+  wireNotYet(view);
   watchScope({self: doc.self});
   paintPresence();
+}
+
+/* ── a row's pending scheduled actions (docs/spec-scheduled-actions.md
+   R-7.3): the calls waiting on this row, each with its reschedule and
+   cancel doors. The kind filters by state and by scheduler, not by
+   target, so the page reads the viewer's pending rows — the own
+   surface answers them, and one scheduler holds at most 100 — and
+   keeps the ones aimed at this row. The panel stays hidden while there
+   are none, and for a viewer the collection does not answer. ──────── */
+const VALIDITY_WORDS = {strict: "only if nothing about it changes",
+                        state: "as long as its state holds",
+                        conditions: "only if its conditions hold"};
+function scheduledSection(doc) {
+  const box = el("div", {class: "panel", "data-scheduled": "",
+                         style: "display:none"});
+  const id = doc.self.split("?")[0].split("/").pop();
+  api("/api/scheduled_actions?state=scheduled&page%5Bsize%5D=100").then(res => {
+    const mine = ((res.ok && (res.body || {}).items) || []).filter(item => {
+      const t = (item.fields || {}).target || {};
+      return t.kind === doc.kind && t.id === id;
+    });
+    if (!mine.length) return;
+    box.append(el("h3", {}, "Scheduled"));
+    for (const item of mine) {
+      const f = item.fields || {}, acts = item.actions || {};
+      const conds = Object.entries(f.conditions || {})
+        .map(([k, v]) => `${k}=${v}`).join(", ");
+      /* the time as this viewer's clock reads it, the way the picker
+         that wrote it did */
+      const at = localStamp(f.run_at);
+      box.append(el("div", {class: "actions", "data-scheduled-row": item.self},
+        el("a", {href: "#" + item.self}, `${pretty(f.target.action)} · ${at}`),
+        el("span", {class: "muted"},
+          ` ${VALIDITY_WORDS[f.validity] || f.validity || ""}` +
+          (conds ? ` (${conds})` : "")),
+        acts.reschedule
+          ? el("button", {"data-scheduled-reschedule": "", onclick: () =>
+              actionDialog({name: "reschedule", entry: acts.reschedule, doc: item,
+                prefill: {run_at: at.replace(" ", "T"),
+                          zone: Intl.DateTimeFormat().resolvedOptions().timeZone},
+                onDone: () => render()})}, "Reschedule")
+          : null,
+        acts.cancel
+          ? el("button", {class: "danger", "data-scheduled-cancel": "",
+              onclick: async () => {
+                const res = await invokeBare(acts.cancel, item);
+                if (res.ok) { toast("Cancelled"); render(); }
+                else box.append(problemBox(res.body));
+              }}, "Cancel")
+          : null));
+    }
+    box.style.display = "";
+  }).catch(() => {});
+  return box;
 }
 
 /* ── the surface screen: the composed decision view (wire 10 shape:
@@ -214,12 +334,12 @@ async function renderSurface(view, doc) {
     if (!showcase.has(name))
       bar.append(actionButton({name, entry, doc: anchor, onDone: () => render()}));
   const {blocked, grouped, gated} = splitRefusals(anchor);
-  for (const [name, entry] of blocked)
-    bar.append(el("button", {class:"blocked", disabled:"",
-      title: entry.reason || ""}, label(name, entry)));
+  for (const [name, entry] of blocked.concat(reachGrouped(grouped, anchor)))
+    bar.append(shutDoor(name, entry, anchor));
   panel.append(bar);
   const notes = blockedNotes(blocked, anchor);
   if (notes) panel.append(notes);
+  wireNotYet(panel);
   if (anchor.self)
     panel.append(el("div", {class:"embed"},
       el("div", {class:"embed-head"}, el("b", {}, "Anchor"),
@@ -251,11 +371,12 @@ async function renderSurface(view, doc) {
       const partPaths = new Set(Object.keys(anchor.parts || {}));
       const plain = Object.fromEntries(
         Object.entries(anchor.data || {}).filter(([k]) => !partPaths.has(k)));
-      dataPanel.append(el("details", {open:""},
+      dataPanel.append(el("details", {class:"rowdata", open:""},
         el("summary", {class:"muted"}, "Data"), kvTable(plain, schema)));
       dataPanel.append(historySection(`${anchor.self}/-/events`));
       const footer = notNowFooter(grouped, gated, anchor);
       if (footer) dataPanel.append(footer);
+      wireNotYet(view);
     });
     view.append(dataPanel);
     watchScope({self: anchor.self});

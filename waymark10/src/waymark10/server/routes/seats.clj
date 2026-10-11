@@ -78,9 +78,12 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
+           (java.nio.charset StandardCharsets)
+           (java.security MessageDigest)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
 
@@ -820,48 +823,92 @@
       n)))
 
 (defn- log-after
-  "One page of the log after event `after`, oldest first."
+  "One page of the log after event `after`, oldest first. The caller
+  keeps `after` from one request to the next, so the page is a SETTLED
+  read: it never passes an id still in flight. A read whose wait ran
+  out answers no rows. The scan then keeps its cursor, and the next
+  tick of a waiting request, or the caller's next request, asks again."
   [eng after]
   (let [st (:storage eng)]
     (store/with-tx st
-      (fn [tx] (store/transitions st tx {:since after} {:limit inbox-page})))))
+      (fn [tx] (store/transitions st tx {:since after}
+                                  {:limit inbox-page :settled true})))))
+
+(def ^:private inbox-seed-tries
+  "How many times a starting cursor asks for the settled log before the
+  door answers that it is not ready."
+  4)
+
+(defn- log-newest
+  "Where a tail that asks for `after=now` begins: the log's newest
+  event, 0 when the log is empty. The caller keeps the answer as its
+  cursor, so the read is SETTLED: seeded at the newest COMMITTED id
+  alone, a lower id still in flight would commit behind the cursor and
+  never be served. With a writer in flight it is the newest event
+  under that writer. → nil when the log has no event under the writers
+  in flight and they outlasted `inbox-seed-tries`: that is not an
+  empty log, and never 0."
+  [eng]
+  (when-some [rows (store/settled-transitions (:storage eng) {}
+                                              {:newest-first true :limit 1}
+                                              inbox-seed-tries)]
+    (if-some [newest (first rows)] (long (:id newest)) 0)))
 
 (defn- sitting-start
   "Where a tail with no `after` begins: just before the sitting's first
   event, so it reads from the sitting's start. A sitting the log does
-  not know begins at the log's newest event, never at its first."
+  not know begins at the log's newest event, never at its first; that
+  is `log-newest`'s settled read, and its nil when the log did not
+  settle."
   [eng sitting]
   (let [st (:storage eng)
-        [own newest] (store/with-tx st
-                       (fn [tx]
-                         [(first (store/transitions st tx {:kind :sitting
-                                                           :resource-id (str (:id sitting))}
-                                                    {:limit 1}))
-                          (first (store/transitions st tx {} {:newest-first true :limit 1}))]))]
-    (cond own (dec (long (:id own)))
-          newest (long (:id newest))
-          :else 0)))
+        own (store/with-tx st
+              (fn [tx]
+                (first (store/transitions st tx {:kind :sitting
+                                                 :resource-id (str (:id sitting))}
+                                          {:limit 1}))))]
+    (if own
+      (dec (long (:id own)))
+      (log-newest eng))))
+
+(defn- inbox-unsettled!
+  "503 for a tail whose starting cursor could not be read: the log did
+  not settle, so the door names no cursor and the caller asks again."
+  []
+  (throw (p/problem :inbox-unsettled 503 "Inbox not ready"
+                    {:detail (str "The log did not settle, so this tail has no "
+                                  "place to begin yet. Ask again.")})))
 
 (defn- inbox-match
-  "A predicate on a log row. The seat's `inbox.only` names its kind
+  "A predicate on a log row. The seat's `inbox.only` (stated, or the
+  default of an interactive seat: `seats/inbox-of`) names its kind
   and its action (an empty list is every action), the seat's scope
   reads the whole kind, and it is neither a transcript nor this
   sitting's own row.
+
+  IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
+  judged as a subscription judges them (`webhooks/in-domains?`,
+  `webhooks/by-actor?`): a row of a kind that keeps a domain's name
+  passes when it answers to the seat's domain, a kind that keeps none
+  passes, and a move whose actor is this seat (`seat:<seat id>`) is
+  left out, whatever sitting made it.
 
   THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
   the sitting's grant: a seat's grant reads exactly its seat's scope
   (R-5.2), and the door holds no principal whose grant that is. An
   entry narrowed by ids or a filter reads only some rows of its kind,
   so it admits none of that kind's events here."
-  [seat sitting]
+  [eng seat sitting]
   (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
-                   (get-in seat [:data :inbox :only]))
+                   (:only (seats/inbox-of seat)))
         readable (into #{}
                        (keep (fn [e]
                                (when (and (nil? (:ids e)) (nil? (:filter e)))
                                  (some-> (:kind e) name))))
                        (get-in seat [:data :scope]))
-        sitting-id (str (:id sitting))]
+        sitting-id (str (:id sitting))
+        own #{(str "seat:" (:id seat))}
+        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)]
     (fn [t]
       (let [k (name (:kind t))
             acts (get only k)]
@@ -870,19 +917,63 @@
               (or (empty? acts) (contains? acts (name (:action t))))
               (contains? readable k)
               (not (contains? transcript-kinds k))
-              (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))))))))
+              (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))
+              (not (webhooks/by-actor? own t))
+              (or (nil? domains) (webhooks/in-domains? eng domains t))))))))
+
+(defn- cue-match
+  "A function of a log row: the seat's cue for it, or nil (R-12.38).
+  The cue is the notes of every `inbox.cues` entry that matches, in
+  the cues' order, joined with ` · `.
+
+  A cue matches by its kind and its action (an empty list is every
+  action) and, when it states a `filter`, by the row AS IT STANDS NOW:
+  one read by `resource-id`, made only for an event whose kind and
+  action a filtered cue names, and judged as a grant judges a filter
+  (`grants/row-matches?`). A row that is gone matches no filter."
+  [eng seat]
+  (let [cues (:cues (seats/inbox-of seat))]
+    (fn [t]
+      (let [k (name (:kind t))
+            a (name (:action t))
+            named (filterv (fn [c]
+                             (and (= k (str (:kind c)))
+                                  (or (empty? (:actions c))
+                                      (some #(= a (str %)) (:actions c)))))
+                           cues)]
+        (when (seq named)
+          (let [rdef (get (inv/resources eng) (keyword k))
+                st (:storage eng)
+                row (when (and rdef (some #(seq (:filter %)) named))
+                      (store/with-tx st
+                        #(store/load-row st % (:kind rdef) (str (:resource-id t)) {})))
+                notes (keep (fn [c]
+                              (when (or (empty? (:filter c))
+                                        (and row (grants/row-matches? row [(:filter c)] rdef)))
+                                (:note c)))
+                            named)]
+            (when (seq notes)
+              (str/join " · " notes))))))))
 
 (defn- inbox-line
-  "One event as the door answers it (R-12.38)."
-  [t]
-  {:kind (name (:kind t))
-   :id (str (:resource-id t))
-   :action (name (:action t))
-   :from (some-> (:from-state t) name)
-   :to (some-> (:to-state t) name)
-   :summary (:summary t)
-   :at (str (:at t))
-   :event (:id t)})
+  "One event as the door answers it (R-12.38). `actor` is the address
+  of who made the move, and `actor_name` what a person calls them, as
+  a subscription's delivery names them. `cue` is there when a cue of
+  the seat's inbox matches the event (`cue-match`)."
+  [eng cue-of t]
+  (let [who (webhooks/actor-name eng t)
+        cue (cue-of t)]
+    (cond-> {:kind (name (:kind t))
+             :id (str (:resource-id t))
+             :action (name (:action t))
+             :from (some-> (:from-state t) name)
+             :to (some-> (:to-state t) name)
+             :summary (:summary t)
+             :actor (webhooks/actor-address t)
+             :at (str (:at t))
+             :event (:id t)}
+      who (assoc :actor_name who)
+      cue (assoc :cue cue))))
 
 (defn- inbox-scan
   "The matching events after `cursor`, read a page at a time until the
@@ -900,7 +991,10 @@
 (defn- sitting-inbox
   "GET /api/-/sittings/inbox — the events a seat's inbox names, after
   `after` or from the sitting's start, as newline-delimited JSON
-  (docs/spec-seat.md R-12.38).
+  (docs/spec-seat.md R-12.38). `after=now` answers no event and names
+  the log's newest one, so a tail of a long-open sitting can begin at
+  the present. A starting cursor the door has to find in a log that
+  does not settle is 503, never a cursor of 0.
 
   ANONYMOUS ON PURPOSE, the transcript door's reasoning: the key in the
   header is the whole credential, it answers for one open sitting, and
@@ -914,19 +1008,164 @@
           seat (some->> (get-in sitting [:data :seat]) (seat-row eng))
           _ (when-not (and sitting seat)
               (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
-          after (whole-param req "after" 0 nil)
+          now? (= "now" (some-> (get (router/query-params req) "after") str str/trim))
+          after (when-not now? (whole-param req "after" 0 nil))
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
-          match? (inbox-match seat sitting)
+          match? (inbox-match eng seat sitting)
+          cue-of (cue-match eng seat)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
-      (loop [cursor (or after (sitting-start eng sitting))]
-        (let [[hits cursor] (inbox-scan eng match? cursor)]
-          (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
-            (do (Thread/sleep (long inbox-tick-ms))
-                (recur cursor))
-            {:status 200
-             :headers {"Content-Type" "application/x-ndjson"
-                       "Waymark-Inbox-After" (str cursor)}
-             :body (apply str (map #(str (wire/write-json (inbox-line %)) "\n") hits))}))))))
+      (if now?
+        {:status 200
+         :headers {"Content-Type" "application/x-ndjson"
+                   "Waymark-Inbox-After" (str (or (log-newest eng) (inbox-unsettled!)))}
+         :body ""}
+        (loop [cursor (or after (sitting-start eng sitting) (inbox-unsettled!))]
+          (let [[hits cursor] (inbox-scan eng match? cursor)]
+            (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
+              (do (Thread/sleep (long inbox-tick-ms))
+                  (recur cursor))
+              {:status 200
+               :headers {"Content-Type" "application/x-ndjson"
+                         "Waymark-Inbox-After" (str cursor)}
+               :body (apply str (map #(str (wire/write-json (inbox-line eng cue-of %)) "\n") hits))})))))))
+
+;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
+
+(def ^:private verify-path
+  "A question about a seat's key, asked by a service. It is under the
+  seats' own word and not the sittings': it opens no sitting."
+  "/api/-/seats/verify")
+
+(def ^:private service-secret-header
+  "`Waymark-Subscription-Secret`, read lowercased as ring hands it
+  over. A header and not a bearer, for `seat-key-header`'s reason."
+  "waymark-subscription-secret")
+
+(def ^:private no-service
+  "The one sentence every refused caller is answered with: no header,
+  a secret no subscription holds and a subscription that is paused,
+  failed or revoked look alike."
+  "No active subscription answers this secret.")
+
+(def verify-per-minute
+  "How many keys one subscription may ask about in one clock minute. A
+  feed checks a key once per connection, so this is far above an
+  honest caller and far below what walking 128 bits would take."
+  120)
+
+(def ^:private verify-key-max
+  "The longest key the door reads. A seat key is 22 characters."
+  200)
+
+(defonce ^:private
+  ^{:doc "Subscription id → [clock minute, asks in it]. One entry per
+  caller, written over each minute, so it is bounded by the
+  subscriptions. It is this process's count: two engines each allow
+  the limit."}
+  verify-counts
+  (atom {}))
+
+(defn- service-of
+  "The ACTIVE subscription whose signing secret is exactly the one this
+  request presents, or nil. `seats/seat-by-key`'s read and its reason:
+  every active subscription is read and compared in constant time, and
+  a request with no header never reaches storage. A subscription that
+  declares no secret matches nothing. The secret is the key the
+  deliverer signs with (`webhooks/signing-key`): for a subscription
+  whose `secret` is the id of a secret row, that is the row's value
+  now and never the id, and a row that holds no value matches nothing."
+  [eng req]
+  (when-some [secret (some-> (get-in req [:headers service-secret-header])
+                             str not-empty)]
+    (when (get (inv/resources eng) :subscription)
+      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)
+            ;; the rows leave the transaction whole: a referenced
+            ;; secret is read by its own
+            active (store/with-tx (:storage eng)
+                     (fn [tx]
+                       (vec (store/query-rows (:storage eng) tx :subscription
+                                              {:state :active} {:limit 500}))))]
+        (->> active
+             (filter (fn [row]
+                       ;; a waiting reference answers a keyword, and an
+                       ;; unsigned subscription nil: neither is a key
+                       (let [held (webhooks/signing-key eng row)]
+                         (when (and (string? held) (seq held))
+                           (MessageDigest/isEqual
+                            wanted
+                            (.getBytes ^String held StandardCharsets/UTF_8))))))
+             first)))))
+
+(defn- verify-asks
+  "This caller's asks in the clock minute `minute`, this one counted."
+  [sub minute]
+  (let [id (str (:id sub))
+        counts (swap! verify-counts update id
+                      (fn [[m n]]
+                        (if (= m minute) [m (inc (long n))] [minute 1])))]
+    (long (second (get counts id)))))
+
+(defn- seat-verify
+  "POST /api/-/seats/verify — is this seat key live, and which seat
+  does it name (docs/spec-seat.md § 16).
+
+  THE CALLER IS A SERVICE, AND IT PROVES ITSELF FIRST. The secret of
+  an active subscription rides `Waymark-Subscription-Secret`; without
+  one the door answers 401 and reads no seat, so it is not a key
+  oracle for the public. Each subscription has `verify-per-minute`
+  asks a minute and is answered 429 past them.
+
+  THE ANSWER IS TWO FIELDS. `live` and the seat's `name`, and nothing
+  else of the row. A key that matches nothing, a key the seat revoked
+  and a parked seat's key all answer `{live: false, seat: null}` off
+  the same read: `seats/seat-by-key` compares every active seat in
+  constant time whichever it is.
+
+  A FEED TOKEN ANSWERS AS THE SEAT'S KEY DOES (R-16.7). The token a sit
+  answered for the seat's `feed_url` is live while its sitting is open
+  and its end has not come (`seats/feed-seat-by-token`); after that it
+  answers the same `{live: false, seat: null}`. No other door reads it.
+
+  A FEED TOKEN PAST HALF ITS LIFE IS ANSWERED THE NEXT ONE (R-16.8).
+  The answer then also carries `next_token` and `next_expires_at`
+  (`seats/renew-feed-token!`), and the token that was asked about
+  answers until its own end, so the feed has no gap.
+
+  IT OPENS NOTHING. No sitting is born and no grant is minted. The
+  door is two reads, and the one write is that renewal, on the
+  sitting and outside the log."
+  [eng]
+  (fn [req]
+    (let [sub (or (service-of eng req)
+                  (throw (p/problem :unauthorized 401 "Unauthorized"
+                                    {:detail no-service})))
+          epoch (.getEpochSecond (now-of eng))]
+      (if (> (long (verify-asks sub (quot epoch 60)))
+             (long verify-per-minute))
+        (router/json-response
+         429
+         {:detail (str "This subscription asked about more than "
+                       verify-per-minute " keys in one minute.")}
+         "application/json"
+         {"Retry-After" (str (- 60 (mod epoch 60)))})
+        (let [body (try (router/read-body req)
+                        (catch Exception _
+                          (invalid! :body "must be JSON; it did not parse.")))
+              key (when (map? body) (:key body))
+              _ (when-not (and (string? key)
+                               (<= 1 (count key) (long verify-key-max)))
+                  (invalid! :key (str "is required: the seat key to check, a "
+                                      "string of at most " verify-key-max
+                                      " characters.")))
+              seat (or (seats/seat-by-key eng key)
+                       (seats/feed-seat-by-token eng key))
+              ;; a seat key is no feed token, so it renews nothing
+              renewed (when seat (seats/renew-feed-token! eng key))]
+          (router/json-response
+           200 (cond-> {:live (some? seat)
+                        :seat (some-> seat (get-in [:data :name]))}
+                 renewed (assoc :next_token (:token renewed)
+                                :next_expires_at (:expires_at renewed)))))))))
 
 (defn routes [eng]
   {:module :seats
@@ -934,7 +1173,8 @@
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
             [transcript-path {:post (sitting-transcript eng)}]
-            [inbox-path {:get (sitting-inbox eng)}]]})
+            [inbox-path {:get (sitting-inbox eng)}]
+            [verify-path {:post (seat-verify eng)}]]})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 

@@ -55,6 +55,19 @@
   keeps a parent from completing over an open child. The tree is the
   `parent` ref, and the `children` link walks it back down.
 
+  AN EPIC NAMES ITS SHOWCASE (ticket cbf84f80). `showcase` is the
+  scene that makes a person want the work: a film for what a person
+  sees, a before/after text for work that makes the agent better. A
+  ticket whose title starts `[epic]` is not groomed without one
+  (`an-epic-names-its-showcase`), and a child shows its parent's scene
+  read-only in `parent_scene`, so plumbing shows which scene it serves.
+
+  AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). An epic is done when
+  its scene can be watched or read, not when its last pull request
+  merges. `showcase.evidence` holds a `film_url` or a `scene_ref`, and
+  `complete` refuses an epic whose evidence does not match its format
+  (`an-epic-shows-its-evidence`). `drop` asks for none.
+
   THE ENDINGS ASK FOR A SENTENCE. `complete` and `drop` take
   `close_reason`: what was done, or why it was let go. The record the
   next reader has is that sentence, so the door will not open on an
@@ -74,6 +87,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.types :as t]))
 
@@ -107,6 +121,10 @@
   ;; stands.
   (update row :data merge inp))
 
+(defhandler reparent-the-ticket [row inp _ctx]
+  ;; nil clears it: the ticket is a piece of nothing
+  (assoc-in row [:data :parent] (:parent inp)))
+
 (defhandler rank-the-ticket [row inp _ctx]
   (assoc-in row [:data :priority] (:priority inp)))
 
@@ -118,9 +136,25 @@
   ;; The state it was blocked FROM is kept, so the last blocker's ending
   ;; returns a draft to `draft` and not to the queue. A restatement from
   ;; `blocked` keeps what the first block wrote.
-  (let [from (state-of row)]
+  ;;
+  ;; `then` says where a DRAFT goes instead (ticket cca6b000): `open`
+  ;; writes `blocked_from` as a groomed ticket's block does, so the last
+  ;; blocker's ending takes `unblock` and the seat wakes. A ticket that
+  ;; stood in the queue stays bound for it whatever `then` says; the way
+  ;; out of the queue is `ungroom`.
+  (let [from (state-of row)
+        was (get-in row [:data :blocked_from])
+        then (some-> (:then inp) name)
+        stood (cond
+                (= :open from) "open"
+                (= :draft from) (or then "draft")
+                (= "open" was) "open"
+                :else (or then was))]
+    ;; `then` is kept beside it, so a restatement that names only the
+    ;; blockers prefills what the first block said
     (cond-> (assoc-in row [:data :blocked_by] (vec (:blocked_by inp)))
-      (#{:draft :open} from) (assoc-in [:data :blocked_from] (name from)))))
+      stood (assoc-in [:data :blocked_from] stood)
+      stood (assoc-in [:data :then] stood))))
 
 (defhandler state-the-merge-order [row inp _ctx]
   ;; `block`'s rule, one field over: the list is REPLACED, and an empty
@@ -161,22 +195,34 @@
 
   BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
   said in the log, and the ticket's move stands. A probe or a
-  rehearsal carries no pen, and moves nothing."
+  rehearsal carries no pen, and moves nothing.
+
+  THE TICKET FOLLOWS A PULL REQUEST BACK UNDER REVIEW (ticket
+  7e01dbe5). The ticket's own move lands it in `open`, which is beside
+  a submitted change once `rework_submitted` ran, so one
+  `rejoin_review` is queued through ctx :follow-up and the engine
+  walks it after this write commits. A follow-up that refuses is said
+  in the log and the ticket stays open, where the sit leaves it out
+  (ticket 6ca380da). A move that itself runs as a follow-up queues
+  one the engine drops, and its ticket stays open the same way."
   [row ctx]
   (let [find' (:find ctx)
-        invoke' (:invoke ctx)]
+        invoke' (:invoke ctx)
+        follow' (:follow-up ctx)
+        under-review? (volatile! false)]
     (when (and find' invoke')
       (doseq [change (changes-born-from row ["stuck"] find')]
         (try
-          (invoke' :change (:id change)
-                   (if (nil? (get-in change [:data :number]))
-                     :rework
-                     :rework_submitted)
-                   nil)
+          (if (nil? (get-in change [:data :number]))
+            (invoke' :change (:id change) :rework nil)
+            (do (invoke' :change (:id change) :rework_submitted nil)
+                (vreset! under-review? true)))
           (catch Exception e
             (binding [*out* *err*]
               (println "factory10 ticket: the change" (:id change)
-                       "was not put back to work -" (ex-message e)))))))))
+                       "was not put back to work -" (ex-message e))))))
+      (when (and follow' @under-review?)
+        (follow' {:kind :ticket :id (:id row) :action :rejoin_review})))))
 
 (defhandler groom-the-ticket [row _inp ctx]
   (put-its-change-back-to-work! row ctx)
@@ -187,7 +233,8 @@
   ;; holds NOW, and an unblocked ticket is blocked by nothing.
   (-> row
       (assoc-in [:data :blocked_by] [])
-      (assoc-in [:data :blocked_from] nil)))
+      (assoc-in [:data :blocked_from] nil)
+      (assoc-in [:data :then] nil)))
 
 (defhandler unblock-the-ticket [row inp ctx]
   ;; `clear-the-blockers`, and the ticket is in the queue again
@@ -365,6 +412,42 @@
               (println "factory10 ticket ending: the change" (:id change)
                        "was not closed -" (ex-message e)))))))))
 
+;; ── a drop is the decline (ticket 775b6427) ─────────────────────────
+
+(def ^:private default-domain
+  "The domain of a ticket, and of a seat, that stores none."
+  "factory")
+
+(defn- turn-the-asker-back!
+  "A ticket asked of another domain names the ticket that waits for it
+  in `needed_by`. When it is dropped, that ticket goes to `draft`
+  through `turn_back`, with the decline as its `shelved_because`, so
+  the mayor that asked plans again. It runs before
+  `release-the-waiters!`, which would put the asker in the queue.
+
+  BEST-EFFORT, as the release is. An asker under review, deferred or
+  ended is left where it stands."
+  [row inp ctx]
+  (let [read' (:read ctx)
+        invoke' (:invoke ctx)
+        asker (when read'
+                (some->> (get-in row [:data :needed_by]) str not-empty
+                         (read' :ticket)))]
+    (when (and invoke' asker
+               (contains? #{:draft :open :blocked} (state-of asker)))
+      (let [why (str "declined by "
+                     (or (some-> (get-in row [:data :domain]) str not-empty)
+                         default-domain)
+                     ": " (:close_reason inp))]
+        (try
+          (invoke' :ticket (:id asker) :turn_back
+                   {:shelved_because (subs why 0 (min 480 (count why)))}
+                   {:if-match (inv/etag :ticket (:id asker) (:version asker))})
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 ticket drop: the ticket" (:id asker)
+                       "was not turned back -" (ex-message e)))))))))
+
 (defhandler close-the-ticket [row inp ctx]
   ;; One handler for every ending but the drop (`drop-the-ticket`). The
   ;; machine says which ending; the handler writes the sentence,
@@ -375,7 +458,9 @@
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
 (defhandler drop-the-ticket [row inp ctx]
-  ;; `close-the-ticket`, with its changes naming the drop
+  ;; `close-the-ticket`, with its changes naming the drop; the ticket
+  ;; that asked for this one is turned back first
+  (turn-the-asker-back! row inp ctx)
   (release-the-waiters! row ctx)
   (finish-the-parent! row ctx)
   (close-its-unmerged-changes! row :dropped inp ctx)
@@ -419,17 +504,50 @@
           (t/deny {:vars {:parent parent}})
           :else (t/allow))))))
 
+;; THE REFUSAL NAMES ONE CHILD (ticket 20ee6b97): the oldest unfinished
+;; child by `created_at`, as evidence, and both remedies bind its id.
+;; A bare remedy on the ticket's own kind falls back to the refused row,
+;; so a pursuit of a parent's `complete` tried the parent again and met
+;; nothing but cycles. One child is enough: a re-plan after each move
+;; finds the next. The count is over every child, as it was; the child
+;; named is one the CALLER can see — the grant on the ctx is the judge,
+;; and a ctx with no grant sees them all — so a refusal never names a
+;; row its reader could not open.
+
+(defn- oldest-first
+  "Rows by `created_at`, the id breaking a tie or standing in where a
+  row carries no timestamp."
+  [rows]
+  (sort (fn [a b]
+          (let [ca (:created-at a)
+                cb (:created-at b)
+                c (if (and ca cb) (compare ca cb) 0)]
+            (if (zero? c) (compare (str (:id a)) (str (:id b))) c)))
+        rows))
+
 (defguardfn children-are-finished
-  {:reads [:ticket]
-   :vars [:count]
-   :remedies [:ticket/complete :ticket/drop]
-   :explain "{count} of this ticket's children are not finished. A parent ends after its children: complete or drop each one first, and then this door opens."}
+  {:reads [:ticket :grant]
+   :vars [:count :which]
+   :evidence [:child_id]
+   :remedies [{:door :ticket/complete :id '(evidence :child_id)}
+              {:door :ticket/drop :id '(evidence :child_id)}]
+   :explain "{count} of this ticket's children are not finished.{which} A parent ends after its children: complete or drop each one first, and then this door opens."}
   [row _inp ctx]
   (if-some [find' (:find ctx)]
-    (let [children (find' :ticket {:parent (str (:id row))} {:limit 500})
-          waiting (count (filter (comp unfinished state-of) children))]
-      (if (pos? waiting)
-        (t/deny {:vars {:count waiting}})
+    (let [waiting (filter (comp unfinished state-of)
+                          (find' :ticket {:parent (str (:id row))} {:limit 500}))
+          row? (:row? (:grant ctx))
+          child (first (oldest-first
+                        (cond->> waiting
+                          row? (filter #(row? :ticket (:id %))))))]
+      (if (seq waiting)
+        (t/deny (cond-> {:vars {:count (count waiting)
+                                :which (if child
+                                         (str " The oldest is \""
+                                              (get-in child [:data :title])
+                                              "\".")
+                                         " They are outside what you can see.")}}
+                  child (assoc :evidence {:child_id (str (:id child))})))
         (t/allow)))
     (t/allow)))
 
@@ -589,6 +707,31 @@
                  :errors {:parent [problem]}}))
       (t/allow))))
 
+;; NO TICKET IS ITS OWN ANCESTOR (ticket 03658863). A birth cannot make
+;; that loop, because nothing is under a ticket that is not yet born; a
+;; re-parenting can, by naming the ticket itself or one below it.
+
+(defguardfn the-parent-is-not-below-it
+  {:judges [:parent]
+   :reads [:ticket]
+   :vars [:which]
+   ;; the-parent-is-not-waited-on's acknowledgment: the chain above the
+   ;; parent named is read from the rows at the write
+   :open "The tickets above the parent named are read from their rows at the write, up the parent chain; no form can recite them. Name a parent that is not under this ticket."
+   :explain "A ticket cannot be a piece of itself: {which}. Name a parent that is not this ticket nor any ticket under it, or leave the parent empty."}
+  [row inp ctx]
+  (let [self (some-> (:id row) str)
+        parent (some-> (:parent inp) str not-empty)
+        problem (cond
+                  (or (nil? self) (nil? parent)) nil
+                  (= self parent) "this ticket names itself"
+                  (some #{self} (lineage parent (:read ctx)))
+                  (str parent " is under this ticket, so this ticket would be its own ancestor"))]
+    (if problem
+      (t/deny {:vars {:which problem}
+               :errors {:parent [problem]}})
+      (t/allow))))
+
 (defguardfn a-person-or-their-delegate-grooms
   {:reads [:principal]
    :open "No door here changes this verdict. Grooming is a person's reading of an ask — that it is stated well enough to build as written — and a model alone does not stand behind its own statement. A seat that wants a ticket groomed says so where an agent may, and a person taps."
@@ -599,6 +742,117 @@
   ;; names whom it acts for is the person's hand.
   (let [{:keys [type acts-for]} (:principal ctx)]
     (if (and (= :agent type) (str/blank? (str acts-for)))
+      (t/deny)
+      (t/allow))))
+
+;; AN EPIC NAMES ITS SHOWCASE (ticket cbf84f80). The guard reads the
+;; row and nothing else, so groom's scenarios stay check-tier: the epic
+;; it knows is the one whose title says `[epic]`. A parent that is an
+;; epic by its children alone is not judged here; reading the children
+;; would declare `:reads [:ticket]` and take this door out of that tier.
+
+(defn- epic? [row]
+  (-> (get-in row [:data :title]) str str/triml str/lower-case
+      (str/starts-with? "[epic]")))
+
+(defn- scene-of [row]
+  (let [showcase (get-in row [:data :showcase])]
+    (some-> (or (:scene showcase) (get showcase "scene")) str not-empty)))
+
+(defguardfn an-epic-names-its-showcase
+  {:reads []
+   :remedies [:ticket/restate]
+   :explain "This ticket is an epic, and an epic is judged by its showcase. Restate it with a showcase: the scene, filmed or told, that makes a person want this."}
+  [row _inp _ctx]
+  (if (and (epic? row) (nil? (scene-of row)))
+    (t/deny)
+    (t/allow)))
+
+;; AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). `complete` asks the
+;; showcase for the evidence its format names: a film's `film_url`, or a
+;; text's `scene_ref` to a row that exists. The ref is spelled `kind:id`,
+;; as change's `born_from` is, and it may name any kind, so the guard
+;; declares `:storage`. A ctx with no hook — the render probe — answers a
+;; stated ref with an ALLOW, as the walls above do. `drop` does not
+;; carry the guard: an epic let go shows nothing.
+
+(defn- showcase-part [m k]
+  (or (get m k) (get m (name k))))
+
+(defn- evidence-of [row k]
+  (some-> (get-in row [:data :showcase])
+          (showcase-part :evidence)
+          (showcase-part k)
+          str str/trim not-empty))
+
+(defn- told-scene
+  "The row a `scene_ref` names, or nil when it is not spelled `kind:id`
+  or no such row is there."
+  [scene-ref read']
+  (let [scene-ref (str scene-ref)
+        colon (str/index-of scene-ref ":")]
+    (when (and colon (pos? (long colon)))
+      (when-some [id (not-empty (subs scene-ref (inc (long colon))))]
+        (try
+          (read' (keyword (subs scene-ref 0 (long colon))) id)
+          (catch Exception _ nil))))))
+
+(defguardfn an-epic-shows-its-evidence
+  {:reads [:storage]
+   :vars [:missing]
+   :evidence [:missing_field]
+   :remedies [{:door :ticket/restate :fields ['(evidence :missing_field)]}]
+   :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
+  [row _inp ctx]
+  (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
+        film (evidence-of row :film_url)
+        scene-ref (evidence-of row :scene_ref)
+        read' (:read ctx)
+        missing (cond
+                  (not (epic? row)) nil
+                  (= "film" fmt)
+                  (when-not (some-> film (str/starts-with? "https://"))
+                    "Its showcase is a film, so its evidence needs `film_url`: the https link where the film plays.")
+                  (= "text" fmt)
+                  (cond
+                    (nil? scene-ref)
+                    "Its showcase is a text, so its evidence needs `scene_ref`: the row whose text is the told scene, written kind:id."
+                    (and read' (nil? (told-scene scene-ref read')))
+                    "Its `scene_ref` names no row that exists: write it kind:id, for the journal or other row whose text is the told scene.")
+                  :else
+                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")
+        ;; the one input the refusal is missing, as the restate's form names it
+        field (case fmt
+                "film" "showcase.evidence.film_url"
+                "text" "showcase.evidence.scene_ref"
+                "showcase")]
+    (if missing
+      (t/deny {:vars {:missing missing} :evidence {:missing_field field}})
+      (t/allow))))
+
+(defn- parent-scene
+  "The `parent_scene` computed field: the scene of the ticket this one
+  is a piece of, or nil when it has no parent or the parent names none."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [parent (some-> (get-in row [:data :parent]) str not-empty)]
+      (some-> (read' :ticket parent) scene-of))))
+
+(defguardfn a-person-or-their-delegate-queues-a-draft
+  {:reads [:principal]
+   :open "No door here changes this verdict. A block that says then: open grooms the draft when its blockers end, and grooming is a person's reading of an ask. A seat blocks the draft without then, and a person grooms it."
+   :explain "A draft blocked with then: open reaches the queue when its blockers end, so it is blocked that way by a person, or by a delegate acting for one under a grant the person approved. A seat that could say it could fill its own queue with asks nobody read."}
+  [row inp ctx]
+  ;; `a-person-or-their-delegate-grooms`, on the one input that grooms:
+  ;; `then: open` on a ticket that did not stand in the queue. Every
+  ;; other block passes, the engine's restatement included.
+  (let [{:keys [type acts-for]} (:principal ctx)
+        queued? (or (= :open (state-of row))
+                    (= "open" (get-in row [:data :blocked_from])))]
+    (if (and (= "open" (some-> (:then inp) name))
+             (not queued?)
+             (= :agent type)
+             (str/blank? (str acts-for)))
       (t/deny)
       (t/allow))))
 
@@ -633,6 +887,115 @@
       (t/allow)
       (t/deny))))
 
+;; ── one domain asks another (ticket 775b6427) ───────────────────────
+
+(defguardfn only-a-decline-turns-the-asker-back
+  {:reads [:within]
+   :open "No door clears this one. A ticket is turned back when the ticket it asked another domain for is dropped, and the engine moves it then; a person who wants it out of the queue sends it back to draft."
+   :explain "A ticket is turned back to draft only when the ticket it asked another domain for is dropped: the drop moves it, in the same transaction, and no hand does."}
+  [_row _inp ctx]
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind) (= :drop action))
+      (t/allow)
+      (t/deny))))
+
+(defhandler note-the-decline [row inp ctx]
+  ;; `clear-the-blockers`, and the decline is kept where the mayor that
+  ;; asked reads it before it plans again
+  (-> (clear-the-blockers row inp ctx)
+      (assoc-in [:data :shelved_because] (:shelved_because inp))))
+
+(defn- domain-named
+  "The domain row of this name, or nil. A ctx with no `:find` hook
+  answers nil."
+  [ctx domain]
+  (when-some [find' (:find ctx)]
+    (first (find' :domain {:name domain} {:limit 1}))))
+
+(declare answer-an-ask)
+
+(defguardfn the-receiving-mayor-answers-an-ask
+  {:reads [:principal]
+   :vars [:domain :asker :mayor]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket was asked of, or the owner, to answer it."
+   :explain "{asker} asked {domain} for this ticket, so {domain} answers it: it is groomed, ranked and dropped by the owner or by the mayor of {domain}, which is {mayor}. A domain that could groom what it asks for would fill another domain's queue."}
+  [row _inp ctx]
+  (answer-an-ask row ctx true))
+
+(defn- a-services-ticket?
+  "Is this ticket a service's (epic aff24e84, piece 5): in `domain`, the
+  domain of a seat that `serves` any, and in the repository the
+  `bench.edit` entry of that seat's scope filters by. A ctx with no
+  `:find` hook answers false."
+  [ctx row domain]
+  (let [repo (some-> (get-in row [:data :repo]) str not-empty)
+        find' (:find ctx)
+        read' (:read ctx)
+        in (fn [seat]
+             (if-some [id (some-> (get-in seat [:data :domain]) str not-empty)]
+               (some-> (when read' (read' :domain id))
+                       (get-in [:data :name]) str)
+               default-domain))
+        edits? (fn [e]
+                 (let [f (:filter e)]
+                   (and (= "bench.edit" (some-> (:kind e) name))
+                        (= repo (some-> (or (:repo f) (get f "repo")) str)))))]
+    (boolean
+     (and repo find'
+          (some #(and (= domain (in %))
+                      (some edits? (get-in % [:data :scope])))
+                (find' :seat {:serves "any"} {:limit 100}))))))
+
+(defn- answer-an-ask
+  "The verdict of `the-receiving-mayor-answers-an-ask`. With
+  `requester-too?` the mayor of the domain that asked is allowed as
+  well, on a service's ticket; without it only the receiving side is."
+  [row ctx requester-too?]
+  ;; domains' `the-mayors-or-a-persons-move`, on a ticket one domain
+  ;; asked of another. Every other ticket passes, and so does a ctx
+  ;; with no hook, which declines to guess. It reads the domain and
+  ;; the caller's grants through that hook and declares neither, as
+  ;; `only-a-person-reopens` reads its held call: see :deviations.
+  (let [domain (or (some-> (get-in row [:data :domain]) str not-empty)
+                   default-domain)
+        asker (some-> (get-in row [:data :requested_by]) str not-empty)]
+    (if (or (nil? asker) (= asker domain) (nil? (:find ctx)))
+      (t/allow)
+      (let [{:keys [type acts-for]} (:principal ctx)
+            cited (delegation/cited-seats ctx)
+            mayor (some-> (domain-named ctx domain)
+                          (get-in [:data :mayor]) str not-empty)
+            said (or (when-some [read' (when mayor (:read ctx))]
+                       (some-> (read' :seat mayor)
+                               (get-in [:data :name]) str not-empty))
+                     mayor
+                     "no seat yet")
+            refuse #(t/deny {:vars {:domain domain :asker asker :mayor said}})]
+        (cond
+          (and mayor (contains? cited mayor)) (t/allow)
+          ;; a service works at its requester's priority: the mayor of
+          ;; the domain that asked grooms and ranks the ticket
+          (and requester-too?
+               (a-services-ticket? ctx row domain)
+               (some->> (domain-named ctx asker) :data :mayor str not-empty
+                        (contains? cited)))
+          (t/allow)
+          ;; a sitter of any other seat
+          (seq cited) (refuse)
+          ;; a person, a tool a person is signed in to, or the engine
+          (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
+          :else (refuse))))))
+
+(defguardfn only-the-receiving-mayor-declines
+  {:reads [:principal]
+   :vars [:domain :asker :mayor]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket was asked of, or the owner, to drop it."
+   :explain "{asker} asked {domain} for this ticket, and the decline is the answer of {domain}: it is dropped by the owner or by the mayor of {domain}, which is {mayor}. The domain that asked grooms and ranks a service's ticket, and it does not drop one."}
+  [row _inp ctx]
+  ;; `the-receiving-mayor-answers-an-ask` with no exception for the
+  ;; requester of a service's ticket (epic aff24e84, piece 5)
+  (answer-an-ask row ctx false))
+
 (defguardfn only-its-change-moves-it
   {:reads [:within]
    :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back to the queue when that change goes red, closes or is unstuck; a stall sends it to draft instead, to be groomed again. The change moves it then, and a person who wants it sooner works the change."
@@ -644,6 +1007,24 @@
   ;; answer nil, so it renders refused, which is true.
   (if (= :change (:kind (:within ctx)))
     (t/allow)
+    (t/deny)))
+
+(defguardfn its-change-is-under-review
+  {:reads [:change]
+   :open "No door clears this one. A ticket goes out for review behind a change of its own that is submitted: the change's submit sends it, and so does a groom, unblock or resume that puts its stuck pull request back under review."
+   :explain "A ticket follows its change out for review, and no change born from this ticket is submitted. It stays in the queue for the seat that builds it."}
+  [row _inp ctx]
+  ;; `only-its-change-moves-it` cannot judge this door: the engine walks
+  ;; it as a ctx :follow-up, after the write that queued it committed,
+  ;; and a follow-up carries no `:within` (ticket 7e01dbe5). The wall is
+  ;; the FACT instead, read from the committed rows, so a hand that
+  ;; takes the door moves the ticket only where its change already is.
+  ;; A ctx with no hook, the render probe, is refused: the door is
+  ;; advertised only where a submitted change was found.
+  (if-some [find' (:find ctx)]
+    (if (seq (changes-born-from row ["submitted"] find'))
+      (t/allow)
+      (t/deny))
     (t/deny)))
 
 (defguardfn only-a-childs-ending-finishes-it
@@ -682,6 +1063,13 @@
   ;; row so the last child's ending can end it (ticket 499bcd72).
   (assoc-in row [:data :merged_change] (:merged_change inp)))
 
+(defhandler note-the-shelving [row inp _ctx]
+  ;; the stall's sentence, kept where whoever grooms next reads it
+  ;; (ticket b6c8ea04); a shelve with none leaves the last one standing
+  (if-some [why (some-> (:shelved_because inp) str not-empty)]
+    (assoc-in row [:data :shelved_because] why)
+    row))
+
 (defhandler note-a-red-head [row inp _ctx]
   ;; One more red head of the base this ticket was opened for, kept to
   ;; the last fifty.
@@ -689,6 +1077,115 @@
              (fn [heads]
                (vec (take-last 50 (distinct (conj (vec heads)
                                                   (:red_head inp))))))))
+
+(defhandler note-a-green-base [row inp _ctx]
+  ;; The base went green while this ticket's change held work (ticket
+  ;; d5000a1c): the sentence is written, and the ticket is not ended.
+  (assoc-in row [:data :green_note] (str (:green_note inp))))
+
+;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
+
+(def ^:private move-doors
+  "The door that writes a ticket's domain, by the state the ticket stands
+  in: one self-loop for each, for `reparent`'s reason. An ended ticket
+  has none (`the-work-is-over` shuts every door on it), and keeps the
+  domain it ended in."
+  {:open :move_domain
+   :draft :move_domain_draft
+   :blocked :move_domain_blocked
+   :in_review :move_domain_in_review
+   :deferred :move_domain_deferred})
+
+(def ^:private change-doors
+  "The same for a change born from it, by the change's state."
+  {:open :take_domain
+   :submitted :take_domain_submitted
+   :failing :take_domain_failing
+   :stuck :take_domain_stuck})
+
+(defn- inside-a-move?
+  "Whether this write was opened inside a ticket's move into a domain."
+  [ctx]
+  (let [{:keys [kind action]} (:within ctx)]
+    (and (= :ticket kind)
+         (contains? (set (vals move-doors)) action))))
+
+(defn- move-the-tickets-under!
+  "Every child of `id` walks its own move, which walks its children in
+  turn. An ended child takes no door, so it is left as it is and the
+  tickets under it are walked from here."
+  [id domain ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (doseq [child (find' :ticket {:parent id} {:limit 500})]
+      (if-some [door (move-doors (state-of child))]
+        ;; the hand's doors are fenced (their :edit implies it), so the
+        ;; version read here is named, as `release-the-waiters!` names it
+        (invoke' :ticket (str (:id child)) door {:domain domain}
+                 {:if-match (inv/etag :ticket (:id child) (:version child))})
+        (move-the-tickets-under! (str (:id child)) domain ctx)))))
+
+(defhandler move-the-domain [row inp ctx]
+  ;; The ticket, every ticket under it and each of their open changes,
+  ;; in the one transaction. NOT best-effort, as the endings' cascades
+  ;; are: a row that refuses refuses the whole move, so a tree is never
+  ;; left in two domains. A probe or a rehearsal carries no pen, and
+  ;; moves the one row.
+  (let [domain (:domain inp)
+        find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (when (and find' invoke')
+      (doseq [change (changes-born-from row (map name (keys change-doors)) find')]
+        (invoke' :change (str (:id change)) (change-doors (state-of change))
+                 {:domain domain}))
+      (move-the-tickets-under! (str (:id row)) domain ctx))
+    (assoc-in row [:data :domain] domain)))
+
+(defguardfn the-domain-stands
+  {:judges [:domain]
+   :reads [:domain]
+   :vars [:which]
+   :open "The domains are read from their rows at the write; no form can recite them. Name a domain that is active."
+   :explain "A ticket moves into a domain that is here and not retired: {which}. Name an active domain."}
+  [_row inp ctx]
+  (let [named (some-> (:domain inp) str not-empty)
+        find' (:find ctx)]
+    (if (or (nil? named) (nil? find')
+            (seq (find' :domain {:name named :state "active"} {:limit 1})))
+      (t/allow)
+      (let [problem (str "no active domain is named " named)]
+        (t/deny {:vars {:which problem}
+                 :errors {:domain [problem]}})))))
+
+(defguardfn the-domains-mayor-or-a-person-moves-it
+  {:reads [:principal :now :grant :domain :within]
+   :open "No door changes who the caller is: ask the mayor of the domain this ticket is in, or a person, to make the move."
+   :explain "A ticket is moved out of a domain by the sitter of that domain's mayor seat, or by a person. Ask the mayor of the domain this ticket is in, or a person, to make the move."}
+  [row _inp ctx]
+  ;; domains' `the-mayors-or-a-persons-move`, read from the ticket: the
+  ;; domain is the one the row stores, or factory. A child's door opens
+  ;; inside its parent's move, whoever's hand made that one.
+  (let [{:keys [type acts-for]} (:principal ctx)
+        cited (delegation/cited-seats ctx)
+        named (or (some-> (get-in row [:data :domain]) str not-empty) "factory")
+        mayor (when-some [find' (:find ctx)]
+                (some-> (first (find' :domain {:name named} {:limit 1}))
+                        (get-in [:data :mayor]) str not-empty))]
+    (cond
+      (inside-a-move? ctx) (t/allow)
+      (and mayor (contains? cited mayor)) (t/allow)
+      ;; a sitter of any other seat
+      (seq cited) (t/deny)
+      ;; a person, a tool a person is signed in to, or the engine
+      (or (not= :agent type) (some? (not-empty (str acts-for)))) (t/allow)
+      :else (t/deny))))
+
+(defguardfn only-a-parents-move-carries-it
+  {:reads [:within]
+   :hide true
+   :explain "A ticket under review or deferred changes domain with the ticket above it, inside that ticket's move. A person and a model read it."}
+  [_row _inp ctx]
+  (if (inside-a-move? ctx) (t/allow) (t/deny)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -747,6 +1244,31 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(def ^:private a-draft-epic
+  (assoc a-draft-ticket :title "[epic] Every epic names its scene"))
+
+(defscenario an-epic-is-not-groomed-without-its-showcase
+  "An epic is judged and ranked by the scene that makes a person want
+   it. Without one even the person's groom is refused, and the refusal
+   names the door that states it."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-draft-epic}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :an-epic-names-its-showcase
+             :because "Restate it with a showcase"}})
+
+(defscenario an-epic-with-its-showcase-is-groomed
+  "And with the scene stated the door opens."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft
+             :data (assoc a-draft-epic :showcase
+                          {:format "film"
+                           :scene "You open a proposal and cannot tell why anyone wants it. Then the scene plays, and you can."})}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 (defscenario a-finished-ticket-is-not-put-back-by-a-side-door
   "The machine refuses it with no guard behind the refusal: a done
    ticket has no unblock door, and the only way to move it is a
@@ -791,9 +1313,17 @@
    "task" "One piece of work, on the way to something larger"
    "chore" "Upkeep — nothing a person would notice, and it needs doing"})
 
+(def ^:private then-choices
+  {"draft" "Back to draft, to be groomed"
+   "open" "Into the queue, as groomed"})
+
+(def ^:private showcase-format-choices
+  {"film" "A short film of what a person sees"
+   "text" "A before/after conversation, for work that makes the agent better"})
+
 (def ^:private stated-fields
   "What a person or a seat STATES about a ticket: the create door and
-  the restate door collect the same five, because a restatement is
+  the restate door collect the same six, because a restatement is
   the whole statement again."
   [[:title {:examples ["The code seat walks ticket rows instead of task rows"]
             :x-display
@@ -808,6 +1338,42 @@
               :label "The how, and what done looks like"
               :help "Everything the builder needs and nothing they can read off the repository: the design, the acceptance, the files it touches, the traps. A seat reads this before it reads a line of code."}}
     [:maybe [:string {:max 20000}]]]
+   ;; ticket cbf84f80: the scene an epic is judged and ranked by
+   [:showcase {:optional true
+               :x-display
+               {:label "Showcase"
+                :help "The scene that makes a person want this, the way a product keynote shows it: the friction you know, then the moment it disappears. film for what a person sees, text for a before/after conversation when the work makes the agent better."}}
+    [:maybe [:map
+             [:format {:x-display
+                       {:label "Film or text"
+                        :choices showcase-format-choices}}
+              (into [:enum] (sort (keys showcase-format-choices)))]
+             [:scene {:x-display
+                      {:widget "prose"
+                       :label "The scene"
+                       :help "The friction a person knows, then the moment it disappears. It is at most 1200 characters."}}
+              [:string {:min 1 :max 1200}]]
+             ;; ticket 056ac769: what `complete` asks an epic for
+             [:evidence {:optional true
+                         :x-display
+                         {:label "Evidence"
+                          :help "What shows the scene happened. An epic is not completed without it: a film needs the film's link, and a text needs the row that tells the scene."}}
+              [:maybe [:map
+                       [:film_url {:optional true
+                                   :x-display
+                                   {:label "The film"
+                                    :help "The https link where the film plays, such as a clone film's public address."}}
+                        [:maybe [:string {:max 500}]]]
+                       [:scene_ref {:optional true
+                                    :x-display
+                                    {:label "The told scene"
+                                     :help "The journal or other row whose text is the scene, told from real records. Write it kind:id."}}
+                        [:maybe [:string {:max 200}]]]
+                       [:note {:optional true
+                               :x-display
+                               {:label "A note"
+                                :help "One line about the evidence, when it needs one."}}
+                        [:maybe [:string {:max 480}]]]]]]]]]
    [:type {:default "task"
            :x-display
            {:label "What kind of ask"
@@ -846,6 +1412,24 @@
                {:label "Found while working on"
                 :help "The ticket whose work surfaced this one, when there is one. It is how the record says where an ask came from."}}
     [:maybe :waymark/ref]]
+   ;; ticket 775b6427: the ticket in the asking domain that waits for
+   ;; this one, which a drop of this one turns back to draft
+   [:needed_by {:optional true :kind :ticket
+                :x-display
+                {:label "Needed by"
+                 :help "The ticket that waits for this one, when a mayor asks another domain for work. If this ticket is dropped, that one goes back to draft with the reason, so the mayor that asked plans again."}}
+    [:maybe :waymark/ref]]
+   ;; the domain's NAME and not its id: the factory domain's id is
+   ;; minted at boot on each database, so no declaration can spell it,
+   ;; and `:absent-as` needs a value it can spell (ticket 20fab5f9)
+   [:domain {:optional true
+             :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+             :examples ["factory"]
+             :x-display
+             {:raw true
+              :label "Domain that does the work"
+              :help "The name of the domain this ask belongs to. Leave it empty and the birth writes it: a ticket with a parent takes its parent's domain, and any other takes the domain of the seat that filed it. A mayor names another domain to ask it for work. A move into another domain changes it, here and on every ticket under this one. A ticket that stores none is in factory."}}
+    [:maybe [:string {:max 64}]]]
    [:bead_id {:optional true
               :examples ["waymark-fp62.8"]
               :x-display
@@ -868,6 +1452,13 @@
                    {:label "Blocked while"
                     :help "Where this ticket stood when it was blocked. When the last ticket it waits on ends it goes back there: a groomed ticket to the queue, a draft to draft."}}
     [:maybe [:enum "draft" "open"]]]
+   ;; ticket cca6b000: what the `block` door said, kept for its restate
+   [:then {:optional true
+           :x-display
+           {:label "When its blockers end"
+            :choices then-choices
+            :help "Where this ticket goes when the last ticket it waits on ends. Empty unless the ticket is blocked."}}
+    [:maybe (into [:enum] (sort (keys then-choices)))]]
    [:defer_until {:optional true
                   :examples ["2026-11-19"]
                   :x-display
@@ -875,7 +1466,7 @@
                    :help "The day this ask comes back into the queue. Empty unless the ticket is deferred."}}
     [:maybe :waymark/date]]
    [:close_reason {:optional true
-                   :examples ["Merged: github:ckopsa/waymark#41."]
+                   :examples ["Done: written, checked and sent to the person who asked."]
                    :x-display
                    {:widget "prose"
                     :label "How it ended"
@@ -890,6 +1481,15 @@
                  :label "Red heads of the base"
                  :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
     [:maybe [:vector [:string {:max 400}]]]]
+   ;; ticket d5000a1c: written by the base pass when the base went green
+   ;; while this ticket's change held work, in place of the ending
+   [:green_note {:optional true
+                 :examples ["main is green again at 1f0c2d3e4a5b60718293a4b5c6d7e8f901234567 on its own. The change on bench/1f0c holds work that is not submitted, so this ticket was left open."]
+                 :x-display
+                 {:raw true
+                  :label "Green on its own"
+                  :help "What the base pass wrote when the base went green while this ticket's change held work that was not submitted. The ticket was left open, so its groomers decide whether that work still ships."}}
+    [:maybe [:string {:max 480}]]]
    ;; ticket d069bc3b: written by the house merge pass, as the change's
    ;; place in the line is, and cleared when nothing holds the merge
    [:merge_waits {:optional true
@@ -907,13 +1507,30 @@
                      :label "Merged before its children"
                      :help "The pull request that merged while a child of this ticket was still open. The ticket ends when its last child does. Empty for every other ticket."}}
     [:maybe [:string {:max 400}]]]
+   ;; ticket b6c8ea04: written by its change's stall, through `shelve`
+   [:shelved_because {:optional true
+                      :x-display
+                      {:widget "prose"
+                       :label "Why its change was stalled"
+                       :help "The sentence the seat gave when it stalled the change built for this ticket and sent it back to draft. Read it before grooming again: a groom that does not answer it sends the seat back to the same wall."}}
+    [:maybe [:string {:max 480}]]]
    ;; ticket b0ec4d47: written by the birth when a fired seat filed the
    ;; ticket, beside the 4 the birth stamped over what it asked
    [:asked_priority {:optional true
                      :x-display
                      {:label "Priority the seat asked for"
-                      :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. Empty for a ticket a person or an interactive seat filed."}}
-    [:maybe [:int {:min 0 :max 4}]]]])
+                      :help "The priority a fired seat named when it filed this ticket. Its birth lands at 4 whatever it asked, so a groomer reads the seat's own judgment here and raises the ticket when it earns it. A ticket a mayor asked of another domain keeps the mayor's suggestion here in the same way. Empty for any other ticket."}}
+    [:maybe [:int {:min 0 :max 4}]]]
+   ;; ticket 775b6427: written by the birth when a seat names a domain
+   ;; other than its own, and read by the groom, rank and drop doors
+   [:requested_by {:optional true
+                   :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+                   :examples ["household"]
+                   :x-display
+                   {:raw true
+                    :label "Domain that asked"
+                    :help "The name of the domain whose mayor asked another domain for this work. Only the receiving domain's mayor, or the owner, grooms, ranks or drops such a ticket, except that the asking domain's mayor grooms and ranks a ticket of a seat that serves any domain. Empty for a ticket filed in its own domain."}}
+    [:maybe [:string {:max 64}]]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
 
@@ -947,14 +1564,174 @@
         (assoc-in [:data :priority] fired-seat-priority))
     row))
 
+;; ── a ticket carries the domain that wants the work (ticket 20fab5f9) ─
+
+(defn- seat-domain-name
+  "The name of the domain the filing seat STORES, or nil: the grant the
+  request wore cites a seat, and the seat names a domain row. A person,
+  a seat with no stored domain and a ctx with no `:read` hook answer
+  nil, and a ticket that stores nothing filters as factory."
+  [ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+      (when-some [seat-id (some-> (read' :grant gid)
+                                  (get-in [:data :seat]) str not-empty)]
+        (when-some [domain-id (some-> (read' :seat seat-id)
+                                      (get-in [:data :domain]) str not-empty)]
+          (some-> (read' :domain domain-id)
+                  (get-in [:data :name]) str not-empty))))))
+
+(defn- filing-seat
+  "The seat row the request's grant cites, or nil: a person, the engine
+  and a ctx with no `:read` hook file with no seat."
+  [ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [gid (some-> (get-in ctx [:grant :id]) str not-empty)]
+      (when-some [seat-id (some-> (read' :grant gid)
+                                  (get-in [:data :seat]) str not-empty)]
+        (read' :seat seat-id)))))
+
+(defn- home-of
+  "The domain ROW a seat is in: the one it stores, or factory's for a
+  seat that stores none."
+  [seat ctx]
+  (if-some [domain-id (some-> (get-in seat [:data :domain]) str not-empty)]
+    ((:read ctx) :domain domain-id)
+    (domain-named ctx default-domain)))
+
+(defguardfn the-domain-is-one-we-have
+  {:judges [:domain]
+   :reads [:domain]
+   :vars [:domain]
+   :open "No door here makes a domain. Name one that exists, or leave the domain empty and the ticket takes the filing seat's."
+   :explain "No domain is named {domain}, and a ticket asked of a domain nobody runs is work no mayor will find. Name a domain that exists, or leave the domain empty."}
+  [_row inp ctx]
+  (let [stated (some-> (:domain inp) str not-empty)]
+    (if (or (nil? stated) (nil? (:find ctx)) (some? (domain-named ctx stated)))
+      (t/allow)
+      (t/deny {:vars {:domain stated}
+               :errors {:domain ["domain not found"]}}))))
+
+(defguardfn only-a-mayor-asks-another-domain
+  {:judges [:domain]
+   ;; it reads the filing seat's row as well, which no declaration in
+   ;; this module names (spec R-6)
+   :reads [:grant :domain]
+   :vars [:domain :own]
+   :open "No door changes who the caller is. Leave the domain empty to file the ticket in your own domain, or tell your domain's mayor what you need of the other one."
+   :explain "Domains ask each other for work through their mayors, and this seat is in {own} without being its mayor, so it does not file a ticket in {domain}. Leave the domain empty, or tell the mayor of {own} what you need of {domain}."}
+  [_row inp ctx]
+  ;; a person, the engine and a seat naming its own domain pass
+  (let [stated (some-> (:domain inp) str not-empty)
+        seat (when stated (filing-seat ctx))]
+    (if (or (nil? seat) (nil? (:find ctx)))
+      (t/allow)
+      (let [home (home-of seat ctx)
+            own (or (some-> home (get-in [:data :name]) str not-empty)
+                    default-domain)
+            mayor (some-> home (get-in [:data :mayor]) str not-empty)]
+        (if (or (= stated own) (= mayor (str (:id seat))))
+          (t/allow)
+          (t/deny {:vars {:domain stated :own own}}))))))
+
+;; ── a seat does not file one failure twice (ticket 535d86ed) ─────────
+
+(def ^:private failure-key-patterns
+  "What names a failing check in a ticket's words: the ui-drive step
+  after `FAILED: `, a `timed out waiting for <what>` phrase, and the
+  Clojure test of a `FAIL in (<name>)` line."
+  [#"FAILED:\s*([^\n`\"]+)"
+   #"(timed out waiting for [^\n`\".;,]+)"
+   #"FAIL in \(([^)\s]+)\)"])
+
+(defn- failure-keys
+  "The failing checks a title and a detail name, as the strings another
+  ticket would hold. A key shorter than six characters names nothing."
+  [text]
+  (into #{}
+        (comp (mapcat #(re-seq % (str text)))
+              (map #(str/replace (str/trim (second %)) #"[\s.,;:')]+$" ""))
+              (filter #(<= 6 (count %))))
+        failure-key-patterns))
+
+(defn- tickets-naming
+  "The draft, open, in-review and blocked tickets of `repo` whose title
+  or detail holds one of `named`. A seat's follow-up is born a draft and
+  stays one until it is groomed, so drafts are read too (ticket
+  901e3c37). A bounded read of each state, with no index: the queue is
+  hundreds of rows, not thousands."
+  [named repo ctx]
+  (when-some [find' (:find ctx)]
+    (for [state ["draft" "open" "in_review" "blocked"]
+          row (find' :ticket (cond-> {:state state} repo (assoc :repo repo))
+                     {:limit 200})
+          :let [words (str (get-in row [:data :title]) "\n"
+                           (get-in row [:data :detail]))]
+          :when (some #(str/includes? words %) named)]
+      row)))
+
+(defguardfn no-open-ticket-names-this-failure
+  {:severity :warning
+   :judges [:title :detail]
+   :reads [:principal :ticket]
+   :vars [:which]
+   :open "The tickets that already name a failure are read from the queue at the write; no form can recite them. Acknowledge the warning by its name to file the ticket anyway."
+   :explain "A ticket in the queue already names this failing check: {which}. Restate that ticket with your run instead of filing a second one, or acknowledge this warning to file anyway."}
+  [_row inp ctx]
+  ;; a person's create is not slowed, and neither is the engine's
+  (let [named (when (= :agent (:type (:principal ctx)))
+                (failure-keys (str (:title inp) "\n" (:detail inp))))
+        hits (when (seq named)
+               (take 5 (tickets-naming named (some-> (:repo inp) str not-empty) ctx)))]
+    (if (seq hits)
+      (t/deny {:vars {:which (str/join "; "
+                                       (map #(str (:id %) " \"" (get-in % [:data :title]) "\"")
+                                            hits))}})
+      (t/allow))))
+
+(defn- take-the-domain
+  "The birth's other stamp. A ticket that names a domain keeps it; one
+  with a parent takes what its parent stores, and any other takes the
+  filing seat's domain. Nothing is written when there is none to take.
+
+  A SEAT THAT NAMES ANOTHER DOMAIN IS ASKING IT (ticket 775b6427). The
+  ticket stores the asking domain in `requested_by`, and its priority
+  is the receiving mayor's to set: what was asked moves to
+  `asked_priority` and the ticket lands at `fired-seat-priority`."
+  [row ctx]
+  (let [stated (some-> (get-in row [:data :domain]) str not-empty)
+        parent (some-> (get-in row [:data :parent]) str not-empty)
+        domain (cond
+                 stated stated
+                 parent (when-some [read' (:read ctx)]
+                          (some-> (read' :ticket parent)
+                                  (get-in [:data :domain]) str not-empty))
+                 :else (seat-domain-name ctx))
+        asker (when (and stated (filing-seat ctx))
+                (or (seat-domain-name ctx) default-domain))]
+    (cond-> row
+      domain (assoc-in [:data :domain] domain)
+      (and asker (not= asker stated))
+      (-> (assoc-in [:data :requested_by] asker)
+          (update :data #(if (some? (:asked_priority %))
+                           %
+                           (assoc % :asked_priority (:priority %)
+                                  :priority fired-seat-priority)))))))
+
+(defn- stamp-the-birth
+  [row ctx]
+  (-> row
+      (land-a-fired-seats-ticket-at-four ctx)
+      (take-the-domain ctx)))
+
 (def ^:private close-input
   [:map
    [:close_reason
-    {:examples ["Merged: github:ckopsa/waymark#41."]
+    {:examples ["Done: written, checked and sent to the person who asked."]
      :x-display
      {:widget "prose"
       :label "How it ended"
-      :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis."}}
+      :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis. It is at most 480 characters."}}
     [:string {:min 1 :max 480}]]])
 
 (def ^:private merge-after-input
@@ -970,6 +1747,52 @@
 
 (def ^:private merge-after-description
   "Name the tickets that must be done before this one's change merges")
+
+(def ^:private reparent-input
+  [:map
+   [:parent {:kind :ticket
+             :x-display
+             {:label "Part of"
+              :help "The larger ask this one is a piece of. It must be open, and not a ticket this one waits on or one under this one. Leave it empty and this ticket is a piece of nothing."}}
+    [:maybe :waymark/ref]]])
+
+(def ^:private reparent-guards
+  [the-parent-is-open-at-birth the-parent-is-not-waited-on
+   the-parent-is-not-below-it])
+
+(def ^:private reparent-safety
+  {:idempotent true :reversible true :confirm false})
+
+(def ^:private reparent-description
+  "Move this ask under another one, or out from under its parent")
+
+(def ^:private move-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :examples ["household"]
+             :x-display
+             {:raw true
+              :label "Domain"
+              :help "The name of the active domain this ask moves into. Every ticket under this one, and each of their open changes, moves with it."}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private carried-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :x-display {:hidden true :raw true :label "The domain"}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private move-domain-guards
+  [the-domain-stands the-domains-mayor-or-a-person-moves-it])
+
+(def ^:private move-domain-safety
+  {:idempotent true :reversible true :confirm false})
+
+(def ^:private move-domain-description
+  "Move this ask, and every ask under it, into another domain")
+
+(def ^:private carried-domain-description
+  "The ticket above it moved into another domain, and this one went with it")
 
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
@@ -995,9 +1818,18 @@
                 :type #{:eq :in}
                 :priority #{:eq :range}
                 :parent #{:eq :set}
+                ;; ticket cfcfcdd7: showcase_set=true is the tickets that name a
+                ;; scene, which a dashboard slot lists as the epics
+                :showcase #{:set}
                 :found_in #{:eq}
                 :repo #{:eq :in}
+                :domain #{:eq :in}
+                ;; ticket ab77e635: a seat's inbox cue names the domain
+                ;; that asked, and a query may too
+                :requested_by #{:eq}
                 :bead_id #{:eq :set}}
+   ;; a ticket born before domains stores none, and is factory's
+   :absent-as {:domain "factory"}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER: a walker
    ;; opens /api/tickets and gets the work that is READY — groomed,
    ;; not blocked, not deferred — lowest priority number first.
@@ -1009,21 +1841,57 @@
    ;; and the doors below are how it becomes ready and stops being.
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
+                   the-domain-is-one-we-have only-a-mayor-asks-another-domain
+                   no-open-ticket-names-this-failure
                    the-parent-is-not-waited-on]
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named
-   :on-create land-a-fired-seats-ticket-at-four
+   ;; and every birth takes its domain (ticket 20fab5f9)
+   :on-create stamp-the-birth
+   ;; ticket cbf84f80: a child shows the scene its parent names
+   :computed {:parent_scene
+              {:schema [:maybe :string]
+               :x-display
+               {:widget "prose"
+                :label "Part of the scene"
+                :help "The showcase of the ticket this one is a piece of, read from the parent each time. It says which scene this work serves. Empty when there is no parent or the parent names no showcase."}
+               ;; it reads the parent: with no :read it is absent
+               :reads? true
+               :fn parent-scene}}
    :actions
+   ;; THE EVERYDAY DOORS (ticket f66dd175). Eight doors are marked
+   ;; `:everyday` in their display: restate, groom, block, unblock,
+   ;; defer, resume, complete and drop. They are the ones a person's
+   ;; hand walks, and a row's bar keeps them in view while they are
+   ;; shut. The others are the engine's or a change's, or a rarer
+   ;; statement, and a shut one of those is drawn under 'More doors'.
    {:restate
     {:from #{:draft} :to :draft
      :input (into [:map] stated-fields)
      :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
      :record true
-     :edit {:prefill [:title :detail :type :repo :merge_after]}
+     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Restate" :order 2
+     :display {:label "Restate" :order 2 :everyday true
                :description "Say what needs doing again, whole"}}
+
+    ;; THE STATEMENT OF A BLOCKED TICKET (ticket 470abe2a). `restate`'s
+    ;; door for the one other state where no seat is building the
+    ;; statement. The way round was `unblock`, which lands in `open`
+    ;; and wakes a seat on work whose blockers have not ended. This is
+    ;; a self-loop: `blocked_by` and `blocked_from` are not stated
+    ;; fields, so the handler leaves them as they stand.
+    :restate_blocked
+    {:from #{:blocked} :to :blocked
+     :input (into [:map] stated-fields)
+     :guards [the-merge-order-makes-no-cycle]
+     :handler restate-the-ticket
+     :record true
+     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Restate" :order 26
+               :description "Say what needs doing again, whole — it stays blocked"}}
 
     ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
     ;; a person read it and stands behind it as written. The way back
@@ -1031,10 +1899,11 @@
     ;; before it changes.
     :groom
     {:from #{:draft} :to :open
-     :guards [a-person-or-their-delegate-grooms]
+     :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
+              the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Groom" :style :primary :order 1
+     :display {:label "Groom" :style :primary :order 1 :everyday true
                :description "It is stated well enough to build as written — into the queue"}}
 
     :ungroom
@@ -1052,6 +1921,7 @@
                          {:label "Priority (0 first, 4 last)"
                           :help "The queue's own order: 0 is what the house wants next."}}
               [:int {:min 0 :max 4}]]]
+     :guards [the-receiving-mayor-answers-an-ask]
      :handler rank-the-ticket
      :record true
      :edit {:prefill [:priority]}
@@ -1065,7 +1935,8 @@
     ;; the last blocker's ENDING returns the ticket where it was blocked
     ;; from (`blocked_from`), so a draft nobody groomed goes back to
     ;; `draft`. Two ways back to two states is why this door is one-way
-    ;; and not reversible.
+    ;; and not reversible. `then: open` on a draft is the groom said
+    ;; ahead of time (ticket cca6b000): the ending queues it.
     :block
     {:from #{:draft :open :blocked} :to :blocked
      :input [:map
@@ -1073,13 +1944,20 @@
                            :x-display
                            {:label "Waits on"
                             :help "Every ticket that must end before this one is worked. State the whole set: this replaces the list, it does not add to it."}}
-              [:vector {:min 1 :max 50} :waymark/ref]]]
-     :guards [the-blockers-are-open-and-not-itself]
+              [:vector {:min 1 :max 50} :waymark/ref]]
+             [:then {:optional true
+                     :x-display
+                     {:label "When they end"
+                      :choices then-choices
+                      :help "Where a draft goes when the last ticket it waits on ends: open puts it in the queue, as groomed; draft, or nothing, returns it to draft. A ticket blocked from the queue goes back to the queue either way."}}
+              [:maybe (into [:enum] (sort (keys then-choices)))]]]
+     :guards [the-blockers-are-open-and-not-itself
+              a-person-or-their-delegate-queues-a-draft]
      :handler state-the-blockers
-     :edit {:prefill [:blocked_by]}
+     :edit {:prefill [:blocked_by :then]}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
-     :display {:label "Blocked by" :order 4
+     :display {:label "Blocked by" :order 4 :everyday true
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
     ;; THE MERGE ORDER, STATED WHOLE (ticket d069bc3b). It holds the
@@ -1126,11 +2004,114 @@
      :display {:label "Merges after" :order 20
                :description merge-after-description}}
 
+    ;; THE PARENT, AFTER BIRTH (ticket 03658863). The birth's walls on
+    ;; `parent` stand here too, and one more: no ticket goes under
+    ;; itself. It is its own door and not a field of `restate`, because
+    ;; a draft holds no blockers and `the-parent-is-not-waited-on`
+    ;; would have nothing to judge there. One door per state, for
+    ;; `merge_after`'s reason. `:record` keeps the old parent beside
+    ;; the new one.
+    :reparent
+    {:from #{:open} :to :open
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 23
+               :description reparent-description}}
+
+    :reparent_draft
+    {:from #{:draft} :to :draft
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 24
+               :description reparent-description}}
+
+    :reparent_blocked
+    {:from #{:blocked} :to :blocked
+     :input reparent-input
+     :guards reparent-guards
+     :handler reparent-the-ticket
+     :record true
+     :edit {:prefill [:parent]}
+     :safety reparent-safety
+     :display {:label "Part of" :order 25
+               :description reparent-description}}
+
+    ;; THE DOMAIN, AFTER BIRTH (ticket 66d080b0). The mayor of the domain
+    ;; the ticket is in, or a person, moves it into another, and every
+    ;; ticket under it and their open changes go with it in the one
+    ;; transaction. One door per state, for `reparent`'s reason, in the
+    ;; states a hand shapes the tree in. `:record` keeps the old domain
+    ;; beside the new one.
+    :move_domain
+    {:from #{:open} :to :open
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 26
+               :description move-domain-description}}
+
+    :move_domain_draft
+    {:from #{:draft} :to :draft
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 27
+               :description move-domain-description}}
+
+    :move_domain_blocked
+    {:from #{:blocked} :to :blocked
+     :input move-domain-input
+     :guards move-domain-guards
+     :handler move-the-domain
+     :record true
+     :edit {:prefill [:domain]}
+     :safety move-domain-safety
+     :display {:label "Move to a domain" :order 28
+               :description move-domain-description}}
+
+    ;; A ticket under review or deferred goes with the ticket above it,
+    ;; and by no hand: hidden, and open only inside that ticket's move.
+    :move_domain_in_review
+    {:from #{:in_review} :to :in_review
+     :input carried-domain-input
+     :guards [only-a-parents-move-carries-it]
+     :handler move-the-domain
+     ;; the engine writes it with no version in hand: an `:edit` would
+     ;; fence it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its parent" :order 29
+               :description carried-domain-description}}
+
+    :move_domain_deferred
+    {:from #{:deferred} :to :deferred
+     :input carried-domain-input
+     :guards [only-a-parents-move-carries-it]
+     :handler move-the-domain
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its parent" :order 30
+               :description carried-domain-description}}
+
     :unblock
     {:from #{:blocked} :to :open
      :handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Unblock" :style :primary :order 1
+     :display {:label "Unblock" :style :primary :order 1 :everyday true
                :description "Back into the queue — nothing holds this one now"}}
 
     ;; THE ENGINE'S WAY BACK FOR A DRAFT. The last blocker's ending
@@ -1145,6 +2126,25 @@
      :display {:label "Return to draft" :order 10
                :description "The last ticket it waited on ended — back to draft, to be groomed"}}
 
+    ;; THE DECLINE'S WAY BACK (ticket 775b6427). The drop of a ticket
+    ;; that names this one in `needed_by` walks it, and no hand does:
+    ;; the other domain said no, so the asker leaves the queue, or its
+    ;; wait, for draft with the reason. No new state.
+    :turn_back
+    {:from #{:draft :open :blocked} :to :draft
+     :guards [only-a-decline-turns-the-asker-back]
+     :handler note-the-decline
+     :input [:map
+             [:shelved_because {:x-display {:hidden true
+                                            :label "Why it was declined"}}
+              [:string {:min 1 :max 480}]]]
+     ;; the engine writes the decline's sentence, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The domain this ticket asked for work dropped that work, so this ticket goes to draft with the reason and waits on nothing. A person's groom puts it back in the queue once its mayor has planned again."}
+     :display {:label "Declined" :order 18
+               :description "The domain it asked said no — back to draft, to be planned again"}}
+
     :defer
     {:from #{:open} :to :deferred
      :input [:map
@@ -1156,14 +2156,14 @@
      :handler defer-the-ticket
      :edit {:prefill [:defer_until]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Defer" :order 5
+     :display {:label "Defer" :order 5 :everyday true
                :description "Not now — take it out of the queue until a day"}}
 
     :resume
     {:from #{:deferred} :to :open
      :handler resume-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Resume" :style :primary :order 1
+     :display {:label "Resume" :style :primary :order 1 :everyday true
                :description "Back into the queue now"}}
 
     ;; THE TWO ENDINGS, from `draft` or `open`. A draft may already be
@@ -1174,25 +2174,27 @@
     :complete
     {:from #{:draft :open} :to :done
      :input close-input
-     :guards [children-are-finished]
+     :guards [children-are-finished an-epic-shows-its-evidence]
      :handler close-the-ticket
      ;; the sentence is composed, so it is drafted (change's `stall`):
      ;; a mis-click must not discard what was typed
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Complete" :style :primary :order 6
+     :display {:label "Complete" :style :primary :order 6 :everyday true
                :description "The work is done — say what was done"}}
 
     :drop
     {:from #{:draft :open} :to :dropped
      :input close-input
-     :guards [children-are-finished]
+     ;; a drop of a ticket another domain asked for is the decline
+     :guards [children-are-finished the-receiving-mayor-answers-an-ask
+              only-the-receiving-mayor-declines]
      :handler drop-the-ticket
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Drop" :style :danger :order 7
+     :display {:label "Drop" :style :danger :order 7 :everyday true
                :description "Let this go — say why"}}
 
     ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────
@@ -1226,10 +2228,33 @@
     :shelve
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
+     :handler note-the-shelving
+     :input [:map
+             [:shelved_because {:optional true
+                                :x-display {:hidden true
+                                            :label "Why its change was stalled"}}
+              [:maybe [:string {:max 480}]]]]
+     ;; the engine writes the stall's sentence, with no version in hand
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The seat stalled the change built for this ticket, so the ticket leaves the queue for draft. A person's groom puts it back, and puts its change back to work in the same move; a change with a pull request goes back under review at the next sit."}
      :display {:label "Stalled" :order 17
                :description "Its change stalled — back to draft, to be groomed again"}}
+
+    ;; THE GROOM'S FOLLOW-UP (ticket 7e01dbe5). A groom, unblock or
+    ;; resume that puts a stuck pull request back under review lands
+    ;; the ticket in `open`, its declared landing, beside a submitted
+    ;; change. Its handler queues this door through ctx :follow-up, and
+    ;; the engine walks it once that write commits. A follow-up carries
+    ;; no `:within`, so `review` would refuse it; this door is walled on
+    ;; the fact instead (`its-change-is-under-review`).
+    :rejoin_review
+    {:from #{:open} :to :in_review
+     :guards [its-change-is-under-review]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "A change built for this ticket is submitted, so the ticket leaves the queue while its pull request is reviewed. Its change sends it back if the checks go red, and its merge ends it."}
+     :display {:label "Out for review again" :order 26
+               :description "Its pull request is back under review — out of the queue with it"}}
 
     ;; the merge's ending, from every state that has not ended (ticket
     ;; 3ec37f66): `in_review` most days, `open` for a change a person
@@ -1279,6 +2304,83 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Red head noted" :order 15
                :description "The base went red again on a new head"}}
+
+    ;; ── GREEN ON ITS OWN, WITH WORK ON THE BENCH (ticket d5000a1c) ───
+    ;; `mend` ends the ticket, and the ending closes its open change.
+    ;; A change that holds work is not closed: the base pass walks this
+    ;; door in place of `mend`, and the ticket stays where it is. A seat
+    ;; that stalled its change sent the ticket to draft, and a person
+    ;; may have blocked or deferred it since (ticket e666bd6a): a
+    ;; self-loop, spelled once for each state it serves. A ticket under
+    ;; review is served too (ticket 1188f3ed): `work-kept` reads every
+    ;; change born from the ticket, and one with no pull request may
+    ;; hold work beside the submitted one.
+    :note_green
+    {:from #{:open} :to :open
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     ;; `note_merge`'s reason: the engine writes a first value onto a
+     ;; blank field, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_in_review
+    {:from #{:in_review} :to :in_review
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_draft
+    {:from #{:draft} :to :draft
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_blocked
+    {:from #{:blocked} :to :blocked
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_deferred
+    {:from #{:deferred} :to :deferred
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
 
     :mend
     {:from #{:draft :open :in_review :blocked :deferred} :to :done
@@ -1343,12 +2445,17 @@
             :href "/api/tickets/{data.found_in}"
             :summary "The ticket whose work surfaced this one"}]
    :deviations
-   ["`restate` serves `draft` alone and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
+   ["`restate` is two doors, `restate` for `draft` and `restate_blocked` for `blocked`, and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`. A blocked ticket is restated where it stands: the way round was `unblock`, which lands in `open` and wakes a seat before the blockers end. A deferred ticket is restated when it returns; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
-    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."]
+    "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
+    "`move_domain` is five doors, one self-loop for each state a ticket can wait in, for `restate`'s reason: a v10 action declares one `:to`. Three are a hand's (`draft`, `open`, `blocked`, the states a hand shapes the tree in, as `reparent`). `move_domain_in_review` and `move_domain_deferred` are hidden and open only inside the move of a ticket above, so a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
+    "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
+    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more, and so does `only-the-receiving-mayor-declines` on `drop`: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
+               an-epic-is-not-groomed-without-its-showcase
+               an-epic-with-its-showcase-is-groomed
                a-seat-does-not-reopen-a-ticket
                the-person-reopens-a-ticket
                a-finished-ticket-is-not-put-back-by-a-side-door

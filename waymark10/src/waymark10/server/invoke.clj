@@ -150,6 +150,7 @@
             [waymark10.derived :as derived]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
@@ -183,14 +184,19 @@
   `allowed_by` is the person whose Allow this write replays (held-
   calls/door-principal sets it from the held call's `decided_by`), so
   the hand stays the author's and the log still says whose yes it was;
-  the correction count reads it (store/corrections-by-model)."
+  the correction count reads it (store/corrections-by-model).
+
+  `scheduled` is the scheduled action whose run this write is
+  (scheduled/runner-of, docs/spec-scheduled-actions.md R-4.2): the hand
+  is the scheduler's, and the log says the clock moved it."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
            :display (:display principal)}
     grant-id (assoc :grant grant-id)
     (:model principal) (assoc :model (:model principal))
-    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))))
+    (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
+    (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
@@ -320,7 +326,8 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
-(declare invoke-in-tx! create-in-tx!)
+(declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
+         create-guard-pass)
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -377,12 +384,41 @@
          ;; hand a guard a pen. Inner results collect on the sink;
          ;; finish! rides them out as :inner-writes so after-write!
          ;; runs their lifecycle/cascade/maintenance post-commit.
-         sink (when (= :invoke mode) (atom []))]
+         sink (when (= :invoke mode) (atom []))
+         ;; the FOLLOW-UP queue (ticket da882851): the calls the handler
+         ;; wants made AFTER this transaction commits. Only a real
+         ;; write mode carries it, as with the pen: a rehearsal queues
+         ;; nothing. land! rides the queue out as :follow-ups and
+         ;; after-write! makes each call.
+         follow-sink (when (= :invoke mode) (atom []))]
      (t/ctx {:principal principal
              :now ((:now-fn engine))
              :services (:services engine)
              :mode mode
              :inner-sink sink
+             :follow-sink follow-sink
+             ;; the FOLLOW-UP door (ticket da882851): a handler names one
+             ;; call, `{:kind :id :action :input}`, and the engine makes
+             ;; it after this write's transaction commits — an ordinary
+             ;; invoke! under THIS principal, leash and correlation id,
+             ;; judged by its own guards against the committed rows.
+             ;; Where ctx :invoke writes inside the transaction and its
+             ;; refusal rolls the outer write back, a follow-up's
+             ;; refusal is logged and the outer write stands (see
+             ;; follow-ups!). Guards never see it.
+             :follow-up
+             (when follow-sink
+               (fn ctx-follow-up [{:keys [kind id action input]}]
+                 (when-not (and (keyword? kind) (some? id) (keyword? action))
+                   (throw (t/definition-error
+                           "ctx follow-up: needs :kind, :id and :action")))
+                 (swap! follow-sink conj
+                        {:kind kind :id (str id) :action action :input input
+                         :opts {:principal principal
+                                :grant grant
+                                :power power
+                                :correlation-id correlation-id}})
+                 nil))
              ;; the presented leash, as the guards see it (waymark-sfe)
              :grant grant
              ;; …and the engine's own hand on the powers that leash
@@ -413,7 +449,21 @@
                    ;; form does not exist here either
                    (when (:bulk adefn)
                      (throw (p/no-such-action target-kind action-name)))
-                   (let [res (invoke-in-tx!
+                   (let [;; THE ENGINE'S OWN HAND (ticket 552b2fd2): a handler
+                         ;; that keeps an invariant of its kind names a
+                         ;; :system actor as `:as`, and the inner write is
+                         ;; that actor's, not the caller's — so it wears no
+                         ;; leash and holds no power, and its transition
+                         ;; names the engine. Only a :system principal: a
+                         ;; handler never writes as a person.
+                         as (:as opts)
+                         _ (when (and as (not= :system (:type as)))
+                             (throw (t/definition-error
+                                     "ctx invoke: :as takes a :system principal")))
+                         principal (or as principal)
+                         grant (when-not as grant)
+                         power (when-not as power)
+                         res (invoke-in-tx!
                               engine tx trdef target-kind (str id) adefn
                               (body-digest body) body
                               {:principal principal
@@ -485,6 +535,51 @@
                                      :action create-action
                                      :res res})
                    res)))
+             ;; the REHEARSAL door (docs/spec-scheduled-actions.md
+             ;; R-3.1): one door of another kind, judged as this
+             ;; principal under this leash and written nowhere — the
+             ;; invoke door's own dry run inside this transaction, or
+             ;; the create rehearsal in full when `id` is nil. It throws
+             ;; what the write would throw, an unacknowledged warning
+             ;; included. A guard may hold it: it is no pen.
+             :rehearse
+             (fn ctx-rehearse [target-kind id action-name body & [opts]]
+               (let [trdef (or (get (resources engine) target-kind)
+                               (throw (p/not-found target-kind id)))
+                     acknowledged (or (:acknowledged opts) #{})
+                     res (if (nil? id)
+                           (let [model (or (:create-schema trdef) (:schema trdef))
+                                 inp (schema/apply-defaults
+                                      model (schema/decode model (or body {})))]
+                             (when-some [errors (schema/closed-errors model inp)]
+                               (throw (p/schema-invalid :create errors)))
+                             {:valid? true
+                              :warnings (not-empty
+                                         (:warned
+                                          (create-guard-pass
+                                           (create-walled-guards trdef) inp
+                                           (make-ctx engine tx :dry-run principal
+                                                     {:grant grant})
+                                           acknowledged)))})
+                           (invoke-in-tx!
+                            engine tx trdef target-kind (str id)
+                            (or (some-> (get-in trdef [:actions action-name])
+                                        (assoc :name action-name))
+                                (throw (p/no-such-action target-kind
+                                                         action-name)))
+                            (body-digest body) body
+                            {:principal principal
+                             :grant grant
+                             :dry-run true
+                             :acknowledged acknowledged}))]
+                 (when-some [warned (seq (:warnings res))]
+                   (throw (p/warning-refused (if id action-name :create) warned)))
+                 res))
+             ;; …and the law a birth of a kind would be stamped by now
+             ;; (R-2.4): what a scheduled create pins
+             :law-of (fn [target-kind]
+                       (when-some [trdef (get (resources engine) target-kind)]
+                         (create-law-revision engine trdef target-kind)))
              ;; the cross-resource read hooks (phase 8): guards declared
              ;; :reads [:kind] and on-create resolution read OTHER kinds
              ;; through the write's own transaction — decoded rows, the
@@ -533,6 +628,14 @@
                           (or (get rs (keyword t))
                               (some (fn [[_ r]] (when (= t (:plural r)) r))
                                     rs))))
+             ;; the log read by LEASH (seat health 1, ticket fad586b7):
+             ;; the transitions an actor carrying this grant made in a
+             ;; window, a nil bound open — how a sitting's close reads
+             ;; what the sitting moved. The write's own transaction.
+             :transitions-under
+             (fn [grant-id since until]
+               (store/transitions-under-grant (:storage engine) tx
+                                              (str grant-id) since until {}))
              :actor-of (fn [row transition]
                          ;; the newest matching transition's actor id
                          (some (fn [rec]
@@ -559,7 +662,7 @@
   (update row :data #(schema/encode (:schema rdef) %)))
 
 (defn- summary-of [rdef row]
-  (summary/render (:summary rdef) (assoc row :kind (:kind rdef))))
+  (summary/line rdef (assoc row :kind (:kind rdef))))
 
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
@@ -828,19 +931,30 @@
   the guard leaves whose entire :judges set the caller provided;
   refusals and warnings grade exactly as the full loop's (deny-outcome
   is shared). → {:valid? true :judged [names] :awaiting [names]
-  :warnings […]} — or the same 409/404 the full loop would throw."
+  :warnings […]} — or the same 409/404 the full loop would throw. A
+  judged leaf's 409 names the leaves that still wait (`awaiting`), so
+  the caller learns the form's guards from the first refusal; the 404
+  of a hidden leaf says nothing more."
   [defn row inp ctx acknowledged rdef provided]
   (let [{:keys [judged awaiting]} (split-leaves (g/walled-guards rdef defn row)
                                                 provided)
         {:keys [warned]}
-        (reduce
-         (fn [acc leaf]
-           (let [[v d] (g/evaluate leaf row inp ctx)]
-             (if-not (t/deny? v)
-               acc
-               (deny-outcome acc v d row inp acknowledged defn rdef))))
-         {:warned [] :overridden []}
-         judged)]
+        (try
+          (reduce
+           (fn [acc leaf]
+             (let [[v d] (g/evaluate leaf row inp ctx)]
+               (if-not (t/deny? v)
+                 acc
+                 (deny-outcome acc v d row inp acknowledged defn rdef))))
+           {:warned [] :overridden []}
+           judged)
+          (catch clojure.lang.ExceptionInfo e
+            (if (and (seq awaiting)
+                     (= :guard-refused (:waymark10/problem (ex-data e))))
+              (throw (ex-info (ex-message e)
+                              (assoc (ex-data e) :awaiting (mapv :name awaiting))
+                              e))
+              (throw e))))]
     {:valid? true
      :judged (mapv :name judged)
      :awaiting (mapv :name awaiting)
@@ -928,9 +1042,13 @@
        "application/waymark+json"))
     ;; writes the handler made through ctx :invoke ride out with the
     ;; result — after-write! owes each its post-commit pass
-    (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+    ;; …and so do the follow-ups it queued through ctx :follow-up, which
+    ;; after-write! makes once this transaction has committed
+    (let [inner (some-> (:inner-sink ctx) deref not-empty)
+          follow (some-> (:follow-sink ctx) deref not-empty)]
       (cond-> {:row (decode-row rdef saved) :transition record}
-        inner (assoc :inner-writes inner)))))
+        inner (assoc :inner-writes inner)
+        follow (assoc :follow-ups follow)))))
 
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
@@ -953,7 +1071,52 @@
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
-(declare cascade!)
+(declare cascade! invoke!)
+
+(def ^:private ^:dynamic *following*
+  "True while after-write! makes a write's follow-ups: the bound on
+  their nesting. Every write made under it — the follow-up itself, its
+  inner writes, its cascade — may queue, and nothing it queued runs."
+  false)
+
+(defn- follow-ups!
+  "Make the calls a committed write queued through ctx :follow-up
+  (ticket da882851), in the order it queued them. Each is an ordinary
+  invoke! — its own transaction, the full algorithm, its own transition
+  and after-write! pass — under the principal, leash and correlation id
+  of the write that queued it, and under the key
+  `follow-up:<outer transition id>:<index>`, so a second delivery of
+  the same outer transition replays instead of writing twice.
+
+  A follow-up that REFUSES is said on *err* and answered as :refused;
+  the outer write committed before it was tried and stands.
+
+  Follow-ups do not nest past ONE level: what a follow-up queues is
+  dropped with a *err* line, never run. → one outcome per call,
+  `{:kind :id :action}` plus `:res` or `:refused`; nil when dropped."
+  [engine res]
+  (let [tid (get-in res [:transition :id])
+        say (fn [{:keys [kind id action]} why]
+              (binding [*out* *err*]
+                (println (str "waymark10: follow-up " (name kind) "/" id " "
+                              (name action) " of transition " tid " " why))))]
+    (if *following*
+      (run! #(say % "dropped: a follow-up queues no follow-up")
+            (:follow-ups res))
+      (binding [*following* true]
+        (vec
+         (map-indexed
+          (fn [i {:keys [kind id action input opts] :as call}]
+            (try
+              {:kind kind :id id :action action
+               :res (invoke! engine kind id action input
+                             (assoc opts :idempotency-key
+                                    (str "follow-up:" tid ":" i)))}
+              (catch Exception e
+                (say call (str "refused: " (ex-message e)))
+                {:kind kind :id id :action action
+                 :refused (or (ex-message e) (str (class e)))})))
+          (:follow-ups res)))))))
 
 (defn- after-write!
   "A committed, non-replayed write may carry law-lifecycle effects: a
@@ -984,7 +1147,15 @@
   own transaction, full algorithm, its own after-write! — under the
   system cascade actor and the parent transition's correlation id;
   redelivery is a natural no-op (children are selected by the child
-  action's :from states)."
+  action's :from states).
+
+  Ticket da882851 adds the FOLLOW-UPS, last: the calls the handler
+  queued through ctx :follow-up run after the cascade and the
+  maintenance pass, so each reads the rows as this write left them.
+  A refusing follow-up does not roll this write back — it committed
+  first — and a replayed or rehearsed write runs none. The outcomes
+  ride the result as :followed; the result's :row is the outer write's
+  own, and predates them."
   [engine kind action-name res]
   (if (and (:transition res) (nil? (:replayed? res)))
     (do
@@ -997,9 +1168,14 @@
       (when-some [lc (:lifecycle engine)]
         (lc engine kind action-name res))
       (cascade! engine kind action-name res)
-      (if-some [m (:maintain engine)]
-        (or (m engine kind action-name res) res)
-        res))
+      (let [out (if-some [m (:maintain engine)]
+                  (or (m engine kind action-name res) res)
+                  res)]
+        (if (seq (:follow-ups res))
+          (let [done (follow-ups! engine res)]
+            (cond-> (dissoc out :follow-ups)
+              done (assoc :followed done)))
+          out)))
     res))
 
 ;; ── the engine-injected adopt (phase 5) ─────────────────────────────
@@ -1189,7 +1365,8 @@
             ;; ctx without the cross-write door, and without the hand
             ;; on a power (waymark-fp62.7.16): a wall that read mail
             ;; would refuse differently on a day Gate was dark
-            guard-ctx (dissoc ctx :invoke :create :inner-sink :power)]
+            guard-ctx (dissoc ctx :invoke :create :inner-sink :power
+                              :follow-up :follow-sink)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)
@@ -1198,7 +1375,8 @@
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
                                      :summary (summary-of rdef row)}
-                                    (out-of-state-says defn row guard-ctx))))
+                                    (out-of-state-says defn row guard-ctx)
+                                    (machine/roads rdef defn (:state row)))))
           (do
             ;; concealment precedes everything in-state too (phase 8's
             ;; ordering amendment, forced by the mirror's sync doors):
@@ -1550,10 +1728,24 @@
   recorded: items run with :record-key? false, so the key lands in
   the log (one action per item for `feed/actions-from-feed` and
   `mcp/actions-from-mcp`, which fold by the key's prefix) while the
-  idempotency store holds exactly the one whole-call record."
+  idempotency store holds exactly the one whole-call record.
+
+  `:on-item`, when given, is called with each item's result once the
+  item has committed and its after-write ran: the router's seam for
+  what a single invoke does after its own commit (a self walk's
+  recording, walks/record-own!). A rehearsal, a deferral and a replay
+  of the whole call run none. In a partial bulk a throw from the
+  after-write or from `:on-item` is logged and changes nothing in the
+  report: the row's transaction committed, so the row succeeded.
+
+  `:on-refused`, when given, is called with a refused row's id and the
+  refusal it threw, in a partial bulk and in an atomic one alike: the
+  router's seam for what a single invoke does with its refusal (a self
+  walk's recording, walks/record-refused!). A rehearsal runs none, and
+  a throw from it is logged and changes nothing."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant]
+           dry-run grant on-item on-refused]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1647,6 +1839,36 @@
                                                      ;; recorded once below
                                                      :idempotency-key idempotency-key
                                                      :record-key? false)))
+                    ;; the partial loop's post-commit pass: the item's
+                    ;; transaction has committed, so a throw here is
+                    ;; logged on its own and never reported as the
+                    ;; row's failure. Each half is caught apart, so a
+                    ;; broken after-write does not cost the row its
+                    ;; :on-item
+                    committed! (fn [id res]
+                                 (try
+                                   (after-write! engine kind action-name res)
+                                   (catch Exception e
+                                     (binding [*out* *err*]
+                                       (println "waymark10 bulk item after-write error:"
+                                                (name kind) id "-" (ex-message e)))))
+                                 (when on-item
+                                   (try
+                                     (on-item res)
+                                     (catch Exception e
+                                       (binding [*out* *err*]
+                                         (println "waymark10 bulk item on-item error:"
+                                                  (name kind) id "-" (ex-message e)))))))
+                    ;; a refused row's own pass: the refusal stands
+                    ;; whatever this does, so a throw here is logged
+                    refused! (fn [id e]
+                               (when on-refused
+                                 (try
+                                   (on-refused id e)
+                                   (catch Exception x
+                                     (binding [*out* *err*]
+                                       (println "waymark10 bulk item on-refused error:"
+                                                (name kind) id "-" (ex-message x)))))))
                     data
                     (if (= "atomic" mode)
                       ;; all-or-nothing: one transaction, any refusal
@@ -1660,6 +1882,7 @@
                                   (mapv (fn [it] (vreset! at (:id it)) (run-item tx it))
                                         items)))
                               (catch Exception e
+                                (when (refusal? e) (refused! @at e))
                                 (if (refusal? e)
                                   (throw (p/problem
                                           :bulk-refused 409 "Atomic bulk refused"
@@ -1674,7 +1897,8 @@
                                                                 :reason (problem-reason e)}]}}))
                                   (throw e))))]
                         (doseq [res results]
-                          (after-write! engine kind action-name res))
+                          (after-write! engine kind action-name res)
+                          (when on-item (on-item res)))
                         {:succeeded (count items) :refused 0 :failed 0 :refusals []})
                       ;; partial success: one transaction PER item — a
                       ;; refusal never poisons its neighbors. Stop mode
@@ -1688,18 +1912,22 @@
                                      (try
                                        (let [res (store/with-tx (:storage engine)
                                                    #(run-item % it))]
-                                         (after-write! engine kind action-name res)
+                                         (committed! id res)
                                          (update rep :succeeded inc))
                                        (catch Exception e
                                          (if (refusal? e)
-                                           (-> rep
+                                           (-> (do (refused! id e) rep)
                                                (update :refused inc)
                                                (update :refusals conj
                                                        {:self (href id)
                                                         :reason (problem-reason e)
                                                         ;; the router counts the
-                                                        ;; 409s; stripped below
-                                                        :status (:status (ex-data e))}))
+                                                        ;; 409s and stamps the
+                                                        ;; last one's law;
+                                                        ;; stripped below
+                                                        :status (:status (ex-data e))
+                                                        :type (:type (ex-data e))
+                                                        :guard (:guard (ex-data e))}))
                                            (do (binding [*out* *err*]
                                                  (println "waymark10 bulk item error:"
                                                           (name kind) id "-" (ex-message e)))
@@ -1725,14 +1953,19 @@
                     ;; per-item 409s leave beside the report, not in
                     ;; it: the stored replay and the wire stay the
                     ;; shape they were (waymark-fp62.7.11)
-                    conflicts (count (filter #(= 409 (:status %))
-                                             (:refusals data)))
+                    conflicted (filter #(= 409 (:status %)) (:refusals data))
+                    conflicts (count conflicted)
                     doc (report-doc action-name
                                     (update data :refusals
-                                            (partial mapv #(dissoc % :status)))
+                                            (partial mapv #(dissoc % :status :type :guard)))
                                     nil)]
                 (fan-out-store! engine kind marker digest idempotency-key doc)
-                {:report doc :conflicts conflicts}))))))))
+                ;; the newest per-item 409's problem type and guard ride
+                ;; beside the count, for the sitting's :last_refusal
+                (cond-> {:report doc :conflicts conflicts}
+                  (seq conflicted)
+                  (assoc :last-conflict
+                         (select-keys (last conflicted) [:type :guard])))))))))))
 
 (defn bulk-item!
   "One id through the SAME per-item algorithm bulk!'s partial-success
@@ -1777,10 +2010,14 @@
   ways: 9's batch dry-run executed under a doomed transaction —
   handlers ran, then rollback — so verdict i saw input i-1's effects;
   10's iron rule is that a rehearsal never fires a handler, so each
-  input is judged independently."
+  input is judged independently.
+
+  `:on-item`, when given, is called with each input's result once the
+  batch has committed and its after-write ran, as `bulk!` calls it for
+  each row. A rehearsal and a replay of the whole call run none."
   [engine kind id action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant]
+           dry-run grant on-item]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1873,7 +2110,8 @@
                                :index @at}))
                       (throw e))))]
             (doseq [res results]
-              (after-write! engine kind action-name res))
+              (after-write! engine kind action-name res)
+              (when on-item (on-item res)))
             (let [doc (report-doc action-name
                                   {:succeeded (count inputs)
                                    :refused 0 :failed 0 :refusals []}
@@ -1882,7 +2120,7 @@
               (fan-out-store! engine kind marker digest idempotency-key doc)
               {:report doc})))))))
 
-(defn- create-law-revision
+(defn create-law-revision
   "Creates stamp the kind's current law (phase 5); an after=true pilot
   claims new creates for the piloted revision. Engines built without
   the definitions boot carry no law slots and keep the phase-2 stub
@@ -1962,7 +2200,8 @@
   warnings ride the body as data. :dry-run :partial narrows both
   tiers to what the caller provided (§23's judged-when-answerable
   mode): provided entries schema-checked, fully covered guard leaves
-  judged, the rest :awaiting."
+  judged, the rest :awaiting — on the verdict, and on a judged leaf's
+  409 exactly as partial-verdict names them."
   [engine rdef model body principal acknowledged mode grant]
   (let [partial? (= :partial mode)
         inp (schema/decode model (or body {}))
@@ -1983,7 +2222,17 @@
                     (split-leaves (create-walled-guards rdef)
                                   (set (keys (or body {}))))
                     {:keys [warned]}
-                    (create-guard-pass judged inp ctx acknowledged)]
+                    (try
+                      (create-guard-pass judged inp ctx acknowledged)
+                      (catch clojure.lang.ExceptionInfo e
+                        (if (and (seq awaiting)
+                                 (= :guard-refused
+                                    (:waymark10/problem (ex-data e))))
+                          (throw (ex-info (ex-message e)
+                                          (assoc (ex-data e)
+                                                 :awaiting (mapv :name awaiting))
+                                          e))
+                          (throw e))))]
                 {:valid? true
                  :judged (mapv :name judged)
                  :awaiting (mapv :name awaiting)
@@ -2027,8 +2276,16 @@
                 (or (:create-schema rdef) (:schema rdef)))
         create-action (first (:create-action-names rdef))]
     (if dry-run
-      (create-dry-run! engine rdef model body principal acknowledged dry-run
-                       grant)
+      (let [verdict (create-dry-run! engine rdef model body principal
+                                     acknowledged dry-run grant)
+            ;; a kind that declares :on-rehearse says what the create
+            ;; would make: asked of the full rehearsal alone, after the
+            ;; guards passed and outside their transaction
+            preview (when (and (true? dry-run) (:valid? verdict))
+                      (when-some [f (:on-rehearse rdef)]
+                        (f engine (schema/decode model (or body {}))
+                           {:principal principal :grant grant})))]
+        (cond-> verdict preview (assoc :preview preview)))
       (after-write!
        engine kind create-action
        (store/with-tx (:storage engine)
@@ -2155,7 +2412,7 @@
                                  []
                                  (create-walled-guards rdef))
                                inp (dissoc ctx :invoke :create :inner-sink
-                                           :power)
+                                           :power :follow-up :follow-sink)
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS
@@ -2281,9 +2538,11 @@
              "application/waymark+json"))
           ;; :on-create writes made through ctx :invoke/:create ride
           ;; out too
-          (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+          (let [inner (some-> (:inner-sink ctx) deref not-empty)
+                follow (some-> (:follow-sink ctx) deref not-empty)]
             (cond-> {:row row :transition record}
-              inner (assoc :inner-writes inner))))))))
+              inner (assoc :inner-writes inner)
+              follow (assoc :follow-ups follow))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

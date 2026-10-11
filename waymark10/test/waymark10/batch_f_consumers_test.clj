@@ -9,13 +9,17 @@
   (WAYMARK10_TEST_DSN)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [org.httpkit.server :as http]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.quests :as quests]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.test.db :as db]
             [waymark10.types :as t]))
 
@@ -31,7 +35,13 @@
     :actions {:file {:from #{:open} :to :filed
                      :safety {:idempotent true :reversible false
                               :confirm false
-                              :one-way "Filed is filed."}}}}))
+                              :one-way "Filed is filed."}}
+              ;; :file's bulk door: a bulk action has no row form
+              :shelve {:from #{:open} :to :filed
+                       :bulk {:max-items 100}
+                       :safety {:idempotent true :reversible false
+                                :confirm false
+                                :one-way "Filed is filed."}}}}))
 
 (def ^:dynamic *eng* nil)
 
@@ -98,6 +108,362 @@
                                {:from-origin? true})
     (is (pos? (count @seen)) "history replayed from the log's origin")
     (is (= 1 (first @seen)))))
+
+;; ── 1b. two writers that commit out of id order ─────────────────────
+
+(deftest out-of-order-commits-are-both-delivered
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        seen (atom [])
+        f #(swap! seen conj (:id %))
+        _ (consumers/drain-consumer! *eng* :f-ordered f)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        appended (promise)
+        release (promise)
+        ;; the slow writer takes the LOWER id and holds its transaction open
+        slow (future
+               (store/with-tx st
+                 (fn [tx]
+                   (deliver appended (:id (store/append-transition! st tx record)))
+                   (deref release 20000 nil))))]
+    (try
+      (let [low (deref appended 10000 nil)
+            ;; the fast writer takes the HIGHER id and commits first
+            high (:id (store/with-tx st
+                        #(store/append-transition! st % record)))]
+        (is (some? low))
+        (is (< low high))
+        (testing "a drain in the window does not pass the id still in flight"
+          (is (= 0 (consumers/drain-consumer! *eng* :f-ordered f)))
+          (is (empty? @seen))
+          (is (< (cursor-of :f-ordered) low)))
+        (deliver release true)
+        @slow
+        (testing "once the lower id commits, both arrive, in id order"
+          (is (= 2 (consumers/drain-consumer! *eng* :f-ordered f)))
+          (is (= [low high] @seen))
+          (is (= high (cursor-of :f-ordered)))))
+      (finally (deliver release true)))))
+
+;; ── 1c. what the order lock costs writers behind a long transaction ─
+;; A measurement, printed: timings are the runner's, so the one bound
+;; asserted is a count. Readers that take no lock (:settled false) are
+;; the log as it was before the order lock.
+
+(defn- to-job-log!
+  "Print line on the process's own stdout. The runner captures *out*
+  and System/out and shows them for a failing test only; these lines
+  are read from a passing one."
+  [line]
+  ;; never closed: closing it closes the descriptor
+  ;; a line of its own: the runner's progress line has no end, and one
+  ;; printed after it is read as part of it
+  (doto (java.io.PrintStream.
+         (java.io.FileOutputStream. java.io.FileDescriptor/out) true)
+    (.print (str \newline line \newline))
+    (.flush)))
+
+(defn- append-latencies!
+  "For hold-ms, `drains` threads read the log (:settled as given) and
+  `writers` threads append, each append in a transaction of its own;
+  with long-writer? one more transaction appends first and stays open
+  for the whole of it. → the appends' latencies in ms, sorted."
+  [st record {:keys [hold-ms drains writers settled long-writer?]}]
+  (let [appended (promise)
+        hold (future
+               (if long-writer?
+                 (store/with-tx st
+                   (fn [tx]
+                     (deliver appended (:id (store/append-transition! st tx record)))
+                     (Thread/sleep (long hold-ms))))
+                 (do (deliver appended nil)
+                     (Thread/sleep (long hold-ms)))))
+        since (deref appended 10000 nil)
+        drainers (mapv (fn [_]
+                         (future
+                           (while (not (future-done? hold))
+                             (store/with-tx st
+                               (fn [tx] (store/transitions st tx {:since since}
+                                                           {:limit 200 :settled settled})))
+                             (Thread/sleep 20))))
+                       (range drains))
+        appenders (mapv (fn [_]
+                          (future
+                            (loop [ms []]
+                              (if (future-done? hold)
+                                ms
+                                (let [t0 (System/nanoTime)]
+                                  (store/with-tx st
+                                    #(store/append-transition! st % record))
+                                  (recur (conj ms (/ (- (System/nanoTime) t0) 1e6))))))))
+                        (range writers))]
+    @hold
+    (run! deref drainers)
+    (vec (sort (mapcat deref appenders)))))
+
+(deftest order-lock-cost-to-writers
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        writers 3
+        run (fn [settled long-writer?]
+              (let [ms (append-latencies! st record {:hold-ms 1500 :drains 2
+                                                     :writers writers
+                                                     :settled settled
+                                                     :long-writer? long-writer?})
+                    at #(nth ms (min (dec (count ms)) (long (* % (count ms)))))]
+                (to-job-log! (format (str "log-order-lock settled=%s long-writer=%s"
+                                          " appends=%d p50=%.1fms p99=%.1fms max=%.1fms")
+                                     settled long-writer? (count ms)
+                                     (at 0.5) (at 0.99) (peek ms)))
+                ms))]
+    ;; not printed: the first case would otherwise pay for the cold pool
+    (append-latencies! st record {:hold-ms 500 :drains 2 :writers writers
+                                  :settled false :long-writer? false})
+    ;; the same runner with the plain INSERT, which holds no floor:
+    ;; what the watermark costs a writer
+    (with-redefs-fn {(ns-resolve 'waymark10.server.store.postgres 'append-with-floor-sql)
+                     ((ns-resolve 'waymark10.server.store.postgres 'append-sql) false)}
+      #(do (to-job-log! "log-order-lock floor=off")
+           (run false false)
+           (run false true)
+           (to-job-log! "log-order-lock floor=on")))
+    (run false false)
+    (run true false)
+    (run false true)
+    (testing "behind a long writer a settled drain yields: appends still land"
+      ;; held for the whole hold, each writer would land exactly one
+      (is (< writers (count (run true true)))))))
+
+;; ── 1c′. the same cost under the engine's own load ──────────────────
+;; A real bulk invoke writes while the quests' consumer and the webhook
+;; deliverer drain on their own cadence: a NOTIFY wakes each, and the
+;; 2 s poll is the backstop. Printed, as above; settled=false is the
+;; same load with no reader held to the settled log.
+;;
+;; Each case holds one active quest on the first note of its bulk, so
+;; the consumer plans it again, in transactions of its own, while the
+;; other items commit. The numbers did not move: one runner, 100 items,
+;; total / p50 / p99 in ms, the cases in this order —
+;;   no quest   settled=false 480.7 / 4.6 / 9.8    settled=true 405.2 / 3.7 / 13.2
+;;   one quest  settled=false 417.6 / 3.8 / 18.7   settled=true 409.7 / 3.7 / 9.3
+;;   no quest   settled=false 369.3 / 3.5 / 6.4    settled=true 306.5 total
+;; The cases with the quest lie between two runs without it, which
+;; differ by more (the JVM warms) than the quest adds. One quest plans
+;; again for one item of the hundred; a quest for each item is another
+;; measurement.
+
+(defn- bulk-latencies!
+  "Create n notes and shelve them in one bulk invoke; (before! ids) runs
+  between the two. → {:total-ms the call's duration, :items each item's
+  latency in ms, sorted}; an item's latency runs from the item before it
+  to its own commit."
+  [n before!]
+  (let [ids (mapv #(:id (note! (str "bulk " %))) (range n))
+        _ (before! ids)
+        marks (atom [])
+        t0 (System/nanoTime)]
+    (inv/bulk! *eng* :f_note :shelve {:ids ids}
+               {:principal elena
+                :on-item (fn [_] (swap! marks conj (System/nanoTime)))})
+    {:total-ms (/ (- (System/nanoTime) t0) 1e6)
+     :items (vec (sort (map #(/ (- %2 %1) 1e6) (cons t0 @marks) @marks)))}))
+
+(deftest order-lock-cost-to-a-bulk-invoke
+  (let [st (:storage *eng*)
+        n 100
+        hits (atom 0)
+        server (http/run-server
+                (fn [_req]
+                  (swap! hits inc)
+                  {:status 200 :headers {} :body ""})
+                {:port 0 :legacy-return-value? false})
+        {sub :row} (inv/create! *eng* :subscription
+                                {:url (str "http://127.0.0.1:"
+                                           (http/server-port server) "/hook")
+                                 :kinds ["f_note"]}
+                                {:principal elena})
+        d (events/dispatcher *eng* {})
+        planner (quests/start! *eng* {:dispatcher d})
+        deliverer (webhooks/start-deliverer! *eng* d {})
+        newest (fn []
+                 (-> (store/with-tx st
+                       #(store/transitions st % {} {:newest-first true :limit 1}))
+                     first
+                     :id))
+        quest (atom nil)
+        ;; the goal is the note's row door, so the bulk's shelve of that
+        ;; note is a move on a row the quest names and not its goal: the
+        ;; consumer plans the quest again while the other items commit
+        accept! (fn [ids]
+                  (reset! quest
+                          (:id (:row (inv/create! *eng* :quest
+                                                  {:self (str "/api/f_notes/"
+                                                              (first ids))
+                                                   :action "file"}
+                                                  {:principal elena}))))
+                  ;; its first plan is written before the bulk starts: a
+                  ;; plan written after the shelve has answered it already
+                  (await-pred #(= (newest) (cursor-of quests/consumer-name)) 10000))
+        plans (fn []
+                (->> (store/with-tx st
+                       #(store/transitions st % {:kind :quest
+                                                 :resource-id (str @quest)}
+                                           {}))
+                     (filter #(= "plan" (name (:action %))))
+                     count))
+        run (fn [settled]
+              (reset! hits 0)
+              (let [{:keys [total-ms items]} (bulk-latencies! n accept!)
+                    at #(nth items (min (dec (count items))
+                                        (long (* % (count items)))))]
+                ;; both drains catch up before the next case writes: the
+                ;; subscription hears a create and a shelve for each note
+                (await-pred #(= (newest) (cursor-of quests/consumer-name)) 10000)
+                (await-pred #(<= (* 2 n) @hits) 10000)
+                (is (= 2 (plans))
+                    "the quest was planned at its create and again at the shelve")
+                (to-job-log! (format (str "log-order-lock bulk settled=%s items=%d"
+                                          " total=%.1fms p50=%.1fms p99=%.1fms"
+                                          " max=%.1fms delivered=%d")
+                                     settled (count items) total-ms
+                                     (at 0.5) (at 0.99) (peek items) @hits))
+                items))]
+    (try
+      ;; the readers' own :settled true, answered as :settled false is:
+      ;; no watermark, no wait
+      (with-redefs-fn {#'pg/settled-read (fn [_tx read] (read nil))}
+        #(run false))
+      (testing "with the drains reading the settled log, every item still commits"
+        (is (= n (count (run true)))))
+      (finally
+        (webhooks/stop-deliverer! deliverer)
+        (quests/stop! planner)
+        (events/stop! d)
+        (inv/invoke! *eng* :subscription (:id sub) :revoke nil {:principal elena})
+        (engine/stop! server)))))
+
+;; ── 1d. the other readers that walk the log by id ───────────────────
+
+(defn- in-the-window
+  "Two appends that commit out of id order. Calls (f low high
+  commit-low!) while the LOWER id is still in flight and the higher
+  one has committed."
+  [f]
+  (note! "a transition to copy")
+  (let [st (:storage *eng*)
+        record (-> (store/with-tx st
+                     #(store/transitions st % {} {:newest-first true :limit 1}))
+                   first
+                   (dissoc :id :at :idempotency-key :correlation-id))
+        appended (promise)
+        release (promise)
+        slow (future
+               (store/with-tx st
+                 (fn [tx]
+                   (deliver appended (:id (store/append-transition! st tx record)))
+                   (deref release 20000 nil))))]
+    (try
+      (let [low (deref appended 10000 nil)
+            high (:id (store/with-tx st
+                        #(store/append-transition! st % record)))]
+        (is (some? low))
+        (is (< low high))
+        (f low high (fn [] (deliver release true) @slow)))
+      (finally (deliver release true)))))
+
+(deftest a-seed-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [seen (atom [])
+           f #(swap! seen conj (:id %))]
+       (testing "a first drain in the window seeds under the id in flight"
+         (is (= 0 (consumers/drain-consumer! *eng* :f-seeded f)))
+         (is (some? (cursor-of :f-seeded)))
+         (is (< (cursor-of :f-seeded) low))
+         (is (empty? @seen)))
+       (commit-low!)
+       (testing "once the lower id commits, the next drain delivers both, in id order"
+         (is (= 2 (consumers/drain-consumer! *eng* :f-seeded f)))
+         (is (= high (cursor-of :f-seeded)))
+         (is (= [low high] @seen)))))))
+
+(deftest a-replay-waits-for-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [rows (future (mapv :id (#'events/backlog (:storage *eng*) (dec low))))]
+       (testing "a replay in the window does not answer without the lower id"
+         (is (= ::waiting (deref rows 200 ::waiting))))
+       (commit-low!)
+       (testing "once the lower id commits, both are replayed, in id order"
+         (is (= [low high] (deref rows 10000 nil))))))))
+
+(deftest the-inbox-page-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [page #(mapv :id (#'seat-routes/log-after *eng* (dec low)))]
+       (testing "a page in the window answers no row"
+         (is (empty? (page))))
+       (commit-low!)
+       (testing "once the lower id commits, the page holds both, in id order"
+         (is (= [low high] (page))))))))
+
+(deftest the-dispatcher-does-not-pass-the-id-in-flight
+  (let [d (events/dispatcher *eng* {:poll-ms 200})
+        sub (events/subscribe d {})
+        seen (atom [])
+        ;; take from the live subscription for ms, or until (done? seen)
+        hear! (fn [done? ms]
+                (let [deadline (+ (System/currentTimeMillis) ms)]
+                  (loop []
+                    (let [left (- deadline (System/currentTimeMillis))]
+                      (when (and (pos? left) (not (done? @seen)))
+                        (when-some [t (events/take-event sub left)]
+                          (swap! seen conj (:id t)))
+                        (recur))))))]
+    (try
+      (in-the-window
+       (fn [low high commit-low!]
+         (testing "a drain in the window delivers neither id"
+           (hear! (constantly false) 1500)
+           (is (empty? (filter #(>= % low) @seen))))
+         (commit-low!)
+         (testing "once the lower id commits, a live subscriber hears both, in id order"
+           (hear! #(some #{high} %) 10000)
+           (is (= [low high] (filterv #(>= % low) @seen))))))
+      (finally
+        (events/unsubscribe d sub)
+        (events/stop! d)))))
+
+(deftest the-dispatcher-seed-does-not-pass-the-id-in-flight
+  (in-the-window
+   (fn [low high commit-low!]
+     (let [started (future (events/dispatcher *eng* {:poll-ms 200}))]
+       (try
+         (testing "a dispatcher started in the window seeds under the lower id"
+           (let [d (deref started 10000 nil)]
+             (is (some? d))
+             (is (< (some-> d :last-seen deref) low))))
+         (commit-low!)
+         (testing "once the lower id commits, its drains reach the newest id"
+           (let [d (deref started 10000 nil)]
+             (is (await-pred #(= high (some-> d :last-seen deref)) 10000))))
+         (finally
+           (some-> (deref started 10000 nil) events/stop!))))))
+  (testing "a log that never settles is read as it stands"
+    (in-the-window
+     (fn [_low high _commit-low!]
+       (let [d (with-redefs [store/settled-transitions (fn [& _] nil)]
+                 (events/dispatcher *eng* {:poll-ms 200}))]
+         (try
+           (is (= high @(:last-seen d)))
+           (finally (events/stop! d))))))))
 
 ;; ── 2. a throwing consumer parks — at-least-once, nothing skipped ───
 

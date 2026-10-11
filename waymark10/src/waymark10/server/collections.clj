@@ -48,6 +48,7 @@
   - waymark9's rows=none, depth= and the recomputing un-advertising
     have no v10 counterpart yet — deferred with their machinery."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.checks :as checks]
             [waymark10.machine :as machine]
             [waymark10.saved-view :as sv]
@@ -81,6 +82,12 @@
     (:double :decimal) "numeric"
     "text"))
 
+(defn- absent-text
+  "The kind's :absent-as value for f as the wire spells it, or nil."
+  [rdef f]
+  (when-some [v (get (:absent-as rdef) f)]
+    (if (keyword? v) (name v) (str v))))
+
 ;; ── the filter grammar ──────────────────────────────────────────────
 
 (defn- grammar
@@ -95,7 +102,9 @@
                  (when-not (= :state f)
                    (let [{:keys [head array?]} (field-info rdef f)
                          fname (name f)
-                         e {:field f :head head :array? array?}]
+                         absent (absent-text rdef f)
+                         e (cond-> {:field f :head head :array? array?}
+                             (some? absent) (assoc :absent-as absent))]
                      (concat
                       (when (or (:eq ops) (:in ops) array?)
                         [[fname (assoc e :mode :eq
@@ -133,14 +142,22 @@
       {:target :data :field f :op :in-any :values values}
       :else
       (let [cast (cast-of (:head e))
-            base {:target :data :field f :cast cast}]
+            base {:target :data :field f :cast cast}
+            ;; :absent-as — a row that stores nothing filters as the
+            ;; declared value: the cond carries :absent? when an absent
+            ;; row belongs in the answer, and each store reads that mark
+            absent (:absent-as e)
+            named? (and (some? absent)
+                        (boolean (some #(= absent (str %)) values)))]
         (case (:mode e)
-          :eq (if multi?
-                (assoc base :op :in :values values)
-                (assoc base :op := :value v))
-          :ne (if multi?
-                (assoc base :op :not-in :values values)
-                (assoc base :op :not= :value v))
+          :eq (cond-> (if multi?
+                        (assoc base :op :in :values values)
+                        (assoc base :op := :value v))
+                named? (assoc :absent? true))
+          :ne (cond-> (if multi?
+                        (assoc base :op :not-in :values values)
+                        (assoc base :op :not= :value v))
+                (and (some? absent) (not named?)) (assoc :absent? true))
           :gte (assoc base :op :>= :value v)
           :lte (assoc base :op :<= :value v)
           :after (assoc base :op :> :value v
@@ -166,8 +183,29 @@
           (keep (fn [[f v]] (when-not (contains? named f) [(name f) (str v)])))
           (:default-filters rdef))))
 
+(defn sort-terms
+  "One sort spelling — a, -a,b or a vector of those — → the keys it
+  names, in order: [{:field kw :desc bool} …]. A declared :sortable
+  :default and the sort= param read through this one door."
+  [spec]
+  (into []
+        (comp (mapcat #(str/split % #","))
+              (map str/trim)
+              (remove str/blank?)
+              (map (fn [t]
+                     (let [desc? (str/starts-with? t "-")]
+                       {:field (keyword (if desc? (subs t 1) t)) :desc desc?}))))
+        (if (string? spec) [spec] spec)))
+
+(defn- sort-of
+  "Sort keys → the :sort shape: the first key as {:field :desc}, any
+  later ones under :then, so a one-field reader keeps reading one map."
+  [terms]
+  (when-some [[t & more] (seq terms)]
+    (cond-> t (seq more) (assoc :then (vec more)))))
+
 (defn parse-query
-  "Query params ({string string}) → {:conds […] :sort {:field :desc}
+  "Query params ({string string}) → {:conds […] :sort {:field :desc :then}
   :page {:size :number} :filters sorted-map :applied sorted-map}, or
   one 422 problem naming every unknown/malformed parameter.
 
@@ -186,7 +224,12 @@
   nothing rather than answering 422 — it is how a client says 'this
   field, deliberately unfiltered', which is the only way to clear a
   default. A blank sort= is still a 422: sort hides no rows, so there
-  is nothing to clear."
+  is nothing to clear.
+
+  sort= (and :sortable :default) may name several keys, comma
+  separated (a vector for the default): rows order by the first, then
+  by the next among its ties, and id breaks the last tie. :then
+  carries the keys after the first."
   ([rdef params] (parse-query rdef params nil))
   ([rdef params {:keys [defaults?] :or {defaults? true}}]
    (let [g (grammar rdef)
@@ -199,15 +242,21 @@
           (fn [acc pname raw]
             (cond
               (= "sort" pname)
-              (let [desc? (str/starts-with? raw "-")
-                    base (if desc? (subs raw 1) raw)]
-                (if (some #(= base %) sortable)
-                  (assoc acc :sort {:field (keyword base) :desc desc?})
+              (let [terms (sort-terms raw)
+                    bad (into [] (comp (map (comp name :field))
+                                       (remove (set sortable)))
+                              terms)
+                    one-of (vec (mapcat (fn [f] [f (str "-" f)]) sortable))]
+                (if (and (seq terms) (empty? bad))
+                  (assoc acc :sort (sort-of terms))
                   (update acc :errors assoc pname
-                          [(if (seq sortable)
-                             (str "must be one of "
-                                  (vec (mapcat (fn [f] [f (str "-" f)]) sortable)))
-                             "this kind declares no sortable fields")])))
+                          [(cond
+                             (empty? sortable)
+                             "this kind declares no sortable fields"
+                             (< 1 (count terms))
+                             (str (str/join ", " bad) " cannot sort; each key "
+                                  "must be one of " one-of)
+                             :else (str "must be one of " one-of))])))
 
               (= "page[size]" pname)
               (let [n (parse-long raw)]
@@ -273,9 +322,7 @@
      (-> acc
          (dissoc :errors)
          (assoc :applied (into (sorted-map) params))
-         (update :sort #(or % (when default-sort
-                                {:field (keyword (str/replace-first default-sort "-" ""))
-                                 :desc (str/starts-with? default-sort "-")})))))))
+         (update :sort #(or % (some-> default-sort sort-terms sort-of)))))))
 
 ;; ── the query affordance's input schema ─────────────────────────────
 
@@ -354,7 +401,8 @@
                                                             (str "-" (name f))])
                                                    sortable))}
                          (get-in rdef [:sortable :default])
-                         (assoc :default (get-in rdef [:sortable :default])))))
+                         (assoc :default (let [d (get-in rdef [:sortable :default])]
+                                           (if (string? d) d (str/join "," d)))))))
         props (reduce-kv (fn [props f v]
                            (let [pname (name f)]
                              (cond-> props
@@ -402,6 +450,41 @@
                                         :maxItems max-items})
         (update :required (fnil conj []) "ids"))))
 
+(defn collection-doors
+  "The kind's safe collection doors (:collection-doors) as the
+  collection document advertises them: name → method, href, input
+  schema and safety. `safe` says the door reads and writes nothing, so
+  whoever may read the kind may call it."
+  [rdef]
+  (let [base (str "/api/" (:plural rdef))]
+    (into {}
+          (map (fn [[dname door]]
+                 [dname
+                  (cond-> {:method "POST"
+                           :href (str base "/-/" (name dname))
+                           :input (if (:input door)
+                                    (schema/json-schema (:input door))
+                                    {:type "object" :properties {}})
+                           :safety {:safe true :idempotent true
+                                    :reversible true :confirm false}}
+                    (:summary door) (assoc :summary (:summary door)))]))
+          (:collection-doors rdef))))
+
+(defn door-errors
+  "A safe collection door's input contract: `body` held to the `:input`
+  the kind declares for the door `dname` under :collection-doors,
+  closed, so a misspelled field is refused and not passed over. A
+  `:double` is read as any number, because that is what the advertised
+  JSON Schema says and a JSON 1080 is not a float. A door that declares
+  no `:input` takes an empty map, as it advertises. Field-keyed errors,
+  or nil when the body is valid."
+  [rdef dname body]
+  (schema/closed-errors
+   (walk/postwalk-replace {:double 'number?}
+                          (or (get-in rdef [:collection-doors dname :input])
+                              [:map]))
+   body))
+
 (defn- collection-actions [rdef]
   (let [base (str "/api/" (:plural rdef))
         model (or (:create-schema rdef) (:schema rdef))
@@ -438,7 +521,8 @@
       :query {:method "GET"
               :href base
               :input (query-input-schema rdef)}}
-     bulk-entries)))
+     bulk-entries
+     (collection-doors rdef))))
 
 (defn create-affordance
   "One kind's create door as its collection advertises it —
@@ -574,7 +658,8 @@
                            counts (store/with-tx st
                                     #(store/facet-counts st % (:kind rdef)
                                                          f (remove own? conds)
-                                                         array?))]
+                                                         array?
+                                                         (absent-text rdef f)))]
                        (when (seq counts) [f counts]))
                      (catch Exception e
                        (binding [*out* *err*]
@@ -728,6 +813,10 @@
                                  ((:conds-of vis) (:kind rdef)))]
                 (into conds fconds)
                 conds)
+        ;; conds the engine itself adds for this one read: a judging
+        ;; walk's anti-join (ticket 279366ee). No query parameter
+        ;; spells them, so neither the hrefs nor the filter echo do
+        conds (into conds (:extra-conds ctx-opts))
         st (:storage eng)
         {:keys [rows total]}
         (store/with-tx st
@@ -735,6 +824,7 @@
             {:rows (store/search-rows st tx (:kind rdef) conds
                                       {:order-by (:field sort)
                                        :desc (:desc sort)
+                                       :then-by (:then sort)
                                        :limit (:size page)
                                        :offset (* (:size page)
                                                   (dec (:number page)))})
@@ -786,10 +876,12 @@
         acts (collection-actions rdef)
         ;; a scoped request's collection affordances: query stays (the
         ;; kind itself is granted or this envelope never rendered),
-        ;; create and bulk entries survive only when granted
+        ;; create and bulk entries survive only when granted, and a
+        ;; safe collection door stays as query does
         acts (if vis
                (into {} (filter (fn [[aname _]]
                                   (or (= :query aname)
+                                      (contains? (:collection-doors rdef) aname)
                                       ((:action? vis) (:kind rdef) aname))))
                      acts)
                acts)

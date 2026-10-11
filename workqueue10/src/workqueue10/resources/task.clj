@@ -62,7 +62,8 @@
 (def ^:private writable #{:fresh :stale :unreachable})
 
 (defguard not-dropped
-  (refuse "A task the source dropped does not complete — the authority already let it go.")
+  (refuse "A task the source dropped does not complete — the authority already let it go."
+          {:open "No door clears this one: the drop is the source's own verdict, and nothing here undoes it."})
   '(not= (var :status) "dropped"))
 
 ;; a create guard judges the birth INPUT (the row is nil at the

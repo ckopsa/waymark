@@ -42,6 +42,7 @@
                 :summary {:type "string"}
                 :data {:type "object"}
                 :parts {:type "object"}
+                :refs {:type "object"}
                 :actions {:type "object"}
                 :unavailable {:type "object"}
                 :links {:type "object"}
@@ -69,14 +70,15 @@
 
 (def ^:private problem-schema
   {:type "object"
-   :description "RFC 9457 problem details; refusals carry remedies and becomes_available beside the standard members."
+   :description "RFC 9457 problem details; refusals carry remedies and becomes_available beside the standard members. A partial rehearsal's guard refusal also carries awaiting: the guard leaves that still wait on a field."
    :properties {:type {:type "string"}
                 :title {:type "string"}
                 :status {:type "integer"}
                 :detail {:type "string"}
                 :errors {:type "object"}
                 :remedies {:type "array" :items {:type "string"}}
-                :becomes_available {:type "object"}}
+                :becomes_available {:type "object"}
+                :awaiting {:type "array" :items {:type "string"}}}
    :required ["title" "status"]})
 
 (def ^:private bulk-report-schema
@@ -227,6 +229,32 @@
                :required ["items"]
                :additionalProperties false}]})))
 
+(defn- link-paths
+  "One GET per declared template link that is a route under the row's
+  own address: `/api/{plural}/{id}/…` with no other hole and no query.
+  Such a link is a safe GET a reader may follow (vocabulary § 13); a
+  link into another kind's collection is that kind's own path."
+  [rdef]
+  (let [kname (name (:kind rdef))
+        prefix (str "/api/" (:plural rdef) "/{id}/")]
+    (into {}
+          (keep (fn [{:keys [href rel summary states]}]
+                  (when (and (string? href)
+                             (str/starts-with? href prefix)
+                             (not (re-find #"[{?]" (subs href (count prefix)))))
+                    [href
+                     {:get {:tags [kname]
+                            :summary (or summary
+                                         (str "Follow the " (name rel) " link of a " kname))
+                            :parameters [id-param]
+                            :responses {"200" {:description
+                                               (if (seq states)
+                                                 (str "The link's answer, for a row that is "
+                                                      (str/join " or " (sort (map name states))))
+                                                 "The link's answer")}
+                                        "404" (resp-ref "not_found")}}}])))
+          (:links rdef))))
+
 (defn- kind-paths [rdef]
   (let [kname (name (:kind rdef))
         col (str "/api/" (:plural rdef))
@@ -334,7 +362,19 @@
                             :parameters [id-param]
                             :responses {"204" {:description "Discarded"}}}})
            paths)))
-     base
+     ;; the row's own safe GETs (:links), then the safe collection
+     ;; doors (:collection-doors)
+     (into (into base (link-paths rdef))
+           (map (fn [[dname door]]
+                  [(:href door)
+                   {:post {:tags [kname]
+                           :summary (or (:summary door)
+                                        (str (name dname) " (safe collection door)"))
+                           :requestBody (body-of (:input door))
+                           :responses {"200" {:description "The door's answer; nothing is written"}
+                                       "404" (resp-ref "not_found")
+                                       "422" (resp-ref "schema_invalid")}}}]))
+           (collections/collection-doors rdef))
      (machine/actions-seq rdef))))
 
 (defn- surface-paths

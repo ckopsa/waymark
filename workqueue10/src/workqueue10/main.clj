@@ -57,7 +57,10 @@
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
-  dev-header resolver, unchanged).
+  dev-header resolver, unchanged), WAYMARK10_SEED (a demo engine
+  only, docs/spec-demo-clones.md § 1: the name of the seed loaded
+  through the doors at boot — it needs FACTORY10=1, an engine named
+  demo-…, and no IdP, and the boot refuses otherwise).
 
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -116,13 +119,16 @@
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.capabilities :as cap :refer [capability]]
+            [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
+            [waymark10.server.domains :as domains]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seed :as seed]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -506,7 +512,8 @@
   [eng]
   (when (= "1" (System/getenv "FACTORY10"))
     (github/from-env #(System/getenv ^String %)
-                     #(bench/active-repositories eng))))
+                     #(bench/active-repositories eng)
+                     (forge/cursor-store eng))))
 
 (defn- factory-every-seconds []
   (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)
@@ -834,6 +841,56 @@
 
 (defonce ^:private dev (atom nil))
 
+(defn- gate-row-on-boot!
+  "The bridge of Gate's deprecation (spec-mcp-servers § 3 step 1): one
+  mcp_server row named gate, passthrough, at the Gate
+  WORKQUEUE10_GATE_URL names, seeded once and never overwritten. The
+  sources and the power door resolve every <rig>__<tool> name through
+  it until each rig has its own row. A demo engine (WAYMARK10_SEED,
+  docs/spec-demo-clones.md § 4) gets none, whatever the url says: a
+  passthrough row answers to every unprefixed tool name, so the seeded
+  held call would be forwarded at Gate's address and not refused with
+  the no-server sentence. `gate-url` and `seed` are the two variables'
+  values as `start!` read them."
+  [eng gate-url seed]
+  (when-not (some-> seed str not-empty)
+    (when-some [url (some-> gate-url str not-empty)]
+      (mcp-servers/ensure-gate-row! eng {:url url}))))
+
+(defn- seed-on-boot!
+  "The demo seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED
+  and nothing otherwise. The seed's tickets are rows of a factory
+  kind, so a demo engine boots with FACTORY10=1 and this refuses one
+  that does not. `seed/boot!` refuses an engine not named `demo-…` or
+  one with an IdP, and a step the law refuses. Every refusal throws,
+  so the boot ends before the server listens. WAYMARK_WALL_URL is the
+  clone's wall (§ 4): when it is set the seed's walled servers are
+  made at it, so the seeded held call is forwarded to the wall. `seed`,
+  `factory` and `wall-url` are the three variables' values as `start!`
+  read them."
+  [eng seed factory wall-url]
+  (when-some [seed-name (some-> seed str not-empty)]
+    (when-not (= "1" factory)
+      (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
+                      {:seed seed-name})))
+    (seed/boot! eng seed-name
+                {:wall-url (some-> wall-url str not-empty)})))
+
+(defn- clocked-engine
+  "The engine `build` makes of `opts`, with the demo clock
+  (docs/spec-agent-demo-walks.md § 7) assembled behind WAYMARK10_SEED
+  and nothing otherwise: the `clock_shift` kind, the `:now-fn` its shifts
+  move, and the offset read back from the rows, so a restarted clone
+  keeps its time. A working engine is built from `opts` as they are: it
+  serves no such kind and has no offset to read. `seed-on-boot!` then
+  refuses a seeded engine not named `demo-…` or one with an IdP, and
+  the kind's own guard asks that again at each shift. `seed` is the
+  variable's value as `start!` read it."
+  [seed build opts]
+  (if (some-> seed str not-empty)
+    (clock-shift/install! (build (clock-shift/with-clock opts)))
+    (build opts)))
+
 (defn start!
   "Boot and serve. Returns the engine."
   []
@@ -850,8 +907,9 @@
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
-        eng (mirror/with-push
-             (engine/engine {:storage storage
+        eng (clocked-engine (System/getenv "WAYMARK10_SEED")
+                            #(mirror/with-push (engine/engine %))
+                            {:storage storage
                              :resources (resources
                                          (sources ha-src)
                                          media-srcs
@@ -905,7 +963,7 @@
                                               ;; bench and rides that
                                               ;; row's one client
                                               :bench-rpc
-                                              (mcp-servers/rpc-of engine-ref))}))
+                                              (mcp-servers/rpc-of engine-ref))})
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
@@ -915,14 +973,13 @@
         _ (runner-links/ensure-seeded-links! eng)
         ;; one runner_provider row per provider, its cap empty
         _ (runner-links/ensure-providers! eng)
-        ;; the bridge of Gate's deprecation (spec-mcp-servers § 3
-        ;; step 1): one mcp_server row named gate, passthrough, at the
-        ;; Gate WORKQUEUE10_GATE_URL names, seeded once and never
-        ;; overwritten — the sources and the power door resolve every
-        ;; <rig>__<tool> name through it until each rig has its own row
-        _ (when-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL")
-                                  str not-empty)]
-            (mcp-servers/ensure-gate-row! eng {:url url}))
+        ;; domain `factory`, once: every seat that names no domain is in it
+        _ (domains/ensure-factory! eng)
+        ;; the bridge of Gate's deprecation, and none of it on a demo
+        ;; engine — see `gate-row-on-boot!`
+        _ (gate-row-on-boot! eng
+                             (System/getenv "WORKQUEUE10_GATE_URL")
+                             (System/getenv "WAYMARK10_SEED"))
         ;; the one vocabulary (waymark-fp62.10.4), run AFTER the rows
         ;; are seeded because it is the rows it reads: a dotted token
         ;; a server's powers name is real because that row says so, so
@@ -940,6 +997,13 @@
         _ (when (= "1" (System/getenv "FACTORY10"))
             (forge/finish-merged-parents! eng))
         _ (connections/ensure-connections! eng (connection-descriptors))
+        ;; the demo seed, after every other boot row and before the
+        ;; server listens: a refusal throws here, so a half-seeded
+        ;; engine is never served
+        _ (seed-on-boot! eng
+                         (System/getenv "WAYMARK10_SEED")
+                         (System/getenv "FACTORY10")
+                         (System/getenv "WAYMARK_WALL_URL"))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
@@ -978,6 +1042,12 @@
                                      {:every-seconds
                                       (factory-every-seconds)})
                          :stop-fn forge/stop-passes!}))
+        ;; …and the watch over its stamp (ticket b53f78ac), under NO
+        ;; election: the mirror's own thread cannot say it stopped,
+        ;; and neither can a process that never won the role
+        factory-watch (when factory-pass
+                        (forge/start-watch!
+                         eng {:every-seconds (factory-every-seconds)}))
         ;; …and the bench's enrolment retry (waymark-fp62.6.3.8), on
         ;; the same shape and behind FACTORY10=1 ALONE: a house with a
         ;; bench and no GitHub token still owes its policy rows an
@@ -994,6 +1064,7 @@
             :stop-fn bench/stop-enrol-sweeper!}))]
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass
+                 :factory-watch factory-watch
                  :factory-enrol-pass factory-enrol-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
@@ -1001,9 +1072,10 @@
 
 (defn stop! []
   (when-some [{:keys [engine server storage inbox-pass factory-pass
-                      factory-enrol-pass]} @dev]
+                      factory-watch factory-enrol-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
+    (when factory-watch (forge/stop-passes! factory-watch))
     (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
     (engine/stop! engine server)
     (pg/close! storage)
@@ -1016,6 +1088,11 @@
   (or (some-> (System/getenv "WORKQUEUE10_DRAIN_MS") parse-long) 20000))
 
 (defn -main [& _]
+  ;; a boot refusal (the seed's, schema drift) throws out of here
+  ;; uncaught, and that ends the image non-zero: the Dockerfile's
+  ;; `clojure -M:dev` is clojure.main, whose `main` catches the
+  ;; Throwable, prints the sentence and calls (System/exit 1) — an exit,
+  ;; so a live non-daemon thread does not keep the process up
   (start!)
   ;; SIGTERM drains: the server stops taking connections and lets the
   ;; calls already in flight answer, then everything else stops. Until

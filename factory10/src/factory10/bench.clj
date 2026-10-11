@@ -327,11 +327,14 @@
   (ticket efa54182): only when the row states one, so the rig keeps
   its own Clojure default otherwise. `check` rides the same way
   (ticket 856e825c): the command the bench's check runs after its lint,
-  sent only when the row states one."
+  sent only when the row states one. `hosted_workflows` rides the same
+  way (ticket 0de73a7a): the workflow files a person allowed on
+  GitHub-hosted runners, sent only when the row names at least one."
   [row]
   (let [test-block (get-in row [:data :test])
         check-block (get-in row [:data :check])
-        pattern (:select_pattern test-block)]
+        pattern (:select_pattern test-block)
+        hosted (seq (get-in row [:data :hosted_workflows]))]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
@@ -340,7 +343,8 @@
       (some? test-block) (assoc :test (cond-> (select-keys test-block [:workflow :input])
                                         (not (str/blank? (str pattern)))
                                         (assoc :select_pattern (str pattern))))
-      (some? check-block) (assoc :check (select-keys check-block [:command :timeout])))))
+      (some? check-block) (assoc :check (select-keys check-block [:command :timeout]))
+      hosted (assoc :hosted_workflows (vec hosted)))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
@@ -499,6 +503,28 @@
                 (house-merges? policy)
                 (seq (required-checks-of policy)))))
 
+(defn person-merges-on-github?
+  "Is this a repository nobody here can merge (ticket 60962bcf)? The
+  house pass does not merge it, and its policy names no required check,
+  so the rig would refuse a merge ask's call (`no_required_checks`: it
+  never merges a change nothing has tested). Its person merges it on
+  GitHub, and no merge ask is raised."
+  [policy]
+  (boolean (and policy
+                (not (house-pass-merges? policy))
+                (empty? (required-checks-of policy)))))
+
+(defn person-marks
+  "The mark of every change a person merges on GitHub
+  (`person-merges-on-github?`): change id → {:line_why \"person\"}."
+  [changes by-repo]
+  (into {}
+        (keep (fn [c]
+                (when (person-merges-on-github?
+                       (get by-repo (str (get-in c [:data :repository]))))
+                  [(str (:id c)) {:line_why "person"}])))
+        changes))
+
 (defn merge-args
   "What the rig's `merge` is told: the pull request, the head it may
   merge and nothing else, and the policy's checks and method."
@@ -513,6 +539,16 @@
   "How long the line waits on a deploy that does not report, when the
   policy names no `deploy_wait_seconds` (ticket 47217098)."
   1800)
+
+(def default-queued-check-minutes
+  "How long a required check may sit queued before the wait itself is
+  the change's red, when the policy names no `queued_check_minutes`
+  (ticket bc3ff12c)."
+  30)
+
+(defn queued-check-minutes-of [policy]
+  (long (or (get-in policy [:data :queued_check_minutes])
+            default-queued-check-minutes)))
 
 (defn deploy-check-of
   "The check on the base whose success means a commit is deployed, or
@@ -672,12 +708,19 @@
   green on a submitted change's head, so a rig's `red` for that very head
   is the failing round's, carried over: it reads as `behind`, and the
   change stands in the line and may ride a train. A head that moved since
-  the green read keeps the rig's red until its own checks are read."
+  the green read keeps the rig's red until its own checks are read.
+  A rig's `waiting` for that very head, when the mirror also read it
+  behind its base (`behind_base`), waits on no check: it reads as
+  `behind` too, so the front is brought up to date or rides a train
+  (ticket fc997a92)."
   [change answer]
-  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
-    (if (and (= "red" (answer-state answer))
-             head
-             (= head (some-> (get-in change [:data :green_head]) str)))
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+        state (answer-state answer)]
+    (if (and head
+             (= head (some-> (get-in change [:data :green_head]) str))
+             (or (= "red" state)
+                 (and (= "waiting" state)
+                      (true? (get-in change [:data :behind_base])))))
       (assoc answer :state "behind")
       answer)))
 
@@ -709,7 +752,8 @@
 (defn- offer-merge!
   "One merge call for one change, with the engine's own hand → the rig's
   answer, or nil. A refusal a new pass cannot fix parks the head in
-  `seen`, with its reason under `[:parked-why id]`."
+  `seen`, with its reason under `[:parked-why id]` and the refusal's
+  name under `[:parked-as id]`."
   [ctx seen change policy]
   (let [id (str (:id change))
         head (str (get-in change [:data :head_sha]))]
@@ -727,7 +771,8 @@
           nil
 
           (contains? parked-refusals why)
-          (do (swap! seen assoc id head [:parked-why id] (reason-of answer))
+          (do (swap! seen assoc id head [:parked-why id] (reason-of answer)
+                     [:parked-as id] why)
               (warn! "the rig refused to merge " id " at " head " ("
                      (reason-of answer) "); this head is not asked again"))
 
@@ -1150,18 +1195,22 @@
 
 (def line-whys
   "Every word `line_why` may carry."
-  ["front" "behind" "red" "conflicted" "draft" "parked" "held"])
+  ["front" "behind" "red" "conflicted" "draft" "parked" "held" "person"])
 
 (def ^:private reason-chars 500)
 
 (defn front-waits-on
   "One word for what the front waits on, from its merge answer: `update`
   when the pass asked to bring it up to date and CI runs, `checks` while
-  its checks run, `merge` when it was offered and GitHub has not merged
-  it yet."
+  its checks run, `github` when its checks are green and GitHub has not
+  judged it mergeable yet, `merge` when it was offered and GitHub has
+  not merged it yet. A `waiting` answer says which of the two in its
+  `waits_on`; one that carries none (a rig not yet deployed) reads as
+  `checks`."
   [answer]
   (cond (behind? answer) "update"
-        (= "waiting" (answer-state answer)) "checks"
+        (= "waiting" (answer-state answer))
+        (if (= "github" (some-> (:waits_on answer) name)) "github" "checks")
         :else "merge"))
 
 (defn- parked-reason [seen id]
@@ -1212,7 +1261,10 @@
       (into {}
             (map (fn [change]
                    (let [id (str (:id change))]
-                     [id {:line_why "parked" :line_reason (parked-reason seen id)}])))
+                     [id (if (conflicted-change? change)
+                           {:line_why "conflicted"}
+                           {:line_why "parked"
+                            :line_reason (parked-reason seen id)})])))
             parked)
       (into {}
             (mapcat (fn [[_ line]]
@@ -1423,18 +1475,34 @@
 (def ^:private red-deploys
   #{"failure" "timed_out" "cancelled" "action_required" "startup_failure"})
 
+(defn- deploy-run-order
+  "Where one run of the deploy check stands among its runs on one head:
+  when it finished, or when it started while it has not, and its forge
+  id beside that, which grows with every run the forge starts. The
+  forge answers its runs newest first and a fake answers them as they
+  were seeded, so the place in the list says nothing."
+  [run]
+  (let [id (str (or (:check_id run) (:id run)))]
+    [(str (or (:finished_at run) (:started_at run)))
+     (if (re-matches #"\d{1,18}" id) (Long/parseLong id) -1)]))
+
 (defn note-deploy!
   "What the forge pass read of one policy's base says of its deploy.
   `base-read` is forge-base's {:head_sha :checks}; `covers?` is (fn
   [number sha]) → whether that pull request's merge is `sha` or an
   ancestor of it. The `deploy_check` green on the head records it as
   deployed and takes every merge it covers off the waits; red says so
-  and holds the line; one still running writes nothing. → true when it
+  and holds the line; one still running writes nothing. Of several runs
+  of the check on the head the newest speaks (`deploy-run-order`), so a
+  green re-apply answers for the red run before it. → true when it
   wrote."
   [eng policy base-read covers?]
   (let [check (deploy-check-of policy)
         head (some-> (:head_sha base-read) str not-empty)
-        run (last (filter #(= check (str (:check_name %))) (:checks base-read)))
+        run (->> (:checks base-read)
+                 (filter #(= check (str (:check_name %))))
+                 (sort-by deploy-run-order)
+                 last)
         conclusion (some-> (:conclusion run) str not-empty)
         id (str (:id policy))]
     (cond
@@ -1573,6 +1641,63 @@
                " conflicted, and the failing pass has it")))
     @wrote))
 
+(defn- with-conflicts
+  "`changes` as their rows read once `mark-conflicts!` has written: the
+  ones in `ids` say `conflicted`."
+  [ids changes]
+  (mapv #(cond-> %
+           (contains? ids (str (:id %))) (assoc-in [:data :mergeable] "conflicted"))
+        changes))
+
+;; A HEAD PARKED AS NOT MERGEABLE (ticket 4df76da5). `seen` keeps that
+;; head until the process restarts, and `mark-conflicts!` writes only
+;; from the pass the rig refused. So a row that stops saying `conflicted`
+;; at the same head — a later read of the mirror's, or any other writer —
+;; would sit submitted and parked, offered nothing and asked for nothing.
+;; Each pass reads its parked conflicts again: a row that says `clean` at
+;; the parked head is un-parked, and the rig is asked once more; any
+;; other word is written back to `conflicted`.
+
+(defn- parked-conflict?
+  "Is this change's head the one `seen` parked as not mergeable?"
+  [seen change]
+  (let [id (str (:id change))
+        head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean (and head
+                  (= head (get seen id))
+                  (= not-mergeable-refusal (get seen [:parked-as id]))))))
+
+(defn- review-parked-conflicts!
+  "Read again every change whose head `seen` parked as not mergeable and
+  whose row does not say `conflicted`: `clean` un-parks the head, and any
+  other word is written back to `conflicted`. Throws nothing.
+  → the changes, as their rows read after it."
+  [eng seen changes]
+  (mapv (fn [change]
+          (let [id (str (:id change))]
+            (cond
+              (or (not (parked-conflict? @seen change))
+                  (conflicted-change? change))
+              change
+
+              (= "clean" (str (get-in change [:data :mergeable])))
+              (do (swap! seen dissoc id [:parked-why id] [:parked-as id])
+                  (warn! "the row of " id " says clean at the head the rig"
+                         " refused as not mergeable; this pass asks again")
+                  change)
+
+              :else
+              (try
+                (mark-row! eng :change id {:mergeable "conflicted"} #{})
+                (warn! "the row of " id " lost its conflict at the parked"
+                       " head; it says conflicted again")
+                (assoc-in change [:data :mergeable] "conflicted")
+                (catch Exception e
+                  (warn! "the conflict of " id " was not written again ("
+                         (ex-message e) "); the next pass writes it")
+                  change)))))
+        changes))
+
 (defn held-changes
   "The changes a house pass holds out of its lines: those of a house
   repository whose ticket still waits on another to merge (`holds`, as
@@ -1610,7 +1735,10 @@
   house`, gets ONE `merge` call with the engine's own hand. `seen` is
   an atom of change id → the head the rig refused for good (a
   `parked-refusals` name): that head is never offered again, and a new
-  head is offered afresh. A branch the rig says is behind its base is
+  head is offered afresh — but for a head parked as not mergeable whose
+  row no longer says `conflicted`, which is offered once more when the
+  row says `clean` and marked again when it says anything else
+  (`review-parked-conflicts!`). A branch the rig says is behind its base is
   brought up to date with `update_branch` only when it is the front of
   its repository's line (`merge-lines`), once per head (`seen` keeps
   that under `[:updated id]`). `merged` needs nothing here, because the
@@ -1633,8 +1761,10 @@
   ([eng seen repos]
   (let [by-repo (into {} (filter #(in-scope? repos (key %))) (policies-by-repo eng))
         deploy-holds (deploy-held eng by-repo)
-        changes (filterv #(in-scope? repos (get-in % [:data :repository]))
-                         (submitted-changes eng))
+        changes (review-parked-conflicts!
+                 eng seen
+                 (filterv #(in-scope? repos (get-in % [:data :repository]))
+                          (submitted-changes eng)))
         house? #(some-> (get by-repo (str (get-in % [:data :repository])))
                         house-pass-merges?)
         holds (merge-holds eng (filter house? changes))
@@ -1666,11 +1796,22 @@
       (doseq [[repo why] deploy-holds]
         (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
                    {:deploy_note why} #{}))
+      ;; the line is read after `mark-conflicts!`, so the pass that finds
+      ;; a conflict says `conflicted` and not `parked` (ticket 4df76da5)
       (mark-lines! eng
-                   (update (line-marks lines @answers @seen
-                                       (parked-changes offered by-repo @seen)
-                                       standing)
+                   (update (let [found (conflicted-ids @answers)]
+                             (line-marks (into (empty lines)
+                                               (map (fn [[repo line]]
+                                                      [repo (with-conflicts found line)]))
+                                               lines)
+                                         @answers @seen
+                                         (parked-changes (with-conflicts found offered)
+                                                         by-repo @seen)
+                                         standing))
                            :changes merge
+                           ;; a change nobody here can merge says so
+                           ;; (ticket 60962bcf)
+                           (person-marks changes by-repo)
                            (into {}
                                  (map (fn [c]
                                         [(str (:id c))
@@ -1817,8 +1958,12 @@
   Once it has waited the policy's `merge_wait_seconds`, it raises one
   merge ask unless `asked-already?`. A change whose ticket still waits
   on another to merge (`merge-holds`) is not timed and not asked; its
-  wait starts once nothing holds it. `waiting` is an atom of change id
-  → {:head :since}. Throws nothing. → the number of asks raised."
+  wait starts once nothing holds it. A repository whose policy names no
+  required check is asked nothing (`person-merges-on-github?`): the rig
+  would refuse the allowed call, so the tap would merge nothing, and the
+  merge pass writes `line_why: person` on the change instead. `waiting`
+  is an atom of change id → {:head :since}. Throws nothing. → the number
+  of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
@@ -1835,6 +1980,7 @@
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
                        (not (house-pass-merges? policy))
+                       (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
                        (not (true? (get-in change [:data :draft])))
                        (not (get holds (born-ticket change))))]

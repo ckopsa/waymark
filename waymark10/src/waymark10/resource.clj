@@ -877,6 +877,18 @@
 ;; spellings, one law — if the hash had moved, the sugar would have
 ;; changed the law and the generalization would have failed.
 
+(defn everyday-doors
+  "The action names a kind's law marks `:everyday true` in `:display`,
+  beside `:order` and `:style`, sorted: the doors a row's bar keeps in
+  view while they are shut (ticket f66dd175). Empty for a kind that
+  marks none, and that kind's bar is drawn whole."
+  [rdef]
+  (->> (:actions rdef)
+       (filter (comp :everyday :display val))
+       (map (comp name key))
+       sort
+       vec))
+
 (def ^:private decision-keys
   #{:asks :by :decider :verdicts :stamps :expires :pacing :offered
     :own-surface :engine-fields})
@@ -1720,10 +1732,15 @@
         (err (str (name f) " is :secret and :filterable — a filter is a "
                   "value oracle over what the projection conceals")))
       (let [sortable (into (set (get-in rmap [:sortable :fields]))
-                           (when-some [d (get-in rmap [:sortable :default])]
-                             [(keyword (if (str/starts-with? d "-")
-                                         (subs d 1)
-                                         d))]))]
+                           ;; a default may name several keys: a, -b or [a -b]
+                           (for [d (let [d (get-in rmap [:sortable :default])]
+                                     (if (string? d) [d] d))
+                                 t (str/split d #",")
+                                 :let [t (str/trim t)]
+                                 :when (seq t)]
+                             (keyword (if (str/starts-with? t "-")
+                                        (subs t 1)
+                                        t))))]
         (doseq [f (sort (filter secret sortable))]
           (err (str (name f) " is :secret and sortable — ordering by a "
                     "concealed value tells its story"))))

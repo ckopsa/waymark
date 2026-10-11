@@ -80,8 +80,9 @@ carries them.
 | `fields`     | `{name: value}`: the dialog form's values as typed | input, debounced 150 ms |
 | `collection` | `{self, filter, sort, page}` of the collection screen | query change |
 | `focus`      | the `self` of the focused row, or `null`       | selection, keyboard focus |
+| `quest`      | `{goal: {self, action}, label, seen: {ok, body}}` of the open quest's sheet (docs/spec-quests.md), absent when none is open. `body` is the rehearsal's `preview`, or a refusal's `title` and `detail` | a tap on a shut door, Not now, Accept quest |
 
-The states are exactly these four. Scroll, hover and cursor position
+The states are exactly these five. Scroll, hover and cursor position
 are not carried: they are noise for a person learning a task and
 expensive on the wire. The event says what is open, what it holds and
 which row is focused. It does not say where the pointer is. Stage 2's
@@ -138,6 +139,8 @@ The reporter's visibility is not used for this.
   `collection.self` follows presence's whole-kind rule. If `sort` names
   a field that fails `:field?`, it is dropped.
 - `focus` crosses only if `:row?` admits it. Otherwise it is `null`.
+- `quest` crosses only if `:row?` admits its goal's row, and its plan
+  keeps the steps on rows `:row?` admits. Otherwise it is absent.
 - **Secrets never cross, whatever the grant.** A field the schema marks
   `writeOnly`, `format: password` or `x-secret` is removed on the
   reporting side, and the server removes it again at report time. It
@@ -195,6 +198,15 @@ in"), sets the collection query and highlights the focused row. The
 existing guards still apply: the Access panel parks, and a dialog
 the follower opened themselves is never replaced.
 
+The `quest` part is applied live too. The follower's screen shows the
+quest's sheet the followed person has open (`guidedQuestSheet`), with
+the same goal, reason and steps, drawn from the part alone. It is
+read-only: it is marked "Planner has this open", **Accept quest** is
+disabled, and it asks the engine nothing and reports nothing. It
+closes with the beat that carries no `quest`. **Not now** closes it on
+the follower's screen alone, and the same goal does not reopen it. It
+is never opened over a dialog the follower has open.
+
 ## 3. Invited input
 
 An agent points at one field of one action and hands the step to the
@@ -216,6 +228,8 @@ invitation
           self (the row the step acts on), action, field (the input
           pointed at), note (one sentence: "pick the repository here"),
           suggest ({field: value}, optional, shown and never submitted),
+          given ({field: value}, optional, written by the engine only:
+          what the person typed already, shown and never submitted),
           answered_by (transition ref), expires_at
   states: open → answered | declined | withdrawn | expired
   doors:  create    (the author, under its own grant)
@@ -251,7 +265,11 @@ row (or its history) until the row leaves `open`, and then reads
 **The person submits, under their own grant.** The invitation carries
 no credential and no delegation. `suggest` values prefill the form as
 suggestions (marked, editable), and they are submitted only if the
-person presses submit. The transition the person commits is theirs in
+person presses submit. `given` values are the person's own, typed
+before the invitation was made (a quest's stored input,
+`docs/spec-quests.md`). Only the engine writes them. They fill the form
+with no suggestion mark, a suggestion for the same field outranks
+them, and the engine never submits them either. The transition the person commits is theirs in
 history, and the invitation's `answered_by` points at it. The audit
 reads: the agent asked, the person did it.
 
@@ -278,7 +296,8 @@ walk        one row per recording
   fields: recorder (pid), followed (pid), title, started_at, ended_at,
           frame_count, retention_days (default 30)
   states: recording → sealed → purged
-  doors:  create (start; the recorder is a follower in guided mode)
+  doors:  create (start; the recorder is a follower in guided mode,
+                  or the person themselves: a self walk, below)
           seal   (stop)
           export (sealed only; answers the export document)
           purge  (the recorder, or the sweep after retention_days)
@@ -286,7 +305,7 @@ walk        one row per recording
 walk_frame  one row per frame, written quietly with the engine's
             own hand (inv/insert-quiet!, as transcript_entry is):
   fields: walk, t (ms since started_at), type (move | ui | transition
-          | invitation), body
+          | invitation | doc), body
 ```
 
 **A walk is recorded under the recorder's sight.** Each frame is
@@ -296,6 +315,26 @@ could see, and nothing needs to be redacted after the fact.
 `transition` frames carry the firehose's event projected by the
 recorder's visibility. Request headers, grant ids, keys and
 credentials are never part of a frame.
+
+**A self walk records your own screen, with nobody following.** A walk
+whose `followed` is its `recorder` is a person showing how a piece of
+work is done, to replay or export afterwards. No follower stream is
+open, so the doors that make the frames hand them to the walk: the
+beat (`presence/report!`) hands over the `move` and `ui` frames it
+made, and the write doors hand over each transition the person
+committed (`walks/self-recorder`, `walks/record-own!`). The `ui` frames
+exist only while the tab shares, so the UI's ● Record button turns ⧉
+sharing on and ■ Stop turns it off again, seals the walk and opens its
+row page. The sight needs no extra rule: the recorder is the person
+whose screen it is, each frame is judged under the visibility of the
+request that made it, and a row that person cannot see is not written.
+The walk's own create and seal are not recorded in it. The create and
+action routes hand over their one transition and the bulk route one per
+row it moved; the connector's `waymark_invoke` rides those same routes,
+so an agent's own walk holds what the agent did. A held call's replay
+after the person's allow is not recorded yet (the forward keeps no
+sight of the author's session to judge the frame under), and neither
+is a batch on one row or a bulk call deferred to a job.
 
 **Retention.** `retention_days` defaults to 30. A sweep purges
 `walk_frame` rows after that time and moves the walk to `purged`. The
@@ -312,7 +351,22 @@ format `waymark-walk/1`:
           "p1": {"display": "Person", "type": "human"}}}
 {"t": 0,    "type": "move", "who": "a1", "self": "/api/tickets/…"}
 {"t": 1830, "type": "ui",   "who": "a1", "ui": {…}}
+{"t": 2410, "type": "invitation", "who": "a1", "subject": "p1",
+ "self": "/api/tickets/…", "action": "groom", "fields": ["priority"],
+ "note": "…", "suggest": {"priority": 2}, "given": {"type": "task"}}
 ```
+
+An `invitation` frame's pinned body is `id`, `author`, `subject`,
+`self`, `action`, `field`, `fields`, `note` and `suggest`, and `given`
+beside them when the invitation has given values. The export's
+invitation line carries `self`, `action`, `field`, `fields`, `note`,
+`step` and `of`, the subject as a cast alias, and `suggest` and `given`
+when either has a value left; it has no `id` and no `author`. The frame
+and the line keep only the keys of `suggest` and of `given`
+that the reader's `:arg?` admits: the follower's when the frame is
+written, the exporting viewer's when the line is. Replay fills the
+read-only dialog with both, the suggestions marked and the given values
+with no mark.
 
 The export has no keys and no secrets:
 
@@ -332,6 +386,20 @@ from the file, on a timer. It makes no network writes, and a
 same file is the marketing artifact: it shows how the work is done,
 with only the rows its exporter could see.
 
+**In replay a pointer makes each step.** Live follow applies a frame as
+it arrives: the screen navigates, and the field being typed is lit.
+Replay puts a gesture before each frame instead. A pointer glides to
+the link, the action button, the field or the submit button a person
+would press, presses it, and the frame is then applied. A typing beat's
+field is clicked and wears a focus ring; it is not lit. The submit
+button is pressed for the beat that closes a form after its write. A
+move to a row that is not on screen presses the navigation entry of its
+kind and then the row's link in that list, so no screen appears without
+a press. A step the recorder did not click (another principal's
+transition, a `clock_shift`, an invitation written by someone else)
+makes no gesture: the caption band shows a notice for it.
+`docs/spec-agent-demo-walks.md` section 2 has the rules and the times.
+
 **Marketing walks are recorded on a demo engine.** Redaction bounds a
 recording by what its recorder could see, and that is still real data:
 real tickets, repositories and people. A walk meant for the public is
@@ -339,6 +407,13 @@ recorded on a separate engine seeded with demo rows. The export's
 header carries `"engine"` (the engine's own name), so a reader can
 tell a demo walk from a real one. Walks recorded on a working engine
 are for onboarding inside it.
+
+**Amended by `docs/spec-agent-demo-walks.md` (2026-10-01).** A
+marketing walk is made by one agent alone in a demo clone and filmed
+there. That spec adds two frame types (`caption`, `doc`), the
+connector's staging of an agent's calls as `move` and `ui` beats, the
+export's summary through the connector, a frame ceiling, and replay's
+pacing. Its section 9 lists each change to this section.
 
 ## 5. The children
 

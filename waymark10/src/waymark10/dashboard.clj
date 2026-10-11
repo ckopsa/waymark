@@ -86,7 +86,7 @@
 (def dashboard-fields
   "The authored surface :revise overwrites wholesale — the same fields
   the write gate judges, so what is stored is exactly what was judged."
-  [:label :description])
+  [:label :description :columns])
 
 (def slot-fields
   "The slot surface :revise overwrites wholesale. :dashboard_id stays
@@ -309,7 +309,7 @@
   "The Sunday page — what is unclaimed, what is overdue, what is thawing.")
 
 (def ^:private dashboard-prose
-  "The household's own words for the two authored fields, spelled once
+  "The household's own words for the authored fields, spelled once
   and worn by both doors: the create form (this kind declares no
   :create-schema, so its data schema IS the create form) and :revise."
   {:label {:x-display {:label "Name"
@@ -317,13 +317,23 @@
    :description {:examples [dashboard-description-example]
                  :x-display {:widget "prose"
                              :label "What this page is for"
-                             :help "A sentence for whoever opens it later — which corner of the week it watches."}}})
+                             :help "A sentence for whoever opens it later — which corner of the week it watches."}}
+   :columns {:x-display {:label "Columns"
+                         :help "How many panels sit side by side. Empty: the default grid."}}})
+
+(def ^:private columns-schema
+  "The grid's width as the author says it: 1..6 equal tracks. nil (or
+  absent) is the page's own responsive grid, so a dashboard written
+  before the field renders unchanged."
+  [:maybe [:int {:min 1 :max 6}]])
 
 (def ^:private dashboard-input
   [:map
    [:label (:label dashboard-prose) [:string {:min 1 :max 60}]]
    [:description (assoc (:description dashboard-prose) :optional true)
-    [:maybe [:string {:max 280}]]]])
+    [:maybe [:string {:max 280}]]]
+   [:columns (assoc (:columns dashboard-prose) :optional true)
+    columns-schema]])
 
 (defresource dashboard
   {:kind :dashboard
@@ -338,7 +348,9 @@
             [:label (assoc (:label dashboard-prose) :sort :default)
              [:string {:min 1 :max 60}]]
             [:description (assoc (:description dashboard-prose) :optional true)
-             [:maybe [:string {:max 280}]]]]
+             [:maybe [:string {:max 280}]]]
+            [:columns (assoc (:columns dashboard-prose) :optional true)
+             columns-schema]]
    :filterable {:state #{:eq :in}}
    :owns [{:kind :dashboard_slot :via :dashboard_id}]
    ;; the embed IS the render contract: GET /api/dashboards/{id}
@@ -349,12 +361,12 @@
    :actions
    {:revise {:from #{:active} :to :active
              :input dashboard-input
-             :edit {:prefill [:label :description]}
+             :edit {:prefill [:label :description :columns]}
              :record true
              :safety {:idempotent true :reversible false :confirm false}
              :handler apply-dashboard
              :display {:label "Revise" :order 1
-                       :description "Rewrite this dashboard's label and description — the slots are their own rows"}}
+                       :description "Rewrite this dashboard's label, description and columns — the slots are their own rows"}}
     :clone {:from #{:active} :to :active
             :touches [{:kind :dashboard :action :create}
                       {:kind :dashboard_slot :action :create :may true}]

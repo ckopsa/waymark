@@ -128,8 +128,8 @@ planner's input complete.
   that will clear it. `waymark10.check` refuses a waiver that waives
   nothing, so the list only shrinks.
 - `waymark10.check` prints the dead ends, then the census line, and exits
-  1 on a stale waiver or on a `:remedies` token naming a door no kind
-  declares.
+  1 on an unwaived dead end, on a stale waiver or on a `:remedies` token
+  naming a door no kind declares.
 
 **The conformance obligation.** The suite walks every guard on every
 fixture kind and reads the refusal body of the ones it can drive. The

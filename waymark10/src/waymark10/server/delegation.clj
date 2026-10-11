@@ -25,6 +25,18 @@
      is NOT the author's own scope: a mayor gives bench.write on repo
      bench without holding it. A call past the ceiling is held, and
      the sentence names the ceiling entry that would have admitted it.
+     ONE CAP YIELDS TO THE DOMAIN (the owner's ruling, 2026-10-04):
+     when the author is the mayor of the domain the new seat names,
+     the domain's headroom replaces the ceiling's per-seat
+     `budget_usd_per_week` cap on the create. Past the headroom the
+     create is refused, not held (seats/budget-fits-the-domain names
+     the total, the ceiling and the headroom, and the remedy is the
+     domain's restate, held for the person). Every other part of the
+     ceiling judges that create as it judges any other.
+     ONE FIELD NO CEILING ADMITS: `serves: any`. It lets the mayor of
+     every asking domain groom and rank tickets in the seat's queue,
+     so whom a seat serves is the person's to say. An author's create
+     or restate that turns it on is held, in its own domain too.
   3. Every authored seat records `authored_by` (the author seat) and
      `owner` (the person the author acts for). The seat's on-create
      stamps both, or the person's `hand_to` writes them with the
@@ -34,7 +46,10 @@
      is the approval. After it, the author restates its own child
      within the ceiling with no new tap. Unpark, merge and retire are
      the person's: from the author they are held. Park is not fenced:
-     it only takes authority away, as it always could.
+     it only takes authority away, as it always could. A mayor's
+     create inside its own domain's headroom is born parked like any
+     other: the headroom answers what the domain can afford, and the
+     person's unpark answers what the seat may touch.
   5. A judgment is promoted by a delegating seat only when a seat it
      authored cites that judgment and is still parked, so a promotion
      never changes a live seat's work unseen. Anything else is held.
@@ -111,8 +126,12 @@
   one the person allowed, or nil. `:within` names the held row, and
   the row is read back through the write's own transaction: it must be
   `allowed`, name this kind and this row, and name this caller.
-  `target` is the row id, nil at a create door. The modules' own
-  holds share the check (holds/allowed-hold)."
+  `target` is the row id, nil at a create door. The run of a scheduled
+  action the person approved at scheduling is the second shape of the
+  same yes: `:within` names a `scheduled_action` that is `running`,
+  names this door and this caller, and whose held call is `done` by an
+  allow (docs/spec-scheduled-actions.md R-4.3). The modules' own holds
+  share the check (holds/allowed-hold)."
   [ctx kind target]
   (holds/allowed-hold ctx kind target))
 
@@ -260,8 +279,10 @@
   "Why this seat body is past the author's ceiling, as one sentence,
   or nil when it fits. Invariant 2, in the order a person reads a
   seat: the ceiling itself, the scope, the money, the tokens, the
-  models."
-  [author inp]
+  models. `by-headroom?` true leaves the money to the domain's
+  headroom: the ceiling's per-seat cap is not read."
+  ([author inp] (misfit author inp false))
+  ([author inp by-headroom?]
   (let [ceil (get-in author [:data :delegates])
         budget (:budget_usd_per_week inp)
         tokens (:sitting_budget_tokens inp)]
@@ -269,7 +290,8 @@
           (str "the body writes a ceiling of its own, and a ceiling is the"
                " person's to write. No ceiling entry admits it"))
         (scope-misfit (:scope ceil) (:scope inp))
-        (when (over? budget (:budget_usd_per_week ceil))
+        (when (and (not by-headroom?)
+                   (over? budget (:budget_usd_per_week ceil)))
           (str "budget_usd_per_week " budget " is over the ceiling's "
                (:budget_usd_per_week ceil) ". A ceiling budget_usd_per_week of "
                budget " would have admitted it"))
@@ -282,7 +304,7 @@
                (:sitting_budget_tokens ceil) ". A ceiling sitting_budget_tokens of "
                tokens " would have admitted it"))
         (models-misfit "held_for" (:held_for inp) (:held_for ceil))
-        (models-misfit "substitute_for" (:substitute_for inp) (:held_for ceil)))))
+        (models-misfit "substitute_for" (:substitute_for inp) (:held_for ceil))))))
 
 ;; ── the sentences ───────────────────────────────────────────────────
 
@@ -306,12 +328,50 @@
 (defn- hold [invariant detail]
   (t/deny {:vars {:invariant invariant :detail detail}}))
 
+(defn- opens-the-queue
+  "Why this body is the person's to allow, as one sentence, or nil: it
+  states `serves: any` on a seat that does not serve any today. A body
+  that states `any` again on a seat a person already opened is no
+  change, and answers nil."
+  [row inp]
+  (when (and (= "any" (some-> (:serves inp) str))
+             (not= "any" (some-> (get-in row [:data :serves]) str)))
+    (str "serves any lets the mayor of every asking domain groom and rank"
+         " tickets in this seat's queue, and whom a seat serves is the"
+         " person's to say. No ceiling entry admits it")))
+
+;; ── a domain's mayor, in its own domain ─────────────────────────────
+
+(defonce ^:private own-domain-rule (atom nil))
+
+(defn mayors-own-domain!
+  "Seats names the one restate a domain's mayor makes with no tap (epic
+  aff24e84, piece 2): `f` takes the row, the input, the ctx and the
+  author seat, and answers true for it. Seats requires this namespace,
+  so the rule is handed over here and not required."
+  [f]
+  (reset! own-domain-rule f))
+
+(defn- mayors-own-domain? [row inp ctx author]
+  (when-some [f @own-domain-rule]
+    (boolean (f row inp ctx author))))
+
+(defn- mayor-of-the-named-domain?
+  "Is `author` the mayor of the domain this create body names? A body
+  that names no domain answers false, and the ceiling judges its money."
+  [inp ctx author]
+  (boolean
+   (when-some [id (some-> (:domain inp) str nonblank)]
+     (when-some [read' (:read ctx)]
+       (= (str (:id author))
+          (some-> (read' :domain id) (get-in [:data :mayor]) str))))))
+
 ;; ── the guards ──────────────────────────────────────────────────────
 
 (g/defguard authors-within-the-ceiling
   {:hold true
    :judges [:scope]
-   :reads [:principal :now :grant :seat :held_call :within]
+   :reads [:principal :now :grant :seat :held_call :within :domain]
    :vars [:invariant :detail]
    :open "The ceiling is the delegates field of the author's own seat row, one GET away; it names kinds this form cannot enumerate."
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -325,9 +385,13 @@
       (nil? author) (t/allow)
       (approved-hold? ctx :seat (:id row)) (t/allow)
 
-      ;; the create door
+      ;; the create door. In the mayor's own domain the money was
+      ;; judged by the domain's headroom (seats/budget-fits-the-domain),
+      ;; which stood before this guard; the seat is born parked all the
+      ;; same
       (nil? (:id row))
-      (if-some [m (misfit author inp)]
+      (if-some [m (or (opens-the-queue row inp)
+                      (misfit author inp (mayor-of-the-named-domain? inp ctx author)))]
         (hold inv-ceiling m)
         (t/allow))
 
@@ -336,6 +400,11 @@
                           (seat-name author) " holds, so its scope, charter,"
                           " budgets and ceiling are the person's"))
 
+      ;; a domain's mayor changes the budget of a seat in its own domain
+      ;; with no tap: the money is judged by the domain's headroom
+      ;; (seats/budget-fits-the-domain), which stood before this guard
+      (mayors-own-domain? row inp ctx author) (t/allow)
+
       (or (not= (str (:id author)) (nonblank (get-in row [:data :authored_by])))
           (nil? (nonblank (get-in row [:data :approved_by]))))
       (hold inv-authored (str (seat-name row) " was not authored by "
@@ -343,12 +412,13 @@
                               ", or its person has not approved it yet"))
 
       :else
-      (if-some [m (misfit author inp)]
+      (if-some [m (or (opens-the-queue row inp) (misfit author inp))]
         (hold inv-ceiling m)
         (t/allow)))))
 
 (g/defguard the-persons-lever
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could pull this lever would be approving its own child."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -366,6 +436,7 @@
 
 (g/defguard promotes-under-a-parked-child
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a promote the person has not seen could change work already under way."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -389,6 +460,7 @@
 
 (g/defguard the-persons-judgment
   {:hold true
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and a judgment in force is the person's to replace."
    :reads [:principal :now :grant :seat :held_call :within]
    :vars [:invariant :detail]
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}

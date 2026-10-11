@@ -71,8 +71,9 @@
 (def ^:private a-key "bWNwLWFwcHMtdGVzdC1zZWF0LWtleS0wMDAx")
 
 (defn- seat-sat!
-  "A seat, sat by a session of colton's connector that declared the extension."
-  [{:keys [eng h]}]
+  "A seat, sat by a session of colton's connector that declared the
+  extension, or by `bearer`'s session that declared `capabilities`."
+  [{:keys [eng h]} & [bearer capabilities]]
   (let [model (:row (inv/create! eng :model
                                  {:name "apps-test-model" :display "Apps 1"
                                   :vendor "anthropic" :tier "strong"
@@ -90,7 +91,7 @@
                                  :sitting_budget_tokens 1000000}
                                 {:principal person}))
         _ (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key} {:principal person})
-        as (initialize! h colton ui-capability)
+        as (initialize! h (or bearer colton) (or capabilities ui-capability))
         sat (tool h as "waymark_sit" {:key a-key})]
     (assert (false? (:isError sat)) (text-of sat))
     {:as as
@@ -242,6 +243,48 @@
         (is (false? (:isError r)) (text-of r))
         (is (= [[:refuse "colton"]]
                (mapv (juxt :action #(get-in % [:actor :id])) (taps eng late))))))))
+
+(deftest the-sitting-says-what-its-client-declared
+  (let [stamps (fn [bearer capabilities]
+                 (let [{:keys [eng] :as w} (world)
+                       {:keys [sitting]} (seat-sat! w bearer capabilities)
+                       row (store/with-tx (:storage eng)
+                             (fn [tx] (store/load-row (:storage eng) tx :sitting sitting {})))]
+                   (select-keys (:data row)
+                                [:client_name :client_version :app_ui :app_tools])))
+        named {:client_name "claude-ai" :client_version "1"}]
+    (is (= (assoc named :app_ui true :app_tools true)
+           (stamps colton ui-capability))
+        "a listed client that declared the extension")
+    (is (= (assoc named :app_ui false :app_tools false)
+           (stamps colton {}))
+        "a session without the extension")
+    (is (= (assoc named :app_ui true :app_tools false)
+           (stamps (delegate "other" "colton") ui-capability))
+        "a declared session on an unlisted delegate client")))
+
+(deftest the-read-says-the-call-in-words-and-links-the-row
+  (let [{:keys [eng h] :as w} (world {:app-url "https://work.example/"})
+        {:keys [as sitter]} (seat-sat! w)
+        id (hold! eng sitter "colton")
+        view (:structuredContent (tool h as "waymark_app_read" {:kind "held_call" :id id}))
+        allow (some #(when (= "allow" (:action %)) %) (:doors view))
+        page (get-in (json (rpc h as "resources/read" {:uri mcp/app-resource-uri}))
+                     [:result :contents 0 :text])]
+    (is (= (str "https://work.example/#/api/held_calls/" id) (:link view)))
+    (is (= "apps-clerk wants to create meal" (:title view))
+        "the seat by its name, the action in words")
+    (is (= "create · meal" (some #(when (= "door" (:label %)) (:value %)) (:fields view))))
+    (is (not-any? #{"patch"} (:inputs allow)) "the edit-door flag is no person's field")
+    (is (not-any? #{"shown"} (map :label (:fields view))))
+    (is (str/includes? (str page) "p.refusal") "the page carries 030-app.css"))
+  (testing "a caller the person cannot read stays its bare id, and no :app-url is no link"
+    (let [{:keys [eng h]} (world)
+          as (initialize! h colton ui-capability)
+          id (hold! eng "seat:somebody" "colton")
+          view (:structuredContent (tool h as "waymark_app_read" {:kind "held_call" :id id}))]
+      (is (= "seat:somebody wants to create meal" (:title view)))
+      (is (nil? (:link view))))))
 
 (deftest somebody-elses-call-is-refused-by-the-second-wall
   (let [{:keys [eng h]} (world)

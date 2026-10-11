@@ -114,6 +114,52 @@
       (is (= [] (get-in row [:data :blocked_by]))))
     (is (= :return_to_draft (:action (last-move eng waiter))))))
 
+(deftest a-draft-blocked-with-then-open-reaches-the-queue
+  (let [{:keys [h eng]} (world)
+        blocker (new-ticket! h "The blocker")
+        waiter (new-ticket! h "The waiter")]
+    (move! h waiter :block {:blocked_by [blocker] :then "open"})
+    (is (= "blocked" (:state (get-row h waiter))))
+    (is (= "open" (get-in (get-row h waiter) [:data :blocked_from]))
+        "the block says where the draft goes")
+    (ended! h blocker :complete)
+    (let [row (get-row h waiter)]
+      (is (= "open" (:state row)) "groomed in waiting, so the ending queues it")
+      (is (= [] (get-in row [:data :blocked_by])))
+      (is (nil? (get-in row [:data :blocked_from]))))
+    (testing "by the unblock transition, the one a seat's wake_on names"
+      (is (= :unblock (:action (last-move eng waiter)))))))
+
+(deftest a-draft-blocked-with-then-draft-returns-to-draft
+  (let [{:keys [h eng]} (world)
+        blocker (new-ticket! h "The blocker")
+        waiter (new-ticket! h "The waiter")]
+    (move! h waiter :block {:blocked_by [blocker] :then "draft"})
+    (is (= "draft" (get-in (get-row h waiter) [:data :blocked_from])))
+    (ended! h blocker :complete)
+    (is (= "draft" (:state (get-row h waiter))))
+    (is (= :return_to_draft (:action (last-move eng waiter))))))
+
+(deftest a-restated-block-can-say-then-open-for-a-blocked-draft
+  (let [{:keys [h]} (world)
+        blocker (new-ticket! h "The blocker")
+        waiter (new-ticket! h "The waiter")]
+    (move! h waiter :block {:blocked_by [blocker]})
+    (move! h waiter :block {:blocked_by [blocker] :then "open"})
+    (is (= "open" (get-in (get-row h waiter) [:data :blocked_from])))
+    (ended! h blocker :complete)
+    (is (= "open" (:state (get-row h waiter))))))
+
+(deftest a-ticket-blocked-from-the-queue-returns-to-it-whatever-then-says
+  (let [{:keys [h]} (world)
+        blocker (new-ticket! h "The blocker")
+        waiter (new-ticket! h "The waiter")]
+    (move! h waiter :groom nil)
+    (move! h waiter :block {:blocked_by [blocker] :then "draft"})
+    (is (= "open" (get-in (get-row h waiter) [:data :blocked_from])))
+    (ended! h blocker :complete)
+    (is (= "open" (:state (get-row h waiter))))))
+
 (deftest dropping-a-blocker-counts-as-ending-it
   (let [{:keys [h]} (world)
         blocker (new-ticket! h "The blocker")
@@ -122,3 +168,21 @@
     (move! h waiter :block {:blocked_by [blocker]})
     (ended! h blocker :drop)
     (is (= "open" (:state (get-row h waiter))))))
+
+;; ticket 775b6427: a drop of the ticket another domain was asked for
+(deftest a-declined-ask-sends-the-waiting-ticket-to-draft
+  (let [{:keys [h eng]} (world)
+        asker (new-ticket! h "The kitchen says when to leave")
+        made (req h :post "/api/tickets"
+                  {:title "Run the music server" :type "task" :priority 2
+                   :repo "ckopsa/waymark" :needed_by asker})
+        asked (id-of made)]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (move! h asker :block {:blocked_by [asked] :then "open"})
+    (ended! h asked :drop)
+    (let [row (get-row h asker)]
+      (is (= "draft" (:state row)) "not the queue: its mayor plans again")
+      (is (= "declined by factory: Merged: github:ckopsa/waymark#41."
+             (get-in row [:data :shelved_because])))
+      (is (= [] (get-in row [:data :blocked_by]))))
+    (is (= :turn_back (:action (last-move eng asker))))))

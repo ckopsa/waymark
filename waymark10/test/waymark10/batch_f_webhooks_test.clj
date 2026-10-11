@@ -149,6 +149,74 @@
                             delivered))))))
           (finally (engine/stop! (:server rcv))))))))
 
+;; ── 2b. the row says what the deliverer did ─────────────────────────
+
+(defn- notes-of [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (filterv #(= "note_deliveries" (name (:action %)))
+               (store/transitions (:storage eng) tx
+                                  {:kind :subscription :resource-id id}
+                                  {:limit 50})))))
+
+(deftest the-row-says-what-was-delivered-and-what-was-skipped
+  (fresh!)
+  (with-eng
+    (fn [eng]
+      (let [rcv (receiver!)]
+        (try
+          (testing "a refusing endpoint under policy skip: the count rises"
+            (reset! (:status rcv) 500)
+            (let [{sub :row} (inv/create! eng :subscription
+                                          {:url (:url rcv)
+                                           :kinds ["f_widget"]
+                                           :delivery_policy "skip"}
+                                          {:principal elena})]
+              (spin! eng "grumpy")
+              (webhooks/drain! eng)
+              (let [row (sub-row eng (:id sub))
+                    n (get-in row [:data :skipped_count])]
+                (is (= :active (:state row)))
+                (is (pos? n))
+                (is (some? (get-in row [:data :last_skipped_at])))
+                (is (nil? (get-in row [:data :last_delivered_at])))
+                (is (= 1 (count (notes-of eng (:id sub))))
+                    "one write a pass, not one an event")
+                (webhooks/drain! eng)
+                (is (= 1 (count (notes-of eng (:id sub))))
+                    "a pass that sent nothing writes nothing")
+                (spin! eng "grumpier")
+                (webhooks/drain! eng)
+                (let [row (sub-row eng (:id sub))]
+                  (is (< n (get-in row [:data :skipped_count])))
+                  (is (nil? (get-in row [:data :last_delivered_at])))))
+              (inv/invoke! eng :subscription (:id sub) :pause nil
+                           {:principal elena})))
+          (testing "an accepting endpoint: the row says when it last delivered"
+            (reset! (:status rcv) 200)
+            (let [{sub :row} (inv/create! eng :subscription
+                                          {:url (:url rcv)
+                                           :kinds ["f_widget"]
+                                           :delivery_policy "skip"}
+                                          {:principal elena})]
+              (spin! eng "sunny")
+              (webhooks/drain! eng)
+              (let [row (sub-row eng (:id sub))]
+                (is (some? (get-in row [:data :last_delivered_at])))
+                (is (nil? (get-in row [:data :skipped_count])))
+                (is (= 1 (count (notes-of eng (:id sub))))))))
+          (testing "the tally is the deliverer's: a person's call refuses"
+            (let [{sub :row} (inv/create! eng :subscription
+                                          {:url (:url rcv)
+                                           :kinds ["f_widget"]}
+                                          {:principal elena})
+                  p (problem-of #(inv/invoke! eng :subscription (:id sub)
+                                              :note_deliveries
+                                              {:skipped_count 9}
+                                              {:principal elena}))]
+              (is (= :guard-refused (:waymark10/problem p)))))
+          (finally (engine/stop! (:server rcv))))))))
+
 ;; ── 3. the default is still the fail posture ────────────────────────
 
 (deftest default-policy-still-fails-and-parks

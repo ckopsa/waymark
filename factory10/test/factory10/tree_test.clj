@@ -463,9 +463,12 @@
           form (into #{} (map first) (rest (:create-schema repo-policy)))]
       (is (= #{:repository :clone_url :branch_pattern :base :max_lines
                :opens_pr :auto_merge :merge_by :required_checks :merge_method
-               :merge_wait_seconds :rounds_per_change :merge_strategy
+               :merge_wait_seconds :rounds_per_change :queued_check_minutes
+               :merge_strategy
                :train_size :formatter :deny
-               :test :check :orientation :enrolled_at :note :source_note
+               :test :check :hosted_workflows
+               :orientation :enrolled_at :note :source_note
+               :forge_cursor :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
@@ -475,7 +478,7 @@
                :deploy_state :deploy_note
                :groom_floor :groom_floor_settle_seconds
                :groom_floor_max_priority
-               :floor_noted_at :floor_count}
+               :floor_noted_at :floor_count :floor_ticket}
              fields)
           "every number a submit obeys, where the bench clones it from,
            and the engine's own: when the bench took it, why it did not,
@@ -483,14 +486,14 @@
            state as the source last read it (ticket ade81ae9), and the
            house's merge line as the merge pass last wrote it (ticket
            b85aded5)")
-      (is (= #{:enrolled_at :note :source_note
+      (is (= #{:enrolled_at :note :source_note :forge_cursor :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
                :line_waiting :line_at :line_train
                :deploy_waits_on :deploy_waiting_since :deployed_head
                :deployed_at :deploy_state :deploy_note
-               :floor_noted_at :floor_count}
+               :floor_noted_at :floor_count :floor_ticket}
              (into #{} (remove form) fields))
           "…and the engine's are on no form: a person states the
            policy, and the engine says what the bench and the source did

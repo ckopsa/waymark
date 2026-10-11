@@ -24,6 +24,21 @@
 (defn transitions-not-from [rmap state]
   (remove #(contains? (:from %) state) (actions-seq rmap)))
 
+(defn roads
+  "The way to a door the row's state shuts: the kind's own actions that
+  leave `state` and land in one `action` opens from, as :kind/action
+  keywords in the machine's deterministic (name) order. They act on
+  this same row, so a pursuit binds them without being told which. The
+  envelope's out-of-state entry and the invoke's wrong-state refusal
+  both read this, so the two never disagree."
+  [rmap action state]
+  (into []
+        (comp (remove :bulk)
+              (filter #(and (contains? (:from %) state)
+                            (contains? (:from action) (:to %))))
+              (map #(keyword (name (:kind rmap)) (name (:name %)))))
+        (actions-seq rmap)))
+
 (defn reachable-states
   "States reachable from :initial by any declared transition."
   [rmap]

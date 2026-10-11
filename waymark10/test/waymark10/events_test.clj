@@ -18,7 +18,8 @@
             [waymark10.wire :as wire])
   (:import (java.io BufferedReader InputStream InputStreamReader)
            (java.net URI)
-           (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
+           (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)
+           (org.postgresql PGConnection PGNotification)))
 
 ;; ── the world ───────────────────────────────────────────────────────
 
@@ -103,6 +104,95 @@
                 (is (= [create-id spin-id]
                        [(:id (events/take-event sub3 5000))
                         (:id (events/take-event sub3 5000))])))))
+          (finally (events/stop! d)))))))
+
+;; ── 3b. the LISTEN connection dies and comes back ───────────────────
+
+(defn- await-true
+  "Poll pred until it answers truthy (or the timeout)."
+  [pred timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (or (pred)
+          (when (< (System/currentTimeMillis) deadline)
+            (Thread/sleep 50)
+            (recur))))))
+
+(defn- kill-backend!
+  "End a LISTEN connection from the server's side, as a database
+  restart or an idle cut would."
+  [st ^java.sql.Connection conn]
+  (let [pid (.getBackendPID ^PGConnection (.unwrap conn PGConnection))]
+    (jdbc/execute! (:ds st) ["SELECT pg_terminate_backend(?)" pid])))
+
+(deftest listener-reopens-a-dead-listen-connection
+  (let [st (pg/storage db/dsn)
+        warns (atom [])
+        l (pg/listener st ["waymark10_listener_test"]
+                       (fn [& parts] (swap! warns conj (apply str parts))))]
+    (try
+      (let [first-conn (pg/listener-connection l)]
+        (is (some? first-conn) "it opens at start")
+        (is (empty? @warns))
+        (kill-backend! st first-conn)
+        (testing "a dead connection answers the beat, it does not throw"
+          (is (await-true #(do (pg/await-notifications! l 200)
+                               (nil? (pg/listener-connection l)))
+                          10000))
+          (is (= 1 (count @warns)) "the loss is said once"))
+        (testing "a fresh connection is opened within the backoff"
+          (is (await-true #(do (pg/await-notifications! l 200)
+                               (some? (pg/listener-connection l)))
+                          20000))
+          (is (not (identical? first-conn (pg/listener-connection l))))
+          (is (= 2 (count @warns)) "and the recovery once"))
+        (testing "it LISTENs again: a NOTIFY wakes the wait early"
+          (jdbc/execute! (:ds st)
+                         ["SELECT pg_notify('waymark10_listener_test', 'hello')"])
+          (let [t0 (System/currentTimeMillis)
+                got (pg/await-notifications! l 20000)]
+            (is (= ["hello"]
+                   (mapv #(.getParameter ^PGNotification %) got)))
+            (is (< (- (System/currentTimeMillis) t0) 15000)))))
+      (finally
+        (pg/close-listener! l)
+        (pg/close! st)))))
+
+(deftest listener-is-nil-off-postgres
+  (is (nil? (pg/listener {} ["waymark10_listener_test"] (fn [& _] nil)))))
+
+(deftest dispatcher-drains-by-poll-while-its-listen-connection-is-gone
+  (fresh!)
+  (with-eng {}
+    (fn [eng]
+      (let [d (events/dispatcher eng {:poll-ms 200})
+            l (:listener d)]
+        (try
+          (let [first-conn (pg/listener-connection l)
+                seed (inv/create! eng :mnt_gizmo {:name "seed"}
+                                  {:principal elena})
+                sub (events/subscribe d {:kinds #{:mnt_gizmo}
+                                         :since (get-in seed [:transition :id])})]
+            (is (some? first-conn))
+            ;; no reopen can succeed in here, so the delivery below can
+            ;; only have come by the poll
+            (with-redefs [pg/listen-on (fn [& _]
+                                         (throw (ex-info "the database is away" {})))]
+              (kill-backend! (:storage eng) first-conn)
+              (is (await-true #(nil? (pg/listener-connection l)) 10000)
+                  "the loop let go of the dead connection")
+              (let [deaf (inv/create! eng :mnt_gizmo {:name "deaf"}
+                                      {:principal elena})]
+                (is (= (get-in deaf [:transition :id])
+                       (:id (events/take-event sub 10000)))
+                    "the beat still drains")))
+            (testing "the dispatcher opens a fresh connection and goes on"
+              (is (await-true #(some? (pg/listener-connection l)) 40000))
+              (is (not (identical? first-conn (pg/listener-connection l))))
+              (let [back (inv/create! eng :mnt_gizmo {:name "back"}
+                                      {:principal elena})]
+                (is (= (get-in back [:transition :id])
+                       (:id (events/take-event sub 10000)))))))
           (finally (events/stop! d)))))))
 
 ;; ── 4. SSE over HTTP ────────────────────────────────────────────────

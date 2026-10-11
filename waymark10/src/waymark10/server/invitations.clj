@@ -8,8 +8,10 @@
   who must find it again outside the follow view.
 
   THE CREATE GUARDS JUDGE THE AUTHOR, NEVER THE SUBJECT. The author's
-  own grant must see `self` and admit `action`, and `field` must be a
-  non-secret argument of that action's input. Whether the SUBJECT may
+  own grant must see `self` and admit `action`, and every name in
+  `fields` (`field` alone is the spelling for a list of one) and every
+  key of `suggest` must be a non-secret argument of that action's
+  input (docs/spec-walkthrough.md § 4). Whether the SUBJECT may
   take the door is judged where it always is, at the subject's own
   invoke: an invitation to a door the person lacks meets that door's
   refusal, which is the honest answer. What the ROW can take now is
@@ -24,7 +26,16 @@
   action) match, the engine walks `answer` with its own hand and
   stores the transition's log id in `answered_by`. The person submits
   under their own grant; `suggest` is shown and never submitted by
-  the engine. An expiry sweep walks `expire` past `expires_at`.
+  the engine. An expiry sweep walks `expire` past `expires_at`. A
+  transition older than the invitation does not answer it: without
+  that, two neighbouring steps on the same (self, action) could both
+  be answered by one replayed transition.
+
+  A WALKTHROUGH'S STEP IS AN INVITATION THE ENGINE MAKES
+  (docs/spec-walkthrough.md § 3). `walkthrough`, `step` and `of` are
+  the engine's alone to write: a create that names one from any other
+  hand is refused. Such a row is stamped with the walkthrough's
+  author, and `withdraw` admits the engine on it.
 
   `self` is the row's path, `/api/<plural>/<id>` — the form intents
   and presence already speak. It names a row of ANY kind, and the ref
@@ -95,20 +106,88 @@
        (= "password" (some-> (:format props) name))
        (= "password" (some-> (get-in props [:json-schema :format]) name)))))
 
+(defn- arg-name
+  "An argument's name as the author wrote it: a string or a keyword."
+  [x]
+  (str/trim (if (keyword? x) (name x) (str x))))
+
+(defn- named-fields
+  "The arguments an invitation points at, in the author's reading
+  order: `fields`, or `field` alone as a list of one. A row born before
+  `fields` holds only `field` and reads the same way."
+  [{:keys [field fields]}]
+  (cond
+    (sequential? fields) (mapv arg-name fields)
+    (some? fields) [(arg-name fields)]
+    (some? field) [(arg-name field)]
+    :else []))
+
+(defn- argument-entries
+  "The schema entries `arg` walks: one for an argument, and one more for
+  each step of a dotted path into a nested map argument
+  (showcase.evidence.film_url), as the form names that input. nil when
+  a step names nothing."
+  [entries arg]
+  (loop [entries entries
+         [k & more] (str/split arg #"\." -1)
+         walked []]
+    (when-some [entry (get entries (keyword k))]
+      (if (seq more)
+        (recur (some-> (schema/map-form (:schema entry)) schema/entry-map)
+               more
+               (conj walked entry))
+        (conj walked entry)))))
+
+(defn- argument-problem
+  "Why `arg` cannot be shown to a person as an argument of `action`; nil
+  when it can. `where` says where the author named it."
+  [entries action where arg]
+  (let [walked (argument-entries entries arg)]
+    (cond
+      (nil? walked)
+      (str "`" arg "`" where " is not an argument of `" (name action) "`.")
+
+      (some #(secret? (:properties %)) walked)
+      (str "`" arg "`" where " is a secret argument, and nobody is invited to type a secret."))))
+
+(defn showable
+  "The entries of `values` an invitation may show a person as arguments
+  of `action` on `rdef`. A key that is no argument of the door, or a
+  secret one, is left out alone, and the others stand."
+  [rdef action values]
+  (let [entries (some-> (get-in rdef [:actions (keyword (name action)) :input])
+                        schema/entry-map)]
+    (into {}
+          (remove (fn [[k _]] (argument-problem entries action "" (arg-name k))))
+          values)))
+
+(defn- judges-the-input?
+  "Does this denier's verdict turn on what the door is handed: does its
+  `:judges` name an argument of the action's input?"
+  [rdef action denier]
+  (let [args (some-> (get-in rdef [:actions (keyword (name action)) :input])
+                     schema/entry-map)]
+    (boolean (some #(contains? args (if (sequential? %) (first %) %))
+                   (:judges denier)))))
+
 (defn- shut-now
   "Why the row cannot take the door now, in the words its envelope's
   `unavailable` uses; nil when it can. A denier reading the principal
   or the grant refused the AUTHOR's hand, not the row, and the
   subject's hand is judged at the subject's own invoke, so it is no
-  reason here."
+  reason here. A denier judging an argument of the door's input
+  refused an input nobody has typed yet: what the person submits is
+  judged at the person's own invoke too, so it is no reason either. A
+  denier that judges the row's state alone still refuses."
   [rdef action row ctx]
   (let [{:keys [status reason denier]}
         (render/action-availability rdef action row ctx)]
     (when (and (= :unavailable status)
-               (not (some #{:principal :grant} (:reads denier))))
+               (not (some #{:principal :grant} (:reads denier)))
+               (not (judges-the-input? rdef action denier)))
       (or reason (str "`" (name action) "` is not open on that row now.")))))
 
-(defn- subject-name
+(defn subject-name
   "The subject's display name, as its member row labels it; the raw
   id when no member row carries that id."
   [subject ctx]
@@ -116,6 +195,73 @@
               (apply [:member (str subject)])
               (get-in [:data :display]))
       (str subject)))
+
+(defn sight-problem
+  "Why the author's own grant cannot point at the step `inp` names; nil
+  when it can. What the row can take NOW is not judged here: the
+  invitation's create adds that, and a walkthrough's step waits for it
+  until the step opens (docs/spec-walkthrough.md § 1)."
+  [inp ctx]
+  (let [{:keys [rdef id action door] :as step} (step-of inp ctx)
+        k (:kind rdef)
+        p (:principal ctx)
+        gr (:grant ctx)]
+    (cond
+      (nil? step)
+      "`self` must be a row's path, /api/<plural>/<id>, of a kind this engine serves."
+
+      (nil? door)
+      (str "`" (name action) "` is not a door of " (name k) ".")
+
+      ;; one sentence for all three, so a refusal never says
+      ;; whether a row the author cannot see exists
+      (or (and (some? gr)
+               (not (and ((:action? gr) k action) ((:row? gr) k id)
+                         (or (nil? (:action-on? gr))
+                             ((:action-on? gr) k action id)))))
+          (and (nil? gr) (= :agent (:type p)))
+          (nil? ((:read ctx) k id)))
+      "your grant does not see that row or does not admit that door.")))
+
+(defn fields-problem
+  "Why the arguments `inp` names cannot be shown to a person; nil when
+  they can, and nil when the step does not resolve, because
+  `sight-problem` says that."
+  [inp ctx]
+  (let [{:keys [action door]} (step-of inp ctx)
+        entries (some-> (:input door) schema/entry-map)
+        names (named-fields inp)
+        suggest (:suggest inp)
+        given (:given inp)]
+    (cond
+      (nil? door) nil
+
+      ;; what the person typed already is the engine's to say: an
+      ;; author's own values are suggestions, and are marked as such
+      (and (some? given) (not= :system (:type (:principal ctx))))
+      "`given` is the engine's to write; name values of your own in `suggest`."
+
+      (and (some? (:field inp)) (some? (:fields inp)))
+      "name `fields`, or `field` alone for a list of one, and not both."
+
+      ;; the engine's own invitation may point at the door alone: a
+      ;; quest's step that takes no argument still has a door to light
+      (and (empty? names) (not= :system (:type (:principal ctx))))
+      "name at least one argument, in `fields` or in `field`."
+
+      :else
+      ;; one bad name refuses the whole create, and the refusal names it
+      (or (some #(argument-problem entries action "" %) names)
+          (when (map? suggest)
+            (some #(argument-problem entries action
+                                     ", a key of `suggest`,"
+                                     (arg-name %))
+                  (keys suggest)))
+          (when (map? given)
+            (some #(argument-problem entries action
+                                     ", a key of `given`,"
+                                     (arg-name %))
+                  (keys given)))))))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -129,54 +275,26 @@
   (if (nil? (:rdef-of ctx))
     ;; no registry in scope (a render probe): the write path carries it
     (t/allow)
-    (let [{:keys [rdef id action door] :as step} (step-of inp ctx)
-          k (:kind rdef)
-          p (:principal ctx)
-          gr (:grant ctx)]
-      (cond
-        (nil? step)
-        (t/deny {:vars {:problem "`self` must be a row's path, /api/<plural>/<id>, of a kind this engine serves."}})
-
-        (nil? door)
-        (t/deny {:vars {:problem (str "`" (name action) "` is not a door of " (name k) ".")}})
-
-        ;; one sentence for all three, so a refusal never says
-        ;; whether a row the author cannot see exists
-        (or (and (some? gr)
-                 (not (and ((:action? gr) k action) ((:row? gr) k id))))
-            (and (nil? gr) (= :agent (:type p)))
-            (nil? ((:read ctx) k id)))
-        (t/deny {:vars {:problem "your grant does not see that row or does not admit that door."}})
-
-        :else
-        (if-some [why (some->> ((:read ctx) k id)
+    (if-some [problem (sight-problem inp ctx)]
+      (t/deny {:vars {:problem problem}})
+      (let [{:keys [rdef id action]} (step-of inp ctx)]
+        (if-some [why (some->> ((:read ctx) (:kind rdef) id)
                                (#(shut-now rdef action % ctx)))]
           (t/deny {:vars {:problem (str "the row cannot take `" (name action)
                                         "` now: " why)}})
           (t/allow))))))
 
 (g/defguard the-field-is-an-open-argument
-  {:judges [:action :field]
+  {:judges [:action :field :fields :suggest :given]
    :reads [:storage]
    :vars [:problem]
-   :open "The field is the action's own input schema; name one of its arguments that is not secret."
-   :explain "An invitation points at one argument of the action a person may be shown: {problem}"}
+   :open "The fields are the action's own input schema; name arguments of it that are not secret, in `fields` or in `field` alone, and suggest values only for such arguments."
+   :explain "An invitation points at arguments of the action a person may be shown: {problem}"}
   [_row inp ctx]
-  (let [{:keys [action door]} (step-of inp ctx)
-        f (keyword (str/trim (str (:field inp))))
-        entries (some-> (:input door) schema/entry-map)]
-    (cond
-      ;; the step does not resolve: the-author-sees-the-step says so
-      (nil? door) (t/allow)
-
-      (not (contains? entries f))
-      (t/deny {:vars {:problem (str "`" (name f) "` is not an argument of `"
-                                    (name action) "`.")}})
-
-      (secret? (get-in entries [f :properties]))
-      (t/deny {:vars {:problem (str "`" (name f) "` is a secret argument, and nobody is invited to type a secret.")}})
-
-      :else (t/allow))))
+  ;; a step that does not resolve: the-author-sees-the-step says so
+  (if-some [problem (fields-problem inp ctx)]
+    (t/deny {:vars {:problem problem}})
+    (t/allow)))
 
 (g/defguard the-subject-declines
   {:reads [:principal]
@@ -192,9 +310,26 @@
    :open "The wall is about who: the author withdraws its own invitation, and no field of this door makes anyone else the author."
    :explain "Only the author of this invitation withdraws it."}
   [row _inp ctx]
-  (if (= (str (get-in row [:data :author])) (str (:id (:principal ctx))))
+  ;; the engine too, on a walkthrough's invitation and on no other: it
+  ;; takes the step back when the walkthrough leaves `running`
+  (if (or (= (str (get-in row [:data :author])) (str (:id (:principal ctx))))
+          (and (some? (get-in row [:data :walkthrough]))
+               (= :system (:type (:principal ctx)))))
     (t/allow)
     (t/deny)))
+
+(g/defguard only-the-engine-names-a-walkthrough
+  ;; it judges `walkthrough`, the reference; `step` and `of` are the
+  ;; engine's count beside it and have no vocabulary a form could offer
+  {:judges [:walkthrough]
+   :reads [:principal]
+   :open "The wall is about who: the engine opens a walkthrough's steps, and no field of this door makes anyone else the engine. Leave `walkthrough`, `step` and `of` out, and the invitation stands alone."
+   :explain "Only the engine names a walkthrough, a step or a step count on an invitation; it opens each step when the one before it ends."}
+  [_row inp ctx]
+  (if (and (some some? ((juxt :walkthrough :step :of) inp))
+           (not= :system (:type (:principal ctx))))
+    (t/deny)
+    (t/allow)))
 
 (g/defguard the-engine-resolves-it
   {:reads [:principal]
@@ -209,14 +344,30 @@
 
 (defn- born
   "The birth stamps: the author is the principal that created the row,
-  never the body, and an invitation naming no expiry gets the default."
+  never the body, `fields` is what the row stores, with `field` its
+  first for a reader that knows only that one, and an invitation naming
+  no expiry gets the default. An invitation the engine makes for a
+  walkthrough is the one exception to the first: it is stamped with
+  the walkthrough's author, so the audit still reads that the agent
+  asked, and the author can still read it, withdraw it and find it by
+  `author`."
   [row ctx]
-  (-> row
-      (assoc-in [:data :author] (str (get-in ctx [:principal :id])))
-      (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
-      (update-in [:data :expires_at]
-                 #(or % (.plusSeconds ^Instant (:now ctx)
-                                      (long default-ttl-seconds))))))
+  (let [names (named-fields (:data row))
+        led (some-> (get-in row [:data :walkthrough]) str not-empty)
+        leader (when led
+                 (some-> (:read ctx)
+                         (apply [:walkthrough led])
+                         (get-in [:data :author])
+                         str
+                         not-empty))]
+    (-> (cond-> row
+          (seq names) (update :data assoc :fields names :field (first names)))
+        (assoc-in [:data :author]
+                  (or leader (str (get-in ctx [:principal :id]))))
+        (assoc-in [:data :subject_name] (subject-name (get-in row [:data :subject]) ctx))
+        (update-in [:data :expires_at]
+                   #(or % (.plusSeconds ^Instant (:now ctx)
+                                        (long default-ttl-seconds)))))))
 
 (defhandler record-answer [row inp _ctx]
   (assoc-in row [:data :answered_by] (:transition inp)))
@@ -239,10 +390,15 @@
                          :label "The door"
                          :help "The action on that row the person is invited to take."}}
     [:string {:min 1 :max 60}]]
-   [:field {:x-display {:raw true
+   [:fields {:optional true
+             :x-display {:label "The fields"
+                         :help "The arguments of that action the person is pointed at, one to eight, in the order they are read. A secret argument is refused."}}
+    [:maybe [:vector {:min 1 :max 8} [:string {:min 1 :max 60}]]]]
+   [:field {:optional true
+            :x-display {:raw true
                         :label "The field"
-                        :help "The argument of that action the person is pointed at. A secret argument is refused."}}
-    [:string {:min 1 :max 60}]]
+                        :help "The one-field spelling of `fields`: name this or `fields`, never both. The engine stamps it with the first of `fields`."}}
+    [:maybe [:string {:min 1 :max 60}]]]
    [:note {:examples ["Pick the repository this ticket belongs to."]
            :x-display {:widget "prose"
                        :label "Note"
@@ -257,6 +413,40 @@
                  :x-display {:label "Waits until"
                              :help "When the sweep expires this invitation. Left empty, the engine stamps a week out."}}
     [:maybe :waymark/instant]]])
+
+(def ^:private led-fields
+  "What the ENGINE writes when a walkthrough opens a step
+  (docs/spec-walkthrough.md § 3): which walkthrough, and how far along."
+  [[:walkthrough {:optional true
+                  :kind :walkthrough
+                  :x-display {:label "The walkthrough"
+                              :help "The walkthrough this step belongs to, written by the engine. Empty on an invitation that stands alone."}}
+    [:maybe :waymark/ref]]
+   [:step {:optional true
+           :x-display {:label "Step"
+                       :help "The number of this step in its walkthrough, counted from one. Written by the engine."}}
+    [:maybe [:int {:min 1 :max 20}]]]
+   [:of {:optional true
+         :x-display {:label "Of"
+                     :help "How many steps the walkthrough has. Written by the engine."}}
+    [:maybe [:int {:min 1 :max 20}]]]])
+
+(def ^:private given-fields
+  "What the ENGINE writes when a quest hands its owner the goal's own
+  step (docs/spec-quests.md): the values the owner gave the quest."
+  [[:given {:optional true
+            :x-display {:label "Given values"
+                        :help "Values the invited person typed already, written by the engine and shown as their own. The engine never submits them; only the person's own submit does."
+                        :spelled-by-hand "Its keys are the arguments of the invited action, which differ per action, so no fixed sub-form can offer them."}}
+    [:maybe [:map-of :keyword :any]]]])
+
+(defn- off-the-form
+  "The same entries, kept off an author's form: the create model must
+  hold them for the engine's own create, and no person fills them in."
+  [entries]
+  (mapv (fn [[k props schema]]
+          [k (assoc-in props [:x-display :hidden] true) schema])
+        entries))
 
 (defresource invitation
   {:kind :invitation
@@ -275,6 +465,8 @@
                               :help "The principal that handed the step over, stamped by the engine at birth."}}
          [:string {:min 1 :max 128}]]]
        (into step-fields)
+       (into led-fields)
+       (into given-fields)
        (conj [:subject_name {:optional true
                              :x-display {:label "Invited by name"
                                          :help "The invited person's name as their member row said it at birth, stamped by the engine."}}
@@ -286,13 +478,24 @@
                                         :help "The log id of the person's own transition that answered this invitation."}}
               [:maybe [:string {:max 64}]]]))
    ;; the author and the answer are the engine's to write
-   :create-schema (into [:map] step-fields)
+   :create-schema (-> [:map]
+                      (into step-fields)
+                      (into (off-the-form led-fields))
+                      (into (off-the-form given-fields)))
    :filterable {:state #{:eq :in}
                 :subject #{:eq}
-                :author #{:eq}}
+                :author #{:eq}
+                :walkthrough #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open"}
-   :create-guards [the-author-sees-the-step the-field-is-an-open-argument]
+   ;; the two people an invitation is between read it under any worn
+   ;; grant, and each ends it from their own side. `create` is not here:
+   ;; handing a step over lands in another person's view, so the grant
+   ;; must name it, and the ask door is how a wearer gets it
+   :own-surface {:by [:author :subject] :actions #{:decline :withdraw}}
+   :create-guards [only-the-engine-names-a-walkthrough
+                   the-author-sees-the-step
+                   the-field-is-an-open-argument]
    :on-create born
    :actions
    {:decline
@@ -357,11 +560,29 @@
   "The durable cursor's name in waymark10_cursors (consumer:invitations)."
   :invitations)
 
+(defn instant-of
+  "An instant, as a stored string or an Instant already; nil for
+  anything else."
+  ^Instant [v]
+  (cond
+    (instance? Instant v) v
+    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
+    :else nil))
+
+(defn- older?
+  "Whether transition `t` was committed before invitation `row` was
+  born. Such a transition does not answer it."
+  [t row]
+  (let [at (instant-of (:at t))
+        birth (instant-of (:created-at row))]
+    (boolean (and at birth (.isBefore at birth)))))
+
 (defn handle-transition!
   "One committed transition: every open invitation whose subject is its
   actor and whose (self, action) it matches is answered, with the
-  transition's log id. Never throws: a parked cursor would stop every
-  later answer."
+  transition's log id. A transition committed before the invitation
+  was born answers nothing. Never throws: a parked cursor would stop
+  every later answer."
   [eng t]
   (try
     (let [rs (inv/resources eng)
@@ -374,7 +595,8 @@
           (doseq [row (open-rows eng)
                   :when (and (= self (get-in row [:data :self]))
                              (= action (str/trim (str (get-in row [:data :action]))))
-                             (= actor (str (get-in row [:data :subject]))))]
+                             (= actor (str (get-in row [:data :subject])))
+                             (not (older? t row)))]
             (walk! eng (:id row) :answer {:transition (str (:id t))})))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
@@ -400,12 +622,6 @@
   (some-> consumer consumers/stop-consumer!))
 
 ;; ── expiry ──────────────────────────────────────────────────────────
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
-    :else nil))
 
 (defn sweep-expired!
   "One pass: every open invitation past its `expires_at`, expired

@@ -205,9 +205,12 @@
                     ;; read the person from it (docs/spec-mcp-apps.md § 2)
                     true (assoc :bearer principal)
                     (:app-ui entry) (assoc :app-ui true)
-                    ;; …and the name its client gave: `app-session?` reads it
-                    ;; against :app-undeclared-clients
-                    (:client-name entry) (assoc :client-name (:client-name entry)))
+                    ;; …and the clientInfo it named, which the sit copies
+                    ;; onto the sitting (ticket b9f90987) and `app-session?`
+                    ;; reads against :app-undeclared-clients
+                    (:client-name entry) (assoc :client-name (:client-name entry))
+                    (:client-version entry)
+                    (assoc :client-version (:client-version entry)))
           with-session (fn [resp]
                          (cond-> resp
                            minted (assoc-in [:headers session-header] minted)))]

@@ -119,16 +119,23 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.verdict :as verdict]))
 
 (set! *warn-on-reflection* true)
 
 ;; ── what a pull request writes back onto the row ────────────────────
 
-(defhandler observe-the-pull-request [row inp _ctx]
+(defhandler observe-the-pull-request [row inp ctx]
   ;; The source hands the facts it read. A fact it did not read is
   ;; absent, and absent means silent: the stored value stands. The
   ;; machine advances the state, never this handler.
+  ;;
+  ;; A HEAD THAT MOVES takes back what judged the old one (ticket
+  ;; 35600491): see `waymark10.verdict/reopen-stale-verdicts!`.
+  (let [head (some-> (:head_sha inp) str not-empty)]
+    (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
+      (verdict/reopen-stale-verdicts! ctx :change (:id row) head)))
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
 
 (defhandler adopt-the-pull-request [row inp _ctx]
@@ -248,6 +255,22 @@
               (println "factory10 change merge: the duplicate" (:id dup)
                        "was not closed -" (ex-message e)))))))))
 
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
+
+(defn- without-the-wait
+  "The row without what the forge pass said of its held head. That pass
+  clears these only on a change it still reads, at submitted or failing,
+  so a door that ends the change drops them itself (ticket 1a72eea8)."
+  [row]
+  (reduce (fn [row k]
+            (cond-> row
+              (some? (get-in row [:data k])) (assoc-in [:data k] nil)))
+          row held-fields))
+
+(defhandler drop-what-the-wait-said [row _inp _ctx]
+  (without-the-wait row))
+
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
   ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
   ;; waymark-fp62.6.3.14, spec-seat.md R-12.32). The seat is told to
@@ -281,7 +304,7 @@
             (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
   (close-the-duplicates! row ctx)
-  row)
+  (without-the-wait row))
 
 ;; ── the ticket follows its change's review (ticket 2e869934) ─────────
 
@@ -297,25 +320,27 @@
   is left where it is, and a door that refuses is said in the log —
   the change's own move stands. A rehearsal carries no pen, and moves
   nothing."
-  [row ctx from action]
+  ([row ctx from action] (move-the-ticket! row ctx from action nil))
+  ([row ctx from action input]
   (let [[entry id walk-row] (born-of row ctx)]
     (when (and walk-row
                (= :ticket (:kind entry))
                (contains? from (some-> (:state walk-row) name keyword))
                (:invoke ctx))
       (try
-        ((:invoke ctx) :ticket id action nil)
+        ((:invoke ctx) :ticket id action input)
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change: the ticket" id "did not" (name action)
-                     "-" (ex-message e))))))))
+                     "-" (ex-message e)))))))))
 
 (defhandler write-what-superseded-it [row inp _ctx]
   ;; The pull request that merged in this one's place rides on the row,
   ;; so a reader of a closed duplicate sees which change did the work
   ;; (ticket 3ec37f66). Its ticket already ended with that merge, so
   ;; nothing is sent back.
-  (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
+  (assoc-in (without-the-wait row)
+            [:data :superseded_by] (str (:superseded_by inp))))
 
 (defhandler fold-into-the-house-row [row inp _ctx]
   ;; A row the forge minted beside a house row on the same branch
@@ -332,16 +357,31 @@
   ;; the queue again, where the seat that wrote the change wakes on its
   ;; `return`, and a person can ungroom it.
   (move-the-ticket! row ctx #{:in_review} :return)
-  row)
+  (without-the-wait row))
 
-(defhandler shelve-the-ticket [row _inp ctx]
+(defhandler shelve-the-ticket [row inp ctx]
   ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
   ;; the ticket goes back to draft and not to the queue (ticket
   ;; 6bdaf6fe): a ticket left open beside a stuck change was handed to
   ;; the seat every wake, and every wake could only say it was stuck. A
   ;; person, or mayor, reads the stall and grooms it again.
-  (move-the-ticket! row ctx #{:open :in_review} :shelve)
-  row)
+  ;;
+  ;; THE SENTENCE RIDES ON BOTH ROWS (ticket b6c8ea04): a transition's
+  ;; stored inputs are not served, so a stall's reason kept only in the
+  ;; log was a blind stall to whoever grooms next.
+  (let [why (some-> (:why inp) str not-empty)]
+    (move-the-ticket! row ctx #{:open :in_review} :shelve
+                      (if why {:shelved_because why} {}))
+    (update row :data assoc
+            :stall_reason why
+            :stalled_at (:now ctx)
+            :stalled_by (some-> (:id (:principal ctx)) str not-empty))))
+
+(defn- unstalled
+  "A change back out of `stuck` no longer says why it stopped: the
+  sentence was for the person who put it back, and the log keeps it."
+  [row]
+  (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
 ;;
@@ -599,20 +639,20 @@
   ;; the round ceiling left in review goes back to the queue with it,
   ;; which is how a person releases a stuck change (ticket 2e869934).
   (move-the-ticket! row ctx #{:in_review} :return)
-  (assoc-in row [:data :rounds] 0))
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defhandler rework-the-change [row _inp _ctx]
   ;; `unstick`'s count, walked by the TICKET (ticket 9ace68fb): a groom,
   ;; an unblock or a resume is a person's reading of the ask, so the
   ;; rounds start again. The ticket is already on its way to `open`,
   ;; so nothing here moves it.
-  (assoc-in row [:data :rounds] 0))
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defn- back-under-review
   "A stuck change put back under review: the rounds start from zero,
   and the forge computes the red names again for the head it reads next."
   [row]
-  (update row :data assoc
+  (update (unstalled row) :data assoc
           :rounds 0
           :failing_checks nil
           :conflicts nil
@@ -832,6 +872,33 @@
       (t/allow)
       (t/deny))))
 
+(defguardfn only-its-tickets-move-writes-the-domain
+  {:reads [:within]
+   :hide true
+   :explain "The domain of a change is its ticket's: a move of the ticket into another domain writes it here, inside that move. A person and a model read it."}
+  [_row _inp ctx]
+  ;; ticket 66d080b0: the ticket's five `move_domain` doors, and no hand
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :ticket kind)
+             (contains? #{:move_domain :move_domain_draft :move_domain_blocked
+                          :move_domain_in_review :move_domain_deferred}
+                        action))
+      (t/allow)
+      (t/deny))))
+
+(defhandler write-the-tickets-domain [row inp _ctx]
+  ;; its ticket moved into another domain, and the change goes with it
+  (assoc-in row [:data :domain] (:domain inp)))
+
+(def ^:private take-domain-input
+  [:map
+   [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+             :x-display {:hidden true :raw true :label "The domain"}}
+    [:string {:min 1 :max 64}]]])
+
+(def ^:private take-domain-description
+  "Its ticket moved into another domain, and the change went with it")
+
 (defguardfn only-a-person-closes-a-change
   {:reads [:principal :within]
    :hold true
@@ -1014,6 +1081,25 @@
 
 ;; ── :change — one pull request, mirrored ────────────────────────────
 
+(defn- take-the-tickets-domain
+  "The birth's stamp (ticket 20fab5f9): a change built for a ticket takes
+  the domain that ticket stores. A change the forge mints, and one
+  whose ticket stores none, is left with none and filters as factory.
+
+  It takes the ticket's `requested_by` in the same way (ticket
+  a9b3d233), so the domain that asked for the work hears the change
+  move as it hears the ticket."
+  [row ctx]
+  (let [born (str (get-in row [:data :born_from]))
+        ticket (when-some [read' (:read ctx)]
+                 (when-some [[_ id] (re-matches #"ticket:(.+)" born)]
+                   (read' :ticket id)))
+        domain (some-> (get-in ticket [:data :domain]) str not-empty)
+        asker (some-> (get-in ticket [:data :requested_by]) str not-empty)]
+    (cond-> row
+      domain (assoc-in [:data :domain] domain)
+      asker (assoc-in [:data :requested_by] asker))))
+
 (defresource change
   {:kind :change
    :plural "changes"
@@ -1046,7 +1132,10 @@
                 :repository #{:eq}
                 :head_branch #{:eq}
                 :head_sha #{:eq}
-                :author #{:eq}}
+                :author #{:eq}
+                :domain #{:eq :in}}
+   ;; a change born before domains stores none, and is factory's
+   :absent-as {:domain "factory"}
    ;; the collection a reader opens IS the pull requests that are
    ;; still live (inbox_item's spelling) — and a change a seat has
    ;; pushed is still live: the checks run, the review lands, and the
@@ -1190,6 +1279,29 @@
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; a submitted head that waits (ticket b256d053): the forge pass
+    ;; stamps the head and the time it first saw it held, counts the wait
+    ;; from that time, writes why when the wait is long, and clears all
+    ;; three when the head is no longer held; a door that merges or
+    ;; closes the change drops them too (ticket 1a72eea8)
+    [:held_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:held_since {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    ;; the held head's compare (ticket 93072465): when the pass asks it
+    ;; again, and how many compares in a row threw, so a restart keeps
+    ;; the backoff; cleared with the three around them
+    [:held_again {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    [:held_threw {:optional true :x-display {:hidden true}}
+     [:maybe [:int {:min 0}]]]
+    [:held_reason {:optional true
+                   :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
+                   :x-display
+                   {:widget "prose"
+                    :label "Why its head waits"
+                    :help "Why this submitted head has not merged after a long wait: the required checks that have no verdict yet, or that it is only behind its base. Empty while the wait is short, and when the head is not held."}}
+     [:maybe [:string {:max 500}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display
@@ -1267,6 +1379,26 @@
                       :label "A pull request nobody adopted"
                       :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
      [:maybe [:string {:max 500}]]]
+    ;; the stall's own sentence (ticket b6c8ea04): written by `stall`,
+    ;; cleared by every door that takes the change out of `stuck`
+    [:stall_reason {:optional true
+                    :examples ["The same test fails on the base commit, so this change is not the cause and I cannot fix it here."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it was stalled"
+                     :help "The sentence the stall door was given: what the seat tried, and what stopped it. Empty unless the change is stuck by a stall."}}
+     [:maybe [:string {:max 480}]]]
+    [:stalled_at {:optional true
+                  :x-display
+                  {:label "When it was stalled"
+                   :help "The moment the stall door moved this change to stuck. Empty unless the change is stuck by a stall."}}
+     [:maybe :waymark/instant]]
+    [:stalled_by {:optional true
+                  :x-ref {:principal true}
+                  :x-display
+                  {:label "Who stalled it"
+                   :help "The principal, usually a seat, that walked the stall door. Empty unless the change is stuck by a stall."}}
+     [:maybe [:string {:max 200}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
@@ -1287,8 +1419,9 @@
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
-                           "held" "Its ticket merges after tickets that are not done yet"}}}
-     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held"]]]
+                           "held" "Its ticket merges after tickets that are not done yet"
+                           "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"}}}
+     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held" "person"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display
@@ -1311,12 +1444,35 @@
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
     [:superseded_by {:optional true :not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
                      :x-display {:hidden true}}
-     [:maybe [:string {:max 500}]]]]
+     [:maybe [:string {:max 500}]]]
+    ;; the domain's NAME, taken at birth from the ticket this change
+    ;; was built for (ticket 20fab5f9), and written again by `take_domain`
+    ;; when that ticket is moved (ticket 66d080b0)
+    [:domain {:optional true
+              :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+              :examples ["factory"]
+              :x-display
+              {:raw true
+               :label "Domain that wants the work"
+               :help "The name of the domain of the ticket this change was built for, written when the change is born and again when that ticket is moved into another domain. A change that stores none is in factory."}}
+     [:maybe [:string {:max 64}]]]
+    ;; the asking domain's NAME, taken at birth from the ticket this
+    ;; change was built for (ticket a9b3d233), and written by nothing else
+    [:requested_by {:optional true
+                    :not-a-ref "The name of a domain, which no restate changes: a word, not a row id."
+                    :examples ["household"]
+                    :x-display
+                    {:raw true
+                     :label "Domain that asked"
+                     :help "The name of the domain whose mayor asked another domain for the ticket this change was built for, written when the change is born. Empty for a change whose ticket was filed in its own domain."}}
+     [:maybe [:string {:max 64}]]]]
    ;; THE BIRTH DOOR IS THE MIRROR'S, AND IT IS HIDDEN. A person meets
    ;; no create form for this kind. The source mints the row with what
    ;; GitHub answered; everything but the identity is optional,
    ;; because a first read does not always carry the counts.
    :create-guards [the-mirror-writes-this-row]
+   :on-create take-the-tickets-domain
+   :no-own-surface "stalled_by is written by the stall door, not at birth; a change is the repository's record, shown by a grant that names it."
    :create-schema
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>
@@ -1346,6 +1502,14 @@
      [:maybe [:string {:max 500}]]]
     ;; the seat's own mint writes it and the forge never does
     ;; (waymark-fp62.6.3.14)
+    ;;
+    ;; A SECOND LIVE ROW WITH THE SAME `born_from` IS NOT REFUSED HERE
+    ;; (ticket 5aa79167), and no caller needs one: the sit's mint
+    ;; (waymark10.server.mcp/minted-change) is the only writer and looks
+    ;; for a live row first, the forge's mint, `adopt` and `fold` never
+    ;; write the field, and factory10.bench-test builds its duplicates by
+    ;; hand; one that is born anyway, when that lookup misses, is closed
+    ;; by the merge (`close-the-duplicates!`) and by the ticket's ending.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
    :actions
@@ -1493,11 +1657,12 @@
                     :x-display
                     {:widget "prose"
                      :label "Why it ends"
-                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move."}}
+                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move. It is at most 480 characters."}}
               [:string {:min 1 :max 480}]]]
      :edit {:draft {:shared true :live true}}
      :guards [no-pull-request-to-close
               only-a-person-closes-a-change]
+     :handler drop-what-the-wait-said
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open."}
      :display {:label "Close" :style :danger :order 30
@@ -1660,6 +1825,50 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adoption noted" :order 19
                :description "The mirror says a landed pull request is waiting for its row"}}
+
+    ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
+    ;; another domain takes its open changes with it, inside its own
+    ;; door. Hidden, and no hand's; one self-loop for each state a
+    ;; change is still live in.
+    :take_domain
+    {:from #{:open} :to :open
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 23
+               :description take-domain-description}}
+
+    :take_domain_submitted
+    {:from #{:submitted} :to :submitted
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 24
+               :description take-domain-description}}
+
+    :take_domain_failing
+    {:from #{:failing} :to :failing
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 25
+               :description take-domain-description}}
+
+    :take_domain_stuck
+    {:from #{:stuck} :to :stuck
+     :guards [only-its-tickets-move-writes-the-domain]
+     :handler write-the-tickets-domain
+     :input take-domain-input
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Moved with its ticket" :order 26
+               :description take-domain-description}}
 
     ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
     ;; A seat-born row writes its head branch at BIRTH, from the

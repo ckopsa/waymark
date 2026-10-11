@@ -317,7 +317,14 @@
       (is (= 401 (:status (a {:request-method :post
                               :uri "/api/-/sittings/tally"
                               :headers {}})))
-          "the tally stays behind the gate"))))
+          "the tally stays behind the gate"))
+    (testing "the key check is open to a POST and to nothing else
+              (spec-seat.md § 16): the subscription secret in its header
+              is the whole credential, and the door judges it"
+      (is (= 200 (:status (a {:request-method :post
+                              :uri "/api/-/seats/verify"
+                              :headers {"waymark-subscription-secret" "s"}}))))
+      (is (= 401 (:status (a (get-req "/api/-/seats/verify"))))))))
 
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience

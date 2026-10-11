@@ -147,6 +147,8 @@
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
+            [waymark10.server.domains :as domains]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.maintainer :as maintainer]
@@ -156,10 +158,14 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.walks :as walks]
+            [waymark10.server.quests :as quests]
+            [waymark10.server.walkthroughs :as walkthroughs]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.dashboard :as dashboard-routes]
@@ -173,6 +179,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.routes.worksheet :as worksheet-routes]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
@@ -239,6 +246,10 @@
              ;; behind every link of one provider, and its cap
              {:kind :runner_provider :enroll :always
               :kinds (fn [_] [runner-links/runner-provider])}
+             ;; the domain (epic aff24e84, piece 1): the seat — core's
+             ;; own — carries a typed ref to it, so it is core's too
+             {:kind :domain :enroll :always
+              :kinds (fn [_] [domains/domain])}
              ;; the MCP server as a row (docs/spec-mcp-servers.md,
              ;; waymark-fp62.10): the external powers a grant names
              ;; reach the engine through a row's client, and a grant
@@ -246,6 +257,11 @@
              ;; dotted scope entry is core's too, beside the seat.
              {:kind :mcp_server :enroll :always
               :kinds (fn [_] [mcp-servers/mcp-server])}
+             ;; the secret (ticket 8cd850fa): a power call names one by
+             ;; reference and the server row's call! puts its value in,
+             ;; so it is core's beside the server row
+             {:kind :secret :enroll :always
+              :kinds (fn [_] [secrets/secret])}
              ;; the held call (docs/spec-mcp-servers.md R-14,
              ;; waymark-fp62.10.2): a powers entry that says
              ;; `approval person` does not forward its call, it mints
@@ -305,6 +321,25 @@
              ;; creates one, and grants are core's.
              {:kind :invitation :enroll :always
               :kinds (fn [_] [invitations/invitation])}
+             ;; the walkthrough (docs/spec-walkthrough.md § 1): the
+             ;; order several such steps are taken in. Core's beside
+             ;; the invitation, which each person step becomes.
+             {:kind :walkthrough :enroll :always
+              :kinds (fn [_] [walkthroughs/walkthrough])}
+             ;; the quest (docs/spec-quests.md): a goal door a person
+             ;; accepted and the steps the engine found toward it.
+             ;; Core's beside the walkthrough, for the same reason: its
+             ;; goal is judged as an invitation's step is.
+             {:kind :quest :enroll :always
+              :kinds (fn [_] [quests/quest])}
+             ;; the scene and the take (docs/spec-scenes.md): a demo
+             ;; written as shots, and one performance of it. Core's
+             ;; beside the walk, because a scene is judged against
+             ;; whatever kinds the house serves.
+             {:kind :scene :enroll :always
+              :kinds (fn [_] [scenes/scene])}
+             {:kind :take :enroll :always
+              :kinds (fn [_] [scenes/take])}
              ;; the recorded walk and its frames (docs/spec-guided-follow.md
              ;; § 4): core's beside the invitation, whose sibling it is,
              ;; and for the transcript's reason — a record of what a
@@ -312,7 +347,19 @@
              {:kind :walk :enroll :always
               :kinds (fn [_] [walks/walk])}
              {:kind :walk_frame :enroll :always
-              :kinds (fn [_] [walks/walk-frame])}]
+              :kinds (fn [_] [walks/walk-frame])}
+             ;; the film rule (demo scorecard): one measured rule of a
+             ;; good demo film. Core's beside the walk a film is
+             ;; rendered from.
+             {:kind :film_rule :enroll :always
+              :kinds (fn [_] [film-rules/film-rule])}
+             ;; the scheduled action (docs/spec-scheduled-actions.md
+             ;; R-1): a call stored for a time. Core's beside the held
+             ;; call, which it carries a typed ref to, and for the
+             ;; spec's own reason: a household engine with no seat must
+             ;; still groom a ticket at 08:30.
+             {:kind :scheduled_action :enroll :always
+              :kinds (fn [_] [scheduled/scheduled-action])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -395,6 +442,32 @@
                             (get-in eng [:services :invitations :sweep-ms]
                                     300000)}))
              :stop invitations/stop-expiry-sweeper!}
+            ;; the walkthroughs' consumer (spec-walkthrough § 3): it
+            ;; opens each step when the one before it ends. A second
+            ;; consumer on its own cursor, beside the invitations' and
+            ;; elected for its reason: two engines draining the same
+            ;; log would walk `step` twice.
+            {:hook :walkthroughs
+             :after [:dispatcher]
+             :elected :walkthroughs
+             :start (fn [eng running]
+                      (walkthroughs/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop walkthroughs/stop!}
+            ;; the quests' consumer (docs/spec-quests.md): it plans a
+            ;; quest when it is accepted and when its owner asks to
+            ;; replan. On its own cursor, and elected for the
+            ;; walkthroughs' reason: two engines draining the same log
+            ;; would rehearse and write each plan twice.
+            {:hook :quests
+             :after [:dispatcher]
+             :elected :quests
+             :start (fn [eng running]
+                      (quests/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop quests/stop!}
             ;; the walks' retention (spec-guided-follow § 4), elected
             ;; for the expiry's reason
             {:hook :walk-retention
@@ -418,7 +491,20 @@
                        eng {:interval-ms
                             (get-in eng [:services :seats :clock-ms]
                                     300000)}))
-             :stop defs/stop-clock-sweeper!}]
+             :stop defs/stop-clock-sweeper!}
+            ;; the scheduled actions' clock (spec-scheduled-actions
+            ;; R-5): every due row claimed and run, on a loop of its
+            ;; own and not a line in the wake tick, because a household
+            ;; engine with no seat must still groom a ticket at 08:30.
+            ;; Elected, and `start` is the claim under it (R-5.2).
+            {:hook :scheduled-actions
+             :elected :scheduled-actions
+             :start (fn [eng _]
+                      (scheduled/start-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :scheduled-actions :sweep-ms]
+                                    scheduled/default-sweep-ms)}))
+             :stop scheduled/stop-sweeper!}]
     :pack packs/core}
 
    {:module :attachments

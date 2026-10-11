@@ -560,3 +560,42 @@
       (is (= 200 (:status (call! eng :post
                                  (str "/api/vt_tickets/" (:ticket w) "/-/close")))))
       (is (= 201 (:status (judge! eng (:seat w) (verdict-body w))))))))
+
+;; ── 6. a verdict keeps the head it judged (ticket 35600491) ──────────
+
+(def vt-change
+  (r/resource
+   {:kind :vt_change
+    :plural "vt_changes"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:filter #{:eq}} [:string {:min 1 :max 60}]]
+             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Closing is acknowledged."}
+             :display {:label "Close" :order 1
+                       :description "Close this change"}}}}))
+
+(deftest a-verdict-keeps-the-head-its-subject-stood-at
+  (let [eng (engine/engine {:storage (memory/storage) :resources [ticket vt-change]})
+        seat (leash! eng seat-id)
+        jid (judgment! eng "Does it work" :subject-kind "vt_change")
+        cid (id-of (get-in (call! eng :post "/api/vt_changes"
+                                  :body {:title "A change" :head_sha "2fba27a"})
+                           [:doc :self]))
+        said (judge! eng seat {:judgment jid :subject_kind "vt_change" :subject_id cid
+                               :verdict "infra" :remedy "Re-run it."})]
+    (is (= 201 (:status said)))
+    (is (= "2fba27a" (str (get-in said [:doc :data :subject_head])))
+        "the judge's own hand reads the head from the subject")
+    (testing "a subject with no head leaves the field empty"
+      (let [{:keys [eng seat] :as w} (world)
+            said (judge! eng seat (verdict-body w))]
+        (is (= 201 (:status said)))
+        (is (nil? (get-in said [:doc :data :subject_head])))))))

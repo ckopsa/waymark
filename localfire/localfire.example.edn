@@ -20,8 +20,8 @@
  :public-url "http://192.168.1.231:8112" ; big-colt
 
  ;; a clone of ckopsa/waymark-seat (R-8.1): CLAUDE.md,
- ;; .claude/settings.json, .claude/hooks/sitting-close.sh, and nothing
- ;; else. A person or a timer pulls it. The server copies it for each
+ ;; .claude/settings.json, .claude/hooks/sitting-close.sh,
+ ;; inbox-feed.sh, and nothing else. A person or a timer pulls it. The server copies it for each
  ;; run and never writes in it.
  :place "/srv/waymark-seat"
 
@@ -38,6 +38,14 @@
  ;; holds.
  ;; The name is the cloud connector's, `Waymark`, so the tools are
  ;; `mcp__Waymark__…` as the seats' instructions spell them.
+ ;;
+ ;; :oauth is optional (R-8.2): the fixed OAuth client, for a door that
+ ;; refuses dynamic registration. It must match the client the person
+ ;; signed in with, `claude mcp add --client-id ... --callback-port ...`:
+ ;; the same id and the same port. Both keys are required when the map
+ ;; is there.
+ ;;   :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"
+ ;;         :oauth {:client-id "localfire-claude" :callback-port 8765}}
  :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"}
 
  ;; passed to --allowedTools, one argument each. This is the default.

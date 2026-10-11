@@ -17,6 +17,7 @@
             [waymark10.wire :as wire]))
 
 (def ^:dynamic *h* nil)
+(def ^:dynamic *st* nil)
 
 (use-fixtures :once
   (fn [f]
@@ -28,7 +29,8 @@
                            "waymark10_transitions" "waymark10_idempotency"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
-        (binding [*h* (engine/handler
+        (binding [*st* st
+                  *h* (engine/handler
                        (engine/engine {:storage st
                                        :resources [fx/meal fx/plan]}))]
           (f))
@@ -121,6 +123,42 @@
   (check-page "/api/-/ui")
   (check-page "/api/-/ui-lite"))
 
+(defn- twice-declared
+  "The top-level function names `body` declares more than once. The
+  ui/ files are joined into one script, so a second `function name(`
+  is legal JavaScript and silently wins; top-level is column 0, the
+  way every file under ui/ writes it."
+  [body]
+  (->> (re-seq #"(?m)^(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(" body)
+       (map second)
+       frequencies
+       (keep (fn [[fname n]] (when (< 1 n) fname)))
+       sort))
+
+(deftest ui-declares-no-top-level-function-twice
+  ;; ticket 837f840c: a new replayWalk(r) beside the existing async
+  ;; replayWalk(self) stalled the replay while every pinned string held
+  (testing "the check sees a second declaration, async or not"
+    (is (= ["replayWalk"]
+           (twice-declared (str "<script>\n"
+                                "async function replayWalk(self) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "function once() {}\n"
+                                "function replayWalk(r) {\n"
+                                "  function step(i) {}\n"
+                                "}\n"
+                                "</script>")))
+        "nested functions are not top-level; one name twice is named"))
+  (testing "the served page"
+    (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+          twice (twice-declared body)]
+      (is (seq (re-seq #"(?m)^(?:async\s+)?function\s" body))
+          "the page still writes its top-level functions at column 0")
+      (is (empty? twice)
+          (str "declared twice at the top level, the later one wins: "
+               (str/join ", " twice))))))
+
 (deftest ui-port-keeps-the-ten-wire
   ;; the ported waymark9 client speaks wire 10, not 9: the grant scope
   ;; selector, the relay/2 draft socket, and the named SSE classes are
@@ -149,6 +187,44 @@
     (is (str/includes? body "data-invite-note"))
     (is (str/includes? body "@keyframes invited"))))
 
+(deftest ui-lights-every-invited-field
+  ;; docs/spec-walkthrough.md §4: every named field is lit, the note sits
+  ;; beside the first, each further one shows its ordinal, and a row born
+  ;; before `fields` reads as a list of one
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "fields: d.fields || (d.field ? [d.field] : [])"))
+    (is (str/includes? body "l.spot.classList.add(\"invited\")"))
+    (is (str/includes? body "if (spot) spot.after(note);"))
+    (is (str/includes? body "data-invite-ordinal"))
+    (is (str/includes? body ".invite-ordinal {"))))
+
+(deftest ui-tracks-the-pinned-quest
+  ;; docs/spec-quests.md, the tracker: the pinned quest has its own row of
+  ;; the header, the count is never a total, the firehose redraws it, and
+  ;; Go opens the head step's door through the helper an invitation uses
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "<div id=\"questbar\""))
+    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, given, invitation}, what)"))
+    (is (str/includes? body "return openDoor({self: d.self, action: d.action, note: d.note,"))
+    (is (str/includes? body "openDoor({self: head.self, action: head.door, fields: head.needs || [],"))
+    ;; the goal's own step opens with the quest's stored input in the form,
+    ;; as the owner's own: `given` wears no suggestion mark
+    (is (str/includes? body "note: head.note, given: goal ? d.input || {} : {}},"))
+    (is (str/includes? body "given: d.given || {},"))
+    (is (str/includes? body "\"/api/quests?state=active&pinned=true&owner=\""))
+    (is (str/includes? body "`${done} done, ${plan.length} known so far`"))
+    (is (not (str/includes? body "${done} of ${"))
+        "the count is never k of n")
+    (is (str/includes? body "onQuestFrame(ev);"))
+    ;; the quest in hand is heard on its own stream, so a viewer under a
+    ;; grant hears it too; the stream of a quest let go is closed
+    (is (str/includes? body "const href = questDoc ? questDoc.self + \"/-/events\" : null;"))
+    (is (str/includes? body "if (questStream) sseClose(questStream);"))
+    (is (str/includes? body "function sseClose(href)"))
+    (is (str/includes? body "if (!document.hidden) refreshQuest().catch(() => {});"))
+    (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questHeadGo"))
+    (is (str/includes? body "\"Quest complete\""))))
+
 (deftest ui-opens-an-invitation-from-the-collection
   ;; the collection row of an open invitation to the viewer takes the
   ;; step in one tap, reading the full envelope first (summaries drop data)
@@ -166,6 +242,85 @@
     (is (str/includes? body
                        "invokeBare(invitation.doc.actions.decline, invitation.doc)"))))
 
+(deftest ui-draws-step-n-of-m-on-an-invited-dialog
+  ;; docs/spec-walkthrough.md §5: an invitation that has a walkthrough
+  ;; opens as any other does, with "Step 2 of 4 · <title>" above the form,
+  ;; and the chip says the same on every screen
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function stepLine(n, of, title)"))
+    (is (str/includes? body "return `Step ${n} of ${of}`"))
+    (is (str/includes? body "walkthrough: d.walkthrough ? ledStep(d) : null"))
+    (is (str/includes? body "data-walk-step"))
+    (is (str/includes? body "stepLine(led.step, led.of, led.title)"))
+    (is (str/includes? body "<span id=\"walkchip\"></span>"))
+    (is (str/includes? body "`step ${f.step} of ${f.of}`"))))
+
+(deftest ui-offers-skip-and-stop-inside-a-walkthrough
+  ;; the Decline button reads Skip and still walks the invitation's own
+  ;; decline door; Stop sits beside it and walks the walkthrough's stop
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "led ? \"Skip\" : \"Decline\""))
+    (is (str/includes? body "data-walk-stop"))
+    (is (str/includes? body "async function stopLed()"))
+    (is (str/includes? body "const stop = row.ok && (row.body.actions || {}).stop;"))
+    (is (str/includes? body "btn(\"data-walk-skip\", \"Skip\", skipLedStep)"))))
+
+(deftest ui-walkthrough-page-lists-its-steps
+  ;; the row page lists every step's note in order, before the start
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (kind === \"walkthrough\") panel.append(walkthroughSteps(doc));"))
+    (is (str/includes? body "function walkthroughSteps(doc)"))
+    (is (str/includes? body "data-walk-steps"))))
+
+(deftest ui-start-follows-the-author-in-guided-mode
+  ;; docs/spec-walkthrough.md §5, watching an agent step: the person's own
+  ;; Start or Resume, heard on the firehose, follows the author in guided
+  ;; mode; an agent step takes the screen to its `self`; the next person
+  ;; step opens over a guided dialog; and a follow the walkthrough began
+  ;; ends when the walkthrough leaves the hand
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function followAuthor()"))
+    (is (str/includes? body "const tapped = !!me && [\"start\", \"resume\"].includes(ev.action) &&"))
+    (is (str/includes? body "if (tapped) followAuthor();"))
+    (is (str/includes? body "follow({id: author, display: held ? followName : author}, {ui: true});"))
+    (is (str/includes? body "function showAgentStep()"))
+    (is (str/includes? body "const self = ((d.steps || [])[(d.current || 1) - 1] || {}).self;"))
+    (is (str/includes? body "setTimeout(showAgentStep, 0);"))
+    (is (str/includes? body "if ($(\"dialog[open]:not([data-guided])\")) return;"))
+    (is (str/includes? body "if (walkthroughFollow && followId === walkthroughFollow) unfollow();"))))
+
+(deftest ui-an-agent-step-offers-stop-and-no-skip
+  ;; the chip on an agent step names who is working and the step's note,
+  ;; with Stop beside it; Skip is a person step's alone
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from (str/index-of body "} else if (d.waiting_on === \"agent\") {")
+        to (some->> from (str/index-of body "} else {"))
+        branch (if (and from to) (subs body from to) "")]
+    (is (some? to) "the chip has a branch for an agent step")
+    (is (str/includes? branch "` is working: ${(steps[n - 1] || {}).note || \"\"}`"))
+    (is (str/includes? branch "if (stop) chip.append(stop);"))
+    (is (not (str/includes? branch "data-walk-skip")))
+    (is (not (str/includes? branch "data-walk-take")))))
+
+(deftest ui-offers-do-this-later
+  ;; docs/spec-scheduled-actions.md R-7.3: a row's dialog schedules the
+  ;; same call, with the zone named and the rule in plain words; a confirm
+  ;; door's sentence rides the scheduling tap; and the row's page lists
+  ;; what waits on it, with reschedule and cancel
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "\"Do this later\""))
+    (is (str/includes? body "Intl.DateTimeFormat().resolvedOptions().timeZone"))
+    (is (str/includes? body "rule(\"strict\", \"Only if nothing about it changes\")"))
+    (is (str/includes? body "rule(\"state\", \"As long as it is still \""))
+    (is (str/includes? body "rule(\"conditions\","))
+    (is (str/includes? body "filterPopover(query, new URLSearchParams()")
+        "a condition is written with the collection's filter control")
+    (is (str/includes? body "api(\"/api/scheduled_actions\","))
+    (is (str/includes? body "call.acknowledge = consequence"))
+    (is (str/includes? body "function scheduledSection(doc)"))
+    (is (str/includes? body "name: \"reschedule\", entry: acts.reschedule"))
+    (is (str/includes? body "invokeBare(acts.cancel, item)"))))
+
 (deftest ui-follow-offers-guided-mode
   ;; docs/spec-guided-follow.md §2: the follow chip offers guided mode,
   ;; which reopens the one live stream with ?ui=<pid> and applies the
@@ -178,7 +333,18 @@
     (is (str/includes? body "if (f.event === \"ui\") applyGuidedUi(f);"))
     (is (str/includes? body "is filling this in"))
     (is (str/includes? body "dialog[open]:not([data-guided])"))
-    (is (str/includes? body "data-guided-mark"))))
+    (is (str/includes? body "data-guided-mark"))
+    (testing "a move of the followed person, which a wholly redacted ui beat becomes, closes the guided dialog and the quest's sheet"
+      (is (str/includes? body "else if (f.event === \"move\") guidedMove(f);"))
+      (is (str/includes? body "guidedDismissed = null;\n    closeGuided();\n    guidedQuestSheet(null);\n  }, GUIDED_MOVE_MS);"))
+      (is (str/includes? body "clearTimeout(guidedMoveTimer);\n  applyUiFrame(f);")))
+    (testing "the ui frame already held, sent again after a move that carries no new beat, takes the close back"
+      (is (str/includes? body "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);\n    if (f.seq <= guidedSeq) return;")))
+    (testing "a guided dialog's read that fails or is not answered gives its key back"
+      (is (str/includes? body "await Promise.race([api(d.self),\n      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);"))
+      (is (str/includes? body "} catch (_e) { res = null; }\n  finally {\n    mine = guidedOpening === key;"))
+      (is (str/includes? body "if (mine) guidedOpening = null;"))
+      (is (not (str/includes? body "const res = replay ? replayDialogDoc(d) : await api(d.self);"))))))
 
 (deftest ui-sharing-is-off-by-default
   ;; the reporting side's opt-in: a per-tab toggle, off until pressed,
@@ -189,6 +355,630 @@
     (is (str/includes? body "sessionStorage.getItem(\"wm10.share.ui\") === \"1\""))
     (is (str/includes? body "if (uiSharing()) body.ui = uiShareState();"))
     (is (str/includes? body "shareableValues(collectValues(form, input), input)"))))
+
+(deftest ui-replay-paces-a-burst
+  ;; docs/spec-agent-demo-walks.md §2: the beats of one connector call
+  ;; are recorded milliseconds apart, and replay plays two frames less
+  ;; than 50 ms apart the one floor (1000 ms) apart, under the long-silence cut
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_BURST_MS = 50, REPLAY_BURST_GAP = REPLAY_MIN_STILL;"))
+    (is (str/includes? body "const dt = Math.max(0, (r.frames[r.at].t || 0) - prev);"))
+    (is (str/includes? body "r.at && dt < REPLAY_BURST_MS ? REPLAY_BURST_GAP : dt);"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
+(deftest ui-replay-shows-a-caption-and-holds-for-it
+  ;; docs/spec-agent-demo-walks.md §3: a caption frame's line is shown in
+  ;; a band until the next caption or an empty one, and the frame after
+  ;; it waits 55 ms a character, between 1500 and 6000 ms
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_READ_MS = 55, REPLAY_READ_MIN = 1500, REPLAY_READ_MAX = 6000;"))
+    (is (str/includes? body "replay.caption = f.text ? f : null;"))
+    (is (str/includes? body "el(\"div\", {id: \"replaycaption\", role: \"status\"})"))
+    (is (str/includes? body "band.textContent = c ? c.text : \"\";"))
+    (is (str/includes? body "#replaycaption {"))
+    (is (str/includes? body "Math.max(REPLAY_READ_MIN, REPLAY_READ_MS * f.text.length));"))
+    (is (str/includes? body "const read = replayReadingTime(r.at ? r.frames[r.at - 1] : null);"))
+    (is (str/includes? body "const gap = read + Math.min(REPLAY_MAX_GAP,"))))
+
+(deftest ui-replay-holds-on-a-write
+  ;; the screen is still at least 1500 ms after a `transition`; a `move`
+  ;; has no hold of its own, only the one floor. The hold is a floor
+  ;; under the gap and no addition to it, so a recorded 60-second silence
+  ;; still plays in REPLAY_MAX_GAP; film mode schedules by the same code
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_MAX_GAP = 3000;"))
+    (is (str/includes? body "const REPLAY_WRITE_HOLD = 1500;"))
+    (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;"))
+    (is (not (re-find #"REPLAY_MOVE_HOLD|replayActHold" body))
+        "a move has no hold of its own: the one floor is under it")
+    (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);"))
+    (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && left + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);"))
+    (is (str/includes? body "r.timer = setTimeout(replayStep, gap / r.speed);"))))
+
+(deftest ui-replay-keeps-a-floor-under-every-visible-change
+  ;; walk 082fefa5's shape (move, doc, ui open, ui typed, transition,
+  ;; doc) is recorded milliseconds apart. After any change of the
+  ;; screen (a move, a dialog opening or closing, a typing beat, a
+  ;; caption, a doc that draws the screen again) the screen is still at
+  ;; least 1000 ms, counted from the moment the change is drawn,
+  ;; before speed and before the gesture. A doc of the screen already shown, or a ui beat equal
+  ;; to the one before it, waits nothing and is not drawn again
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_MIN_STILL = 1000;"))
+    (testing "the one floor is under the gap the schedule plays, which speed divides"
+      (is (str/includes? body "if (!replayShows(frames, at)) return 0;"))
+      (is (str/includes? body "if (f.type === \"transition\") return REPLAY_WRITE_HOLD;\n  return REPLAY_MIN_STILL;"))
+      (is (not (re-find #"REPLAY_STILL_SCREEN|REPLAY_STILL_TYPED|replayTyped" body))
+          "no kind of change has a shorter floor of its own")
+      (is (str/includes? body "const still = replayHoldTime(r.frames, r.at);")))
+    (testing "a frame that changes nothing visible adds no wait"
+      (is (str/includes? body "if (!read && replayStill(r.frames, r.at)) return 0;"))
+      (is (str/includes? body "if ((f.t || 0) - (frames[at - 1].t || 0) < REPLAY_BURST_MS) return true;"))
+      (is (str/includes? body "return JSON.stringify(frames[i].doc) === JSON.stringify(f.doc);"))
+      (is (str/includes? body "replayBeat(frames[i]) === replayBeat(f);")))
+    (testing "the floor is counted from the last frame that changed the screen"
+      (is (str/includes? body "while (i >= 0 && !replayShows(frames, i)) i--;")))
+    (testing "a doc that draws the screen again is a change, and one for another address is not"
+      (is (str/includes? body "return !!f.doc && !!row(f.self) && row(f.self) === row(hereHref());")))
+    (testing "the floor is counted from the moment the change is drawn"
+      (is (str/includes? body "return replayDrawn(replay, renderReplay(view, href));"))
+      (is (str/includes? body "const left = Math.max(0, still - (performance.now() - r.drawn) * r.speed);"))
+      (is (str/includes? body "return r.drawn + r.still / r.speed - now;")))
+    (testing "a frame that changes nothing is not drawn again"
+      (is (str/includes? body "if (!same && self === String(hereHref() || \"\").split(\"?\")[0]) render();"))
+      (is (str/includes? body "} else if (f.type === \"ui\" && !again) {")))))
+
+(deftest ui-replay-leaves-a-screen-only-after-it-has-been-still
+  ;; the floors are stillness: for a dialog with one typed field and a
+  ;; submit, the form is still at least 1000 ms after it opens before the
+  ;; pointer moves, the typed value at least 1000 ms before the pointer
+  ;; heads to the submit, and a hop's list at least 1000 ms. The
+  ;; gesture's 900 ms come after the stillness and not inside it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        [_ floor] (re-find #"const REPLAY_MIN_STILL = (\d+);" body)]
+    (is (and floor (>= (Long/parseLong floor) 1000)) "every change of the screen is still at least 1000 ms")
+    (is (not (re-find #"REPLAY_SCREEN_MIN|REPLAY_TYPE_MIN" body))
+        "no floor is measured from the screen's change to the next frame")
+    (testing "an opened form and a typed value owe the one floor"
+      (is (str/includes? body "return REPLAY_MIN_STILL;")))
+    (testing "the frame waits the stillness and then the gesture, when its recorded gap is shorter"
+      (is (str/includes? body "const gap = Math.max(replayGap(r),\n    still && left + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);")))
+    (testing "the gesture never starts inside the stillness"
+      (is (str/includes? body "Math.max(left, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+    (testing "a hop's list and a walk's row are still for the screen floor before the next gesture"
+      (is (str/includes? body "replayGaze(\"list\", list);\n  replayLinger(r);"))
+      (is (str/includes? body "replayGaze(walk.list ? \"list\" : \"row\", walk.self);\n  replayLinger(r);"))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_MIN_STILL / r.speed);")))
+    (testing "the arrival outline lasts as long as the stillness, so it is off when the pointer leaves"
+      (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_MIN_STILL;")))))
+
+(deftest ui-replay-anchors-a-caption-to-its-field
+  ;; docs/spec-agent-demo-walks.md §3: a caption that names a field is
+  ;; drawn beside it, with the field lit, by the code that draws an
+  ;; invitation's note; the recorded dialog has that field to light
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function markInvited(form, names, text) {"))
+    (is (str/includes? body "dlg.guidedMark = (names, text) => markInvited(form, names, text);"))
+    (is (str/includes? body "g.guidedMark(c.field ? [c.field] : [], c.text)"))
+    (is (str/includes? body ".setAttribute(\"data-caption-note\", \"\");"))
+    (is (str/includes? body "(f.type === \"invitation\" || (f.type === \"caption\" && f.field))"))
+    (is (str/includes? body "if (replay) replayCaption();"))))
+
+(deftest ui-replay-draws-a-recorded-refusal-in-its-form
+  ;; docs/spec-agent-demo-walks.md §2: a `refusal` frame is drawn in the
+  ;; open form by the code that draws a person's own refusal, with
+  ;; "Accept as quest" where they saw it; the footer's button is for a
+  ;; walk recorded before the frame existed
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "dlg.guidedRefuse = (problem, kept) => {"))
+    (is (str/includes? body "if (f.type === \"refusal\") {"))
+    (is (str/includes? body "if (replay) replayRefuse(replay.refused);"))
+    (is (str/includes? body "return g.querySelector(\"[data-surface='dialog.accept']\") || g.guidedAccept();"))))
+
+(deftest ui-replay-draws-a-formless-refusal-in-the-band
+  ;; docs/spec-agent-demo-walks.md §2: a bulk write opens no form, so
+  ;; each row it refused is a line in the caption band, held until the
+  ;; recorder's next step
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function replayFormless(r, f) {"))
+    (is (str/includes? body "if (n.type === \"move\") return true;"))
+    (is (str/includes? body "replay.refusals.push(replayRefusedLine(replay, f));"))
+    (is (str/includes? body "[...replay.refusals, replay.notice].filter(Boolean).join(\"\\n\");"))
+    (is (str/includes? body "if (f.type === \"move\" || f.type === \"ui\") replay.refusals = [];"))
+    (is (str/includes? body "#replaycaption[data-replay-notice] { white-space: pre-line; }"))))
+
+(deftest ui-replay-says-a-refused-accept-in-the-quests-sheet
+  ;; docs/spec-quests.md: a `refusal` frame while the quest's sheet is
+  ;; open is the answer Accept quest got; the replay says it in the
+  ;; sheet's own box, by the sheet's own code, and not in the band
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "dlg.questRefuse = refused;"))
+    (is (str/includes? body "function replaySheetRefused(f) {"))
+    (is (str/includes? body "sheet.questRefuse({title: f.title, detail: f.detail});"))
+    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-surface='sheet.accept']\") : null;"))
+    ;; one tap makes the quest and then pins it: the refused pin of a
+    ;; sheet whose own create was made draws no second press
+    (is (str/includes? body "if (f.type === \"refusal\" && f.action === \"pin\" &&\n        sheet.hasAttribute(\"data-replay-accepted\")) return null;"))))
+
+(deftest ui-replay-presses-the-submit-before-the-close
+  ;; the moment of a write: for the frame that closes a form after its
+  ;; write, the pointer goes to the guided dialog's submit button, drawn
+  ;; unlit, and presses it before the frame is applied; a form closed
+  ;; with no transition has no press, and no separate light is made
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        mark (str/index-of body "const wait = replayGestureWait(r);")
+        close (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (not (str/includes? body "replayMarkWrite")))
+    (is (str/includes? body "dlg.guidedWrite = () => {"))
+    (is (str/includes? body "const lit = el(\"button\", {class: write.className + \" invited\","))
+    (is (str/includes? body "if (!replayWrote(replay, key)) return null;"))
+    (is (str/includes? body "let write = g.querySelector(\"[data-replay-write]\");"))
+    (is (str/includes? body "write = g.guidedWrite();\n      write.classList.remove(\"invited\");"))
+    (is (str/includes? body ".dlgfoot button.invited { animation: none; }"))
+    (is (and mark close (< mark close))
+        "the submit is pressed before the frame that closes the form is applied")))
+
+(deftest ui-replay-changes-no-screen-behind-an-open-form
+  ;; walk 082fefa5's write (dialog open, typing, transition, doc, close):
+  ;; the transition and the doc recorded while the form is open wait, with
+  ;; no time of their own, so the submit is pressed and the form closes
+  ;; first. The frame that closes the form draws them on the screen the
+  ;; form was over, outlined, and that screen is still for the write's
+  ;; hold. A form the recording never closes has them drawn by the next
+  ;; frame that is not its own, or when the last frame has played
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        hold (str/index-of body "replay.held.push(f);")
+        land (str/index-of body "const note = landed || replayKeepsForm(f) ? null : replayLand(replay);")
+        close (str/index-of body "applyUiFrame({self: f.self, ui: f.ui || {}, principal: actor});")]
+    (testing "a transition or a doc behind an open form is held, not drawn"
+      (is (str/includes? body "const form = f.type === \"ui\" && !!(f.ui || {}).dialog;"))
+      (is (str/includes? body "if (!landed && replay.held && (f.type === \"transition\" || f.type === \"doc\")) {"))
+      (is (str/includes? body "if (form && !replay.held) replay.held = [];")))
+    (testing "a held frame waits nothing, and the floor before the close is the typed value's"
+      (is (str/includes? body "if (t === \"ui\") return !!(frames[i].ui || {}).dialog;"))
+      (is (str/includes? body "if (replayHeld(frames, at) &&\n      frames.some((g, k) => k > at && !replayKeepsForm(g))) return true;")))
+    (testing "the frame that ends the form draws what waited, in order, on the screen shown"
+      (is (str/includes? body "for (const f of held) {\n    applyReplayFrame(f, true);"))
+      (is (str/includes? body "else if (landed) { /* the screen stays */ }"))
+      (is (and hold land close (< hold land close))
+          "the held frames are drawn by the frame that closes the form, not before it"))
+    (testing "the screen wears the arrival outline and is still for the write's hold"
+      (is (str/includes? body "r.gaze = null;\n    replayGaze(\"row\", wrote);"))
+      (is (str/includes? body "if (frames[j].type === \"transition\") return replayHeld(frames, j);"))
+      (is (str/includes? body "if (replayLands(frames, i)) return REPLAY_WRITE_HOLD;")))
+    (testing "a form never closed loses nothing: the next frame that is not its own draws what waited"
+      (is (str/includes? body "return f.type === \"transition\" || f.type === \"doc\" || f.type === \"caption\" ||\n    (f.type === \"ui\" && !!(f.ui || {}).dialog);"))
+      (is (str/includes? body "if (t !== \"transition\" && t !== \"doc\" && t !== \"caption\") return false;")))
+    (testing "with no frame left, the end draws it under the form the recording left open"
+      (is (str/includes? body "if (!open) closeGuided();"))
+      (is (str/includes? body "if (r.at >= r.frames.length && r.held) {\n    r.notice = replayLand(r, true) || r.notice;"))
+      (is (str/includes? body "r.walked = null;\n    r.held = null;")))))
+
+(deftest ui-replay-walks-to-a-row-that-is-not-on-screen
+  ;; no jumps: a move whose link is not on screen presses the navigation
+  ;; entry of its kind, that list is drawn as a screen of its own, still
+  ;; for 1000 ms with the arrival outline, and the row's link is pressed
+  ;; there; until then the frame is not applied, so no hash goes to the
+  ;; row. A list already shown is no hop, and one hop is made for a frame
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        hop (str/index-of body "if (r.gesture && r.gesture.hop) { replayHop(r); return; }")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "if (f.type !== \"move\" || !to.closest(\"#kinds\")) return null;"))
+    (is (str/includes? body "return list.split(\"?\")[0] === String(f.self).split(\"?\")[0] ? null : list;"))
+    (is (str/includes? body "hop: r.hopped === r.at ? null : replayHopOf(f, to)};"))
+    (testing "the hop draws the list, outlined, and waits the screen floor for the next gesture"
+      (is (str/includes? body "location.hash = \"#\" + list;\n  replayGaze(\"list\", list);"))
+      (is (str/includes? body "const wait = REPLAY_MIN_STILL + REPLAY_GLIDE_MS + REPLAY_PRESS_MS;"))
+      (is (str/includes? body "r.timer = setTimeout(replayStep, wait / r.speed);"))
+      (is (str/includes? body "r.lead = setTimeout(() => replayGesture(r), REPLAY_MIN_STILL / r.speed);")))
+    (is (and hop act (< hop act))
+        "the hop is made before the frame is applied, and in its place")))
+
+(deftest ui-replay-walks-to-the-row-of-a-dialog-a-write-or-an-invitation
+  ;; no jumps for the three other frames either: a dialog beat with no
+  ;; action button on screen, a write of the recorder's and an invitation,
+  ;; on a row that is not the screen shown, make the gesture of a move to
+  ;; that row first (navigation entry, list, the row's link); the row is
+  ;; drawn as a screen of its own, and the frame is applied after it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        walk (str/index-of body "if (r.gesture && r.gesture.walk) { replayArrive(r); return; }")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (testing "a dialog beat whose door has no button on screen"
+      (is (str/includes? body "const to = ui.dialog ? !replayGestureTarget(f) && (list ? collectionHrefOf(c) : f.self)")))
+    (testing "a write of the recorder's, and not a step with no click behind it"
+      (is (str/includes? body ": f.type === \"transition\" ? !replayNotice(r, f) && f.self")))
+    (testing "an invitation"
+      (is (str/includes? body ": f.type === \"invitation\" && f.action ? row(f.self) : null;")))
+    (testing "the screen shown is no walk, nor is one under an open dialog, and one walk is made for a frame"
+      (is (str/includes? body "if (!f || r.walked === r.at || r.door || $(\"dialog[open]\")) return null;"))
+      (is (str/includes? body "return to && row(to) !== hereHref() ? {type: \"move\", who: f.who, self: to, list} : null;")))
+    (testing "the gesture is a move's, so it goes by the kind's list as a move does"
+      (is (str/includes? body "const walk = replayWalkOf(r, r.frames[r.at]);\n  const f = walk || r.frames[r.at];")))
+    (testing "the walk draws the row, outlined, and waits the screen floor for the frame's own gesture"
+      (is (str/includes? body "applyFollowMove(walk.self);\n  replayGaze(walk.list ? \"list\" : \"row\", walk.self);")))
+    (is (and walk act (< walk act))
+        "the walk is made before the frame is applied, and in its place")))
+
+(deftest ui-replay-points-at-the-field-a-typing-beat-types
+  ;; the pointer fills the form: a typing beat's gesture goes to the
+  ;; field it types into, and the click there, before the frame shows the
+  ;; value, gives that field the ring a focused field wears. Replay makes
+  ;; no separate lit-field cue. The pointer is drawn inside the dialog
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "? g.guidedField(replayTypingOf(f)) : null;"))
+    (is (str/includes? body "if (typeof ui.focus === \"string\" && !ui.focus.startsWith(\"/\")) return ui.focus;"))
+    (is (str/includes? body "if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }"))
+    (is (str/includes? body "if (spot) spot.setAttribute(\"data-replay-click\", \"\");"))
+    (is (str/includes? body "[data-replay-click] { outline: 2px solid Highlight;"))
+    (testing "the lit-field cue is a live follow's alone"
+      (is (str/includes? body "if (!replay) g.guidedLight(guidedTyping);"))
+      (is (str/includes? body "if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);")))
+    (testing "the pointer is drawn inside the form's dialog, and stays on the page when it closes"
+      (is (str/includes? body "const host = target.closest(\"dialog[open]\") || document.body;"))
+      (is (str/includes? body "if (p.parentElement !== host) host.append(p);"))
+      (is (str/includes? body "else if (p && p.parentElement !== document.body && !p.closest(\"dialog[open]\"))")))))
+
+(deftest ui-replay-shows-a-notice-for-a-step-with-no-click
+  ;; a transition by a principal other than the recorder, a clock_shift
+  ;; and an invitation the recorder did not write have no click behind
+  ;; them: the pointer and the screen stay where they were, and the
+  ;; caption band says the step
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (!r.recorder && (f.type === \"move\" || f.type === \"ui\")) r.recorder = f.who || null;"))
+    (is (str/includes? body "const other = !!r.recorder && !!f.who && f.who !== r.recorder;"))
+    (is (str/includes? body "if (f.kind === \"clock_shift\") return \"Later: \" + what;"))
+    (is (str/includes? body "return (actor.type === \"system\" ? \"Scheduled\" : actor.display) + \": \" + what;"))
+    (is (str/includes? body "return \"Invited: \" + (f.note || pretty(f.action || \"\"));"))
+    (is (str/includes? body "replay.notice = replayNotice(replay, f);"))
+    (testing "it moves no screen and makes no gesture"
+      (is (str/includes? body "else if (!$(\"dialog[open]\") && !replay.notice) location.hash = \"#\" + f.self;")))
+    (testing "the band shows it"
+      (is (str/includes? body "band.toggleAttribute(\"data-replay-notice\", !!n);"))
+      (is (str/includes? body "#replaycaption[data-replay-notice] { font-style: italic; }")))))
+
+(deftest ui-replay-outlines-the-row-or-list-the-gaze-moves-to
+  ;; the moment of a look: a move to a row, or a `collection` ui, marks
+  ;; the root element for the screen's stillness, 1000 ms, and the main panel is
+  ;; outlined while it does; film mode hides neither mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const REPLAY_GAZE_MS = REPLAY_MIN_STILL;"))
+    (is (str/includes? body "if (f.self) { applyFollowMove(f.self); replayGaze(\"row\", f.self); }"))
+    (is (str/includes? body "replayGaze(\"list\", collectionHrefOf(c));"))
+    (is (str/includes? body "root.setAttribute(\"data-replay-gaze\", what);"))
+    (is (str/includes? body "html[data-replay-gaze] .panel[data-replay-screen],"))
+    (is (str/includes? body "html[data-replay-gaze] [data-replay-doc] > .panel:first-of-type {"))
+    (is (not (re-find #"html\[data-film\][^{]*(data-replay-gaze|data-guided-write|\.dlgfoot)[^{]*\{[^}]*display: none" body))
+        "film mode hides no part of either mark")))
+
+(deftest ui-replay-points-at-the-link-or-button-before-the-act
+  ;; the gesture before an act: a pointer glides for 600 ms to the link a
+  ;; move would follow, or to the action button a dialog beat would
+  ;; press, and that element is lit for 300 ms in the invitation's lit
+  ;; style; the frame is applied after it. With no link on screen there
+  ;; is no gesture and the move still happens. Film mode draws the pointer
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        wait (str/index-of body "const wait = replayGestureWait(r);")
+        act (str/index-of body "applyReplayFrame(r.frames[r.at++]);")]
+    (is (str/includes? body "const REPLAY_GLIDE_MS = 600, REPLAY_PRESS_MS = 300;"))
+    (testing "a move goes to the row's link on the page, then to the navigation bar"
+      (is (str/includes? body "return link(\"#view\", h => row(h) === to) || nav(to) ||"))
+      (is (str/includes? body "(list !== row(here) && nav(list)) || null;")))
+    (testing "a dialog beat goes to that row's action button for the door"
+      (is (str/includes? body ".filter(b => seen(b) && b.dataset.action === d.action);"))
+      (is (str/includes? body "return doors.find(b => rowOf(b) === d.self) ||")))
+    (testing "a query beat goes to the filter control or the navigation entry"
+      (is (str/includes? body "link(\"#view\", h => h === target) || nav(row(c.self)) || null;")))
+    (testing "the target is lit after the glide, and the frame waits for the press"
+      (is (str/includes? body "lit.classList.add(\"invited\");"))
+      (is (str/includes? body "lit.setAttribute(\"data-replay-press\", \"\");"))
+      (is (str/includes? body "}, REPLAY_GLIDE_MS / r.speed);"))
+      (is (and wait act (< wait act))
+          "the gesture is waited for before the frame is applied"))
+    (testing "with no link on screen there is no gesture, and the frame is applied"
+      (is (str/includes? body "if (!to) return;"))
+      (is (str/includes? body "return r.gesture ? r.gesture.until - performance.now() : 0;")))
+    (testing "the gesture ends as the wait before its frame does, after the stillness"
+      (is (str/includes? body "Math.max(left, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS) / r.speed);")))
+    (testing "the pointer is drawn over the page, in film mode as well"
+      (is (str/includes? body "document.body.append(p = el(\"div\", {id: \"replaypointer\", \"aria-hidden\": \"true\"}));"))
+      (is (str/includes? body "#replaypointer { position: fixed; left: 0; top: 0; z-index: 35;"))
+      (is (str/includes? body "[data-replay-press].invited { animation: none; }"))
+      (is (not (re-find #"html\[data-film\][^{]*(#replaypointer|data-replay-press)[^{]*\{[^}]*display: none" body))))))
+
+(deftest ui-replay-lights-the-field-a-staged-call-types
+  ;; docs/spec-agent-demo-walks.md §2: a typing beat names its argument
+  ;; in `focus`, and replay lights that field alone, in the invitation's
+  ;; lit style, in the dialog the beat draws
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const typing = !!d && typeof ui.focus === \"string\" && !ui.focus.startsWith(\"/\");"))
+    (is (str/includes? body "guidedTyping = typing ? ui.focus : null;"))
+    (is (str/includes? body "guidedFocus = typing ? null : ui.focus || null;"))
+    (is (str/includes? body "g.guidedLight(guidedTyping);"))
+    (is (str/includes? body "dlg.guidedLight = name => markTyped(form, name);"))
+    (is (str/includes? body "function markTyped(form, name) {"))
+    (is (str/includes? body "for (const s of form.querySelectorAll(\"[data-typed]\")) {"))
+    (is (str/includes? body "spot.classList.add(\"invited\");"))
+    (is (str/includes? body "spot.setAttribute(\"data-typed\", \"\");"))))
+
+(deftest ui-replay-names-a-ref-fields-row-and-not-its-id
+  ;; ticket 097e60da: a replay fetches no collection, so a ref picker has
+  ;; no entry of its own. A typing beat seats it with one, [id, label]:
+  ;; the beat's own `labels`, else the summary of the walk's last `doc`
+  ;; for that row, else the id
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        said "if (typeof said === \"string\" && said) return said;"
+        held "for (const [self, doc] of replay.docs)"]
+    (testing "the beat's labels are kept beside its fields"
+      (is (str/includes? body "guidedLastLabels = ui.labels || {};"))
+      (is (str/includes? body "const said = Array.isArray(own) ? own[i] : i === undefined ? own : null;"))
+      (is (str/includes? body said)))
+    (testing "with no label, a doc the walk already holds names the row"
+      (is (str/includes? body held))
+      (is (str/includes? body "doc && typeof doc.summary === \"string\" && doc.summary)"))
+      (is (< (str/index-of body said) (str/index-of body held))
+          "the beat's own label is read first"))
+    (testing "a replay alone seats the picker: a live follow's is fetched"
+      (is (str/includes? body "g.guidedSet(guidedLastFields, replay ? guidedLabel : null);"))
+      (is (not (str/includes? body "g.guidedSet(guidedLastFields);"))))
+    (testing "the one entry is the row by its label, and the id when none is known"
+      (is (str/includes? body "if (!seat) node.append(seat = el(\"option\", {value: v}, named[0] || v));"))
+      (is (str/includes? body "else if (named[0] && seat.textContent === v) seat.textContent = named[0];")))))
+
+(defn- well-known [h]
+  (-> (h {:request-method :get :uri "/api/.well-known/waymark"
+          :headers {"x-waymark-principal" "reader"}})
+      :body
+      wire/read-json))
+
+(deftest ui-shows-no-banner-on-an-engine-without-an-expiry
+  ;; docs/spec-demo-clones.md §3: a working engine sets no expiry, so
+  ;; its well-known document carries none and the banner stays hidden
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (not (contains? (well-known *h*) :expires_at)))
+    (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
+    (is (str/includes? body "#demobanner[hidden] { display: none; }"))
+    (is (str/includes? body "const at = Date.parse(w.expires_at || \"\");"))
+    (is (str/includes? body "if (Number.isNaN(at)) return;"))
+    (is (str/includes? body "if (demoEnds === null) { box.hidden = true; return; }"))))
+
+(deftest ui-warns-before-a-demo-engine-ends
+  ;; the engine reads its expiry at boot and answers it on well-known
+  ;; beside its name; the banner says when, and turns to a warning at
+  ;; 15 minutes and again at 5
+  (let [ends "2026-10-01T16:40:00Z"
+        opts {:storage *st* :resources [fx/meal fx/plan]}
+        h (engine/handler (engine/engine (assoc opts :expires-at ends)))
+        body (:body (h {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (= ends (:expires_at (well-known h))))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (engine/engine (assoc opts :expires-at "soon")))
+        "an expiry that is not an instant refuses the boot")
+    (is (str/includes? body "Demo engine. It ends at ${at} and takes everything with it."))
+    (is (str/includes? body "const DEMO_WARN_MS = 15 * 60000, DEMO_LAST_MS = 5 * 60000;"))
+    (is (str/includes? body "left <= DEMO_LAST_MS ? \"last\" : left <= DEMO_WARN_MS ? \"warn\" : \"note\""))
+    (is (str/includes? body "#demobanner[data-demo-level=\"warn\"]"))
+    (is (str/includes? body "#demobanner[data-demo-level=\"last\"]"))
+    (is (str/includes? body "setInterval(demoRefresh, DEMO_TICK_MS);"))))
+
+(deftest ui-names-an-unexported-walk-in-the-warning
+  ;; the banner names each walk of the viewer's that is still recording,
+  ;; or sealed and not exported in this browser; the export button is
+  ;; what marks a walk exported
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "?recorder=${encodeURIComponent(door.me)}&state="))
+    (is (str/includes? body "(i.state === \"recording\" || (i.state === \"sealed\" && !done.has(i.self)))"))
+    (is (str/includes? body "\"Your walk is not exported. \""))
+    (is (str/includes? body "\"Seal and export it now: \""))
+    (is (str/includes? body "el(\"a\", {href: \"#\" + w.self}, w.summary || \"the walk\")"))
+    (is (str/includes? body "localStorage.getItem(\"wm10.walk.exported\")"))
+    (is (str/includes? body "markWalkExported(self);"))
+    (is (str/includes? body "\"data-export-walk\""))
+    (is (str/includes? body "onclick: () => exportWalk(doc)"))
+    ;; the export's address is the row's links.export, and a row without
+    ;; the link offers no export
+    (is (str/includes? body "doc.links?.export?.href"))
+    (is (not (str/includes? body "self + \"/export\"")))))
+
+(deftest ui-list-export-chip-exports-as-the-button-does
+  ;; a walk's export chip on a table row or a feed item makes the row
+  ;; page's download: as the viewer, and marked exported in this browser
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function exportChipClick(e, item, rel, l) {"))
+    (is (str/includes? body "if (!isWalk || rel !== \"export\" || !l || !l.href) return;"))
+    (is (str/includes? body "exportWalk({...item, kind: \"walk\"});"))
+    (is (str/includes? body "onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},"))
+    (is (str/includes? body "onclick: e => exportChipClick(e, item, rel, l)},"))))
+
+(deftest ui-row-page-offers-a-walks-export-one-time
+  ;; a walk's row page draws its export as the Export button, which reads
+  ;; as the viewer and marks the walk exported: the links strip leaves
+  ;; that rel out, so no plain chip stands beside the button
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function linksStrip(doc, held = []) {"))
+    (is (str/includes? body ".filter(([rel, l]) => l && l.href && !held.includes(rel));"))
+    (is (str/includes? body "const chips = linksStrip(doc, walkExportHref(doc) ? [\"export\"] : []);"))))
+
+(deftest ui-replay-draws-an-invitation-frame
+  ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
+  ;; dialog read-only, with every named field lit, the note and the
+  ;; "Step 2 of 4" line, and the next `transition` frame closes it
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "async function openReplayInvitation(f, actor)"))
+    (is (str/includes? body "openReplayInvitation(f, actor);"))
+    (is (str/includes? body "g.setAttribute(\"data-replay-invite\", \"\");"))
+    (testing "every named field has an input and is lit"
+      (is (str/includes? body "const typed = inv ? [f.field, ...(f.fields || []),"))
+      (is (str/includes? body "fields: f.fields || (f.field ? [f.field] : [])},")))
+    (testing "the step line is drawn from the frame's own `step` and `of`"
+      (is (str/includes? body "invitation: {doc: {}, note: f.note, step: f.step, of: f.of,"))
+      (is (str/includes? body "if (invitation && invitation.step && invitation.of)"))
+      (is (str/includes? body "`Step ${invitation.step} of ${invitation.of}`"))
+      (is (str/includes? body "data-invite-step"))
+      (is (str/includes? body ".invite-step {")))
+    (testing "the transition that answers it closes it"
+      (is (str/includes? body "const inv = $(\"dialog[open][data-replay-invite]\");"))
+      (is (str/includes? body "if (inv && inv.getAttribute(\"data-guided\") === f.self + \" \" + f.action)")))))
+
+(deftest ui-replay-fills-an-invitations-given-values-unmarked
+  ;; docs/spec-walkthrough.md §6: a replayed invitation's `given` values
+  ;; fill their fields as `suggest` values do, and only a suggestion
+  ;; wears the `suggested-value` mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (testing "a given key has an input in the replayed form"
+      (is (str/includes? body "...Object.keys(f.given || {})]")))
+    (testing "the frame's given values reach the dialog and fill it"
+      (is (str/includes? body "    given: f.given || {},"))
+      (is (str/includes? body "g.guidedSet(Object.assign({}, f.given || {}, f.suggest || {}));")))
+    (testing "the mark is put on the keys of `suggest` alone"
+      (is (str/includes? body "for (const k of Object.keys(suggest || {})) {"))
+      (is (= 1 (count (re-seq #"classList\.add\(\"suggested-value\"\)" body)))))))
+
+(deftest ui-replay-draws-a-row-from-its-doc
+  ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
+  ;; replay passes it, and the screen it names is drawn by the code that
+  ;; draws a live row or collection, inert, with every request held
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "replay.docs.set(self, f.doc);"))
+    (is (str/includes? body "if (doc && doc.kind) return renderReplayDoc(view, doc);"))
+    (is (str/includes? body "\"data-replay-doc\": \"\", inert: \"\"});"))
+    (is (str/includes? body "if (String(doc.kind).endsWith(\"_collection\")) renderCollection(screen, doc, hints);"))
+    (is (str/includes? body "else drawn = renderResource(screen, doc, hints).catch(() => {});"))
+    (testing "a dialog is drawn from the document's input schema"
+      (is (str/includes? body "if (held && (held.actions || {})[d.action]) return {ok: true, body: held};")))
+    (testing "it makes no read and no write"
+      (is (str/includes? body "apiHeld = walk.frames.some(f => f.type === \"doc\");"))
+      (is (str/includes? body "if (apiHeld) return {res: null, status: 0, ok: false, body: null, etag: null};"))
+      (is (str/includes? body "if (apiHeld) return dataHintsCache[kind] || {};"))
+      (is (str/includes? body "if (loaded || apiHeld) return;")))))
+
+(deftest ui-replay-falls-back-without-a-doc
+  ;; a screen the walk holds no document for is today's panel, and a
+  ;; walk with no document at all holds no request
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from-doc "if (doc && doc.kind) return renderReplayDoc(view, doc);"
+        panel "const panel = el(\"div\", {class: \"panel\", \"data-replay-screen\": self});"]
+    (is (str/includes? body "const doc = r.docs.get(self);"))
+    (is (str/includes? body panel))
+    (is (< (str/index-of body from-doc) (str/index-of body panel))
+        "the panel is what is left when no document is held")
+    (is (str/includes? body "let apiHeld = false;"))
+    (testing "playing again forgets the documents, and stopping lets requests go"
+      (is (str/includes? body "r.rows.clear();\n    r.docs.clear();"))
+      (is (str/includes? body "replay = null;\n  apiHeld = false;")))))
+
+(deftest ui-film-mode-hides-the-chrome
+  ;; docs/spec-agent-demo-walks.md §8b: /#/api/walks/<id>?film=1 plays a
+  ;; sealed walk for a camera; the dev principal box, the replay chip,
+  ;; the demo banner and every toast are hidden, and the film's own
+  ;; address is no screen and no gaze
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "return /^\\/api\\/walks\\/[^/]+$/.test(path) &&"))
+    (is (str/includes? body "new URLSearchParams(query || \"\").get(\"film\") === \"1\" ? path : null;"))
+    (is (str/includes? body "html[data-film] #who, html[data-film] #replaychip,"))
+    (is (str/includes? body "html[data-film] #demobanner, html[data-film] #toast { display: none !important; }"))
+    (testing "the chrome is gone before the walk is read"
+      (is (< (str/index-of body "filmState(\"\");")
+             (str/index-of body "const row = await api(self);\n    const href = row.ok ? walkExportHref(row.body) : null;\n    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;\n    if (res && res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
+    (is (str/includes? body "if (filmWalkOf(raw)) {"))
+    (is (str/includes? body "if (film) return;"))))
+
+(deftest ui-presentation-mode-hides-the-developer-detail
+  ;; docs/spec-agent-demo-walks.md §8b: window.wmPresent(true) sets
+  ;; `present` on the root element; the crumb's row id, the version
+  ;; line, the grant chip and the header's developer buttons are hidden
+  ;; with display: none, and the everyday UI keeps them
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "window.wmPresent = on => document.documentElement.classList.toggle(\"present\", on !== false);"))
+    (is (str/includes? body "html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,"))
+    (is (str/includes? body "html.present #grantchip, html.present #sharebtn, html.present #recordbtn,"))
+    (is (str/includes? body "html.present #replaybtn, html.present #ledgertoggle { display: none !important; }"))
+    (testing "the marked elements are the ones the pages draw"
+      (is (str/includes? body "el(\"span\", {class:\"idsep\"}, \" / \"),\n    el(\"span\", {class:\"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class: \"idsep\"}, \" / \"),\n    el(\"span\", {class: \"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class:\"version\"},"))
+      (is (str/includes? body "el(\"span\", {class: \"version\"},"))
+      (doseq [id ["sharebtn" "recordbtn" "replaybtn" "ledgertoggle" "grantchip"]]
+        (is (str/includes? body (str "id=\"" id "\"")))))
+    (testing "what a performed Quests take still showed is hidden too"
+      ;; ticket 9e7c21f5: the law revision chip, the signed-in name and
+      ;; its sign-out link, the ticker, a row's Data section and the
+      ;; reasons under the doors
+      (is (str/includes? body "html.present #lawstamp, html.present #signedin, html.present #ticker,"))
+      (is (str/includes? body "html.present details.rowdata, html.present .blockedwhy { display: none !important; }"))
+      (is (str/includes? body "<span id=\"lawstamp\"></span>"))
+      (is (str/includes? body "$who.after(el(\"span\", {id: \"signedin\","))
+      (is (str/includes? body "<div id=\"ticker\"></div>"))
+      (is (str/includes? body "el(\"details\", {class:\"rowdata\", open:\"\"},\n      el(\"summary\", {class:\"muted\"}, \"Data\"),"))
+      (is (str/includes? body "dataPanel.append(el(\"details\", {class:\"rowdata\", open:\"\"},"))
+      (is (str/includes? body "const box = el(\"ul\", {class:\"blockedwhy notnow\"});"))
+      (testing "and nothing but the `present` class takes them away"
+        (is (empty? (remove #(str/starts-with? % "html.present")
+                            (map (comp str/trim second)
+                                 (re-seq #"([^\s,{}]*\s?(?:#lawstamp|#signedin|#ticker|details\.rowdata|\.blockedwhy))(?=\s*[,{])[^{}]*\{[^}]*display:\s*none" body)))))))
+    (testing "the theme control and the principal box are not among them"
+      (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))
+    (testing "a demo engine's banner and the recording chip are not drawn"
+      ;; the recording chip is #recordbtn itself: recordChip writes the
+      ;; `■ Stop m:ss` into the button the rule above already names
+      (is (str/includes? body "html.present #demobanner { display: none !important; }"))
+      (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
+      (is (str/includes? body "function recordChip() {\n  const b = $(\"#recordbtn\");"))
+      (is (str/includes? body "b.textContent = `■ Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, \"0\")}`;")))
+    (testing "a ticket title's '[epic] ' marker is not drawn, and is drawn out of the mode"
+      (is (str/includes? body "html.present .epicmark { display: none !important; }"))
+      (is (str/includes? body "mark.className = \"epicmark\";"))
+      (is (= #{"html.present .epicmark"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?\.epicmark)\s*\{" body))))))
+    (testing "the phone's tab bar and the intent cards are not drawn, and the toast and the undo stack sit at the top"
+      ;; ticket c0cb83af: a film's caption is burned over the bottom of
+      ;; the frame, and an intent card names an actor by its id
+      (is (str/includes? body "html.present #intents { display: none !important; }"))
+      (is (str/includes? body "html.present[data-ui=\"mobile\"] header nav { display: none !important; }"))
+      (is (str/includes? body "html.present #toast { top: 12px !important; bottom: auto !important; }"))
+      (is (str/includes? body "html.present #undostack { top: 64px !important; bottom: auto !important;"))
+      (is (str/includes? body "<div id=\"toast\"></div>"))
+      (is (str/includes? body "<div id=\"intents\" aria-live=\"polite\" aria-label=\"live intents\"></div>"))
+      (is (str/includes? body "<div id=\"undostack\" aria-live=\"polite\" aria-label=\"undo the last few things you did\"></div>"))
+      (testing "and the desktop header's nav is not among them"
+        (is (not (re-find #"html\.present header nav" body)))))
+    (testing "and out of presentation mode both are drawn"
+      ;; nothing but the banner's own [hidden], film mode and the
+      ;; `present` class takes either away
+      (is (= #{"#demobanner[hidden]" "html[data-film] #demobanner" "html.present #demobanner"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#demobanner(?:\[hidden\])?)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body)))))
+      (is (= #{"html.present #recordbtn"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#recordbtn)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body))))))))
+
+(deftest ui-film-mode-says-when-it-has-ended
+  ;; the root element's data-film is what the camera reads: `ready` under
+  ;; the title card for 2 s, `playing` once play starts by itself at 1×,
+  ;; and `ended` when the last screen has held for 1.5 s
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        ready "filmState(\"ready\");"
+        playing "filmState(\"playing\");\n    startReplay(text);\n  }, FILM_TITLE_MS);"]
+    (is (str/includes? body "const FILM_TITLE_MS = 2000, FILM_HOLD_MS = 1500;"))
+    (is (str/includes? body "function filmState(s) { document.documentElement.setAttribute(\"data-film\", s); }"))
+    (is (str/includes? body "el(\"h1\", {}, walk.header.title || \"a walk\"));"))
+    (is (str/includes? body ready))
+    (is (str/includes? body playing))
+    (is (< (str/index-of body ready) (str/index-of body playing))
+        "the title card comes before the play")
+    (is (str/includes? body "if (film && r.at >= r.frames.length) filmEnd();"))
+    (is (str/includes? body "setTimeout(() => filmState(\"ended\"), FILM_HOLD_MS);"))
+    (is (str/includes? body "speed: 1, playing: false")
+        "a replay starts at 1×")))
+
+(deftest ui-film-mode-draws-a-caption-as-a-band
+  ;; a caption on video is a band across the bottom, two lines at most
+  ;; and in large type; one that names a field is drawn beside the lit
+  ;; field instead, once its form is open
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "html[data-film] #replaycaption { left: 0; right: 0; bottom: 0; transform: none;"))
+    (is (str/includes? body "border-radius: 0; box-shadow: none; font-size: 34px;"))
+    (is (str/includes? body "line-height: 1.3; max-height: 2.6em; overflow: hidden; }"))
+    (is (str/includes? body "band.style.display = c && !filmBeside(c) ? \"block\" : \"none\";"))
+    (is (str/includes? body "const g = film && c.field && c.action &&"))
+    (is (str/includes? body "String(c.self).split(\"?\")[0] + \" \" + c.action === g.getAttribute(\"data-guided\");"))))
 
 (defn- render! [headers body]
   (let [resp (*h* {:request-method :post :uri "/api/-/render/markdown"
@@ -215,3 +1005,81 @@
                                  {:texts "# One"})))))
   (testing "anonymous is not let in"
     (is (= 404 (:status (render! {} {:texts ["# One"]}))))))
+
+(deftest ui-quest-page-shows-its-plan-as-a-checklist
+  ;; docs/spec-quests.md: each step state has its own affordance on the
+  ;; quest's row page, and Go is the next step's alone
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        from (str/index-of body "function questStep(doc, s)")
+        step (subs body from (str/index-of body "async function questGo(step)"))]
+    (is (str/includes? body "if (kind === \"quest\") panel.append(questPlan(doc));"))
+    (is (str/includes? body "function questPlan(doc)"))
+    (testing "the step's state rides the row, and the sheet styles each one"
+      (is (str/includes? step "\"data-quest-step\": s.state"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"done\"] .quest-note { text-decoration: line-through;"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"next\"] { font-weight: 600;"))
+      (is (str/includes? body ".quest-step[data-quest-step=\"later\"] { opacity: .5; }")))
+    (testing "Go is on the next step of an active quest, and nowhere else"
+      (is (str/includes? step "if (s.state === \"next\" && doc.state === \"active\")"))
+      (is (= 1 (count (re-seq #"data-quest-go" body)))))
+    (testing "a waiting step says who, and a held one links to the tap"
+      (is (str/includes? step "if (s.state === \"waiting\")"))
+      (is (str/includes? step "? el(\"a\", {href: \"#\" + s.self}, \"your tap\")"))
+      (is (str/includes? step ": s.waiting_on || \"someone else\"));")))
+    (testing "an unseen wait is the step the engine marks, and its row is left out"
+      (is (str/includes? body "function questUnseen(s) { return !!s && s.unseen === true; }"))
+      (is (not (str/includes? step "s.self === d.self")))
+      (is (str/includes? step "if (s.self && !questUnseen(s))"))
+      (is (str/includes? body "text(\"b + span:not([data-quest-turn])\", li)")))
+    (testing "a choice says what must be picked"
+      (is (str/includes? step "if (s.whose === \"choice\" && s.state !== \"done\")"))
+      (is (str/includes? step "needs ? ` · choose ${needs}`")))
+    (testing "the blocked reason, the count and the estimate note"
+      (is (str/includes? body "\"data-quest-blocked\": \"\"}, d.blocked_reason)"))
+      (is (str/includes? body "`${done} done, ${steps.length} known so far`"))
+      (is (str/includes? body "\"data-quest-estimate\": \"\"")))
+    (testing "Go opens the viewer's invitation for the step, else its row"
+      (is (str/includes? body "if (inv) openInvitationRow(inv);"))
+      (is (str/includes? body "else go(step.self);")))
+    (testing "the data table leaves the plan out and draws the goal row in words"
+      (is (str/includes? body "if (kind === \"quest\") delete plainData.plan;"))
+      (is (str/includes? body "tr.lastChild.replaceChildren(questRow(plainData.self));")))
+    (testing "the goal door and the keys of its input are drawn by their labels"
+      (is (str/includes? body "el(\"span\", {\"data-quest-door\": \"\", title: plainData.action},"))
+      (is (str/includes? body "goal.door_label || title(plainData.action)));"))
+      (is (str/includes? body "(goal.needs_labels || [])[needs.indexOf(k)] || title(k)),")))))
+
+(deftest ui-row-page-header-carries-no-path
+  ;; the row's own path is the crumb's title on every row page, and is
+  ;; not header text
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "el(\"span\", {class:\"id\", title: doc.self},"))
+    (is (str/includes? body "el(\"span\", {class: \"id\", title: doc.self},"))
+    (is (not (str/includes? body "title: doc.self}, doc.self)")))))
+
+(deftest ui-surfaces-are-the-names-the-page-sets
+  ;; docs/spec-agent-demo-walks.md § 8a: the list at /api/-/ui/surfaces
+  ;; and the data-surface values the page's code sets are one
+  ;; vocabulary. A listed name that ends in <…> is a stem the page
+  ;; completes ("door:" + name), so both sides are compared by stem.
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        resp (*h* {:request-method :get :uri "/api/-/ui/surfaces" :headers {}})
+        listed (map :name (:surfaces (some-> (:body resp) wire/read-json)))
+        stem #(first (str/split % #"<"))
+        in-page (set (map second
+                          (re-seq #"data-surface\"?[:,=]\s*\"([a-z][a-z.:-]*)\""
+                                  body)))]
+    (is (= 200 (:status resp)))
+    (is (seq listed))
+    (is (= (count listed) (count (distinct listed))) "a name is listed once")
+    (testing "every name the page sets is in the list"
+      (doseq [s in-page]
+        (is (some #(= s (stem %)) listed)
+            (str s " is set in ui/ and is not in the list"))))
+    (testing "every listed name is set somewhere in the page"
+      (doseq [n listed]
+        (is (contains? in-page (stem n))
+            (str n " is listed and the page never sets it"))))
+    (testing "the page reads a surface by its name"
+      (is (str/includes? body "function surfaceNode(name)"))
+      (is (str/includes? body "function readSurface(name)")))))

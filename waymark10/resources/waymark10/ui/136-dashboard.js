@@ -174,7 +174,8 @@ async function renderDashboard(view, doc) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class: "crumbs"},
     el("a", {href: "#"}, "Workspace"), " / ",
-    el("a", {href: "#" + colHref}, "Dashboards"), " / ",
+    el("a", {href: "#" + colHref}, "Dashboards"),
+    el("span", {class: "idsep"}, " / "),
     el("span", {class: "id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
   const data = doc.data || {};
@@ -185,8 +186,7 @@ async function renderDashboard(view, doc) {
     el("span", {class: "statechip", title: "dashboard"}, doc.state),
     el("span", {class: "version"},
       `v${meta.version}` +
-      (meta.law_revision != null ? ` · law r${meta.law_revision}` : "")),
-    el("span", {class: "version", title: doc.self}, doc.self)));
+      (meta.law_revision != null ? ` · law r${meta.law_revision}` : ""))));
   if (data.description)
     panel.append(el("p", {class: "prose slot-desc"}, data.description));
   const bar = el("div", {class: "actions"});
@@ -200,9 +200,8 @@ async function renderDashboard(view, doc) {
       else render();
     }}));
   const {blocked, grouped, gated} = splitRefusals(doc);
-  for (const [name, entry] of blocked.concat(gated))
-    bar.append(el("button", {class: "blocked", disabled: "",
-      title: entry.reason || ""}, label(name, entry)));
+  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+    bar.append(shutDoor(name, entry, doc));
   const slotsLink = (doc.links || {}).slots || {};
   if (slotsLink.href)
     bar.append(el("a", {class: "slot-manage", href: "#" + slotsLink.href,
@@ -233,6 +232,13 @@ async function renderDashboard(view, doc) {
           : ".")));
   else {
     const grid = el("div", {class: "slot-grid"});
+    /* the author's own width (data.columns, 1..6): that many equal
+       tracks. Absent, the stylesheet's responsive default stands */
+    const cols = Number(data.columns);
+    if (Number.isInteger(cols) && cols >= 1 && cols <= 6) {
+      grid.classList.add("slot-grid-cols");
+      grid.style.setProperty("--slot-cols", String(cols));
+    }
     view.append(grid);
     for (const s of slots) {
       const p = el("div", {class: "slot-panel"},
@@ -246,5 +252,6 @@ async function renderDashboard(view, doc) {
   const footer = notNowFooter(grouped, gated, doc);
   if (footer) dataPanel.append(footer);
   view.append(dataPanel);
+  wireNotYet(view);
   watchScope({self: doc.self});
 }

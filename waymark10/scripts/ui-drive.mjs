@@ -50,12 +50,22 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs batch-a
 
-   ACCESS (the held seat call's names, against waymark10.access-dev,
-   which seeds its own member, seat and held seat-restate; CI runs it
+   ACCESS (the held seat call's names and each x-ref form's label,
+   against waymark10.access-dev, which seeds its own member, seat and
+   held seat-restate and serves the ref_card fixture; CI runs it
    in the ui-access job of .github/workflows/tests.yml):
    1. the same boot, naming waymark10.access-dev/start! on 8124
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs access
+
+   QUEST-PHONE (the quest flow on a phone: 390x844 with touch, in the
+   mobile shell, live and then as a film; then the 'not yet' button,
+   a shut door tapped into a quest, on the phone and at desktop;
+   against the same waymark10.access-dev engine, and CI runs it in the
+   ui-access job after the access drive):
+   1. the access boot, on 8124
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs quest-phone
 
    INVITATION (an open invitation taken from its collection in one
    tap, and another declined from the dialog; docs/spec-guided-follow.md
@@ -75,6 +85,17 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs guided
 
+   LATER ("Do this later" from a row's dialog, and the row's pending
+   scheduled actions; docs/spec-scheduled-actions.md R-7.3. The
+   scheduled_action kind is core's, so a memory engine — no database —
+   serves it beside a ticket fixture):
+   1. clojure -Sdeps '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
+        "(do ((requiring-resolve 'waymark10.batch-a-dev/start-later!) 8125) nil) @(promise)"
+      (boot fresh per drive run — the drive writes its ticket through
+       the API)
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs later
+
    (The FEED and RECIPE drives — the day's scroll-first face and the
    recipe editor — retired with the feed, 2026-09, and so did
    feed-smoke.sh.)
@@ -83,12 +104,13 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "access", "invitation", "guided"].includes(process.argv[2])
+const MODE = ["batch-a", "access", "invitation", "guided", "later", "quest-phone"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (["batch-a", "guided"].includes(MODE) ? "http://localhost:8123"
-   : ["access", "invitation"].includes(MODE) ? "http://localhost:8124"
+   : ["access", "invitation", "quest-phone"].includes(MODE) ? "http://localhost:8124"
+   : MODE === "later" ? "http://localhost:8125"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -123,13 +145,30 @@ async function evaljs(expr) {
   return r.result.result.value;
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-async function waitFor(pred, what, ms = 6000) {
+/* the page as it stands, as a PNG in the directory SHOTS names (CI's
+   ui-access job uploads it); with no SHOTS this does nothing */
+async function shot(name) {
+  if (!process.env.SHOTS) return;
+  const r = await send("Page.captureScreenshot", {format: "png"});
+  if (!r.result?.data) return;
+  const {mkdir, writeFile} = await import("node:fs/promises");
+  await mkdir(process.env.SHOTS, {recursive: true});
+  await writeFile(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, "base64"));
+}
+/* `why`, when given, is an expression read once at the timeout: what the
+   page held, so the message says which half of the wait was false */
+async function waitFor(pred, what, ms = 6000, why = null) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
     if (await evaljs(pred)) return true;
     await sleep(150);
   }
-  throw new Error("timed out waiting for " + what);
+  let seen = "";
+  if (why) {
+    try { seen = ": " + JSON.stringify(await evaljs(why)); }
+    catch (e) { seen = ": (" + e.message + ")"; }
+  }
+  throw new Error("timed out waiting for " + what + seen);
 }
 let passed = 0;
 function ok(name, cond) {
@@ -386,6 +425,16 @@ await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=re
 await waitFor(`document.querySelector("dialog[open] [data-draftnote]")?.textContent.includes("draft saved")`,
               "draft saved note");
 ok("the draft saved on blur through the draft sub-resource", true);
+/* the dialog of a drafted door shows the person no machinery */
+ok("the dialog shows no effort chip, fence, idempotency or blur words, and no 'server:' label",
+   await evaljs(`{ const d = document.querySelector("dialog[open]");
+     const t = d.innerText;
+     !d.querySelector(".effort-chip") &&
+     !document.querySelector("button[data-effort] .effort-chip") &&
+     !["fenced (If-Match)", "idempotency-key attached", "saved on blur", "server:"]
+       .some(s => t.includes(s)) &&
+     ![...d.querySelectorAll(".err.srv")]
+       .some(e => getComputedStyle(e, "::before").content.includes("server")) }`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
   .find(b => b.textContent === "Cancel").click(); true`);
 /* reopen: the half-written effort comes back from the server */
@@ -505,8 +554,8 @@ await waitFor(`document.querySelector("dialog[open] textarea[name=recipe]")`, "r
 /* the relay must be LIVE before we type — the state frame's presence
    roster is its observable arrival (without the socket, saves fall
    back to the plain PUT, which has no revision discipline to reject) */
-await waitFor(`(document.querySelector("dialog[open] [data-draftnote]")?.textContent || "")
-               .includes("editing with")`, "relay/2 socket joined", 8000);
+await waitFor(`!!document.querySelector("dialog[open] [data-draftnote] [data-roster]")`,
+              "relay/2 socket joined", 8000);
 await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=recipe]");
   ta.value = "v1 typed in this ui";
   ta.dispatchEvent(new Event("input", {bubbles: true}));
@@ -861,6 +910,181 @@ async function accessStory() {
        [${JSON.stringify(held.owner)}, ${JSON.stringify("seat:" + sid)},
         ${JSON.stringify(sid)}].includes(s.title))`));
 
+  /* ref labelling (ticket f0eb54a6). ui_assembly_test pins fieldCell,
+     resourceRef and rowSummary as substrings; this runs them. The held
+     call on screen carries three x-ref forms: a principal (owner, and
+     caller as `seat:<id>`), a nested one (door.author) and a kind-from
+     id (door.id). Each name above is also a link to the row it names. */
+  console.log("· ref labelling: each form links to the row it names");
+  const refLinks = (href, text) => `[...document.querySelectorAll("a")]
+    .filter(a => a.getAttribute("href") === ${JSON.stringify("#" + href)} &&
+                 a.textContent.trim() === ${JSON.stringify(text)}).length`;
+  await waitFor(`${refLinks("/api/members/" + held.owner, names.member)} >= 1`,
+                "the owner's link to its member");
+  ok("a principal links to its member's row", true);
+  await waitFor(`${refLinks("/api/seats/" + sid, names.seat)} >= 3`,
+                "the caller's, the door author's and the door row's links to the seat");
+  ok("a seat principal, a nested principal and a kind-from id link to the seat's row", true);
+
+  /* a refusal that names one ENTRY of a list of refs (ticket e07d8361).
+     The seat's restate form draws held_for as one select per row, and
+     listWidget gives each row a slot named by the row's own path. A
+     ref is any string, so no value a select holds draws that refusal:
+     the page's fetch is wrapped to spoil one entry of what the form
+     sent, and the sentence is the server's own, read under the row.
+     Then the mint-order case: with the first row gone, the refusal's
+     [0] is the row minted second, and lands under it. Nothing is
+     written; each submit is refused on its schema. */
+  console.log("· a refusal naming one entry of a list of refs");
+  await evaljs(`location.hash = ${JSON.stringify("/api/seats/" + sid)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify("/api/seats/" + sid)} &&
+                 !!document.querySelector('#view [data-action="restate"]')`,
+                "the seat's restate door");
+  await evaljs(`document.querySelector('#view [data-action="restate"]').click(); true`);
+  const heldList = `document.querySelector('dialog[open] [data-list="held_for"]')`;
+  const heldRows = `[...${heldList}.querySelectorAll(":scope > .listrows > .listrow")]`;
+  await waitFor(`!!${heldList}`, "the restate form's list of models");
+  /* three fresh rows, whatever the seat held; their selects are seated
+     from the one fetch of the models before a value is put in them */
+  await evaljs(`(() => {
+    for (const r of ${heldRows}) r.querySelector(":scope > .listdrop").click();
+    for (let n = 0; n < 3; n++) ${heldList}.querySelector(":scope > .listadd").click();
+    return true; })()`);
+  await sleep(600);
+  const heldMinted = await evaljs(`(() => {
+    const rows = ${heldRows};
+    const model = [...rows[0].querySelector("select").options]
+      .map(o => o.value).find(v => v !== "") || "drive-model";
+    for (const r of rows) {
+      const s = r.querySelector("select");
+      if (![...s.options].some(o => o.value === model)) s.append(new Option(model, model));
+      s.value = model;
+    }
+    const fetch0 = window.__listFetch = window.fetch;
+    window.fetch = (u, o) => {
+      let b = null;
+      try { b = JSON.parse(o.body); } catch (e) {}
+      if (b && Array.isArray(b.held_for) && window.__listBad != null) {
+        window.__listSent = b.held_for.length;
+        b.held_for[window.__listBad] = 0;
+        o = {...o, body: JSON.stringify(b)};
+      }
+      return fetch0(u, o);
+    };
+    return rows.map(r => r.getAttribute("data-row")); })()`);
+  ok("the form holds three rows of models, named in mint order",
+     heldMinted.length === 3 && new Set(heldMinted).size === 3);
+  /* submit with entry `at` of what is sent spoiled; answer what the
+     form sent, the sentence under each row, and any left in the box */
+  const heldRefused = async at => {
+    await evaljs(`(() => {
+      const d = document.querySelector("dialog[open]");
+      for (const n of d.querySelectorAll("[data-srverr]")) n.textContent = "";
+      for (const n of d.querySelectorAll(".problem")) n.remove();
+      window.__listBad = ${at}; window.__listSent = null;
+      [...d.querySelectorAll(".dlgfoot button")].at(-1).click(); return true; })()`);
+    const read = `(() => {
+      const d = document.querySelector("dialog[open]");
+      return {sent: window.__listSent,
+              rows: ${heldRows}.map(r => r.getAttribute("data-row")),
+              under: ${heldRows}.map(r =>
+                r.querySelector(":scope > [data-srverr]")?.textContent || ""),
+              loose: [...d.querySelectorAll(".problem")].map(p => p.textContent)}; })()`;
+    await waitFor(`(s => s.sent !== null && (s.under.some(t => t) || s.loose.length > 0))(${read})`,
+                  "the refusal of entry " + at, 6000, read);
+    const seen = await evaljs(read);
+    console.log("  entry " + at + " refused: " + JSON.stringify(seen));
+    return seen;
+  };
+  const heldSecond = await heldRefused(1);
+  ok("a refusal naming one entry of a list of refs reads under that row",
+     heldSecond.sent === 3 && heldSecond.under[1] !== "" &&
+     heldSecond.under[0] === "" && heldSecond.under[2] === "");
+  ok("and none of it is left in the box, named by its path",
+     !heldSecond.loose.some(t => t.includes("held_for[")));
+  await evaljs(`${heldRows}[0].querySelector(":scope > .listdrop").click(); true`);
+  const heldFirst = await heldRefused(0);
+  ok("with the first row removed, the refusal's [0] lands under the row that is now first",
+     heldFirst.sent === 2 && heldFirst.rows.join() === heldMinted.slice(1).join() &&
+     heldFirst.under[0] !== "" && heldFirst.under[1] === "" &&
+     !heldFirst.loose.some(t => t.includes("held_for[")));
+  await evaljs(`(() => {
+    window.fetch = window.__listFetch;
+    delete window.__listFetch; delete window.__listBad; delete window.__listSent;
+    [...document.querySelectorAll("dialog[open] .dlgfoot button")]
+      .find(b => b.textContent === "Cancel").click(); return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the restate form closed");
+
+  /* a ref_card (access-dev's fixture) carries the other two forms: a
+     plain :kind ref and a typed address, both naming one ref_target,
+     and a second address naming a row that is not there. */
+  const refCreate = async (path, body) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...h},
+      body: JSON.stringify(body)});
+    const doc = await res.json().catch(() => null);
+    if (res.status !== 201)
+      throw new Error("POST " + path + ": " + res.status + " " + JSON.stringify(doc));
+    return doc.self;
+  };
+  const refTarget = await refCreate("/api/ref_targets", {name: "Top shelf"});
+  const refTargetId = refTarget.split("/").pop();
+  const refLostId = crypto.randomUUID();
+  const refCard = await refCreate("/api/ref_cards",
+    {name: "Index card", target_id: refTargetId,
+     about: "ref_target:" + refTargetId, lost: "ref_target:" + refLostId});
+  const refSummary = (await get(refTarget)).summary;
+  const refDoc = await get(refCard);
+  ok("the card's envelope carries its plain ref's href and summary",
+     !!refSummary && refDoc.refs?.target_id?.href === refTarget &&
+     refDoc.refs?.target_id?.summary === refSummary);
+
+  /* every request the page starts from here on, by url */
+  const refWatch = `(() => {
+    window.__refGets = [];
+    window.__refFetch = window.fetch;
+    window.fetch = (...a) => {
+      window.__refGets.push(String(a[0]?.url || a[0]));
+      return window.__refFetch.apply(window, a);
+    };
+    return true; })()`;
+  const refUnwatch = `window.fetch = window.__refFetch; delete window.__refFetch; true`;
+  /* how many of them named `id`, and whether that count has stopped */
+  const refReads = async id => {
+    const n = `window.__refGets.filter(u => u.includes(${JSON.stringify(id)})).length`;
+    await sleep(1500);
+    const count = await evaljs(n);
+    await sleep(1500);
+    return {count, still: (await evaljs(n)) === count};
+  };
+  /* the value cell of one field on the row page */
+  const refCell = f => `document.querySelector('td.k[title="${f}"]')?.nextElementSibling`;
+  const refLinked = (f, href, text) => `(() => {
+    const a = ${refCell(f)}?.querySelector("a");
+    return !!a && a.getAttribute("href") === ${JSON.stringify("#" + href)} &&
+           a.textContent.trim() === ${JSON.stringify(text)}; })()`;
+
+  await evaljs(refWatch);
+  await evaljs(`location.hash = ${JSON.stringify(refCard)}; true`);
+  await waitFor(refLinked("target_id", refTarget, refSummary), "the plain kind ref's link");
+  ok("a plain kind ref reads as its target's summary and links to its row", true);
+  await waitFor(refLinked("about", refTarget, refSummary), "the typed address's link");
+  ok("a typed address reads as its target's summary and links to its row", true);
+  const refLost = await refReads(refLostId);
+  const refSeen = await evaljs(
+    `window.__refGets.filter(u => u.includes(${JSON.stringify(refTargetId)}))`);
+  console.log("  reads of the target: " + JSON.stringify(refSeen) +
+              ", of the missing row: " + refLost.count);
+  ok("both labels ride the card's envelope: the page starts no read of the target",
+     refSeen.length === 0);
+  ok("a ref to a row that is not there stays its bare token, unlinked",
+     await evaljs(`(() => { const c = ${refCell("lost")};
+       return !!c && !c.querySelector("a") &&
+              c.textContent.trim() === ${JSON.stringify("ref_target:" + refLostId)}; })()`));
+  ok("and the page asks for it and stops: no failing GET loop",
+     refLost.count >= 1 && refLost.count <= 2 && refLost.still);
+  await evaljs(refUnwatch);
+
   /* replay (docs/spec-guided-follow.md §4): the boot sealed one walk
      of a move, a ui frame with the restate dialog open, and a
      transition. Replay on its row page plays the export on this
@@ -872,7 +1096,10 @@ async function accessStory() {
   const walks = await get("/api/walks?state=sealed");
   ok("the boot sealed one walk", (walks.data?.items || []).length === 1);
   const walkSelf = walks.data.items[0].self;
-  const exportText = await (await fetch(BASE + walkSelf + "/export", {headers: h})).text();
+  /* the row names its export: the link is followed, not built */
+  const walkOut = (await get(walkSelf)).links?.export?.href;
+  ok("a sealed walk's envelope names its export", !!walkOut);
+  const exportText = await (await fetch(BASE + walkOut, {headers: h})).text();
   const [walkHead, ...walkFrames] = exportText.trim().split("\n").map(l => JSON.parse(l));
   ok("its export is a move, a ui frame and a transition",
      walkHead.format === "waymark-walk/1" &&
@@ -916,10 +1143,14 @@ async function accessStory() {
   await waitFor(`!!document.querySelector("[data-replay-walk]")`,
                 "Replay on the sealed walk's row page");
   ok("a sealed walk's row page offers Replay", true);
+  ok("a sealed walk's row page shows one export control",
+     await evaljs(`document.querySelectorAll("[data-export-walk]").length === 1 &&
+       ![...document.querySelectorAll("[data-links] a.chip")]
+         .some(a => a.getAttribute("href") === ${JSON.stringify(walkOut)})`));
   await sleep(1500);   /* the row page's own reads settle first */
   await evaljs(watchFetch);
   await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
-  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame");
+  await waitFor(`${replayState} === "ended"`, "the replay to reach its last frame", 15000);
   const first = await replayed();
   ok("the screen navigates to the recorded row, drawn from the recording",
      first.here === uiFrame.self && first.screen);
@@ -932,7 +1163,7 @@ async function accessStory() {
   ok("the transition renders from its own frame",
      first.transition === transFrame.action && first.heading === transFrame.summary);
   ok("the replay makes no request but the export GET",
-     first.reqs.length === 1 && first.reqs[0] === "GET " + walkSelf + "/export");
+     first.reqs.length === 1 && first.reqs[0] === "GET " + walkOut);
 
   await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
   await waitFor(`!${replayState} && !document.querySelector("dialog[open]") &&
@@ -967,6 +1198,918 @@ async function accessStory() {
   await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
                 "the second replay to stop");
 
+  /* a walkthrough (docs/spec-walkthrough.md §5 and §7 item 5). The boot
+     seeded three steps by the mail-desk sitter for priya: a person
+     step naming two fields, an agent step with no action, a person
+     step. The page leads her through the person steps, and nothing
+     here reloads it: the mark set first is read again at step 3. */
+  console.log("· a walkthrough: the page leads through the person steps");
+  const wt = ((await get("/api/walkthroughs?state=open&subject=priya")).data?.items || [])[0];
+  ok("the boot seeded one walkthrough offered to the viewer", !!wt);
+  const wtSteps = (await get(wt.self)).data.steps;
+  await evaljs(`window.__led = true; location.hash = ${JSON.stringify(wt.self)}; true`);
+  await waitFor(`document.querySelectorAll("[data-walk-steps] li").length === 3 &&
+                 !!document.querySelector('[data-action="start"]')`,
+                "the walkthrough's row page");
+  ok("the row page lists every step before the start", true);
+  await evaljs(`document.querySelector('[data-action="start"]').click(); true`);
+  /* Start is the row's own door: its dialog, when it shows one, is
+     confirmed. A step's own dialog is never touched here. */
+  await waitFor(`!!document.querySelector("dialog[open]") || !!walkthroughId`,
+                "Start to ask or to land");
+  await evaljs(`(() => { const d = document.querySelector("dialog[open]");
+    if (d && !d.querySelector("[data-walk-step]"))
+      d.querySelector(".dlgfoot button.primary").click();
+    return true; })()`);
+  const wtDlg = `document.querySelector("dialog[open] [data-walk-step]")`;
+  const wtChip = `document.querySelector("#walkchip").textContent`;
+  await waitFor(`${wtDlg}?.textContent.startsWith("Step 1 of 3")`,
+                "step 1's dialog, opened off the firehose", 15000);
+  ok("Start opens step 1's dialog under its step line", true);
+  const wtFirst = await evaljs(`({
+    lit: document.querySelectorAll("dialog[open] .invited").length,
+    skip: document.querySelector("dialog[open] [data-invite-decline]")?.textContent,
+    stop: !!document.querySelector("dialog[open] [data-walk-stop]")})`);
+  ok("both named fields are lit", wtFirst.lit === 2);
+  ok("inside a walkthrough the dialog offers Skip and Stop",
+     wtFirst.skip === "Skip" && wtFirst.stop);
+  await waitFor(`${wtChip}.includes("Step 1 of 3")`, "the chip on step 1");
+  ok("the chip says the same step", true);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    set("title", "Sorted mail"); set("room", "Front desk");
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`${wtChip}.includes("Step 2 of 3") && ${wtChip}.includes("is working: ")`,
+                "the chip's agent line", 15000);
+  const wtAgent = await evaljs(`({text: ${wtChip},
+    skip: !!document.querySelector("#walkchip [data-walk-skip]"),
+    stop: !!document.querySelector("#walkchip [data-walk-stop]")})`);
+  ok("after the answer the chip reads the agent's step and its note",
+     wtAgent.text.includes(wtSteps[1].note));
+  ok("an agent step offers Stop and no Skip", wtAgent.stop && !wtAgent.skip);
+  /* the sitter ends its own step through the API; the page hears it */
+  const wtAuthor = (await get(wt.self)).data.author;
+  const wtAdvanced = await fetch(BASE + wt.self + "/-/advance", {method: "POST",
+    headers: {"Content-Type": "application/json", "x-waymark-principal": wtAuthor,
+              "Idempotency-Key": "ui-drive-advance-" + Date.now()},
+    body: "{}"});
+  ok("the sitter advances its own step through the API", wtAdvanced.status < 400);
+  await waitFor(`${wtDlg}?.textContent.startsWith("Step 3 of 3")`,
+                "step 3's dialog, with no reload", 15000);
+  ok("the next person step opens by itself, with no reload",
+     await evaljs(`window.__led === true`));
+  await evaljs(`document.querySelector("dialog[open] [data-invite-decline]").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") &&
+                 document.querySelector("#walkchip").style.display === "none"`,
+                "the walkthrough to finish and leave the hand", 15000);
+  const wtEnded = await get(wt.self);
+  ok("the walkthrough is finished: answered, done, skipped",
+     wtEnded.state === "finished" &&
+     (wtEnded.data.outcomes || []).map(o => o.outcome).join() === "answered,done,skipped");
+
+  /* the quest tracker (docs/spec-quests.md, the tracker): priya accepts
+     a goal on a note of her own and pins it. The planner answers the
+     create with a plan of its own; the story waits for that one, then
+     writes its plans through the engine's own `plan` door by a system
+     principal, as the planner writes them. */
+  console.log("· a pinned quest: the tracker rides every page");
+  const sys = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  let qCalls = 0;
+  const qPost = async (path, body, headers) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...headers,
+                "Idempotency-Key": `ui-drive-quest-${Date.now()}-${qCalls++}`},
+      body: JSON.stringify(body)});
+    return {status: res.status, doc: await res.json().catch(() => null)};
+  };
+  const qBar = `document.querySelector("#questbar")`;
+  const qCount = `${qBar}.querySelector("[data-quest-count]")?.textContent`;
+  const qTitle = "Clear the quest pile";
+  ok("with no pinned quest the tracker is hidden", await evaljs(`${qBar}.hidden === true`));
+  const pile = (await qPost("/api/led_notes", {title: "Quest pile"}, h)).doc;
+  const quest = await qPost("/api/quests",
+    {self: pile.self, action: "finish", title: qTitle}, h);
+  ok("priya accepts the goal as a quest", quest.status === 201);
+  const qSelf = quest.doc.self;
+  await evaljs(`window.__quest = true; true`);
+  ok("priya pins it", (await qPost(qSelf + "/-/pin", {}, h)).status < 400);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-title]")?.textContent ===
+                   ${JSON.stringify(qTitle)}`,
+                "the tracker, off the firehose", 15000);
+  /* the planner's own plan lands first, so it cannot write over the
+     story's */
+  let qBorn = null;
+  for (let i = 0; i < 60 && !qBorn; i++) {
+    if ((await get(qSelf)).data.planned_at) qBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the create with a first plan", qBorn === true);
+  /* the planner is quicker than a page, so the row as it was born (no
+     plan, no planned_at) is drawn from the quest in hand */
+  ok("a quest with no plan yet reads planning… under its title, with no Go",
+     await evaljs(`(() => {
+       questDoc = {...questDoc, data: {...questDoc.data, plan: [], planned_at: null}};
+       questTracker();
+       const t = ${qBar}.querySelector("[data-quest-title]");
+       return !!${qBar}.querySelector("[data-quest-planning]") &&
+         t.textContent === ${JSON.stringify(qTitle)} &&
+         t.getAttribute("href") === ${JSON.stringify("#" + qSelf)} &&
+         !${qBar}.querySelector("[data-surface='tracker.go']"); })()`));
+  const stepOne = {n: 1, door: "rename", self: pile.self, whose: "person",
+                   note: "Name the pile, then say which room it is in.",
+                   needs: ["title", "room"]};
+  const stepTwo = {n: 2, door: "finish", self: pile.self};
+  const planned = await qPost(qSelf + "/-/plan",
+    {plan: [{...stepOne, state: "next"},
+            {...stepTwo, whose: "person", note: "Finish the note.", state: "later"}],
+     plan_is_estimate: true}, sys);
+  ok("the engine's plan door writes the first plan", planned.status < 400);
+  await waitFor(`${qCount} === "0 done, 2 known so far"`,
+                "the count, off the plan transition", 15000);
+  ok("the count is k done, n known so far, and never k of n",
+     await evaljs(`!/\\d+ of \\d+/.test(${qBar}.textContent)`));
+  ok("the head step's note stands beside the count",
+     await evaljs(`${qBar}.querySelector("[data-quest-note]")?.textContent`) === stepOne.note);
+  ok("no step in the tracker reads as a path",
+     await evaljs(`!/\\/api\\//.test(${qBar}.textContent)`));
+  /* the quest's own page says its goal door by its display label: the
+     raw action name is the cell's title, and is not its text. The cell
+     is a span: a shut door's button carries data-quest-door too. */
+  const qWas = await evaljs(`hereHref()`);
+  const qDoor = `document.querySelector("#view .kv span[data-quest-door]")`;
+  await evaljs(`location.hash = ${JSON.stringify(qSelf)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(qSelf)} && !!${qDoor}`,
+                "the quest's row page", 15000);
+  const qGoal = ((await get(qSelf)).data.plan || []).find(s =>
+    s.self === pile.self && s.door === "finish") || {};
+  const qDoorSays = qGoal.door_label || await evaljs(`title("finish")`);
+  ok("the quest page's data table says the goal door by its label, not its action name",
+     qDoorSays !== "finish" &&
+     await evaljs(`${qDoor}.textContent`) === qDoorSays &&
+     await evaljs(`${qDoor}.getAttribute("title")`) === "finish");
+  await evaljs(`location.hash = ${JSON.stringify(qWas)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify(qWas)}`,
+                "the page the story was on", 15000);
+  const qPageOne = await evaljs(`hereHref()`);
+  await evaljs(`location.hash = "/api/led_notes"; true`);
+  await waitFor(`hereHref().split("?")[0] === "/api/led_notes" && !${qBar}.hidden &&
+                 ${qCount} === "0 done, 2 known so far"`,
+                "the tracker on a second page");
+  ok("the tracker is on two different pages", qPageOne.split("?")[0] !== "/api/led_notes");
+
+  const qPlannedAt = (await get(qSelf)).data.planned_at;
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
+  await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
+                "the head step's dialog", 15000);
+  const qDlg = await evaljs(`({here: hereHref(),
+    lit: document.querySelectorAll("dialog[open] .invited").length,
+    note: document.querySelector("dialog[open] [data-invite-note]").textContent,
+    decline: !!document.querySelector("dialog[open] [data-invite-decline]")})`);
+  ok("Go opens the head step's door on its row", qDlg.here === pile.self);
+  ok("the step's needs are lit and its note is shown",
+     qDlg.lit === 2 && qDlg.note === stepOne.note);
+  ok("a quest's step is no invitation: the dialog offers no Decline", !qDlg.decline);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    set("title", "Sorted quest pile"); set("room", "Hall");
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the step's dialog to close", 15000);
+  ok("the step is taken through its own door",
+     (await get(pile.self)).data.title === "Sorted quest pile");
+  /* a move on the row the quest names plans it again: that plan lands
+     first, so it cannot write over the story's */
+  let qAgain = null;
+  for (let i = 0; i < 60 && !qAgain; i++) {
+    if ((await get(qSelf)).data.planned_at !== qPlannedAt) qAgain = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the step with a new plan", qAgain === true);
+
+  const replanned = await qPost(qSelf + "/-/plan",
+    {plan: [{...stepOne, state: "done"},
+            {...stepTwo, whose: "seat", waiting_on: "Planner", state: "waiting"}],
+     plan_is_estimate: true, waiting_on: "Planner"}, sys);
+  ok("the engine plans again", replanned.status < 400);
+  /* the planner's own plan may read the same count: the waiting line is
+     the story's alone */
+  await waitFor(`${qCount} === "1 done, 2 known so far" &&
+                 !!${qBar}.querySelector("[data-quest-waiting]")`,
+                "the new count", 15000);
+  ok("a new plan transition moves the count with no reload",
+     await evaljs(`window.__quest === true`));
+  const qSeat = await evaljs(`({
+    waiting: ${qBar}.querySelector("[data-quest-waiting]")?.textContent,
+    go: ${qBar}.querySelector("[data-surface='tracker.go']")?.disabled,
+    doors: ["pause", "unpin", "replan"].every(n =>
+      !!${qBar}.querySelector('[data-action="' + n + '"]'))})`);
+  ok("a seat's head step reads waiting on, and Go is disabled",
+     qSeat.waiting === "waiting on Planner" && qSeat.go === true);
+  ok("the menu offers the quest's own Pause, Unpin and Replan", qSeat.doors);
+
+  ok("the engine finishes the quest",
+     (await qPost(qSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]") &&
+                 ${qBar}.textContent.includes(${JSON.stringify(qTitle)})`,
+                "the completion line", 15000);
+  ok("finish shows Quest complete with the title", true);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide", 15000);
+  ok("a few seconds later the tracker hides", true);
+
+  /* a step's need may be a path into a nested argument (ticket
+     45cae4d6): the fixture's restate door takes
+     showcase.evidence.film_url, a map inside a map. The form names that
+     input by its path, Go lights that one input, and the submit folds
+     the path back into one object. */
+  console.log("· a quest step whose need is a path: showcase.evidence.film_url");
+  const pNeed = "showcase.evidence.film_url";
+  const pFilm = "https://films.example/quest-reel";
+  const reel = (await qPost("/api/led_notes", {title: "Quest reel"}, h)).doc;
+  const pQuest = await qPost("/api/quests",
+    {self: reel.self, action: "finish", title: "Show the reel"}, h);
+  ok("priya accepts a second goal as a quest", pQuest.status === 201);
+  const pSelf = pQuest.doc.self;
+  ok("priya pins the second quest", (await qPost(pSelf + "/-/pin", {}, h)).status < 400);
+  let pBorn = null;
+  for (let i = 0; i < 60 && !pBorn; i++) {
+    if ((await get(pSelf)).data.planned_at) pBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the second create with a first plan", pBorn === true);
+  const pStep = {n: 1, door: "restate", self: reel.self, whose: "person",
+                 note: "Say where the film plays.", needs: [pNeed]};
+  const pPlanned = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next"}], plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes a path as a need", pPlanned.status < 400);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-note]")?.textContent ===
+                   ${JSON.stringify(pStep.note)}`,
+                "the path step's note in the tracker", 15000);
+  /* the need in words (ticket fa301d44). The plan door stores a plan as
+     it is given, and this one names no needs_labels: the page says the
+     path's last step and not the whole dotted path (prettyNeed,
+     ui/100-core.js). The planner stores the declared label beside the
+     need, and the page then says that one, in the tracker and on the
+     quest's own page. */
+  const pAsks = `(${qBar}.querySelector("[data-quest-needs]")?.textContent || "")`;
+  ok("a path need with no stored label reads its last step in the tracker: film url",
+     await evaljs(`${pAsks} === " · asks for film url"`));
+  const pLabelled = await qPost(pSelf + "/-/plan",
+    {plan: [{...pStep, state: "next", needs_labels: ["The film"]}],
+     plan_is_estimate: true}, sys);
+  ok("the engine's plan door takes the need's label beside it", pLabelled.status < 400);
+  await waitFor(`${pAsks} === " · asks for The film"`,
+                "the need's stored label in the tracker", 15000, pAsks);
+  ok("a path need stored with its label reads The film in the tracker", true);
+  const pWasAt = await evaljs(`location.hash`);
+  const pPlan = `document.querySelector("[data-quest-plan]")`;
+  await evaljs(`location.hash = ${JSON.stringify("#" + pSelf)}; true`);
+  await waitFor(`!!${pPlan} && !!${pPlan}.querySelector("[data-quest-needs]")`,
+                "the path step's need on the quest's page", 15000,
+                `document.body.innerText.slice(-400)`);
+  ok("the quest's page reads The film too, and no dotted path",
+     await evaljs(`${pPlan}.querySelector("[data-quest-needs]").textContent ===
+                     " · asks for The film" &&
+                   !${pPlan}.textContent.includes("showcase")`));
+  await evaljs(`location.hash = ${JSON.stringify(pWasAt)}; true`);
+  await waitFor(`location.hash === ${JSON.stringify(pWasAt)} && !${pPlan}`,
+                "the page back where the path step began", 15000);
+  const pPlannedAt = (await get(pSelf)).data.planned_at;
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
+  await waitFor(`!!document.querySelector("dialog[open] [data-invite-note]")`,
+                "the path step's dialog", 15000);
+  const pDlg = await evaljs(`(() => {
+    const lit = [...document.querySelectorAll("dialog[open] .invited")];
+    const input = document.querySelector('dialog[open] [name="${pNeed}"]');
+    const inner = input ? input.closest('[data-subform="showcase.evidence"]') : null;
+    return {here: hereHref(), lit: lit.length,
+            holds: lit.length === 1 && !!input && lit[0].contains(input),
+            nested: !!inner && !!inner.parentElement.closest('[data-subform="showcase"]'),
+            note: document.querySelector("dialog[open] [data-invite-note]").textContent}; })()`);
+  ok("Go opens the restate door on the step's row", pDlg.here === reel.self);
+  ok("the input two levels down is named by its path", pDlg.nested);
+  ok("the path lights that one input and no other",
+     pDlg.lit === 1 && pDlg.holds && pDlg.note === pStep.note);
+  await evaljs(`(() => {
+    const i = document.querySelector('dialog[open] [name="${pNeed}"]');
+    i.value = ${JSON.stringify(pFilm)};
+    i.dispatchEvent(new Event("input", {bubbles: true}));
+    i.dispatchEvent(new Event("change", {bubbles: true}));
+    document.querySelector("dialog[open] .dlgfoot button.primary").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`,
+                "the path step's dialog to close", 15000);
+  ok("the submit folds the path back into one nested object",
+     JSON.stringify((await get(reel.self)).data.showcase) ===
+       JSON.stringify({evidence: {film_url: pFilm}}));
+  /* the move plans the quest again: that plan lands before the finish */
+  let pAgain = null;
+  for (let i = 0; i < 60 && !pAgain; i++) {
+    if ((await get(pSelf)).data.planned_at !== pPlannedAt) pAgain = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the path step with a new plan", pAgain === true);
+  ok("the engine finishes the second quest",
+     (await qPost(pSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the second completion line", 15000);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
+  /* "Accept as quest" (docs/spec-quests.md): a refused door that names
+     a remedy offers to keep the goal, and one that names none does not.
+     The fixture's shelve door refuses the attic with no remedy, and the
+     high shelf, for a note with no room, with rename as its remedy. */
+  console.log("· a refused door with remedies: Accept as quest");
+  const shelfTitle = "Shelf pile";
+  const shelfNote = (await qPost("/api/led_notes", {title: shelfTitle}, h)).doc;
+  /* priya records this story as a walk of her own, with its screens
+     (`docs`, so the walk holds the quest's document), and shares this
+     tab so the walk takes its forms. The replay further down plays what
+     the engine recorded of these refusals. */
+  const rShare = `document.querySelector("#sharebtn")`;
+  const rRec = await qPost("/api/walks",
+    {followed: "priya", title: "A refusal kept as a quest", docs: true}, h);
+  ok("priya starts a walk of her own screen", rRec.status === 201);
+  const rWalkSelf = rRec.doc.self;
+  const rFrameCount = async () => (await get(rWalkSelf)).data.frame_count;
+  /* the walk's frame count, once no more arrive for a second */
+  const rSettled = async () => {
+    let n = await rFrameCount();
+    for (let i = 0; i < 20; i++) {
+      await sleep(1000);
+      const m = await rFrameCount();
+      if (m === n) return n;
+      n = m;
+    }
+    return n;
+  };
+  await evaljs(`${rShare}.click(); true`);
+  await waitFor(`${rShare}.getAttribute("aria-pressed") === "true"`,
+                "priya's share toggle on", 15000);
+  await evaljs(`location.hash = ${JSON.stringify(shelfNote.self)}; true`);
+  /* the hash moves before the page is drawn, and the page it leaves is
+     the reel's: a note too, with a shelve door of its own. The wait
+     reads the drawn page, so the click is on this note's door. */
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(shelfNote.self)} &&
+                 document.querySelector("#view").textContent
+                   .includes(${JSON.stringify(shelfTitle)}) &&
+                 !!document.querySelector('#view [data-action="shelve"]')`,
+                "the note's row page", 15000);
+  /* the row's own path is the crumb's title, and is not header text */
+  ok("a row page's header shows no /api/ path as text",
+     await evaljs(`(() => {
+       const p = document.querySelector("#view .panel");
+       const head = [p.querySelector(".crumbs"), p.querySelector("h2"),
+                     ...p.querySelectorAll(".statechip, .version")];
+       return p.querySelector(".crumbs .id")?.getAttribute("title") ===
+                ${JSON.stringify(shelfNote.self)} &&
+              head.every(n => n && !n.textContent.includes("/api/")); })()`));
+  const rBefore = await rSettled();
+  await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog", 15000);
+  /* a shelf the door's schema does not name. The form offers none, so
+     this write of priya's goes to the action route beside the form,
+     once the walk holds the open form. */
+  let rCount = rBefore;
+  for (let i = 0; i < 30 && rCount <= rBefore; i++) {
+    await sleep(500);
+    rCount = await rFrameCount();
+  }
+  ok("the walk takes priya's shelve form", rCount > rBefore);
+  await sleep(1500);
+  const rLoft = await qPost(shelfNote.self + "/-/shelve", {shelf: "loft"}, h);
+  ok("the shelve door refuses a shelf its schema does not name",
+     rLoft.status >= 400 && rLoft.status < 500);
+  /* the next refusal takes this one's place in the form: the walk
+     keeps them apart, so a replay shows each */
+  await sleep(1500);
+  /* the enum is a select or a radio group, as the form chose */
+  const shelve = async shelf => {
+    const before = await rFrameCount();
+    await evaljs(`(() => {
+      const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
+      const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
+      const i = radio || nodes[0];
+      if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+      return true; })()`);
+    /* the walk takes the choice before the press, as it does of a
+       person: the form's beat and the door's answer are two requests */
+    for (let i = 0; i < 40 && await rFrameCount() <= before; i++) await sleep(250);
+    await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  };
+  const qRefused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
+  const qAccept = `document.querySelector("dialog[open] [data-surface='dialog.accept']")`;
+  /* what the shelve door answered each time, for the timeout's trace: a
+     submit closes the dialog on a 2xx and on nothing else */
+  await evaljs(`(() => {
+    const real = window.fetch;
+    window.__shelved = [];
+    window.fetch = async (...a) => {
+      const res = await real(...a);
+      if (String(a[0]).includes("/-/shelve"))
+        window.__shelved.push([String(a[0]), res.status, a[1]?.body ?? null]);
+      return res; };
+    return true; })()`);
+  await shelve("attic");
+  await waitFor(`${qRefused}.includes("attic")`, "the attic's refusal", 15000);
+  /* the offer is drawn after a read of the quests collection: give a
+     wrong one the time to land */
+  await sleep(1500);
+  /* no dialog holds no offer either: the dialog still stands, with the
+     attic's refusal in it */
+  ok("the shelve dialog still stands with the attic's refusal",
+     await evaljs(`${qRefused}.includes("attic")`));
+  ok("a refusal without remedies offers no Accept as quest", await evaljs(`!${qAccept}`));
+  await shelve("high");
+  await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
+                "the offer under the refusal", 15000,
+                `({refusal_names_room: ${qRefused}.includes("room"),
+                   button: !!${qAccept},
+                   offer: document.querySelector("dialog[open] .questoffer")
+                            ?.getAttribute("data-quest-offer") ?? null,
+                   dialog_open: !!document.querySelector("dialog[open]"),
+                   shelved: window.__shelved ?? null,
+                   here: location.hash,
+                   problem: ${qRefused}})`);
+  ok("a refused door with remedies shows Accept as quest", true);
+  await shot("accept-as-quest-offer");
+  await evaljs(`${qAccept}.click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") && !${qBar}.hidden &&
+                 !!${qBar}.querySelector("[data-quest-title]")`,
+                "the tracker, off the click", 15000);
+  ok("the click closes the dialog and shows the tracker", true);
+  await shot("accept-as-quest-tracker");
+  const qMe = await evaljs(`viewerId()`);
+  const qPinned = (await get("/api/quests?state=active&pinned=true&owner=" +
+                             encodeURIComponent(qMe))).data?.items || [];
+  ok("the click leaves one pinned quest", qPinned.length === 1);
+  const qMade = (await get(qPinned[0].self)).data;
+  ok("its self, action and input match the door",
+     qMade.self === shelfNote.self && qMade.action === "shelve" &&
+     JSON.stringify(qMade.input) === JSON.stringify({shelf: "high"}));
+  ok("the tracker's title opens that quest",
+     await evaljs(`${qBar}.querySelector("[data-quest-title]").getAttribute("href")`) ===
+       "#" + qPinned[0].self);
+  /* the finish the stream does not deliver: the owner's own goal write
+     can finish the quest before the tracker reads again, so the stream
+     is closed here and the read alone must say Quest complete */
+  await evaljs(`sseClose(questStream); true`);
+  ok("the engine finishes the accepted quest",
+     (await qPost(qPinned[0].self + "/-/finish", {}, sys)).status < 400);
+  await evaljs(`refreshQuest().catch(() => {}); true`);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "the completion line, off the read alone", 15000);
+  ok("a quest that finished unheard still says Quest complete", true);
+  await waitFor(`${qBar}.hidden === true`, "the tracker to hide again", 15000);
+
+  /* in a block of its own: the story after it names its own rNote, rWalk
+     and rSeen */
+  {
+  /* the guided story's quest walk ("replay: a quest kept from a refusal,
+     and its tracker") is a hand-written file. This one the engine
+     recorded (walks.clj, `docs: true`): priya keeps the refused shelve as
+     a quest and takes two steps from the tracker's Go, a second
+     principal takes the first one again between them, when it is
+     already done, and the goal door finishes the quest. Every plan is the planner's own, so the counts are read off
+     the export's quest documents and none is written here. */
+  console.log("· replay: a quest walk the engine recorded, with two principals");
+  const rNote = (await qPost("/api/led_notes", {title: "Recorded pile"}, h)).doc;
+  const rWalk = await evaljs(`(async () => {
+    const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+      {followed: principalId() || viewerId(),
+       title: "A quest kept from a refusal, recorded", docs: true})});
+    if (!r.ok || !r.body || !r.body.self) return null;
+    recording = recordingOf(r.body);
+    recordChip();
+    /* the walk takes ui frames only while this tab shares, as Record's
+       own start has it (startRecording, 200-events-follow.js) */
+    if (!uiSharing()) {
+      toggleShareUi();
+      sessionStorage.setItem("wm10.record.shared", "1");
+    }
+    return r.body.self; })()`);
+  ok("priya starts a self walk that carries its screens",
+     !!rWalk && (await get(rWalk)).data.docs === true);
+  const rPlan = `JSON.stringify(((questDoc || {}).data || {}).plan || null)`;
+  /* the live tracker's head step is `door` on the note, after `done`
+     steps, and Go is the owner's to press */
+  const rGoFor = (door, done) => `(() => {
+    const s = questDoc && questHead(questDoc);
+    return !!s && s.door === ${JSON.stringify(door)} &&
+      s.self === ${JSON.stringify(rNote.self)} &&
+      questDoc.data.plan.filter(p => p.state === "done").length === ${done} &&
+      !!${qBar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
+  /* the planner's next plan of the quest, after the one planned at `was` */
+  const rPlanned = async (self, was) => {
+    for (let i = 0; i < 60; i++) {
+      const at = (await get(self)).data.planned_at;
+      if (at && at !== was) return at;
+      await sleep(250);
+    }
+    return null;
+  };
+  /* a beat carries the form: each press waits for the one before it */
+  await sleep(600);
+  await evaljs(`location.hash = ${JSON.stringify(rNote.self)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(rNote.self)} &&
+                 !!document.querySelector('[data-action="shelve"]')`,
+                "the recorded note's row page", 15000);
+  await sleep(600);
+  await evaljs(`document.querySelector('[data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog, recorded", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`${qRefused}.includes("room") && !!${qAccept}`,
+                "the offer under the recorded refusal", 15000);
+  await sleep(600);
+  await evaljs(`${qAccept}.click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]") && !${qBar}.hidden &&
+                 !!${qBar}.querySelector("[data-quest-title]")`,
+                "the recorded quest's tracker", 15000);
+  const rSelf = ((await get("/api/quests?state=active&pinned=true&owner=" +
+                            encodeURIComponent(qMe))).data?.items || [])[0]?.self;
+  ok("Accept as quest leaves the recorded quest pinned", !!rSelf);
+  const rFirst = await rPlanned(rSelf, null);
+  ok("the planner plans the recorded quest", !!rFirst);
+  await waitFor(rGoFor("rename", 0), "the remedy at the tracker's head", 15000, rPlan);
+  console.log("  the first plan: " + await evaljs(rPlan));
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="title"]')`,
+                "the remedy's dialog, from Go", 15000);
+  await sleep(600);
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    /* a name and a room: the high shelf refuses no more, so the remedy
+       is done and the goal door is the next step */
+    set("title", "Recorded pile, sorted"); set("room", "Hall");
+    return true; })()`);
+  await sleep(600);
+  await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
+  ok("priya takes the first step from the tracker's Go",
+     (await get(rNote.self)).data.title === "Recorded pile, sorted");
+  /* the plan that answers priya's step lands first: a move committed
+     before that plan is written counts as answered by it, and is no
+     step of the walk's */
+  await waitFor(rGoFor("shelve", 1), "the goal door at the tracker's head", 15000, rPlan);
+  const rSecond = (await get(rSelf)).data.planned_at;
+  ok("the planner plans again after priya's step", !!rSecond && rSecond !== rFirst);
+  /* the remedy is done and its door stays open: the second principal
+     takes it again. The plan that answers equals the one held, and it
+     is written all the same (quests.clj, plan's `:replay false`), so
+     the walk holds the move and the quest's document after it. */
+  const rStep = await qPost(rNote.self + "/-/rename",
+                            {title: "Recorded pile, filed", room: "Hall"}, sys);
+  ok("a second principal takes the quest's done step again", rStep.status < 400);
+  if (!(await rPlanned(rSelf, rSecond)))
+    throw new Error("FAILED: the planner plans again after the second principal's step: " +
+      JSON.stringify({step: rStep.status, note: (await get(rNote.self)).data,
+                      plan: ((await get(rSelf)).data.plan || []).map(s => s.door + " " + s.state)}));
+  ok("the planner plans again after the second principal's step", true);
+  await waitFor(rGoFor("shelve", 1), "the goal door still at the tracker's head", 15000, rPlan);
+  console.log("  the last plan: " + await evaljs(rPlan));
+  await sleep(600);
+  await evaljs(`${qBar}.querySelector("[data-surface='tracker.go']").click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the goal's dialog, from Go", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
+                qRefused);
+  /* the owner's own goal write, end to end: the live tracker says Quest
+     complete whether it hears the finish or reads the held quest's row
+     first. It is waited for before the row is asked, since the line
+     stays only a few seconds. The finish is the consumer's, so the wait
+     is as long as the tracker's own reads after Go, and a timeout says
+     what the quest's row held: active is a late consumer, finished is a
+     tracker that never said so. */
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]")`,
+                "Quest complete, after priya's own goal write", 40000, rPlan)
+    .catch(async e => {
+      throw new Error(e.message + "; the quest's row is " + (await get(rSelf)).state);
+    });
+  ok("the tracker says Quest complete after the owner's own goal write", true);
+  for (let i = 0; i < 60 && (await get(rSelf)).state !== "finished"; i++) await sleep(250);
+  ok("the goal door finishes the recorded quest",
+     (await get(rSelf)).state === "finished");
+  /* the consumer hands the finished quest to the walk after the move */
+  await sleep(1500);
+  await evaljs(`stopRecording().then(() => true)`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(rWalk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the sealed recorded walk's page", 15000);
+  ok("stop seals the recorded walk", (await get(rWalk)).state === "sealed");
+
+  const rText = await (await fetch(BASE + (await get(rWalk)).links.export.href, {headers: h})).text();
+  const [rHeader, ...rFrames] = rText.trim().split("\n").map(l => JSON.parse(l));
+  const rQuestDoc = f => f.type === "doc" && (f.doc || {}).kind === "quest";
+  console.log("  the frames: " + rFrames.map(f =>
+    f.type === "transition" ? `${f.kind}.${f.action}`
+      : rQuestDoc(f) ? `doc(quest ${f.doc.state})` : f.type).join(" "));
+  const rCreateAt = rFrames.findIndex(f =>
+    f.type === "transition" && f.kind === "quest" && f.action === "create");
+  ok("the export is the walk of the quest: its create, and its documents",
+     rHeader.format === "waymark-walk/1" && rCreateAt >= 0 && rFrames.some(rQuestDoc));
+  ok("the quest's first document is recorded after its create",
+     rFrames.findIndex(rQuestDoc) > rCreateAt);
+  const rOwner = rFrames[rCreateAt].who;
+  const rForeignAt = rFrames.findIndex(f =>
+    f.type === "transition" && f.who !== rOwner && f.self === rNote.self);
+  ok("the second principal's step is a transition frame of the walk", rForeignAt >= 0);
+  ok("the second principal's transition is recorded before the quest document it caused",
+     rQuestDoc(rFrames.slice(rForeignAt + 1)
+       .find(f => f.type === "transition" || f.type === "doc") || {}));
+  const rOther = ((rHeader.cast || {})[rFrames[rForeignAt].who] || {}).display || "";
+  /* what the tracker says of one quest document (questDraw, replayQuest) */
+  const rSays = d => d.state === "finished" ? "complete"
+    : !(d.state === "active" && (d.data || {}).pinned) ? null
+    : !d.data.planned_at ? "planning"
+    : `${(d.data.plan || []).filter(s => s.state === "done").length} done, ` +
+      `${(d.data.plan || []).length} known so far`;
+  const rWant = rFrames.filter(rQuestDoc).map(f => rSays(f.doc)).filter(Boolean);
+  console.log("  the tracker, by the documents: " + rWant.join("; "));
+  ok("the recorded documents end on the finished quest",
+     rWant[rWant.length - 1] === "complete");
+  /* each tracker line the replay drew, in order, is one the documents hold */
+  const rFollows = seen => {
+    let i = 0;
+    for (const s of seen) {
+      i = rWant.indexOf(s, i);
+      if (i < 0) return false;
+    }
+    return seen.length > 1 && seen[seen.length - 1] === "complete";
+  };
+  /* the presses: Accept with no tracker yet, each Go on a count the
+     documents hold, and each write on the count its Go had */
+  const rPressed = presses => {
+    if (presses.map(p => p.what).join() !== "accept,go,write,go,write") return false;
+    const [accept, go1, write1, go2, write2] = presses;
+    return accept.count === null &&
+      [go1, go2].every(p => /known so far$/.test(p.count || "") && rWant.includes(p.count)) &&
+      write1.count === go1.count && write2.count === go2.count;
+  };
+  const rRead = async name => JSON.parse(await evaljs(`JSON.stringify(window.${name})`));
+  const rSeen = async () => (await rRead("__questSeen")).filter(s => s !== "hidden");
+  const rLine = presses => presses.map(p => `${p.at} ${p.what} ${p.count}`).join("; ");
+  const rWhy = `({presses: window.__questPresses, seen: window.__questSeen,
+    at: replay && replay.at, film: document.documentElement.getAttribute("data-film"),
+    state: document.querySelector("#replaychip")?.getAttribute("data-replay-state") ?? null})`;
+  await evaljs(`(() => {
+    window.__questPresses = []; window.__questReads = [];
+    window.__questSeen = []; window.__questNotices = []; window.__questForms = [];
+    const to0 = replayPointerTo, fetch0 = window.fetch;
+    /* the tracker of a replay is its walk's: no quest is asked for */
+    window.fetch = (u, o) => {
+      if (replay && String(u).includes("/api/quests")) window.__questReads.push(String(u));
+      return fetch0(u, o);
+    };
+    window.replayPointerTo = (to, speed) => {
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
+        : to.getAttribute("data-surface") === "tracker.go" ? "go"
+        : to.hasAttribute("data-replay-write") ? "write" : null;
+      const last = window.__questPresses[window.__questPresses.length - 1];
+      if (replay && what && !(last && last.at === replay.at && last.what === what))
+        window.__questPresses.push({at: replay.at, what,
+          count: document.querySelector("#questbar [data-quest-count]")?.textContent || null});
+      return to0(to, speed);
+    };
+    /* each tracker line and each notice the replay shows, as it changes */
+    setInterval(() => {
+      if (!replay) return;
+      const bar = document.querySelector("#questbar");
+      const now = bar.hidden ? "hidden"
+        : bar.querySelector("[data-quest-complete]") ? "complete"
+        : bar.querySelector("[data-quest-planning]") ? "planning"
+        : bar.querySelector("[data-quest-count]")?.textContent || "";
+      const seen = window.__questSeen, notes = window.__questNotices;
+      if (seen[seen.length - 1] !== now) seen.push(now);
+      const note = String(replay.notice || "");
+      if (note && notes[notes.length - 1] !== note) notes.push(note);
+      /* the form the replay has open at each frame, for a failed press */
+      const form = document.querySelector("dialog[open][data-guided]");
+      const forms = window.__questForms;
+      const mark = replay.at + " " + (form ? form.getAttribute("data-guided") : "none");
+      if (forms[forms.length - 1] !== mark) forms.push(mark);
+    }, 40);
+    return true; })()`);
+  await evaljs(`document.querySelector("[data-replay-walk]").click(); true`);
+  await waitFor(`!!replay`, "the recorded walk's replay to start", 15000);
+  ok("a replay hides the tracker until its walk has a quest", await evaljs(`${qBar}.hidden`));
+  await waitFor(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the recorded walk to end", 240000, rWhy);
+  /* the last frame's tracker line is read by the watch above, 40 ms apart */
+  await sleep(200);
+  const rPresses = await rRead("__questPresses");
+  console.log("  the presses: " + rLine(rPresses));
+  console.log("  the tracker, as replayed: " + (await rSeen()).join("; "));
+  ok("the replayed tracker follows the recorded documents, plan by plan, to Quest complete",
+     rFollows(await rSeen()));
+  /* a press the replay did not make: what the walk held up to the first
+     Go, and the form the replay had open at each frame */
+  if (!rPressed(rPresses)) {
+    const tail = s => String(s || "").split("/").pop();
+    console.log("  the frames to the first Go: " + rFrames.slice(0, 16).map((f, i) =>
+      `${i}@${f.t} ${f.who || "-"} ` +
+      (f.type === "transition" ? `${f.kind}.${f.action}`
+        : f.type === "ui" ? `ui ${tail(f.self)} ` + ((f.ui || {}).dialog
+            ? `form ${tail(f.ui.dialog.self)} ${f.ui.dialog.action}` : `no form`)
+        : rQuestDoc(f) ? `doc quest goal ${tail((f.doc.data || {}).self)} ${(f.doc.data || {}).action}`
+        : `${f.type} ${tail(f.self)}`)).join(" | "));
+    console.log("  the forms, as replayed: " + (await rRead("__questForms")).join("; "));
+  }
+  ok("the create is pressed on Accept as quest, and each step's form is opened from the tracker's Go",
+     rPressed(rPresses));
+  ok("the second principal's step is a notice",
+     !!rOther && (await rRead("__questNotices")).some(n => n.startsWith(rOther + ": ")));
+  ok("the finished quest's document says Quest complete",
+     await evaljs(`!${qBar}.hidden && !!${qBar}.querySelector("[data-quest-complete]")`));
+  ok("replaying the recorded quest read no quest",
+     (await rRead("__questReads")).join(", ") === "");
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!replay && hereHref().split("?")[0] === ${JSON.stringify(rWalk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the replay to stop on the recorded walk's page", 15000);
+
+  /* the same walk filmed: its own export, with no stub in between */
+  console.log("· film: the recorded quest walk");
+  await evaljs(`(() => {
+    window.__questPresses = []; window.__questSeen = [];
+    location.hash = "#" + ${JSON.stringify(rWalk)} + "?film=1";
+    return true; })()`);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${qBar}).display !== "none" &&
+                 !!${qBar}.querySelector("[data-surface='tracker.go']:disabled")`,
+                "the tracker in the recorded film", 240000, rWhy);
+  ok("film mode keeps the recorded walk's tracker", true);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the recorded film to end", 240000, rWhy);
+  ok("the recorded film ends on the finished quest, after the same presses",
+     await evaljs(`!!${qBar}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${qBar}).display !== "none"`) &&
+     rLine(await rRead("__questPresses")) === rLine(rPresses));
+  /* out of film mode, and of the story's fetch and pointer */
+  await evaljs(`location.hash = "/api/led_notes"; location.reload(); true`);
+  await sleep(1200);
+  await waitFor(`typeof hereHref === "function" &&
+                 !document.documentElement.hasAttribute("data-film") &&
+                 hereHref().split("?")[0] === "/api/led_notes"`,
+                "the page out of film mode", 15000);
+  }
+
+  /* a recorded refusal, replayed (docs/spec-agent-demo-walks.md §2). The
+     walk is the one priya recorded above, as the engine wrote it: the
+     shelve form, a schema refusal with its field's message, then the
+     guard's refusals, the last one kept as a quest. Replay draws
+     each in the form (dlg.guidedRefuse): the message under its field,
+     then the problem box with "Accept as quest" under it, which the
+     pointer presses. The press is lit for a moment only, so the page is
+     watched while the walk plays. */
+  console.log("· replay: a recorded refusal, kept as a quest");
+  /* the form's closing beat lands before the seal */
+  await rSettled();
+  ok("priya seals her walk", (await qPost(rWalkSelf + "/-/seal", {}, h)).status < 400);
+  await evaljs(`${rShare}.click(); true`);
+  await waitFor(`${rShare}.getAttribute("aria-pressed") === "false"`,
+                "priya's share toggle off", 15000);
+  const rWalk = await (await fetch(BASE + (await get(rWalkSelf)).links.export.href, {headers: h})).text();
+  const rFrames = rWalk.trim().split("\n").slice(1).map(l => JSON.parse(l));
+  console.log("  recorded: " + rFrames.map(f => f.type).join());
+  const rRefusals = rFrames.filter(f => f.type === "refusal" &&
+    f.self === shelfNote.self && f.action === "shelve");
+  ok("the walk holds the three refusals of priya's own writes", rRefusals.length === 3);
+  const [rSchema, , rGuard] = rRefusals;
+  const rFieldError = ((rSchema?.errors || {}).shelf || [])[0] || "";
+  ok("the schema refusal carries its field's message", rFieldError !== "");
+  const rDetail = rGuard?.detail || "";
+  ok("the high shelf's refusal carries its sentence and its remedy",
+     rDetail !== "" && (rGuard?.remedies || []).length > 0);
+  ok("a quest's create by the same hand follows it",
+     rFrames.slice(rFrames.indexOf(rGuard) + 1).some(f =>
+       f.type === "transition" && f.who === rGuard?.who &&
+       f.kind === "quest" && f.action === "create"));
+  await evaljs(`(() => {
+    const seen = window.__refused = {fieldError: "", box: "", offered: false, pressed: false};
+    window.__refusedWatch = new MutationObserver(() => {
+      const g = document.querySelector("dialog[open][data-guided]");
+      if (!g) return;
+      const under = g.querySelector('[data-srverr="shelf"]')?.textContent || "";
+      if (under) seen.fieldError = under;
+      const accept = g.querySelector(".questoffer [data-surface='dialog.accept']");
+      if (!accept) return;
+      seen.offered = true;
+      seen.box = g.querySelector(".problem")?.innerText || seen.box;
+      if (accept.hasAttribute("data-replay-press")) seen.pressed = true;
+    });
+    window.__refusedWatch.observe(document.body,
+      {subtree: true, childList: true, attributes: true, characterData: true});
+    return true; })()`);
+  await evaljs(`(async () => {
+    await replayFile(new File([${JSON.stringify(rWalk)}], "refusal.ndjson"));
+    return true; })()`);
+  await waitFor(`${replayState} === "ended"`, "the refusal's replay to reach its last frame",
+                120000, `window.__refused`);
+  const rSeen = await evaljs(`(() => {
+    window.__refusedWatch.disconnect();
+    return {...window.__refused, open: !!document.querySelector("dialog[open]")}; })()`);
+  console.log("  seen during the replay: " + JSON.stringify(rSeen));
+  /* a replay that drew something else says what the walk held from the
+     last refused write on: each frame's time, type, door and form */
+  const rOk = (name, cond) => ok(cond ? name : name + " (the walk: " +
+    rFrames.slice(Math.max(0, rFrames.indexOf(rGuard) - 1))
+      .map(f => f.t + " " + f.type + (f.action ? ":" + f.action : "") +
+                (!f.ui ? "" : f.ui.dialog ? ":form" : ":bare")).join(", ") + ")", cond);
+  rOk("a replayed schema refusal shows the field's message under its field",
+      rFieldError !== "" && rSeen.fieldError.includes(rFieldError));
+  rOk("a replayed refusal kept as a quest shows its problem box",
+      rDetail !== "" && rSeen.box.includes(rDetail));
+  rOk("with Accept as quest under it", rSeen.offered);
+  rOk("the pointer presses Accept as quest", rSeen.pressed);
+  rOk("the form closes after the press", !rSeen.open);
+  await evaljs(`document.querySelector("[data-replay-stop]").click(); true`);
+  await waitFor(`!${replayState} && !document.querySelector("dialog[open]")`,
+                "the refusal's replay to stop");
+
+  /* the same under a grant that admits quest and nothing else: the one
+     live stream carries no row events there, so the tracker hears the
+     quest on the quest's own event stream */
+  console.log("· a pinned quest under a grant: the tracker hears its own row");
+  const gTitle = "Clear the granted pile";
+  const gPile = (await qPost("/api/led_notes", {title: "Granted pile"}, h)).doc;
+  const gQuest = await qPost("/api/quests",
+    {self: gPile.self, action: "finish", title: gTitle}, h);
+  ok("priya accepts a second goal as a quest", gQuest.status === 201);
+  const gSelf = gQuest.doc.self;
+  ok("priya pins it", (await qPost(gSelf + "/-/pin", {}, h)).status < 400);
+  let gBorn = null;
+  for (let i = 0; i < 60 && !gBorn; i++) {
+    if ((await get(gSelf)).data.planned_at) gBorn = true;
+    else await sleep(250);
+  }
+  ok("the planner answers the create with a first plan", gBorn === true);
+  const gGrant = await qPost("/api/grants",
+    {audience: "priya", scope: [{kind: "quest", actions: []}],
+     expires_at: new Date(Date.now() + 86400000).toISOString()}, sys);
+  ok("a grant to priya admits quest and nothing else", gGrant.status === 201);
+  const gId = gGrant.doc.self.split("/").pop();
+  /* an offered grant is the audience's to accept; one born active
+     refuses this, and what the page reads below is the proof either way */
+  await qPost("/api/grants/" + gId + "/-/accept", {}, h);
+  await evaljs(`localStorage.setItem("wm10.grant", ${JSON.stringify(gId)});
+                location.reload(); true`);
+  await sleep(1200);
+  await waitFor(`!${qBar}.hidden &&
+                 ${qBar}.querySelector("[data-quest-title]")?.textContent ===
+                   ${JSON.stringify(gTitle)}`,
+                "the tracker at page load, under the grant", 15000);
+  const gScope = await evaljs(`(async () => ({
+    quests: (await api("/api/quests")).ok,
+    notes: (await api("/api/led_notes")).ok}))()`);
+  ok("the page reads through the grant: quests and no notes",
+     gScope.quests === true && gScope.notes === false);
+  await evaljs(`window.__granted = true; true`);
+  const gPlanned = await qPost(gSelf + "/-/plan",
+    {plan: [{n: 1, door: "rename", self: gPile.self, whose: "person",
+             note: "Name the pile.", state: "done"},
+            {n: 2, door: "finish", self: gPile.self, whose: "seat",
+             waiting_on: "Planner", state: "waiting"}],
+     plan_is_estimate: true, waiting_on: "Planner"}, sys);
+  ok("the engine plans the granted quest", gPlanned.status < 400);
+  await waitFor(`${qCount} === "1 done, 2 known so far" &&
+                 !!${qBar}.querySelector("[data-quest-waiting]")`,
+                "the count under the grant", 15000);
+  ok("under a grant a plan transition moves the count with no reload",
+     await evaljs(`window.__granted === true`));
+  ok("the engine finishes the granted quest",
+     (await qPost(gSelf + "/-/finish", {}, sys)).status < 400);
+  await waitFor(`!!${qBar}.querySelector("[data-quest-complete]") &&
+                 ${qBar}.textContent.includes(${JSON.stringify(gTitle)})`,
+                "the completion line under the grant", 15000);
+  ok("under a grant finish shows Quest complete with the title",
+     await evaljs(`window.__granted === true`));
+  await evaljs(`localStorage.removeItem("wm10.grant"); location.reload(); true`);
+  await sleep(1200);
+
   /* signed in the way a person is: a session cookie off the magic
      link, the dev box EMPTY. An open invitation addressed to that
      member offers "Take this step" on its row page and in its
@@ -988,7 +2131,8 @@ async function accessStory() {
     {display: "Guest Viewer", actor_type: "agent", bind_token: tok}, admin);
   await post("/api/grants",
     {audience: guest,
-     scope: [{kind: "invitation", actions: []}, {kind: "seat", actions: []}],
+     scope: [{kind: "invitation", actions: []}, {kind: "seat", actions: []},
+             {kind: "ref_card", actions: []}],
      expires_at: new Date(Date.now() + 86400000).toISOString()}, admin);
   const note = "Restate the desk's charter in your own words.";
   const inv = await post("/api/invitations",
@@ -1003,6 +2147,40 @@ async function accessStory() {
   await waitFor(`!!window.signedinPrincipal`, "the session's identity on well-known");
   ok("the dev box is empty and the viewer is the session's member",
      await evaljs(`$("#who").value === "" && viewerId() === ${JSON.stringify(guest)}`));
+
+  /* the same card under the guest's grant, which admits ref_card and
+     not ref_target: the reader cannot see the target, so the envelope
+     names no ref, both values stay bare, and no read loops. */
+  console.log("· ref labelling: a target the reader cannot see");
+  const refUnseen = await evaljs(`(async () => {
+    const card = await api(${JSON.stringify(refCard)});
+    const target = await api(${JSON.stringify(refTarget)});
+    return {card: card.ok, refs: !!(card.body || {}).refs, target: target.ok}; })()`);
+  ok("the guest's grant shows the card and hides its target",
+     refUnseen.card && !refUnseen.target);
+  ok("so the card's envelope names no ref", !refUnseen.refs);
+  await evaljs(refWatch);
+  await evaljs(`location.hash = ${JSON.stringify(refCard)}; true`);
+  await waitFor(`!!${refCell("target_id")} && !!${refCell("about")}`,
+                "the card's row page under the guest's grant");
+  const refHidden = await refReads(refTargetId);
+  const refBare = await evaljs(`(() => {
+    const plain = ${refCell("target_id")}, about = ${refCell("about")};
+    const named = c => [...c.querySelectorAll("a")].filter(a =>
+      a.getAttribute("href") === ${JSON.stringify("#" + refTarget)}).length;
+    return {plain: plain.textContent.trim(), about: about.textContent.trim(),
+            links: named(plain) + named(about)}; })()`);
+  console.log("  the hidden target reads " + JSON.stringify(refBare) +
+              ", reads of it: " + refHidden.count);
+  ok("a plain ref to a hidden row keeps its token, not a name",
+     !refBare.plain.includes(refSummary) &&
+     refBare.plain.includes(refTargetId.slice(0, 8)));
+  ok("a typed address to a hidden row stays its bare text",
+     refBare.about === "ref_target:" + refTargetId);
+  ok("neither links to the row the reader cannot see", refBare.links === 0);
+  ok("and the page makes no failing GET loop",
+     refHidden.count <= 2 && refHidden.still);
+  await evaljs(refUnwatch);
 
   await evaljs(`location.hash = ${JSON.stringify("/api/invitations/" + inv)}; true`);
   await waitFor(`!!document.querySelector("[data-invite-open]")`,
@@ -1155,6 +2333,147 @@ async function invitationStory() {
   ok("Decline moves the invitation to declined", await stateOf(declined) === "declined");
 }
 
+/* ════ later: "Do this later" from a row's dialog ═════════════════════
+   Against waymark10.batch-a-dev/start-later!. ui_test pins the page's
+   strings; this executes them (docs/spec-scheduled-actions.md R-7.3): a
+   ticket's Groom dialog schedules the groom for tomorrow 08:30 under
+   the state rule; the ticket's page lists it; Reschedule moves it and
+   Cancel removes it; and an *Only if…* row submits conditions the
+   engine accepts. Every write is read back off the API. */
+async function laterStory() {
+  const person = {"x-waymark-principal": "colton"};
+  const call = async (method, path, body, headers) => {
+    const res = await fetch(BASE + path,
+      {method, headers: {"Content-Type": "application/json", ...headers},
+       body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+  const must = (r, status, what) => {
+    if (r.status !== status)
+      throw new Error(what + ": " + r.status + " " + JSON.stringify(r.body));
+    return r;
+  };
+  const p = n => String(n).padStart(2, "0");
+  /* tomorrow at h:m, as the picker writes it and as the instant it
+     names: node and chromium read the one machine's zone */
+  const tomorrow = (h, m) => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(h, m, 0, 0);
+    return {local: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(h)}:${p(m)}`,
+            instant: d.getTime()};
+  };
+
+  console.log("· seeding a draft ticket");
+  const ticket = must(await call("POST", "/api/tickets",
+    {title: "Later " + Date.now(), priority: 2}, person),
+    201, "the person writes a ticket").body.self.split("/").pop();
+  const pending = async () => must(await call("GET",
+    "/api/scheduled_actions?state=scheduled", null, person),
+    200, "read the scheduled actions").body.items
+    .filter(i => ((i.fields || {}).target || {}).id === ticket);
+  const settle = async (pred, what) => {
+    const t0 = Date.now();
+    for (;;) {
+      const rows = await pending();
+      if (pred(rows)) return rows;
+      if (Date.now() - t0 > 6000) throw new Error("timed out waiting for " + what);
+      await sleep(150);
+    }
+  };
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "colton"); location.reload(); true`);
+  await sleep(1200);
+
+  const dialog = `document.querySelector("dialog[open]")`;
+  const groom = `document.querySelector('button[data-action="groom"]')`;
+  const openLater = async () => {
+    await waitFor(`!!${groom}`, "the ticket's Groom");
+    await evaljs(`${groom}.click(); true`);
+    await waitFor(`!!${dialog}?.querySelector("[data-later]")`, "Do this later beside the submit");
+    await evaljs(`${dialog}.querySelector("[data-later]").click(); true`);
+    await waitFor(`!!${dialog}?.querySelector("[data-later-at]")`, "the time picker");
+  };
+  const schedule = async at => {
+    await evaljs(`${dialog}.querySelector("[data-later-at]").value = ${JSON.stringify(at)}; true`);
+    await evaljs(`${dialog}.querySelector("[data-later-go]").click(); true`);
+    await waitFor(`!${dialog}`, "the dialog closes once it is scheduled");
+  };
+
+  console.log("· schedule a groom for tomorrow 08:30, under state");
+  await evaljs(`location.hash = ${JSON.stringify("/api/tickets/" + ticket)}; true`);
+  await openLater();
+  ok("the dialog offers Do this later beside its submit", true);
+  ok("the picker's zone is named",
+     await evaljs(`${dialog}.querySelector("[data-later-zone]").textContent ===
+                   Intl.DateTimeFormat().resolvedOptions().timeZone`));
+  ok("the state rule is chosen, in plain words",
+     await evaljs(`(() => { const r = ${dialog}.querySelector('input[name="later_validity"]:checked');
+       return r.value === "state" &&
+              r.closest("label").textContent.includes("As long as it is still draft"); })()`));
+  const first = tomorrow(8, 30);
+  await schedule(first.local);
+  let rows = await settle(r => r.length === 1, "the scheduled groom");
+  ok("the groom is stored under the state rule", rows[0].fields.validity === "state");
+  ok("for tomorrow 08:30 in the person's zone",
+     Date.parse(rows[0].fields.run_at) === first.instant);
+  ok("and the ticket is not groomed yet",
+     must(await call("GET", "/api/tickets/" + ticket, null, person),
+          200, "read the ticket").body.state === "draft");
+
+  console.log("· the ticket's page lists it; reschedule moves it; cancel removes it");
+  const listed = `document.querySelector("[data-scheduled-row]")`;
+  await waitFor(`!!${listed}`, "the pending scheduled action on the ticket's page");
+  ok("the row's page lists its pending scheduled action",
+     await evaljs(`${listed}.textContent.includes("groom")`));
+  await evaljs(`${listed}.querySelector("[data-scheduled-reschedule]").click(); true`);
+  await waitFor(`!!${dialog}?.querySelector('[name="run_at"]')`, "the reschedule dialog");
+  const second = tomorrow(9, 15);
+  await evaljs(`${dialog}.querySelector('[name="run_at"]').value = ${JSON.stringify(second.local)}; true`);
+  await evaljs(`[...${dialog}.querySelectorAll(".dlgfoot button")].at(-1).click(); true`);
+  await waitFor(`!${dialog}`, "the reschedule lands");
+  rows = await settle(r => r.length === 1 &&
+    Date.parse(r[0].fields.run_at) === second.instant, "the moved time");
+  ok("reschedule moves it to tomorrow 09:15", true);
+  const moved = rows[0].self;
+  /* the page paints again after the move: cancel from the fresh row */
+  await waitFor(`!!${listed}?.textContent.includes("09:15")`, "the page shows the moved time");
+  await evaljs(`${listed}.querySelector("[data-scheduled-cancel]").click(); true`);
+  await settle(r => r.length === 0, "the cancel");
+  await waitFor(`!${listed}`, "the cancelled action leaves the page");
+  ok("cancel removes it from the row's page", true);
+  ok("and the scheduled action is cancelled",
+     must(await call("GET", moved, null, person),
+          200, "read the scheduled action").body.state === "cancelled");
+
+  console.log("· Only if…: a condition from the collection's filter control");
+  await openLater();
+  await evaljs(`${dialog}.querySelector('input[name="later_validity"][value="conditions"]').click(); true`);
+  const conds = `${dialog}.querySelector("[data-later-conds]")`;
+  await waitFor(`!!${conds}.querySelector(".filterpanel")`, "the filter control in the dialog");
+  await evaljs(`[...${conds}.querySelectorAll("button")]
+    .find(b => b.textContent.startsWith("Filters")).click(); true`);
+  await evaljs(`{ const sel = [...${conds}.querySelectorAll(".filterpanel select")]
+      .find(s => [...s.options].some(o => o.textContent === "Priority"));
+    sel.value = [...sel.options].find(o => o.textContent === "Priority").value;
+    sel.dispatchEvent(new Event("change")); true }`);
+  await waitFor(`!!${conds}.querySelector('[data-role=values] input[name="priority"]')`,
+                "the priority value");
+  await evaljs(`${conds}.querySelector('[data-role=values] input[name="priority"]').value = "2"; true`);
+  await evaljs(`[...${conds}.querySelectorAll(".filterpanel button")]
+    .find(b => b.textContent === "Apply").click(); true`);
+  await waitFor(`!!${dialog}.querySelector('[data-later-cond="priority"]')`, "the condition's chip");
+  ok("Only if… takes a row from the collection's filter control", true);
+  await schedule(first.local);
+  rows = await settle(r => r.length === 1, "the conditional groom");
+  ok("the conditions are submitted, and the engine accepts them",
+     rows[0].fields.validity === "conditions" &&
+     (rows[0].fields.conditions || {}).priority === "2");
+}
+
 /* ── more tabs: each its own browser context, so each holds its own
    localStorage and cookies — two people in one chromium. → {openTab,
    close}; close disposes every context openTab made. ─────────────── */
@@ -1202,13 +2521,18 @@ async function openChrome() {
         throw new Error(`${label}: eval failed: ` + JSON.stringify(r.result.exceptionDetails));
       return r.result.result.value;
     };
-    const until = async (pred, what, ms = 8000) => {
+    /* `tell`, when given, is read on this tab at the timeout: what the
+       page held, so a red run names where it stopped */
+    const until = async (pred, what, ms = 8000, tell = null) => {
       const t0 = Date.now();
       while (Date.now() - t0 < ms) {
         if (await js(pred)) return true;
         await sleep(150);
       }
-      throw new Error(`${label}: timed out waiting for ${what}`);
+      const held = tell
+        ? " — " + await js(tell).catch(e => "its state could not be read: " + e.message)
+        : "";
+      throw new Error(`${label}: timed out waiting for ${what}${held}`);
     };
     return {call: c.call, js, until, close: c.close};
   };
@@ -1230,7 +2554,9 @@ async function openChrome() {
    screen, filters the meals, focuses a row, pages, opens a dialog and
    types; tab B (bo) follows ada in guided mode and sees each land.
    Then the guards: the Access panel parks, a dialog bo opened is never
-   replaced, and an invitation to bo opens in bo's own hand. Each tab
+   replaced, and an invitation to bo opens in bo's own hand. Then a
+   walkthrough by ada for bo (docs/spec-walkthrough.md §7 item 6): its
+   agent step's `ui` frame shows on bo's screen under the chip. Each tab
    is its own browser context, so each holds its own localStorage —
    two principals in one chromium. */
 async function guidedStory() {
@@ -1287,6 +2613,16 @@ async function guidedStory() {
   const arrived = (tab, recipe) => tab.until(
     `PRESENCE.get("ada")?.ui?.fields?.recipe === ${JSON.stringify(recipe)}`,
     `ada's frame (${recipe})`, 15000);
+  /* the follower's side when a guided dialog never opened: the three
+     ways openGuidedDialog and applyGuidedUi return with no retry of
+     their own (a seq not past guidedSeq, followUi off when the read
+     answers, another open dialog), and ada's last frame as bo holds it */
+  const guidedState = `JSON.stringify({guidedSeq, guidedOpening, guidedDismissed,
+    followUi, followId, here: hereHref(),
+    adaSeq: PRESENCE.get("ada")?.seq ?? null,
+    adaDialog: PRESENCE.get("ada")?.ui?.dialog ?? null,
+    dialogs: [...document.querySelectorAll("dialog[open]")]
+      .map(d => d.getAttribute("data-guided") ?? "not guided")})`;
   /* ada's dialog: update_recipe on the first on-list meal, from its
      row in the collection. A create dialog stands on the collection,
      and the registry keeps only a dialog on a row, so it never crosses */
@@ -1299,7 +2635,8 @@ async function guidedStory() {
     await A.js(`${recipeButton}.click(); true`);
     await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
     await B.until(`!!document.querySelector(${JSON.stringify(
-      `dialog[open][data-guided="${recipeKey}"]`)})`, "the guided dialog", 15000);
+      `dialog[open][data-guided="${recipeKey}"]`)})`, "the guided dialog", 15000,
+      guidedState);
   };
 
   console.log("· two tabs: ada shares, bo follows");
@@ -1435,9 +2772,187 @@ async function guidedStory() {
        !document.querySelector("dialog[data-guided]") &&
        hereHref() === ${JSON.stringify(meals[1])}`));
 
-  console.log("· stopping");
+  /* a walkthrough's agent step (docs/spec-walkthrough.md §5, watching
+     an agent step): ada leads bo through two steps on the stew, hers
+     first. Start follows the author in guided mode, bo's screen goes to
+     the step's row, and what ada shares shows there under the chip. */
+  console.log("· a walkthrough's agent step: bo watches ada work");
   await press(B, "dialog[open] .dlgfoot", "Cancel");
   await press(A, "dialog[open] .dlgfoot", "Cancel");
+  /* bo follows ada's gaze only, so Start is what turns guided mode on */
+  await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);
+  await B.until(`localStorage.getItem("wm10.follow.ui") === null`,
+                "guided mode off before the start");
+  const agentNote = "Watch me: writing the recipe.";
+  const led = must(await call("POST", "/api/walkthroughs",
+    {subject: "bo", title: `Writing the stew ${tag}`,
+     steps: [{who: "agent", self: meals[1], note: agentNote},
+             {who: "person", self: meals[1], action: "update_recipe",
+              fields: ["recipe"], note: "Now you write the rest."}]}, "ada"),
+    201, "ada offers bo a walkthrough").body;
+  const ledId = led.self.split("/").pop();
+  /* each door is taken through the page of the one who holds it */
+  const takeDoor = (tab, name) => tab.js(
+    `api(${JSON.stringify(led.self)})
+       .then(r => invokeBare(r.body.actions[${JSON.stringify(name)}], r.body))
+       .then(r => r.ok)`);
+  ok("bo starts the walkthrough", await takeDoor(B, "start"));
+  await B.until(`walkthroughId === ${JSON.stringify(ledId)} && followId === "ada" &&
+                 localStorage.getItem("wm10.follow.ui") === "1"`,
+                "the walkthrough in hand and its author followed in guided mode", 15000);
+  ok("Start follows the author in guided mode", true);
+  await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
+  /* the stew's own door, not a row's: ada comes from the collection, and
+     its rows carry the same door for another meal until the page is drawn */
+  const stewButton = `[...document.querySelectorAll("button")]
+    .find(b => !b.closest("dialog") && !b.closest("tr[data-self]") &&
+               /^update recipe/i.test(b.textContent))`;
+  await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
+                "ada's recipe door on the stew's page");
+  await A.js(`${stewButton}.click(); true`);
+  await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
+  await B.until(`!!document.querySelector(${JSON.stringify(
+    `dialog[open][data-guided="${meals[1]} update_recipe"]`)})`,
+                "ada's dialog on bo's screen", 15000, guidedState);
+  ok("an agent step's ui frame shows on the subject's screen under the chip",
+     await B.js(`{ const chip = document.querySelector("#walkchip");
+       chip.style.display !== "none" && chip.textContent.includes("Step 1 of 2") &&
+       chip.textContent.includes(${JSON.stringify(" is working: " + agentNote)}) &&
+       !chip.querySelector("[data-walk-skip]") && !!chip.querySelector("[data-walk-stop]") &&
+       hereHref() === ${JSON.stringify(meals[1])} }`));
+  /* ada ends her step with her dialog still open: bo's step opens over it */
+  ok("ada advances her own step", await takeDoor(A, "advance"));
+  await B.until(`document.querySelector("dialog[open] [data-walk-step]")
+                   ?.textContent.startsWith("Step 2 of 2")`,
+                "step 2's dialog on bo's screen", 15000);
+  ok("the next person step opens in bo's hand, over ada's guided dialog",
+     await B.js(`{ const open = document.querySelectorAll("dialog[open]");
+       const t = open.length === 1 && open[0].querySelector("textarea[name=recipe]");
+       !!t && !t.disabled && !open[0].hasAttribute("data-guided") }`));
+  await press(B, "dialog[open] .dlgfoot", "Cancel");
+  must(await call("POST", led.self + "/-/withdraw", null, "ada"), 200,
+       "ada withdraws the walkthrough");
+  await B.until(`!walkthroughId && document.querySelector("#walkchip").style.display === "none"`,
+                "the walkthrough out of bo's hand", 15000);
+  ok("the follow bo already held stands when the walkthrough leaves his hand",
+     await B.js(`followId === "ada" && localStorage.getItem("wm10.follow.ui") === "1"`));
+
+  /* the quest's sheet (docs/spec-guided-follow.md § 2): a plan with an
+     uncovered day keeps Finalize shut, and names assign_meal as its way
+     out (fixtures.clj, all-days-covered-gate). Ada taps it, and bo's
+     screen shows her sheet with the same steps, read-only. */
+  console.log("· the quest's sheet of a shut door");
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's recipe form closed");
+  await B.until(`!document.querySelector("dialog[open]")`,
+                "ada's dialog off bo's screen", 15000, guidedState);
+  const plan = must(await call("POST", "/api/plans",
+    {start_date: "2026-07-14", weeks: 1,
+     days: [{date: "2026-07-14"}, {date: "2026-07-15"}]}, "ada"),
+    201, "ada creates a plan with no meal on its days").body.self;
+  const shutDoor = '#view [data-surface="door-shut:finalize"]';
+  await A.js(`location.hash = ${JSON.stringify(plan)}; true`);
+  await A.until(`hereHref() === ${JSON.stringify(plan)} &&
+                 !!document.querySelector(${JSON.stringify(shutDoor)})`,
+                "the plan's page, with its shut Finalize", 15000,
+                `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+  await B.until(`hereHref() === ${JSON.stringify(plan)}`,
+                "bo following ada to the plan", 15000, guidedState);
+  await sleep(600);
+  await A.js(`document.querySelector(${JSON.stringify(shutDoor)}).click(); true`);
+  const questSheetOpen = `document.querySelector("dialog[open][data-surface='sheet']")`;
+  await A.until(`!!${questSheetOpen}`, "ada's quest sheet", 15000,
+                `document.body.innerText.slice(-400)`);
+  await B.until(`!!document.querySelector("dialog[open][data-surface='sheet'][data-guided-quest]")`,
+                "ada's quest sheet on bo's screen", 15000, guidedState);
+  const sheetSays = `(() => { const g = ${questSheetOpen};
+    return JSON.stringify({
+      goal: g.querySelector("[data-quest-sheet-goal]").textContent,
+      title: g.querySelector("[data-quest-title-line]").textContent,
+      why: g.querySelector("[data-quest-why]").textContent,
+      steps: [...g.querySelectorAll("[data-quest-steps] li")].map(li => li.textContent),
+      blocked: g.querySelector("[data-quest-blocked]")?.textContent ?? null,
+      refused: g.querySelector("[data-quest-refused]").textContent}); })()`;
+  const hers = await A.js(sheetSays), his = await B.js(sheetSays);
+  console.log("  ada's sheet: " + hers);
+  if (hers !== his) console.log("  bo's sheet:  " + his);
+  ok("bo's screen shows ada's quest sheet, with the same goal, reason and steps",
+     hers === his);
+  ok("the engine found steps to the shut door, and both sheets list them",
+     JSON.parse(hers).steps.length > 0);
+  ok("the sheet is read-only on bo's screen: it says whose it is, and Accept is disabled",
+     await B.js(`{ const g = ${questSheetOpen};
+       (g.querySelector("[data-guided-note]")?.textContent || "").endsWith(" has this open") &&
+       g.querySelector("[data-surface='sheet.accept']").disabled === true }`));
+  ok("ada's own Accept stays live",
+     await A.js(`${questSheetOpen}.querySelector("[data-surface='sheet.accept']").disabled`) === false);
+  /* a second tab of ada's reads another row: her gaze moves and no new
+     `ui` beat is made, so the server says the carried frame again under
+     its old seq (presence/publish!). That frame takes the move's close
+     back on bo's page, and the sheet he holds is the one he held: the
+     mark tells a sheet that stayed from one closed and drawn again. */
+  const A2 = await openTab("ada's second tab");
+  await boot(A2, "ada");
+  let a2Reads = 0;
+  const heldAcrossMove = async () => {
+    const meal = meals[a2Reads++ % meals.length];
+    await B.until(`!!document.querySelector("dialog[open][data-quest-sheet][data-guided-quest]")`,
+                  "ada's quest sheet on bo's screen, before her move", 15000, guidedState);
+    await B.js(`document.querySelector("dialog[open][data-guided-quest]")
+      .dataset.heldAcrossMove = "1"; true`);
+    await A2.js(`location.hash = ${JSON.stringify(meal)}; true`);
+    await A2.until(`hereHref() === ${JSON.stringify(meal)}`,
+                   "the meal's page on ada's second tab", 15000);
+    await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meal)}`,
+                  "ada's move to the meal, on bo's page", 15000, guidedState);
+    await sleep(await B.js(`GUIDED_MOVE_MS`) + 350);
+    return await B.js(`!!document.querySelector(
+      "dialog[open][data-guided-quest][data-held-across-move]")`);
+  };
+  /* first on a page without the line that takes the close back: the
+     case must fail there, or it does not test that line. Bo's page gets
+     applyGuidedUi again from its own source with the line cut. Ada's
+     10 s heartbeat carries a new seq and takes the close back when it
+     lands inside the wait, so the move is given again; the same
+     heartbeat draws her sheet on bo's screen again after a close. */
+  const takesBack = "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);";
+  const applySrc = await B.js(`applyGuidedUi.toString()`);
+  ok("applyGuidedUi has the line that takes a move's close back",
+     applySrc.includes(takesBack));
+  await B.js(`window.applyGuidedUiWhole = applyGuidedUi;
+    applyGuidedUi = ${applySrc.replace(takesBack, "")}; true`);
+  let heldWithout = true;
+  for (let i = 0; i < 3 && heldWithout; i++) heldWithout = await heldAcrossMove();
+  await B.js(`applyGuidedUi = window.applyGuidedUiWhole; true`);
+  ok("without that line, the same move closes her sheet on bo's screen",
+     !heldWithout);
+  ok("a move of ada's with no new ui beat leaves her sheet open on bo's screen",
+     await heldAcrossMove());
+  /* the second tab leaves: its beats would move ada's gaze under the
+     cases below */
+  await A2.call("Page.navigate", {url: "about:blank"});
+  A2.close();
+  /* a `ui` beat whose every part was redacted for bo reaches his page as
+     a plain move (presence/ui-redactor): it closes the guided sheet.
+     Ada's own 10 s heartbeat carries her sheet again and takes the close
+     back when it lands inside the wait, so the move is given again. */
+  let movedShut = false;
+  for (let i = 0; i < 3 && !movedShut; i++) {
+    await B.js(`onPresenceFrame({event: "presence", data: {event: "move",
+      principal: {id: followId, display: followName},
+      self: ${JSON.stringify(plan)}, at: new Date().toISOString()}}); true`);
+    await sleep(600);
+    movedShut = await B.js(`!document.querySelector("dialog[open][data-guided-quest]")`);
+  }
+  ok("a move of ada's, which a wholly redacted beat becomes, closes her sheet on bo's screen",
+     movedShut);
+  await A.js(`document.querySelector("dialog[open] [data-surface='sheet.decline']").click(); true`);
+  await A.until(`!document.querySelector("dialog[open]")`, "ada's sheet closed, off Not now");
+  await B.until(`!document.querySelector("[data-surface='sheet']")`,
+                "ada's sheet off bo's screen", 15000, guidedState);
+  ok("bo's sheet closes with ada's", true);
+
+  console.log("· stopping");
   await A.js(`document.querySelector("#sharebtn").click(); true`);
   ok("the toggle turns sharing off", await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
   await B.js(`document.querySelector("#followchip [data-guided-mark]").click(); true`);
@@ -1445,14 +2960,1965 @@ async function guidedStory() {
                  !document.querySelector("#followchip [data-guided-mark]")`, "guided mode off");
   ok("the guided mark turns guided mode off, and the follow stands",
      await B.js(`followId`) === "ada");
-  A.close(); B.close();
+  B.close();
+
+  console.log("· record: ada's own screen, with nobody following");
+  const recordBtn = `document.querySelector("#recordbtn")`;
+  const recordingOn = `${recordBtn}.getAttribute("aria-pressed") === "true" &&
+    ${recordBtn}.textContent.startsWith("■ Stop")`;
+  const frameCount = async () =>
+    must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body.data.frame_count;
+  ok("the record button is off before a recording",
+     await A.js(`${recordBtn}.getAttribute("aria-pressed")`) === "false");
+  await A.js(`window.prompt = () => "Ada writes a recipe"; ${recordBtn}.click(); true`);
+  await A.until(recordingOn, "the recording to start");
+  const walkSelf = await A.js(`recording.self`);
+  ok("record starts a walk of ada by ada, and turns sharing on for this tab",
+     await A.js(`sessionStorage.getItem("wm10.share.ui")`) === "1" &&
+     await (async () => {
+       const d = must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body;
+       return d.state === "recording" && d.data.recorder === "ada" && d.data.followed === "ada";
+     })());
+  await boot(A, "ada");
+  await A.until(`${recordingOn} && recording.self === ${JSON.stringify(walkSelf)}`,
+                "the recording to come back after the reload");
+  ok("reloading the tab keeps recording", true);
+  await A.js(`location.hash = "/api/meals"; true`);
+  await A.until(`!!${recipeButton}`, "ada's recipe door on the row");
+  const before = await frameCount();
+  await A.js(`${recipeButton}.click(); true`);
+  await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
+  let count = before;
+  for (let i = 0; i < 30 && count <= before; i++) {
+    await sleep(500);
+    count = await frameCount();
+  }
+  ok("the walk takes ada's dialog with no follower stream open", count > before);
+  await A.js(`${recordBtn}.click(); true`);
+  await A.until(`hereHref() === ${JSON.stringify(walkSelf)} &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`, "the sealed walk's page");
+  ok("stop seals the walk, opens its page and turns sharing off again",
+     must(await call("GET", walkSelf, null, "ada"), 200, "ada reads the walk").body.state === "sealed" &&
+     await A.js(`sessionStorage.getItem("wm10.share.ui")`) === null);
+  await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]")`, "Replay on the walk's page");
+  await A.js(`document.querySelector("[data-replay-walk]").click(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the replay to reach its last frame", 60000);
+  ok("the sealed walk replays the dialog ada opened, read-only",
+     await A.js(`{ const g = document.querySelector(${JSON.stringify(
+         `dialog[open][data-guided="${recipeKey}"]`)});
+       const inputs = g ? [...g.querySelectorAll("input, select, textarea")] : [];
+       inputs.length > 0 && inputs.every(n => n.disabled) }`));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  /* walk is the recorder's own surface (walks.clj, :own-surface): a
+     worn grant that names no walk still carries the record door */
+  console.log("· record: ada again, wearing a grant that names no walk");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const wkKinds = `(async () => Object.keys((await wellKnown()).resources || {}))()`;
+  const wideKinds = await A.js(wkKinds);
+  const sys = {"Content-Type": "application/json",
+               "x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  const nRes = await fetch(BASE + "/api/grants", {method: "POST", headers: sys,
+    body: JSON.stringify({audience: "ada", scope: [{kind: "meal", actions: []}],
+      expires_at: new Date(Date.now() + 86400000).toISOString()})});
+  const nDoc = await nRes.json().catch(() => null);
+  ok("a grant to ada admits meal and nothing else", nRes.status === 201 && !!nDoc?.self);
+  const nId = nDoc.self.split("/").pop();
+  /* an offered grant is the audience's to accept; one born active
+     refuses this, and what the page reads below is the proof either way */
+  await call("POST", "/api/grants/" + nId + "/-/accept", {}, "ada");
+  await A.js(`localStorage.setItem("wm10.grant", ${JSON.stringify(nId)}); true`);
+  await boot(A, "ada");
+  const narrowKinds = await A.js(wkKinds);
+  ok("the page reads through the grant: fewer kinds, and walk among them",
+     await A.js(`localStorage.getItem("wm10.grant")`) === nId &&
+     narrowKinds.length < wideKinds.length &&
+     narrowKinds.includes("meal") && narrowKinds.includes("walk"));
+  await A.until(`!!${recordBtn} && ${recordBtn}.style.display !== "none" &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`,
+                "the record button, shown and off, under the grant");
+  await A.js(`window.prompt = () => "Ada records under a grant"; ${recordBtn}.click(); true`);
+  await A.until(recordingOn, "the recording to start under the grant");
+  const narrowWalk = await A.js(`recording.self`);
+  ok("record under the grant starts a new walk whose recorder is the grant-wearer",
+     narrowWalk !== walkSelf &&
+     await (async () => {
+       const d = must(await call("GET", narrowWalk, null, "ada"), 200, "ada reads the walk").body;
+       return d.state === "recording" && d.data.recorder === "ada";
+     })());
+  await A.js(`${recordBtn}.click(); true`);
+  await A.until(`hereHref() === ${JSON.stringify(narrowWalk)} &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`,
+                "the sealed walk's page, under the grant");
+  ok("stop under the grant seals the walk",
+     must(await call("GET", narrowWalk, null, "ada"), 200, "ada reads the walk").body.state === "sealed");
+  await A.until(`!!document.querySelector("dialog[open] .dlgfoot") ||
+                 !!document.querySelector("[data-replay-walk]")`, "the walk's page to draw");
+  if (await A.js(`!!${button("dialog[open] .dlgfoot", "Cancel")}`))
+    await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "Replay on the walk's page, under the grant");
+  ok("the sealed walk's page opens with Replay under the grant", true);
+  /* the replays below start and stop on the first walk's page */
+  await A.js(`localStorage.removeItem("wm10.grant"); true`);
+  await boot(A, "ada");
+  await A.js(`location.hash = ${JSON.stringify("#" + walkSelf)}; true`);
+  await A.until(`hereHref() === ${JSON.stringify(walkSelf)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the first walk's page again, with no grant worn");
+
+  console.log("· replay: a walk file's invitation frame");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const replayNote = `Write the recipe here, ${tag}, in the replay.`;
+  const walkFile = [
+    {format: "waymark-walk/1", title: "Ada invites Bo",
+     cast: {a1: {display: "Ada", type: "human"}, p1: {display: "Bo", type: "human"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 100, type: "invitation", who: "a1", subject: "p1", self: meals[1],
+     action: "update_recipe", field: "recipe", note: replayNote,
+     suggest: {recipe: "Brown the roux."}},
+    {t: 200, type: "ui", who: "a1", self: "/api/meals", ui: {}},
+    {t: 5000, type: "transition", who: "p1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every request the page makes while the file plays that is not a read */
+  await A.js(`{ window.__replayWrites = [];
+    const f0 = window.fetch;
+    window.fetch = (u, o) => {
+      if (o && o.method && o.method !== "GET") window.__replayWrites.push(o.method + " " + u);
+      return f0(u, o);
+    }; true }`);
+  await A.js(`startReplay(${JSON.stringify(walkFile)})`);
+  const invite = `document.querySelector("dialog[open][data-replay-invite]")`;
+  /* the frame after the invitation is ada's screen elsewhere, 3 s
+     before the answer: the replay is paused there for the checks */
+  await A.until(`!!${invite} && replay.at === 3`, "the invitation's dialog, and the frame after it", 15000);
+  await A.js(`pauseReplay(); true`);
+  ok("the replay opens the invited door's dialog on the invited row, read-only, and a later frame leaves both",
+     await A.js(`{ const inputs = [...${invite}.querySelectorAll("input, select, textarea")];
+       hereHref() === ${JSON.stringify(meals[1])} &&
+       inputs.length > 0 && inputs.every(n => n.disabled) }`));
+  ok("the invited field is highlighted, the note stands beside it, and the suggestion is marked as one",
+     await A.js(`{ const g = ${invite};
+       const t = g.querySelector("[name=recipe]");
+       const spot = t.closest("label") || t.parentElement;
+       const n = g.querySelector("[data-invite-note]");
+       spot.classList.contains("invited") && spot.nextElementSibling === n &&
+       n.textContent === ${JSON.stringify(replayNote)} &&
+       t.value === "Brown the roux." && t.classList.contains("suggested-value") }`));
+  ok("the replayed invitation offers neither Decline nor submit",
+     await A.js(`{ const b = [...${invite}.querySelectorAll(".dlgfoot button")];
+       b.length === 1 && b[0].textContent === "Cancel" }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !!document.querySelector('[data-replay-transition="update_recipe"]')`,
+                "the answering transition on the row", 15000);
+  ok("the transition that answers the invitation closes its dialog",
+     await A.js(`!document.querySelector("dialog[open]")`));
+  ok("replaying the file made no write",
+     (await A.js(`window.__replayWrites.join(", ")`)) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a staged call's write");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const stagedDialog = {self: meals[1], action: "update_recipe"};
+  const stagedFile = [
+    {format: "waymark-walk/1", title: "An agent writes a recipe",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 10, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 20, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 30, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+    {t: 40, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every glide the pointer starts from here on: how long the screen it
+     leaves had been still, and the stillness it owed at that speed. A
+     hop's list and a walk's row owe the screen floor. */
+  await A.js(`{ window.__replayGlides = []; let changed = 0, drawn = false;
+    const apply0 = applyReplayFrame, hop0 = replayHop, arrive0 = replayArrive,
+          to0 = replayPointerTo;
+    window.applyReplayFrame = f => {
+      const i = replay ? replay.frames.indexOf(f) : -1;
+      const out = apply0(f);
+      if (replay && f.type !== "doc" && !replayStill(replay.frames, i)) {
+        changed = performance.now(); drawn = false;
+      }
+      return out;
+    };
+    window.replayHop = r => { changed = performance.now(); drawn = true; return hop0(r); };
+    window.replayArrive = r => { changed = performance.now(); drawn = true; return arrive0(r); };
+    window.replayPointerTo = (to, speed) => {
+      if (replay && changed) window.__replayGlides.push({at: replay.at,
+        still: Math.round(performance.now() - changed),
+        floor: (drawn ? REPLAY_MIN_STILL
+                      : replayHoldTime(replay.frames, replay.at)) / replay.speed});
+      return to0(to, speed);
+    };
+    true }`);
+  /* at half speed the press lasts 600 ms, which the 150 ms poll cannot miss */
+  await A.js(`startReplay(${JSON.stringify(stagedFile)}) && (setReplaySpeed(0.5), true)`);
+  /* no jump: the stew's link is not on the walk's page, so the pointer
+     takes the path a person would. The replay is paused at each press
+     for its check, and makes that gesture again when it plays on. */
+  const navPress = `document.querySelector("#kinds a[data-replay-press]")`;
+  await A.until(`!!${navPress} && (pauseReplay(), true)`, "the pressed navigation entry", 15000);
+  ok("a replayed move to a row that is not on screen presses its kind's navigation entry first",
+     await A.js(`${navPress}.getAttribute("href").split("?")[0] === "#/api/meals" &&
+       replay.at === 0 && hereHref() !== ${JSON.stringify(meals[1])}`));
+  await A.js(`playReplay(); true`);
+  const rowPress = `document.querySelector(${JSON.stringify(
+    `#view a[href="#${meals[1]}"][data-replay-press]`)})`;
+  await A.until(`!!${rowPress} && (pauseReplay(), true)`, "the pressed row link in the list", 15000);
+  ok("the list is drawn, and the row's link is pressed there before the move is made",
+     await A.js(`hereHref() === "/api/meals" && replay.at === 0`));
+  await A.js(`playReplay(); true`);
+  const pressed = `document.querySelectorAll("#view button[data-replay-press]")`;
+  /* the dialog waits for the gesture: the replay is paused there for the check */
+  await A.until(`${pressed}.length === 1 && (pauseReplay(), true)`, "the lit action button", 15000);
+  ok("a replayed staged call lights one action button, under the pointer, before its dialog opens",
+     await A.js(`{ const b = ${pressed};
+       b.length === 1 && b[0].dataset.action === "update_recipe" &&
+       b[0].classList.contains("invited") && replay.at === 1 &&
+       !!document.querySelector("#replaypointer") && !document.querySelector("dialog[open]") }`));
+  await A.js(`playReplay(); true`);
+  /* the pointer fills the form: still at half speed, the value waits
+     for the click, and the replay is paused there for the check */
+  const clicked = `document.querySelector("dialog[open][data-guided] [data-replay-click]")`;
+  await A.until(`!!${clicked} && (pauseReplay(), true)`, "the clicked field", 15000);
+  ok("the pointer goes into the form and clicks the field before its value shows",
+     await A.js(`{ const t = document.querySelector("dialog[open][data-guided] [name=recipe]");
+       const c = ${clicked};
+       (c === t || c.contains(t)) && t.value === "" && t.disabled && replay.at === 2 &&
+       !!document.querySelector("dialog[open][data-guided] #replaypointer") }`));
+  await A.js(`setReplaySpeed(1); playReplay(); true`);
+  const written = `document.querySelectorAll("dialog[open][data-guided] .dlgfoot [data-replay-write]")`;
+  /* the close waits for the press: the replay is paused on its way, and
+     the pointer still arrives and presses, for the check */
+  await A.until(`${written}.length === 1 && (pauseReplay(), true)`, "the submit under the pointer", 15000);
+  await A.until(`${written}[0].hasAttribute("data-replay-press")`, "the pressed submit");
+  ok("a replayed staged call presses one submit, lit under the pointer, before the frame that closes its form",
+     await A.js(`{ const b = ${written};
+       b.length === 1 && b[0].classList.contains("invited") && replay.at === 4 &&
+       document.querySelector("dialog[open][data-guided] [name=recipe]")?.value === "Brown the roux." }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close after the mark", 15000);
+  ok("the marked form closes", true);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a dialog beat on a row that is not on screen");
+  /* the walk's page is drawn again before the file plays: the stew's
+     page, still on screen, has links the first gesture would take */
+  await A.until(`!replay && !document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]") &&
+                 !document.querySelector(${JSON.stringify(`#view a[href="#${meals[1]}"]`)})`,
+                "the replay to stop on the walk's page");
+  const farFile = [
+    {format: "waymark-walk/1", title: "An agent opens a form elsewhere",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 1000, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 3000, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every hash the replay goes to, and whether an element was pressed
+     since the hash before it */
+  await A.js(`{ window.__replayHops = []; let pressed = false;
+    new MutationObserver(ms => {
+      if (ms.some(m => m.target.hasAttribute("data-replay-press"))) pressed = true;
+    }).observe(document.body, {subtree: true, attributes: true,
+                               attributeFilter: ["data-replay-press"]});
+    window.addEventListener("hashchange", () => {
+      if (replay) window.__replayHops.push((pressed ? "press " : "jump ") + hereHref());
+      pressed = false;
+    }); true }`);
+  await A.js(`startReplay(${JSON.stringify(farFile)})`);
+  await A.until(`!!replay && replay.at >= 1`, "the dialog beat, after its walk", 20000);
+  console.log("  the path: " + await A.js(`window.__replayHops.join(", ")`));
+  await A.until(`!!document.querySelector("dialog[open][data-guided]") && (pauseReplay(), true)`,
+                "the form on the row walked to");
+  ok("a replayed dialog beat on a row that is not on screen goes there by the list, and no hash changes without a press",
+     await A.js(`{ const h = window.__replayHops;
+       hereHref() === ${JSON.stringify(meals[1])} && h.length >= 2 &&
+       h[0] === "press /api/meals" && h.every(x => x.startsWith("press ")) }`));
+  await A.js(`playReplay(); true`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the form to close", 15000);
+  const glides = JSON.parse(await A.js(`JSON.stringify(window.__replayGlides)`));
+  console.log("  the glides (ms still / ms owed): " +
+              glides.map(g => g.still + "/" + g.floor).join(", "));
+  ok("the pointer never starts a glide before the screen it leaves has been still for its floor",
+     glides.some(g => g.floor > 0) && glides.every(g => g.still >= g.floor - 20));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: one second between the changes of the screen");
+  const onWalk = `!replay && !document.querySelector("dialog[open]") &&
+                  !!document.querySelector("[data-replay-walk]") &&
+                  !document.querySelector(${JSON.stringify(`#view a[href="#${meals[1]}"]`)})`;
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a typed field, a caption in the form, a write behind the form, a
+     caption, two moves back onto the row shown, a `doc` that draws that
+     row again and a `doc` for a row that is not on screen. Frames 1, 5
+     and 11 change nothing a viewer sees. */
+  const stillFile = [
+    {format: "waymark-walk/1", title: "An agent takes its time",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 10, type: "doc", self: meals[1], doc: {note: "as it was"}},
+    {t: 20, type: "ui", who: "a1", self: meals[1], ui: {dialog: stagedDialog, fields: {}}},
+    {t: 30, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: stagedDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 40, type: "caption", who: "a1", text: "The recipe is typed."},
+    {t: 50, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided stew ${tag}`},
+    {t: 60, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+    {t: 70, type: "caption", who: "a1", text: "The recipe is written."},
+    {t: 80, type: "move", who: "a1", self: meals[1]},
+    {t: 90, type: "move", who: "a1", self: meals[1]},
+    {t: 600, type: "doc", self: meals[1], doc: {note: "as it is now"}},
+    {t: 1100, type: "doc", self: meals[0], doc: {note: "another row"}},
+    {t: 1110, type: "caption", who: "a1", text: "Done."},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every change of the screen: when its frame was applied (`from`) and
+     when its last draw was done (`to`) */
+  await A.js(`{ window.__replayDraws = [];
+    const apply1 = applyReplayFrame, hop1 = replayHop, drawn1 = replayDrawn;
+    const mark = what => {
+      const t = Math.round(performance.now());
+      window.__replayDraws.push({what, from: t, to: t});
+    };
+    window.applyReplayFrame = (f, landed) => {
+      const i = replay && !landed ? replay.frames.indexOf(f) : -1;
+      const shows = i >= 0 && replayShows(replay.frames, i);
+      const out = apply1(f, landed);
+      if (shows) mark(i + " " + f.type);
+      return out;
+    };
+    window.replayHop = r => { const out = hop1(r); mark("hop"); return out; };
+    window.replayDrawn = (r, draw) => drawn1(r, draw).then(() => {
+      const m = window.__replayDraws[window.__replayDraws.length - 1];
+      if (m) m.to = Math.round(performance.now());
+    });
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(stillFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !document.querySelector("dialog[open]")`, "the walk to end at 1x", 60000);
+  const draws = JSON.parse(await A.js(`JSON.stringify(window.__replayDraws)`));
+  console.log("  the changes (ms since the one before was drawn): " +
+              draws.map((d, i) => d.what + (i ? " +" + (d.from - draws[i - 1].to) : "")).join(", "));
+  ok("a burst's doc, a write behind its form and a doc for a row off screen change no screen",
+     draws.map(d => d.what).join(", ") ===
+       "hop, 0 move, 2 ui, 3 ui, 4 caption, 6 ui, 7 caption, 8 move, 9 move, 10 doc, 12 caption");
+  ok("at 1x no two changes of the screen are drawn less than 1000 ms apart",
+     draws.length > 1 && draws.every((d, i) => !i || d.from - draws[i - 1].to >= 1000 - 20));
+  const shown = draws.find(d => d.what === "10 doc"), last = draws.find(d => d.what === "12 caption");
+  ok("a doc for a row that is not on screen adds no wait",
+     await A.js(`replayHoldTime(replay.frames, 11) === 0 &&
+                 replayHoldTime(replay.frames, 10) === REPLAY_MIN_STILL`) &&
+     !!shown && !!last && last.from - shown.to < 1900 + 300);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: the floor counts from the draw");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  const lateFile = [
+    {format: "waymark-walk/1", title: "A list drawn late",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* the hop's list is drawn 700 ms after its navigation entry is
+     pressed: when the hop was made, when its list was drawn, and when
+     the pointer next started a glide */
+  await A.js(`{ const late = window.__replayLate = {};
+    const render2 = renderReplay, hop2 = replayHop, drawn2 = replayDrawn, to2 = replayPointerTo;
+    window.renderReplay = (view, href) => href.split("?")[0] !== "/api/meals"
+      ? render2(view, href)
+      : new Promise(done => setTimeout(done, 700)).then(() => render2(view, href));
+    window.replayHop = r => { late.hop = performance.now(); return hop2(r); };
+    window.replayDrawn = (r, draw) => drawn2(r, draw).then(() => {
+      if (late.hop && !late.drawn && hereHref() === "/api/meals") late.drawn = performance.now();
+    });
+    window.replayPointerTo = (to, speed) => {
+      if (late.drawn && !late.glide) late.glide = performance.now();
+      return to2(to, speed);
+    };
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(lateFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the move, after its list", 20000);
+  const late = JSON.parse(await A.js(`JSON.stringify(window.__replayLate)`));
+  console.log("  the list: drawn " + Math.round(late.drawn - late.hop) + " ms after the hop, left " +
+              Math.round(late.glide - late.drawn) + " ms after it was drawn");
+  ok("a list drawn late is still for its whole floor, counted from the moment it is drawn",
+     late.drawn - late.hop >= 650 && late.glide - late.drawn >= 1000 - 20);
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a bulk write's refused rows, in the band");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a self walk's bulk write as it is recorded: a move to the
+     collection, the write that went through, and a `refusal` frame for
+     each row that did not. No form is open, so each is a line in the
+     caption band, held until the recorder's next `ui` beat or `move`. */
+  const bulkDoc = (self, name) => ({t: 10, type: "doc", self,
+    doc: {self, kind: "meal", state: "on_list", summary: name, actions: {}, data: {name}}});
+  const bulkRefusal = (t, self, detail) => (
+    {t, type: "refusal", who: "a1", self, action: "accept", title: "Not available", detail});
+  const bulkNames = [`Guided soup ${tag}`, `Guided stew ${tag}`];
+  const bulkDetails = ["The soup is on the list already.", "The stew is on the list already."];
+  const bulkLines = bulkNames.map((n, i) => `Refused: ${n}: ${bulkDetails[i]}`);
+  const bulkFile = [
+    {format: "waymark-walk/1", title: "A bulk write, partly refused",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    {t: 0, type: "move", who: "a1", self: "/api/meals"},
+    bulkDoc(meals[0], bulkNames[0]),
+    bulkDoc(meals[1], bulkNames[1]),
+    {t: 20, type: "transition", who: "a1", kind: "meal", self: meals[2],
+     action: "accept", from: "draft", to: "on_list",
+     at: new Date().toISOString(), summary: `Guided pie ${tag}`},
+    bulkRefusal(30, meals[0], bulkDetails[0]),
+    bulkRefusal(40, meals[1], bulkDetails[1]),
+    {t: 50, type: "ui", who: "a1", self: "/api/meals", ui: {dialog: null}},
+    bulkRefusal(60, meals[1], bulkDetails[1]),
+    {t: 70, type: "move", who: "a1", self: meals[0]},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* what the band shows when each frame has been applied */
+  await A.js(`{ window.__bulkBand = [];
+    const apply4 = applyReplayFrame;
+    window.applyReplayFrame = (f, landed) => {
+      const out = apply4(f, landed);
+      const band = document.querySelector("#replaycaption");
+      if (replay) window.__bulkBand.push({type: f.type, self: f.self || null,
+        band: band && getComputedStyle(band).display !== "none" ? band.textContent : "",
+        notice: !!band && band.hasAttribute("data-replay-notice")});
+      return out;
+    };
+    true }`);
+  await A.js(`startReplay(${JSON.stringify(bulkFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the bulk write's walk to end", 40000);
+  const bulkBand = JSON.parse(await A.js(`JSON.stringify(window.__bulkBand)`));
+  const bulkRefused = e => !e ? "no frame"
+    : e.band.split("\n").filter(l => l.startsWith("Refused: ")).join(" | ");
+  const bulkOf = type => bulkBand.filter(e => e.type === type);
+  console.log("  the band: " + bulkBand.map(e => `${e.type} [${bulkRefused(e)}]`).join("; "));
+  ok("each refused row of a bulk write is one line in the band: its summary and the problem's detail",
+     bulkOf("refusal").length === 3 &&
+     bulkRefused(bulkOf("refusal")[0]) === bulkLines[0] &&
+     bulkRefused(bulkOf("refusal")[1]) === bulkLines.join(" | ") &&
+     bulkOf("refusal").every(e => e.notice));
+  ok("the recorder's next ui beat takes the lines away",
+     bulkRefused(bulkOf("ui")[0]) === "" && bulkRefused(bulkOf("refusal")[2]) === bulkLines[1]);
+  ok("and so does the recorder's next move",
+     bulkOf("move").length === 2 && bulkOf("move")[1].self === meals[0] &&
+     bulkRefused(bulkOf("move")[1]) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a create form with no move to its collection");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a self walk of a recorder whose scope names only some rows, and who
+     may create there: the create form's `ui` beats and its `refusal`,
+     with no `move` to the collection before them and no `doc` behind
+     them (docs/spec-agent-demo-walks.md §2). Replay opens the form from
+     the beat's own `self`. */
+  const ownDoor = {self: "/api/meals", action: "create"};
+  const ownName = `Guided broth ${tag}`;
+  const ownDetail = "A meal of that name is on the list already.";
+  const ownForm = (t, fields) => (
+    {t, type: "ui", who: "a1", self: ownDoor.self, ui: {dialog: ownDoor, fields}});
+  const ownFile = [
+    {format: "waymark-walk/1", title: "A create form and its refusal",
+     cast: {a1: {display: "Ada's agent", type: "agent"}}},
+    ownForm(0, {}),
+    ownForm(10, {name: ownName}),
+    {t: 20, type: "refusal", who: "a1", ...ownDoor, title: "Not available", detail: ownDetail},
+  ].map(l => JSON.stringify(l)).join("\n");
+  await A.js(`startReplay(${JSON.stringify(ownFile)})`);
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the create form's walk to end", 20000);
+  await A.until(`!!document.querySelector("dialog[open][data-guided] .problem")`,
+                "the create form's refusal to be drawn in the form");
+  const own = JSON.parse(await A.js(`{ const g = document.querySelector("dialog[open][data-guided]");
+    JSON.stringify({here: hereHref(),
+      screen: !!document.querySelector('#view [data-replay-screen="/api/meals"]'),
+      key: g.getAttribute("data-guided"),
+      name: g.querySelector("[name=name]")?.value || "",
+      box: g.querySelector(".problem")?.innerText || ""}) }`));
+  console.log("  seen at the walk's end: " + JSON.stringify(own));
+  ok("a create form with no move before it is opened on its own collection",
+     own.here === ownDoor.self && own.screen && own.key === ownDoor.self + " " + ownDoor.action);
+  ok("with what the recorder typed", own.name === ownName);
+  ok("and its refusal is drawn in that form", own.box.includes(ownDetail));
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· replay: a quest kept from a refusal, and its tracker");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  /* a walk as `docs: true` records it: the refused door's form with the
+     quest's create and pin behind it, the quest's document after each
+     plan, and another principal's step just before the plan it caused.
+     A refusal, and the engine's own plan and finish, are no frames. */
+  const questSelf = "/api/quests/replayed-quest";
+  const questName = `Shelve the stew ${tag}`;
+  const goalDoor = {self: meals[0], action: "shelve"};
+  const questSteps = [[{self: meals[1], action: "update_recipe"}, "Write the recipe"],
+                      [{self: meals[1], action: "season"}, "Season it"],
+                      [{self: meals[1], action: "taste"}, "Taste it"]];
+  const questNow = new Date().toISOString();
+  const questAt = (state, ...steps) => ({
+    self: questSelf, kind: "quest", state, summary: questName, actions: {},
+    data: {title: questName, self: goalDoor.self, action: goalDoor.action,
+           pinned: true, planned_at: questNow,
+           plan: steps.map((s, i) => ({self: questSteps[i][0].self,
+             door: questSteps[i][0].action, note: questSteps[i][1], state: s}))}});
+  const questMove = (t, who, kind, self, action) => (
+    {t, type: "transition", who, kind, self, action, from: "on_list", to: "on_list",
+     at: questNow, summary: kind === "quest" ? questName : `Guided stew ${tag}`});
+  const questForm = (t, dialog, fields) => (
+    {t, type: "ui", who: "p1", self: meals[0], ui: dialog ? {dialog, fields} : {dialog: null}});
+  const questFile = [
+    {format: "waymark-walk/1", title: "A quest kept from a refusal",
+     cast: {p1: {display: "Ada", type: "human"}, p2: {display: "Planner", type: "agent"}}},
+    {t: 0, type: "move", who: "p1", self: meals[0]},
+    questForm(10, goalDoor, {reason: "Out of season"}),
+    questMove(20, "p1", "quest", questSelf, "create"),
+    questMove(30, "p1", "quest", questSelf, "pin"),
+    questForm(40, null),
+    {t: 50, type: "doc", self: questSelf, doc: questAt("active", "next", "later")},
+    questForm(2000, questSteps[0][0], {}),
+    questForm(2010, questSteps[0][0], {recipe: "Brown the roux."}),
+    questMove(2020, "p1", "meal", meals[1], "update_recipe"),
+    questForm(2030, null),
+    {t: 2040, type: "doc", self: questSelf, doc: questAt("active", "done", "next", "later")},
+    questMove(4000, "p2", "meal", meals[1], "season"),
+    {t: 4010, type: "doc", self: questSelf, doc: questAt("active", "done", "done", "next")},
+    questForm(6000, questSteps[2][0], {}),
+    questForm(6010, questSteps[2][0], {verdict: "Good."}),
+    questMove(6020, "p1", "meal", meals[1], "taste"),
+    questForm(6030, null),
+    {t: 6040, type: "doc", self: questSelf, doc: questAt("finished", "done", "done", "done")},
+  ].map(l => JSON.stringify(l)).join("\n");
+  /* every press the pointer makes on the quest's own buttons: the frame
+     it is for, and what the tracker counted then */
+  await A.js(`{ window.__questPresses = []; window.__questReads = [];
+    const to3 = replayPointerTo, fetch3 = window.fetch;
+    /* the tracker of a replay is its walk's: no quest is asked for */
+    window.fetch = (u, o) => {
+      if (replay && String(u).includes("/api/quests")) window.__questReads.push(String(u));
+      return fetch3(u, o);
+    };
+    window.replayPointerTo = (to, speed) => {
+      const what = ["sheet.accept", "dialog.accept"].includes(to.getAttribute("data-surface")) ? "accept"
+        : to.getAttribute("data-surface") === "tracker.go" ? "go"
+        : to.hasAttribute("data-replay-write") ? "write" : null;
+      const last = window.__questPresses[window.__questPresses.length - 1];
+      if (replay && what && !(last && last.at === replay.at && last.what === what))
+        window.__questPresses.push({at: replay.at, what,
+          count: document.querySelector("#questbar [data-quest-count]")?.textContent || null});
+      return to3(to, speed);
+    };
+    true }`);
+  const qBar2 = `document.querySelector("#questbar")`;
+  const qCount = n => `!${qBar2}.hidden &&
+    ${qBar2}.querySelector("[data-quest-count]")?.textContent === "${n}"`;
+  const qPresses = async () => JSON.parse(await A.js(`JSON.stringify(window.__questPresses)`))
+    .map(p => `${p.at} ${p.what} ${p.count}`).join("; ");
+  const qWant = "4 accept null; 6 go 0 done, 2 known so far; 9 write 0 done, 2 known so far; " +
+                "13 go 2 done, 3 known so far; 16 write 2 done, 3 known so far";
+  await A.js(`startReplay(${JSON.stringify(questFile)})`);
+  ok("a replay hides the live tracker until its walk has a quest", await A.js(`${qBar2}.hidden`));
+  await A.until(qCount("0 done, 2 known so far"), "the tracker of the quest's first plan", 40000);
+  ok("the quest's first document draws the tracker: its title, its head step, and Go disabled",
+     await A.js(`${qBar2}.querySelector("[data-quest-title]").textContent === ${JSON.stringify(questName)} &&
+       ${qBar2}.querySelector("[data-quest-note]").textContent === "Write the recipe" &&
+       ${qBar2}.querySelector("[data-surface='tracker.go']").disabled && replay.at === 6 &&
+       !document.querySelector("dialog[open]")`));
+  await A.until(qCount("1 done, 3 known so far"), "the tracker after the first step", 40000);
+  ok("the tracker follows the plan made after the recorder's step",
+     await A.js(`${qBar2}.querySelector("[data-quest-note]").textContent === "Season it"`));
+  await A.until(`String(replay.notice || "").startsWith("Planner: ")`, "the planner's notice", 40000);
+  ok("another principal's step is a notice, and moves no screen",
+     await A.js(`hereHref() === ${JSON.stringify(meals[0])} &&
+       document.querySelector("#replaycaption").textContent.includes("Planner: ")`));
+  await A.until(qCount("2 done, 3 known so far"), "the tracker after the planner's step", 40000);
+  await A.until(`!!${qBar2}.querySelector("[data-quest-complete]")`, "Quest complete", 40000);
+  ok("the finished quest's document says Quest complete",
+     await A.js(`!${qBar2}.hidden && ${qBar2}.textContent.includes(${JSON.stringify(questName)})`));
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
+                "the quest's walk to end", 20000);
+  console.log("  the presses: " + await qPresses());
+  ok("the create is pressed on Accept as quest, and each step's form is opened from the tracker's Go",
+     (await qPresses()) === qWant);
+  ok("replaying the quest read no quest",
+     (await A.js(`window.__questReads.join(", ")`)) === "");
+  await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
+
+  console.log("· film: the tracker is in the film");
+  await A.until(onWalk, "the replay to stop on the walk's page");
+  ok("stopping gives the tracker back to the live quest",
+     await A.js(`!${qBar2}.querySelector("[data-quest-complete]")`));
+  /* the sealed walk's page in film mode, with the quest's walk as its
+     export: the film reads the row for its links.export, then that
+     export, which is the read stubbed here. The stub reads the row
+     the same way: the link is followed, not built */
+  ok("the walk to film names its export", await A.js(`(async () => {
+    const walk = hereHref().split("?")[0], fetch0 = window.fetch;
+    const out = walkExportHref(await (await fetch0(walk, {headers: principalHeaders()})).json());
+    window.fetch = (u, o) => out && String(u) === out
+      ? Promise.resolve(new Response(${JSON.stringify(questFile)}))
+      : fetch0(u, o);
+    window.__questPresses = [];
+    location.hash = "#" + walk + "?film=1"; return !!out; })()`));
+  await A.until(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${qBar2}).display !== "none" &&
+                 !!${qBar2}.querySelector("[data-surface='tracker.go']:disabled")`,
+                "the tracker in the film", 60000);
+  ok("film mode keeps the tracker", true);
+  await A.until(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the film to end", 90000);
+  ok("the film ends on the finished quest, after the same presses",
+     await A.js(`!!${qBar2}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${qBar2}).display !== "none"`) && (await qPresses()) === qWant);
+  A.close();
   await chrome.close();
+}
+
+/* the quest flow on a phone (docs/spec-quests.md): a 390x844 screen with
+   touch, in the mobile shell. priya keeps a refused shelve as a quest and
+   takes its two steps from the tracker's Go, as the access story's
+   recorded walk does, and here Accept as quest, Go and the menu are
+   pressed by a finger. At each of the four moments (the offer, the
+   tracker, the step's door, Quest complete) nothing scrolls sideways, and
+   SHOTS keeps a picture. The walk she records of it is then filmed at the
+   same size. */
+async function questPhoneStory() {
+  const h = {"x-waymark-principal": "priya"};
+  const sys = {"x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  const get = async path => (await fetch(BASE + path, {headers: h})).json();
+  let calls = 0;
+  const post = async (path, body, headers) => {
+    const res = await fetch(BASE + path, {method: "POST",
+      headers: {"Content-Type": "application/json", ...headers,
+                "Idempotency-Key": `ui-drive-phone-${Date.now()}-${calls++}`},
+      body: JSON.stringify(body)});
+    return {status: res.status, doc: await res.json().catch(() => null)};
+  };
+  const W = 390, H = 844;
+
+  console.log("· a phone: 390x844 with touch, the mobile shell");
+  await send("Emulation.setDeviceMetricsOverride",
+             {width: W, height: H, deviceScaleFactor: 2, mobile: true});
+  await send("Emulation.setTouchEmulationEnabled", {enabled: true, maxTouchPoints: 5});
+  /* the access drive leaves this tab signed in as its guest, sharing:
+     the phone is priya's, by the dev box, with no session and no grant */
+  await send("Network.clearBrowserCookies");
+  await send("Page.navigate", {url: BASE + "/api/-/ui?ui=mobile"});
+  await sleep(1200);
+  await evaljs(`sessionStorage.clear(); localStorage.removeItem("wm10.grant");
+    localStorage.setItem("wm10.principal", "priya"); location.reload(); true`);
+  await sleep(1200);
+  /* the page knows who reads it a moment after it is drawn */
+  await waitFor(`typeof hereHref === "function" && typeof viewerId === "function" &&
+                 !!(principalId() || viewerId())`,
+                "the page on the phone, as priya", 15000);
+  ok("the page is 390 wide, in the mobile shell",
+     await evaljs(`innerWidth === ${W} && innerHeight === ${H} &&
+       document.documentElement.getAttribute("data-ui") === "mobile"`));
+  ok("its pointer is coarse", await evaljs(`matchMedia("(pointer: coarse)").matches`));
+
+  const bar = `document.querySelector("#questbar")`;
+  const me = await evaljs(`viewerId()`);
+  ok("the phone's viewer is priya, by the dev box",
+     !!me && await evaljs(`$("#who").value === "priya"`));
+  const pinned = async () => (await get("/api/quests?state=active&pinned=true&owner=" +
+                                        encodeURIComponent(me))).data?.items || [];
+  /* a quest an earlier drive left pinned would be the tracker's: none is */
+  for (const q of await pinned()) await post(q.self + "/-/finish", {}, sys);
+  await evaljs(`refreshQuest().catch(() => {}); true`);
+  await waitFor(`${bar}.hidden === true`, "a phone with no pinned quest", 15000);
+
+  /* nothing scrolls sideways: the page, and the tracker when it is shown */
+  const widths = `(() => {
+    const d = document.documentElement, b = ${bar};
+    const out = [...b.children].filter(c => {
+      const r = c.getBoundingClientRect();
+      return r.width > 0 && (r.left < -0.5 || r.right > innerWidth + 0.5);
+    }).map(c => c.className || c.tagName);
+    return {page: d.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth,
+            bar: b.hidden || (b.scrollWidth <= b.clientWidth && out.length === 0),
+            seen: {doc: d.scrollWidth, body: document.body.scrollWidth,
+                   bar: [b.scrollWidth, b.clientWidth], out}}; })()`;
+  const noOverflow = async when => {
+    const f = await evaljs(widths);
+    if (!f.page || !f.bar) console.log(`  the widths ${when}: ` + JSON.stringify(f.seen));
+    ok(`the page does not scroll sideways ${when}`, f.page);
+    ok(`the tracker does not scroll sideways ${when}`, f.bar);
+  };
+  /* the open dialog is a sheet inside the screen, and holds no wider line */
+  const sheetFits = async name => {
+    const s = await evaljs(`(() => {
+      const g = document.querySelector("dialog[open]"), r = g.getBoundingClientRect();
+      return {left: r.left, right: r.right, wide: g.scrollWidth, room: g.clientWidth}; })()`);
+    if (s.left < -0.5 || s.right > W + 0.5 || s.wide > s.room)
+      console.log(`  ${name}: ` + JSON.stringify(s));
+    ok(`${name} is a sheet inside the screen, with nothing wider than it`,
+       s.left >= -0.5 && s.right <= W + 0.5 && s.wide <= s.room);
+  };
+  /* the open dialog's foot: every button whole inside the screen, no
+     unnamed peer in the draft line, no repo in a placeholder */
+  const footFits = async name => {
+    const f = await evaljs(`(() => {
+      const g = document.querySelector("dialog[open]");
+      const cut = [...g.querySelectorAll(".dlgfoot button")].filter(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && (r.left < -0.5 || r.right > innerWidth + 0.5);
+      }).map(b => b.textContent);
+      return {cut,
+              note: g.querySelector("[data-draftnote]")?.textContent || "",
+              hints: [...g.querySelectorAll("[placeholder]")].map(i => i.placeholder)}; })()`);
+    if (f.cut.length) console.log(`  ${name}, cut: ` + JSON.stringify(f.cut));
+    ok(`every button of ${name} is whole inside the screen`, f.cut.length === 0);
+    ok(`${name} names no unnamed peer`, !f.note.includes("anonymous"));
+    ok(`${name} shows no repo or pull request as a placeholder`,
+       f.hints.every(h => !/github:|#\d/.test(h)));
+  };
+  /* a touch target: where a finger lands on it, how tall it is, whether
+     all of it is on the screen, and whether the finger lands on IT */
+  const target = sel => `(() => {
+    const t = document.querySelector(${JSON.stringify(sel)});
+    if (!t) return null;
+    t.scrollIntoView({block: "nearest"});
+    const r = t.getBoundingClientRect();
+    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+    const hit = document.elementFromPoint(x, y);
+    return {x, y, h: r.height,
+            on: r.left >= -0.5 && r.top >= -0.5 &&
+                r.right <= innerWidth + 0.5 && r.bottom <= innerHeight + 0.5,
+            hit: !!hit && (hit === t || t.contains(hit))}; })()`;
+  const checkTarget = async (name, sel) => {
+    const t = await evaljs(target(sel));
+    if (!t || t.h < 44 || !t.on || !t.hit) console.log(`  ${name}: ` + JSON.stringify(t));
+    ok(`${name} is at least 44px tall`, !!t && t.h >= 44);
+    ok(`${name} is fully on screen, under the finger`, t.on && t.hit);
+    return t;
+  };
+  const tap = async t => {
+    await send("Input.dispatchTouchEvent",
+               {type: "touchStart", touchPoints: [{x: t.x, y: t.y}]});
+    await send("Input.dispatchTouchEvent", {type: "touchEnd", touchPoints: []});
+  };
+
+  console.log("· a refused door on a phone: Accept as quest");
+  const title = "Phone pile, with a name far too long for one line of a phone's tracker";
+  const made = await post("/api/led_notes", {title}, h);
+  ok("priya writes a note with a long name", made.status === 201 && !!made.doc?.self);
+  const note = made.doc;
+  /* her walk of it, with its screens, as the access story records one */
+  const walk = await evaljs(`(async () => {
+    const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+      {followed: principalId() || viewerId(),
+       title: "A quest on a phone", docs: true})});
+    if (!r.ok || !r.body || !r.body.self)
+      return {refused: r.status, body: r.body || null};
+    recording = recordingOf(r.body);
+    recordChip();
+    if (!uiSharing()) {
+      toggleShareUi();
+      sessionStorage.setItem("wm10.record.shared", "1");
+    }
+    return r.body.self; })()`);
+  if (typeof walk !== "string") console.log("  the walk's create: " + JSON.stringify(walk));
+  ok("priya records the phone's walk", typeof walk === "string");
+  /* a beat carries the form: each press waits for the one before it */
+  await sleep(600);
+  await evaljs(`location.hash = ${JSON.stringify(note.self)}; true`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(note.self)} &&
+                 document.querySelector("#view").textContent.includes(${JSON.stringify(title)}) &&
+                 !!document.querySelector('#view [data-action="shelve"]')`,
+                "the note's row page", 15000);
+  await sleep(600);
+  await evaljs(`document.querySelector('#view [data-action="shelve"]').click(); true`);
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the shelve dialog", 15000);
+  await sleep(600);
+  /* the enum is a select or a radio group, as the form chose */
+  const shelve = async shelf => {
+    await evaljs(`(() => {
+      const nodes = [...document.querySelectorAll('dialog[open] [name="shelf"]')];
+      const radio = nodes.find(n => n.type === "radio" && n.value === ${JSON.stringify(shelf)});
+      const i = radio || nodes[0];
+      if (radio) radio.checked = true; else i.value = ${JSON.stringify(shelf)};
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+      return true; })()`);
+    await sleep(600);
+    await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  };
+  const refused = `(document.querySelector("dialog[open] .problem")?.innerText || "")`;
+  const accept = "dialog[open] [data-surface='dialog.accept']";
+  await shelve("high");
+  await waitFor(`${refused}.includes("room") && !!document.querySelector(${JSON.stringify(accept)})`,
+                "the offer under the refusal", 15000);
+  await sleep(600);
+  await sheetFits("the refused door's dialog");
+  const offer = await checkTarget("Accept as quest", accept);
+  await noOverflow("under the offer");
+  await shot("phone-quest-offer");
+  await tap(offer);
+  await waitFor(`!document.querySelector("dialog[open]") && !${bar}.hidden &&
+                 !!${bar}.querySelector("[data-quest-title]")`,
+                "the tracker, off the tap", 15000);
+  ok("a tap on Accept as quest closes the dialog and shows the tracker", true);
+  const quest = (await pinned())[0]?.self;
+  ok("the tap leaves the quest pinned", !!quest);
+
+  console.log("· the tracker on a phone");
+  const plan = `JSON.stringify(((questDoc || {}).data || {}).plan || null)`;
+  const goFor = door => `(() => {
+    const s = questDoc && questHead(questDoc);
+    return !!s && s.door === ${JSON.stringify(door)} &&
+      s.self === ${JSON.stringify(note.self)} &&
+      !!${bar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
+  await waitFor(goFor("rename"), "the remedy at the tracker's head", 30000, plan);
+  /* the head step's row is in the tracker by its title, which the page
+     reads, and no path is text (ticket 5b3fa3f7) */
+  const rowSays = `(${bar}.querySelector("[data-quest-row]")?.textContent || "")`;
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title)})`,
+                "the note's title in the tracker", 15000, `${bar}.textContent`);
+  ok("the tracker names the step's row in words, and no path",
+     await evaljs(`!/\\/api\\//.test(${bar}.textContent)`));
+  const says = await evaljs(`(() => {
+    const b = ${bar}, t = b.querySelector("[data-quest-title]"), cs = getComputedStyle(t);
+    const line = b.querySelector("[data-quest-note]");
+    return {title: t.textContent, clipped: t.scrollWidth > t.clientWidth,
+            ellipsis: cs.textOverflow === "ellipsis" && cs.whiteSpace === "nowrap" &&
+                      cs.overflowX === "hidden",
+            count: b.querySelector("[data-quest-count]")?.textContent || "",
+            note: line ? line.textContent : null,
+            noteWide: line ? line.getBoundingClientRect().width : 0,
+            needs: questHead(questDoc).needs || []}; })()`);
+  console.log("  the tracker: " + JSON.stringify(says));
+  ok("the tracker says its title, the count and the head step's note",
+     !!says.title && /^\d+ done, \d+ known so far$/.test(says.count) &&
+     !!(says.note || "").trim() && says.noteWide >= 100);
+  ok("a long title ends in an ellipsis",
+     says.ellipsis && (says.title.length < 60 || says.clipped));
+  const go = await checkTarget("Go", '[data-surface="tracker.go"]');
+  await checkTarget("the tracker's title", "#questbar [data-quest-title]");
+  /* the title's 44px box overlaps its neighbours: the tracker is still
+     the count's line, the gap and the row of Go, and no taller */
+  const tall = await evaljs(`(() => {
+    const b = ${bar}, cs = getComputedStyle(b);
+    const h = sel => b.querySelector(sel).getBoundingClientRect().height;
+    return {bar: b.getBoundingClientRect().height,
+            rows: h("[data-quest-count]") + h("[data-surface='tracker.go']") +
+                  [cs.rowGap, cs.paddingTop, cs.paddingBottom, cs.borderTopWidth,
+                   cs.borderBottomWidth].reduce((n, v) => n + (parseFloat(v) || 0), 0)}; })()`);
+  console.log("  the tracker's height: " + JSON.stringify(tall));
+  ok("the title's 44px box makes the tracker no taller", tall.bar <= tall.rows + 1);
+  await noOverflow("under the tracker");
+  await shot("phone-quest-tracker");
+  const menu = await checkTarget("the tracker's menu", "#questbar .quest-menu summary");
+  await tap(menu);
+  await waitFor(`${bar}.querySelector(".quest-menu").open`, "the menu, off the tap", 15000);
+  const doors = await evaljs(`[...${bar}.querySelectorAll(".quest-menu-items button")].map(b => {
+    const r = b.getBoundingClientRect();
+    return {name: b.textContent.trim(), h: r.height,
+            on: r.left >= -0.5 && r.right <= innerWidth + 0.5 && r.bottom <= innerHeight + 0.5}; })`);
+  console.log("  the menu's doors: " + JSON.stringify(doors));
+  ok("each door of the menu is at least 44px tall and on screen",
+     doors.length > 0 && doors.every(d => d.h >= 44 && d.on));
+  await noOverflow("under the open menu");
+  await shot("phone-quest-menu");
+  await evaljs(`${bar}.querySelector(".quest-menu").open = false; true`);
+
+  console.log("· Go on a phone: the step's door");
+  await sleep(600);
+  await tap(go);
+  await waitFor(`!!document.querySelector('dialog[open] [name="title"]')`,
+                "the remedy's dialog, off a tap on Go", 15000);
+  await sleep(600);
+  const lit = await evaljs(`document.querySelectorAll("dialog[open] .invited").length`);
+  console.log(`  the step needs ${JSON.stringify(says.needs)}: ${lit} lit`);
+  ok("a tap on Go opens the step's door, with its needs lit",
+     says.needs.length === 0 || lit > 0);
+  await sheetFits("the step's door");
+  await footFits("the step's door");
+  await noOverflow("under the step's door");
+  await shot("phone-quest-go");
+  await evaljs(`(() => {
+    const set = (name, v) => {
+      const i = document.querySelector('dialog[open] [name="' + name + '"]');
+      i.value = v;
+      i.dispatchEvent(new Event("input", {bubbles: true}));
+      i.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+    /* a name and a room: the high shelf refuses no more */
+    set("title", ${JSON.stringify(title + ", sorted")}); set("room", "Hall");
+    return true; })()`);
+  await sleep(600);
+  await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the remedy's dialog to close", 15000);
+  await waitFor(goFor("shelve"), "the goal door at the tracker's head", 30000, plan);
+  await waitFor(`${rowSays}.includes(${JSON.stringify(title + ", sorted")})`,
+                "the note's new title in the tracker", 15000, `${bar}.textContent`);
+  ok("a rename shows in the tracker: the row's new title", true);
+  await sleep(600);
+  await tap(await evaljs(target('[data-surface="tracker.go"]')));
+  await waitFor(`!!document.querySelector('dialog[open] [name="shelf"]')`,
+                "the goal's dialog, off a tap on Go", 15000);
+  await sleep(600);
+  await shelve("high");
+  await waitFor(`!document.querySelector("dialog[open]")`, "the goal's dialog to close", 15000,
+                refused);
+
+  console.log("· Quest complete on a phone");
+  /* the line stays a few seconds: it is read and pictured at once */
+  await waitFor(`!!${bar}.querySelector("[data-quest-complete]")`,
+                "Quest complete on the phone", 40000, plan)
+    .catch(async e => {
+      throw new Error(e.message + "; the quest's row is " + (await get(quest)).state);
+    });
+  ok("the tracker says Quest complete", true);
+  await noOverflow("under Quest complete");
+  await shot("phone-quest-complete");
+  for (let i = 0; i < 60 && (await get(quest)).state !== "finished"; i++) await sleep(250);
+  ok("the goal door finishes the phone's quest", (await get(quest)).state === "finished");
+  /* the consumer hands the finished quest to the walk after the move */
+  await sleep(1500);
+  await evaljs(`stopRecording().then(() => true)`);
+  await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the sealed walk's page", 15000);
+  ok("stop seals the phone's walk", (await get(walk)).state === "sealed");
+
+  console.log("· film: the phone's quest walk, at 390x844");
+  const why = `({at: replay && replay.at, film: document.documentElement.getAttribute("data-film"),
+    state: document.querySelector("#replaychip")?.getAttribute("data-replay-state") ?? null})`;
+  await evaljs(`location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
+  await waitFor(`document.documentElement.getAttribute("data-film") === "playing" &&
+                 getComputedStyle(${bar}).display !== "none" &&
+                 !!${bar}.querySelector("[data-surface='tracker.go']:disabled")`,
+                "the tracker in the phone's film", 240000, why);
+  ok("film mode keeps the tracker on a phone", true);
+  await noOverflow("in the film");
+  await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                "the phone's film to end", 240000, why);
+  ok("the film ends on the finished quest",
+     await evaljs(`innerWidth === ${W} && !!${bar}.querySelector("[data-quest-complete]") &&
+       getComputedStyle(${bar}).display !== "none"`));
+  await noOverflow("at the film's end");
+  await shot("phone-quest-film");
+
+  /* ── the 'not yet' button (shutDoor, 140-links-access.js) ─────────────
+     A led_task ends after its children (access_dev.clj), as a ticket
+     does: the parent's Complete is shut and names the child's Complete
+     as its way out, and its Discard is shut and names none. One tap on
+     Complete makes and pins the quest, Go walks it, and the walk she
+     records of it is filmed. Driven on the phone and then at desktop:
+     a press is a finger there and a click here. */
+  const ready = `typeof hereHref === "function" && typeof viewerId === "function" &&
+                 !!(principalId() || viewerId())`;
+  /* out of film mode: the page again, live */
+  const fresh = async what => {
+    await evaljs(`location.hash = "/api/led_tasks"; location.reload(); true`);
+    await sleep(1200);
+    await waitFor(ready, what, 15000);
+  };
+  const notYet = async (where, slug, phone) => {
+    console.log(`· the 'not yet' button ${where}`);
+    const press = async sel => phone
+      ? tap(await evaljs(target(sel)))
+      : evaljs(`document.querySelector(${JSON.stringify(sel)}).click(); true`);
+    /* the sheet a tap on a shut door opens (questSheet), and its doors */
+    const sheet = `document.querySelector("dialog[open][data-surface='sheet']")`;
+    const notNow = 'dialog[open] [data-surface="sheet.decline"]';
+    const acceptIt = '[data-surface="sheet.accept"]';
+    await evaljs(`refreshQuest().catch(() => {}); true`);
+    await waitFor(`${bar}.hidden === true`, `no pinned quest ${where}`, 15000);
+    const parent = await post("/api/led_tasks", {title: `Spring clean ${where}`}, h);
+    const epic = parent.doc?.self;
+    ok("priya writes a task", parent.status === 201 && !!epic);
+    const sub = await post("/api/led_tasks",
+      {title: `Sweep the hall ${where}`, parent: epic.split("/").pop()}, h);
+    const child = sub.doc?.self;
+    ok("and a child of it, not finished", sub.status === 201 && !!child);
+    /* a refused tap (ticket e8cb4bcf): one owner holds at most 20 active
+       quests (quests.clj, active-cap), so at the cap the tap's preview is
+       refused as the create would be. The sentence is said in the sheet
+       and Accept is disabled; no quest is pinned and no tracker shows. */
+    const spare = await post("/api/led_tasks", {title: `Spare room ${where}`}, h);
+    const room = spare.doc?.self;
+    const dust = await post("/api/led_tasks",
+      {title: `Dust the shelf ${where}`, parent: String(room).split("/").pop()}, h);
+    ok("a second task with an open child, for the refused tap",
+       spare.status === 201 && !!room && dust.status === 201);
+    const held = [];
+    let full = null;
+    for (let i = 0; i < 21 && !full; i++) {
+      const q = await post("/api/quests", {self: room, action: "complete"}, h);
+      if (q.status === 201 && q.doc?.self) held.push(q.doc.self);
+      else full = q;
+    }
+    console.log(`  ${held.length} quests held, then: ` + JSON.stringify(full?.doc ?? null));
+    ok("priya's active quests reach the cap, and the next create is refused",
+       held.length > 0 && !!full && full.status >= 400 && full.status < 500 &&
+       /at most 20 active quests/.test(full.doc?.detail || ""));
+    await evaljs(`location.hash = ${JSON.stringify(room)}; true`);
+    const shutDoor = '[data-surface="door-shut:complete"]';
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(room)} &&
+                   !!document.querySelector(${JSON.stringify(shutDoor + "[aria-describedby]")})`,
+                  "the second task's row page, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    /* presentation mode (wmPresent, 200-events-follow.js; spec-agent-demo-
+       walks §8b): the crumb's id, the version line and the header's
+       developer buttons are not drawn while it is on, a beat's text
+       carries none of them, and they are drawn again when it is off */
+    const chrome = `JSON.stringify([".crumbs .id", ".version", "#sharebtn", "#recordbtn",
+      "#replaybtn", "#ledgertoggle"].map(s => { const e = document.querySelector(s);
+        return !!e && getComputedStyle(e).display !== "none"; }))`;
+    const plain = JSON.parse(await evaljs(chrome));
+    console.log("  the chrome drawn, out of presentation mode: " + JSON.stringify(plain));
+    ok("the row page draws its crumb id and its version line",
+       plain[0] && plain[1] && (phone || plain.slice(2).every(Boolean)));
+    const crumbId = await evaljs(`document.querySelector(".crumbs .id").textContent`);
+    await evaljs(`window.wmPresent(true); true`);
+    ok("presentation mode draws no crumb id, no version line and no toolbar button",
+       JSON.parse(await evaljs(chrome)).every(shown => !shown));
+    /* a film's caption is burned over the bottom of the frame (ticket
+       c0cb83af): no fixed strip is drawn in the bottom fifth of it */
+    const low = JSON.parse(await evaljs(`JSON.stringify(["header nav", "#ticker", "#intents",
+      "#toast", "#undostack"].filter(s => { const e = document.querySelector(s);
+        if (!e || getComputedStyle(e).display === "none") return false;
+        const r = e.getBoundingClientRect();
+        return r.height > 0 && r.bottom > innerHeight * 0.8; }))`));
+    console.log("  the strips in the bottom fifth, in presentation mode: " + JSON.stringify(low));
+    ok("presentation mode draws no tab bar, no intent card and no strip in the bottom fifth",
+       low.length === 0);
+    const presented = await evaljs(`filmScreenText()`);
+    console.log("  the text in presentation mode: " + JSON.stringify(presented.slice(0, 240)));
+    ok("and a beat's text carries none of them",
+       !presented.includes(crumbId) && !/v\d+ · law r\d+/.test(presented) &&
+       !/● Record|▶ file|◷ Activity/.test(presented));
+    await evaljs(`window.wmPresent(false); true`);
+    ok("out of presentation mode they are drawn again",
+       JSON.stringify(JSON.parse(await evaljs(chrome))) === JSON.stringify(plain));
+    await press(shutDoor);
+    const saidWhy = `(${sheet}?.querySelector("[data-quest-refused]")?.textContent || "")`;
+    await waitFor(`!!${saidWhy}`, "the refusal, in the quest's sheet", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const refusal = await evaljs(saidWhy);
+    console.log("  the refused preview: " + JSON.stringify(refusal));
+    ok("a refused preview says the engine's sentence in the sheet",
+       /at most 20 active quests/.test(refusal));
+    ok("and Accept is disabled with that line",
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
+    if (phone) await sheetFits("the refused quest's sheet");
+    await shot(`${slug}-notyet-refused`);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the refused sheet to close, off Not now", 15000);
+    ok("the refused tap shows no tracker and pins no quest",
+       await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
+    ok("the door takes a tap again",
+       await evaljs(`!document.querySelector(${JSON.stringify(shutDoor)}).hasAttribute("data-quest-busy")`));
+    if (phone) await noOverflow("after the refused quest's sheet");
+    for (const q of held) await post(q + "/-/abandon", {}, h);
+    ok("priya lets the held quests go",
+       (await Promise.all(held.map(q => get(q)))).every(q => q.state === "abandoned"));
+    /* one short of the cap again, for the Accept the recording has
+       refused (ticket 5b321c0a): the walk's own quest is finished by
+       then, and one more made under the open sheet fills the cap */
+    const kept = [];
+    for (let i = 0; i < held.length - 1; i++) {
+      const q = await post("/api/quests", {self: room, action: "complete"}, h);
+      if (q.status === 201 && q.doc?.self) kept.push(q.doc.self);
+    }
+    ok("priya holds one quest short of the cap", kept.length === held.length - 1);
+    const walk = await evaljs(`(async () => {
+      const r = await api("/api/walks", {method: "POST", body: JSON.stringify(
+        {followed: principalId() || viewerId(),
+         title: ${JSON.stringify("A shut door, tapped " + where)}, docs: true})});
+      if (!r.ok || !r.body || !r.body.self)
+        return {refused: r.status, body: r.body || null};
+      recording = recordingOf(r.body);
+      recordChip();
+      if (!uiSharing()) {
+        toggleShareUi();
+        sessionStorage.setItem("wm10.record.shared", "1");
+      }
+      return r.body.self; })()`);
+    if (typeof walk !== "string") console.log("  the walk's create: " + JSON.stringify(walk));
+    ok(`priya records her walk ${where}`, typeof walk === "string");
+    await sleep(600);
+    await evaljs(`location.hash = ${JSON.stringify(epic)}; true`);
+    const door = '[data-surface="door-shut:complete"]';
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(epic)} &&
+                   !!document.querySelector(${JSON.stringify(door + "[aria-describedby]")})`,
+                  "the parent's row page, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    const seat = await evaljs(`(() => {
+      const b = document.querySelector(${JSON.stringify(door)}), cs = getComputedStyle(b);
+      const line = document.getElementById(b.getAttribute("aria-describedby"));
+      const plain = [...document.querySelectorAll("#view button.blocked")]
+        .filter(p => !(p.getAttribute("data-surface") || "").startsWith("door-shut:"));
+      return {cls: b.className, text: b.textContent, disabled: b.disabled,
+              aria: b.getAttribute("aria-disabled"), self: b.dataset.questSelf,
+              border: cs.borderTopStyle, opacity: cs.opacity,
+              line: line ? line.textContent : null,
+              plain: plain.map(p => ({text: p.textContent, disabled: p.disabled,
+                                      flag: !!p.querySelector(".notyet-flag")}))}; })()`);
+    console.log("  the shut door: " + JSON.stringify(seat));
+    ok("Complete is a reachable button: dashed, flagged, not dimmed",
+       /\bblocked\b/.test(seat.cls) && /\bnotyet\b/.test(seat.cls) &&
+       seat.text.includes("⚑") && seat.border === "dashed" && seat.opacity === "1");
+    ok("it is aria-disabled and not disabled, and names its row",
+       seat.aria === "true" && seat.disabled === false && seat.self === epic);
+    ok("its reason line ends 'Not yet. Tap to see the quest.'",
+       (seat.line || "").trim().endsWith("Not yet. Tap to see the quest."));
+    ok("a door with no remedy is the plain disabled button",
+       seat.plain.length > 0 && seat.plain.every(p => p.disabled && !p.flag));
+    if (phone) {
+      await checkTarget("Complete ⚑", door);
+      await noOverflow("under the shut door");
+    }
+    await shot(`${slug}-notyet-door`);
+    await press(door);
+    /* the tap previews: the sheet says the goal, why its door is shut,
+       and the steps with the goal's own form last. Nothing is written. */
+    await waitFor(`!!${sheet} && !!${sheet}.querySelector("[data-quest-steps] li")`,
+                  "the quest's sheet, off the tap on Complete", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const seen = await evaljs(`(() => {
+      const g = ${sheet};
+      return {goal: g.querySelector("[data-quest-sheet-goal]").textContent,
+              why: g.querySelector("[data-quest-why]").textContent,
+              steps: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent),
+              paths: [...g.querySelectorAll("[data-quest-steps] li")].map(l => l.title),
+              turns: [...g.querySelectorAll("[data-quest-turn]")].map(t => t.textContent),
+              refused: g.querySelector("[data-quest-refused]").textContent,
+              accept: g.querySelector("[data-surface='sheet.accept']").disabled}; })()`);
+    console.log("  the quest's sheet: " + JSON.stringify(seen));
+    ok("the sheet says the goal and why its door is shut",
+       /Complete/.test(seen.goal) && seen.why.replace("Not yet:", "").trim().length > 0);
+    ok("it numbers the steps, each with whose turn it is",
+       seen.steps.length >= 2 && seen.turns.length === seen.steps.length &&
+       seen.turns.every(t => t.trim().length > 0));
+    ok("a step names its row in words: the child's title, and the path only as a title",
+       seen.steps.some(t => t.includes(`Sweep the hall ${where}`)) &&
+       seen.steps.every(t => !t.includes("/api/led_tasks/")) &&
+       seen.paths.includes(child) && seen.paths.includes(epic));
+    ok("the goal's own form is the last step, with Close reason asked for",
+       /Close reason/.test(seen.steps[seen.steps.length - 1] || "") &&
+       !/close_reason/.test(seen.steps[seen.steps.length - 1] || ""));
+    ok("Accept is offered, with no refusal said",
+       seen.accept === false && seen.refused === "");
+    if (phone) {
+      await sheetFits("the quest's sheet");
+      await checkTarget("Not now", notNow);
+      await checkTarget("Accept quest", acceptIt);
+    }
+    await shot(`${slug}-notyet-sheet`);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet to close, off Not now", 15000);
+    await sleep(600);
+    ok("Not now leaves no quest and shows no tracker",
+       await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
+    /* a wait on a row the owner cannot see is a seat's step on the goal's
+       own door and row, and the engine marks it (`unseen`, answer->plan,
+       quests.clj). A seat's real step of the same shape carries no mark
+       and keeps its door and row. The sheet is drawn
+       from a preview that carries one and read as a film beat reads it
+       (readSurface, 100-core.js), and the quest's page draws the same
+       step (questStep, 200-events-follow.js). Nothing is written. */
+    const wait = await evaljs(`(() => {
+      const note = "This waits on work you cannot see.";
+      const goal = {self: ${JSON.stringify(epic)}, action: "complete"};
+      const real = {self: goal.self, door: "complete", whose: "seat", waiting_on: "Juniper",
+                    note, door_label: "Complete", row_label: "The epic", state: "waiting"};
+      const unseen = {...real, unseen: true};
+      const held = {self: ${JSON.stringify(child)}, door: "complete", whose: "seat",
+                    waiting_on: "Juniper", door_label: "Complete", row_label: "The child"};
+      const mine = {self: ${JSON.stringify(child)}, door: "complete", whose: "choice",
+                    state: "next", door_label: "Complete", row_label: "The child",
+                    alternatives: [{self: ${JSON.stringify(child)}, door: "drop",
+                                    door_label: "Drop"}]};
+      const dlg = questSheet({title: ""}, "complete", {}, null, goal,
+        {ok: true, body: {preview: {goal: "Complete the epic",
+                                    plan: [unseen, held, real, mine]}}});
+      const read = readSurface("sheet");
+      dlg.close();
+      const li = questStep({state: "active", data: goal}, unseen);
+      const li2 = questStep({state: "active", data: goal}, real);
+      return {note, steps: read && read.steps, page: li.textContent,
+              real_page: li2.textContent, mine_waits: questWaits(mine),
+              links: li.querySelectorAll("a").length}; })()`);
+    console.log("  the unseen wait: " + JSON.stringify(wait));
+    ok("the sheet says an unseen wait by its note alone, and its turn names who is waited on",
+       !!wait.steps && wait.steps[0].label === wait.note &&
+       wait.steps[0].whose === "waiting on Juniper");
+    ok("a seat's step on a row the reader sees keeps its door, its row and the seat's name",
+       !!wait.steps && wait.steps[1].label === "Complete The child" &&
+       wait.steps[1].whose === "Juniper's");
+    ok("the quest's page says the unseen wait with no row beside it",
+       wait.page === wait.note + " · waiting on Juniper" && wait.links === 0);
+    ok("a seat's real step on the goal's own door and row, with a note, still names its door and row",
+       !!wait.steps && !!wait.steps[2] && wait.steps[2].label !== wait.note &&
+       wait.steps[2].label.startsWith("Complete") && wait.steps[2].whose === "Juniper's" &&
+       wait.real_page !== wait.page && wait.real_page.startsWith(wait.note + " · "));
+    ok("a choice the reader can take is theirs on the sheet, as the tracker judges it",
+       !!wait.steps && !!wait.steps[3] && wait.steps[3].whose === "yours" &&
+       wait.mine_waits === false);
+    await press(door);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
+                  "the quest's sheet again, off a second tap", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    await press(acceptIt);
+    /* a refused create or pin is said in the sheet: the page's last
+       words say which, when the tracker never shows. The pin's frame
+       can show the tracker before the pin's answer closes the sheet,
+       so the wait is for both. */
+    await waitFor(`!${bar}.hidden && !!${bar}.querySelector("[data-quest-title]") &&
+                   !document.querySelector("dialog[open]")`,
+                  "the tracker and the closed sheet, off Accept", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("Accept closes the sheet and shows the tracker",
+       await evaljs(`!document.querySelector("dialog[open]")`));
+    const made = (await pinned())[0]?.self;
+    ok("the tap leaves a quest pinned", !!made);
+    const goal = (await get(made)).data || {};
+    ok("its goal is this row and this door",
+       String(goal.self || "").split("?")[0] === epic && goal.action === "complete");
+
+    const headIs = self => `(() => {
+      const s = questDoc && questHead(questDoc);
+      return !!s && s.door === "complete" && s.self === ${JSON.stringify(self)} &&
+        !!${bar}.querySelector("[data-surface='tracker.go']:not(:disabled)"); })()`;
+    await waitFor(headIs(child), "the child's Complete at the tracker's head", 30000, plan);
+    /* the tracker and the quest's page name a step's row and what its
+       door asks for in words, and no path is text (ticket 5b3fa3f7) */
+    const childTitle = JSON.stringify(`Sweep the hall ${where}`);
+    await waitFor(`(${bar}.querySelector("[data-quest-row]")?.textContent || "")
+                     .includes(${childTitle})`,
+                  "the child's title in the tracker", 15000, `${bar}.textContent`);
+    ok("the tracker names the step's row and its needs in words, and no path",
+       await evaljs(`((questHead(questDoc).needs || []).length === 0 ||
+                      /Close reason/.test(${bar}.textContent)) &&
+                     !/close_reason/.test(${bar}.textContent) &&
+                     !/\\/api\\//.test(${bar}.textContent)`));
+    const wasAt = await evaljs(`location.hash`);
+    const qPlan = `document.querySelector("[data-quest-plan]")`;
+    await evaljs(`location.hash = ${JSON.stringify("#" + made)}; true`);
+    await waitFor(`!!${qPlan} && [...${qPlan}.querySelectorAll("[data-quest-row]")]
+                     .some(a => a.textContent.includes(${childTitle}))`,
+                  "the child's title on the quest's page", 15000,
+                  `document.body.innerText.slice(-400)`);
+    ok("the quest's page names each step's row and its needs in words, and no path",
+       await evaljs(`/Close reason/.test(${qPlan}.textContent) &&
+                     !/close_reason/.test(${qPlan}.textContent) &&
+                     !/\\/api\\//.test(${qPlan}.textContent)`));
+    /* the data table under the checklist draws the goal row in words
+       and leaves the plan out: no path is visible text anywhere on the
+       page (ticket bdd37958) */
+    await waitFor(`!!document.querySelector("table.kv [data-quest-row]")`,
+                  "the goal row in the quest's data table", 15000,
+                  `document.body.innerText.slice(-400)`);
+    /* the whole page, the shell's ticker included: it names the last
+       event's row in words, with the path as href and title (ticket
+       14b91354). A miss says the text the path was read in */
+    const paths = JSON.parse(await evaljs(`JSON.stringify(
+      document.body.innerText.match(/.{0,60}\\/api\\/.{0,60}/g) || [])`));
+    ok("the quest's whole page shows no row path as text" +
+       (paths.length ? ": " + JSON.stringify(paths) : ""), !paths.length);
+    await evaljs(`location.hash = ${JSON.stringify(wasAt)}; true`);
+    await waitFor(`!${qPlan}`, "the page the quest was accepted on", 15000);
+    /* the plan's last step, and whether it is `self`'s Complete with
+       close_reason still owed: a miss says the plan it read */
+    const endsWith = async (name, self) => {
+      const steps = JSON.parse(await evaljs(plan)) || [];
+      const last = steps[steps.length - 1] || {};
+      console.log("  the plan: " + JSON.stringify(steps));
+      const ends = last.door === "complete" && last.self === self &&
+        (last.needs || []).flat().includes("close_reason");
+      ok(name + (ends ? "" : ": " + JSON.stringify(steps)), ends);
+    };
+    /* a goal the row page draws shut is not rehearsed past its refusal
+       (client.clj, the door not afforded), so the planner reads the
+       goal's needs from the kind's declaration: the goal's own step,
+       with its form, is the last one from the first plan on */
+    await endsWith("the first plan ends with the parent's Complete, which needs close_reason",
+                   epic);
+    /* Go, the form, a reason, and the form's own button: → how many of
+       the form's fields were lit */
+    const close = async what => {
+      await sleep(600);
+      await press('[data-surface="tracker.go"]');
+      await waitFor(`!!document.querySelector('dialog[open] [name="close_reason"]')`,
+                    `${what}, off Go`, 15000);
+      await sleep(600);
+      const lit = await evaljs(`[...document.querySelectorAll("dialog[open] .invited")]
+        .filter(e => !e.closest(".dlgfoot")).length`);
+      if (phone) await sheetFits(what);
+      await evaljs(`(() => {
+        const i = document.querySelector('dialog[open] [name="close_reason"]');
+        i.value = "Done.";
+        i.dispatchEvent(new Event("input", {bubbles: true}));
+        i.dispatchEvent(new Event("change", {bubbles: true}));
+        return true; })()`);
+      await sleep(600);
+      await evaljs(`document.querySelector("dialog[open] .dlgfoot button.primary").click(); true`);
+      await waitFor(`!document.querySelector("dialog[open]")`, `${what} to close`, 15000, refused);
+      return lit;
+    };
+    await close("the child's Complete");
+    await waitFor(headIs(epic), "the parent's Complete at the tracker's head", 30000, plan);
+    await endsWith("the plan then ends with the parent's Complete, which needs close_reason",
+                   epic);
+    const lit = await close("the parent's Complete");
+    console.log(`  the goal's form: ${lit} lit`);
+    ok("Go opens the goal's form last, with close_reason lit", lit > 0);
+    await waitFor(`!!${bar}.querySelector("[data-quest-complete]")`,
+                  `Quest complete ${where}`, 40000, plan);
+    ok("Go walks the tapped door's quest to Quest complete", true);
+    if (phone) await noOverflow("under the tapped door's Quest complete");
+    await shot(`${slug}-notyet-complete`);
+    for (let i = 0; i < 60 && (await get(made)).state !== "finished"; i++) await sleep(250);
+    ok("the parent's Complete finishes the quest", (await get(made)).state === "finished");
+    ok("and the parent is done", (await get(epic)).state === "done");
+    /* a door shut by its state alone carries remedies only when a door
+       of the row leads to a state it opens from (render.clj,
+       out-of-state-entry; machine.clj, roads). Nothing leaves done, so
+       a done task's doors name no way out and are never reachable */
+    const shut = (await get(epic)).unavailable ?? null;
+    console.log("  the done parent's shut doors: " + JSON.stringify(shut));
+    ok("the done parent's doors are shut by its state, and carry no remedies",
+       ["complete", "discard"].every(n => {
+         const e = (shut || {})[n];
+         return !!e && (e.becomes_available?.in_states || []).includes("open") &&
+           !(e.remedies || []).length; }));
+    /* a refused Accept (ticket 5b321c0a): the cap is reached between the
+       preview and Accept, so the sheet opens with its steps and the
+       create is refused. The sentence is said in the sheet and Accept
+       is disabled; the walk holds the `refusal` frame for its film. */
+    await evaljs(`location.hash = ${JSON.stringify(room)}; true`);
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(room)} &&
+                   !!document.querySelector(${JSON.stringify(shutDoor + "[aria-describedby]")})`,
+                  "the second task's row page again, with its shut Complete", 15000,
+                  `[...document.querySelectorAll("#view button")].map(b => b.outerHTML.slice(0, 160))`);
+    await sleep(600);
+    /* first, an Accept whose create is made and whose pin is refused
+       (ticket 9d1e2615). `pin` has one guard, the-owner-moves-it
+       (quests.clj), and it never refuses the hand that made the quest;
+       a refusal is recorded in the refused hand's own walk alone
+       (walks.clj, record-refused!). So the pin a recorder is refused is
+       refused by the quest's state: `pin` leaves active only. The page's
+       pin is held on its way out, priya abandons the quest over the API,
+       and the pin then goes. The sentence is said in the sheet and
+       Accept is disabled; the walk holds the `create` and the `refusal`. */
+    await press(shutDoor);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
+                  "the second task's sheet, with Accept offered, one short of the cap", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    await evaljs(`(() => {
+      const real = window.fetch;
+      window.__pin = {url: null, answer: null};
+      const go = new Promise(done => { window.__pinGo = done; });
+      window.fetch = async (u, o) => {
+        if (!String(u).includes("/-/pin")) return real(u, o);
+        window.__pin.url = String(u);
+        await go;
+        const res = await real(u, o);
+        window.__pin.answer = {status: res.status,
+                               body: await res.clone().json().catch(() => null)};
+        return res; };
+      window.__pinUnwatch = () => { window.fetch = real; };
+      return true; })()`);
+    await press(acceptIt);
+    await waitFor(`!!window.__pin.url`, "the page's pin, held on its way out", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const unpinned = new URL(await evaljs(`window.__pin.url`), BASE).pathname
+      .replace(/\/-\/pin$/, "");
+    ok("Accept makes the quest, active and not pinned yet",
+       (await get(unpinned)).state === "active" && (await pinned()).length === 0);
+    const gone = await post(unpinned + "/-/abandon", {}, h);
+    ok("priya abandons it elsewhere, under the open sheet",
+       gone.status < 400 && (await get(unpinned)).state === "abandoned");
+    await evaljs(`window.__pinGo(); true`);
+    await waitFor(`!!${saidWhy}`, "the refused pin, in the quest's sheet", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const pinSaid = await evaljs(saidWhy);
+    const pinAnswer = await evaljs(`window.__pin.answer`);
+    await evaljs(`window.__pinUnwatch(); true`);
+    console.log("  the refused pin: " + JSON.stringify([pinSaid, pinAnswer]));
+    ok("the pin of the made quest is refused",
+       !!pinAnswer && pinAnswer.status >= 400 && pinAnswer.status < 500);
+    ok("a refused pin says the engine's sentence in the sheet",
+       !!pinAnswer?.body?.title && pinSaid.includes(pinAnswer.body.title) &&
+       pinSaid.includes(pinAnswer.body.detail || ""));
+    ok("and Accept is disabled, in the sheet still open",
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
+    if (phone) await sheetFits("the sheet of the refused pin");
+    await shot(`${slug}-notyet-pin-refused`);
+    await sleep(600);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet of the refused pin to close, off Not now", 15000);
+    ok("the refused pin leaves no quest pinned", (await pinned()).length === 0);
+    await sleep(600);
+    await press(shutDoor);
+    await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
+                  "the second task's sheet, with Accept offered", 15000,
+                  `document.body.innerText.slice(-400)`);
+    await sleep(600);
+    const last = await post("/api/quests", {self: room, action: "complete"}, h);
+    if (last.status === 201 && last.doc?.self) kept.push(last.doc.self);
+    ok("a quest made elsewhere fills the cap under the open sheet", last.status === 201);
+    await press(acceptIt);
+    await waitFor(`!!${saidWhy}`, "the refused Accept, in the quest's sheet", 15000,
+                  `document.body.innerText.slice(-400)`);
+    const late = await evaljs(saidWhy);
+    console.log("  the refused Accept: " + JSON.stringify(late));
+    ok("a refused Accept says the engine's sentence in the sheet",
+       /at most 20 active quests/.test(late));
+    ok("and Accept is disabled, in the sheet still open",
+       await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
+    if (phone) await sheetFits("the sheet of the refused Accept");
+    await shot(`${slug}-notyet-accept-refused`);
+    await sleep(600);
+    await press(notNow);
+    await waitFor(`!document.querySelector("dialog[open]")`,
+                  "the sheet of the refused Accept to close, off Not now", 15000);
+    ok("the refused Accept pins no quest", (await pinned()).length === 0);
+    await sleep(1500);
+    await evaljs(`stopRecording().then(() => true)`);
+    await waitFor(`hereHref().split("?")[0] === ${JSON.stringify(walk)} &&
+                   !!document.querySelector("[data-replay-walk]")`,
+                  "the sealed walk's page", 15000);
+    ok(`stop seals the walk ${where}`, (await get(walk)).state === "sealed");
+    for (const q of kept) await post(q + "/-/abandon", {}, h);
+    ok("priya lets the kept quests go, out of her recording",
+       (await Promise.all(kept.map(q => get(q)))).every(q => q.state === "abandoned"));
+
+    console.log(`· film: the tapped door's walk ${where}`);
+    /* the press is lit for a moment: the page itself notes it, with
+       whether the replay first walked to another row (replayGesture) */
+    const active = async () => ((await get("/api/quests?state=active&owner=" +
+      encodeURIComponent(me))).data?.items || []).length;
+    const before = await active();
+    /* and each sheet the replay opens, with its steps, its close and
+       the presses the replay draws on its Accept quest */
+    await evaljs(`window.__notYet = null;
+      window.__sheets = [];
+      if (window.__sheetWatch) window.__sheetWatch.disconnect();
+      window.__sheetWatch = new MutationObserver(ms => {
+        const is = n => n.nodeType === 1 && n.matches("[data-surface='sheet']");
+        for (const m of ms) {
+          for (const n of m.addedNodes)
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false, accepts: 0,
+              steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
+          for (const n of m.removedNodes)
+            if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
+              said: n.querySelector("[data-quest-refused]").textContent,
+              shut: n.querySelector("[data-surface='sheet.accept']").disabled});
+        }
+      });
+      window.__sheetWatch.observe(document.body, {childList: true});
+      new MutationObserver(ms => {
+        for (const m of ms) {
+          const open = window.__sheets.find(s => !s.closed);
+          if (open && m.target.hasAttribute("data-replay-press") &&
+              m.target.matches("[data-surface='sheet.accept']"))
+            open.accepts++;
+        }
+        const b = document.querySelector(${JSON.stringify(door + "[data-replay-press]")});
+        if (b && !window.__notYet)
+          window.__notYet = {self: b.dataset.questSelf,
+                             walk: !!(replay && replay.gesture && replay.gesture.walk)};
+      }).observe(document.documentElement,
+                 {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      window.__beatEvents = [];
+      if (!window.__beatWatch) document.addEventListener("waymark:film-beat",
+        window.__beatWatch = e => window.__beatEvents.push(e.detail.i));
+      location.hash = "#" + ${JSON.stringify(walk)} + "?film=1"; true`);
+    await waitFor(`!!window.__notYet`, "the replay's press on Complete", 240000, why);
+    const pressed = await evaljs(`window.__notYet`);
+    console.log("  the replay's press: " + JSON.stringify(pressed));
+    ok("the replay draws the press on Complete, on the parent's own page",
+       pressed.self === epic);
+    ok("and makes no walk to the quest's row for it", pressed.walk === false);
+    await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                  `the film to end ${where}`, 240000, why);
+    ok(`film mode reaches ended ${where}`, true);
+    /* the beats the film said (docs/spec-agent-demo-walks.md §8b): what
+       it pressed, and what the sheet and the tracker said */
+    const said = JSON.parse(await evaljs(`JSON.stringify({beats: window.wmFilmBeats || [],
+      events: window.__beatEvents, frames: replay ? replay.frames.length : null,
+      tracker: readSurface("tracker")})`));
+    const beats = said.beats, lastBeat = beats[beats.length - 1] || {};
+    const presses = beats.map(b => b.pressed && b.pressed.target);
+    const flat = t => String(t).replace(/\s+/g, " ").trim();
+    console.log("  the film's beats: " + JSON.stringify(beats.map(b =>
+      [b.i, b.type, b.pressed, b.sheet && b.sheet.steps.map(s => s.label),
+       b.tracker && b.tracker.next])));
+    ok(`the film says a beat for each frame it steps to, in order, by its event ${where}`,
+       beats.length > 0 && beats.every((b, n) => !n || b.i > beats[n - 1].i) &&
+       JSON.stringify(said.events) === JSON.stringify(beats.map(b => b.i)) &&
+       (said.frames == null || lastBeat.i === said.frames - 1));
+    ok("the beats hold the press on the shut Complete and the press on Accept quest",
+       presses.includes("door:complete") && presses.includes("sheet.accept"));
+    ok("a beat's sheet lists the recorded steps, each by its door and its row",
+       beats.some(b => b.sheet && b.sheet.steps.length === seen.steps.length &&
+         b.sheet.steps.every((s, n) => !!s.label && flat(seen.steps[n]).startsWith(s.label))));
+    ok("a beat's tracker names the step at its head",
+       beats.some(b => b.tracker && !!b.tracker.next));
+    /* what a viewer could read and where it is (§8b): the sheet's beat
+       is about the sheet, which is on the screen whole, in type a
+       person can read */
+    const sheetBeat = beats.find(b => b.sheet && b.sheet.shut_reason &&
+                                      b.focus && b.focus.name === "sheet");
+    const tight = t => String(t || "").replace(/\s+/g, "");
+    const fr = sheetBeat?.focus.rect, vp = sheetBeat?.viewport;
+    console.log("  the sheet's beat: " + JSON.stringify(sheetBeat &&
+      {focus: [sheetBeat.focus.name, fr], viewport: vp, type_px: sheetBeat.type_px,
+       contrast: sheetBeat.contrast, pointer: sheetBeat.pointer,
+       boxes: sheetBeat.boxes.map(b => b.name), text: sheetBeat.text.slice(0, 200)}));
+    ok(`the sheet's beat has the sheet as its focus, with its rect inside the viewport ${where}`,
+       !!sheetBeat && fr.w > 0 && fr.h > 0 && fr.x >= 0 && fr.y >= 0 &&
+       fr.x + fr.w <= vp.w + 1 && fr.y + fr.h <= vp.h + 1);
+    ok("its text holds the sheet's reason",
+       !!sheetBeat && tight(sheetBeat.text).includes(tight(sheetBeat.sheet.shut_reason)));
+    ok("its focus text is 12 px or larger, with a contrast ratio and the sheet among its boxes",
+       !!sheetBeat && sheetBeat.type_px >= 12 && sheetBeat.contrast >= 1 &&
+       sheetBeat.boxes.some(b => b.name === "sheet"));
+    ok("the last beat says the tracker as the film leaves it",
+       JSON.stringify(lastBeat.tracker) === JSON.stringify(said.tracker));
+    /* what a beat leaves out, and the ratio it does not guess (§8b):
+       the film's own measure (filmMeasure) of a block drawn for it, with
+       a run under a fixed bar and a run its scrolling parent clips, each
+       with the block itself as the page's answer at its centre; a run
+       with a bar over its top and one over its bottom, which is mostly
+       covered with its centre open, and a run with a thin bar over its
+       centre only; a run under a bar that takes no pointer, and a run
+       under such a bar that draws nothing; a run a `clip-path` cuts
+       away beside one it leaves, and a run a clipping parent scaled to
+       half cuts away beside one it leaves; then of the same block under
+       an open modal, where it is inert and those two clips are read by
+       geometry; then of the same block with a gradient behind its text */
+    const drawn = JSON.parse(await evaljs(`(() => {
+      const d = document.createElement("div");
+      d.dataset.surface = "film.case";
+      d.style.cssText = "position:fixed;left:0;top:0;width:300px;height:200px;" +
+        "z-index:2147483000;background:#fff;font:16px/20px sans-serif";
+      const bar = (top, h, look) => "<div style='position:fixed;left:0;top:" + top +
+        "px;width:300px;height:" + h + "px;" + (look || "background:#333") + "'></div>";
+      d.innerHTML = "<p>open run</p><p>barred run</p>" +
+        "<div style='height:20px;overflow:hidden'><p>kept run</p><p>clipped run</p></div>" +
+        "<p>pinched run</p><p>striped run</p><p>veiled run</p><p>glass run</p>" +
+        "<div style='clip-path:inset(0 0 20px 0)'><p>shown run</p><p>cut run</p></div>" +
+        "<div style='height:20px;overflow:hidden;transform:scale(.5);" +
+        "transform-origin:0 0'><p>small run</p><p>lost run</p></div>" +
+        bar(20, 20) + bar(60, 8) + bar(72, 8) + bar(89, 2) +
+        bar(100, 20, "background:#333;pointer-events:none") +
+        bar(120, 20, "pointer-events:none");
+      for (const p of d.querySelectorAll("p"))
+        p.style.cssText = "margin:0;padding:0;height:20px;color:#000;font-size:16px";
+      document.body.prepend(d);
+      const read = () => {
+        const b = {};
+        filmMeasure({at: d, pressed: null}, b);
+        return {text: b.text, focus: b.focus && b.focus.text, contrast: b.contrast};
+      };
+      try {
+        const plain = read();
+        /* a modal in the far corner, off the block: the beat's focus is
+           then not the block, so its runs are read with filmRuns */
+        const m = document.createElement("dialog");
+        m.style.cssText = "position:fixed;inset:auto 0 0 auto;margin:0;padding:0;" +
+          "border:0;width:40px;height:20px";
+        document.body.append(m);
+        let under;
+        try {
+          m.showModal();
+          under = {text: read().text, runs: filmRuns(d).map(r => r.s).join(" ")};
+        } finally { m.close(); m.remove(); }
+        d.style.backgroundImage = "linear-gradient(#fff, #000)";
+        return JSON.stringify({front: !!filmFront(), plain, under, gradient: read()});
+      } finally { d.remove(); }
+    })()`));
+    const stays = "open run kept run striped run glass run shown run small run";
+    console.log("  the drawn block's beats: " + JSON.stringify(
+      {...drawn, plain: {...drawn.plain, text: drawn.plain.text.slice(0, 80)},
+       under: {...drawn.under, text: drawn.under.text.slice(0, 80)},
+       gradient: {...drawn.gradient, text: drawn.gradient.text.slice(0, 80)}}));
+    ok(`a run under a fixed bar and a run its scrolling parent clips are in neither text ${where}`,
+       drawn.plain.focus === stays && drawn.plain.text.includes(stays) &&
+       !/barred run|clipped run/.test(drawn.plain.text));
+    ok("a run mostly covered with its centre open is in neither text, and one with its centre " +
+       "only covered is in both",
+       !/pinched run/.test(drawn.plain.text) && /striped run/.test(drawn.plain.focus || ""));
+    ok("a run under a bar that takes no pointer is in neither text, and one under such a bar " +
+       "that draws nothing is in both",
+       !/veiled run/.test(drawn.plain.text) && /glass run/.test(drawn.plain.focus || ""));
+    ok("a run a clip-path cuts away is in neither text, and the run it leaves is in both",
+       !/cut run/.test(drawn.plain.text) && /shown run/.test(drawn.plain.focus || ""));
+    ok("a run a transformed clipping parent cuts away is in neither text, and the run it " +
+       "leaves is in both",
+       !/lost run/.test(drawn.plain.text) && /small run/.test(drawn.plain.focus || ""));
+    const underOk = !/cut run|lost run/.test(drawn.under.text + " " + drawn.under.runs) &&
+      /shown run.*small run/.test(drawn.under.runs) &&
+      /shown run.*small run/.test(drawn.under.text);
+    ok("under an open modal, where the page answers no run of the block, the two runs cut " +
+       "away are not in the beat's text or the block's runs, and the two runs left are in both" +
+       (underOk ? "" : ": " + JSON.stringify(drawn.under.runs)), underOk);
+    ok("and the contrast is of the text on the colour behind it: 21",
+       drawn.plain.contrast === 21);
+    ok("a gradient behind the focus text leaves its text as it was, and gives no contrast",
+       drawn.gradient.focus === stays && drawn.gradient.text.includes(stays) &&
+       drawn.gradient.contrast === null);
+    const sheets = await evaljs(`window.__sheets`);
+    console.log("  the replay's sheets: " + JSON.stringify(sheets));
+    ok("the replay opens the quest's sheet for each tap, with the recorded steps",
+       sheets.length === 4 && sheets.every(s => s.replay && s.steps.length > 0) &&
+       sheets.slice(0, 2).every(s =>
+         JSON.stringify(s.steps) === JSON.stringify(seen.steps)));
+    /* the third is the second task's: its Accept made the quest and was
+       refused its pin. One tap is one press, at the create; the refused
+       pin draws none (replayGestureTarget), its sentence is said in the
+       sheet (replaySheetRefused), and the sheet closes off Not now */
+    ok("the replay says the refused pin in the sheet, with Accept disabled",
+       !!pinSaid && sheets[2]?.said === pinSaid && sheets[2]?.shut === true);
+    ok("and makes one press on Accept quest for the made create and its refused pin" +
+       (sheets[2]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[2]?.accepts === 1);
+    ok("and closes that sheet off Not now",
+       sheets[2]?.closed === true &&
+       beats.some(b => b.pressed && b.pressed.target === "sheet.decline" &&
+                       b.i > (beats.find(p => p.sheet && p.sheet.refused)?.i ?? Infinity)));
+    /* the fourth is the second task's again: its Accept was refused at
+       the cap, and the film says so where the recording did */
+    ok("the replay says the refused Accept in the sheet, with Accept disabled",
+       /at most 20 active quests/.test(sheets[3]?.said || "") && sheets[3]?.shut === true);
+    /* the quest made over the API under that sheet has the sheet's own
+       goal and is not its Accept (replaySheetMade): the one press is
+       the refused create's */
+    ok("and makes one press on Accept quest for the refused Accept" +
+       (sheets[3]?.accepts === 1 ? "" : ": " + JSON.stringify(sheets.map(s => s.accepts))),
+       sheets[3]?.accepts === 1);
+    ok("and says no refusal in the sheets it was not said in",
+       sheets.slice(0, 2).every(s => s.said === ""));
+    ok("and closes each: off Not now, and off Accept quest",
+       sheets.every(s => s.closed));
+    ok("the replay makes no quest", (await active()) === before);
+    await shot(`${slug}-notyet-film`);
+    await fresh(`the page ${where}, out of its film`);
+
+    /* the jump box by its surfaces (docs/spec-agent-demo-walks.md §8a):
+       readSurface answers the lines as drawn and the selected one, and
+       a press on jump.home goes home */
+    console.log(`· the jump box ${where}`);
+    const jump = async () => JSON.parse(await evaljs(`JSON.stringify({
+      box: readSurface("jump"), query: readSurface("jump.query"),
+      home: readSurface("jump.home"),
+      drawn: [...document.querySelectorAll("#jumplist [role='option']")].map(o =>
+        ({name: o.getAttribute("data-surface"), row: o.getAttribute("data-row"),
+          selected: o.getAttribute("aria-selected") === "true"}))})`));
+    const jumpKey = key => evaljs(`document.querySelector("#jumpq").dispatchEvent(
+      new KeyboardEvent("keydown", {key: ${JSON.stringify(key)}, bubbles: true})); true`);
+    const jumpType = text => evaljs(`{ const i = document.querySelector("#jumpq");
+      i.value = ${JSON.stringify(text)};
+      i.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+    const same = (lines, drawn) => lines.length === drawn.length &&
+      lines.every((l, n) => l.name === drawn[n].name && l.row === drawn[n].row &&
+                            l.selected === drawn[n].selected);
+    ok(`a shut jump box answers no surface ${where}`, (await jump()).box === null);
+    await evaljs(`document.dispatchEvent(new KeyboardEvent("keydown",
+      {key: "k", ctrlKey: true, bubbles: true, cancelable: true})); true`);
+    await waitFor(`(readSurface("jump")?.lines.length || 0) > 1`,
+                  `the jump box's lines ${where}`, 15000);
+    const opened = await jump();
+    console.log("  the jump box: " + JSON.stringify(opened.box).slice(0, 400));
+    ok("the open box answers an empty query and each line as drawn",
+       opened.box.query === "" && same(opened.box.lines, opened.drawn) &&
+       opened.query.text === "" && opened.query.disabled === false);
+    ok("its first line is jump.home, with no row, and is the selected one",
+       opened.box.lines[0].name === "jump.home" && opened.box.lines[0].row === null &&
+       opened.box.lines[0].label === "Home" && !!opened.home &&
+       opened.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(opened.box.selected) === JSON.stringify(opened.box.lines[0]));
+    ok("every other line is jump.line, with the row it goes to",
+       opened.box.lines.slice(1).every(l => l.name === "jump.line" && !!l.row && !!l.label));
+    await jumpKey("ArrowDown");
+    const down = await jump();
+    ok("an arrow down moves the selected line to the second",
+       same(down.box.lines, down.drawn) &&
+       down.box.lines.filter(l => l.selected).length === 1 &&
+       JSON.stringify(down.box.selected) === JSON.stringify(down.box.lines[1]) &&
+       down.box.selected.row === opened.box.lines[1].row);
+    await jumpType("led");
+    const typed = await jump();
+    console.log("  typed 'led': " + JSON.stringify(typed.box).slice(0, 400));
+    ok("the box and jump.query answer what was typed",
+       typed.box.query === "led" && typed.query.text === "led");
+    ok("the lines are the filtered ones as drawn, with the tasks' line among them",
+       typed.box.lines.length > 0 && typed.box.lines.length < opened.box.lines.length &&
+       same(typed.box.lines, typed.drawn) &&
+       typed.box.lines.some(l => l.name === "jump.line" && l.row === "/api/led_tasks"));
+    ok("and the first of them is the selected one",
+       JSON.stringify(typed.box.selected) === JSON.stringify(typed.box.lines[0]));
+    await jumpType("");
+    await waitFor(`!!readSurface("jump.home")`, `the home line again ${where}`, 15000);
+    await shot(`${slug}-jump`);
+    await press('[data-surface="jump.home"]');
+    await waitFor(`!document.body.classList.contains("jump-open") && !location.hash.slice(1)`,
+                  `home, off the press on jump.home ${where}`, 15000,
+                  `({open: document.body.classList.contains("jump-open"), hash: location.hash})`);
+    ok(`a press on jump.home shuts the box and goes home ${where}`,
+       (await jump()).box === null);
+    await fresh(`the tasks' page ${where}, back from home`);
+
+    /* the same sheet from a walk the connector records (stage-sheet!,
+       server/mcp.clj; ticket 5bc2c3e4): a rehearsed quest create on a
+       shut goal is the tap, the create after it is Accept quest, and the
+       pin puts the quest in the tracker. No page takes part in the
+       recording: the film is all the browser sees of it. */
+    console.log(`· the connector's quest preview ${where}`);
+    const tool = async (name, args) => {
+      const res = await fetch(BASE + "/api/-/mcp", {method: "POST",
+        headers: {...h, "Content-Type": "application/json", "Accept": "application/json"},
+        body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+                              params: {name, arguments: args}})});
+      const doc = await res.json().catch(() => null);
+      if (res.status !== 200 || !doc?.result || doc.result.isError)
+        console.log(`  ${name}: ${res.status} ` + JSON.stringify(doc).slice(0, 400));
+      return res.status === 200 && !!doc?.result && !doc.result.isError;
+    };
+    const top = await post("/api/led_tasks", {title: `Clear the loft ${where}`}, h);
+    const loft = top.doc?.self;
+    const box = await post("/api/led_tasks",
+      {title: `Carry the boxes down ${where}`, parent: String(loft).split("/").pop()}, h);
+    ok("a third task with an open child, for the connector's quest",
+       top.status === 201 && !!loft && box.status === 201);
+    const actives = async () => ((await get("/api/quests?state=active&owner=" +
+      encodeURIComponent(me))).data?.items || []).map(q => q.self);
+    const had = await actives();
+    const rec = await post("/api/walks",
+      {followed: await evaljs(`principalId() || viewerId()`),
+       title: "A quest previewed by the connector " + where, docs: true}, h);
+    const cWalk = rec.doc?.self;
+    if (!cWalk) console.log("  the walk's create: " + JSON.stringify(rec));
+    ok(`priya records a walk of her own, with no page in it ${where}`,
+       rec.status === 201 && !!cWalk);
+    const shutGoal = {self: loft, action: "complete"};
+    ok("the connector rehearses the quest's create on the shut Complete",
+       await tool("waymark_invoke",
+                  {kind: "quest", action: "create", dry_run: true, input: shutGoal}));
+    await sleep(1500);
+    ok("and then makes the quest, with the same input",
+       await tool("waymark_invoke", {kind: "quest", action: "create", input: shutGoal}));
+    const quest = (await actives()).find(q => !had.includes(q));
+    ok("the create made one quest of priya's", !!quest);
+    await sleep(1500);
+    ok("and the connector pins it",
+       await tool("waymark_invoke",
+                  {kind: "quest", id: String(quest).split("/").pop(), action: "pin"}));
+    ok("the quest is priya's pinned one", (await pinned()).some(q => q.self === quest));
+    await sleep(1500);
+    ok("priya seals the connector's walk",
+       (await post(cWalk + "/-/seal", {}, h)).status < 400 &&
+       (await get(cWalk)).state === "sealed");
+    /* the live quest is let go, out of the recording: the tracker the
+       film shows is then the film's own */
+    await post(quest + "/-/abandon", {}, h);
+    ok("priya lets the connector's quest go", (await get(quest)).state === "abandoned");
+    await evaljs(`refreshQuest().catch(() => {}); true`);
+    await waitFor(`${bar}.hidden === true`, `no pinned quest before the film ${where}`, 15000);
+
+    console.log(`· film: the connector's quest preview ${where}`);
+    const left = await active();
+    await evaljs(`window.__accept = null;
+      window.__sheets = [];
+      if (window.__sheetWatch) window.__sheetWatch.disconnect();
+      window.__sheetWatch = new MutationObserver(ms => {
+        const is = n => n.nodeType === 1 && n.matches("[data-surface='sheet']");
+        for (const m of ms) {
+          for (const n of m.addedNodes)
+            if (is(n)) window.__sheets.push({replay: !!replay, closed: false,
+              here: hereHref().split("?")[0],
+              steps: [...n.querySelectorAll("[data-quest-steps] li")].map(l => l.textContent)});
+          for (const n of m.removedNodes)
+            if (is(n)) Object.assign(window.__sheets.find(s => !s.closed) || {}, {closed: true,
+              said: n.querySelector("[data-quest-refused]")?.textContent || "",
+              shut: !!n.querySelector("[data-surface='sheet.accept']")?.disabled});
+        }
+      });
+      window.__sheetWatch.observe(document.body, {childList: true});
+      new MutationObserver(() => {
+        const b = document.querySelector(
+          "[data-surface='sheet.accept'][data-replay-press]");
+        if (b && !window.__accept)
+          window.__accept = {text: b.textContent, shut: b.disabled,
+                             tracker: getComputedStyle(${bar}).display !== "none"};
+      }).observe(document.documentElement,
+                 {subtree: true, attributes: true, attributeFilter: ["data-replay-press"]});
+      location.hash = "#" + ${JSON.stringify(cWalk)} + "?film=1"; true`);
+    await waitFor(`!!replay && !!${sheet} &&
+                   ${sheet}.querySelectorAll("[data-quest-steps] li").length > 0`,
+                  `the quest's sheet in the connector's film ${where}`, 240000, why);
+    ok("the replay opens the quest's sheet, with its steps", true);
+    if (phone) {
+      await sheetFits("the sheet of the connector's film");
+      await noOverflow("under the sheet of the connector's film");
+    }
+    await shot(`${slug}-connector-film-sheet`);
+    await waitFor(`!!window.__accept`, "the replay's press on Accept quest", 240000, why);
+    const accepted = await evaljs(`window.__accept`);
+    console.log("  the replay's Accept: " + JSON.stringify(accepted));
+    ok("the pointer presses Accept quest, in the sheet, with Accept offered",
+       accepted.shut === false);
+    await waitFor(`!document.querySelector("[data-surface='sheet']") &&
+                   getComputedStyle(${bar}).display !== "none" &&
+                   !!${bar}.querySelector("[data-surface='tracker.go']")`,
+                  `the pinned quest in the film's tracker ${where}`, 240000, why);
+    ok("the sheet closes off Accept quest, and the quest is pinned in the tracker", true);
+    if (phone) await noOverflow("with the connector's quest in the film's tracker");
+    await shot(`${slug}-connector-film-tracker`);
+    await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                  `the connector's film to end ${where}`, 240000, why);
+    ok(`the connector's film reaches ended ${where}`, true);
+    const staged = await evaljs(`window.__sheets`);
+    console.log("  the connector's film's sheets: " + JSON.stringify(staged));
+    ok("the film opens one sheet, on the goal's own page, and closes it",
+       staged.length === 1 && staged[0].replay && staged[0].closed &&
+       staged[0].here === loft && staged[0].steps.length > 0);
+    ok("its steps are said in words, with no /api/ path in them",
+       (staged[0]?.steps || []).every(s => !s.includes("/api/")));
+    ok("and says no refusal in it", staged[0]?.said === "" && staged[0]?.shut === false);
+    ok("the connector's film makes no quest", (await active()) === left);
+    await fresh(`the page ${where}, out of the connector's film`);
+
+    /* a rehearsal the create refuses (ticket 03d24d3e): priya holds her
+       20 active quests (quests.clj, active-cap) before the walk starts,
+       so the connector's rehearsed create is refused as the create would
+       be. The walk holds the sheet's beat with that answer (stage-sheet!,
+       seen {ok false}); the film says the sentence in the sheet, with
+       Accept disabled, and nowhere else. */
+    {
+      console.log(`· the connector's refused quest preview ${where}`);
+      const filled = [];
+      let over = null;
+      for (let i = 0; i < 21 && !over; i++) {
+        const q = await post("/api/quests", shutGoal, h);
+        if (q.status === 201 && q.doc?.self) filled.push(q.doc.self);
+        else over = q;
+      }
+      console.log(`  ${filled.length} quests held, then: ` + JSON.stringify(over?.doc ?? null));
+      ok("priya's active quests reach the cap, before the walk starts",
+         filled.length > 0 && !!over && over.status >= 400 && over.status < 500 &&
+         /at most 20 active quests/.test(over.doc?.detail || ""));
+      const rec = await post("/api/walks",
+        {followed: await evaljs(`principalId() || viewerId()`),
+         title: "A quest the connector is refused " + where, docs: true}, h);
+      const rWalk = rec.doc?.self;
+      if (!rWalk) console.log("  the walk's create: " + JSON.stringify(rec));
+      ok(`priya records a second walk of her own, with no page in it ${where}`,
+         rec.status === 201 && !!rWalk);
+      const res = await fetch(BASE + "/api/-/mcp", {method: "POST",
+        headers: {...h, "Content-Type": "application/json", "Accept": "application/json"},
+        body: JSON.stringify({jsonrpc: "2.0", id: 1, method: "tools/call",
+                              params: {name: "waymark_invoke",
+                                       arguments: {kind: "quest", action: "create",
+                                                   dry_run: true, input: shutGoal}}})});
+      const told = JSON.stringify(await res.json().catch(() => null));
+      console.log(`  the refused rehearsal: ${res.status} ` + told.slice(0, 400));
+      ok("the connector's rehearsed create is refused, with the engine's sentence",
+         /at most 20 active quests/.test(told));
+      await sleep(1500);
+      ok("priya seals the refused rehearsal's walk",
+         (await post(rWalk + "/-/seal", {}, h)).status < 400 &&
+         (await get(rWalk)).state === "sealed");
+      /* the held quests are let go after the seal, out of the recording */
+      for (const q of filled) await post(q + "/-/abandon", {}, h);
+      ok("priya lets the held quests go, out of her recording",
+         (await Promise.all(filled.map(q => get(q)))).every(q => q.state === "abandoned"));
+
+      console.log(`· film: the connector's refused quest preview ${where}`);
+      const idle = await active();
+      await evaljs(`window.__sheets = [];
+        if (window.__sheetWatch) window.__sheetWatch.disconnect();
+        window.__sheetWatch = new MutationObserver(ms => {
+          for (const m of ms)
+            for (const n of m.addedNodes)
+              if (n.nodeType === 1 && n.matches("[data-surface='sheet']"))
+                window.__sheets.push({replay: !!replay, here: hereHref().split("?")[0]});
+        });
+        window.__sheetWatch.observe(document.body, {childList: true});
+        location.hash = "#" + ${JSON.stringify(rWalk)} + "?film=1"; true`);
+      await waitFor(`!!replay && /at most 20 active quests/.test(${saidWhy})`,
+                    `the refusal, in the sheet of the connector's film ${where}`, 240000, why);
+      ok("the replay opens the quest's sheet with the refusal's sentence", true);
+      ok("and Accept is disabled with that line",
+         await evaljs(`${sheet}.querySelector("[data-surface='sheet.accept']").disabled === true`));
+      /* the sentence is in the sheet alone, and the caption band is not
+         drawn: no refusal line, no notice and no caption beside it */
+      const alone = `(() => {
+        const n = s => (String(s || "").match(/at most 20 active quests/g) || []).length;
+        const s = document.querySelector("[data-surface='sheet']");
+        const band = document.querySelector("#replaycaption");
+        return n(document.body.textContent) === n(s && s.textContent) &&
+          (!band || getComputedStyle(band).display === "none" || !band.textContent);
+      })()`;
+      ok("no refusal line, notice or caption is drawn outside the sheet", await evaljs(alone));
+      if (phone) {
+        await sheetFits("the refused sheet of the connector's film");
+        await noOverflow("under the refused sheet of the connector's film");
+      }
+      await shot(`${slug}-connector-film-refused`);
+      await waitFor(`document.documentElement.getAttribute("data-film") === "ended"`,
+                    `the connector's refused film to end ${where}`, 240000, why);
+      ok(`the connector's refused film reaches ended ${where}`, true);
+      const shown = await evaljs(`window.__sheets`);
+      console.log("  the refused film's sheets: " + JSON.stringify(shown));
+      ok("the film opens one sheet, on the goal's own page",
+         shown.length === 1 && shown[0].replay && shown[0].here === loft);
+      ok("and still draws no refusal outside it at its end", await evaljs(alone));
+      ok("the refused film makes no quest", (await active()) === idle);
+      await fresh(`the page ${where}, out of the connector's refused film`);
+    }
+  };
+
+  await fresh("the phone's page, out of its film");
+  await notYet("on a phone", "phone", true);
+  /* out of the phone: the same story at a desk */
+  await send("Emulation.setTouchEmulationEnabled", {enabled: false});
+  await send("Emulation.setDeviceMetricsOverride",
+             {width: 1280, height: 800, deviceScaleFactor: 1, mobile: false});
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await waitFor(ready, "the page at desktop, as priya", 15000);
+  ok("the page is 1280 wide, out of the mobile shell",
+     await evaljs(`innerWidth === 1280 &&
+       document.documentElement.getAttribute("data-ui") !== "mobile"`));
+  await notYet("at desktop", "desktop", false);
+  await send("Emulation.clearDeviceMetricsOverride");
 }
 
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "access") await accessStory();
 else if (MODE === "invitation") await invitationStory();
 else if (MODE === "guided") await guidedStory();
+else if (MODE === "later") await laterStory();
+else if (MODE === "quest-phone") await questPhoneStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

@@ -28,6 +28,7 @@ Fields a person states:
 | `url` | Where an http server answers. |
 | `command`, `args` | What a stdio server is started with. |
 | `auth_env` | The NAME of an environment variable on the engine's host that holds the `Authorization` header value. Never the value. |
+| `send_caller` | False for an upstream that must not see who calls (§5). Empty means true. |
 | `passthrough` | True only on the row named `gate`. Its tools already wear their prefixes. |
 | `powers` | The policy. A list of `{power, tools, approval, shown, constraints}` (`why` is `approval`'s older spelling). |
 | `note` | Free words for the next person. |
@@ -41,7 +42,7 @@ States: `live`, `dark`, `retired`. Doors:
 | Door | Who | What it does |
 | --- | --- | --- |
 | `create` | a person | Makes the row and discovers the server. A server that does not answer makes a row born `dark`. |
-| `restate` | a person | States `url` or `command`, `args`, `auth_env`, `powers` or `note` again, then discovers. A server that does not answer refuses the restate. |
+| `restate` | a person | States `url` or `command`, `args`, `auth_env`, `send_caller`, `powers` or `note` again, then discovers. A server that does not answer refuses the restate. |
 | `discover` | a person or the engine | Reads `tools/list` again and mirrors it onto the row. |
 | `mark_dark` | the engine | Records that a call failed on the wire. Hidden. |
 | `mark_live` | a person | Discovers first. Refuses when the server does not answer. |
@@ -262,6 +263,29 @@ remedy. The http client reads `auth_env` at call time. The engine never
 writes the value to a row, a log, a transition or an answer. A value
 that looks like a secret (a space, a colon, more than 64 characters)
 refuses at create and at restate.
+
+### What a door may trust: the caller headers
+
+Every power call the power door forwards to an http row carries four
+headers the engine writes from the session, on every request:
+
+| Header | Value |
+| --- | --- |
+| `X-Waymark-Seat` | `name=<seat name>; id=<seat id>` when the principal is a seat's sitter (`seat:<id>`), else empty. |
+| `X-Waymark-Principal` | `type=<type>; id=<principal id>`. |
+| `X-Waymark-Acts-For` | The member the principal acts for, or empty. |
+| `X-Waymark-Sitting` | The sitting the call was made in, or empty. |
+
+The engine always writes them itself. A call's arguments never become
+headers, so a caller cannot set or spoof them. A row with `send_caller`
+false sends none of them. The engine's own hand (a source, the sit's
+bench `prepare`, a held call's forward) binds no caller and sends none.
+A stdio row has no headers.
+
+A door may trust these headers ONLY when it accepts calls from the
+engine alone: a loopback listener that also demands the row's
+`Authorization` value. A door anyone else can reach can be sent any
+header. Every colton-tools door is such a door.
 
 The seam for tests and for deployments is `(:services eng) :mcp-servers`:
 `:client-fn` (a function of the row that answers a client, or nil),

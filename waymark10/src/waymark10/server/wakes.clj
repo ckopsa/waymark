@@ -37,7 +37,9 @@
   `at_most` is a COUNT wake: the seat is not woken by a row, it is
   woken by a queue reaching a size. It does not poll — the count is
   read only when a transition of that kind matches the entry's
-  actions, which is the one moment the number can have changed — and
+  actions, which is the one moment the number can have changed, and
+  again when one of the seat's sittings closes (`judge-count-on-close`),
+  since a seat's work seldom moves the kind it counts — and
   the count itself is the collection's own (`count-under`), so the
   number in the text is the number the list page would show under the
   same filter.
@@ -100,7 +102,11 @@
   the TRAILING edge. A match writes `wake_pending` and `wake_due_at`
   (the match's own instant plus the settle) on the schedule row and
   fires NOTHING, not even the first one. A later match moves
-  `wake_due_at` forward. `release!` then holds the wake until that
+  `wake_due_at` forward, but never past the FIRST match's instant
+  (`wake_first_at`) plus the entry's `max_wait_seconds`, which is
+  three settles unless the entry says: matches that never stop must
+  not hold the wake forever (ticket 8f482592). The seat's cadence is
+  the backstop beside that cap (`backstop-due?`). `release!` then holds the wake until that
   moment has passed, beside the walls it already keeps, and the tick
   is what asks: the settle is a duration, so the answer comes within
   one tick of the moment it ends. The release fires with no text, as
@@ -210,9 +216,14 @@
 
 (defn max-open-of
   "The seat's `max_open_sittings`, or one for a row written before the
-  field existed. One is the seat as it always was."
+  field existed. One is the seat as it always was. An open breaker
+  (`breaker_open`, seat health 3) caps it to one and leaves the stated
+  number on the row."
   [seat-row]
-  (max 1 (long (or (get-in seat-row [:data :max_open_sittings]) 1))))
+  (let [stated (max 1 (long (or (get-in seat-row [:data :max_open_sittings]) 1)))]
+    (if (true? (get-in seat-row [:data :breaker_open]))
+      (min stated 1)
+      stated)))
 
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
@@ -314,18 +325,22 @@
   filter the kind cannot
   answer is a warning and a nil — a seat that cannot be counted for
   is a seat that says nothing, rather than a consumer that parks."
-  [eng kind filter-map]
-  (when-some [rdef (get (inv/resources eng) kind)]
-    (try
-      (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-            conds (:conds (collections/parse-query rdef params))
-            st (:storage eng)]
-        (store/with-tx st
-          (fn [tx] (store/count-matching st tx (:kind rdef) conds))))
-      (catch Exception e
-        (warn! "the count wake over " (name kind) " could not be counted — "
-               (ex-message e))
-        nil))))
+  ([eng kind filter-map] (count-under eng kind filter-map nil))
+  ;; `extra` is store conds counted under beside the filter's own: a
+  ;; judging seat's anti-join (`judged-out`)
+  ([eng kind filter-map extra]
+   (when-some [rdef (get (inv/resources eng) kind)]
+     (try
+       (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
+             conds (into (vec (:conds (collections/parse-query rdef params)))
+                         extra)
+             st (:storage eng)]
+         (store/with-tx st
+           (fn [tx] (store/count-matching st tx (:kind rdef) conds))))
+       (catch Exception e
+         (warn! "the count wake over " (name kind) " could not be counted — "
+                (ex-message e))
+         nil)))))
 
 (defn moved-under?
   "Does the row that MOVED fall under this entry's filter (R-12.22)?
@@ -392,6 +407,15 @@
   [e]
   (some-> (:settle_seconds e) long))
 
+(defn- max-wait-of
+  "The longest a settled entry's wake may wait after the FIRST match
+  it heard, in seconds, or nil for an entry that does not settle
+  (ticket 8f482592). The entry's own `max_wait_seconds`, or three
+  settles when it names none."
+  [e]
+  (when-some [settle (settle-of e)]
+    (long (or (:max_wait_seconds e) (* 3 settle)))))
+
 (declare entry-count)
 
 (defn- wake-for
@@ -432,22 +456,24 @@
                 (when (and (not (count-entry? e))
                            (moved-under? eng (:kind t) (:resource-id t)
                                          (:filter e)))
-                  {:text (wake-text t) :settle (settle-of e)}))
+                  {:text (wake-text t) :settle (settle-of e)
+                   :max-wait (max-wait-of e)}))
               matched)
         (some (fn [e]
                 (when (count-entry? e)
                   (when-some [n (entry-count eng @seat-row e)]
                     (let [n (long n)
-                          settle (settle-of e)]
+                          settle (settle-of e)
+                          max-wait (max-wait-of e)]
                       (if-some [at-least (:at_least e)]
                         (when (>= n (long at-least))
                           {:text (count-text (:kind e) n :at_least
                                              (long at-least))
-                           :settle settle})
+                           :settle settle :max-wait max-wait})
                         (let [at-most (long (:at_most e))]
                           (when (<= n at-most)
                             {:text (count-text (:kind e) n :at_most at-most)
-                             :settle settle})))))))
+                             :settle settle :max-wait max-wait})))))))
               matched))))
 
 ;; ── the damper ──────────────────────────────────────────────────────
@@ -481,8 +507,13 @@
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (cond-> (assoc (:data schedule-row) :wake_fired_at (str at))
-                            clear-pending? (dissoc :wake_pending :wake_due_at))
+                          ;; a fire that went out is past the fuel wall, so
+                          ;; the `halted` a wall hold stamped comes off, as
+                          ;; a sit clear of the wall takes it off
+                          (cond-> (-> (:data schedule-row)
+                                      (assoc :wake_fired_at (str at))
+                                      (dissoc :halted))
+                            clear-pending? (schedules/clear-wake))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -496,14 +527,19 @@
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
                           (if pending?
-                            (assoc (:data schedule-row) :wake_pending true)
-                            (dissoc (:data schedule-row) :wake_pending :wake_due_at))
+                            (assoc (schedules/keep-textless (:data schedule-row))
+                                   :wake_pending true)
+                            (schedules/clear-wake (:data schedule-row)))
                           (:next-flip-at schedule-row))))
   nil)
 
 (defn- mark-pending! [eng schedule-row]
-  (when-not (true? (get-in schedule-row [:data :wake_pending]))
-    (write-pending! eng schedule-row true))
+  ;; a wake with no text beside waiting texts is its own fire (ticket
+  ;; 58573175), so it is written even when the flag already stands
+  (let [data (:data schedule-row)]
+    (when-not (and (true? (:wake_pending data))
+                   (= data (schedules/keep-textless data)))
+      (write-pending! eng schedule-row true)))
   nil)
 
 (def ^:private heard-cap
@@ -532,6 +568,16 @@
                             (:data row) (:next-flip-at row))))
     row))
 
+(defn- first-heard
+  "The instant of the FIRST match the waiting settled wake heard, or
+  nil when no settled wake waits (ticket 8f482592). Read only beside a
+  pending flag and a due moment, so a mark some other clear left
+  behind is not taken for this wake's."
+  ^Instant [schedule-row]
+  (let [data (:data schedule-row)]
+    (when (and (true? (:wake_pending data)) (:wake_due_at data))
+      (instant-of (:wake_first_at data)))))
+
 (defn- due-at
   "The moment a settled wake is due, as the row should hold it after
   this match: the match's own instant plus the entry's quiet time, or
@@ -541,11 +587,24 @@
   to wait for the matches to stop, so a second entry with a shorter
   quiet time must not pull the wake in front of the first entry's.
   With one entry, which is the ordinary seat, the two readings are
-  the same moment."
-  ^Instant [schedule-row ^Instant at settle-seconds]
-  (let [asked (.plusSeconds at (long settle-seconds))
-        held (instant-of (get-in schedule-row [:data :wake_due_at]))]
-    (if (and held (.isAfter ^Instant held asked)) held asked)))
+  the same moment.
+
+  `max-wait`, when given, is the cap on what this match may ASK for
+  (ticket 8f482592): the first match's instant (`first-heard`, or
+  this match when it is the first) plus that many seconds. Matches
+  that arrive faster than the settle would otherwise move the moment
+  forward for ever, and the seat would never sit. A moment the row
+  already holds past the cap stays, for the forward-only reason."
+  (^Instant [schedule-row ^Instant at settle-seconds]
+   (due-at schedule-row at settle-seconds nil))
+  (^Instant [schedule-row ^Instant at settle-seconds max-wait]
+   (let [asked (.plusSeconds at (long settle-seconds))
+         cap (when max-wait
+               (.plusSeconds ^Instant (or (first-heard schedule-row) at)
+                             (long max-wait)))
+         asked (if (and cap (.isAfter asked ^Instant cap)) cap asked)
+         held (instant-of (get-in schedule-row [:data :wake_due_at]))]
+     (if (and held (.isAfter ^Instant held asked)) held asked))))
 
 (defn- mark-settling!
   "A match on an entry that SETTLES: the seat is not woken now, and
@@ -553,16 +612,20 @@
   match remembers itself as `wake_pending`, exactly as a damped match
   does, and writes `wake_due_at` beside it, so `release!` knows the
   wake is not ready. One maintenance write, and no transition, for
-  `write-pending!`'s reason."
-  [eng schedule-row ^Instant due]
+  `write-pending!`'s reason. `text`, when given, joins the waiting
+  texts for the release to fire with (ticket afb445d4, and
+  `schedules/keep-waiting`)."
+  ([eng schedule-row due] (mark-settling! eng schedule-row due nil))
+  ([eng schedule-row ^Instant due text]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (:data schedule-row)
+                          (assoc (cond-> (:data schedule-row)
+                                   text (schedules/keep-waiting text))
                                  :wake_pending true
                                  :wake_due_at (str due))
                           (:next-flip-at schedule-row))))
-  nil)
+  nil))
 
 (defn- settled?
   "Has the quiet time passed? A row with no `wake_due_at` has nothing
@@ -572,6 +635,28 @@
   (if-some [due (instant-of (get-in schedule-row [:data :wake_due_at]))]
     (not (.isBefore at ^Instant due))
     true))
+
+(defn- backstop-due?
+  "Is the seat's cadence owed while a settled wake waits (ticket
+  8f482592)? `sweep-cadence!` leaves a row whose wake is already
+  pending alone, so a settle that keeps being moved would hold the
+  cadence back too. With a settled wake waiting, a whole cadence
+  since the last fire releases it whatever `wake_due_at` says. A seat
+  that never fired counts from the first match it heard. A seat with
+  no cadence, and a wake that no settled entry left, have no
+  backstop."
+  [seat-row schedule-row ^Instant at]
+  (let [cadence (get-in seat-row [:data :cadence_seconds])
+        heard (first-heard schedule-row)]
+    (boolean
+     (and heard
+          (number? cadence)
+          (pos? (long cadence))
+          (if (some #(instant-of (get-in schedule-row [:data %]))
+                    [:last_fired_at :wake_fired_at])
+            (not (fired-recently? schedule-row (long cadence) at))
+            (not (.isBefore at (.plusSeconds ^Instant heard
+                                             (long cadence)))))))))
 
 (defn- throttled?
   "Is the provider's throttle still on? The row's `retry_after` is the
@@ -603,19 +688,35 @@
               (grants/spent-this-week eng (:id seat-row) at)
               (get-in seat-row [:data :budget_usd_per_week]))))))
 
+(defn- wall-mark
+  "The schedule's `halted` for a wake the fuel wall held, in the
+  spelling a halted sit stamps (`seats/halt-mark`): the wall, and the
+  sentence with the wall's own two numbers. A seat whose wakes are all
+  held never sits, so the hold has to say it."
+  [eng seat-row ^Instant at]
+  {:wall "budget"
+   :detail (str "The seat is against a wall. The week's fuel is spent: "
+                (grants/spent-this-week eng (:id seat-row) at) " of "
+                (or (get-in seat-row [:data :budget_usd_per_week]) 0M)
+                " over this seat's sittings of the last seven days. The"
+                " wall lifts on its own as the window rolls.")})
+
 (defn- hold-at-the-wall!
   "A match the fuel wall held: remembered as `wake_pending`, so the
   first release after the window rolls fires it, and
-  `last_halted_wake` stamped beside it, so a person reading the
-  schedule row can see why the seat stayed quiet. One maintenance
-  write, for `write-pending!`'s reason."
-  [eng schedule-row ^Instant at]
+  `last_halted_wake` stamped beside it with `halted`, the wall and its
+  sentence (`wall-mark`), so a person reading the schedule row can see
+  why the seat stayed quiet. The first fire that goes out takes
+  `halted` off (`stamp-fired!`). One maintenance write, for
+  `write-pending!`'s reason."
+  [eng schedule-row seat-row ^Instant at]
   (store/with-tx (:storage eng)
     (fn [tx]
       (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (:data schedule-row)
+                          (assoc (schedules/keep-textless (:data schedule-row))
                                  :wake_pending true
-                                 :last_halted_wake (str at))
+                                 :last_halted_wake (str at)
+                                 :halted (wall-mark eng seat-row at))
                           (:next-flip-at schedule-row))))
   nil)
 
@@ -675,8 +776,9 @@
   "The most walk rows one count of the unclaimed rows reads."
   200)
 
-(defn- in-flight
-  "How many fires of this seat are runs that have not sat yet. A fire
+(defn- flying-fires
+  "The fires of this seat that are runs that have not sat yet, oldest
+  first, each as `{:at … :text …}`. A fire
   goes out before its run opens a sitting, so a burst of wakes that
   counted open sittings alone would read every slot free and fire past
   the ceiling. The fires of the last `in-flight-seconds` are paired,
@@ -694,8 +796,9 @@
                                             :resource-id (str seat-id)}
                                      {:limit in-flight-page :newest-first true})
                   (filter #(= "fire" (some-> (:action %) name)))
-                  (keep #(recent (:at %)))
-                  (sort))
+                  (keep #(when-some [i (recent (:at %))]
+                           {:at i :text (get-in % [:inputs :text])}))
+                  (sort-by :at))
              ;; the row's own birth, on the clock the log's `at` is
              ;; written by; a missed sitting is the sweep's record of a
              ;; fire older than the window, and took none of these
@@ -707,11 +810,50 @@
                   (sort))]))]
     (loop [fs fires ss starts]
       (cond
-        (empty? fs) 0
-        (empty? ss) (count fs)
+        (empty? fs) nil
+        (empty? ss) fs
         ;; a sitting born before the oldest fire left took none of them
-        (.isBefore ^Instant (first ss) ^Instant (first fs)) (recur fs (rest ss))
+        (.isBefore ^Instant (first ss) ^Instant (:at (first fs)))
+        (recur fs (rest ss))
         :else (recur (rest fs) (rest ss))))))
+
+(defn- in-flight
+  "How many fires of this seat are runs that have not sat yet
+  (`flying-fires`)."
+  [eng seat-id ^Instant at]
+  (count (flying-fires eng seat-id at)))
+
+(defn- spoken-for?
+  "Is the walk row this wake's `text` names already another run's? The
+  slots count rows and not WHICH row, so with a second row free a
+  second wake on one row read a free slot for a free row and fired a
+  run that sat, was told its row was held, and stopped (ticket
+  884fff20). The row is spoken for when a run still on its way to a
+  sit was fired with a text that names it (`flying-fires`), or an open
+  sitting of the seat holds it. A text that names no walk row is
+  spoken for by nobody."
+  [eng seat-row text ^Instant at]
+  (when-some [named (seats/fire-names eng seat-row text)]
+    (boolean
+     (or (some #(= named (seats/fire-names eng seat-row (:text %)))
+               (flying-fires eng (str (:id seat-row)) at))
+         (contains? (seats/open-walked-rows eng (:id seat-row)) named)))))
+
+(defn- one-for-a-row
+  "These wake `texts` with one kept for each walk row they name: the
+  first. `spoken-for?` is asked of each text before the release fires
+  any, so two texts of different wording on one row both passed it, and
+  the second run sat to a row the first had (ticket 2be02e40). A text
+  that names no walk row is always kept."
+  [eng seat-row texts]
+  (first
+   (reduce (fn [[kept seen] text]
+             (let [named (seats/fire-names eng seat-row text)]
+               (if (and named (contains? seen named))
+                 [kept seen]
+                 [(conj kept text) (cond-> seen named (conj named))])))
+           [[] #{}]
+           texts)))
 
 (defn- walk-query
   "The kind the seat's sit walks and the filter it walks it under, as
@@ -731,12 +873,14 @@
 (defn- ids-under
   "`count-under`'s rows by id rather than by number, at most
   `queue-page` of them, as a set of strings; nil when the kind is not
-  served or the filter cannot be answered."
-  [eng kind filter-map]
+  served or the filter cannot be answered. `extra` is store conds read
+  under beside the filter's own (`judged-out`)."
+  [eng kind filter-map extra]
   (when-some [rdef (get (inv/resources eng) kind)]
     (try
       (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-            conds (:conds (collections/parse-query rdef params))
+            conds (into (vec (:conds (collections/parse-query rdef params)))
+                        extra)
             st (:storage eng)]
         (into #{} (map str)
               (store/with-tx st
@@ -747,20 +891,51 @@
                (ex-message e))
         nil))))
 
+(defn- withheld-rows
+  "The walk row ids a sit of this seat would leave off its page after
+  the queue is read: `seats/unwalkable-rows`. → a set of ids."
+  [eng seat-row]
+  (set (seats/unwalkable-rows eng seat-row nil)))
+
+(defn- judged-out
+  "For a seat that walks a judgment, the conds that leave out of its
+  queue the subjects that judgment has already judged and, for a judge
+  of sittings, its own sittings and the unfinished ones
+  (`judgments/walk-conds`, which `mcp/walk-of` reads the same way,
+  ticket f508c646); nil for any other seat. Without them a judged
+  subject still open in the queue read as a row to hand: a seat of
+  several slots fired again on every sitting's close, and each run sat
+  to an empty walk (ticket 871c8555). The store answers them in the
+  queue's own query, so the count has no page of verdicts to run past
+  and the ids read are free ones (ticket 279366ee)."
+  [eng seat-row]
+  (when-some [jid (some-> (get-in seat-row [:data :judgment]) str not-empty)]
+    (not-empty
+     (judgments/walk-conds eng (or (raw-row eng :judgment jid) {:id jid})
+                           (:id seat-row)))))
+
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
-  open sittings and the runs on their way to a sit; `:free` is the rows
-  of its walk the sit would hand (no open sitting holds them and no
-  stuck change stands beside them, `seats/unwalkable-rows`), less the
-  rows those runs will take. A seat that walks nothing has no free row."
+  open sittings and the runs on their way to a sit, less the sittings
+  whose sit handed them nothing (`seats/busy-sitting-count`, ticket
+  cc2f8e7f): those wait only for the hook's close; `:free` is the rows
+  of its walk the sit would hand (no open sitting holds them, no stuck
+  change stands beside them and no verdict of its judgment stands on
+  them, `withheld-rows`), less the
+  rows those runs will take, and less one for each open sitting that
+  has sat and not claimed its row yet (`seats/sitting-down-count`,
+  ticket c822d9e4): its run is no longer on its way, and the row it is
+  about to take reads unclaimed. A seat that walks nothing has no free
+  row."
   [eng seat-row ^Instant at]
   (let [seat-id (str (:id seat-row))
         flying (long (in-flight eng seat-id at))
+        sitting-down (long (seats/sitting-down-count eng seat-id))
         queue (when-some [[kind f] (walk-query eng seat-row)]
-                (ids-under eng kind f))
-        unclaimed (count (remove (seats/unwalkable-rows eng seat-row nil) queue))]
-    {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
-     :free (max 0 (- unclaimed flying))}))
+                (ids-under eng kind f (judged-out eng seat-row)))
+        unclaimed (count (remove (withheld-rows eng seat-row) queue))]
+    {:busy (+ (long (seats/busy-sitting-count eng seat-id)) flying)
+     :free (max 0 (- unclaimed flying sitting-down))}))
 
 (defn- damped?
   "Does the damper hold a wake of this seat at `at` (R-12.22's parts 1
@@ -787,6 +962,29 @@
     (and (< 1 max-open)
          (let [{:keys [busy free]} (slots eng seat-row at)]
            (and (< (long busy) max-open) (pos? (long free)))))))
+
+(defn- runs-to-start
+  "How many runs one release of a seat with several slots may start at
+  `at`: no more than it has slots free, and no more than it has rows to
+  hand them (`slots`). A release sends one run for each waiting text and
+  one for the wake of no text, and three of them over two free rows
+  started a run that sat to a walk its siblings had taken (ticket
+  8c071e14). Never less than one: the release was already judged to
+  fire. nil for a seat of one slot, which sends as it always did."
+  [eng seat-row ^Instant at]
+  (let [max-open (long (max-open-of seat-row))]
+    (when (< 1 max-open)
+      (let [{:keys [busy free]} (slots eng seat-row at)]
+        (max 1 (min (- max-open (long busy)) (long free)))))))
+
+(defn- left-waiting
+  "`data` with only the sends a release had no row for still waiting:
+  `kept` is their texts in order, nil for the wake of no text."
+  [data kept]
+  (let [texts (vec (keep identity kept))]
+    (cond-> (assoc (schedules/clear-wake data) :wake_pending true)
+      (seq texts) (assoc :wake_texts texts :wake_text (first texts))
+      (and (seq texts) (some nil? kept)) (assoc :wake_textless true))))
 
 (declare empty-walk? grace-lift)
 
@@ -823,14 +1021,25 @@
   drain's replay, and it is silence on every path, the damped one
   included (waymark-fp62.21).
   → true when a fire went out."
-  [eng seat t ^Instant at {:keys [text settle]}]
+  [eng seat t ^Instant at {:keys [text settle max-wait]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
-      (let [row (remember-heard! eng row t)]
+      (let [row (remember-heard! eng row t)
+            ;; when the grace of the row this wake names lifts: asked
+            ;; one time, and only by the branch that reads it
+            deferred (delay (when (some? text)
+                              (seats/fire-deferred-until
+                               eng (raw-row eng :seat (:id seat)) text at)))]
        (cond
         settle
-        (mark-settling! eng row (due-at row at settle))
+        ;; the first match of this wake is kept beside the due moment,
+        ;; so later matches cannot move it past the cap (8f482592)
+        (mark-settling! eng (update row :data
+                                    #(assoc (schedules/keep-textless %)
+                                            :wake_first_at
+                                            (str (or (first-heard row) at))))
+                        (due-at row at settle max-wait))
 
         ;; a broken Routine fires nothing: the wake waits for the link
         ;; that mends it (waymark ticket bb19404d)
@@ -849,19 +1058,40 @@
 
         ;; the fuel wall: the wake waits, and says it was held
         (at-the-fuel-wall? eng (raw-row eng :seat (:id seat)) at)
-        (hold-at-the-wall! eng row at)
+        (hold-at-the-wall! eng row (raw-row eng :seat (:id seat)) at)
+
+        ;; the row the wake names is already a run's (ticket 884fff20):
+        ;; a seat of several slots is not held by `damped?` while another
+        ;; row is free, and its fire would start a run that sits and is
+        ;; told the row is held. The run that has the row answers for
+        ;; it, and its close fires again while a row is left free.
+        (and (< 1 (long (or (:max-open seat) 1)))
+             (some? text)
+             (spoken-for? eng (raw-row eng :seat (:id seat)) text at))
+        (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
+                   ", which a run of it already has — its wake fires nothing")
+            nil)
 
         ;; the row the wake names is withheld by name (ticket 80a8e60b):
         ;; a groom that leaves a ticket open beside its submitted change
         ;; names a row the sit will not hand
         ;; (`seats/named-open-beside-a-submitted-change?`), so its fire
-        ;; would start a run that walks nothing
+        ;; would start a run that walks nothing. A groom, unblock or
+        ;; resume that put a stuck pull request back under review sends
+        ;; its ticket out for review after it (ticket 7e01dbe5), and the
+        ;; wake that move earned names a round already in the house's
+        ;; hands: it is withheld the same way. Any other wake naming a
+        ;; ticket in review fires (ticket 7af7d506).
         (let [walk (some-> (raw-row eng :seat (:id seat))
                            (get-in [:data :walk]) str not-empty)]
           (and (some? text)
                (= walk (name (:kind t)))
-               (seats/named-open-beside-a-submitted-change?
-                eng walk (:resource-id t))))
+               (seats/named-beside-a-submitted-change?
+                eng walk (:resource-id t)
+                (if (contains? #{"groom" "unblock" "resume"}
+                               (some-> (:action t) name))
+                  #{"open" "in_review"}
+                  #{"open"}))))
         (do (warn! "seat " (:id seat) " was woken on " (:resource-id t)
                    ", which is open beside a submitted change — its wake"
                    " fires nothing")
@@ -874,10 +1104,18 @@
         (if-some [lift (grace-lift eng (raw-row eng :seat (:id seat)) at)]
           ;; the row rests in a closed sitting's grace: the wake waits
           ;; for the grace to end rather than being spent now
-          (mark-settling! eng row (due-at row lift 0))
+          (mark-settling! eng (update row :data schedules/keep-textless)
+                          (due-at row lift 0))
           (do (warn! "seat " (:id seat) " has an empty walk — its wake"
                      " fires nothing")
               nil))
+
+        ;; the row the wake names rests in a closed sitting's grace
+        ;; while others wait (ticket afb445d4): the wake waits for the
+        ;; grace to lift and then fires with its own text, rather than
+        ;; a run that is told its row is held and stops
+        (some? @deferred)
+        (mark-settling! eng row (due-at row @deferred 0) text)
 
         :else
         (if (fire! eng (:id seat) text
@@ -892,46 +1130,64 @@
   (`mcp/walk-of`): the judgment's `queue` for a seat that says one,
   and the walk's scope entry filter otherwise, both under the kind's
   defaults. Less, as the sit leaves them out, the rows another open
-  sitting holds and the tickets whose change is stuck
-  (`seats/unwalkable-rows`, ticket e031e479): with none of those the
-  count is `count-under`'s, and with some it is the queue's ids, at
-  most `queue-page` of them, less those. A judgment seat's count does
-  not subtract the subjects already judged, so it can only read high:
-  a zero here is a zero on the sit's page too."
+  sitting holds, the tickets whose change is stuck (ticket e031e479)
+  (`withheld-rows`), and the subjects the seat's judgment has judged
+  (`judged-out`, ticket 871c8555). The judged are left out by the store
+  in the count's own query. With no row withheld the count is
+  `count-under`'s, and with some it is the queue's ids, at most
+  `queue-page` of them, less those. A zero here is a zero on the sit's
+  page too."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
-    (let [skip (seats/unwalkable-rows eng seat-row nil)]
+    (let [skip (withheld-rows eng seat-row)
+          out (judged-out eng seat-row)]
       (if (empty? skip)
-        (count-under eng walk f)
-        (some->> (ids-under eng walk f) (remove skip) count)))))
+        (count-under eng walk f out)
+        (some->> (ids-under eng walk f out) (remove skip) count)))))
 
 (defn- unjudged-transcripts
   "How many sealed transcripts under the entry's filter record a
   sitting this judgment has not judged (ticket c9edc5bd), or nil when
   they cannot be read. Only fired sittings keep a transcript
   (`keep_transcripts` fired), so this is the fired sittings still
-  waiting on the judge. The newest `judgments/judged-page` sealed transcripts
-  are read, the unjudged being the fresh end of the table; the entry's
+  waiting on the judge. The entry's
   filter is read through `collections/parse-query`, as `count-under`
   reads it — so a comma value is any-of — and its own `state` replaces
-  `sealed`."
-  [eng judgment-id filter-map]
+  `sealed`. The store counts them in that one query (ticket 2abff5f9),
+  under two anti-joins on the transcript's `sitting`: no standing
+  (`said`) verdict of the judgment on it, `judgments/walk-conds`' rule,
+  and no sitting of the judging seat `seat-id` with that id: the walk
+  never hands the seat its own sitting, so a wake never counts one
+  (ticket f508c646). No page of transcripts, verdicts or sittings
+  bounds the count."
+  [eng judgment-id filter-map seat-id]
   (when-some [rdef (when (serves? eng :transcript)
                      (get (inv/resources eng) :transcript))]
     (try
       (let [params (merge {"state" "sealed"}
                           (into {} (map (fn [[f v]] [(name f) (str v)]))
                                 filter-map))
-            conds (:conds (collections/parse-query rdef params
-                                                   {:defaults? false}))
-            judged (judgments/judged-subjects eng judgment-id)
+            conds (cond-> (vec (:conds (collections/parse-query
+                                        rdef params {:defaults? false})))
+                    (serves? eng :verdict)
+                    (conj {:target :data :field :sitting :op :no-row
+                           :from {:kind :verdict :target :data
+                                  :field :subject_id
+                                  :conds [{:target :state :op :=
+                                           :value "said"}
+                                          {:target :data :field :judgment
+                                           :cast "text" :op :=
+                                           :value (str judgment-id)}]}})
+
+                    (and seat-id (serves? eng :sitting))
+                    (conj {:target :data :field :sitting :op :no-row
+                           :from {:kind :sitting :target :id
+                                  :conds [{:target :data :field :seat
+                                           :cast "text" :op :=
+                                           :value (str seat-id)}]}}))
             st (:storage eng)]
-        (->> (store/with-tx st
-               (fn [tx] (store/search-rows st tx :transcript conds
-                                           {:limit judgments/judged-page
-                                            :desc true})))
-             (remove #(contains? judged (str (get-in % [:data :sitting]))))
-             count))
+        (store/with-tx st
+          (fn [tx] (store/count-matching st tx :transcript conds))))
       (catch Exception e
         (warn! "the unjudged transcripts could not be counted — "
                (ex-message e))
@@ -960,16 +1216,19 @@
         [walk f] (when seat-row (walk-query eng seat-row))]
     (cond
       (and judgment (= :transcript kind))
-      (unjudged-transcripts eng (:id judgment) (:filter e))
+      (unjudged-transcripts eng (:id judgment) (:filter e) (:id seat-row))
 
       (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
       (walk-count eng seat-row)
 
       (and walk (= walk kind))
-      (let [skip (seats/unwalkable-rows eng seat-row nil)]
+      (let [skip (withheld-rows eng seat-row)
+            out (judged-out eng seat-row)]
         (if (empty? skip)
-          (count-under eng kind (:filter e))
-          (some->> (ids-under eng kind (:filter e)) (remove skip) count)))
+          (count-under eng kind (:filter e) out)
+          (some->> (ids-under eng kind (:filter e) out)
+                   (remove skip)
+                   count)))
 
       :else
       (count-under eng kind (:filter e)))))
@@ -982,7 +1241,7 @@
   (ticket 1a4038bf)."
   [eng seat-row ^Instant at]
   (when-some [[kind f] (walk-query eng seat-row)]
-    (when-some [queue (not-empty (ids-under eng kind f))]
+    (when-some [queue (not-empty (ids-under eng kind f nil))]
       (seats/grace-lifts-at eng seat-row queue at))))
 
 (defn- empty-walk?
@@ -1001,7 +1260,12 @@
 (defn release!
   "The pending wake of one seat, released now that the damper has
   lifted: a fire with NO TEXT, so the session walks the queue rather
-  than one row (R-12.22), and then the flag is cleared.
+  than one row (R-12.22), and then the flag is cleared. A fire that
+  waited out a release grace goes with the text it was given (ticket
+  afb445d4), so its run walks the row it named: one run for each
+  waiting text (`schedules/waiting-texts`, ticket 58573175), each under
+  a key of its own, and a wake with no text that waited beside them
+  (`wake_textless`) as its own fire after them.
 
   Silence when there is nothing pending, when the seat is not active,
   when a sitting is still open, when the gap has not passed, when the
@@ -1021,6 +1285,8 @@
   A seat of several slots is held by `damped?` rather than by the two
   walls above, and `slot?` (a sitting of it closed) lets it fire with
   NOTHING pending when a slot and a row for it are free (`free-slot?`).
+  Its release starts at most `runs-to-start` runs, and the sends past
+  that keep waiting (`left-waiting`) for a slot and a row of their own.
   → true when a fire went out."
   ([eng seat-row schedule-row key at]
    (release! eng seat-row schedule-row key at false))
@@ -1031,7 +1297,8 @@
                  (and slot? (free-slot? eng seat-row at)))
              (schedules/fires-out? eng schedule-row)
              (not (schedules/held? eng schedule-row seat-row))
-             (settled? schedule-row at)
+             (or (settled? schedule-row at)
+                 (backstop-due? seat-row schedule-row at))
              (not (throttled? schedule-row at))
              (if (< 1 (max-open-of seat-row))
                (not (damped? eng seat-row schedule-row at))
@@ -1053,9 +1320,55 @@
       nil
 
       :else
-      (when (fire! eng (:id seat-row) nil key)
-        (stamp-fired! eng schedule-row at true)
-        true)))))
+      (let [waiting (schedules/waiting-texts (:data schedule-row))
+            ;; a text that waited may name a row a run took since (ticket
+            ;; d65f9247): `runs-to-start` counts rows and not WHICH row,
+            ;; so it is dropped here as `wake-seat!` drops it. The run
+            ;; that has the row answers for it. Two texts that name one
+            ;; row are one send, for the same reason (ticket 2be02e40),
+            ;; and that holds for a seat of one slot too (ticket
+            ;; fd179d32): no run of it is open here, so no text of its
+            ;; own is spoken for, but two of them may still name one row.
+            texts (one-for-a-row
+                   eng seat-row
+                   (if (< 1 (max-open-of seat-row))
+                     (remove #(spoken-for? eng seat-row % at) waiting)
+                     waiting))
+            textless? (get-in schedule-row [:data :wake_textless])
+            sends (cond
+                    (seq texts)
+                    (cond-> (vec (map-indexed
+                                  (fn [i text]
+                                    [text (if (zero? i) key (str key ":" i))])
+                                  texts))
+                      textless?
+                      (conj [nil (str key ":queue")]))
+
+                    ;; every waiting text names a row a run already has
+                    (and (seq waiting) (not textless?))
+                    []
+
+                    :else
+                    [[nil key]])
+            room (runs-to-start eng seat-row at)
+            [sends kept] (if room (split-at room sends) [sends nil])
+            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
+        (cond
+          (and (empty? sends) (empty? kept))
+          (do (write-pending! eng schedule-row false)
+              (warn! "seat " (:id seat-row) " had only waiting wakes on rows"
+                     " a run of it already has — its release fires nothing")
+              nil)
+
+          (some true? sent)
+          (do (if (seq kept)
+                ;; no free row for these yet: they wait for the next release
+                (stamp-fired! eng
+                              (update schedule-row :data left-waiting
+                                      (map first kept))
+                              at false)
+                (stamp-fired! eng schedule-row at true))
+              true)))))))
 
 (defn release-linked!
   "The wake a broken schedule held, released by the link that mended
@@ -1066,20 +1379,57 @@
     (release! eng (raw-row eng :seat seat-id) schedule-row
               (str "wake:" seat-id ":link:" (:id t)) (now eng))))
 
+(defn- count-wake-holds?
+  "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
+  count is `entry-count`'s, the one the consumer itself would take."
+  [eng seat-row]
+  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
+                           keyword (get (inv/resources eng)))]
+    (boolean
+     (some (fn [e]
+             (when-some [at-least (:at_least e)]
+               (when-some [n (entry-count eng seat-row e)]
+                 (>= (long n) (long at-least)))))
+           (seats/effective-wake-on seat-row walk-rdef)))))
+
+(defn- judge-count-on-close
+  "The close is a further evaluation point for the seat's count wakes
+  (R-12.32, ticket 668a845d). A seat that takes one row per sitting
+  usually writes another kind than the one it counts, so no transition
+  of the counted kind follows its close, and the rows left would wait
+  for the cadence. When nothing is pending yet and an `at_least` entry
+  still holds, the wake is marked pending here, as a damped match is,
+  and `release!` fires it under the usual damper. An empty queue marks
+  nothing. A replayed close is heard once. → the schedule row as it
+  stands after."
+  [eng seat-row schedule-row t]
+  (if (and seat-row schedule-row
+           (= :active (:state seat-row))
+           (schedules/fires-out? eng schedule-row)
+           (not (get-in schedule-row [:data :wake_pending]))
+           (not (heard? schedule-row t))
+           (count-wake-holds? eng seat-row))
+    (do (mark-pending! eng (remember-heard! eng schedule-row t))
+        (schedules/schedule-for-seat eng (:id seat-row)))
+    schedule-row))
+
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
-  wake waiting on exactly that. Keyed by the sitting's own transition,
+  wake waiting on exactly that, or a count wake that still holds
+  (`judge-count-on-close`). Keyed by the sitting's own transition,
   so a replayed close releases once. A seat of several slots may fire
   with nothing pending, when a slot and a row for it are free."
   [eng t ^Instant at]
   (when-some [sitting (raw-row eng :sitting (:resource-id t))]
     (when-some [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
-      (release! eng
-                (raw-row eng :seat seat-id)
-                (schedules/schedule-for-seat eng seat-id)
-                (str "wake:" seat-id ":release:" (:id t))
-                at
-                true))))
+      (let [seat-row (raw-row eng :seat seat-id)]
+        (release! eng
+                  seat-row
+                  (judge-count-on-close
+                   eng seat-row (schedules/schedule-for-seat eng seat-id) t)
+                  (str "wake:" seat-id ":release:" (:id t))
+                  at
+                  true)))))
 
 (defn sweep-pending!
   "Every schedule row carrying a pending wake, released where the
@@ -1200,19 +1550,6 @@
       s
       (subs s 0 missed-note-cap))))
 
-(defn- count-wake-holds?
-  "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
-  count is `entry-count`'s, the one the consumer itself would take."
-  [eng seat-row]
-  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
-                           keyword (get (inv/resources eng)))]
-    (boolean
-     (some (fn [e]
-             (when-some [at-least (:at_least e)]
-               (when-some [n (entry-count eng seat-row e)]
-                 (>= (long n) (long at-least)))))
-           (seats/effective-wake-on seat-row walk-rdef)))))
-
 (defn- last-sitting-missed?
   "Was the seat's newest sitting itself a missed one? Two missed runs
   in a row stop the re-arm, so a Routine that is dark does not loop."
@@ -1263,6 +1600,11 @@
                            :served {}
                            :missed true
                            :closed_by "missed"
+                           ;; seat health 1: no close judges a row
+                           ;; born closed, so its outcome is written
+                           ;; here — a fire nobody sat in never sat
+                           :outcome "never_sat"
+                           :flags []
                            :note (missed-note fired deadline schedule)}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})
@@ -1300,7 +1642,10 @@
                                             " missed fire not recorded — "
                                             (ex-message e))
                                      false))
-                            (inc n)
+                            ;; seat health 2: a sitting born closed
+                            ;; is a close too, and no door ran for it
+                            (do (seats/roll-health! eng (:id seat-row))
+                                (inc n))
                             n))
                         n
                         found)))))
@@ -1308,13 +1653,159 @@
         (concat (rows-where eng :seat {:state :active} missed-seat-page)
                 (rows-where eng :seat {:state :parked} missed-seat-page)))))))
 
+;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────
+;;
+;; The key above is minted by the schedules consumer, at the moment it
+;; carries the seat's `fire` out. A fire that consumer never carried
+;; out holds no key, so the pass above cannot see it: the wake stamped
+;; `wake_fired_at` and cleared its flag, `last_fired_at` stayed where
+;; it was, no run sat, and nothing was written down. This pass reads
+;; the log instead, so a silent seat is never unexplained.
+
+(def ^:private unsent-lookback-seconds
+  "How far back a fire nobody carried out is still written down. One
+  day: an older one is history, and its queue has been fired since."
+  86400)
+
+(defn- born-at
+  "When a sitting row was born, on the clock the log's `at` is written
+  by (`flying-fires`' reading)."
+  [sitting]
+  (instant-of (or (:created-at sitting) (get-in sitting [:data :started_at]))))
+
+(defn- newest-sitting [st tx seat-id]
+  (first (store/query-rows st tx :sitting {:seat (str seat-id)}
+                           {:limit 1 :newest-first true})))
+
+(defn- unsent-fire
+  "The instant of this seat's newest `fire` when nobody carried it out
+  and nothing on the schedule row says why. It is older than `deadline`
+  seconds and younger than `unsent-lookback-seconds`; `last_fired_at`,
+  which a fire that went out stamps with the fire's own instant, is
+  before it; no sitting was born since, a missed one included; and no
+  wake waits for a moment still ahead (`wake_due_at`, a deferred
+  fire's). → an Instant, or nil."
+  [eng seat-row schedule ^Instant now deadline]
+  (let [st (:storage eng)
+        seat-id (str (:id seat-row))
+        [fired sitting]
+        (store/with-tx st
+          (fn [tx]
+            [(->> (store/transitions st tx {:kind :seat :resource-id seat-id}
+                                     {:limit in-flight-page :newest-first true})
+                  (filter #(= "fire" (some-> (:action %) name)))
+                  (keep #(instant-of (:at %)))
+                  (sort)
+                  (last))
+             (newest-sitting st tx seat-id)]))
+        stamped (instant-of (get-in schedule [:data :last_fired_at]))
+        due (instant-of (get-in schedule [:data :wake_due_at]))
+        born (some-> sitting born-at)]
+    (when (and fired
+               (.isBefore ^Instant fired (.minusSeconds now (long deadline)))
+               (.isAfter ^Instant fired
+                         (.minusSeconds now (long unsent-lookback-seconds)))
+               ;; a millisecond's room, for a stamp the row keeps shorter
+               ;; than the log keeps its own
+               (not (and stamped
+                         (not (.isBefore ^Instant stamped
+                                         (.minusMillis ^Instant fired 1)))))
+               (not (and born (not (.isBefore ^Instant born ^Instant fired))))
+               (not (and due (.isAfter ^Instant due now))))
+      fired)))
+
+(defn- record-unsent!
+  "One fire nobody carried out, written down in ONE transaction as
+  `record-missed!` writes an unspent key: a closed sitting that says
+  the run never sat and why, and, unless the seat's last sitting was
+  missed too, `wake_pending` on the schedule row, so `release!` fires
+  the queue again under the usual damper. The seat row is read FOR
+  UPDATE and the newest sitting is read again under it, so two passes
+  write one row. → true when this call wrote the sitting."
+  [eng seat-row schedule ^Instant fired ^Instant now deadline]
+  (let [st (:storage eng)
+        seat-id (str (:id seat-row))
+        model (or (seats/chair-of seat-row)
+                  (some-> (get-in schedule [:data :model]) str not-empty))]
+    (boolean
+     (store/with-tx st
+       (fn [tx]
+         (when (store/load-row st tx :seat seat-id {:for-update true})
+           (let [newest (newest-sitting st tx seat-id)
+                 born (some-> newest born-at)]
+             (when-not (and born (not (.isBefore ^Instant born fired)))
+               (inv/insert-quiet!
+                eng tx :sitting
+                (cond-> {:seat seat-id
+                         :member (seats/sitter-id seat-row)
+                         :mode seats/default-mode
+                         :started_at fired
+                         :ended_at now
+                         :input_tokens 0 :output_tokens 0
+                         :cache_read_tokens 0 :cache_write_tokens 0
+                         :turns 0 :transitions 0 :refusals 0
+                         :served {}
+                         :missed true
+                         :closed_by "missed"
+                         :outcome "never_sat"
+                         :flags []
+                         :note (str "Fired at " fired "; the fire was never"
+                                    " sent to a runner, and no session sat"
+                                    " within " deadline "s.")}
+                  model (assoc :model model))
+                {:principal seats/seats-actor :state :closed})
+               (when-not (true? (get-in newest [:data :missed]))
+                 (store/update-data! st tx :schedule (str (:id schedule))
+                                     (assoc (:data schedule) :wake_pending true)
+                                     (:next-flip-at schedule)))
+               true))))))))
+
+(defn sweep-unsent!
+  "Every active seat whose newest fire nobody carried out
+  (`unsent-fire`), written down as a closed `missed` sitting, and its
+  wake armed again. The clock sweep's pass, after `sweep-missed!`, so a
+  fire that pass just wrote down is not written twice. A schedule that
+  is broken or throttled already says why on its own row, and is left
+  alone. A second pass over the same state writes nothing, because the
+  first left a sitting born after the fire.
+  → the number of missed sittings written."
+  ([eng] (sweep-unsent! eng default-sit-deadline-seconds))
+  ([eng deadline]
+   (if-not (and (serves? eng :seat) (serves? eng :sitting)
+                (serves? eng :schedule))
+     0
+     (let [at (now eng)]
+       (reduce
+        (fn [n seat-row]
+          (if (try
+                (when-some [schedule (when-not (seats/interactive-seat? seat-row)
+                                       (schedules/schedule-for-seat
+                                        eng (:id seat-row)))]
+                  (when (and (schedules/fires-out? eng schedule)
+                             (not (schedules/held? eng schedule seat-row))
+                             (not (throttled? schedule at)))
+                    (when-some [fired (unsent-fire eng seat-row schedule
+                                                   at deadline)]
+                      (record-unsent! eng seat-row schedule fired at
+                                      deadline))))
+                (catch Exception e
+                  (warn! "seat " (:id seat-row)
+                         " unsent fire not recorded — " (ex-message e))
+                  false))
+            (do (seats/roll-health! eng (:id seat-row))
+                (inc n))
+            n))
+        0
+        (rows-where eng :seat {:state :active} missed-seat-page))))))
+
 ;; ── the consumer ────────────────────────────────────────────────────
 
 (defn handle-transition!
   "One transition → the wake it implies, or nothing.
 
       seat <anything>          the active-seat cache is stale; drop it
-      sitting close, abandon   release that seat's pending wake
+      sitting close, abandon   release that seat's pending wake, and
+                               judge its count wakes once more
       seat, sitting, schedule,
       subscription             nothing else — these are the engine's
                                own writing about wakes, and a seat

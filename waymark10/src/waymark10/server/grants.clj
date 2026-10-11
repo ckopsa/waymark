@@ -981,7 +981,8 @@
 (g/defguard an-anchorless-ask-names-its-grant
   {:reads [:principal :now :grant]
    :vars [:grants]
-   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."}
+   :explain "You hold several live grants ({grants}); pass grant_id to name the one this ask widens."
+   :open "The way out is in this same form: pass grant_id, one of the grants the sentence lists. No door picks among several live grants for you."}
   [_row inp ctx]
   ;; an anchorless ask from a holder of live grants would MINT a
   ;; replacement, and the session would wear it and lose the sight it
@@ -1043,11 +1044,29 @@
       (assoc-in row [:data :waits_on] m)
       (update row :data dissoc :waits_on))))
 
+(defn- stamp-domain
+  "The ask carries the name of the domain its requester's seat stores
+  (epic aff24e84, piece 3). The requester's seat is the one a sitter's
+  id names (`seat:<the seat>`). A member with no seat, and a seat that
+  stores no domain, stamp nothing, and :absent-as filters the row as
+  factory. Whatever the body said is dropped."
+  [row ctx]
+  (let [pid (str (get-in ctx [:principal :id]))
+        read' (:read ctx)
+        d (when (and read' (str/starts-with? pid "seat:"))
+            (some-> (read' :seat (subs pid 5))
+                    (get-in [:data :domain]) str not-empty))
+        nm (when d
+             (some-> (read' :domain d) (get-in [:data :name]) str not-empty))]
+    (if nm
+      (assoc-in row [:data :domain] nm)
+      (update row :data dissoc :domain))))
+
 (defn- born-ask
   "The ask's birth hook: anchor-the-lone-grant, then the person it
-  waits on."
+  waits on, then its requester's seat's domain."
   [row ctx]
-  (-> row (anchor-the-lone-grant ctx) (stamp-waits-on ctx)))
+  (-> row (anchor-the-lone-grant ctx) (stamp-waits-on ctx) (stamp-domain ctx)))
 
 (g/defguard requester-is-named
   {:reads [:principal]
@@ -1383,8 +1402,9 @@
               :name :someone-else-decides
               :explain "The requester cannot judge its own ask; another principal decides."}
     :stamps  {:decided-by :approved_by}
-    ;; born-ask stamps waits_on at birth, so the create model omits it
-    :engine-fields [:waits_on]
+    ;; born-ask stamps waits_on and domain at birth, so the create
+    ;; model omits them
+    :engine-fields [:waits_on :domain]
     ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
     ;; expiry gets the engine's configured TTL (24h, the leash's own
     ;; cap — waymark-h6y: a shorter default killed the minted grant
@@ -1472,8 +1492,18 @@
             [:waits_on {:optional true :kind :member
                         :x-display {:label "Waits on"
                                     :help "The member who must approve this ask: the person the requesting seat or delegate acts for, or the requester themselves. The engine stamps it at birth."}}
-             [:maybe :waymark/ref]]]
-   :filterable {:grant_id #{:eq}}
+             [:maybe :waymark/ref]]
+            ;; THE REQUESTER'S SEAT'S DOMAIN, BY NAME (epic aff24e84,
+            ;; piece 3): stamped at birth by born-ask, never read from
+            ;; the body. An ask with none filters as factory.
+            [:domain {:optional true
+                      :not-a-ref "The domain's NAME, as the seat's domain row spells it: never a row id."
+                      :x-display {:label "The requester's domain"
+                                  :help "The name of the domain the requesting seat was in when it asked. The engine stamps it at birth. An ask with none filters as factory."}}
+             [:string {:min 1 :max 120}]]]
+   :filterable {:grant_id #{:eq}
+                :domain #{:eq}}
+   :absent-as {:domain "factory"}
    ;; the approval page opens on the decision queue: newest ask first,
    ;; and only the ones still waiting on a person — both projected by
    ;; the sugar (:default-filters {:state "offered"}, :sortable
@@ -1637,6 +1667,42 @@
        (let [exp (get-in row [:data :expires_at])]
          (or (nil? exp) (neg? (compare now exp))))))
 
+(defn grant-by-id
+  "The grant row with this id, decoded, as it stands now; nil when no
+  such grant exists. For a reader that is not at the wire — a scheduled
+  run holds the ID of the grant it was arranged under and no request
+  (docs/spec-scheduled-actions.md R-4.2). It conceals nothing and
+  judges nothing, so it is for the engine's own reads and never for an
+  answer a caller sees."
+  [eng grant-id]
+  (when (some? grant-id)
+    (load-decoded eng :grant (str grant-id))))
+
+(defn grant-standing
+  "Where the grant with this id stands right now: {:standing :grant}.
+  :standing is :absent (no such row), :offered (not yet accepted),
+  :active (accepted and unexpired), :revoked, or :expired. Expiry is
+  judged by the live clock, same as enforcement, so a grant past its
+  `expires_at` reads :expired before the `expire` transition is
+  written. :grant is the decoded row, nil when absent.
+
+  NARROWED is not a standing. An :active grant's scope is read off
+  :grant as it is at this moment, wider or narrower than the day it was
+  cited; whether it still admits one call is `visibility`'s answer for
+  the principal that wears it."
+  [eng grant-id]
+  (let [row (grant-by-id eng grant-id)
+        now ((:now-fn eng))
+        exp (get-in row [:data :expires_at])
+        past? (and (some? exp) (not (neg? (compare now exp))))]
+    {:standing (cond
+                 (nil? row) :absent
+                 (= :revoked (:state row)) :revoked
+                 (or past? (= :expired (:state row))) :expired
+                 (active? row now) :active
+                 :else (:state row))
+     :grant row}))
+
 (defn- mode-spec [m]
   (when m
     {:mode (keyword (:mode m))
@@ -1720,7 +1786,7 @@
                    (str/split raw #",")))]
     (if (seq vs) vs [raw])))
 
-(defn- row-matches?
+(defn row-matches?
   "Does this decoded row sit inside one of the entry's filter maps?
   Exact text comparison against the data field — the same value the
   collection's :eq cond compares in SQL, so the row check and the
@@ -2233,6 +2299,61 @@
                           (without-entries (get-in seat [:data :stale])))
                         (own-seat-entry seat-id))})))))
 
+(defn seat-of-grant
+  "The seat a grant row cites, as the welcome document names it:
+  {:id, :name, :scope}, or nil for a grant that carries its own scope.
+  `:scope` is the seat's scope as this grant wears it — minus the drop
+  list for a substitute, minus the sweep's stale entries — and no wall
+  is judged here: the walls are per request, and this is what the
+  grant carries when none stands."
+  [eng row]
+  (when-some [seat-id (seat-cited row)]
+    (let [seat (load-decoded eng :seat seat-id)]
+      {:id seat-id
+       :name (nonblank (get-in seat [:data :name]))
+       :scope (cond-> (vec (get-in seat [:data :scope]))
+                (true? (get-in row [:data :substitute]))
+                (without-entries (get-in seat [:data :substitute_drop]))
+
+                :always
+                (without-entries (get-in seat [:data :stale])))})))
+
+(defn seat-grant-of-another?
+  "Does `grant-id` name a SEAT grant whose audience is not this
+  principal? The identity boundary asks it of the header a delegate
+  presented: the seat's view is the connector's alone, so the HTTP door
+  refuses that header by name instead of resolving it to a dead
+  surface. A seat grant its own audience presents is not this
+  question's, and neither is a grant that carries its own scope."
+  [eng grant-id principal]
+  (when-some [row (when grant-id (load-decoded eng :grant grant-id))]
+    (boolean (and (seat-cited row)
+                  (not= (get-in row [:data :audience]) (:id principal))))))
+
+(defn as-the-seats-sitter
+  "`principal` as it sits under `grant-id` where no session is there to
+  declare a model: a planner hears a principal id and holds no session,
+  and a seat held for named models serves nothing to a hand that
+  declares none (`resolve-seat`, wall 2). So the principal takes the
+  name of the first model the grant's seat is held for —
+  `substitute_for` for a substitute — which is the claim its sitter's
+  own session makes. The principal comes back as it was when it declares
+  a model already, when the grant is not its own or cites no seat, and
+  when the seat names no model."
+  [eng grant-id principal]
+  (or (when-not (nonblank (:model principal))
+        (when-some [row (when grant-id (load-decoded eng :grant grant-id))]
+          (when (= (get-in row [:data :audience]) (:id principal))
+            (when-some [seat (some->> (seat-cited row) (load-decoded eng :seat))]
+              (when-some [held (some (fn [id]
+                                       (nonblank (get-in (load-decoded eng :model (str id))
+                                                         [:data :name])))
+                                     (get-in seat [:data (if (true? (get-in row [:data :substitute]))
+                                                           :substitute_for
+                                                           :held_for)]))]
+                (assoc principal :model held))))))
+      principal))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2354,7 +2475,27 @@
                          ;; now each kind's own :own-surface :actions, so
                          ;; the affordance and the law it opens live in
                          ;; one file
-                         (contains? (:actions (own-of k) #{}) a))))]
+                         (contains? (:actions (own-of k) #{}) a))))
+        ;; the same question asked of ONE ROW. A door the scope names
+        ;; opens on every row the scope shows. A door only the
+        ;; own-surface confers opens on the principal's own rows and
+        ;; no others: when the scope also names the kind, :row? shows
+        ;; rows that are not theirs, so the row is asked of own-row?
+        ;; here. A create has no row (nil id) and stays kind-level.
+        ;; A READER WITH NO ROW IN HAND (the schema digest, a
+        ;; collection's doors, a mirror's sync trigger, a walk's create
+        ;; form, a refusal's remedy) asks :action? and is told of the
+        ;; owner's doors under a grant that names the kind: they open
+        ;; on the reader's own rows, and nil id here answers the same.
+        ;; Which row a door opens on is the row's reader's to say
+        action-on?* (fn [kind action id]
+                      (let [k (name kind) a (name action)]
+                        (boolean
+                         (or (contains? (get-in surface [k :actions] #{}) a)
+                             (and (contains? (:actions (own-of k) #{}) a)
+                                  (or (nil? id)
+                                      (not (contains? surface k))
+                                      (own-row? k id)))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -2381,6 +2522,20 @@
      ;; stand-in.
      :grant (when (and live? (seq surface))
               {:id (str grant-id) :action? action?* :row? row?*
+               :action-on? action-on?*
+               ;; a field this leash shows plain, neither hidden nor
+               ;; hashed: what a scheduled action's conditions may
+               ;; name (docs/spec-scheduled-actions.md R-2.3)
+               :plain? (fn [kind field]
+                         (let [k (name kind) f (name field)]
+                           (if-some [e (get surface k)]
+                             (and (admits? (:fields e) f)
+                                  (not (contains? (:hashed e) f)))
+                             (own-kind? k))))
+               ;; a power token this leash names: what a scheduled
+               ;; power call may name (docs/spec-scheduled-actions.md
+               ;; R-4.4)
+               :power? (fn [token] (contains? surface (str token)))
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
@@ -2396,6 +2551,7 @@
      :whole-kind? (fn [kind] (contains? whole-kinds (name kind)))
      :row? row?*
      :action? action?*
+     :action-on? action-on?*
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
@@ -2540,6 +2696,87 @@
   meaning is the reader's, exactly as for an external capability."
   [vis token]
   (when vis (get (:surface vis) (str token))))
+
+;; ── who else holds a door (the quest's `waiting_on`) ────────────────
+
+(def ^:private takers-cap
+  "The most seat rows, and the most grant rows, one `door-takers` reads."
+  200)
+
+(defn- scope-admits-door?
+  "Does this scope admit `action` on the row `id` of `kind`? One scope
+  read as `visibility` reads a live grant's: the same surface, the same
+  pruning, and its `:row?`'s judgment of ids and filters. A nil `id`
+  names no row, so the kind and the action alone are judged."
+  [eng scope kind action id]
+  (let [k (name kind)
+        scope (mapv #(update % :kind scope-name) scope)
+        e (get (prune-unusable eng (surface-of {:data {:scope scope}})) k)]
+    (boolean
+     (and e
+          (contains? (:actions e) (name action))
+          (or (nil? id)
+              (and (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                   (or (nil? (:filters e))
+                       (when-some [row (load-decoded eng (keyword k) id)]
+                         (row-matches? row (:filters e)
+                                       (get (inv/resources eng) (keyword k)))))))))))
+
+(defn- display-of
+  "The display name of the member a principal id names: the row of that
+  id, or the row a binding stamped with it as `subject`; the raw id
+  when no member row answers."
+  [eng pid]
+  (or (when-some [rdef (get (inv/resources eng) :member)]
+        (nonblank
+         (get-in (or (load-decoded eng :member pid)
+                     (some->> (first (store/with-tx (:storage eng)
+                                       (fn [tx]
+                                         (store/query-rows (:storage eng) tx :member
+                                                           {:subject pid} {:limit 1}))))
+                              (inv/decode-row rdef)))
+                 [:data :display])))
+      pid))
+
+(defn door-takers
+  "Who can take `action` on the row `id` of `kind` right now, by display
+  name, `except` one principal: each active seat whose scope admits it,
+  then each principal holding an accepted, unexpired grant whose own
+  scope admits it. A seat grant is its seat's entry and is read there.
+  The own-surface kinds are nobody's by grant, so they name nobody.
+
+  The engine's own read: it conceals nothing, so it is for a sentence
+  that says whom a blocked step waits on and never for a scope a caller
+  did not name. At most `takers-cap` rows of each kind are read, oldest
+  first; no index serves a scope's kind."
+  [eng kind action id except]
+  (let [st (:storage eng)
+        now ((:now-fn eng))
+        mine (set (members/spellings-of eng except))
+        rows (fn [k where]
+               (when-some [rdef (get (inv/resources eng) k)]
+                 (mapv #(inv/decode-row rdef %)
+                       (store/with-tx st
+                         (fn [tx]
+                           (vec (store/query-rows st tx k where {:limit takers-cap})))))))
+        seats (for [s (rows :seat {:state :active})
+                    :when (and (not (contains? mine (str "seat:" (:id s))))
+                               (scope-admits-door?
+                                eng
+                                (without-entries (get-in s [:data :scope])
+                                                 (get-in s [:data :stale]))
+                                kind action id))]
+                (nonblank (get-in s [:data :name])))
+        holders (for [g (rows :grant {:state :accepted})
+                      :let [aud (nonblank (get-in g [:data :audience]))]
+                      :when (and aud
+                                 (not (seat-cited g))
+                                 (active? g now)
+                                 (not (contains? mine aud))
+                                 (scope-admits-door? eng (get-in g [:data :scope])
+                                                     kind action id))]
+                  (display-of eng aud))]
+    (into [] (comp (remove nil?) (distinct)) (concat seats holders))))
 
 ;; ── enforcement helpers (the router's consults) ─────────────────────
 

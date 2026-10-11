@@ -167,11 +167,16 @@
              ;; nothing a person never answered runs late (R-14, R-7)
              :mcp-discover :held-call-expiry :notifier
              ;; the invitations' resolution and expiry
-             ;; (spec-guided-follow § 3), and the walks' retention (§ 4)
-             :invitations :invitation-expiry :walk-retention
+             ;; (spec-guided-follow § 3), the walkthroughs' consumer
+             ;; (spec-walkthrough § 3), the quests' consumer
+             ;; (spec-quests), and the walks' retention (§ 4)
+             :invitations :invitation-expiry :walkthroughs :quests :walk-retention
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock
+             ;; core's seventh: the scheduled actions' clock
+             ;; (spec-scheduled-actions R-5), elected like the rest
+             :scheduled-actions
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes :judgments

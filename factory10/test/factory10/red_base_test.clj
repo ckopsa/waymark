@@ -9,6 +9,7 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]
             [factory10.main :as main]
+            [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
             [waymark10.server.engine :as engine]
@@ -119,6 +120,207 @@
         (is (= 0 (:base-closed (pass! w))))
         (is (= before (:version (policy-of engine))))))))
 
+(defn- benched-world
+  "`world`, with a bench that answers `status` for every branch."
+  [status]
+  (let [state (gh/fake-state)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))
+                            :services {:bench-rpc
+                                       (fn [_method _params]
+                                         {:structuredContent {:result status}})}})]
+    ;; the pattern admits `bench/the-red-base`, so `submit` opens on it
+    (inv/create! eng :repo_policy {:repository repo :required_checks ["gate"]
+                                   :branch_pattern "bench/*"}
+                 {:principal a-person})
+    {:state state :engine eng :source (gh/fake-source state {:repos repo})}))
+
+(defn- red-ticket-with-a-change!
+  "The base is red for two passes, and a seat's change is open beside
+  the ticket that opened. → the change's id."
+  [{:keys [engine] :as w}]
+  (head-at! w head-1 511 "failure")
+  (pass! w)
+  (pass! w)
+  (let [born (str "ticket:" (:id (first (tickets engine))))]
+    (str (:id (:row (inv/create! engine :change
+                                 {:change_id born
+                                  :repository repo
+                                  :head_branch "bench/the-red-base"
+                                  :born_from born}
+                                 {:principal mirror/source-principal}))))))
+
+(defn- change-of [eng id]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/load-row st tx :change id {})))))
+
+(deftest a-green-base-keeps-the-ticket-whose-change-holds-work
+  ;; ticket d5000a1c: the red was a flake, and the seat's edit was on
+  ;; the bench branch when the next merge's run went green
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 512 "success")
+    (is (= 0 (:base-closed (pass! w))) "the ticket is not ended")
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :open (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :open (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
+(deftest a-green-base-keeps-the-ticket-whose-change-has-commits
+  (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 2})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 513 "success")
+    (is (= 0 (:base-closed (pass! w))))
+    (is (= :open (state-of (first (tickets engine)))))
+    (is (= :open (state-of (change-of engine change-id))))))
+
+(deftest a-green-base-keeps-the-draft-ticket-whose-stuck-change-holds-work
+  ;; ticket e666bd6a: the seat stalled its change, which sent the ticket
+  ;; to draft, and its edit was still on the bench branch
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (inv/invoke! engine :change change-id :stall
+                 {:why "The red test passes here, so I cannot fix it."}
+                 {:principal a-person
+                  :if-match (inv/etag :change change-id
+                                      (:version (change-of engine change-id)))})
+    (is (= :stuck (state-of (change-of engine change-id))))
+    (is (= :draft (state-of (first (tickets engine)))))
+    (head-at! w head-2 515 "success")
+    (is (= 0 (:base-closed (pass! w))) "the ticket is not ended")
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :draft (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :stuck (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
+(defn- stick-on-a-failed-landing!
+  "THE PATH PRODUCTION TAKES (ticket 900ee2f2). The seat's `submit`
+  sends the ticket out for review. The landing fails before the pull
+  request opens, so the change has no number and its work is still on
+  the branch. The forge pass reads that as red, and on the last round
+  the policy gives it walks `stick`, which leaves the ticket in review.
+  Under the ceiling it walks `fail`, which sends the ticket back to the
+  queue. `stick` is walked here with the mirror's hand, as the pass
+  walks it."
+  [eng change-id]
+  (inv/invoke! eng :change change-id :submit
+               {:why "Fix the red test."}
+               {:principal a-person
+                :idempotency-key (str (random-uuid))
+                :if-match (inv/etag :change change-id
+                                    (:version (change-of eng change-id)))})
+  (inv/invoke! eng :change change-id :stick
+               {:why "The checks went red on the last round the policy gives: landing:pull_request."
+                :failing_checks ["landing:pull_request"]
+                :landing_error "The pull request did not open."}
+               {:principal mirror/source-principal}))
+
+(deftest a-green-base-keeps-the-ticket-under-review-whose-change-holds-work
+  ;; ticket 1188f3ed: the ticket is out for review, and a change born
+  ;; from it with no pull request still holds an edit on its branch
+  (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (stick-on-a-failed-landing! engine change-id)
+    (is (= :in_review (state-of (first (tickets engine))))
+        "the change's own doors left the ticket in review")
+    (is (nil? (get-in (change-of engine change-id) [:data :number])))
+    (head-at! w head-2 516 "success")
+    (let [census (pass! w)]
+      (is (= 0 (:base-closed census)) "the ticket is not ended")
+      (is (= 1 (:base-kept census))))
+    (let [tk (first (tickets engine))
+          note (str (get-in tk [:data :green_note]))]
+      (is (= :in_review (state-of tk)))
+      (is (str/includes? note (str "main is green again at " head-2)))
+      (is (str/includes? note "bench/the-red-base"))
+      (is (= :stuck (state-of (change-of engine change-id)))
+          "and its change is not superseded")
+      (testing "the next green pass writes the sentence no second time"
+        (pass! w)
+        (is (= (:version tk) (:version (first (tickets engine)))))))))
+
+(deftest a-green-base-ends-the-ticket-whose-change-is-empty
+  (let [{:keys [engine] :as w} (benched-world {:dirty 0 :ahead 0})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 514 "success")
+    (is (= 1 (:base-closed (pass! w))))
+    (let [tk (first (tickets engine))]
+      (is (= :done (state-of tk)))
+      (is (str/blank? (str (get-in tk [:data :green_note])))))
+    (is (= :closed (state-of (change-of engine change-id)))
+        "an empty change is closed with its ticket, as before")))
+
+(deftest a-green-base-keeps-the-ticket-when-the-bench-is-dark
+  ;; ticket 6d8e3a3e: the bench answers nothing, so the pass cannot tell
+  ;; an empty change from one that holds work
+  (let [{:keys [engine source] :as w} (benched-world nil)
+        change-id (red-ticket-with-a-change! w)
+        lines (atom [])
+        _ (head-at! w head-2 515 "success")
+        census (forge/pass! {:source source :engine engine
+                             :log-fn (fn [& parts]
+                                       (swap! lines conj (apply str parts)))})
+        tk (first (tickets engine))]
+    (is (= 0 (:base-closed census)))
+    (is (= 1 (:base-kept census)) "the census counts the ticket it held")
+    (is (= :open (state-of tk)))
+    (is (= :open (state-of (change-of engine change-id))))
+    (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
+    (is (= 1 (count (filter #(str/includes? % "the bench did not answer")
+                            @lines)))
+        "and one line says why it was held")))
+
+(deftest a-green-base-keeps-the-ticket-whose-stuck-change-the-bench-refuses
+  ;; ticket e768af15: the rig answers `no_worktree` for a branch with no
+  ;; worktree, which does not say a stalled change's branch is empty
+  (let [{:keys [engine source] :as w} (benched-world {:refused "no_worktree"})
+        change-id (red-ticket-with-a-change! w)
+        lines (atom [])
+        _ (inv/invoke! engine :change change-id :stall
+                       {:why "The red test passes here, so I cannot fix it."}
+                       {:principal a-person
+                        :if-match (inv/etag :change change-id
+                                            (:version (change-of engine change-id)))})
+        _ (head-at! w head-2 516 "success")
+        census (forge/pass! {:source source :engine engine
+                             :log-fn (fn [& parts]
+                                       (swap! lines conj (apply str parts)))})
+        tk (first (tickets engine))]
+    (is (= 0 (:base-closed census)) "the ticket is not ended")
+    (is (= 1 (:base-kept census)))
+    (is (= :draft (state-of tk)))
+    (is (= :stuck (state-of (change-of engine change-id)))
+        "and its change is not superseded")
+    (is (str/blank? (str (get-in tk [:data :green_note]))) "no note is written")
+    ;; ticket 7984a8b1: the line names the refusal and the branch
+    (is (= 1 (count (filter #(str/includes?
+                              % (str "the bench refused no_worktree for its"
+                                     " change on bench/the-red-base"))
+                            @lines))))
+    (is (not-any? #(str/includes? % "the bench did not answer") @lines)
+        "a refusal is not a dark bench")))
+
+(deftest a-green-base-ends-the-ticket-whose-open-change-the-bench-refuses
+  ;; an open change the rig refuses was never prepared: it holds no work
+  (let [{:keys [engine] :as w} (benched-world {:refused "no_worktree"})
+        change-id (red-ticket-with-a-change! w)]
+    (head-at! w head-2 517 "success")
+    (is (= 1 (:base-closed (pass! w))))
+    (is (= :done (state-of (first (tickets engine)))))
+    (is (= :closed (state-of (change-of engine change-id))))))
+
 (deftest a-base-red-once-and-green-next-opens-nothing
   (let [{:keys [engine] :as w} (world)]
     (head-at! w head-1 601 "failure")
@@ -199,6 +401,41 @@
     (is (str/includes? detail "### gate\n\n```\n")
         "the log tail follows the check's heading directly")
     (is (str/includes? detail "FAIL in (calendar10-clash)"))))
+
+(deftest a-red-main-ticket-carries-the-red-steps-own-lines
+  ;; ticket 3a9d6c62: the tail of the whole job was the steps after the
+  ;; red one, and the body's ceiling cut what was left of the failure
+  (let [{:keys [state engine] :as w} (world)
+        wide (apply str (repeat 100 "x"))
+        step (str/join "\n" (map #(str "compiling namespace " % " " wide)
+                                 (range 400)))
+        after (str "##[group]Run crash report\nenv: LATER_DUMP\n##[endgroup]\n"
+                   (str/join "\n" (map #(str "post-job line " %) (range 400))))
+        ended "\n##[error]Process completed with exit code 1.\n"]
+    (gh/seed-branch! state repo "main" head-1)
+    (gh/seed-check! state repo head-1 (a-check 701 head-1 "failure"))
+    (gh/seed-log! state "701"
+                  (str step "\n##[group]Run clojure -M:test\nenv: STEP_DUMP\n"
+                       "##[endgroup]\nFAIL in (the-merge-clash)" ended after))
+    (gh/seed-check! state repo head-1
+                    (assoc (a-check 702 head-1 "failure") :name "quick"))
+    (gh/seed-log! state "702"
+                  (str step "\nFAIL in (calendar10-clash)" ended after))
+    (pass! w)
+    (is (= 1 (:base-opened (pass! w))))
+    (let [detail (str (get-in (first (tickets engine)) [:data :detail]))]
+      (is (str/includes? detail "FAIL in (calendar10-clash)")
+          "the first log ends at its failing lines")
+      (is (str/includes? detail "FAIL in (the-merge-clash)")
+          "and the ceiling leaves the second log its failing lines too")
+      (is (str/includes? detail "Run clojure -M:test")
+          "the red step's own command is named")
+      (is (not (str/includes? detail "STEP_DUMP")) "its env dump is not")
+      (is (not (str/includes? detail "crash report"))
+          "a step after the red one is left out")
+      (is (not (str/includes? detail "post-job line")))
+      (is (str/includes? detail "## What to do")
+          "the body is whole under its ceiling"))))
 
 (deftest a-red-after-green-names-the-head-that-turned-it
   (let [{:keys [engine] :as w} (world)]
@@ -386,6 +623,42 @@
       (is (zero? (floor-pass! eng)))
       (is (= 1 (count (floor-tickets eng)))))))
 
+;; the floor ticket is found by the id its policy keeps (ticket ba20278d)
+
+(defn- floor-past-window! [eng]
+  (floor-noted! eng (.minusSeconds (Instant/now) 7200)))
+
+(deftest a-renamed-floor-ticket-is-still-found
+  (let [eng (floor-world 5 3)]
+    (is (= 1 (floor-pass! eng)))
+    (let [id (str (:id (first (floor-tickets eng))))
+          before (count (tickets eng))]
+      (is (= id (get-in (policy-of eng) [:data :floor_ticket]))
+          "the policy keeps the id of the ticket it filed")
+      (bench/mark-row! eng :ticket id {:title "Batch seven, by hand"} #{})
+      (is (empty? (floor-tickets eng)) "no title names the floor now")
+      (testing "while it is draft, a pass past the window files none"
+        (floor-past-window! eng)
+        (is (zero? (floor-pass! eng)))
+        (is (= before (count (tickets eng)))))
+      (testing "and none while it is open"
+        (inv/invoke! eng :ticket id :groom {} {:principal a-person})
+        (floor-past-window! eng)
+        (is (zero? (floor-pass! eng)))
+        (is (= before (count (tickets eng))))))))
+
+(deftest a-floor-ticket-filed-before-the-id-was-kept-is-found-by-title
+  (let [eng (floor-world 4 3)]
+    (is (= 1 (floor-pass! eng)))
+    (let [id (str (:id (first (floor-tickets eng))))]
+      (bench/mark-row! eng :repo_policy (str (:id (policy-of eng)))
+                       {:floor_ticket nil} #{})
+      (floor-past-window! eng)
+      (is (zero? (floor-pass! eng)))
+      (is (= 1 (count (floor-tickets eng))))
+      (is (= id (get-in (policy-of eng) [:data :floor_ticket]))
+          "and the policy keeps its id from then on"))))
+
 (deftest the-floor-files-none-inside-its-settle-window
   (let [eng (floor-world 4 3)]
     (floor-noted! eng (Instant/now))
@@ -443,3 +716,65 @@
     (is (= 1 (floor-pass! eng)))
     (is (str/includes? (str (get-in (first (floor-tickets eng)) [:data :detail]))
                        "2 draft bugs, tasks and chores"))))
+
+;; ── the mirror's own beat (ticket b53f78ac) ─────────────────────────
+;;
+;; A stamp that stands still files one draft ticket an outage. The check
+;; is called directly, at the default beat: four passes of 300 seconds.
+
+(defn- beat-tickets [eng]
+  (filterv #(str/starts-with? (str (get-in % [:data :title]))
+                              "The factory mirror stopped beating: ")
+           (tickets eng)))
+
+(defn- ago ^Instant [seconds]
+  (Instant/ofEpochSecond (- (.getEpochSecond (Instant/now)) (long seconds))))
+
+(defn- pass-stamped! [eng ^Instant at]
+  (bench/mark-row! eng :repo_policy (str (:id (policy-of eng)))
+                   {:forge_pass_at at} #{}))
+
+(defn- beat-check! [eng raised]
+  (forge/beat-check! eng {:every-seconds 300 :raised raised
+                          :log-fn (fn [& _] nil)}))
+
+(deftest a-fresh-stamp-says-nothing
+  (let [eng (:engine (world))
+        raised (atom nil)]
+    (is (nil? (beat-check! eng raised)) "a policy no pass stamped is no evidence")
+    (pass-stamped! eng (ago 600))
+    (is (= :fresh (beat-check! eng raised)))
+    (is (nil? @raised))
+    (is (empty? (beat-tickets eng)))))
+
+(deftest a-stale-stamp-raises-one-draft-ticket-an-outage
+  (let [eng (:engine (world))
+        raised (atom nil)
+        stale (ago 1500)]
+    (pass-stamped! eng stale)
+    (is (= :raised (beat-check! eng raised)))
+    (is (= :standing (beat-check! eng raised)))
+    (let [[ticket & more] (beat-tickets eng)]
+      (is (nil? more))
+      (is (= :draft (state-of ticket)))
+      (is (= 1 (get-in ticket [:data :priority])))
+      (is (str/includes? (str (get-in ticket [:data :title])) (str stale)))
+      (is (str/includes? (str (get-in ticket [:data :detail])) (str stale))
+          "the ticket names the stamp that stands still"))
+    (testing "a second watch over the same stamp files no second ticket"
+      (beat-check! eng (atom nil))
+      (is (= 1 (count (beat-tickets eng)))))))
+
+(deftest a-recovered-mirror-clears-and-the-next-outage-raises-again
+  (let [eng (:engine (world))
+        raised (atom nil)]
+    (pass-stamped! eng (ago 1500))
+    (is (= :raised (beat-check! eng raised)))
+    (pass-stamped! eng (ago 60))
+    (is (= :fresh (beat-check! eng raised)))
+    (is (nil? @raised) "the outage is over")
+    (is (= :fresh (beat-check! eng raised)))
+    (is (= 1 (count (beat-tickets eng))) "a beating mirror files nothing")
+    (pass-stamped! eng (ago 1800))
+    (is (= :raised (beat-check! eng raised)))
+    (is (= 2 (count (beat-tickets eng))))))

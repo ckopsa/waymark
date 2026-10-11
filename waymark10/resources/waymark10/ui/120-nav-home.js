@@ -66,22 +66,23 @@ async function renderNav(current) {
   $("#drawerbtn").classList.toggle("on", domains.length > 0);
   if (domains.length) fillDrawer(w, current, active);
   /* the tab bar has no header wordmark in reach — Home earns a tab */
-  if (MOBILE) nav.append(el("a", {href: "#",
+  if (MOBILE) nav.append(el("a", {href: "#", "data-surface": "nav-home",
     style: !current ? "font-weight:700" : ""}, "Home"));
   /* the active application as a breadcrumb back to its home */
   if (active) {
     const home = domainHome(w, active);
     if (home) nav.append(el("a", {class: "nav-domain", href: "#" + home,
+      "data-surface": "nav-domain",
       style: "color:var(--ink);font-weight:700"}, title(active)));
   }
   /* the active domain's primary kinds (a domainless primary always) */
   for (const [kind, r] of entries)
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
-      nav.append(el("a", {href: "#" + r.href,
+      nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && askKind(w))
-    nav.append(el("a", {href: "#access",
+    nav.append(el("a", {href: "#access", "data-surface": "nav-access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
   /* every other decision kind is a queue with a tab of its own (the
      ask kind's queue is the Access panel) */
@@ -89,7 +90,7 @@ async function renderNav(current) {
     const r = w.resources[kind];
     if (kind === askKind(w) || navTier(r) === "primary") continue;
     if (r.domain && r.domain !== active) continue;
-    nav.append(el("a", {href: "#" + r.href,
+    nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
       style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   }
   /* secondary and system kinds fold behind ⋯ — domainless (the
@@ -108,6 +109,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
   const wrap = el("span", {class:"nav-more-wrap"});
   const menu = el("div", {class:"nav-menu", role:"menu"});
   const btn = el("button", {class:"nav-more", type:"button",
+    "data-surface": "nav-more",
     "aria-haspopup":"true", "aria-expanded":"false",
     title: "more kinds — and the machinery's own resources"}, "⋯");
   /* a deployable with enough kinds overruns the screen: cap the menu
@@ -144,7 +146,8 @@ function overflowMenu(tuckedEntries, extra = {}) {
   /* domain kinds first, then the engine's own machinery under a
      quiet divider — two tiers, one menu */
   const item = ([kind, {href}]) =>
-    el("a", {href: "#" + href, role:"menuitem", onclick: close},
+    el("a", {href: "#" + href, role:"menuitem", "data-surface": "nav." + kind,
+             onclick: close},
       ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
       title(kind) + "s");
   const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
@@ -153,7 +156,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
      no ⌘K, and a menu is where someone looks for "where else can I
      go" (waymark-sv9v). The shortcut rides along as a hint. */
   menu.append(el("a", {role: "menuitem", href: "#", "data-nav": "jump",
-                       class: "jump-row",
+                       "data-surface": "nav-jump", class: "jump-row",
                        onclick: ev => { ev.preventDefault(); close();
                                         jumpOpen(); }},
     "Jump to a kind…",
@@ -164,7 +167,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
   system.forEach(e => menu.append(item(e)));
   /* the shell switch: a full reload with ?ui= beats the UA sniff,
      the hash (this screen) rides along */
-  menu.append(el("a", {role: "menuitem",
+  menu.append(el("a", {role: "menuitem", "data-surface": "nav-shell",
     href: location.pathname + "?ui=" + (MOBILE ? "desktop" : "mobile")
         + location.hash},
     MOBILE ? "Desktop view" : "Mobile view"));
@@ -412,4 +415,260 @@ async function fillDashCard(card, kind, href) {
   }
   return env;
 }
+
+/* ── the quest tracker (docs/spec-quests.md) ─────────────────────────
+   The person's pinned active quest, in the header's own row, so it is
+   on every page and covers none of a page's actions. It reads the
+   quest row and holds no opinion of its own: the count is "k done, n
+   known so far" and never a total, the head step is the first one not
+   done, and Go opens that step's door on its row (openDoor,
+   180-action-dialog.js). The quest's own event stream redraws it
+   (questFollow, below). */
+let questDoc = null;        // the pinned quest's envelope, when there is one
+let questDone = null;       // the title of the quest that has just finished
+let questDoneTimer = null;
+const QUEST_DONE_MS = 4000;
+const questTitle = doc => (doc.data || {}).title || doc.summary || "Quest";
+function questHead(doc) {
+  return ((doc.data || {}).plan || []).find(s => s.state !== "done") || null;
+}
+/* a step's row in words (ticket 5b3fa3f7). The quest stores the row's
+   path and never its label: a rename is a change to the row, so it
+   moves the screen and not the quest. The label is the row's own
+   summary line, read under the reader's grant and kept for the page;
+   when the row moves it is read again, in place. The path is the
+   link's href and its title only. A row the reader may not see, and
+   every row of a replay, which reads nothing, is its kind in words. */
+const questRowSeen = {};    // a row's path → the promise of its summary
+function questRowSay(node, self) {
+  (questRowSeen[self] || (questRowSeen[self] =
+    api(self + "?depth=summary")
+      .then(r => (r.ok && r.body.summary) || null).catch(() => null)))
+    .then(s => { if (s && node.getAttribute("title") === self) node.textContent = s; });
+}
+/* `link` false is plain text, for the tracker: its title and Go are
+   the tap targets there */
+function questRow(self, link = true) {
+  const node = el(link ? "a" : "span",
+                  {"data-quest-row": "", title: self, href: link ? "#" + self : null},
+                  pretty(String(self).split("/")[2] || "row"));
+  if (!replay) questRowSay(node, self);
+  return node;
+}
+function questRowMoved(self) {
+  if (replay || !(self in questRowSeen)) return;
+  delete questRowSeen[self];
+  for (const node of document.querySelectorAll("[data-quest-row]"))
+    if (node.getAttribute("title") === self) questRowSay(node, self);
+}
+/* a seat's step and a held one are someone else's to take */
+function questWaits(step) {
+  return ["seat", "held"].includes(step.whose) || step.state === "waiting";
+}
+/* the tracker's Go; the quest page's own is questGo (200-events-follow.js) */
+function questHeadGo() {
+  const head = questDoc && questHead(questDoc);
+  if (!head || questWaits(head)) return;
+  /* the goal's own step: what the quest stored is in the form already,
+     as the owner's own and not as a suggestion */
+  const d = questDoc.data || {};
+  const goal = head.self === d.self && head.door === d.action;
+  openDoor({self: head.self, action: head.door, fields: head.needs || [],
+            note: head.note, given: goal ? d.input || {} : {}},
+           "The step's row");
+}
+/* the owner's own step moves the quest a moment later, in the engine's
+   consumer, and the stream alone would have to say so: a frame that is
+   late or lost left the tracker on the step just taken. So the quest is
+   read again after a door taken through openDoor (180-action-dialog.js),
+   a few times and further apart, until what the tracker holds is
+   another plan or no quest at all. */
+const QUEST_AFTER_GO_MS = [500, 1000, 2000, 4000, 8000, 15000];
+const questMark = doc =>
+  doc ? doc.self + " " + ((doc.data || {}).planned_at || "") : "";
+async function questAfterGo() {
+  const was = questMark(questDoc);
+  if (!was) return;
+  for (const ms of QUEST_AFTER_GO_MS) {
+    await new Promise(r => setTimeout(r, ms));
+    if (replay || questMark(questDoc) !== was) return;
+    await refreshQuest();
+  }
+}
+function questTracker() {
+  /* a replay draws the quest its walk recorded (replayQuest,
+     200-events-follow.js): it reads nothing, follows no stream, and
+     every door is disabled */
+  if (replay) {
+    questDraw(replay.quest, replay.questDone);
+    for (const b of $("#questbar").querySelectorAll("button")) b.disabled = true;
+    liftQuestDoors();
+    return;
+  }
+  questFollow();
+  questDraw(questDoc, questDone);
+  /* a quest taken up after the row page was drawn brings its door out
+     of 'More doors' (liftQuestDoors, 140-links-access.js) */
+  liftQuestDoors();
+}
+/* the tracker of one quest document; `finished` is the title of a
+   quest that has just finished, shown in its place */
+function questDraw(doc, finished) {
+  const bar = $("#questbar");
+  bar.setAttribute("data-surface", "tracker");
+  bar.textContent = "";
+  if (finished != null) {
+    bar.hidden = false;
+    bar.append(el("b", {"data-quest-complete": ""}, "Quest complete"),
+               el("span", {class: "quest-line"}, finished));
+    return;
+  }
+  bar.hidden = !doc;
+  if (!doc) return;
+  const d = doc.data || {}, plan = d.plan || [], acts = doc.actions || {};
+  const done = plan.filter(s => s.state === "done").length;
+  const head = questHead(doc);
+  const waiting = !!head && questWaits(head);
+  bar.append(el("a", {class: "quest-title", "data-quest-title": "",
+                      href: "#" + doc.self}, questTitle(doc)));
+  if (!d.planned_at) {
+    /* born with no plan: the first one has not landed yet */
+    bar.append(el("span", {class: "quest-line muted", "data-quest-planning": ""},
+                  "planning…"));
+  } else {
+    bar.append(
+      el("span", {class: "muted", "data-quest-count": ""},
+         `${done} done, ${plan.length} known so far`),
+      el("span", {class: "quest-meter", "aria-hidden": "true"},
+         el("i", {style: `width:${plan.length
+           ? Math.round(100 * done / plan.length) : 0}%`})));
+    /* blocked hides Go and says why; a waiting head keeps Go, disabled */
+    if (d.blocked_reason)
+      bar.append(el("span", {class: "quest-line", "data-quest-blocked": ""},
+                    d.blocked_reason));
+    else if (waiting)
+      bar.append(el("span", {class: "quest-line", "data-quest-waiting": ""},
+        el("i", {class: "quest-live", "aria-hidden": "true"}),
+        `waiting on ${head.waiting_on || d.waiting_on || "someone else"}`));
+    else {
+      /* the head step: its note, then its row and what its door asks
+         for, both in words. The note keeps the line's width, and the
+         words beside it give way first (020-base.css). */
+      const line = el("span", {class: "quest-line quest-head"},
+        el("span", {"data-quest-note": "", "data-surface": "tracker.next"},
+           head ? head.note || head.door_label || pretty(head.door) : ""));
+      const needs = head
+        ? head.needs_labels || (head.needs || []).flat().map(prettyNeed) : [];
+      if (head && head.self)
+        line.append(el("span", {class: "quest-on muted"},
+          questRow(head.self, false),
+          needs.length
+            ? el("span", {"data-quest-needs": ""}, ` · asks for ${needs.join(", ")}`)
+            : null));
+      bar.append(line);
+    }
+    if (head && !d.blocked_reason)
+      bar.append(el("button", {class: "primary", "data-surface": "tracker.go",
+                               disabled: waiting ? "" : null, onclick: questHeadGo},
+                    "Go"));
+  }
+  /* the quest's own doors, as its row offers them to this person now */
+  const doors = ["pause", "unpin", "replan"].filter(n => acts[n]);
+  if (doors.length)
+    bar.append(el("details", {class: "quest-menu"},
+      el("summary", {"data-surface": "tracker.more", title: "this quest's doors", "aria-label": "quest menu"}, "⋯"),
+      el("div", {class: "quest-menu-items"}, doors.map(n =>
+        actionButton({name: n, entry: acts[n], doc, small: true,
+                      onDone: () => { refreshQuest(); render(); }})))));
+}
+/* the collection is the read, so the tracker holds no quest id that
+   could go stale: whichever quest is pinned now is the one shown */
+async function refreshQuest() {
+  /* a replay's tracker is its walk's: the live quest is read when it stops */
+  if (replay) return;
+  const me = viewerId();
+  if (!me) { questDoc = null; questTracker(); return; }
+  const res = await api("/api/quests?state=active&pinned=true&owner=" +
+                        encodeURIComponent(me));
+  /* no answer (a held replay, an engine restarting) changes nothing */
+  if (!res.ok && res.status !== 404) return;
+  const item = res.ok && ((res.body.data || {}).items || [])[0];
+  /* none is pinned and one is in hand: it may have finished before its
+     stream said so, as it does after the owner's own goal write. The
+     row itself says which, and a finished one is said here. */
+  const held = questDoc;
+  if (!item && held) {
+    const was = await api(held.self);
+    if (was.ok && was.body.state === "finished" && questDoc === held) {
+      questFinished();
+      return;
+    }
+  }
+  /* a collection item is a summary: the plan is on the row's envelope */
+  const row = item ? await api(item.self) : null;
+  if (row && !row.ok) return;
+  questDoc = row ? row.body : null;
+  questTracker();
+}
+/* the quest in hand is followed on its own event stream, as a row page
+   follows one row. A grant that admits the quest admits that stream,
+   and under a grant the one live stream carries no row events
+   (220-boot.js): so every viewer hears the quest here, granted or not.
+   The stream closes when the tracker lets the quest go, and another
+   opens when it takes one up. Each time one opens the quest is read
+   again, for what moved before it did. */
+let questStream = null;     // the href of the stream that is open
+function questFollow() {
+  const href = questDoc ? questDoc.self + "/-/events" : null;
+  if (href === questStream) return;
+  if (questStream) sseClose(questStream);
+  questStream = href;
+  if (!href) return;
+  const mine = () => questStream === href;
+  sse(href,
+      f => { if (mine() && f.event === "transition") onQuestRowFrame(f.data); },
+      () => { if (mine()) refreshQuest().catch(() => {}); });
+}
+/* the quest in hand has finished: the tracker says so for a few
+   seconds before it hides. The stream's frame and the read both come
+   here, whichever learns it first. */
+function questFinished() {
+  questDone = questTitle(questDoc);
+  questDoc = null;
+  clearTimeout(questDoneTimer);
+  questDoneTimer = setTimeout(() => {
+    questDone = null;
+    questTracker();
+    refreshQuest();
+  }, QUEST_DONE_MS);
+  questTracker();
+}
+/* the stream's half: a transition of the quest in hand reads it again,
+   and finish says so */
+async function questRowFrame(ev) {
+  if (!questDoc || replay) return;
+  if (ev.action === "finish") { questFinished(); return; }
+  /* a move on a plan's row plans the quest again, and under a grant
+     this stream alone says so: the rows' labels are read again */
+  for (const self of Object.keys(questRowSeen)) questRowMoved(self);
+  await refreshQuest();
+}
+function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
+/* the firehose's half (210-ledger.js): a pin takes whichever quest is
+   pinned now. The quest in hand is heard on its own stream, above. */
+function onQuestFrame(ev) {
+  /* a row a step names has moved: its label is read again */
+  questRowMoved(ev.self);
+  if (ev.kind !== "quest" || ev.action !== "pin") return;
+  refreshQuest().catch(() => {});
+}
+/* at boot, and whenever the dev box names another principal */
+wellKnown().then(w => {
+  if (!(w.resources || {}).quest) return;
+  $who.addEventListener("change", () => refreshQuest());
+  /* the backstop: a tab that comes back reads the pinned quest again */
+  document.addEventListener("visibilitychange",
+    () => { if (!document.hidden) refreshQuest().catch(() => {}); });
+  return refreshQuest();
+}).catch(() => {});
 

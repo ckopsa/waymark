@@ -18,11 +18,12 @@
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
+    :absent-as :collection-doors
     :owns :links :related
-    :display :label-template :summary :deviations
-    :on-create :mirror
+    :display :label-template :summary :summary-fn :summary-line :deviations
+    :on-create :mirror :on-rehearse
     :retain
-    :decision :process :own-surface :answered-at-a-door
+    :decision :process :own-surface :no-own-surface :answered-at-a-door
     :scenarios})
 
 (def action-keys

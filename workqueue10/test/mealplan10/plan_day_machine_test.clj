@@ -296,3 +296,38 @@
                          [:data :days_without_recipe])))
         (is (= "planned" (:state (act! (:self plan2) :finalize)))
             "no acknowledgment demanded of an honest week")))))
+
+(deftest a-made-up-meal-is-refused-at-the-days-door
+  ;; waymark-fp62.4.1.1's follow-up: assign_meal's meal_id is a typed
+  ;; ref on the door's OWN input, so the day needs no checker of its
+  ;; own for an id nobody holds. A themed night refuses in the kind's
+  ;; sentence (the acceptance set speaks first); a rotating Sunday
+  ;; binds no set, so the framework's dangling-ref wall is what stands
+  ;; there. This namespace makes no rotation: Sunday stays rotating.
+  (let [_pozole (listed-meal! "Pozole rojo" ["mexican"])
+        plan (created! "plans" {:start_date "2026-08-18" :weeks 1})
+        days (get-in (json (req :get (str "/api/plan_days?plan_id="
+                                          (id-of plan)
+                                          "&page%5Bsize%5D=10")))
+                     [:data :items])
+        tue (:self (first days))
+        sun (:self (nth days 5))
+        made-up (str (random-uuid))]
+
+    (testing "a themed night: the acceptance set's own sentence"
+      (let [p (refuse! tue :assign_meal {:meal_id made-up} 409)]
+        (is (str/starts-with?
+             (:detail p) "That meal doesn't serve this day's theme night"))))
+
+    (testing "a rotating Sunday: the wall names the field and the id"
+      (let [p (refuse! sun :assign_meal {:meal_id made-up} 409)]
+        (is (str/includes? (:detail p) "meal_id names no meal"))
+        (is (str/includes? (:detail p) made-up))))
+
+    (testing "an id of the wrong kind stands for no meal either"
+      (let [p (refuse! sun :assign_meal {:meal_id (id-of plan)} 409)]
+        (is (str/includes? (:detail p) "meal_id names no meal"))))
+
+    (testing "nothing was written: both days are still undecided"
+      (is (= "undecided" (:state (json (req :get tue)))))
+      (is (= "undecided" (:state (json (req :get sun))))))))

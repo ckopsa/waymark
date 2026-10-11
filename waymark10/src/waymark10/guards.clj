@@ -62,7 +62,12 @@
 ;; a remedy may name the row and input it acts on, read off the
 ;; refused call: {:door :plan/finalize :id (input :plan_id)} — or off
 ;; the refusal's evidence: {:door :plan_day/assign_meal
-;; :id (evidence :plan_day_id)}
+;; :id (evidence :plan_day_id)}. It may also say which input fields
+;; answer the refusal: {:door :ticket/restate :fields [:showcase]} —
+;; a pursuit asks for those, and not for the door's required fields.
+;; A field may be a path into a nested one, [:showcase :evidence
+;; :film_url], or (evidence :f): the name or path the guard found
+;; missing. The wire spells a path dotted, as a form names its input
 
 (defn- binding-form?
   "(input :f), (data :f) or (evidence :f): the three reads a remedy
@@ -73,6 +78,15 @@
                     (contains? '#{input data evidence} (first f))
                     (keyword? (second f))))
 
+(defn- remedy-field?
+  "One entry of a remedy's :fields: an input field name, a path of
+  names into a nested field, or (evidence :f) for the field the
+  refusing guard found missing."
+  [f]
+  (clojure.core/or (simple-keyword? f)
+                   (clojure.core/and (vector? f) (seq f) (every? simple-keyword? f))
+                   (clojure.core/and (binding-form? f) (= 'evidence (first f)))))
+
 (defn- remedy-problem
   "Why a remedy map is malformed, nil when it is not. A bare token is
   the registry check's (R-6) to judge."
@@ -82,8 +96,15 @@
       (not (qualified-keyword? (:door r)))
       (str (pr-str r) " names no :door :kind/action")
 
-      (seq (dissoc r :door :id :input))
-      (str (pr-str r) " carries keys beyond :door, :id and :input")
+      (seq (dissoc r :door :id :input :fields))
+      (str (pr-str r) " carries keys beyond :door, :id, :input and :fields")
+
+      (clojure.core/and (contains? r :fields)
+                        (not (clojure.core/and (vector? (:fields r))
+                                               (seq (:fields r))
+                                               (every? remedy-field? (:fields r)))))
+      (str "the :fields of " (pr-str r)
+           " is not a vector of input field names, paths of them or (evidence :f)")
 
       (clojure.core/and (contains? r :id) (not (binding-form? (:id r))))
       (str "the :id of " (pr-str r) " is not (input :f), (data :f) or (evidence :f)")
@@ -109,7 +130,8 @@
 (defn remedy-bindings
   "Every binding form one remedy map carries."
   [r]
-  (cond-> (vec (vals (:input r))) (:id r) (conj (:id r))))
+  (cond-> (into (vec (vals (:input r))) (filter seq?) (:fields r))
+    (:id r) (conj (:id r))))
 
 (defn evidence-names
   "The evidence names a guard declares its refusal returns."
@@ -122,11 +144,21 @@
     data (get-in row [:data k])
     evidence (get evidence k)))
 
+(defn- field-path
+  "A remedy field as the wire spells it: a name, or a path dotted
+  (showcase.evidence.film_url). nil when it names nothing."
+  [f]
+  (cond
+    (keyword? f) (name f)
+    (string? f) (not-empty f)
+    (sequential? f) (not-empty (apply str (interpose "." (keep field-path f))))))
+
 (defn resolve-remedies
   "The refusal's remedies resolved against the refused call and the
   refusal's evidence: each {:door} plus the :id and :input its
-  bindings read, where they resolve. nil when no remedy binds
-  anything, so a refusal with bare remedies reads as it always did."
+  bindings read, where they resolve, and the :fields it names. nil
+  when no remedy binds anything, so a refusal with bare remedies reads
+  as it always did."
   ([g row inp] (resolve-remedies g row inp nil))
   ([g row inp evidence]
    (when (some map? (:remedies g))
@@ -138,10 +170,19 @@
                               (keep (fn [[k f]]
                                       (when-some [v (bound-value f row inp evidence)]
                                         [k v])))
-                              (:input r))]
+                              (:input r))
+                     ;; a field the evidence did not find names nothing
+                     fields (into []
+                                  (keep (fn [f]
+                                          (field-path
+                                           (if (seq? f)
+                                             (bound-value f row inp evidence)
+                                             f))))
+                                  (:fields r))]
                  (cond-> {:door (:door r)}
                    (some? id) (assoc :id (str id))
-                   (seq in) (assoc :input in)))))
+                   (seq in) (assoc :input in)
+                   (seq fields) (assoc :fields fields)))))
            (:remedies g)))))
 
 (defn guard
@@ -999,6 +1040,9 @@
                       (clojure.core/and (some? g)
                                         ((:action? g) kind action)
                                         (clojure.core/or
+                                         (nil? (:action-on? g))
+                                         ((:action-on? g) kind action (:id row)))
+                                        (clojure.core/or
                                          (nil? (:id row))
                                          ((:row? g) kind (:id row))))
                       (t/allow)
@@ -1017,6 +1061,8 @@
                                    (list 't/deny {:vars {:problem own-said}})
                                    (list 'and '(some? g)
                                          (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:action-on? g))
+                                               (list '(:action-on? g) kind action '(:id row)))
                                          (list 'or '(nil? (:id row))
                                                (list '(:row? g) kind '(:id row))))
                                    '(t/allow)
@@ -1105,6 +1151,9 @@
                       (clojure.core/and (some? g)
                                         ((:action? g) kind action)
                                         (clojure.core/or
+                                         (nil? (:action-on? g))
+                                         ((:action-on? g) kind action (:id row)))
+                                        (clojure.core/or
                                          (nil? (:id row))
                                          ((:row? g) kind (:id row))))
                       (t/allow)
@@ -1120,6 +1169,8 @@
                                    '(t/allow)
                                    (list 'and '(some? g)
                                          (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:action-on? g))
+                                               (list '(:action-on? g) kind action '(:id row)))
                                          (list 'or '(nil? (:id row))
                                                (list '(:row? g) kind '(:id row))))
                                    '(t/allow)

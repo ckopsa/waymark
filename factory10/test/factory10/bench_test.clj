@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.resources.ticket :as tk]
             [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
@@ -202,8 +203,12 @@
                                       :arguments (:arguments params)})
         (when (:down @st)
           (throw (ex-info "Gate unreachable" {})))
-        (let [answer (get-in @st [:answers named]
-                             {:refused "unknown_tool"})]
+        (let [queued (first (get-in @st [:first-answers named]))
+              _ (when queued
+                  (swap! st update-in [:first-answers named] (comp vec rest)))
+              answer (or queued
+                         (get-in @st [:answers named]
+                                 {:refused "unknown_tool"}))]
           {:isError (boolean (:refused answer))
            :content [{:type "text" :text (wire/write-json answer)}]
            :structuredContent {:result answer}}))
@@ -748,6 +753,63 @@
     (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows])))
         "and the rows still ride")))
 
+(def ^:private a-fetch-refusal
+  "The rig's refusal of 2026-10-07, as it answered it: the fetch could
+  not reach the forge (ticket 2576d7a1)."
+  {:refused "git"
+   :command "fetch --prune origin"
+   :reason (str "fatal: unable to access "
+                "'https://github.com/ckopsa/waymark/': "
+                "Could not resolve host: github.com")})
+
+(defn- sit-answer
+  "One sit on a fresh engine over `st`, with no wait between two tries
+  of the prepare → [the sit's result, its document, the change]."
+  [st]
+  (with-redefs [mcp/bench-fetch-retry-pause-ms 0]
+    (let [eng (fresh-engine st)
+          _ (a-policy! eng {})
+          change (a-change! eng {})
+          _ (open-seat! eng {})
+          h (engine/handler eng)
+          sid (get-in (rpc h (bearer) "initialize"
+                           {:protocolVersion mcp/protocol-version
+                            :capabilities {}
+                            :clientInfo {:name "routine" :version "0"}})
+                      [:headers "Mcp-Session-Id"])
+          sat (call! h sid "waymark_sit" {:key a-key})]
+      [sat (doc-of sat) change])))
+
+(deftest one-failed-fetch-then-a-good-one-leaves-no-stall-advice
+  ;; Prod, 2026-10-07: the rig's fetch could not resolve the forge's
+  ;; host one time, the sit said to stall the change, and one prepare a
+  ;; minute later made the worktree (ticket 2576d7a1).
+  (let [st (state)
+        _ (swap! st assoc-in [:first-answers "bench__prepare"]
+                 [a-fetch-refusal])
+        [sat answer _] (sit-answer st)]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= 2 (count (calls-of st "bench__prepare")))
+        "the sit asked for the prepare one more time")
+    (is (some? (:bench answer))
+        "the second prepare made the worktree, so the bench is answered")
+    (is (nil? (:bench_note answer))
+        "and nothing tells the seat to stall a change it can build")
+    (is (not (str/includes? (text-of sat) "stall the change with"))
+        "anywhere in the answer")))
+
+(deftest a-fetch-that-fails-twice-still-reads-as-its-reason
+  (let [st (state)
+        _ (answer! st "bench__prepare" a-fetch-refusal)
+        [sat answer _] (sit-answer st)
+        note (str (:bench_note answer))]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= 2 (count (calls-of st "bench__prepare")))
+        "one more try, and then no more")
+    (is (nil? (:bench answer)))
+    (is (str/includes? note "Could not resolve host: github.com")
+        "a fetch that fails both times is a cause a person reads")))
+
 (deftest a-repository-with-no-orientation-file-answers-the-sentence
   (let [st (state)
         _ (answer! st "bench__read" {:refused "path" :repo a-repository
@@ -924,6 +986,44 @@
     (is (str/includes? note "stop the sitting"))
     (is (str/includes? note "Do not stall the ticket")
         "and not by stalling a ticket the code did not fail")))
+
+(deftest a-finding-names-no-tool-the-seat-does-not-hold
+  ;; ticket 9b16e766: the rig closes a pipeline finding with `read more
+  ;; with bench__log {job: …}`, and a seat whose grant holds no such
+  ;; power met `No power` when it followed it
+  (let [st (state)
+        _ (answer! st "bench__feedback"
+                   (assoc (get-in @st [:answers "bench__feedback"])
+                          :findings
+                          [{:source "pipeline" :severity "error"
+                            :message (str "test10 (shard 4): exit 134; read "
+                                          "more with bench__log "
+                                          "{job: \"test10 (shard 4)\"}")}
+                           {:source "pipeline" :severity "error"
+                            :message (str "gate: FAIL in a-test; read more "
+                                          "with bench__read {path: \"a.clj\"}")}]))
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {:scope [{:kind "change"
+                                    :actions ["submit" "discard" "stall"]}
+                                   {:kind "bench.read" :actions []
+                                    :filter {:repo a-repository}}]})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        said (mapv :message (get-in answer [:feedback :findings]))]
+    (is (= "bench__read" (get-in answer [:bench :tools :bench.read]))
+        "the seat holds the bench's read and no log read")
+    (is (= "test10 (shard 4): exit 134" (first said))
+        "a remedy naming a tool the grant does not hold is not carried")
+    (is (= "gate: FAIL in a-test; read more with bench__read {path: \"a.clj\"}"
+           (second said))
+        "and a remedy naming a tool the seat holds rides as the rig said it")))
 
 (deftest feedback-names-a-merge-trains-red-first
   ;; ticket 238f45b3: the change's own branch is green, so the rig's
@@ -1338,6 +1438,105 @@
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
 
+(deftest the-hosted-workflows-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-widens-the-hosted-workflows)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-added-hosted-workflow-waits-for-the-person
+  ;; ticket 407323ef. In the suite and not beside the kind's scenarios
+  ;; for the reason above: a check-tier agent never acts-for, so the
+  ;; first wall would answer before this one.
+  (let [st (state)
+        eng (fresh-engine st)
+        tofu ".github/workflows/tofu.yml"
+        ansible ".github/workflows/ansible.yml"
+        drift ".github/workflows/drift.yml"
+        row (a-policy! eng {:hosted_workflows [tofu ansible]})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who hosted]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         :hosted_workflows hosted)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        hosted-now #(get-in (policy-row eng (:id row)) [:data :hosted_workflows])]
+    (testing "an agent's added entry is the hold's refusal, and the row stands"
+      (let [e (try (restated delegate [tofu ansible drift])
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? e) "the door did not open")
+        (is (= :only-a-person-widens-the-hosted-workflows
+               (some-> (:guard (ex-data e)) name keyword))
+            (pr-str (ex-data e)))
+        (is (= [tofu ansible] (hosted-now)))))
+    (testing "an agent's restate that leaves the list as it stands is not held"
+      (restated delegate [ansible tofu])
+      (is (= [ansible tofu] (hosted-now))))
+    (testing "an agent's removal narrows the exception and is not held"
+      (restated delegate [tofu])
+      (is (= [tofu] (hosted-now))))
+    (testing "the person's own added entry runs directly"
+      (restated person [tofu drift])
+      (is (= [tofu drift] (hosted-now))))))
+
+(deftest the-merge-gate-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-loosens-the-merge-gate)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-loosened-merge-gate-waits-for-the-person
+  ;; ticket 68643356. In the suite for the reason above.
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {:auto_merge false :required_checks ["gate" "lint"]})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who changed]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :required_checks
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         changed)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        held-by (fn [changed]
+                  (try (restated delegate changed)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e
+                         (some-> (:guard (ex-data e)) name keyword))))
+        gate-now #(select-keys (:data (policy-row eng (:id row)))
+                               [:auto_merge :required_checks])]
+    (testing "an agent's auto_merge turned on is the hold's refusal, and the row stands"
+      (is (= :only-a-person-loosens-the-merge-gate (held-by {:auto_merge true})))
+      (is (= {:auto_merge false :required_checks ["gate" "lint"]} (gate-now))))
+    (testing "an agent's dropped required check is the hold's refusal, and the row stands"
+      (is (= :only-a-person-loosens-the-merge-gate
+             (held-by {:required_checks ["gate"]})))
+      (is (= {:auto_merge false :required_checks ["gate" "lint"]} (gate-now))))
+    (testing "an agent's added required check narrows the gate and is not held"
+      (restated delegate {:required_checks ["lint" "gate" "deploy"]})
+      (is (= {:auto_merge false :required_checks ["lint" "gate" "deploy"]}
+             (gate-now))))
+    (testing "the person's own loosening runs directly"
+      (restated person {:auto_merge true :required_checks ["gate"]})
+      (is (= {:auto_merge true :required_checks ["gate"]} (gate-now))))
+    (testing "an agent's auto_merge turned off narrows the gate and is not held"
+      (restated delegate {:auto_merge false})
+      (is (= {:auto_merge false :required_checks ["gate"]} (gate-now))))))
+
 (deftest a-policy-states-its-merge-strategy-and-never-its-train
   ;; the merge train, slice a (ticket 394d0602): data only
   (let [st (state)
@@ -1479,6 +1678,30 @@
                                         (:version current))}))
     (is (= check (:check (sent 1)))
         "the restate carries the check step to the rig's enrollment")))
+
+(deftest a-policy-restated-with-hosted-workflows-enrolls-with-them
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        sent (fn [n] (:arguments (nth (calls-of st "bench__enroll") n)))
+        hosted [".github/workflows/tofu.yml" ".github/workflows/ansible.yml"]]
+    (is (not (contains? (sent 0) :hosted_workflows))
+        "a policy with no exception sends none")
+    (let [current (policy-row eng (:id row))]
+      (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                   (assoc (select-keys (:data current)
+                                       [:repository :branch_pattern :base
+                                        :max_lines :opens_pr :auto_merge
+                                        :rounds_per_change :formatter
+                                        :deny :orientation])
+                          :hosted_workflows hosted)
+                   {:principal person
+                    :if-match (inv/etag :repo_policy (:id row)
+                                        (:version current))}))
+    (is (= hosted (:hosted_workflows (:data (policy-row eng (:id row)))))
+        "the row carries the list the person stated")
+    (is (= hosted (:hosted_workflows (sent 1)))
+        "the restate carries the list to the rig's enrollment")))
 
 (deftest a-patch-restate-leaves-the-groom-floor-as-it-stood
   (let [st (state)
@@ -1729,6 +1952,60 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
+;; ── a head parked as not mergeable (ticket 4df76da5) ────────────────────────
+
+(defn- row-says!
+  "Another writer, putting `mergeable` on the submitted change's row at
+  the head it has."
+  [w mergeable]
+  (bench/mark-row! (:eng w) :change (str (:id (change-row w)))
+                   {:mergeable mergeable} #{}))
+
+(deftest the-pass-that-finds-a-conflict-says-conflicted-on-the-line
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= {:line_why "conflicted"}
+           (select-keys (:data (change-row w))
+                        [:line_place :line_why :line_reason]))
+        "the line reads the row after the conflict was written on it")))
+
+(deftest a-parked-conflict-whose-row-turns-clean-is-offered-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__merge"))))
+    (row-says! w "clean")
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! (:eng w) seen)
+    (let [calls (calls-of st "bench__merge")]
+      (is (= 2 (count calls))
+          "a clean row at the parked head un-parks it, and the rig is asked")
+      (is (= a-commit (:head_sha (:arguments (last calls))))
+          "the same head, offered once more"))
+    (is (= "clean" (get-in (change-row w) [:data :mergeable]))
+        "a clean row is not written back to conflicted")))
+
+(deftest a-parked-conflict-whose-row-loses-the-word-is-marked-again
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        seen (atom {})]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (bench/merge-green! (:eng w) seen)
+    (row-says! w "unknown")
+    (bench/merge-green! (:eng w) seen)
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "the head stays parked: the rig already said it conflicts")
+    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
+        "the conflict is on the row again, so the failing pass has it")
+    (is (= "conflicted" (get-in (change-row w) [:data :line_why])))))
+
 (defn- the-policy
   "The one policy row of a world, as stored."
   [{:keys [eng]}]
@@ -1914,7 +2191,9 @@
 
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
-(def ^:private person-policy {:auto_merge false})
+;; a required check is named, because a repository that names none is
+;; asked nothing (ticket 60962bcf): the rig would refuse the merge
+(def ^:private person-policy {:auto_merge false :required_checks ["gate"]})
 
 (def ^:private approver
   (t/principal {:id "colton" :display "Colton Kopsa" :roles #{"approver"}}))
@@ -2015,6 +2294,40 @@
       (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 501))))
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
       (is (= 2 (count (bench/merge-asks eng)))))))
+
+;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
+
+(deftest a-repository-with-no-required-checks-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (clean-world {:auto_merge false})
+        waiting (atom {})]
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "the wait has passed, and the rig would refuse the merge")
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 600))))
+    (is (empty? (bench/merge-asks eng))
+        "no held call is filed for a tap that could merge nothing")
+    (testing "the change says a person merges it on GitHub"
+      (bench/merge-green! eng (atom {}))
+      (is (= "person" (get-in (change-row w) [:data :line_why]))))))
+
+(deftest a-merge-the-rig-refuses-after-the-allow-lands-failed
+  (let [{:keys [eng state]} (clean-world person-policy)
+        waiting (atom {})
+        reason "the rig never merges a change nothing has tested"]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (answer! state "bench__merge" {:refused "no_required_checks" :reason reason})
+    (let [ask (first (bench/merge-asks eng))
+          out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
+                           {:principal approver})]
+      (held/after-allow! eng (get (inv/resources eng) :held_call)
+                         :allow out))
+    (let [ask (first (bench/merge-asks eng))]
+      (is (= 1 (count (calls-of state "bench__merge"))))
+      (is (= :failed (:state ask))
+          "an answer that says isError is not a merge, so the row is not done")
+      (is (str/includes? (str (get-in ask [:data :reason])) reason)
+          "the person reads the rig's own reason"))))
 
 (deftest a-policy-that-names-no-clone-url-is-cloned-from-github
   (let [st (state)
@@ -3358,6 +3671,39 @@
     (is (empty? (get-in (sit-again! w) [:walk :rows]))
         "a draft is in no seat's walk")))
 
+(deftest a-stall-s-reason-is-readable-on-the-change-and-the-ticket
+  ;; ticket b6c8ea04: the stall's sentence was kept only in the log
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        change #(first (changes-of (:eng w)))
+        row (change)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (= a-stall-sentence (get-in row [:data :stall_reason])))
+    (is (some? (get-in row [:data :stalled_at])))
+    (is (not (str/blank? (str (get-in row [:data :stalled_by])))))
+    (is (= a-stall-sentence (get-in (ticket-row w) [:data :shelved_because]))
+        "the shelved ticket carries the same sentence")
+    (testing "the groom's answer names it"
+      (let [res (person-moves-ticket! w :groom)]
+        (is (= a-stall-sentence
+               (get-in (:row res) [:data :shelved_because])))))
+    (testing "the groom's rework clears it from the change"
+      (is (= "open" (name (:state (change)))))
+      (is (nil? (get-in (change) [:data :stall_reason]))))))
+
+(deftest an-unstick-clears-the-stall-s-reason
+  (let [w (ticket-world)
+        id (get-in (:answer w) [:change :id])
+        _ (seat-invokes! w "stall" {:why a-stall-sentence})]
+    (is (= a-stall-sentence
+           (get-in (first (changes-of (:eng w))) [:data :stall_reason])))
+    (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
+    (let [row (first (changes-of (:eng w)))]
+      (is (= "open" (name (:state row))))
+      (is (nil? (get-in row [:data :stall_reason])))
+      (is (nil? (get-in row [:data :stalled_at])))
+      (is (nil? (get-in row [:data :stalled_by]))))))
+
 (deftest a-walk-with-only-a-stuck-change-ticket-answers-no-row
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
@@ -3660,7 +4006,8 @@
         "the ticket's move put the pull request back under review")
     (is (zero? (long (get-in row [:data :rounds]))))
     (is (nil? (get-in row [:data :failing_checks])))
-    (is (= "open" (ticket-state w)))
+    (is (= "in_review" (ticket-state w))
+        "and its follow-up sent the ticket out for review with it")
     (mirror-moves-change! w :fail a-conflict)
     (let [row (first (changes-of (:eng w)))]
       (is (= "failing" (name (:state row)))
@@ -3696,8 +4043,10 @@
     (back-under-review-and-red? w)))
 
 (deftest a-groomed-ticket-whose-pull-request-is-back-under-review-is-not-walked
-  ;; ticket 6ca380da: the groom leaves the ticket open beside a submitted
-  ;; change, and neither the plain walk nor the fire naming it hands it
+  ;; ticket 6ca380da, and 7e01dbe5 after it: the groom's follow-up sends
+  ;; the ticket out for review behind its submitted change, so the plain
+  ;; walk leaves it out. A ticket left OPEN beside that change is still
+  ;; handed by neither the plain walk nor the fire naming it
   (let [w (ticket-world)
         ticket-id (str (:id (:ticket w)))
         url (do (stalled-with-a-pull-request! w 95)
@@ -3712,11 +4061,15 @@
                        (doc-of (call! (:h w) (:sid w) "waymark_sit"
                                       {:key k :seat "bench-seat"}))))]
     (is (= "submitted" (change-state w)))
-    (is (= "open" (ticket-state w)))
+    (is (= "in_review" (ticket-state w)))
     (testing "the plain walk leaves it out"
       (is (empty? (get-in (sit-again! w) [:walk :rows]))))
-    (testing "the fire naming it leaves it out too"
-      (is (empty? (get-in (sit-fired!) [:walk :rows]))))
+    (testing "left open beside its submitted change, the sit's skip holds"
+      (force-ticket-state! w :open)
+      (is (empty? (get-in (sit-again! w) [:walk :rows])))
+      (is (empty? (get-in (sit-fired!) [:walk :rows]))
+          "the fire naming it leaves it out too")
+      (force-ticket-state! w :in_review))
     (testing "a red head hands it back with its feedback"
       (mirror-moves-change! w :fail a-conflict)
       (let [answer (sit-again! w)]
@@ -3728,6 +4081,88 @@
       (is (= "done" (ticket-state w)))
       (is (= (str "Merged: " url ".")
              (get-in (ticket-row w) [:data :close_reason]))))))
+
+;; ── the ticket follows its pull request back under review (ticket 7e01dbe5)
+;;
+;; The groom's own landing is `open`. Its handler queues `rejoin_review`
+;; through ctx :follow-up, and the engine walks that door after the
+;; groom commits, so the ticket reads in_review when the call returns.
+
+(deftest a-groom-that-reworks-a-pull-request-lands-its-ticket-in-review
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 96)
+        res (person-moves-ticket! w :groom)]
+    (is (= [{:kind :ticket :id (str (:id (:ticket w))) :action :rejoin_review}]
+           (mapv #(select-keys % [:kind :id :action]) (:followed res)))
+        "the groom queued one follow-up, the ticket's own move")
+    (is (every? :res (:followed res)) "and its door let it through")
+    (is (= "submitted" (change-state w)))
+    (is (= "in_review" (ticket-state w))
+        "the ticket is out for review once the groom returns")
+    (is (= :rejoin_review (:action (last-ticket-move w))))))
+
+(deftest a-groom-with-no-pull-request-behind-it-lands-open
+  (let [w (ticket-world)
+        stalled (seat-invokes! w "stall" {:why a-stall-sentence})
+        res (person-moves-ticket! w :groom)]
+    (is (false? (:isError stalled)) (text-of stalled))
+    (is (empty? (:followed res)) "no pull request, so nothing is queued")
+    (is (= "open" (change-state w)))
+    (is (= "open" (ticket-state w)) "the seat builds it again, as before")))
+
+(deftest a-refused-follow-up-leaves-the-groom-standing
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 97)
+        born @#'tk/changes-born-from
+        res (with-redefs-fn
+              ;; the follow-up's guard finds no submitted change, so its
+              ;; door refuses; the groom's own read of the stuck one stands
+              {#'tk/changes-born-from
+               (fn [row states find']
+                 (when-not (= ["submitted"] states)
+                   (born row states find')))}
+              #(person-moves-ticket! w :groom))]
+    (is (string? (:refused (first (:followed res))))
+        "the follow-up was refused, and said so")
+    (is (= "submitted" (change-state w))
+        "the groom committed first: its change is back under review")
+    (is (= "open" (ticket-state w)) "and the ticket stands where the groom landed it")
+    (is (true? (seats/named-open-beside-a-submitted-change?
+                (:eng w) "ticket" (str (:id (:ticket w)))))
+        "where the sit's skip keeps a seat off it (ticket 6ca380da)")))
+
+(deftest a-groom-wake-naming-the-ticket-it-sent-to-review-fires-nothing
+  (let [w (ticket-world)
+        eng (:eng w)
+        seat-id (str (:id (:seat w)))
+        ticket-id (str (:id (:ticket w)))
+        _ (stalled-with-a-pull-request! w 98)
+        _ (person-moves-ticket! w :groom)
+        _ (close-sittings! eng seat-id)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng seat-id)))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_benchseat/fire")
+                        :token "rk-test-benchseat-0123456789abcdef"}
+                       {:principal person})
+        fire (schedules/fake-fire)
+        woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)
+              {:id seat-id :interval 3600 :max-open 1}
+              {:id "groom-that-sent-its-ticket-to-review" :kind :ticket
+               :resource-id ticket-id :action :groom}
+              ((:now-fn eng))
+              {:text (str "{\"kind\":\"ticket\",\"id\":\"" ticket-id "\"}")})]
+    (is (= "in_review" (ticket-state w)))
+    (is (= "submitted" (change-state w)))
+    (is (false? (seats/named-open-beside-a-submitted-change?
+                 eng "ticket" ticket-id))
+        "a ticket in review is still handed by name (ticket 7af7d506)")
+    (is (not woke) "but the groom's own wake answers that no fire went out")
+    (is (empty? (schedules/fires fire)))
+    (is (= ticket-id (get-in (schedules/schedule-for-seat eng seat-id)
+                             [:data :last_withheld_wake]))
+        "withheld by name, as a ticket open beside its submitted change is")))
 
 (deftest a-groom-leaves-a-closed-pull-request-alone
   (let [w (ticket-world)]

@@ -300,6 +300,37 @@
             "one standing verdict per subject under one judgment — a
              correction is a `corrects`, not a second opinion")))))
 
+;; ── 1b · a verdict that names no judgment is the seat's judgment's ──
+
+(deftest a-verdict-with-no-judgment-is-written-under-the-seats
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        [sid _ _] (sit! h)
+        bare #(dissoc (verdict-input judgment (:id %) {}) :judgment)]
+
+    (testing "the seat names its judgment, so the body need not copy it"
+      (let [said (judge! h sid (bare knives))]
+        (is (false? (:isError said)) (text-of said))
+        (is (= (str (:id judgment))
+               (str (get-in (doc-of said) [:data :judgment])))
+            "the verdict is written under the seat's own judgment")
+        (let [[_ _ answer'] (sit! h)]
+          (is (= [(str (:id flour))] (mapv :id (get-in answer' [:walk :rows])))
+              "and it stands under it: the subject left the judgment's queue"))))
+
+    (testing "the walls judged the defaulted value: a second is refused"
+      (is (true? (:isError (judge! h sid (bare knives))))))
+
+    (testing "a caller with no seat judgment and no input is refused"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/create! eng :verdict (bare flour)
+                                {:principal person}))
+          "nobody's judgment is no judgment this house holds"))))
+
 ;; ── 2 · the consequence is the mirror's, never the seat's ───────────
 
 (deftest the-consequence-is-walked-on-the-subject-after-the-verdict
@@ -382,7 +413,7 @@
 ;; ── 4 · a reopened verdict puts its subject back in the queue ───────
 ;;
 ;; The walk subtracts subjects with a SAID verdict and nothing else
-;; (`mcp/judged-subjects`), so a reopen — which moves the standing
+;; (`judgments/walk-conds`), so a reopen — which moves the standing
 ;; verdict to overruled and writes nothing in its place — hands the
 ;; subject back by that one rule. And because the reopen is an
 ;; ordinary transition, the seat that walks the judgment wakes on it
@@ -613,6 +644,145 @@
         (is (= 4 (n)) "the default `sealed` leaves the open one out")
         (is (= 5 (#'wakes/entry-count eng (raw-of eng :seat (:id judge)) either))
             "open,sealed counts the four unjudged sealed and the open one")))))
+
+(deftest a-judges-count-over-transcripts-has-no-page-to-run-past
+  ;; the count read the newest 500 sealed transcripts and the oldest 500
+  ;; said verdicts, so an unjudged sitting older than 500 judged ones
+  ;; was counted by nobody (ticket 2abff5f9)
+  (let [eng (fresh-engine)
+        judgment (sitting-judgment! eng)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]
+                :wake_on [seal-count]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
+        waiting (sealed-sitting! eng worker model grant)]
+    (is (= 1 (n)) "one sealed transcript, its sitting unjudged")
+    (dotimes [_ 501]
+      (judge-sitting! eng judgment (sealed-sitting! eng worker model grant)))
+    (is (= 1 (n))
+        "501 judged sittings sealed after it, and the one waiting still counts")
+    (judge-sitting! eng judgment waiting)
+    (is (= 0 (n)) "judged, it counts no more")))
+
+;; ── a judge of sittings is handed only what it can read (ticket f508c646) ──
+
+(def ^:private no-transcript-sentence
+  "Nothing of the sitting was kept, so nothing of it was read.")
+
+(def ^:private spent
+  {:input_tokens 1000 :output_tokens 100
+   :cache_read_tokens 0 :cache_write_tokens 0 :turns 1})
+
+(defn- sitting-of!
+  "One open sitting of `seat`, with no transcript → its id."
+  [eng seat model grant]
+  (str (:id (:row (inv/create! eng :sitting
+                               {:seat (str seat)
+                                :model (str model)
+                                :grant (str grant)}
+                               {:principal worker-sitter})))))
+
+(deftest a-sitting-judge-is-handed-neither-its-own-sitting-nor-an-open-one
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (let [row (:row (inv/create!
+                                  eng :judgment
+                                  {:name "read-sittings"
+                                   :subject_kind "sitting"
+                                   ;; the queue itself admits an open
+                                   ;; sitting: the walk is what leaves it out
+                                   :queue {:state "open,closed"}
+                                   :verdicts [{:name "keep" :sentence keep-sentence}
+                                              {:name "no_transcript"
+                                               :sentence no-transcript-sentence}]
+                                   :remedy_max 200
+                                   :notes "The sitting judge's own judgment."}
+                                  {:principal person}))]
+                   (inv/invoke! eng :judgment (str (:id row)) :promote {}
+                                {:principal person})
+                   row)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        close! #(inv/invoke! eng :sitting % :close spent {:principal worker-sitter})
+        sealed (sealed-sitting! eng worker model grant)
+        bare (doto (sitting-of! eng worker model grant) close!)
+        still-open (sitting-of! eng worker model grant)
+        own (doto (sitting-of! eng (:id judge) model grant) close!)
+        say (fn [sid word]
+              (try
+                (inv/create! eng :verdict
+                             {:judgment (str (:id judgment))
+                              :subject_kind "sitting"
+                              :subject_id (str sid)
+                              :verdict word
+                              :remedy "Nothing to do."}
+                             {:principal (t/principal {:id "expense-sitter"
+                                                       :type :agent})})
+                nil
+                (catch Exception e e)))]
+
+    (testing "the wake counts the two sittings the judge can read"
+      (is (= 2 (#'wakes/walk-count eng (raw-of eng :seat (:id judge))))))
+
+    (testing "the sit hands the closed sittings of other seats and no other"
+      (let [[_ r answer] (sit! h)
+            handed (set (mapv :id (:rows (:walk answer))))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= #{sealed bare} handed)
+            "its own sitting, closed or open, and an open one are left out")
+        (is (not (contains? handed own)))
+        (is (not (contains? handed still-open)))))
+
+    (testing "a closed sitting that kept no transcript is no_transcript"
+      (is (some? (say bare "keep")) "keep would say it was read")
+      (is (nil? (say bare "no_transcript"))))
+
+    (testing "a sealed transcript is judged by the judgment's other words"
+      (is (nil? (say sealed "keep"))))))
 
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 
@@ -911,3 +1081,207 @@
       (is (some? (:sitting (doc-of r))) "the same key opens the sit")
       (is (not (seats/fire-key-held? eng (raw-row eng :seat (:id seat)) fire-key))
           "and that sit is the one that spent it"))))
+
+;; ── 9 · a judged subject is no row to wake for (ticket 871c8555) ─────
+
+(deftest a-judged-subject-is-no-row-to-wake-for
+  (let [eng (fresh-engine)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {:max_open_sittings 3})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id seat))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_expense_judge/fire")
+                        :token "rk-test-expense-judge-0123456789abcdef"}
+                       {:principal person})
+        seat-row #(raw-of eng :seat (:id seat))
+        fires #(filterv (fn [t] (= :fire (:action t)))
+                        (store/with-tx (:storage eng)
+                          (fn [tx] (store/transitions
+                                    (:storage eng) tx
+                                    {:kind :seat :resource-id (str (:id seat))}
+                                    {}))))]
+
+    (testing "unjudged, the subject is a row the wake counts"
+      (is (= 1 (#'wakes/walk-count eng (seat-row)))))
+
+    (inv/create! eng :verdict (verdict-input judgment (:id knives) {})
+                 {:principal (t/principal {:id "expense-sitter" :type :agent})})
+
+    (testing "judged, the wake's walk is as empty as the sit's"
+      (is (= 0 (#'wakes/walk-count eng (seat-row)))
+          "the sit subtracts the judged subject, and so does the count")
+      (is (true? (#'wakes/empty-walk? eng (seat-row)))))
+
+    (testing "a closing sitting of a seat of several slots fires nothing"
+      (is (nil? (wakes/release! eng (seat-row)
+                                (schedules/schedule-for-seat eng (:id seat))
+                                "wake:test:release:judged"
+                                ((:now-fn eng))
+                                true))
+          "no slot is left a row to take, so the close is no wake")
+      (is (empty? (fires))))))
+
+;; ── 9′ · a page of judged subjects hides no free row (ticket f175f8c5) ─
+
+(declare empty-sit!)
+
+(deftest a-page-of-judged-subjects-does-not-hide-the-free-row-behind-it
+  ;; the queue is read a page at a time and the judged subjects are
+  ;; subtracted after: a first page of nothing but judged rows handed
+  ;; no row while a free one waited on the second
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+        judged (mapv #(expense! eng (str "Vendor " %) "kitchen" (at %))
+                     (range 100))
+        free (expense! eng "Flour mill" "kitchen" (at 100))
+        _ (doseq [e judged]
+            (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 101 (get-in answer [:walk :total])))
+    (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows])))
+        "the one unjudged expense is past the first page, and is handed")
+    (is (nil? why) "a sitting handed a row did not walk nothing")))
+
+(deftest a-queue-of-only-judged-subjects-says-the-judge-has-caught-up
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        _ (doseq [e [knives flour]]
+            (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= (str "The queue held 2 rows under the walk's filter, and each one "
+                "the walk read already carries a standing verdict of this "
+                "judgment.")
+           why))))
+
+;; ── 9″ · the judged are left out past the page (ticket 245c880b) ─────
+
+(deftest a-judged-subject-past-the-page-of-verdicts-is-not-handed-again
+  ;; the judged were once read a page of said verdicts at a time: a
+  ;; judgment that had said more handed its newer subjects again, and
+  ;; the guard refused each verdict. The store's anti-join
+  ;; (`judgments/walk-conds`) has no page, so the sit's walk and the
+  ;; wake's count of it leave out every subject with a said verdict
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        salt (expense! eng "Salt works" "kitchen" "2026-09-18T09:00:00Z")
+        ids #(mapv (comp str :id) %)
+        _ (say! eng judgment knives "keep" "Nothing to do: the amount fits.")
+        [r answer _] (empty-sit! eng h)]
+    (testing "three subjects, one judged: the other two are handed"
+      (is (false? (:isError r)) (text-of r))
+      (is (= (ids [flour salt]) (mapv :id (get-in answer [:walk :rows])))))
+    (doseq [e [flour salt]]
+      (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+    (testing "all three judged: none is handed"
+      (let [[r answer _] (empty-sit! eng h)]
+        (is (false? (:isError r)) (text-of r))
+        (is (empty? (get-in answer [:walk :rows]))))
+      (is (= 0 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+          "and the wake counts none of them"))))
+
+;; ── 9‴ · the store leaves the judged out of the queue (ticket 279366ee) ─
+
+(deftest judged-subjects-past-the-walk's-pages-do-not-hide-the-free-one
+  ;; the judged were subtracted after each page was read, so a walk
+  ;; stopped at its cap of pages with a free subject behind them, and
+  ;; the wake counted the first ids of the queue alone. The cap is one
+  ;; page here and the wake's page ten ids, with 150 judged ahead
+  (with-redefs-fn {#'mcp/walk-pages-max 1
+                   #'wakes/queue-page 10}
+    (fn []
+      (let [eng (fresh-engine)
+            h (engine/handler eng)
+            judgment (promoted-judgment! eng {})
+            seat (open-judge-seat! eng judgment {})
+            at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+            judged (mapv #(expense! eng (str "Vendor " %) "kitchen" (at %))
+                         (range 150))
+            free (expense! eng "Flour mill" "kitchen" (at 150))
+            _ (doseq [e judged]
+                (say! eng judgment e "keep" "Nothing to do: the amount fits."))]
+        (is (= 1 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+            "the wake counts the one free subject, behind 150 judged")
+        (let [[r answer why] (empty-sit! eng h)]
+          (is (false? (:isError r)) (text-of r))
+          (is (= 151 (get-in answer [:walk :total]))
+              "the total is still the whole queue")
+          (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows])))
+              "the free expense is handed from behind more pages than the cap")
+          (is (nil? why)))))))
+
+;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
+
+(def ^:private empty-queue-sentence
+  "The queue held no rows under the walk's filter and the seat's grant.")
+
+(defn- empty-sit!
+  "One run's sit → [result answer why], `why` being the sentence the
+  sit kept on its sitting."
+  [eng h]
+  (let [sid (initialize! h)
+        r (call! h (with-session sid) "waymark_sit"
+                 {:key seat-key :session "run-empty"})
+        answer (doc-of r)]
+    [r answer (get-in (raw-of eng :sitting (:sitting answer))
+                      [:data :walked_nothing_why])]))
+
+(deftest an-empty-walk-says-when-its-filter-left-rows-out
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        _ (expense! eng "Tyre place" "garage" "2026-09-18T07:00:00Z")
+        _ (expense! eng "Oil depot" "garage" "2026-09-18T08:00:00Z")
+        _ (expense! eng "Paint shop" "garage" "2026-09-18T09:00:00Z")
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= (str "Your walk filter (team=kitchen) leaves out 3 expense rows "
+                "this seat can see.")
+           why)
+        "the seat sees three expenses, and its judgment's queue takes none")))
+
+(deftest an-empty-walk-counts-no-row-the-grant-conceals
+  ;; the scope entry's filter is the seat's sight: the garage's
+  ;; expenses are outside it, so they are neither counted nor named
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment
+                            {:scope [{:kind "expense" :actions []
+                                      :filter {:team "kitchen"}}
+                                     {:kind "verdict" :actions ["judge"]}]})
+        _ (expense! eng "Tyre place" "garage" "2026-09-18T07:00:00Z")
+        _ (expense! eng "Oil depot" "garage" "2026-09-18T08:00:00Z")
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= empty-queue-sentence why)
+        "the plain sentence, with no count of what the grant cannot see")))
+
+(deftest an-empty-queue-with-nothing-filtered-keeps-its-sentence
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        [r answer why] (empty-sit! eng h)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (get-in answer [:walk :rows])))
+    (is (= empty-queue-sentence why))))

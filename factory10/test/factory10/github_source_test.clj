@@ -257,6 +257,9 @@
         refused? (atom false)
         pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
                              (gh/requests state))]
+    ;; the repository is one the source has read: a first read lists the
+    ;; open pull requests only (ticket c07b581f), and this one merges after
+    (pass! r)
     (gh/seed-pull! state repo merged {:files the-files :reviews the-reviews})
     (let [census (with-redefs [forge/move-change!
                                (fn [& args]
@@ -271,7 +274,7 @@
 
     ;; the cursor moves past the pull request, and its head moves on
     ;; without a new stamp, so the listing no longer answers it
-    (reset! (:cursor source) "2026-09-18T16:00:00Z")
+    (swap! (:cursor source) assoc repo "2026-09-18T16:00:00Z")
     (gh/seed-pull! state repo (assoc-in merged [:head :sha] a-later-head)
                    {:files the-files :reviews the-reviews})
 
@@ -837,6 +840,96 @@
       (is (= "2026-09-18T10:00:00Z" (gh/cursor source))
           "the cursor advances only when every repository answered"))))
 
+;; ── one cursor for each repository, and stored (ticket c07b581f) ────
+
+(defn- pull-at [n at]
+  {:number n :state "open" :title (str "pull " n)
+   :user {:login "ckopsa"} :base {:ref "main"}
+   :head {:ref (str "b" n) :sha (str "sha" n)}
+   :updated_at at :labels []})
+
+(defn- a-cursor-store
+  "A cursor store as the wiring's, over a map a second source reads."
+  []
+  (let [kept (atom {})]
+    {:kept kept
+     :load (fn [repository] (get @kept repository))
+     :save! (fn [repository cursor] (swap! kept assoc repository cursor))}))
+
+(def ^:private the-bench-repo "ckopsa/bench")
+
+(deftest a-source-built-again-starts-at-the-stored-cursor
+  (let [state (gh/fake-state)
+        store (a-cursor-store)
+        opts {:repos [repo the-bench-repo] :store store}]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state repo (pull-at 2 "2026-09-18T12:00:00Z"))
+    (gh/seed-pull! state the-bench-repo (pull-at 3 "2026-09-18T11:00:00Z"))
+    (forge/forge-poll (gh/fake-source state opts))
+    (is (= {repo "2026-09-18T12:00:00Z" the-bench-repo "2026-09-18T11:00:00Z"}
+           @(:kept store))
+        "each repository's cursor is written after its own read")
+    (let [before (count (gh/requests state))
+          answer (forge/forge-poll (gh/fake-source state opts))
+          asked (drop before (gh/requests state))
+          listing? #(re-matches #"/repos/[^/]+/[^/]+/pulls" (str (:path %)))
+          paths (mapv :path asked)]
+      (is (= [(str "/repos/" repo "/pulls")
+              (str "/repos/" the-bench-repo "/pulls")]
+             (mapv :path (filter listing? asked)))
+          "one listing call for each repository")
+      (is (every? #(= "all" (get-in % [:params :state])) (filter listing? asked))
+          "and it is the window's listing, not a first read")
+      (is (not-any? #{(str "/repos/" repo "/pulls/1")} paths)
+          "a pull request behind the window is not read again")
+      (is (= #{"github:ckopsa/waymark#2" "github:ckopsa/bench#3"}
+             (set (map :change_id (:changes answer))))
+          "only the ones inside the five minutes are seen again"))))
+
+(deftest a-repository-that-does-not-answer-holds-only-its-own-cursor
+  (let [state (gh/fake-state)
+        store (a-cursor-store)
+        source (gh/fake-source state {:repos [repo the-bench-repo]
+                                      :store store})]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state the-bench-repo (pull-at 2 "2026-09-18T09:00:00Z"))
+    (gh/refuse! state the-bench-repo 403)
+    (let [answer (forge/forge-poll source)]
+      (is (false? (:complete? answer)))
+      (is (= [repo] (:answered answer)))
+      (is (= "2026-09-18T10:00:00Z" (gh/cursor source repo))
+          "the repository that answered moves its cursor")
+      (is (nil? (gh/cursor source the-bench-repo))
+          "the one that did not keeps its own")
+      (is (= {repo "2026-09-18T10:00:00Z"} @(:kept store))))
+    (gh/refuse! state the-bench-repo nil)
+    (let [before (count (gh/requests state))
+          answer (forge/forge-poll source)
+          asked (drop before (gh/requests state))]
+      (is (true? (:complete? answer)))
+      (is (= "2026-09-18T09:00:00Z" (gh/cursor source the-bench-repo)))
+      (is (= "all" (:state (:params (first asked))))
+          "and the first one is read from its window, not from nothing"))))
+
+(deftest a-new-repository-is-first-read-for-its-open-pull-requests
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        listings (fn [] (filterv #(= (str "/repos/" repo "/pulls") (:path %))
+                                 (gh/requests state)))]
+    (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
+    (gh/seed-pull! state repo (assoc (pull-at 2 "2026-09-18T11:00:00Z")
+                                     :state "closed"
+                                     :merged_at "2026-09-18T11:00:00Z"))
+    (let [answer (forge/forge-poll source)]
+      (is (= ["open"] (mapv #(get-in % [:params :state]) (listings))))
+      (is (= ["github:ckopsa/waymark#1"] (mapv :change_id (:changes answer)))
+          "what merged before the house read the repository is not mirrored")
+      (is (not-any? #{(str "/repos/" repo "/pulls/2")}
+                    (map :path (gh/requests state)))))
+    (testing "with a cursor the listing follows merges and closes again"
+      (forge/forge-poll source)
+      (is (= ["open" "all"] (mapv #(get-in % [:params :state]) (listings)))))))
+
 ;; ── check runs refused (a private repository) ───────────────────────
 ;;
 ;; A fine-grained token cannot hold `Checks`, so on a PRIVATE repository
@@ -988,6 +1081,32 @@
   [engine repository]
   (:row (inv/create! engine :repo_policy {:repository repository}
                      {:principal a-person})))
+
+(deftest the-cursor-is-kept-on-the-policy-row
+  ;; ticket c07b581f
+  (let [{:keys [state engine]} (rig)
+        policy (policy! engine repo)
+        on-the-row #(get-in (first (bench/policies engine :active))
+                            [:data :forge_cursor])]
+    (testing "no stored cursor and no change is no cursor"
+      (is (nil? ((:load (forge/cursor-store engine)) repo))))
+    (testing "a pass writes the repository's cursor on its policy"
+      (pass! {:source (gh/fake-source state {:store (forge/cursor-store engine)})
+              :engine engine})
+      (is (= "2026-09-18T12:00:00Z" (on-the-row))))
+    (testing "a source built again reads it back"
+      (let [again (gh/fake-source state {:store (forge/cursor-store engine)})
+            before (count (gh/requests state))]
+        (forge/forge-poll again)
+        (is (= "all" (get-in (first (drop before (gh/requests state)))
+                             [:params :state])))
+        (is (= "2026-09-18T12:00:00Z" (gh/cursor again repo)))))
+    (testing "a row with none is seeded from the newest stored change"
+      (bench/mark-row! engine :repo_policy (str (:id policy))
+                       {:forge_cursor nil} #{})
+      (let [seed ((:load (forge/cursor-store engine)) repo)]
+        (is (some? seed))
+        (is (= seed (on-the-row)) "and written, so the next boot reads it")))))
 
 (deftest the-source-polls-the-repositories-the-active-rows-name
   (let [state (gh/fake-state)
@@ -1450,6 +1569,26 @@
     (is (= ["merge-conflict"] (get-in (the-change engine) [:data :failing_checks])))
     (is (nil? (get-in (the-change engine) [:data :conflicts]))
         "a bench that cannot name the paths costs the paths, never the move")))
+
+(deftest the-rigs-conflict-outlives-the-forges-weaker-word
+  ;; ticket bf8ba0a6: #706's merge was refused as not mergeable and the
+  ;; merge pass wrote `conflicted`, with no landing record and every
+  ;; check green. The next poll read `blocked` over it at the same head,
+  ;; so the failing pass never saw the conflict and the change sat
+  ;; submitted and parked
+  (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
+        id (str (:id (the-change engine)))
+        _ (is (= "blocked" (get-in (the-change engine) [:data :mergeable])))
+        _ (bench/mark-row! engine :change id {:mergeable "conflicted"} #{})
+        census (pass! r)
+        row (the-change engine)]
+    (is (= "conflicted" (get-in row [:data :mergeable]))
+        "the forge's `blocked` at the same head does not replace the conflict")
+    (is (= :failing (:state row))
+        "and the change goes to its seat in that one pass")
+    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+    (is (= the-conflicts (get-in row [:data :conflicts])))
+    (is (= 1 (:failing census)))))
 
 (deftest a-behind-change-is-not-failing
   (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
@@ -1987,29 +2126,32 @@
   [{:name "Set up job" :conclusion "success"}
    {:name "Run the tests" :conclusion "failure"}])
 
-(defn- interrupted-world
-  "One change at `submitted`, whose one required check ended with
-  `conclusion`, on a head whose one workflow run ended with one job at
-  `job-conclusion` and `steps`."
-  [conclusion job-conclusion steps]
+(def ^:private the-gate-decided
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Decide" :conclusion "failure"}])
+
+(defn- run-world
+  "One change at `submitted`, whose one required check `check` ended
+  with `conclusion`, on a head whose one workflow run ended with
+  `run-conclusion` and `jobs`."
+  [check conclusion run-conclusion jobs]
   (let [state (gh/fake-state)
         engine (boot)
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo a-pull-request
                    {:files the-files :reviews the-reviews})
     (gh/seed-check! state repo the-head
-                    {:id 41752098700 :name "test10 (shard 3)"
+                    {:id 41752098700 :name check
                      :status "completed" :conclusion conclusion
                      :head_sha the-head})
     (gh/seed-run! state repo the-head
                   {:id 900 :workflow_id 11 :head_sha the-head
-                   :status "completed" :conclusion job-conclusion})
-    (gh/seed-job! state repo 900
-                  {:id 7001 :run_id 900 :name "test10 (shard 3)"
-                   :status "completed" :conclusion job-conclusion
-                   :steps steps})
+                   :status "completed" :conclusion run-conclusion})
+    (doseq [job jobs]
+      (gh/seed-job! state repo 900
+                    (assoc job :run_id 900 :status "completed")))
     (inv/create! engine :repo_policy
-                 {:repository repo :required_checks ["test10 (shard 3)"]}
+                 {:repository repo :required_checks [check]}
                  {:principal a-person})
     (pass! r)
     (let [id (str (:id (the-change engine)))
@@ -2024,6 +2166,15 @@
                                  (assoc-in [:data :rounds] 1))
                              (:version row))))))
     r))
+
+(defn- interrupted-world
+  "One change at `submitted`, whose one required check ended with
+  `conclusion`, on a head whose one workflow run ended with one job at
+  `job-conclusion` and `steps`."
+  [conclusion job-conclusion steps]
+  (run-world "test10 (shard 3)" conclusion job-conclusion
+             [{:id 7001 :name "test10 (shard 3)"
+               :conclusion job-conclusion :steps steps}]))
 
 (deftest an-interrupted-run-is-re-run-once-per-head
   (let [{:keys [state engine] :as r}
@@ -2073,6 +2224,50 @@
     (is (= :failing (:state (the-change engine))))
     (is (nil? (get-in (the-change engine) [:data :rerun_head])))))
 
+(deftest a-run-with-a-conclusion-is-finished
+  ;; GitHub's own run shape: `updated_at` and no `completed_at`
+  ;; (ticket 62e29b7b)
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        run (fn [id] (first (filter #(= id (:run_id %))
+                                    (forge/forge-runs source repo the-head))))]
+    (gh/seed-run! state repo the-head
+                  {:id 900 :workflow_id 11 :head_sha the-head
+                   :status "in_progress" :conclusion "success"
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:02:26Z"})
+    (gh/seed-run! state repo the-head
+                  {:id 901 :workflow_id 12 :head_sha the-head
+                   :status "in_progress" :conclusion "cancelled"
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:02:26Z"})
+    (gh/seed-job! state repo 901
+                  {:id 7001 :run_id 901 :name "test10 (shard 3)"
+                   :status "completed" :conclusion "cancelled" :steps []})
+    (gh/seed-run! state repo the-head
+                  {:id 902 :workflow_id 13 :head_sha the-head
+                   :status "in_progress" :conclusion nil
+                   :created_at "2026-10-09T14:00:00Z"
+                   :run_started_at "2026-10-09T14:00:05Z"
+                   :updated_at "2026-10-09T14:01:00Z"})
+    (gh/seed-job! state repo 902
+                  {:id 7002 :run_id 902 :name "test10 (shard 3)"
+                   :status "in_progress" :steps []})
+    (is (= "completed" (:status (run 900)))
+        "the conclusion speaks, not the status word")
+    (is (= "success" (:conclusion (run 900))))
+    (testing "a finished run that did not pass carries its jobs"
+      (is (= "completed" (:status (run 901))))
+      (is (= ["test10 (shard 3)"] (mapv :name (:jobs (run 901)))))
+      (is (forge/interrupted-run? (run 901))))
+    (testing "a run with no conclusion still waits"
+      (is (= "in_progress" (:status (run 902))))
+      (is (nil? (:conclusion (run 902))))
+      (is (not (contains? (run 902) :jobs)))
+      (is (not (forge/interrupted-run? (run 902)))))))
+
 (deftest a-run-is-interrupted-only-with-no-red-job
   (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})]
     (is (forge/interrupted-run? (run {:conclusion "timed_out"})))
@@ -2086,6 +2281,59 @@
     (is (not (forge/interrupted-run?
               {:status "in_progress" :jobs [{:conclusion "cancelled"}]}))
         "a run still running is not judged")))
+
+;; the gate beside cancelled suites (ticket 2f8a03cd)
+
+(def ^:private a-cancelled-suite
+  {:name "test10 (shard 3)" :conclusion "cancelled" :steps []
+   :started_at "2026-10-05T12:00:00Z" :completed_at "2026-10-05T12:04:00Z"})
+
+(def ^:private the-red-gate
+  {:name "gate" :conclusion "failure" :steps the-gate-decided
+   :started_at "2026-10-05T12:04:05Z" :completed_at "2026-10-05T12:04:10Z"})
+
+(deftest a-run-red-only-by-its-gate-is-re-run-once-per-head
+  (let [{:keys [state engine] :as r}
+        (run-world "gate" "failure" "failure"
+                   [(assoc a-cancelled-suite :id 7001)
+                    (assoc a-cancelled-suite :id 7002
+                           :name "test-queue (shard 1)")
+                    (assoc the-red-gate :id 7003)])
+        census (pass! r)
+        row (the-change engine)]
+    (is (= [{:repository repo :run 900}] (gh/reruns state))
+        "the gate's red step is no test: the cancelled suites run again")
+    (is (= 1 (:rerun census)))
+    (is (= the-head (get-in row [:data :rerun_head])))
+    (is (= :submitted (:state row)) "no test failed, so the change is not red")
+    (testing "the same head is not re-run a second time"
+      (let [census (pass! r)]
+        (is (= 1 (count (gh/reruns state))))
+        (is (= 0 (:rerun census)))
+        (is (= 1 (:rerun-noted census)))))))
+
+(deftest an-aggregator-is-red-only-beside-a-red-test
+  (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})
+        a-red-test {:name "test10 (shard 1)" :conclusion "failure"
+                    :steps died-in-a-test
+                    :started_at "2026-10-05T12:00:00Z"
+                    :completed_at "2026-10-05T12:03:50Z"}]
+    (is (forge/interrupted-run?
+         (run a-cancelled-suite {:name "quick" :conclusion "success"}
+              the-red-gate))
+        "a gate that began after the suites were cancelled reports them")
+    (is (not (forge/interrupted-run? (run a-red-test a-cancelled-suite)))
+        "a fail-fast sibling cancelled beside a real red test stays red")
+    (is (not (forge/interrupted-run?
+              (run a-red-test a-cancelled-suite the-red-gate)))
+        "and so does the run when the gate is red beside that red test")
+    (is (not (forge/interrupted-run?
+              (run a-cancelled-suite
+                   (dissoc the-red-gate :started_at))))
+        "a red job whose times the forge did not say is read as a test")
+    (is (not (forge/interrupted-run?
+              (run {:name "quick" :conclusion "success"} the-red-gate)))
+        "a red job with no interrupted job beside it is red")))
 
 ;; ── commit statuses and late reds (ticket 3aca3ae8) ─────────────────
 
@@ -2201,6 +2449,420 @@
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
 
+;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
+
+(deftest a-change-waiting-on-checks-names-the-ones-without-a-verdict
+  (let [checks [{:check_name "gate" :status "in_progress"}
+                {:check_name "lint" :status "completed" :conclusion "success"}
+                {:check_name "scan" :status "completed" :conclusion "stale"}]]
+    (is (= [{:name "gate" :status "in_progress" :conclusion nil}
+            {:name "scan" :status "completed" :conclusion "stale"}
+            {:name "tests" :status nil :conclusion nil}]
+           (forge/held-checks ["gate" "lint" "scan" "tests"] checks)))
+    (is (= (str "the checks of change-1 at abc have no verdict: "
+                "gate (status in_progress, conclusion none), "
+                "scan (status completed, conclusion stale), tests (no run)")
+           (forge/held-why "change-1" "abc" ["gate" "lint" "scan" "tests"]
+                           checks nil)))
+    (is (= [] (forge/held-checks ["lint"] checks))
+        "a check with a verdict is not named")))
+
+(deftest a-change-held-only-because-it-is-behind-its-base-says-so
+  (let [green [{:check_name "gate" :status "completed" :conclusion "success"}]]
+    (is (= (str "change-1 at abc is held only because it is behind its "
+                "base; its required checks are green")
+           (forge/held-why "change-1" "abc" ["gate"] green true)))
+    (is (nil? (forge/held-why "change-1" "abc" ["gate"] green false))
+        "a green head level with its base has nothing to say")
+    (is (re-find #"have no verdict: gate \(status queued"
+                 (forge/held-why "change-1" "abc" ["gate"]
+                                 [{:check_name "gate" :status "queued"}] true))
+        "a head that still waits on a check is not held only by its base")))
+
+(deftest a-held-change-is-due-one-time-past-the-bound
+  (let [t0 (java.time.Instant/parse "2026-10-09T10:00:00Z")
+        at #(.plusSeconds t0 (* 60 (long %)))
+        [s1 due1] (forge/held-due {} "c" "abc" (at 0) 20)
+        [s2 due2] (forge/held-due s1 "c" "abc" (at 19) 20)
+        [s3 due3] (forge/held-due s2 "c" "abc" (at 20) 20)
+        [s4 due4] (forge/held-due s3 "c" "abc" (at 40) 20)
+        [s5 due5] (forge/held-due s4 "c" "def" (at 41) 20)
+        [_ due6] (forge/held-due s5 "c" "def" (at 61) 20)]
+    (is (= [false false true false false true]
+           [due1 due2 due3 due4 due5 due6])
+        "due when the wait reaches the bound, one time for each head")))
+
+;; the same line, through the pass itself (ticket da550baa)
+
+(def ^:private a-held-green
+  {:id 41752098951 :name "gate" :status "completed" :conclusion "success"
+   :head_sha the-head})
+
+(defn- held-log-world
+  "`missing-world` with `checks` on its head, an engine on a clock the
+  test holds, and the lines the pass logs."
+  [checks]
+  (let [clock (atom (java.time.Instant/now))]
+    (-> (missing-world checks)
+        (update :engine assoc :now-fn #(deref clock))
+        (assoc :clock clock :lines (atom [])))))
+
+(defn- held-pass! [{:keys [source engine lines]}]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
+
+(defn- minutes-later! [{:keys [clock]} n]
+  (swap! clock (fn [^java.time.Instant t] (.plusSeconds t (* 60 (long n))))))
+
+(defn- held-lines [{:keys [lines]}]
+  (filterv #(re-find #"have no verdict|is held only because" %) @lines))
+
+(deftest a-pass-logs-a-running-required-check-one-time-past-the-bound
+  (let [{:keys [engine] :as r}
+        (held-log-world [{:id 41752098950 :name "gate" :status "in_progress"
+                      :head_sha the-head}])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (held-pass! r)
+    (is (= [] (held-lines r)) "the first pass starts the wait and says nothing")
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= [(str "the checks of " change-id " at " the-head
+                 " have no verdict: gate (status in_progress, conclusion none)")]
+           (held-lines r)))
+    (is (= :submitted (:state (the-change engine))))
+    (testing "a later pass on the same head does not say it again"
+      (minutes-later! r (inc forge/held-log-minutes))
+      (held-pass! r)
+      (is (= 1 (count (held-lines r)))))))
+
+(deftest a-pass-logs-a-green-head-that-is-behind-its-base
+  (let [{:keys [engine] :as r} (held-log-world [a-held-green])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (held-pass! r)
+    (is (= [] (held-lines r)))
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= [(str change-id " at " the-head " is held only because it is behind"
+                 " its base; its required checks are green")]
+           (held-lines r))
+        "the fake's compare answers diverged for a head with no ancestor seeded")
+    (is (= :submitted (:state (the-change engine))))))
+
+;; ticket 14e72c6e: #1095 stood green, with no check missing and no
+;; `behind_base` on its row, so the merge line read the rig's `waiting`
+;; as a wait on checks and never brought it up to date
+(deftest a-green-head-held-behind-its-base-says-so-on-the-row
+  (let [{:keys [engine] :as r} (held-log-world [a-held-green])
+        waiting {:state "waiting"}]
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= the-head (get-in row [:data :green_head])))
+      (is (= [] (get-in row [:data :missing_checks])))
+      (is (nil? (get-in row [:data :behind_base]))
+          "no compare is made inside the bound")
+      (is (= "waiting" (:state (bench/head-answer row waiting)))))
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= [] (get-in row [:data :missing_checks])))
+      (is (true? (get-in row [:data :behind_base])))
+      (is (some? (get-in row [:data :base_compared_at])))
+      (is (re-find #"is held only because it is behind"
+                   (str (get-in row [:data :held_reason]))))
+      (is (= "behind" (:state (bench/head-answer row waiting)))
+          "the merge line brings the front up to date"))))
+
+(deftest a-compare-that-throws-does-not-cost-the-held-change-its-pass
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (let [census (held-pass! r)
+          row (the-change engine)]
+      (is (= 1 (asked)) "the due pass asked the forge for the compare")
+      (is (= [] (held-lines r)) "a forge that does not answer says nothing")
+      (is (not-any? #(re-find #"did not move the change" %) @lines))
+      (is (= 0 (:refused census)))
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :green_head]))
+          "the rest of the change's pass ran"))))
+
+;; ticket 443bcbc2: the due pass was the one compare a held green head
+;; got, so one forge error left it waiting on `checks` for good
+(deftest a-compare-that-throws-on-the-due-pass-is-asked-again
+  (let [{:keys [engine state] :as r} (held-log-world [a-held-green])
+        change-id (get-in (the-change engine) [:data :change_id])]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (nil? (get-in (the-change engine) [:data :behind_base]))
+        "the due compare threw and wrote nothing")
+    (gh/fail-path! state nil)
+    (minutes-later! r 1)
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (true? (get-in row [:data :behind_base])))
+      (is (some? (get-in row [:data :base_compared_at])))
+      (is (= [(str change-id " at " the-head " is held only because it is"
+                   " behind its base; its required checks are green")]
+             (held-lines r))
+          "the line is said on the pass that got the answer")
+      (is (= "behind" (:state (bench/head-answer row {:state "waiting"})))))
+    (testing "a head that is behind is not compared or said again"
+      (let [asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                        (gh/requests state))))
+            before (asked)]
+        (minutes-later! r (inc forge/held-compare-minutes))
+        (held-pass! r)
+        (is (= before (asked)))
+        (is (= 1 (count (held-lines r))))))))
+
+(deftest a-held-green-head-level-with-its-base-is-compared-again-later
+  (let [{:keys [engine state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))]
+    (gh/seed-ancestor! state repo the-head "main")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (false? (get-in (the-change engine) [:data :behind_base])))
+    (is (= [] (held-lines r)))
+    (let [before (asked)]
+      (minutes-later! r 1)
+      (held-pass! r)
+      (is (= before (asked)) "not again inside the bound"))
+    ;; the base moves: the head no longer holds it
+    (swap! state update-in [:repos repo :ancestors] dissoc the-head)
+    (minutes-later! r forge/held-compare-minutes)
+    (held-pass! r)
+    (is (true? (get-in (the-change engine) [:data :behind_base])))
+    (is (= 1 (count (held-lines r))) "and the pass says so one time")))
+
+(deftest a-held-head-is-compared-again-by-what-the-compare-answered
+  (let [now (java.time.Instant/parse "2026-10-10T10:00:00Z")]
+    (is (nil? (forge/held-again true now)))
+    (is (= now (forge/held-again nil now)) "no answer: the next pass")
+    (is (= (.plusSeconds now (* 60 (long forge/held-compare-minutes)))
+           (forge/held-again false now)))))
+
+;; ticket dfd181ae: a compare route that kept throwing cost a held green
+;; head one request on every pass, and no line said so
+(deftest a-compare-that-keeps-throwing-waits-longer-each-time
+  (let [now (java.time.Instant/parse "2026-10-10T10:00:00Z")
+        later (fn [m] (.plusSeconds now (* 60 (long m))))]
+    (is (= [0 0 1 2 4 8 16 forge/held-compare-minutes
+            forge/held-compare-minutes]
+           (mapv forge/held-backoff [0 1 2 3 4 5 6 7 40])))
+    (is (= now (forge/held-again nil now 1)) "one error: the next pass")
+    (is (= (later 2) (forge/held-again nil now 3)))
+    (is (= (later forge/held-compare-minutes) (forge/held-again nil now 9)))
+    (is (nil? (forge/held-again true now 9)))
+    (is (= (later forge/held-compare-minutes)
+           (forge/held-again false now 9)))))
+
+(deftest a-compare-that-keeps-throwing-is-asked-a-bounded-number-of-times
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))
+        failing (fn [] (filterv #(re-find #"has thrown" %) @lines))]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (is (= 1 (asked)))
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 2 (asked)) "one error is asked again on the next pass")
+    (is (= [] (failing)))
+    (held-pass! r)
+    (is (= 2 (asked)) "the second error in a row waits")
+    ;; an hour of passes a minute apart, the forge failing throughout
+    (dotimes [_ 59]
+      (minutes-later! r 1)
+      (held-pass! r))
+    (is (= 8 (asked)) "the waits double up to the bound")
+    (is (= 1 (count (failing))) "and the log says so one time")
+    (is (re-find (re-pattern (str "has thrown " forge/held-compare-errors
+                                  " passes in a row"))
+                 (first (failing))))
+    (is (nil? (get-in (the-change engine) [:data :behind_base])))
+    (testing "a forge that answers again is heard at the next compare"
+      (gh/fail-path! state nil)
+      (minutes-later! r forge/held-compare-minutes)
+      (held-pass! r)
+      (is (true? (get-in (the-change engine) [:data :behind_base])))
+      (is (= 1 (count (held-lines r)))))))
+
+;; ticket 93072465: the count and the next compare's time were kept in
+;; the process alone, so a restart asked at once and said the line again
+(deftest a-failing-compare-keeps-its-backoff-across-a-restart
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])
+        asked (fn [] (count (filter #(re-find #"/compare/" (str (:path %)))
+                                    (gh/requests state))))
+        failing (fn [] (filterv #(re-find #"has thrown" %) @lines))]
+    (gh/fail-path! state #"/compare/")
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (dotimes [_ 2]
+      (minutes-later! r 1)
+      (held-pass! r))
+    (is (= 3 (asked)))
+    (is (= 1 (count (failing))))
+    (is (= 3 (get-in (the-change engine) [:data :held_threw])))
+    ;; a restart: the process forgets every head it saw
+    (reset! @#'forge/held-seen {})
+    (held-pass! r)
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 3 (asked)) "the wait the third error earned is still kept")
+    (minutes-later! r 1)
+    (held-pass! r)
+    (is (= 4 (asked)) "and the compare is asked when it ends")
+    (is (= 4 (get-in (the-change engine) [:data :held_threw]))
+        "the count goes on from the row's")
+    (is (= 1 (count (failing))) "the failing line is not said again")))
+
+;; ── the held reason and its clock are on the row (ticket b256d053) ──
+
+(defn- held-world
+  "`missing-world` with `gate` still running, read by an engine whose
+  clock is `clock`."
+  [clock]
+  (-> (missing-world [{:id 41752098850 :name "gate" :status "in_progress"
+                       :head_sha the-head}])
+      (update :engine assoc :now-fn (fn [] @clock))))
+
+(defn- logging-pass!
+  "One pass whose log lines land in `lines`."
+  [{:keys [source engine]} lines]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& xs] (swap! lines conj (apply str xs)))}))
+
+(deftest the-held-reason-is-written-on-the-change
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :held_head])))
+      (is (nil? (get-in row [:data :held_reason]))
+          "nothing is said inside the bound"))
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (let [reason (get-in (the-change engine) [:data :held_reason])]
+      (is (re-find #"have no verdict: gate \(status in_progress" (str reason)))
+      (is (some #{reason} @lines) "the row carries the line the pass logs"))))
+
+(deftest the-held-wait-counts-from-the-row-across-a-restart
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since])))
+    ;; a restart: the process forgets every head it saw
+    (reset! @#'forge/held-seen {})
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (is (= (str t0) (get-in (the-change engine) [:data :held_since]))
+        "the wait is not started again")
+    (is (some #(re-find #"have no verdict: gate" %) @lines)
+        "due on the first pass after the restart")))
+
+;; ticket 1a72eea8: the pass clears the wait only on a change it still
+;; reads, so one that merged or closed while held kept its reason
+(defn- ends-while-held!
+  "A change held past the bound, whose pull request then reads as
+  `pull` says: the row after the pass that follows."
+  [pull]
+  (let [t0 (java.time.Instant/now)
+        clock (atom t0)
+        {:keys [state engine] :as r} (held-world clock)
+        lines (atom [])]
+    (pass! r)
+    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+    (logging-pass! r lines)
+    (is (some? (get-in (the-change engine) [:data :held_reason]))
+        "the head is held, and the row says why")
+    (gh/seed-pull! state repo
+                   (merge a-pull-request
+                          {:state "closed"
+                           :updated_at "2026-09-18T15:00:00Z"}
+                          pull)
+                   {:files the-files :reviews the-reviews})
+    (pass! r)
+    (the-change engine)))
+
+(deftest a-change-that-merges-while-held-drops-what-the-wait-said
+  (let [row (ends-while-held! {:merged_at "2026-09-18T15:00:00Z"})]
+    (is (= :merged (:state row)))
+    (is (nil? (get-in row [:data :held_reason])))
+    (is (nil? (get-in row [:data :held_head])))
+    (is (nil? (get-in row [:data :held_since])))))
+
+(deftest a-change-that-closes-while-held-drops-what-the-wait-said
+  (let [row (ends-while-held! {})]
+    (is (= :closed (:state row)))
+    (is (nil? (get-in row [:data :held_reason])))
+    (is (nil? (get-in row [:data :held_head])))
+    (is (nil? (get-in row [:data :held_since])))))
+
+;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
+
+(defn- minutes-ago [n]
+  (str (.minusSeconds (java.time.Instant/now) (* 60 (long n)))))
+
+(deftest a-required-check-queued-past-the-limit-fails-the-change
+  (let [{:keys [state engine] :as r}
+        (missing-world [{:id 41752098900 :name "gate" :status "queued"
+                         :head_sha the-head :started_at (minutes-ago 45)}])]
+    (pass! r)
+    (let [row (the-change engine)
+          names (get-in row [:data :failing_checks])]
+      (is (= "failing" (name (:state row))))
+      (is (= 1 (count names)) "one finding")
+      (is (re-matches
+           #"check gate has been queued \d+ minutes; no runner took it \(check its runs-on\)"
+           (str (first names)))))
+    (testing "a run that starts clears the finding on the next pass"
+      (gh/seed-check! state repo the-head
+                      {:id 41752098901 :name "gate" :status "in_progress"
+                       :head_sha the-head :started_at (minutes-ago 1)})
+      (pass! r)
+      (let [row (the-change engine)]
+        (is (= "submitted" (name (:state row))))
+        (is (empty? (get-in row [:data :failing_checks])))))))
+
+(deftest a-required-check-queued-under-the-limit-stays-submitted
+  (let [{:keys [engine] :as r}
+        (missing-world [{:id 41752098900 :name "gate" :status "queued"
+                         :head_sha the-head :started_at (minutes-ago 10)}])]
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= "submitted" (name (:state row))))
+      (is (empty? (get-in row [:data :failing_checks]))))))
+
+(deftest the-queued-verdict-reads-the-limit-it-is-given
+  (let [now (java.time.Instant/now)
+        queued {:check_name "gate" :status "queued"
+                :started_at (minutes-ago 45)}]
+    (is (= :red (:verdict (forge/queued-verdict ["gate"] [queued] 30 now))))
+    (is (nil? (forge/queued-verdict ["gate"] [queued] 60 now))
+        "the policy's own limit, not the default")
+    (is (nil? (forge/queued-verdict ["gate"]
+                                    [(assoc queued :status "in_progress")]
+                                    30 now))
+        "a running check is not a queued one")
+    (is (nil? (forge/queued-verdict ["gate"] [(dissoc queued :started_at)]
+                                    30 now))
+        "a check that does not say when it was queued is not judged")))
+
 ;; ── a parent stranded in review by an early merge (ticket 499bcd72) ─
 
 (defn- force!
@@ -2266,3 +2928,233 @@
   (let [{:keys [engine parent]} (stranded-world :open)]
     (is (= 0 (forge/finish-merged-parents! engine)))
     (is (= :in_review (:state (ticket-row engine parent))))))
+
+;; ── GitHub's rate limit (ticket cdba1f6a) ───────────────────────────
+;;
+;; A 403 that says the hour's calls are spent is a throttle and not a
+;; refusal: the pass that meets it stops, moves no row and notes no
+;; repository unreadable, and every call waits for the reset. An answer
+;; GitHub has not changed is a 304, which costs nothing, and the census
+;; line carries what is left.
+
+(def ^:private limit-hour (java.time.Instant/parse "2026-10-01T20:42:00Z"))
+(def ^:private limit-reset (java.time.Instant/parse "2026-10-01T21:00:00Z"))
+(def ^:private limit-head (get-in a-pull-request [:head :sha]))
+
+(defn- limit-rig
+  "A fresh in-memory GitHub with one open pull request and one green
+  check on its head, the real source over it on a clock the test holds,
+  and an engine whose one policy names the repository."
+  []
+  (let [state (gh/fake-state)
+        engine (boot)
+        clock (atom limit-hour)
+        source (gh/fake-source state {:repos-fn #(bench/active-repositories
+                                                  engine)
+                                      :now-fn #(deref clock)})]
+    (gh/seed-pull! state repo a-pull-request {:files the-files})
+    (gh/seed-check! state repo limit-head a-green-check)
+    (policy! engine repo)
+    {:state state :engine engine :source source :clock clock
+     :lines (atom [])}))
+
+(deftest a-check-with-a-conclusion-and-an-end-is-finished
+  ;; the shape GitHub left on ckopsa/waymark#1095: check run
+  ;; 113855755394 (ticket 9112f56e)
+  (let [{:keys [state source]} (limit-rig)
+        gate {:id 113855755394 :name "gate" :status "in_progress"
+              :conclusion "success" :head_sha limit-head
+              :started_at "2026-10-09T14:02:24Z"
+              :completed_at "2026-10-09T14:02:26Z"}
+        named (fn [n] (first (filter #(= n (:check_name %))
+                                     (forge/forge-checks source repo
+                                                         limit-head))))]
+    (gh/seed-check! state repo limit-head gate)
+    (is (= "completed" (:status (named "gate")))
+        "the conclusion and the end speak, not the status word")
+    (is (= {:verdict :green}
+           (forge/check-verdict ["gate"]
+                                (forge/forge-checks source repo limit-head))))
+
+    (testing "a run with no conclusion is still running"
+      (gh/seed-check! state repo limit-head
+                      {:id 113855755401 :name "image" :status "in_progress"
+                       :head_sha limit-head
+                       :started_at "2026-10-09T14:02:24Z"})
+      (is (= "in_progress" (:status (named "image"))))
+      (is (nil? (forge/check-verdict
+                 ["gate" "image"]
+                 (forge/forge-checks source repo limit-head)))))))
+
+(deftest an-actions-run-or-job-with-a-conclusion-and-an-end-is-finished
+  ;; the same shape, read through Actions where the check-runs route
+  ;; refuses the token (ticket b5e8bbd8)
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        ended {:status "in_progress"
+               :started_at "2026-10-09T14:02:24Z"
+               :completed_at "2026-10-09T14:02:26Z"}
+        named (fn [n] (first (filter #(= n (:check_name %))
+                                     (forge/forge-checks source repo
+                                                         limit-head))))]
+    (gh/checks-answer! state repo 403)
+    (gh/seed-run! state repo limit-head
+                  (assoc ended :id 900 :workflow_id 11 :head_sha limit-head
+                         :conclusion "failure"))
+    (gh/seed-job! state repo 900
+                  (assoc ended :id 7001 :run_id 900 :name "gate"
+                         :conclusion "failure" :head_sha limit-head))
+    (gh/seed-job! state repo 900
+                  {:id 7002 :run_id 900 :name "image" :status "in_progress"
+                   :head_sha limit-head
+                   :started_at "2026-10-09T14:02:24Z"})
+    (testing "a job"
+      (is (= "completed" (:status (named "gate")))
+          "the conclusion and the end speak, not the status word")
+      (is (= "in_progress" (:status (named "image")))
+          "a job with no conclusion is still running"))
+    (testing "a workflow run"
+      (let [[run] (forge/forge-runs source repo limit-head)]
+        (is (= "completed" (:status run)))
+        (is (= ["gate" "image"] (mapv :name (:jobs run)))
+            "its jobs are read, as a finished red run's are")))))
+
+(defn- limit-pass! [{:keys [source engine lines]}]
+  (forge/pass! {:source source :engine engine
+                :log-fn (fn [& parts] (swap! lines conj (apply str parts)))}))
+
+(defn- wire-count [state] (count (gh/requests state)))
+
+(deftest the-headers-tell-a-throttle-from-a-refusal
+  (let [epoch (str (.getEpochSecond ^java.time.Instant limit-reset))
+        facts (fn [status headers body]
+                (gh/answer-facts status headers body limit-hour))]
+    (testing "no call remains: the limit lifts at the reset"
+      (is (= limit-reset
+             (:throttle (facts 403 {"x-ratelimit-remaining" "0"
+                                    "x-ratelimit-reset" epoch}
+                               "")))))
+    (testing "a retry-after is the wait, whatever else is said"
+      (is (= (.plusSeconds ^java.time.Instant limit-hour 30)
+             (:throttle (facts 429 {"retry-after" "30"
+                                    "x-ratelimit-remaining" "12"
+                                    "x-ratelimit-reset" epoch}
+                               "")))))
+    (testing "a body that names the rate limit, and no header: a minute"
+      (is (= (.plusSeconds ^java.time.Instant limit-hour 60)
+             (:throttle (facts 403 {}
+                               "You have exceeded a secondary rate limit")))))
+    (testing "a 403 with calls left is a refusal of the token"
+      (is (= {:remaining 4999 :limit 5000 :reset limit-reset}
+             (facts 403 {"x-ratelimit-remaining" "4999"
+                         "x-ratelimit-limit" "5000"
+                         "x-ratelimit-reset" epoch}
+                    "Resource not accessible by integration"))
+          "no throttle, and the budget is read from it all the same"))
+    (testing "an answer that is not a 403 or a 429 is never a throttle"
+      (is (nil? (:throttle (facts 200 {"x-ratelimit-remaining" "0"
+                                       "x-ratelimit-reset" epoch}
+                                  "")))))))
+
+(deftest a-spent-rate-limit-holds-the-pass-and-refuses-nothing
+  (let [{:keys [state engine clock lines] :as w} (limit-rig)]
+    (gh/budget! state {:remaining 4321 :limit 5000 :reset limit-reset})
+    (limit-pass! w)
+    (is (str/includes? (str (last @lines))
+                       (str "4321 of 5000 calls left until " limit-reset))
+        "the census line carries the remaining calls and the reset")
+    (let [before (the-change engine)]
+      (is (some? before) "the first pass minted the change")
+      (gh/throttle! state limit-reset)
+
+      (testing "the pass that meets the spent limit stops"
+        (let [so-far (wire-count state)
+              census (limit-pass! w)]
+          (is (= (str limit-reset) (:held-until census)))
+          (is (= (inc so-far) (wire-count state))
+              "one answer said the limit is spent, and nothing was asked
+               after it")
+          (is (false? (:complete? census)) "the cursor stands")
+          (is (= 0 (:noted census)))
+          (is (nil? (source-note-of engine repo))
+              "a throttle is not a repository the token cannot read")
+          (is (= 0 (+ (long (:failing census)) (long (:stuck census))
+                      (long (:moved census)) (long (:refused census))))
+              "and no row moved or was refused on it")
+          (is (= before (the-change engine)))
+          (is (str/includes? (str (last @lines))
+                             (str "every call held until " limit-reset))
+              "the census line names the hold and the reset")))
+
+      (testing "the next pass waits for the reset, though GitHub would answer"
+        (gh/throttle! state nil)
+        (let [so-far (wire-count state)
+              census (limit-pass! w)]
+          (is (= so-far (wire-count state)) "nothing went on the wire")
+          (is (= 0 (:calls census)))
+          (is (= (str limit-reset) (:held-until census)))
+          (is (nil? (source-note-of engine repo)))
+          (is (= before (the-change engine)))))
+
+      (testing "past the reset the pass reads again"
+        (reset! clock (.plusSeconds ^java.time.Instant limit-reset 1))
+        (let [census (limit-pass! w)]
+          (is (nil? (:held-until census)))
+          (is (pos? (long (:calls census))))
+          (is (true? (:complete? census))))))))
+
+(deftest every-pass-stamps-the-policy-and-a-held-pass-does-too
+  ;; ticket e674e558: `base_checked_at` stands still on a held pass
+  (let [{:keys [state engine] :as w} (limit-rig)
+        policy #(one-row engine :repo_policy {:repository repo})
+        stamp #(get-in (policy) [:data :forge_pass_at])]
+    (limit-pass! w)
+    (is (some? (stamp)) "a pass that read the repository stamps its policy")
+    (bench/mark-row! engine :repo_policy (str (:id (policy)))
+                     {:forge_pass_at nil} #{})
+    (is (nil? (stamp)))
+    (gh/throttle! state limit-reset)
+    (let [census (limit-pass! w)]
+      (is (= (str limit-reset) (:held-until census)))
+      (is (some? (stamp)) "the held pass ran, and the policy says when"))))
+
+(deftest an-unchanged-answer-is-a-304-and-costs-nothing
+  (let [{:keys [state source]} (limit-rig)
+        _ (gh/budget! state {:remaining 4321 :limit 5000 :reset limit-reset})
+        ;; the first read of a new repository lists `state=open` only
+        ;; (ticket c07b581f), which is another request than every later
+        ;; listing: the two passes compared here come after it
+        _ (forge/forge-poll source)
+        first-poll (forge/forge-poll source)
+        first-checks (forge/forge-checks source repo limit-head)
+        so-far (wire-count state)
+        spared (count (gh/unchanged state))]
+    (is (= 1 (count (:changes first-poll))))
+
+    (testing "a second pass over a pull request that did not move"
+      (let [second-poll (forge/forge-poll source)
+            second-checks (forge/forge-checks source repo limit-head)]
+        (is (pos? (- (wire-count state) so-far)))
+        (is (= (- (wire-count state) so-far)
+               (- (count (gh/unchanged state)) spared))
+            "every request of it was answered 304")
+        (is (= (:changes first-poll) (:changes second-poll))
+            "and the documents are the ones the first pass read")
+        (is (= first-checks second-checks))
+        (is (= {:remaining 4321 :limit 5000 :reset (str limit-reset)}
+               (select-keys (forge/forge-budget source)
+                            [:remaining :limit :reset])))
+        (is (pos? (long (:unchanged (forge/forge-budget source)))))))
+
+    (testing "a check that finishes changes one route's answer, and only
+              that route is read whole"
+      (gh/seed-check! state repo limit-head a-red-check)
+      (let [so-far (wire-count state)
+            spared (count (gh/unchanged state))
+            checks (forge/forge-checks source repo limit-head)]
+        (is (= 2 (- (wire-count state) so-far))
+            "the check runs and the statuses")
+        (is (= 1 (- (count (gh/unchanged state)) spared))
+            "the statuses did not change")
+        (is (contains? (set (map :check_name checks)) "test10 (shard 3)")
+            "the new red check is read")))))

@@ -132,6 +132,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.resource :as res]
             [waymark10.server.seams :as seams]
             [waymark10.server.seats :as seats]
@@ -309,7 +310,10 @@
     (seats/count-correction! eng kind
                              (or (get-in result [:transition :resource-id])
                                  (get-in result [:row :id]))))
-  result)
+  ;; a person recording their own screen has this write put in their
+  ;; walk, under this request's sight (walks/record-own!,
+  ;; spec-guided-follow § 4); it answers the result it was handed
+  (walks/record-own! eng (principal-of req) (visibility-of req) result))
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
 
@@ -332,11 +336,16 @@
 (defn check-action!
   "A scoped request invoking a non-granted action: the action does not
   exist (never a 403 — a refusal that names the gate would leak what
-  concealment hides)."
+  concealment hides). A request that addresses one row is judged on
+  that row: a door only the own-surface confers does not exist on a
+  row the principal does not own."
   [req rdef action]
   (when-some [vis (visibility-of req)]
-    (when-not ((:action? vis) (:kind rdef) action)
-      (throw (p/no-such-action (:kind rdef) action)))))
+    (let [id (get-in req [:path-params :id])
+          on? (:action-on? vis)]
+      (when-not (and ((:action? vis) (:kind rdef) action)
+                     (or (nil? id) (nil? on?) (on? (:kind rdef) action id)))
+        (throw (p/no-such-action (:kind rdef) action))))))
 
 (defn- url-decode ^String [^String s]
   (URLDecoder/decode s StandardCharsets/UTF_8))
@@ -396,6 +405,8 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
+(declare ref-summary-hook)
+
 (defn- render-opts
   "The one ctx-opts map every render call shares: identity, clock,
   services, visibility, and the kind map link targets resolve
@@ -411,6 +422,10 @@
            :services (:services eng)
            :visibility (visibility-of req)
            :resources (inv/resources eng)
+           ;; what names the rows a summary line mentions (ticket
+           ;; 2f35a7b5): one instance a request, so a page reads each
+           ;; mentioned row once
+           :summary-refs (ref-summary-hook eng req)
            ;; the links assembled modules lend core kinds
            ;; (seams/Linking), gathered once at boot
            :link-doors (:link-doors eng)}
@@ -483,8 +498,9 @@
 (defn- dry-run-response
   "A dry-run's verdict, the invoke door's shape grown optional limbs:
   {:valid …} plus :warnings (full and partial), :judged/:awaiting
-  (partial — always present there, even empty), and :verdicts
-  (bulk/batch — per item)."
+  (partial — always present there, even empty), :verdicts
+  (bulk/batch — per item), and :preview (a create whose kind declares
+  :on-rehearse — what the create would make)."
   [result]
   (json-response 200
                  (p/wire-value
@@ -493,6 +509,7 @@
                     (assoc :warnings (mapv p/prune (:warnings result)))
                     (:judged result) (assoc :judged (:judged result))
                     (:awaiting result) (assoc :awaiting (:awaiting result))
+                    (:preview result) (assoc :preview (:preview result))
                     (:verdicts result)
                     (assoc :verdicts (mapv p/prune (:verdicts result)))))
                  media-type nil))
@@ -579,6 +596,14 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the doors the law marks everyday.
+                                           ;; A shut door's entry carries no
+                                           ;; :display, so the page reads the
+                                           ;; marks here. Absent when none is
+                                           ;; marked: that kind's wire is as
+                                           ;; it was
+                                           (seq (res/everyday-doors r))
+                                           (assoc :everyday (res/everyday-doors r))
                                            ;; a decision kind advertises
                                            ;; itself, and the field its
                                            ;; requester is stamped into
@@ -587,6 +612,12 @@
                                                   {:by (some-> (res/decision r)
                                                                :by name)}))]))
                                  resources)}
+         ;; when the engine ends (engine's :expires-at, a demo clone's
+         ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).
+         ;; Absent on a working engine, and the UI shows its banner
+         ;; only when this is here
+         (:expires-at eng)
+         (assoc :expires_at (str (:expires-at eng)))
          ;; global navigation between the deployable's applications:
          ;; every distinct declared domain, sorted — present only when
          ;; some kind declares one, so single-domain wires are unchanged
@@ -728,7 +759,13 @@
         (let [rows (rows-of params)
               env (collections/envelope eng rdef (dissoc params "rows")
                                         (cond-> (render-opts eng req)
-                                          rows (assoc :rows rows)))]
+                                          rows (assoc :rows rows)
+                                          ;; an in-process caller's own
+                                          ;; conds (`mcp/walk-of`): no
+                                          ;; wire request carries the key
+                                          (:waymark10/extra-conds req)
+                                          (assoc :extra-conds
+                                                 (:waymark10/extra-conds req))))]
           (mark-read! eng req (str "/api/" plural))
           (json-response 200 env media-type nil))))))
 
@@ -793,16 +830,35 @@
           result (try
                    (count-committed!
                     eng req (:kind rdef)
-                    (inv/create! eng (:kind rdef) body
-                                 (select-keys opts [:principal :acknowledged
-                                                    :idempotency-key :dry-run
-                                                    :grant])))
+                    ;; a scheduled call that waits on a person has its
+                    ;; held call minted out here (scheduled/after-write!,
+                    ;; docs/spec-scheduled-actions.md R-4.3)
+                    (scheduled/after-write!
+                     eng rdef (first (:create-action-names rdef))
+                     (inv/create! eng (:kind rdef) body
+                                  (select-keys opts [:principal :acknowledged
+                                                     :idempotency-key :dry-run
+                                                     :grant]))))
                    (catch clojure.lang.ExceptionInfo e
                      (if-some [resp (held-instead eng opts (:kind rdef)
                                                   (first (:create-action-names rdef))
                                                   nil body e)]
                        {::held resp}
-                       (throw e))))]
+                       (do
+                         ;; a person recording their own screen has the
+                         ;; refusal of their create put in their walk,
+                         ;; as the action route does
+                         ;; (walks/record-refused!): no row exists yet,
+                         ;; so the collection is its `self`
+                         (when-not (or (:dry-run opts)
+                                       (= :warning-required
+                                          (:waymark10/problem (ex-data e))))
+                           (walks/record-refused!
+                            eng (principal-of req) (visibility-of req)
+                            {:self (str "/api/" plural)
+                             :action (first (:create-action-names rdef))}
+                            e))
+                         (throw e)))))]
       (cond
         (::held result) (::held result)
 
@@ -965,6 +1021,7 @@
                          [(store/search-rows st tx (:kind trdef) conds
                                              {:order-by (:field sort)
                                               :desc (:desc sort)
+                                              :then-by (:then sort)
                                               :limit (:size page)
                                               :offset (* (:size page) (dec (:number page)))})
                           (store/count-matching st tx (:kind trdef) conds)]))
@@ -1054,6 +1111,33 @@
                                      (visibility-of req))
                   instant))
 
+(defn- ref-summary-hook
+  "The ctx-opt :ref-summary (ticket 6ef1473c): one target row's
+  {:href :summary} under THIS request's visibility — nil when its
+  grant does not admit the row, or no such row stands. It is the
+  answer the client's own depth=summary GET of that row would get,
+  without the GET: the same `:row?` check-row! asks, the same
+  projected summary. One instance per request, so a target two fields
+  name is read once."
+  [eng req]
+  (let [vis (visibility-of req)
+        st (:storage eng)
+        seen (atom {})]
+    (fn [kind id]
+      (let [k [kind id]]
+        (if-some [e (find @seen k)]
+          (val e)
+          (let [trdef (get (inv/resources eng) kind)
+                raw (when (and trdef
+                               (or (nil? vis) ((:row? vis) kind id)))
+                      (store/with-tx st #(store/load-row st % kind id {})))
+                v (when raw
+                    {:href (str "/api/" (:plural trdef) "/" id)
+                     :summary (render/target-summary
+                               trdef (inv/decode-row trdef raw) vis)})]
+            (swap! seen assoc k v)
+            v))))))
+
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
   [eng rdef plural id req]
@@ -1079,7 +1163,14 @@
         opts (render-opts eng req)
         env (if (= :summary depth)
               (render/envelope-summary rdef row opts)
-              (splice-embeds eng rdef (render/envelope rdef row opts) opts
+              ;; the full row alone carries its refs' labels: a
+              ;; summary has no data for them to label
+              (splice-embeds eng rdef
+                             (render/envelope
+                              rdef row
+                              (assoc opts :ref-summary
+                                     (ref-summary-hook eng req)))
+                             opts
                              (embed-overrides req)))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
@@ -1159,7 +1250,13 @@
                        eng rdef (keyword action)
                        (grants/approval-effects!
                         eng rdef (keyword action)
-                        (inv/invoke! eng (:kind rdef) id (keyword action) body opts))))))
+                        ;; …and a scheduled call that waits on a person
+                        ;; is asked about again when its time moves, and
+                        ;; cancelled by a refusal, out here
+                        ;; (scheduled/after-write!, R-4.3)
+                        (scheduled/after-write!
+                         eng rdef (keyword action)
+                         (inv/invoke! eng (:kind rdef) id (keyword action) body opts)))))))
                    (catch Exception e
                      (let [d (ex-data e)
                            held (held-instead eng opts (:kind rdef)
@@ -1183,6 +1280,17 @@
                                               :warnings (mapv #(select-keys % [:name :reason])
                                                               (:warnings d))
                                               :acknowledge (:acknowledge d)}))
+                           ;; a person recording their own screen has
+                           ;; the refusal of their write put in their
+                           ;; walk, under this request's sight
+                           ;; (walks/record-refused!); a rehearsal is
+                           ;; no write, and the acknowledge wall is a
+                           ;; question and not a refusal
+                           (when-not (or (:dry-run opts)
+                                         (= :warning-required (:waymark10/problem d)))
+                             (walks/record-refused! eng (principal-of req)
+                                                    (visibility-of req)
+                                                    {:self self :action action} e))
                            (throw e))))))
           ;; beat 3: the dry-run's shadow — "considering — <action> on
           ;; <resource>", gone in a moment if abandoned. Only the FULL
@@ -1228,6 +1336,15 @@
           _ (check-kind! req rdef)
           _ (check-action! req rdef (keyword action))
           body (read-body req)
+          ;; an owner's door is judged on each row the call names, as
+          ;; the single door judges its one row
+          _ (when-some [on? (:action-on? (visibility-of req))]
+              (let [ids (if (contains? body :items)
+                          (keep #(when (map? %) (:id %)) (:items body))
+                          (:ids body))]
+                (doseq [id (when (sequential? ids) ids) :when (some? id)]
+                  (when-not (on? (:kind rdef) (keyword action) (str id))
+                    (throw (p/no-such-action (:kind rdef) (keyword action)))))))
           ;; batch B (flagged): grant-denied args 422 here too — the
           ;; bulk body minus its ids (and its on_error) is the
           ;; per-item input; in the items shape each item's own
@@ -1239,7 +1356,26 @@
               (grants/check-args! (visibility-of req) rdef (keyword action)
                                   (dissoc body :ids :on_error)))
           opts (invoke-opts req)
-          result (inv/bulk! eng (:kind rdef) (keyword action) body opts)]
+          ;; each row this call moved gets the single door's post-commit
+          ;; pass (count-committed!): the sitting counts the transition,
+          ;; a person's reversal counts its correction, and a principal
+          ;; recording their own walk has the row put in it, under this
+          ;; request's sight. Each row it refused gets the single door's
+          ;; refusal frame, about that row (walks/record-refused!); the
+          ;; acknowledge wall is a question and not a refusal
+          result (inv/bulk! eng (:kind rdef) (keyword action) body
+                            (assoc opts
+                                   :on-item
+                                   #(count-committed! eng req (:kind rdef) %)
+                                   :on-refused
+                                   (fn [id e]
+                                     (when-not (= :warning-required
+                                                  (:waymark10/problem (ex-data e)))
+                                       (walks/record-refused!
+                                        eng (principal-of req) (visibility-of req)
+                                        {:self (str "/api/" plural "/" id)
+                                         :action action}
+                                        e)))))]
       (cond
         (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
@@ -1281,11 +1417,14 @@
 
         :else
         ;; R-10.6: a partial bulk's per-item 409s count on the
-        ;; sitting as a thrown one would (waymark-fp62.7.11)
+        ;; sitting as a thrown one would (waymark-fp62.7.11), and the
+        ;; last refused item's problem type and guard stamp its
+        ;; :last_refusal, as wrap-refusals-counted does for a thrown one
         (do (when (pos? (or (:conflicts result) 0))
               (when-some [sitting-id (counted-sitting-id eng req)]
                 (dotimes [_ (:conflicts result)]
-                  (seats/bump-counter! eng sitting-id :refusals))))
+                  (seats/bump-counter! eng sitting-id :refusals
+                                       (:last-conflict result)))))
             (report-response result))))))
 
 (defn- batch-action [eng]
@@ -1299,7 +1438,11 @@
           _ (doseq [inp (:inputs body)]
               (grants/check-args! (visibility-of req) rdef (keyword action) inp))
           opts (invoke-opts req)
-          result (inv/batch! eng (:kind rdef) id (keyword action) body opts)]
+          ;; each input this call committed gets the single door's
+          ;; post-commit pass, as the bulk door's rows do
+          result (inv/batch! eng (:kind rdef) id (keyword action) body
+                             (assoc opts :on-item
+                                    #(count-committed! eng req (:kind rdef) %)))]
       ;; the batch door's rehearsal (§23): index-keyed verdicts, and —
       ;; full mode, all-ok only — the considering card names the row,
       ;; exactly as the single door's
@@ -1379,10 +1522,12 @@
                                         "anchor — GET /api/surfaces/" name
                                         ".")})))
       (json-response 200
-                     (surface/envelope eng sdef id
-                                       {:principal (principal-of req)
-                                        :now ((:now-fn eng))
-                                        :services (:services eng)})
+                     ;; the anchor and the member items render through
+                     ;; the ctx-opts every other read lends (ticket
+                     ;; f1951d5c): their :computed fields read the kind
+                     ;; map and the evidence reads. :visibility is nil
+                     ;; here, because a scoped request 404s above
+                     (surface/envelope eng sdef id (render-opts eng req))
                      media-type nil))))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────
@@ -1535,18 +1680,23 @@
 (defn- home-grant
   "The agent's standing grant (audience == pid), if one lives — the
   leash it already holds, so it arrives scoped and need not re-ask.
-  Own by construction: the audience IS the reader."
+  Own by construction: the audience IS the reader. A seat grant omits
+  its scope (the seat's is read fresh at every request), so it answers
+  the seat it cites and that seat's scope; any other grant reads as it
+  always did."
   [eng pid]
   (when (get (inv/resources eng) :grant)
     (when-some [g (grants/standing-grant-for eng pid)]
-      {:href (str "/api/grants/" (:id g))
-       :id (:id g)
-       :state (name (:state g))
-       :scope (get-in g [:data :scope])
-       :expires_at (some-> (get-in g [:data :expires_at]) str)
-       :wear {:header "X-Waymark-Grant" :value (:id g)
-              :note (str "send this on every request — it selects your "
-                         "standing scope, already yours")}})))
+      (let [seat (grants/seat-of-grant eng g)]
+        (cond-> {:href (str "/api/grants/" (:id g))
+                 :id (:id g)
+                 :state (name (:state g))
+                 :scope (if seat (:scope seat) (get-in g [:data :scope]))
+                 :expires_at (some-> (get-in g [:data :expires_at]) str)
+                 :wear {:header "X-Waymark-Grant" :value (:id g)
+                        :note (str "send this on every request — it selects your "
+                                   "standing scope, already yours")}}
+          seat (assoc :seat (select-keys seat [:id :name])))))))
 
 (def ^:private home-letters-opened-recent 3)
 
@@ -2008,6 +2158,21 @@
   (p/->response (p/problem :not-found 404 "Not found"
                            {:detail "No such route."})))
 
+(defn- seat-door-is-the-connector
+  "The 403 a delegate's plain-HTTP call answers with when its
+  X-Waymark-Grant names a seat's grant (owner, 2026-10-01, ticket
+  b5d51b4d). The connector is the one door where a sitting's tally,
+  refusals and walls are kept, so the seat's view is the connector's
+  alone and a call over plain HTTP is its bearer's."
+  []
+  (p/problem :seat-door-is-the-connector 403 "The connector is the seat's door"
+             {:detail (str "This grant is a seat's, and a seat is sat "
+                           "through the connector alone: call waymark_sit "
+                           "there with the seat's key and make the seat's "
+                           "calls through its tools. A call over plain "
+                           "HTTP is its bearer's; leave X-Waymark-Grant "
+                           "out to make it as yourself.")}))
+
 (defn- wrap-identity
   "The identity boundary (phase 9a), judgment-style: the principal
   (bearer token via the engine's :oidc config, else the RP session
@@ -2025,6 +2190,13 @@
           ;; gate — first authenticated sight binds an invited member
           principal (members/gate! eng principal
                                    (get-in req [:headers "x-waymark-invite"]))
+          ;; the seat's view is the connector's alone: a delegate that
+          ;; presents a seat's grant here is refused by name, before
+          ;; anything is resolved or stamped for the seat
+          _ (when (and (:acts-for principal)
+                       (grants/seat-grant-of-another?
+                        eng (get-in req [:headers "x-waymark-grant"]) principal))
+              (throw (seat-door-is-the-connector)))
           vis (if-some [gid (or (get-in req [:headers "x-waymark-grant"])
                                 ;; the guest door's worn scope rides
                                 ;; the session (oidc-rp); the header,
@@ -2102,23 +2274,41 @@
 
 (defn wrap-reads-stamped
   "A sitting's READS are activity (ticket 900764ce): a GET under a
-  live grant stamps the calling sitting's `last_call_at`, so a sitter
-  that only reads over HTTP is not abandoned by the idle sweep while
-  it works. It counts no transition and no refusal. Mounted by
+  live grant stamps the calling sitting's `last_call_at`. It reaches
+  only a request whose own principal is the seat grant's audience: a
+  delegate's plain-HTTP read is its bearer's and stamps nothing
+  (ticket b5d51b4d). It counts no transition and no refusal. Mounted by
   `handler` only: the MCP door already stamps every tools/call through
   `seats/add-served!`. Best-effort, the mind-the-wall! posture — a
-  stamp that could fail a read would be worse than none."
+  stamp that could fail a read would be worse than none.
+
+  The stamp is written once the read has answered (ticket 3ff10737):
+  a status below 400 stamps `last_answer_at` in the same write, so a
+  sitting that recovers from a refusal over plain HTTP is judged as
+  one that recovers through the connector is. A read that threw is
+  still a call, and answered nothing."
   [handler eng]
-  (fn [req]
-    (when (= :get (:request-method req))
-      (try
-        (when-some [sitting-id (counted-sitting-id eng req)]
-          (seats/stamp-call! eng sitting-id))
-        (catch Exception e
-          (binding [*out* *err*]
-            (println "waymark10 router: could not stamp the sitting's read -"
-                     (ex-message e))))))
-    (handler req)))
+  (let [stamp! (fn [req resp]
+                 (try
+                   (when-some [sitting-id (counted-sitting-id eng req)]
+                     (seats/stamp-call! eng sitting-id
+                                        (let [status (:status resp)]
+                                          (and (number? status)
+                                               (< (long status) 400)))))
+                   (catch Exception e
+                     (binding [*out* *err*]
+                       (println "waymark10 router: could not stamp the sitting's read -"
+                                (ex-message e))))))]
+    (fn [req]
+      (if (= :get (:request-method req))
+        (let [resp (try
+                     (handler req)
+                     (catch Throwable t
+                       (stamp! req nil)
+                       (throw t)))]
+          (stamp! req resp)
+          resp)
+        (handler req)))))
 
 (defn- walk-export
   "GET /api/walks/{id}/export — a sealed walk as `waymark-walk/1`,
@@ -2129,11 +2319,46 @@
   [eng]
   (fn [{{:keys [id]} :path-params :as req}]
     (check-row! req {:kind walks/kind} id)
-    (if-some [body (walks/export eng id (visibility-of req))]
+    (if-some [body (walks/export eng id (visibility-of req) (principal-of req))]
       {:status 200
        :headers {"Content-Type" "application/x-ndjson"}
        :body body}
       (throw (p/not-found walks/kind id)))))
+
+(defn- collection-door
+  "POST /api/{plural}/-/{name} for a door the kind declares under
+  :collection-doors (film_rule's `judge`, spec-agent-demo-walks § 8d).
+  A route and not an action, because it moves no row and writes
+  nothing: whoever may read the kind may call it, and a caller whose
+  grant does not admit the kind gets the collection's own not-found.
+  The grant's actions are not asked: the door is a read. The body is
+  held to the input the collection advertises (collections/door-errors),
+  and then the door's declared `:handler` answers: `(fn [engine body
+  ctx])` → the JSON answer, where ctx carries the caller's :visibility
+  and :principal. A rehearsal is the call itself, since nothing is
+  written, so `dry_run` changes nothing here."
+  [eng req rdef dname]
+  (check-kind! req rdef)
+  (let [body (read-body req)]
+    (when-some [errors (collections/door-errors rdef dname body)]
+      (throw (p/schema-invalid dname errors)))
+    (json-response 200 ((get-in rdef [:collection-doors dname :handler])
+                        eng body {:visibility (visibility-of req)
+                                  :principal (principal-of req)}))))
+
+(defn- collection-action
+  "POST /api/{plural}/-/{action}: a door the kind declares under
+  :collection-doors when the name is one, and the bulk door otherwise.
+  One mount serves every declared door, so a kind that declares one has
+  its route."
+  [eng]
+  (let [bulk (bulk-action eng)]
+    (fn [{{:keys [plural action]} :path-params :as req}]
+      (let [rdef (rdef-by-plural eng plural)
+            dname (keyword action)]
+        (if (contains? (:collection-doors rdef) dname)
+          (collection-door eng req rdef dname)
+          (bulk req))))))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
@@ -2169,12 +2394,13 @@
   [["/api/:plural" {:get (collection eng) :post (create eng)}]])
 
 (defn core-plural-tail
-  "The plural grammar's catch-alls: the bulk door, the row, its event
+  "The plural grammar's catch-alls: the bulk door and the declared
+  collection doors beside it, the row, its event
   stream, invoke, batch, and the draft sub-resource. These are LAST on
   purpose — each one ends in a wildcard segment, so anything mounted
   after them is shadowed by position and never answers."
   [eng]
-  [["/api/:plural/-/:action" {:post (bulk-action eng)}]
+  [["/api/:plural/-/:action" {:post (collection-action eng)}]
    ["/api/:plural/:id" {:get (get-one eng)}]
    ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
    ;; the log, read (waymark-442.4). A literal third segment, so it

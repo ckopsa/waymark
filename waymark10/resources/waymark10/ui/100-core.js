@@ -65,7 +65,27 @@ function localStamp(v, {seconds = false, dateOnly = false} = {}) {
          (seconds ? ":" + p(d.getSeconds()) : "");
 }
 const pretty = s => String(s).replace(/_/g, " ");
+/* a need the plan gives no label for: a dotted path into a nested map
+   (showcase.evidence.film_url) says only its last step, as the server's
+   own words do (need-words, quests.clj) */
+const prettyNeed = s => pretty(String(s).split(".").pop());
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
+/* a ticket title's '[epic] ' marker (`epic?`, factory10's ticket.clj),
+   at the head of a string or after a space in it: it is drawn in a span
+   of its own, so presentation mode (030-screens.css) hides the marker
+   and nothing else. An option and a textarea hold text only. */
+const EPIC_MARK = "[epic] ";
+const textNodes = (tag, s) => {
+  s = String(s);
+  const m = tag === "option" || tag === "textarea" ? null : /(^|\s)\[epic\] /.exec(s);
+  if (!m) return [document.createTextNode(s)];
+  const at = m.index + m[1].length;
+  const mark = document.createElement("span");
+  mark.className = "epicmark";
+  mark.textContent = EPIC_MARK;
+  return [document.createTextNode(s.slice(0, at)), mark,
+          document.createTextNode(s.slice(at + EPIC_MARK.length))];
+};
 const el = (tag, attrs={}, ...kids) => {
   const n = document.createElement(tag);
   for (const [k,v] of Object.entries(attrs)) {
@@ -73,9 +93,101 @@ const el = (tag, attrs={}, ...kids) => {
     else if (v !== undefined && v !== null) n.setAttribute(k, v);
   }
   for (const kid of kids.flat(Infinity)) if (kid != null)
-    n.append(kid.nodeType ? kid : document.createTextNode(kid));
+    n.append(...(kid.nodeType ? [kid] : textNodes(tag, kid)));
   return n;
 };
+
+/* ── surfaces: the names a scene addresses the screen by ─────────────
+   (docs/spec-agent-demo-walks.md §8a). A name is the value an element
+   carries in its data-surface attribute; the list of them is served at
+   GET /api/-/ui/surfaces. `name@row` narrows a name to one row: the
+   address the element carries in data-row, or the one the row or the
+   dialog around it carries in data-self. Of several, the one drawn. */
+function surfaceNode(name) {
+  const at = String(name).indexOf("@");
+  const n = at < 0 ? String(name) : String(name).slice(0, at);
+  const row = at < 0 ? null : String(name).slice(at + 1);
+  const rowOf = e => e.getAttribute("data-row") ||
+    (e.closest("[data-self]") || e).getAttribute("data-self");
+  const all = [...document.querySelectorAll('[data-surface="' + CSS.escape(n) + '"]')]
+    .filter(e => !row || rowOf(e) === row);
+  return all.find(e => e.getClientRects().length) || all[0] || null;
+}
+/* what a surface shows now, read from the page as drawn and said in
+   its visible text: null when it is not on the screen. The sheet, the
+   tracker and the dialog answer the parts a film beat names, and the
+   beat reads them here (filmBeatSay, 200-events-follow.js); so do the
+   secret, report and upload dialogs, and the jump box; a caption and a
+   refusal answer their line; any other answers its text and whether it
+   can be pressed. The secret dialog never answers the secret: a beat
+   is kept. */
+function readSurface(name) {
+  const e = surfaceNode(name);
+  if (!e || !e.getClientRects().length) return null;
+  const flat = k => k ? k.textContent.replace(/\s+/g, " ").trim() || null : null;
+  const text = (q, of = e) => flat(q ? of.querySelector(q) : of);
+  const base = String(name).split("@")[0];
+  /* the sheet (questSheet, 140-links-access.js). A step's label is its
+     door and its row, or the row's path where the sheet could not name
+     it; the sheet draws no state for a step, so `state` is null. An
+     unseen wait has no row beside its note, and the turn's span is not
+     taken for one. */
+  if (base === "sheet")
+    return {goal: text("[data-quest-sheet-goal]"),
+            steps: [...e.querySelectorAll('[data-surface^="sheet.step:"]')].map((li, i) =>
+              ({n: i + 1,
+                label: [text("b", li), text("b + span:not([data-quest-turn])", li)].filter(Boolean).join(" "),
+                whose: text("[data-quest-turn]", li),
+                state: li.getAttribute("data-quest-step")})),
+            shut_reason: (text("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,
+            refused: text("[data-quest-refused]")};
+  /* the tracker (questDraw, 120-nav-home.js); `text` is the whole bar
+     without its menu */
+  if (base === "tracker")
+    return {title: text("[data-quest-title]") || text("[data-quest-complete] + .quest-line"),
+            next: text("[data-quest-note]"),
+            waiting_on: (text("[data-quest-waiting]") || "").replace(/^waiting on\s*/, "") || null,
+            progress: text("[data-quest-count]"),
+            text: [...e.children].filter(c => !c.matches(".quest-menu"))
+              .map(flat).filter(Boolean).join(" · ")};
+  /* the open form. A lit field is lit on its label, or on what holds
+     it (markInvited and markTyped, 180-action-dialog.js): one name for
+     each lit place, said one time. */
+  if (base === "dialog")
+    return {self: e.getAttribute("data-self"), action: e.getAttribute("data-action"),
+            lit: [...new Set([...e.querySelectorAll("form .invited, form [data-typed]")]
+              .map(s => s.matches("[name]") ? s : s.querySelector("[name]"))
+              .map(n => n && n.getAttribute("name")).filter(Boolean))]};
+  if (base === "secret")
+    return {heading: text("h3"), copy: text('[data-surface="secret.copy"]'),
+            copy_other: text('[data-surface="secret.copy-other"]')};
+  if (base === "report")
+    return {heading: text("h3"), totals: text(".verdict-totals"),
+            refused: [...e.querySelectorAll(".verdicts tbody tr")].map(tr =>
+              ({row: (tr.querySelector("a")?.getAttribute("href") || "").slice(1) || null,
+                reason: text(".reason", tr)}))};
+  if (base === "upload")
+    return {file: text("[data-upload-chosen]"),
+            ready: !e.querySelector('[data-surface="upload.submit"]')?.disabled,
+            refused: text('[data-surface="refusal"]')};
+  /* the jump box (jumpRow, 125-palette.js): what is typed, and the
+     lines as drawn. A line's `name` is jump.line, or jump.home for the
+     line that goes home, which has no `row`. */
+  if (base === "jump") {
+    const lines = [...e.querySelectorAll('[role="option"]')].map(li =>
+      ({name: li.getAttribute("data-surface"),
+        row: li.getAttribute("data-row"),
+        label: text("span", li), where: text(".jump-where", li),
+        selected: li.getAttribute("aria-selected") === "true"}));
+    return {query: e.querySelector('[data-surface="jump.query"]')?.value || "",
+            lines, selected: lines.find(l => l.selected) || null};
+  }
+  /* an input's value is not its textContent */
+  if (base === "jump.query") return {text: e.value, disabled: !!e.disabled};
+  if (base === "caption" || base === "refusal") return text();
+  return {text: text(),
+          disabled: !!e.disabled || e.getAttribute("aria-disabled") === "true"};
+}
 
 /* ── identity: the dev principal + the session's grant scope ───────── */
 const $who = $("#who");
@@ -137,7 +249,13 @@ function grantChip() {
 }
 grantChip();
 
+/* a replay that draws the product's own screens from recorded
+   documents (200-events-follow.js, renderReplayDoc) holds every
+   request: the screen code asks as it does live and is answered
+   nothing, with no fetch */
+let apiHeld = false;
 async function api(href, opts={}) {
+  if (apiHeld) return {res: null, status: 0, ok: false, body: null, etag: null};
   const res = await fetch(href, {method: opts.method || "GET",
     headers: {...principalHeaders(),
               ...(opts.body !== undefined ? {"Content-Type": "application/json"} : {}),

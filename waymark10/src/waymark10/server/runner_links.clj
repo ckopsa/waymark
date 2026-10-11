@@ -69,7 +69,8 @@
 (g/defguard the-engine-writes-the-seed
   {:judges [:seeded_from]
    :reads [:principal]
-   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."}
+   :explain "Where a link was copied from is written by the engine's boot seed alone, never by hand. Make the link without seeded_from."
+   :remedies [:runner_link/create]}
   [_row inp ctx]
   (if (or (nil? (:seeded_from inp))
           (= :system (get-in ctx [:principal :type])))
@@ -340,7 +341,8 @@
 
 (g/defguard a-person-sets-the-cap
   {:reads [:principal]
-   :explain "An account's cap is a person's to set, from what the provider's own terms allow."}
+   :explain "An account's cap is a person's to set, from what the provider's own terms allow."
+   :open "No door changes who the caller is: ask the person to set the account's cap."}
   [_row _inp ctx]
   (if (a-persons-hand? ctx) (t/allow) (t/deny)))
 
@@ -454,8 +456,9 @@
   that URL and a copy of the token, recorded by `seeded_from`
   (`model:<id>` or `schedule:<id>`) so running it again makes none.
   The source rows keep their own links untouched. A source row whose
-  `runners` is empty — an active model, a live schedule — is given
-  that link as its list; a list a person set is never overwritten."
+  `runners` is empty — an active model, a schedule that has not
+  ended — is given that link as its list and stays in the state it is
+  in (`sch/seed-doors`); a list a person set is never overwritten."
   [eng]
   (when (contains? (inv/resources eng) :runner_link)
     (doseq [kind [:model :schedule]
@@ -473,10 +476,12 @@
                         :seeded_from from}
                        {:principal seed-actor}))
         (when-let [link (first (rows-of eng :runner_link {:seeded_from from}))]
-          (when (and (nil? (sch/runners-of-row r))
-                     (= (if (= kind :model) "active" "live")
-                        (name (:state r))))
-            (inv/invoke! eng kind (str (:id r)) :seed_runners
+          (when-let [door (when (nil? (sch/runners-of-row r))
+                            (let [state (keyword (name (:state r)))]
+                              (if (= kind :model)
+                                (when (= :active state) :seed_runners)
+                                (get sch/seed-doors state))))]
+            (inv/invoke! eng kind (str (:id r)) door
                          {:runners [(str (:id link))]}
                          {:principal seed-actor})))
         (catch Exception e

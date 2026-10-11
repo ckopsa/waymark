@@ -30,13 +30,16 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
+            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -473,3 +476,900 @@
                       (get-in (json resp) [:data :items]))]
         (is (= 200 (:status resp)))
         (is (= [hook-id] ids))))))
+
+;; ── 9. the close judges the sitting: outcome and flags (fad586b7) ───
+
+(def ^:private a-sat
+  "The document of a closed sitting that sat, took its turns and moved
+  nothing: the base every fixture below is cut from."
+  {:closed_by "door" :turns 20 :refusals 0 :cancelled_runs 0
+   :served {:waymark_sit {:calls 1 :bytes 4000}}})
+
+(deftest each-outcome-has-one-fixture-and-the-first-match-wins
+  (let [t0 (java.time.Instant/parse "2026-10-01T10:00:00Z")
+        t1 (.plusSeconds t0 60)
+        t2 (.plusSeconds t0 120)
+        refused (assoc a-sat :last_refusal
+                       {:type "guard-refused" :guard "still-open" :at (str t1)})
+        health #(seats/sitting-health %1 %2 [])
+        outcome (comp :outcome health)]
+    (is (= "submitted" (outcome refused [{:kind :change :action :submit :at t0}]))
+        "a submit wins over a refusal that came after it")
+    (is (= "stalled" (outcome a-sat [{:kind :change :action :stall :at t0}])))
+    (is (= "never_sat" (outcome {:closed_by "missed" :missed true
+                                 :turns 0 :served {}}
+                                nil))
+        "a missed row")
+    (is (= "never_sat" (outcome (assoc a-sat :turns 0 :served {}) [])))
+    (is (= "refused_out" (outcome refused [{:kind :meal :action :accept :at t0}])))
+    (is (= "idle" (outcome refused [{:kind :meal :action :accept :at t2}]))
+        "a transition after the refusal means it was not refused out")
+    (is (= "cut_short" (outcome (assoc a-sat :closed_by "hook" :turns 9) [])))
+    (is (= "idle" (outcome (assoc a-sat :closed_by "hook" :turns 10) [])))
+    (is (= "idle" (outcome a-sat [])))
+    (is (= "idle" (outcome a-sat [{:kind :meal :action :submit :at t0}]))
+        "only a change's submit counts")
+
+    (testing "a refused_out sitting names the law that refused it"
+      (is (= ["refused:guard-refused" "refused_by:still-open"]
+             (:flags (health refused [])))))))
+
+(deftest a-sitting-that-recovers-from-a-refusal-is-not-refused-out
+  ;; ticket 28a5d117, the shape of sitting d485f99e: one 422 on a power
+  ;; call, then an answered call, then a close with no transition
+  (let [t0 (java.time.Instant/parse "2026-10-09T23:40:00Z")
+        t1 (.plusSeconds t0 60)
+        refused (assoc a-sat :refusals 1 :last_refusal
+                       {:type "invalid-arguments" :at (str t0)})
+        note "Nothing waiting in the chat; the plan is still in draft."
+        recovered (assoc refused :last_answer_at (str t1) :note note)
+        health #(seats/sitting-health % [] [])]
+    (testing "an answered call after the refusal, and a note: idle"
+      (is (= "idle" (:outcome (health recovered))))
+      (is (= ["refused:invalid-arguments"] (:flags (health recovered)))
+          "the refusal is still recorded"))
+    (testing "it has the outcome it would have had without the refusal"
+      (is (= "cut_short"
+             (:outcome (health (assoc recovered :closed_by "hook" :turns 9))))))
+    (testing "a sitting whose last call was refused stays refused_out"
+      (is (= "refused_out" (:outcome (health (assoc refused :note note))))
+          "no call answered at all")
+      (is (= "refused_out"
+             (:outcome (health (assoc recovered :last_answer_at
+                                      (str (.minusSeconds t0 30))))))
+          "the answer came before the refusal")
+      (is (= "refused_out"
+             (:outcome (health (assoc recovered :last_answer_at (str t0)))))
+          "the refused call's own moment is no later answer"))
+    (testing "a close with no note stays refused_out"
+      (is (= "refused_out" (:outcome (health (dissoc recovered :note)))))
+      (is (= "refused_out" (:outcome (health (assoc recovered :note ""))))))))
+
+(deftest a-seat-names-its-own-delivery
+  (let [judged [{:kind :verdict :action :judge
+                 :at (java.time.Instant/parse "2026-10-01T10:00:00Z")}]
+        sat (assoc a-sat :closed_by "hook" :turns 6)
+        outcome #(:outcome (seats/sitting-health sat judged [] %))]
+    (is (= "submitted" (outcome [{:kind "verdict" :action "judge"}]))
+        "a judge that judged delivered, however few its turns")
+    (is (= "cut_short" (outcome nil))
+        "a seat that states no delivers delivers a change's submit")
+    (is (= "cut_short" (:outcome (seats/sitting-health sat judged [])))
+        "…and so does a caller that passes none")
+    (is (= "cut_short" (outcome [{:kind "verdict" :action "dismiss"}]))
+        "the action is part of the delivery")
+    (is (= "submitted"
+           (:outcome (seats/sitting-health
+                      sat [{:kind :change :action :submit}] []
+                      seats/default-delivers))))
+    (is (= "cut_short"
+           (:outcome (seats/sitting-health
+                      sat [{:kind :change :action :submit}] []
+                      [{:kind "verdict" :action "judge"}])))
+        "a seat that names its delivery is judged by that list alone")))
+
+(deftest the-flags-explain-the-outcome
+  (let [flags #(set (:flags (seats/sitting-health %1 [] %2)))
+        tests #(assoc-in a-sat [:served :bench__test] {:calls % :bytes 900})
+        walked (assoc a-sat :walked_rows ["t1"])
+        earlier (fn [& outcomes]
+                  (mapv #(hash-map :walked_rows ["t1"] :outcome %) outcomes))]
+    (is (= #{} (flags a-sat [])))
+
+    (testing "test_thrash: more than 6 bench.test calls, or a cancelled run"
+      (is (contains? (flags (tests 13) []) "test_thrash"))
+      (is (not (contains? (flags (tests 6) []) "test_thrash")))
+      (is (contains? (flags (assoc a-sat :cancelled_runs 1) []) "test_thrash")))
+
+    (testing "read_heavy: the read bytes, or what was dropped"
+      (is (contains? (flags (update a-sat :served assoc
+                                    :bench__read {:calls 9 :bytes 100000}
+                                    :bench__find {:calls 3 :bytes 50001})
+                            [])
+                     "read_heavy"))
+      (is (not (contains? (flags (assoc-in a-sat [:served :bench__read]
+                                           {:calls 9 :bytes 150000})
+                                 [])
+                          "read_heavy")))
+      (is (contains? (flags (assoc-in a-sat [:served :waymark_power]
+                                      {:calls 1 :bytes 1000 :dropped 2501})
+                            [])
+                     "read_heavy")
+          "2501 dropped is over half of the 5000 served"))
+
+    (testing "rewalk: two earlier sittings walked the row and did not submit"
+      (is (contains? (flags walked (earlier "idle" "stalled")) "rewalk"))
+      (is (not (contains? (flags walked (earlier "idle" "submitted")) "rewalk")))
+      (is (not (contains? (flags walked (earlier "idle")) "rewalk"))))
+
+    (testing "over_budget and refusals_high"
+      (is (contains? (flags (assoc a-sat :cost_usd 3.01M) []) "over_budget"))
+      (is (not (contains? (flags (assoc a-sat :cost_usd 3M) []) "over_budget")))
+      (is (contains? (flags (assoc a-sat :refusals 5) []) "refusals_high"))
+      (is (not (contains? (flags (assoc a-sat :refusals 4) []) "refusals_high"))))))
+
+(deftest a-close-stamps-the-outcome-and-the-query-filters-by-it
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        sid (initialize! h)
+        sitting-id (str (:sitting (sit! h sid)))
+        meal (:row (inv/create! eng :meal {:name "Soup" :themes []}
+                                {:principal person}))
+        ids-of (fn [query]
+                 (let [resp (h {:request-method :get :uri "/api/sittings"
+                                :query-string query
+                                :headers (bearer {:sub "colton"
+                                                  :name "Colton Kopsa"})})]
+                   (is (= 200 (:status resp)) query)
+                   (mapv #(str (or (:id %) (last (str/split (str (:self %)) #"/"))))
+                         (get-in (json resp) [:data :items]))))]
+    (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                {:kind "meal" :id (:id meal) :action "accept"}))))
+    (is (= 1 (seats/add-cancelled-run! eng sitting-id "r1")))
+    (is (= 200 (:status (report! h counts))))
+
+    (testing "a hook's close after seven turns, with no submit, is cut short"
+      (let [data (:data (row-of eng :sitting sitting-id))]
+        (is (= "cut_short" (some-> (:outcome data) name)))
+        (is (= ["test_thrash"] (vec (:flags data))))))
+
+    (testing "the collection filters by the outcome and by a flag"
+      (is (= [sitting-id] (ids-of "outcome=cut_short")))
+      (is (= [] (ids-of "outcome=idle")))
+      (is (= [sitting-id] (ids-of "flags=test_thrash"))))))
+
+(deftest a-close-reads-the-seats-delivers
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        delivers [{:kind "meal" :action "accept"}]
+        _ (store/with-tx (:storage eng)
+            (fn [tx]
+              (store/update-data!
+               (:storage eng) tx :seat seat-id
+               (assoc (:data (row-of eng :seat seat-id)) :delivers delivers)
+               nil)))
+        sid (initialize! h)
+        sitting-id (str (:sitting (sit! h sid)))
+        meal (:row (inv/create! eng :meal {:name "Soup" :themes []}
+                                {:principal person}))]
+    (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                {:kind "meal" :id (:id meal) :action "accept"}))))
+    (is (= 200 (:status (report! h counts))))
+    (is (= "submitted"
+           (some-> (:outcome (:data (row-of eng :sitting sitting-id))) name))
+        "the same hook close is cut_short on a seat that states none")
+
+    (testing "the create door takes delivers"
+      (let [made (:row (inv/create!
+                        eng :seat
+                        {:name "meal-judge"
+                         :charter "Judge whether a meal belongs on the list."
+                         :scope [{:kind "meal" :actions ["accept"]}]
+                         :held_for [(:id model)]
+                         :standing_ttl_seconds 604800
+                         :cadence_seconds 3600
+                         :budget_usd_per_week 5M
+                         :sitting_budget_tokens 60000
+                         :delivers delivers}
+                        {:principal person}))]
+        (is (= [["meal" "accept"]]
+               (mapv (juxt :kind :action)
+                     (get-in (row-of eng :seat (:id made))
+                             [:data :delivers]))))))))
+
+(deftest the-backfill-judges-each-unjudged-sitting-once
+  (let [eng (fresh-engine)
+        {:keys [seat model]} (open-seat! eng)
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago data]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (str (:id (inv/insert-quiet!
+                                 eng tx :sitting
+                                 (merge {:seat (str (:id seat))
+                                         :model (str (:id model))
+                                         :member (seats/sitter-id seat)
+                                         :mode seats/default-mode
+                                         :started_at started
+                                         :ended_at (.plusSeconds started 60)
+                                         :input_tokens 0 :output_tokens 0
+                                         :cache_read_tokens 0
+                                         :cache_write_tokens 0
+                                         :turns 12 :transitions 0 :refusals 0
+                                         :served {:waymark_sit {:calls 1 :bytes 4000}}
+                                         :closed_by "door"}
+                                        data)
+                                 {:principal seats/seats-actor
+                                  :state :closed})))))))
+        first-walk (born! 180 {:walked_rows ["t1"]})
+        second-walk (born! 120 {:walked_rows ["t1"]})
+        third-walk (born! 60 {:walked_rows ["t1"]})
+        missed (born! 30 {:closed_by "missed" :missed true :turns 0 :served {}})
+        old (born! (* 8 24 60) {:walked_rows ["t1"]})
+        health #(let [data (:data (row-of eng :sitting %))]
+                  [(some-> (:outcome data) name) (some-> (:flags data) vec)])]
+    (is (= 4 (seats/backfill-health! eng)))
+
+    (testing "each sitting of the last week is judged, the oldest first"
+      (is (= ["idle" []] (health first-walk)))
+      (is (= ["idle" []] (health second-walk)))
+      (is (= ["idle" ["rewalk"]] (health third-walk))
+          "the third walk of one ticket without a submit")
+      (is (= ["never_sat" []] (health missed))))
+
+    (testing "a sitting older than the window is left alone"
+      (is (= [nil nil] (health old))))
+
+    (testing "a second pass writes nothing"
+      (is (= 0 (seats/backfill-health! eng)))
+      (is (= ["idle" ["rewalk"]] (health third-walk))))))
+
+;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
+
+(def ^:private ten-outcomes
+  "Ten sittings, OLDEST first: six submitted, two cut short, one refused
+  out and one that never sat."
+  ["submitted" "submitted" "cut_short" "submitted" "never_sat"
+   "submitted" "submitted" "refused_out" "submitted" "cut_short"])
+
+(deftest a-seats-health-is-counted-over-its-sittings
+  (let [at (java.time.Instant/parse "2026-10-01T12:00:00Z")
+        sat (fn [hours-ago outcome]
+              (let [started (.minusSeconds at (* 3600 (long hours-ago)))]
+                {:outcome outcome
+                 :cost_usd 0.5M
+                 :flags (if (= "refused_out" outcome)
+                          ["refusals_high" "refused:conflict"
+                           "refused_by:not-parked"]
+                          [])
+                 :started_at started
+                 :ended_at (.plusSeconds started 60)}))
+        ;; newest first, as the rollup is handed them
+        ten (vec (map-indexed #(sat (inc %1) %2) (reverse ten-outcomes)))
+        health (seats/seat-health ten 3 at)]
+    (testing "six submits of ten is a rate of 0.6, and each outcome is counted"
+      (is (= 10 (:sittings health)))
+      (is (= {:submitted 6 :stalled 0 :never_sat 1 :refused_out 1
+              :cut_short 2 :idle 0}
+             (:outcomes health)))
+      (is (== 0.6 (:submit_rate health))))
+
+    (testing "the cost is the sum, and it is divided by the submits and the merges"
+      (is (== 5 (:cost_usd health)))
+      (is (== 0.833333M (:cost_per_submit health)))
+      (is (= 3 (:merged_prs health)))
+      (is (== 1.666667M (:cost_per_merge health))))
+
+    (testing "a count for each flag, and a refusal's type is no key"
+      (is (= {:refusals_high 1 :refused 1
+              (keyword "refused_by:not-parked") 1}
+             (:flags health))))
+
+    (testing "the newest sitting and the newest submit are named"
+      (is (= "cut_short" (:last_outcome health)))
+      (is (= (str (:ended_at (second ten))) (:last_submit_at health)))
+      (is (= (str at) (:computed_at health))))
+
+    (testing "a seat with no judged sitting divides by nothing"
+      (let [none (seats/seat-health [] 0 at)]
+        (is (= 0 (:sittings none)))
+        (is (nil? (:submit_rate none)))
+        (is (nil? (:cost_per_submit none)))
+        (is (nil? (:cost_per_merge none)))
+        (is (nil? (:last_outcome none)))))))
+
+(deftest a-close-rolls-the-seats-health-and-the-window-slides
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago outcome]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (inv/insert-quiet!
+                       eng tx :sitting
+                       {:seat seat-id
+                        :model (str (:id model))
+                        :member (seats/sitter-id seat)
+                        :mode seats/default-mode
+                        :started_at started
+                        :ended_at (.plusSeconds started 60)
+                        :input_tokens 0 :output_tokens 0
+                        :cache_read_tokens 0
+                        :cache_write_tokens 0
+                        :turns 12 :transitions 0 :refusals 0
+                        :served {:waymark_sit {:calls 1 :bytes 4000}}
+                        :closed_by "door"
+                        :cost_usd 0.5M
+                        :outcome outcome
+                        :flags []}
+                       {:principal seats/seats-actor
+                        :state :closed})))))
+        _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2) ten-outcomes))
+        health #(:health (:data (row-of eng :seat seat-id)))
+        rolled (seats/roll-health! eng seat-id)]
+    (testing "ten sittings, six of them submitted, are a rate of 0.6"
+      (is (= 10 (:sittings rolled)))
+      (is (== 0.6 (bigdec (:submit_rate rolled))))
+      (is (= [6 0 1 1 2 0]
+             (mapv #(get-in rolled [:outcomes (keyword %)]) seats/outcomes)))
+      (is (== 5 (bigdec (:cost_usd rolled))))
+      (is (= 0 (:merged_prs rolled)) "this engine serves no change kind")
+      (is (= "cut_short" (:last_outcome rolled))))
+
+    (testing "the seat row carries what was counted"
+      (is (= 10 (:sittings (health))))
+      (is (== 0.6 (bigdec (:submit_rate (health))))))
+
+    (testing "the eleventh close slides the window: the oldest submit leaves it"
+      (let [sid (initialize! h)]
+        (sit! h sid)
+        (is (= 200 (:status (report! h counts))))
+        (let [slid (health)]
+          (is (= 10 (:sittings slid)))
+          (is (= 5 (get-in slid [:outcomes :submitted])))
+          (is (= 3 (get-in slid [:outcomes :cut_short])))
+          (is (== 0.5 (bigdec (:submit_rate slid))))
+          (is (= "cut_short" (:last_outcome slid))))))
+
+    (testing "one read of the seat collection answers the seat's health"
+      (let [resp (h {:request-method :get :uri "/api/seats"
+                     :headers (bearer {:sub "colton" :name "Colton Kopsa"})})
+            item (first (get-in (json resp) [:data :items]))]
+        (is (= 200 (:status resp)))
+        (is (= 10 (get-in item [:fields :health :sittings])))))))
+
+;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
+
+(def ^:private groomers-ticket
+  "The groomers' ticket, as much of factory10's as a filing needs
+  (judgment_walk_test's own cut)."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:draft :dropped]
+    :initial :draft
+    :terminal #{:dropped}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 200}]]
+             [:detail {:optional true :x-display {:label "Detail"}}
+              [:maybe [:string {:max 20000}]]]
+             [:type {:x-display {:label "Type"}} [:string {:min 1 :max 20}]]
+             [:priority {:x-display {:label "Priority"}} [:int {:min 0 :max 4}]]
+             [:repo {:optional true :x-display {:label "Repo"}}
+              [:maybe [:string {:max 140}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:drop {:from #{:draft} :to :dropped
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "Dropped is dropped."}
+            :display {:label "Drop" :order 1
+                      :description "Let this ticket go"}}}}))
+
+(defn- ticket-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [fx/meal groomers-ticket]
+                  :oidc {:issuer issuer :audience audience :jwks jwks
+                         :app-url "https://app.test/"
+                         :delegate-clients {"connector" "Claude"}}}))
+
+(defn- tickets [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx :ticket {} {:limit 50}))))
+
+(defn- close-as!
+  "One sitting of `seat`, born closed and already judged, that started
+  `minutes-ago`; then the rollup a close asks for. `extra` is laid over
+  the sitting's document. → the health written."
+  [eng seat model minutes-ago outcome & [extra]]
+  (let [started (.minusSeconds (java.time.Instant/now)
+                               (* 60 (long minutes-ago)))]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (inv/insert-quiet!
+         eng tx :sitting
+         (merge {:seat (str (:id seat))
+                 :model (str (:id model))
+                 :member (seats/sitter-id seat)
+                 :mode seats/default-mode
+                 :started_at started
+                 :ended_at (.plusSeconds started 60)
+                 :input_tokens 0 :output_tokens 0
+                 :cache_read_tokens 0
+                 :cache_write_tokens 0
+                 :turns 12 :transitions 0 :refusals 0
+                 :served {:waymark_sit {:calls 1 :bytes 4000}}
+                 :closed_by "door"
+                 :cost_usd 0.5M
+                 :outcome outcome
+                 :flags []}
+                extra)
+         {:principal seats/seats-actor
+          :state :closed})))
+    (seats/roll-health! eng (str (:id seat)))))
+
+(deftest the-alert-rules-are-judged-over-the-window
+  (let [at (java.time.Instant/parse "2026-10-01T12:00:00Z")
+        sat (fn [outcome & flags] {:outcome outcome :flags (vec flags)})
+        ;; newest first, as the rollup is handed them
+        breach (fn [alerts sittings]
+                 (seats/health-breach alerts
+                                      (seats/seat-health sittings 0 at)
+                                      sittings))]
+    (testing "a run is counted from the newest sitting back"
+      (is (nil? (breach nil [(sat "cut_short") (sat "cut_short")])))
+      (is (= "cut_short_run"
+             (breach nil [(sat "cut_short") (sat "cut_short") (sat "cut_short")])))
+      (is (nil? (breach nil [(sat "submitted") (sat "cut_short") (sat "cut_short")
+                             (sat "cut_short")]))
+          "one submit ends the run"))
+
+    (testing "a flag that rides enough sittings in a row is a breach"
+      (is (= "flag_run:rewalk"
+             (breach nil [(sat "submitted" "rewalk") (sat "idle" "rewalk")])))
+      (is (nil? (breach nil [(sat "submitted" "test_thrash")
+                             (sat "submitted" "test_thrash")])))
+      (is (= "flag_run:test_thrash"
+             (breach nil (repeat 3 (sat "submitted" "test_thrash"))))))
+
+    (testing "the submit rate is judged only once the window holds six"
+      (let [third [(sat "submitted") (sat "idle") (sat "idle")]]
+        (is (nil? (breach nil (vec (take 5 (cycle third))))))
+        (is (= "submit_rate_below" (breach nil (vec (take 6 (cycle third))))))))
+
+    (testing "a seat states its own rules, and the rest keep their defaults"
+      (is (= "refused_out_run" (breach {:refused_out_run 1} [(sat "refused_out")])))
+      (is (nil? (breach {:never_sat_any false} [(sat "never_sat")])))
+      (is (= "never_sat_any" (breach {:cut_short_run 5} [(sat "never_sat")]))))))
+
+(deftest two-refused-out-closes-file-one-ticket-and-a-third-files-none
+  (let [eng (ticket-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        breach #(get-in (row-of eng :seat seat-id) [:data :health :breach])]
+    (testing "one refused_out close is no run yet"
+      (close-as! eng seat model 40 "refused_out")
+      (is (nil? (breach)))
+      (is (empty? (tickets eng))))
+
+    (testing "the second files one draft ticket, and the seat row names it"
+      (close-as! eng seat model 30 "refused_out")
+      (let [[ticket :as filed] (tickets eng)]
+        (is (= 1 (count filed)))
+        (is (= "draft" (name (:state ticket))))
+        (is (= "seat meal-clerk health breach: refused_out_run"
+               (get-in ticket [:data :title])))
+        (is (= 1 (get-in ticket [:data :priority])))
+        (is (= "ckopsa/waymark" (get-in ticket [:data :repo])))
+        (is (str/includes? (get-in ticket [:data :detail]) "refused_out"))
+        (is (str/includes? (get-in ticket [:data :detail])
+                           (str "/api/seats/" seat-id)))
+        (is (= "refused_out_run" (:rule (breach))))
+        (is (= (str (:id ticket)) (:ticket (breach))))))
+
+    (testing "the third is the same breach, and files none"
+      (close-as! eng seat model 20 "refused_out")
+      (is (= 1 (count (tickets eng))))
+      (is (= "refused_out_run" (:rule (breach)))))
+
+    (testing "a seat that asked for no breaker has none"
+      (is (nil? (get-in (row-of eng :seat seat-id) [:data :breaker_open]))))
+
+    (testing "a window that recovers clears the breach and files nothing"
+      (close-as! eng seat model 10 "submitted")
+      (is (nil? (breach)))
+      (is (= 1 (count (tickets eng)))))))
+
+(deftest a-never-sat-close-files-a-ticket
+  (let [eng (ticket-engine)
+        {:keys [seat model]} (open-seat! eng)
+        rolled (close-as! eng seat model 10 "never_sat")
+        [ticket :as filed] (tickets eng)]
+    (is (= 1 (count filed)))
+    (is (= "seat meal-clerk health breach: never_sat_any"
+           (get-in ticket [:data :title])))
+    (is (= (str (:id ticket)) (get-in rolled [:breach :ticket])))))
+
+(deftest an-open-breaker-caps-the-wakes-to-one-sitting-until-it-is-closed
+  (let [eng (ticket-engine)
+        {:keys [model]} (open-seat! eng)
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "breaker-clerk"
+                     :charter "Decide whether a meal belongs on the list."
+                     :scope [{:kind "meal" :actions ["accept"]}]
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000
+                     :max_open_sittings 3
+                     :health_alerts {:cut_short_run 1}
+                     :health_breaker true}
+                    {:principal person}))
+        seat-id (str (:id seat))
+        stored #(row-of eng :seat seat-id)]
+    (testing "a healthy seat wakes as many sittings as it states"
+      (close-as! eng seat model 30 "submitted")
+      (is (nil? (get-in (stored) [:data :breaker_open])))
+      (is (= 3 (wakes/max-open-of (stored)))))
+
+    (testing "a breach opens the breaker, and the stated number stands"
+      (close-as! eng seat model 20 "cut_short")
+      (is (true? (get-in (stored) [:data :breaker_open])))
+      (is (= 3 (get-in (stored) [:data :max_open_sittings])))
+      (is (= 1 (wakes/max-open-of (stored))))
+      (is (str/includes? (get-in (first (tickets eng)) [:data :detail])
+                         "breaker_open")))
+
+    (testing "close_breaker restores the wakes"
+      (inv/invoke! eng :seat seat-id :close_breaker {} {:principal person})
+      (is (nil? (get-in (stored) [:data :breaker_open])))
+      (is (= 3 (wakes/max-open-of (stored)))))
+
+    (testing "the same breach at the next close does not open it again"
+      (close-as! eng seat model 10 "cut_short")
+      (is (nil? (get-in (stored) [:data :breaker_open])))
+      (is (= 1 (count (tickets eng)))))))
+
+;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
+;;
+;; A seat whose walk comes up empty while rows of the kind it walks wait
+;; outside its scope entry's filter is told nothing of them, and its
+;; person is: the rule is on the seat row, the count in the ticket.
+
+(def ^:private post
+  "mcp_sit_test's queue, as much of it as a walk needs: it filters its
+  own queue by state, and `box` is filterable, so a scope entry narrows
+  a seat to one box and a post in another is outside its grant."
+  (r/resource
+   {:kind :post
+    :plural "posts"
+    :states [:queued :filed]
+    :initial :queued
+    :terminal #{:filed}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:box {:x-display {:label "Which box"}} [:string {:min 1 :max 40}]]
+     [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]]
+    :filterable {:state #{:eq :in} :box #{:eq}}
+    :default-filters {:state "queued"}
+    :sortable {:fields [:received_at] :default "received_at"}
+    :actions
+    {:file {:from #{:queued} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed post keeps its history."}}}}))
+
+(def ^:private slip
+  "A queue with a middle state: a slip that was opened and not yet
+  filed still waits, so its default filter names both states with a
+  comma."
+  (r/resource
+   {:kind :slip
+    :plural "slips"
+    :states [:queued :opened :filed]
+    :initial :queued
+    :terminal #{:filed}
+    :summary "{data.subject} · {state}"
+    :schema
+    [:map
+     [:subject {:x-display {:label "What it is about"}}
+      [:string {:min 1 :max 120}]]
+     [:box {:x-display {:label "Which box"}} [:string {:min 1 :max 40}]]
+     [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]]
+    :filterable {:state #{:eq :in} :box #{:eq}}
+    :default-filters {:state "queued,opened"}
+    :sortable {:fields [:received_at] :default "received_at"}
+    :actions
+    {:open {:from #{:queued} :to :opened
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "An opened slip keeps its history."}}
+     :file {:from #{:queued :opened} :to :filed
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A filed slip keeps its history."}}}}))
+
+(defn- post-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [fx/meal groomers-ticket post slip]
+                  :oidc {:issuer issuer :audience audience :jwks jwks
+                         :app-url "https://app.test/"
+                         :delegate-clients {"connector" "Claude"}}}))
+
+(defn- open-post-seat!
+  "A seat that walks the post queue under its scope entry's filter: the
+  house's own box and no other. Its key is offered. `kind` and
+  `actions` name another queue of the same shape."
+  ([eng] (open-post-seat! eng "post" ["file"]))
+  ([eng kind actions]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "close-test-model" :display "Close 1"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok (:input prices)
+                                  :price_output_per_mtok (:output prices)
+                                  :price_cache_read_per_mtok (:cache_read prices)
+                                  :price_cache_write_per_mtok (:cache_write prices)}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "post-clerk"
+                     :charter "Read each post and file it."
+                     :scope [{:kind kind :actions actions
+                              :filter {:box "house"}}]
+                     :walk kind
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
+                 {:principal person})
+    {:seat seat :model model})))
+
+(defn- slip!
+  "One slip in a box, moved through `doors` in order."
+  [eng subject box & doors]
+  (let [row (:row (inv/create! eng :slip {:subject subject :box box
+                                          :received_at "2026-09-18T07:00:00Z"}
+                               {:principal person}))]
+    (doseq [door doors]
+      (inv/invoke! eng :slip (str (:id row)) door nil {:principal person}))
+    row))
+
+(defn- post! [eng subject box]
+  (:row (inv/create! eng :post {:subject subject :box box
+                                :received_at "2026-09-18T07:00:00Z"}
+                     {:principal person})))
+
+(deftest the-walked-nothing-rule-wants-the-run-and-the-hidden-rows
+  (let [at (java.time.Instant/parse "2026-10-01T12:00:00Z")
+        nothing (fn [outcome] {:outcome outcome :flags [] :walked_nothing true})
+        breach (fn [sittings hidden]
+                 (seats/health-breach nil
+                                      (seats/seat-health sittings 0 at)
+                                      sittings
+                                      hidden))]
+    (is (= "walked_nothing_run" (breach (vec (repeat 3 (nothing "idle"))) 5)))
+    (is (nil? (breach (vec (repeat 3 (nothing "idle"))) 0))
+        "a queue that hides no row is only an empty queue")
+    (is (nil? (breach (vec (repeat 2 (nothing "idle"))) 5))
+        "two are no run yet")
+    (is (= "walked_nothing_run"
+           (breach [(nothing "cut_short") (nothing "idle") (nothing "cut_short")] 1))
+        "a hook closes such a wake within a few turns")
+    (is (nil? (breach [(nothing "idle") (nothing "idle") {:outcome "idle" :flags []}]
+                      5))
+        "an idle sitting that was handed rows is not of the run")))
+
+(deftest a-seat-that-walks-nothing-beside-hidden-rows-breaches-and-its-person-is-told
+  (let [eng (post-engine)
+        h (engine/handler eng)
+        {:keys [seat model]} (open-post-seat! eng)
+        seat-id (str (:id seat))
+        breach #(get-in (row-of eng :seat seat-id) [:data :health :breach])
+        hidden-ids (mapv #(str (:id (post! eng (str "Street post " %) "street")))
+                         (range 5))
+        nothing! #(close-as! eng seat model % "idle" {:walked_nothing true})]
+
+    (testing "the sitting's own answers carry no trace of the rows its grant hides"
+      (let [sat (sit! h (initialize! h))
+            sitting (row-of eng :sitting (:sitting sat))]
+        (is (empty? (get-in sat [:walk :rows])))
+        (is (true? (get-in sitting [:data :walked_nothing])))
+        (is (= "The queue held no rows under the walk's filter and the seat's grant."
+               (get-in sitting [:data :walked_nothing_why])))
+        (is (not-any? #(str/includes? (pr-str sat) %) hidden-ids))
+        (is (not (str/includes? (pr-str sat) "outside its grant")))))
+
+    (testing "two wakes that walked nothing are no run yet"
+      (nothing! 40)
+      (nothing! 30)
+      (is (nil? (breach)))
+      (is (empty? (tickets eng))))
+
+    (testing "the third is a breach, and the ticket tells the count and the kind"
+      (nothing! 20)
+      (let [[ticket :as filed] (tickets eng)
+            detail (str (get-in ticket [:data :detail]))]
+        (is (= "walked_nothing_run" (:rule (breach))))
+        (is (= 1 (count filed)))
+        (is (= "seat post-clerk health breach: walked_nothing_run"
+               (get-in ticket [:data :title])))
+        (is (str/starts-with?
+             detail
+             "post-clerk walked nothing 3 times while 5 queued posts sat outside its grant (box filter or scope)."))
+        (is (not-any? #(str/includes? detail %) hidden-ids)
+            "no row ids, only the count and the kind")
+        (is (= (str (:id ticket)) (:ticket (breach))))))
+
+    (testing "the seat row names the rule, and neither the count nor the rows"
+      (is (= #{:rule :at :ticket} (set (keys (breach))))))
+
+    (testing "a wake that submits ends the run and clears the breach"
+      (close-as! eng seat model 10 "submitted")
+      (is (nil? (breach)))
+      (is (= 1 (count (tickets eng)))))))
+
+(deftest a-seat-that-walks-nothing-with-no-hidden-rows-raises-no-breach
+  (let [eng (post-engine)
+        {:keys [seat model]} (open-post-seat! eng)
+        seat-id (str (:id seat))
+        filed (post! eng "Street post" "street")]
+    ;; a post that left the queue waits for nobody, in whichever box
+    (inv/invoke! eng :post (str (:id filed)) :file nil {:principal person})
+    (doseq [minutes-ago [40 30 20]]
+      (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
+    (is (nil? (get-in (row-of eng :seat seat-id) [:data :health :breach])))
+    (is (empty? (tickets eng)))))
+
+;; A default filter that names two states with a comma (ticket a45c5830).
+
+(deftest a-row-left-in-a-middle-state-is-offered-by-the-next-walk
+  (let [eng (post-engine)
+        h (engine/handler eng)
+        _ (open-post-seat! eng "slip" ["open" "file"])]
+    (slip! eng "Opened and left" "house" :open)
+    (slip! eng "Answered" "house" :open :file)
+    (let [sat (sit! h (initialize! h))]
+      (is (= ["opened"] (mapv :state (get-in sat [:walk :rows])))
+          "the row still waits on a decision, and the filed one does not"))))
+
+(deftest hidden-rows-are-counted-in-every-state-a-comma-filter-names
+  (let [eng (post-engine)
+        {:keys [seat model]} (open-post-seat! eng "slip" ["open" "file"])]
+    (slip! eng "Street, queued" "street")
+    (slip! eng "Street, opened" "street" :open)
+    (slip! eng "Street, filed" "street" :open :file)
+    (doseq [minutes-ago [40 30 20]]
+      (close-as! eng seat model minutes-ago "idle" {:walked_nothing true}))
+    (let [[ticket :as filed] (tickets eng)]
+      (is (= "walked_nothing_run"
+             (get-in (row-of eng :seat (str (:id seat)))
+                     [:data :health :breach :rule])))
+      (is (= 1 (count filed)))
+      (is (str/starts-with?
+           (str (get-in ticket [:data :detail]))
+           "post-clerk walked nothing 3 times while 2 queued or opened slips sat outside its grant (box filter or scope).")
+          "a comma value names two states, and the filed slip waits for nobody"))))
+
+;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
+
+(def ^:private verify-uri "/api/-/seats/verify")
+
+(def ^:private a-secret "inbox-signing-secret-01")
+
+(defn- subscribe!
+  "The calling service's subscription, with the secret it proves
+  itself by."
+  [eng]
+  (:row (inv/create! eng :subscription
+                     {:url "https://inbox.test/events" :secret a-secret}
+                     {:principal person})))
+
+(defn- verify!
+  "The service's POST: its own secret in the header, the seat key it
+  was handed in the body."
+  ([h key] (verify! h {"waymark-subscription-secret" a-secret} key))
+  ([h headers key]
+   (h {:request-method :post :uri verify-uri :headers headers
+       :body (wire/write-json {:key key})})))
+
+(deftest a-service-asks-whether-a-seat-key-is-live-and-nothing-opens
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        _ (subscribe! eng)
+        resp (verify! h a-key)]
+    (testing "a live key answers the seat's name and nothing else"
+      (is (= 200 (:status resp)))
+      (is (= {:live true :seat "meal-clerk"} (json resp))))
+    (testing "and the ask opened no sitting"
+      (is (empty? (open-sittings eng seat))))))
+
+(deftest an-unknown-key-and-a-revoked-key-answer-alike
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        _ (subscribe! eng)
+        unknown (verify! h "c2l0dGluZy1jbG9zZS1ub2JvZHk")]
+    (is (= 200 (:status unknown)))
+    (is (= {:live false :seat nil} (json unknown)))
+    (inv/invoke! eng :seat (:id seat) :revoke_key nil {:principal person})
+    (let [revoked (verify! h a-key)]
+      (is (= 200 (:status revoked)))
+      (is (= (:body unknown) (:body revoked))
+          "uniform: a revoked key reads as a key nobody ever held"))))
+
+(deftest the-key-check-answers-only-a-service-it-knows
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        sub (subscribe! eng)]
+    (testing "no secret, and a secret no subscription holds"
+      (doseq [headers [{} {"waymark-subscription-secret" "not-the-secret-01"}]]
+        (let [resp (verify! h headers a-key)]
+          (is (= 401 (:status resp)))
+          (is (= "No active subscription answers this secret."
+                 (:detail (json resp)))))))
+    (testing "a key is required"
+      (is (= 422 (:status (verify! h "")))))
+    (testing "a paused subscription is not a caller"
+      (inv/invoke! eng :subscription (:id sub) :pause nil {:principal person})
+      (is (= 401 (:status (verify! h a-key)))))))
+
+(deftest the-key-check-knows-a-service-by-the-secret-row-it-names
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        {sec :row} (inv/create! eng :secret {:name "INBOX_TEST_SECRET"}
+                                {:principal person})
+        ref (str (:id sec))
+        {sub :row} (inv/create! eng :subscription
+                                {:url "https://inbox.test/events" :secret ref}
+                                {:principal person})
+        value "inbox-row-value-01"
+        ask (fn [secret]
+              (verify! h {"waymark-subscription-secret" secret} a-key))]
+    (testing "a row that holds no value matches nothing"
+      (is (= 401 (:status (ask ref))))
+      (is (= 401 (:status (ask value)))))
+    (inv/invoke! eng :secret ref :replace {:value value}
+                 {:principal person
+                  :if-match (inv/etag :secret ref (:version sec))})
+    (testing "the row's value is the service's secret"
+      (let [resp (ask value)]
+        (is (= 200 (:status resp)))
+        (is (= {:live true :seat "meal-clerk"} (json resp)))))
+    (testing "the reference is not the secret"
+      (is (= 401 (:status (ask ref)))))
+    (testing "a literal subscription beside it answers as before"
+      (subscribe! eng)
+      (is (= 200 (:status (verify! h a-key))))
+      (is (= 200 (:status (ask value)))))
+    (testing "the subscription keeps the reference, never the value"
+      (is (= ref (get-in (row-of eng :subscription (str (:id sub)))
+                         [:data :secret]))))))
+
+(deftest the-key-check-is-rate-limited-per-caller
+  (let [;; one clock minute, whatever the wall clock does
+        eng (assoc (fresh-engine)
+                   :now-fn (constantly (java.time.Instant/parse
+                                        "2026-10-03T12:00:30Z")))
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        _ (subscribe! eng)]
+    (with-redefs [seat-routes/verify-per-minute 2]
+      (let [answers (mapv (fn [_] (verify! h a-key)) (range 3))]
+        (is (= [200 200 429] (mapv :status answers)))
+        (is (= "30" (get-in (peek answers) [:headers "Retry-After"])))))))

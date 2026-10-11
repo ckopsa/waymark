@@ -1779,6 +1779,57 @@
           (inv/invoke! eng :sitting (str s) :abandon nil
                        {:principal seats/seats-actor}))))))
 
+(deftest a-second-seat-is-not-handed-the-row-another-seats-sitting-holds
+  ;; Ticket 40d8f04c: two seats walked one queue, and each sit handed
+  ;; the row the other seat's open sitting already worked.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        first-seat (open-walk-seat! eng {:rows_per_firing 1})
+        second-key "c2VhdC1rZXktZm9yLXRoZS1zZWNvbmQtY2xlcms"
+        second-seat (:row (inv/create!
+                           eng :seat
+                           {:name "post-clerk-two"
+                            :charter walk-charter
+                            :scope [{:kind "post"
+                                     :actions ["file" "drop"]
+                                     :filter {:box "house"}}]
+                            :walk "post"
+                            :held_for (get-in first-seat [:data :held_for])
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000
+                            :rows_per_firing 1}
+                           {:principal person}))
+        _ (schedules/ensure-schedule! eng second-seat)
+        _ (inv/invoke! eng :seat (:id second-seat) :offer_key {:key second-key}
+                       {:principal person})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        sit-as! (fn [k seat-name run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key k :seat seat-name :session run})]
+                    [r (doc-of r)]))
+        [r1 one] (sit-as! walk-key "post-clerk" "run-one")]
+    (testing "the first seat's sit is handed the one row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (= [(str (:id gas))] (mapv :id (get-in one [:walk :rows])))))
+    (let [[r2 two] (sit-as! second-key "post-clerk-two" "run-two")]
+      (testing "the second seat's sit is not handed it, and says why"
+        (is (false? (:isError r2)) (text-of r2))
+        (is (empty? (get-in two [:walk :rows])))
+        (is (= [(str (:id gas))] (mapv :id (get-in two [:walk :withheld]))))
+        (is (str/includes? (str (get-in two [:walk :withheld 0 :reason]))
+                           "another seat"))
+        (is (contains? (seats/claimed-rows eng (:id second-seat) (:sitting two))
+                       (str (:id gas))))))
+    (testing "the hold ends when the holding sitting does"
+      (inv/invoke! eng :sitting (str (:sitting one)) :abandon nil
+                   {:principal seats/seats-actor})
+      (let [[r3 three] (sit-as! second-key "post-clerk-two" "run-two")]
+        (is (false? (:isError r3)) (text-of r3))
+        (is (= [(str (:id gas))] (mapv :id (get-in three [:walk :rows]))))))))
+
 (deftest a-fire-that-names-a-row-walks-that-row-or-the-next-free-one
   (let [eng (fresh-engine [fx/meal post])
         h (engine/handler eng)
@@ -1831,6 +1882,81 @@
         (is (false? (:isError r3)) (text-of r3))
         (is (empty? (get-in third [:walk :rows])))
         (is (str/includes? (str (:note third)) "nothing for you to walk"))))))
+
+(deftest a-fire-that-names-a-row-past-the-first-page-walks-that-row
+  ;; Ticket 59582777: the named row was looked for on the queue's first
+  ;; page of 100 alone, so a row behind it was not found and the queue's
+  ;; oldest row was handed in its place.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+        _ (doseq [i (range 100)]
+            (post! eng (str "Bill " i) "house" (at i)))
+        note (post! eng "The school note" "house" (at 100))
+        k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                ((:now-fn eng))
+                                (wire/write-json {:kind "post" :id (str (:id note))
+                                                  :action "file" :from "queued"
+                                                  :to "queued"}))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key k :seat "post-clerk" :session "run-far"})
+        answer (doc-of r)]
+    (is (false? (:isError r)) (text-of r))
+    (is (= 101 (get-in answer [:walk :total])))
+    (is (= [(str (:id note))] (mapv :id (get-in answer [:walk :rows])))
+        "the named row is past the first page, and is handed alone")))
+
+(deftest a-fires-prose-names-a-row-by-its-short-id
+  ;; Ticket 26c7967a: a person's prose names a row by the first 8 hex of
+  ;; its id. The key keeps that row when exactly one row's id opens with
+  ;; the word (`seats/short-id-row`).
+  (let [eng (fresh-engine [fx/meal post])
+        st (:storage eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        note (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        short (fn [row] (subs (str (:id row)) 0 8))
+        ;; the key first: the row is read after the fire wrote its entry
+        named (fn [text]
+                (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                              ((:now-fn eng)) text)]
+                  (seats/fire-key-row eng (seat-row-of eng (:id seat)) k)))]
+    (testing "prose naming a row's 8-hex prefix names that row"
+      (is (= (str (:id note))
+             (named (str "Walk " (short note) " and stop."))))
+      (is (= (str (:id note))
+             (named (str "Walk " (str/upper-case (short note)) " and stop.")))
+          "in either case"))
+
+    (testing "an 8-hex word that opens no row's id names nothing"
+      (is (nil? (named "Walk 00000000 and stop."))))
+
+    (testing "a full id wins over a prefix"
+      (is (= (str (:id note))
+             (named (str "Not " (short gas) ": walk " (:id note) ".")))))
+
+    (testing "JSON wake text is read as it was: its words are not looked up"
+      (is (nil? (named (wire/write-json {:kind "meal" :id (str (:id note))
+                                         :note (short note)})))))
+
+    ;; a second row whose id opens with the gas bill's first 8 hex
+    (store/with-tx st
+      (fn [tx]
+        (store/insert-row!
+         st tx :post
+         (assoc (store/load-row st tx :post (str (:id gas)) {})
+                :id (str (short gas) "-0000-4000-8000-000000000000")))))
+
+    (testing "a prefix of two rows names nothing"
+      (is (nil? (named (str "Walk " (short gas) " and stop.")))))
+
+    (testing "the first word that names exactly one row is the one taken"
+      (is (= (str (:id note))
+             (named (str "Walk " (short gas) " or " (short note) ".")))))))
 
 (deftest a-re-sat-session-is-handed-the-row-only-when-no-other-sitting-holds-it
   ;; Ticket d7c854b3: a seat of several open sittings walks one row.

@@ -3118,10 +3118,16 @@ judging questions the form hadn't answered yet — so the wire grows
   transition, no handler, nothing committed. The 200 answers
   `{"valid": true, "judged": […], "awaiting": […]}` (both arrays
   always present in partial mode — the mode is recognizable on the
-  wire); refusals answer the usual problem shapes.
+  wire); refusals answer the usual problem shapes. One member is
+  added: when a judged leaf refuses (the guard's 409) while other
+  leaves still wait, the problem carries `awaiting` too — the same
+  names the 200 would have listed — so the caller learns the form's
+  guards from the first refusal. It is absent when nothing waits,
+  and the 404 of a hidden leaf says nothing more.
 
 Partial composes with every door: it rides `create!` (provided
-entries, covered create-guard leaves) and, per item, the bulk/batch
+entries, covered create-guard leaves; its 409 names `awaiting` the
+same way) and, per item, the bulk/batch
 fan-outs — for free, because they all run the one per-item
 algorithm.
 
@@ -3181,7 +3187,8 @@ proves it — warnings as data, acknowledged names pass); the partial
 obligations (silence on unprovided fields, provided-field errors
 keyed only by provided fields, covered leaves judged now, uncovered
 leaves named `awaiting`). `router_test` (wire): the create door's
-200/verdict/422 and the partial door's shape. `bulk_batch_test`:
+200/verdict/422, the partial door's shape, and the partial 409's
+`awaiting` member. `bulk_batch_test`:
 mixed verdicts with the guard's own sentence per item, no row moved,
 no job minted on an over-threshold rehearsal, nothing stored under a
 presented key, the batch rehearsal's full verdict list, and the 428
@@ -3204,6 +3211,7 @@ considering cards on the live stream.
 | --- | --- | --- |
 | `?dry_run=partial` (wire mode; engine `:dry-run :partial`) | the blur judge should judge only what the form has answered — judged-when-answerable | 2026-07-10 |
 | `judged`/`awaiting` (partial verdict body), `verdicts` (bulk/batch dry-run body) | the rehearsal names what it judged and what still waits | 2026-07-10 |
+| `awaiting` on the partial rehearsal's guard-refused 409 (row door and create door) | a judged leaf's refusal should not hide the leaves that still wait; the caller learns them from the first answer | 2026-10-06 |
 | create dry-run tiers = waymark9 `_create_entry` | schema-only without create guards; guards judged with warnings as data | 2026-07-10 |
 | bulk dry-run exists (9 had none); batch dry-run judges independently (9 rolled back real executions) | the iron rule: a rehearsal never fires a handler | 2026-07-10 |
 | dry-runs never defer, never touch idempotency | a job is an effect; a key is a record | 2026-07-10 |
@@ -3254,6 +3262,44 @@ natural replay, dry-run writes nothing, 201-child self-loop cascade).
 | ctx `:invoke` (handlers + on-create only; guards and rehearsals never see it) | absorb's cascade writes another row's children with input — the owns cascade cannot say that | 2026-07-15 |
 | `:inner-writes` drain before the outer's own after-write! pass | the response's rollups tell the post-inner truth | 2026-07-15 |
 | cascade! seen-set + growing window | a self-loop cascade target must terminate past the 200-row page | 2026-07-15 |
+| ctx `:follow-up` runs post-commit, as a new invoke; one level deep | a call that must read the outer write's committed state (and may land the same row again) cannot run inside its transaction | 2026-10-01 |
+
+## ctx `:follow-up` — the handler's post-commit call
+
+Ticket da882851. ctx `:invoke` writes INSIDE the handler's transaction:
+the inner door reads the outer row as it stood before the write, and a
+second write of the outer row collides with the outer's own versioned
+save. A follow-up is the other half: the handler names one call,
+
+```clojure
+((:follow-up ctx) {:kind :ticket :id (:id row) :action :review :input {}})
+```
+
+and the engine makes it after the transaction commits.
+
+- `make-ctx` carries `:follow-up` ONLY in `:invoke` mode, and guard
+  evaluation receives a ctx without it. A dry run runs no handler and
+  holds no door, so a rehearsal queues nothing.
+- The queue rides the result as `:follow-ups`; `after-write!` runs it
+  LAST, after the inner writes' passes, the lifecycle, the cascade and
+  the maintenance pass. A write that rolls back takes its queue with it.
+- Each follow-up is an ordinary `invoke!`: its own transaction, the
+  full algorithm, its own guards, its own transition. It runs under the
+  principal, the grant and the correlation id of the write that queued
+  it. It is not opened inside that write, so its `:within` is nil.
+- Its idempotency key is `follow-up:<outer transition id>:<index>`. A
+  replayed outer write runs no follow-up (`after-write!` skips a
+  replay), and a second delivery of one outer transition replays the
+  stored answer.
+- **A follow-up that refuses does not roll the outer write back.** The
+  outer write committed first. The refusal is one line on `*err*` and
+  an entry with `:refused` in the result's `:followed`. The caller's
+  answer is the outer write's own row, which predates the follow-ups.
+- **Follow-ups do not nest past one level.** What a follow-up queues —
+  from its own handler, its inner writes or its cascade — is dropped
+  with a line on `*err*` and never run.
+
+Proof: `waymark10/test/waymark10/follow_up_test.clj`.
 
 ## `:touches` — blast radius as law
 
@@ -3400,6 +3446,30 @@ Follow-up beads: respell `outcome.make_it_so` through `:process :atomic`
 (the `approval_request` proof shape), and advertise the steps on the
 envelope.
 
+## `:collection-doors` — the safe door on a collection
+
+A kind's doors were all moves: an action takes a row from one state to
+another, and `create` and the bulk entries do the same from the
+collection. `film_rule`'s `judge` is none of these. It scores a take
+against the active rules and writes nothing, so it has no `:from`, no
+`:to`, no guards and no log entry, and the router mounts it from the
+declaration (`POST /api/film_rules/-/judge`): kind check, body read,
+`collections/door-errors`, then the entry's `:handler`. A route no document names is a
+route a client must construct, which client rule 1 forbids. So the kind
+declares it under `:collection-doors`, a `{name {:input … :summary …
+:handler …}}` map, and the collection document names each entry under `actions` with
+`safety {safe: true, idempotent: true, reversible: true, confirm:
+false}` and NO `effect`. `safety.safe` is the mark a reader keys on: the
+door moves no row, and whoever may read the kind may call it, so a
+scoped grant keeps it as it keeps `query`. The key is the advertisement
+and the mount, and is never in the fingerprint. The OpenAPI document lists the
+route, the connector's `waymark_invoke` with no id calls it, and the
+generic UI offers no button for it, because its answer is a verdict and
+not an envelope. The CLI prints the entry flagged `[safe]` with no
+`→ state`, and `act <collection> <name> --input …` posts it and prints
+the answer as JSON; `waymark10.cli-test` runs that against a started
+engine. The vocabulary's § 13 is the reference.
+
 ## The charter as conformance — an advertised door is an obligation
 
 The bug that named this (waymark-tgy): a task the house finished last
@@ -3436,8 +3506,16 @@ its endings changes which doors open and mints a revision saying so
 **The dangling-ref wall.** Every input entry whose properties carry
 `:kind` resolves at the door, on the create model and on every action's
 input; a list resolves each item and the sentence names the position. The
-kind writes nothing. Two shapes are out of reach and named as such: a ref
-nested inside a part, and a pointer that is a KIND-AND-ID PAIR rather
+kind writes nothing. A part's own door is inside the wall: its ref rides
+the door's input beside the scope key, at the top level, so an invented
+`meal_id` refuses both at the plan's `parts.days` item door
+(`assign_meal`, `conformance-test/dangling-ref-truth`) and at the
+household's `plan_day.assign_meal`, where a themed night answers in the
+day's own acceptance sentence and a rotating Sunday, which binds no set,
+meets the wall (`mealplan10.plan-day-machine-test`). Two shapes are out
+of reach and named as such: a ref nested inside a part that a door takes
+WHOLE (`schema/ref-fields` reads an input model's top-level entries
+only), and a pointer that is a KIND-AND-ID PAIR rather
 than a typed ref (`insight`'s `offer_kind`/`offer_id`, a journal's
 `evidence` addresses). Those stay their kind's own checkers —
 `insight/unresolved-addresses` is the one of them, shared with

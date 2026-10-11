@@ -132,7 +132,8 @@
     document carries the `ci_run` kind's own fields plus
     `:change_id` (the change it ran on) and whatever the forge needs
     to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds its cursor where it was. A source
+    did not answer; the source holds that repository's cursor where it
+    was, and moves the cursor of each one that answered. A source
     may also answer `:answered` (the repositories that did answer) and
     `:refusals` ({repository {:status :route}} for each whose pulls
     listing refused the token), which the pass writes on the policy
@@ -223,6 +224,18 @@
     the steps of the job behind it that finished red, in order. Empty
     when the check names no job. Throws when the forge does not
     answer."))
+
+(defprotocol ForgeBudget
+  "The forge's rate limit as the source last heard it (ticket
+  cdba1f6a). A protocol of its own: a source that does not implement it
+  has no budget to print and is never held."
+  (forge-budget [s]
+    "Answers {:remaining n :limit n :reset instant :unchanged n
+    :held-until instant}, each absent when the forge has not said it.
+    `:unchanged` counts the answers of this pass the forge did not
+    count against the limit. `:held-until` stands while the source
+    holds every call for a spent limit, and no read of the forge
+    answers before that instant. Never throws."))
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -353,13 +366,30 @@
   [row]
   (some-> (:state row) name keyword))
 
+(defn- holds-conflict?
+  "Does the row's `conflicted` stand against what the forge reads now
+  (ticket bf8ba0a6)? The merge pass writes `conflicted` when the rig's
+  merge is refused as not mergeable, and parks that head: nothing writes
+  it a second time. GitHub's own read of the same head may still say
+  `unknown` or `blocked` — it has not computed the merge, or the policy
+  word outranks it — and that word used to replace the conflict before
+  the failing pass read it, so #706 sat submitted and parked. Neither
+  word says the conflict is gone: only `clean`, or a new head, does."
+  [row doc]
+  (and (= "conflicted" (str (get-in row [:data :mergeable])))
+       (contains? #{"unknown" "blocked"} (str (:mergeable doc)))
+       (or (nil? (:head_sha doc))
+           (= (str (:head_sha doc)) (str (get-in row [:data :head_sha]))))))
+
 (defn- changed-facts
   "The facts that moved under the row. A value equal to the stored one
-  is not written again, so a pass that saw nothing new logs nothing."
+  is not written again, so a pass that saw nothing new logs nothing. A
+  conflict the row holds (`holds-conflict?`) is not written over."
   [row doc]
   (into {}
         (keep (fn [[k v]] (when (not= v (get-in row [:data k])) [k v])))
-        (present doc change-observe-fields)))
+        (present (cond-> doc (holds-conflict? row doc) (dissoc :mergeable))
+                 change-observe-fields)))
 
 (defn- state-door
   "The one door from the row's state to the forge's. nil when the row
@@ -915,15 +945,37 @@
                         :interrupted)
       :else nil)))
 
+(defn- job-instant [job k]
+  (try (Instant/parse (str (get job k))) (catch Exception _ nil)))
+
+(defn- aggregator?
+  "A red job that only reports the others (the `gate` of tests.yml,
+  ticket 2f8a03cd): it began after every interrupted job had ended, so
+  its own red step read their result and ran no test. It is known by
+  the run's own times and by no name. A red test job beside fail-fast
+  siblings began before they were cancelled, so it is no aggregator;
+  neither is a job whose times the forge did not say."
+  [job interrupted]
+  (let [began (job-instant job :started_at)
+        ended (map #(job-instant % :completed_at) interrupted)]
+    (boolean (and began
+                  (seq ended)
+                  (every? some? ended)
+                  (not-any? #(.isAfter ^Instant % began) ended)))))
+
 (defn interrupted-run?
   "A finished run with at least one interrupted job and no red one. A
   run with a failing test step is red, not interrupted — and so is a
-  fail-fast matrix, whose siblings a red job cancelled."
+  fail-fast matrix, whose siblings a red job cancelled. A red
+  aggregator is not counted: it is red because the others died."
   [run]
-  (let [verdicts (mapv job-verdict (:jobs run))]
+  (let [jobs (vec (:jobs run))
+        verdicts (mapv job-verdict jobs)
+        of (fn [v] (keep-indexed #(when (= v (nth verdicts %1)) %2) jobs))
+        interrupted (of :interrupted)]
     (boolean (and (= "completed" (str (:status run)))
-                  (some #{:interrupted} verdicts)
-                  (not-any? #{:red} verdicts)))))
+                  (seq interrupted)
+                  (every? #(aggregator? % interrupted) (of :red))))))
 
 (defn- short-head [head]
   (subs head 0 (min (count head) 12)))
@@ -1049,6 +1101,84 @@
     (when (and (map? answer) (not (bench/refused answer)))
       (:landing answer))))
 
+;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
+;;
+;; A check whose workflow asks for a runner no runner serves stays
+;; `queued` and never concludes, so `check-verdict` answers nil for good
+;; and the change sits at `submitted`. Past the policy's
+;; `queued_check_minutes` the wait itself is the red: one finding for
+;; each such check, among the names. A check that starts after that
+;; brings the row back to `submitted` on the next pass.
+
+(def ^:private queued-finding-mark " has been queued ")
+
+(defn- queued-finding [check-name minutes]
+  (let [tail (str queued-finding-mark minutes
+                  " minutes; no runner took it (check its runs-on)")
+        head (str "check " check-name)]
+    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
+
+(defn- queued-finding? [s]
+  (let [s (str s)]
+    (and (str/starts-with? s "check ")
+         (str/includes? s queued-finding-mark))))
+
+(defn- minutes-since
+  "The whole minutes from `started-at` to `now`, or nil when the check
+  does not say when it was queued."
+  [^java.time.Instant now started-at]
+  (try
+    (.toMinutes (java.time.Duration/between
+                 (java.time.Instant/parse (str started-at)) now))
+    (catch Exception _ nil)))
+
+(defn- required-runs
+  "[name runs] for each required check, the newest run speaking for its
+  name as in `check-verdict`."
+  [required checks]
+  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
+                             newest-runs)
+        names (if (seq required)
+                (vec (distinct required))
+                (vec (sort (remove str/blank? (keys by-name)))))]
+    (mapv (fn [n] [n (get by-name n)]) names)))
+
+(defn- queued? [check]
+  (= "queued" (str (:status check))))
+
+(defn queued-verdict
+  "{:verdict :red :names [finding …]} when a required check has been
+  `queued` (not `in_progress`) longer than `limit` minutes at `now`,
+  with one finding for each such check; nil otherwise. A check that
+  does not say when it was queued is not judged."
+  [required checks limit now]
+  (let [findings (into []
+                       (keep (fn [[n runs]]
+                               (let [waits (keep #(when (queued? %)
+                                                    (minutes-since now (:started_at %)))
+                                                 runs)]
+                                 (when (and (seq runs)
+                                            (= (count waits) (count runs)))
+                                   (let [m (long (apply min waits))]
+                                     (when (> m (long limit))
+                                       (queued-finding n m)))))))
+                       (required-runs required checks))]
+    (when (seq findings) {:verdict :red :names findings})))
+
+(defn- queue-left?
+  "True when a row that is failing ONLY for queued checks has none of
+  its required checks queued any more: a runner took them."
+  [row required checks]
+  (let [names (get-in row [:data :failing_checks])
+        runs (required-runs required checks)]
+    (boolean (and (seq names)
+                  (every? queued-finding? names)
+                  (seq runs)
+                  (every? (fn [[_ rs]] (and (seq rs) (not-any? queued? rs)))
+                          runs)))))
+
+(declare now-of)
+
 (defn- failing-move
   "The one door the verdict opens on this row, as [door input], or nil.
   A red head under the round ceiling goes to `failing`; a red head on
@@ -1079,6 +1209,8 @@
         (when-not (and train-head
                        (= train-head (str (get-in row [:data :head_sha]))))
           [:recover {}]))
+      ;; a queued check a runner took at last (ticket bc3ff12c)
+      [:failing :started] [:recover {}]
       nil)))
 
 (def ^:private moved-counts
@@ -1110,6 +1242,235 @@
                         (not= head (str (get-in row [:data :head_sha]))))))
       (second (move-change! eng row doc)))))
 
+;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
+;;
+;; `check-verdict` answers nil while a required check has no verdict,
+;; and a green head that is behind its base does not merge either: both
+;; sit at `submitted` and say nothing. Past `held-log-minutes` on one
+;; head the pass logs why, one time for that head, and writes it on the
+;; change as `held_reason`. The wait counts from `held_since` on the row
+;; (ticket b256d053), so a restart does not start it again. The next
+;; compare's time and the count of compares that threw are on the row as
+;; `held_again` and `held_threw` for the same reason (ticket 93072465).
+
+(def held-log-minutes
+  "How long a submitted head may wait before the pass logs why it is
+  held: longer than an ordinary run of the checks."
+  20)
+
+(def held-compare-minutes
+  "How long a held green head that holds its base waits before the pass
+  compares it again, so a base that moves later is seen (ticket
+  443bcbc2)."
+  20)
+
+(def held-compare-errors
+  "How many compares of one held head may throw in a row before the pass
+  logs that the compare is failing (ticket dfd181ae)."
+  3)
+
+(defonce ^:private held-seen (atom {}))
+
+(defn held-checks
+  "The required checks without a verdict among `checks`, as
+  [{:name :status :conclusion} …]: a check with no run at all (no
+  status), a run that has not completed, and a run that completed with
+  a conclusion `check-verdict` does not judge."
+  [required checks]
+  (into []
+        (mapcat
+         (fn [[n runs]]
+           (if (empty? runs)
+             [{:name n :status nil :conclusion nil}]
+             (keep (fn [run]
+                     (let [status (some-> (:status run) str not-empty)
+                           conclusion (some-> (:conclusion run) str not-empty)]
+                       (when-not (and (= "completed" status)
+                                      (or (contains? red-conclusions conclusion)
+                                          (contains? green-conclusions conclusion)
+                                          (= "cancelled" conclusion)))
+                         {:name n :status status :conclusion conclusion})))
+                   runs))))
+        (required-runs required checks)))
+
+(defn held-why
+  "The line a held change logs, or nil when there is nothing to say:
+  the checks without a verdict with each one's status and conclusion,
+  or, when every required check has one and `behind?` is true, that
+  the change is held only because it is behind its base."
+  [change-id head required checks behind?]
+  (let [held (held-checks required checks)]
+    (cond
+      (seq held)
+      (str "the checks of " change-id " at " head " have no verdict: "
+           (str/join ", "
+                     (map (fn [{:keys [name status conclusion]}]
+                            (if status
+                              (str name " (status " status ", conclusion "
+                                   (or conclusion "none") ")")
+                              (str name " (no run)")))
+                          held)))
+
+      (true? behind?)
+      (str change-id " at " head " is held only because it is behind its "
+           "base; its required checks are green"))))
+
+(defn held-due
+  "[seen' due?] for one held change: `seen` is change id → {:head :since
+  :said}. The wait counts from the first pass that saw this head held,
+  and it is due one time, when the wait reaches `limit` minutes at
+  `now`. A new head starts the wait again, and drops what else the
+  process kept for the last one."
+  [seen id head ^java.time.Instant now limit]
+  (let [was (get seen id)
+        same? (= head (:head was))
+        ^java.time.Instant since (if same? (:since was) now)
+        said? (boolean (and same? (:said was)))
+        due? (and (not said?)
+                  (>= (.toMinutes (java.time.Duration/between since now))
+                      (long limit)))]
+    [(assoc seen id (assoc (if same? was {})
+                           :head head :since since :said (or said? due?)))
+     due?]))
+
+(defn held-backoff
+  "The minutes a held head waits for its next compare after `threw`
+  compares in a row threw: none after the first, so one forge error
+  costs one pass, then 1, 2, 4 … and `held-compare-minutes` at most."
+  [threw]
+  (let [n (long threw)]
+    (if (< n 2)
+      0
+      (min (long held-compare-minutes)
+           (bit-shift-left 1 (min 20 (- n 2)))))))
+
+(defn held-again
+  "When a held head is compared to its base again, after a compare that
+  answered `behind?` at `now`: nil when it is behind, since nothing but
+  a new head changes that; `held-compare-minutes` later when it holds
+  its base, which may still move; and the next pass when there was no
+  answer, because the forge threw or the head has no verdict yet
+  (ticket 443bcbc2). `threw` is how many compares of this head threw in
+  a row, this one counted: the wait is then `held-backoff` minutes, so
+  a forge that keeps throwing is asked less often (ticket dfd181ae)."
+  ([behind? now] (held-again behind? now 0))
+  ([behind? ^java.time.Instant now threw]
+   (cond
+     (true? behind?) nil
+     (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
+     :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
+
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
+
+(defn- held-kept
+  "The time the row says `head` was first seen held, or nil when the row
+  names another head or none."
+  [row head]
+  (when (= head (some-> (get-in row [:data :held_head]) str))
+    (try (java.time.Instant/parse (str (get-in row [:data :held_since])))
+         (catch Exception _ nil))))
+
+(defn- held-kept-compare
+  "What the row says of its held head's compares, for a process that
+  has not seen that head: {:again :threw :said}, or nil when the row
+  names no next compare. A row that names one has had its due pass, so
+  the process does not take it again (ticket 93072465)."
+  [row]
+  (when-some [again (try (some-> (get-in row [:data :held_again])
+                                 str not-empty java.time.Instant/parse)
+                         (catch Exception _ nil))]
+    {:again again
+     :threw (long (or (get-in row [:data :held_threw]) 0))
+     :said true}))
+
+(defn- clear-held!
+  "A head that is no longer held: the process forgets it, and the row
+  drops what it said about the wait."
+  [eng row]
+  (swap! held-seen dissoc (str (:id row)))
+  (when (some #(some? (get-in row [:data %])) held-fields)
+    (bench/mark-row! eng :change (str (:id row))
+                     (zipmap held-fields (repeat nil)) #{})))
+
+(defn- log-held!
+  "Logs why a submitted head is held, when its wait is due (`held-due`),
+  and writes the same line on the change as `held_reason`. The wait
+  counts from the row's `held_since`: a process that has not seen this
+  head takes that time, and a head the row does not name is stamped.
+  `checked` is the head's verdict: with one, the base is compared, and a
+  forge that does not answer says nothing. What the compare answered is
+  written as `behind_base` too: the staleness pass compares only a head
+  that lacks a check, so a green head would say it is behind in prose
+  alone and the merge line would never bring it forward (ticket
+  14e72c6e). A head first seen held drops the last head's answer.
+  The compare is asked again on a later pass, at the time `held-again`
+  names, so one forge error or a base that moves after the due pass
+  does not leave a green head waiting on `checks` (ticket 443bcbc2);
+  such a pass says a line only when the head is now behind. Compares
+  that throw in a row are counted for the head and wait longer each
+  time, and the pass that counts `held-compare-errors` of them logs one
+  line that the compare is failing (ticket dfd181ae). That count and
+  the next compare's time are written on the row as `held_threw` and
+  `held_again`, and a process that has not seen this head takes them
+  from there, so a restart neither asks sooner than the wait allowed
+  nor says the failing line again (ticket 93072465)."
+  [eng source row repo head required checks checked log-fn]
+  (let [id (str (:id row))
+        kept (held-kept row head)
+        was (cond-> @held-seen
+              (and kept (not= head (get-in @held-seen [id :head])))
+              (assoc id (merge {:head head :since kept :said false}
+                               (held-kept-compare row))))
+        ^java.time.Instant now (now-of eng)
+        [seen due?] (held-due was id head now held-log-minutes)
+        ^java.time.Instant again (get-in seen [id :again])
+        again? (boolean (and (not due?) again (not (.isBefore now again))))]
+    (reset! held-seen seen)
+    (when-not kept
+      (bench/mark-row! eng :change id
+                       {:held_head head
+                        :held_since (str (get-in seen [id :since]))
+                        :held_reason nil
+                        :held_again nil
+                        :held_threw nil
+                        :behind_base nil}
+                       #{}))
+    (when (or due? again?)
+      (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
+            compares? (boolean (and base (satisfies? ForgeCompare source)))
+            answer (when (and checked compares?)
+                     (try {:behind (boolean (forge-behind? source repo base head))}
+                          (catch Exception e {:error e})))
+            behind? (:behind answer)
+            threw (if (:error answer)
+                    (inc (long (or (get-in seen [id :threw]) 0)))
+                    0)
+            again (when compares? (held-again behind? now threw))]
+        (swap! held-seen update id assoc :again again :threw threw)
+        (bench/mark-row! eng :change id
+                         {:held_again (some-> again str)
+                          :held_threw (when (pos? threw) threw)}
+                         #{})
+        (when (= threw (long held-compare-errors))
+          (log-fn (str "the compare of " (get-in row [:data :change_id])
+                       " at " head " to " base " has thrown " threw
+                       " passes in a row (" (ex-message (:error answer))
+                       "); it is asked less often, " held-compare-minutes
+                       " minutes apart at most, until the forge answers")))
+        (when (some? behind?)
+          (bench/mark-row! eng :change id
+                           {:behind_base behind?
+                            :base_compared_at (str now)}
+                           #{:base_compared_at}))
+        (when-some [line (when (or due? (true? behind?))
+                           (held-why (get-in row [:data :change_id]) head
+                                     required checks behind?))]
+          (log-fn line)
+          (bench/mark-row! eng :change id
+                           {:held_reason (subs line 0 (min 500 (count line)))}
+                           #{}))))))
+
 (defn- failing-pass!
   "Every submitted or failing change of a repository with an active
   policy → its head's checks, read against the policy, and at most one
@@ -1140,9 +1501,31 @@
                    landing (when (contains? #{:submitted :failing}
                                             (state-of row))
                              (landing-verdict (landing-of eng row policy)))
+                   required (bench/required-checks-of policy)
+                   checks (when-not landing (read-checks repo head))
                    checked (when-not landing
-                             (check-verdict (bench/required-checks-of policy)
-                                            (read-checks repo head)))
+                             (check-verdict required checks))
+                   ;; a required check nobody runs never concludes, so
+                   ;; the wait past the policy's limit is the red, and
+                   ;; a check that starts after it clears that red
+                   ;; (ticket bc3ff12c)
+                   waited (when (and (not landing) (nil? checked))
+                            (or (queued-verdict
+                                 required checks
+                                 (bench/queued-check-minutes-of policy)
+                                 (now-of eng))
+                                (when (and (= :failing (state-of row))
+                                           (queue-left? row required checks))
+                                  {:verdict :started})))
+                   ;; a submitted head with no verdict, or green and
+                   ;; still here, says why past the bound (ticket
+                   ;; 5b1c2c88)
+                   _ (if (and (not landing)
+                              (= :submitted (state-of row))
+                              (or (nil? checked) (= :green (:verdict checked))))
+                       (log-held! eng source row repo head required checks
+                                  checked log-fn)
+                       (clear-held! eng row))
                    ;; every required check finished on a house change:
                    ;; wake the merge pass (ticket 6e190062)
                    _ (when (and checked (bench/house-pass-merges? policy))
@@ -1157,7 +1540,7 @@
                              :red landing
                              :running (when (conflicted? row)
                                         (with-conflict nil row))
-                             (with-conflict checked row))
+                             (with-conflict (or checked waited) row))
                    ;; the mirror's own read of a submitted head, stamped
                    ;; for the merge line: a rig's red on a head read green
                    ;; here is the failing round's (ticket baf76388)
@@ -1670,15 +2053,97 @@
   {:open :note_red
    :in_review :note_red_in_review})
 
+(def ^:private green-note-doors
+  "The door that writes the green note on the ticket, read from its
+  state. A seat's stall sends the ticket to draft, and a person may
+  have blocked or deferred it since (ticket e666bd6a). A ticket under
+  review has a stuck change with no pull request and work on its
+  branch when a submit's landing failed on the last round: `stick`
+  leaves the ticket in review (tickets 1188f3ed, 900ee2f2)."
+  {:open :note_green
+   :in_review :note_green_in_review
+   :draft :note_green_draft
+   :blocked :note_green_blocked
+   :deferred :note_green_deferred})
+
+(def ^:private work-holding
+  "The states of a change that the ticket's ending closes when it has
+  no pull request, as ticket.clj's `unmerged` names them."
+  ["open" "stuck" "failing"])
+
 (defn- cut [s n]
   (let [s (str s)] (subs s 0 (min (count s) (long n)))))
 
 (defn- red-head-line [sha names]
   (cut (str sha ": " (str/join ", " names)) 400))
 
+(defn- work-kept
+  "A MAIN-RED TICKET THAT MENDS ITSELF KEEPS THE SEAT'S WORK (ticket
+  d5000a1c). `mend` ends the ticket, and the ending closes its open
+  change through `supersede`. A flake's ticket went green that way
+  while a seat held an edit on its bench branch, and the edit was
+  lost. So the base pass asks the bench first. A stuck or a failing
+  change is closed by the ending as an open one is, so it is read the
+  same way (ticket e666bd6a). → the open, stuck or failing change born
+  from this ticket, with no pull request, whose branch has edits or
+  commits ahead of the base; `:unknown` when the bench did not answer
+  for one; `[:refused name branch]` when the bench refused for one
+  that may hold work; nil when every such change is empty, which
+  `mend` closes as before.
+
+  WHAT THE RIG ANSWERS (read 2026-10-09, ticket e768af15). `status` is
+  read from the branch's worktree: `dirty`, `ahead`, `behind`, `head`.
+  For a branch with no worktree it answers no counts. It refuses with
+  `no_worktree`, and it does not read `ahead` from the branch alone.
+  `stall` asks the rig for nothing, so the stall itself removes no
+  worktree. The rig's own code is not in this repository, so whether
+  it removes one later is not read here.
+
+  So a refusal is read by the change's state. An open change the rig
+  refuses was never prepared and holds no work. A stuck or a failing
+  change was worked on, and a refusal does not say its branch is
+  empty: it is not known either, and the answer carries the refusal
+  and the branch so the log names both (ticket 7984a8b1)."
+  [eng policy ticket-row]
+  (let [born (str "ticket:" (:id ticket-row))
+        repo (str (get-in policy [:data :repository]))
+        changes (into {}
+                      (comp (filter #(and (= born (str (get-in % [:data :born_from])))
+                                          (some #{(some-> (state-of %) name)}
+                                                work-holding)
+                                          (nil? (get-in % [:data :number]))))
+                            (map (juxt :id identity)))
+                      (mapcat (fn [state]
+                                (concat (rows-by eng :change
+                                                 {:state state :change_id born} 50)
+                                        (rows-by eng :change
+                                                 {:state state :repository repo}
+                                                 200)))
+                              work-holding))]
+    (reduce (fn [found change]
+              (let [branch (bench/branch-of change policy)
+                    status (bench/ask {:services (:services eng)} :status
+                                      {:repo repo :branch branch})]
+                (cond
+                  (nil? status) :unknown
+                  (bench/refused status)
+                  (if (= "open" (some-> (state-of change) name))
+                    found
+                    [:refused (bench/refused status) branch])
+                  (or (pos? (long (or (:dirty status) 0)))
+                      (pos? (long (or (:ahead status) 0)))) (reduced change)
+                  :else found)))
+            nil
+            (vals changes))))
+
 (defn- seen-head? [ticket-row sha]
   (boolean (some #(str/starts-with? (str %) (str sha))
                  (get-in ticket-row [:data :red_heads]))))
+
+(def ^:private detail-reserve
+  "The characters of a red-main ticket's body kept for what is not log:
+  the checks and their addresses, the red steps, and what to do."
+  4000)
 
 (defn- red-main-detail
   "The body a code seat reads: what is red, where, the log, and what to
@@ -1687,10 +2152,15 @@
   (`quick=failure`) — and their logs come first, because the cause is
   in them (ticket 9a14577e). Each log names the steps of its job that
   went red, so the step is named even when the tail is cut before it
-  (ticket c0d7ce64)."
+  (ticket c0d7ce64). The logs share what the body's ceiling leaves, and
+  each keeps its END: the ceiling cut the body from the end, and so cut
+  the failing lines of every log but the first (ticket 3a9d6c62)."
   [source repo base head red-from red-checks failed]
-  (let [tails (for [c (concat (take base-log-tails failed)
-                              (take base-log-tails red-checks))]
+  (let [logged (concat (take base-log-tails failed)
+                       (take base-log-tails red-checks))
+        share (quot (- (long ticket/detail-chars) (long detail-reserve))
+                    (max 1 (count logged)))
+        tails (for [c logged]
                 (let [{:keys [excerpt note]}
                       (try (forge-log-tail source (assoc c :repository repo))
                            (catch Exception e {:note (ex-message e)}))
@@ -1705,7 +2175,8 @@
                               "\n\n"))
                        (if (str/blank? (str excerpt))
                          (str "No log tail: " (or note "the forge gave none") ".")
-                         (str "```\n" excerpt "\n```")))))]
+                         (str "```\n" (tail-of (str excerpt) share)
+                              "\n```")))))]
     (cut (str "## What is red\n\n"
               "The head of `" base "` in " repo " is `" head "`, and these "
               "checks on it finished red:\n\n"
@@ -1756,6 +2227,51 @@
     (inv/invoke! eng :ticket id :note_red
                  {:red_head (red-head-line head names)} (base-opts))
     id))
+
+;; THE SOURCE'S CURSOR, KEPT ON THE POLICY (ticket c07b581f). The GitHub
+;; source holds one cursor for each repository and loses them at a
+;; restart, and a source with no cursor reads a repository from its
+;; beginning. So the cursor is written on the repository's own
+;; `repo_policy` row with a maintenance write, as `base_checked_at` is,
+;; and a boot reads it back. A row that carries none yet is seeded from
+;; the newest stored change of that repository, so the first boot with
+;; this field does not read the world either; a repository with no
+;; change at all answers nil, and the source reads its open pull
+;; requests only.
+
+(defn- active-policy-of [eng repo]
+  (first (filter #(= (str repo) (some-> (get-in % [:data :repository]) str))
+                 (bench/policies eng :active))))
+
+(defn- newest-change-stamp
+  "When the newest stored change of this repository was last written,
+  or nil when the repository has none."
+  [eng repo]
+  (let [st (:storage eng)]
+    (some-> (store/with-tx st
+              (fn [tx] (first (store/query-rows st tx :change
+                                                {:repository (str repo)}
+                                                {:limit 1
+                                                 :order-by :updated_at
+                                                 :newest-first true}))))
+            :updated-at str not-empty)))
+
+(defn cursor-store
+  "Where the GitHub source keeps each repository's cursor across boots:
+  → {:load (fn [repo]) :save! (fn [repo cursor])}, over the active
+  `repo_policy` rows of this engine."
+  [eng]
+  (let [save! (fn [repo cursor]
+                (when-some [policy (active-policy-of eng repo)]
+                  (bench/mark-row! eng :repo_policy (str (:id policy))
+                                   {:forge_cursor (str cursor)} #{})))]
+    {:load (fn [repo]
+             (or (some-> (active-policy-of eng repo)
+                         (get-in [:data :forge_cursor]) str not-empty)
+                 (when-some [seed (newest-change-stamp eng repo)]
+                   (save! repo seed)
+                   seed)))
+     :save! save!}))
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
@@ -1886,11 +2402,52 @@
               (cond
                 (not (and (= "red" now) (= "red" was)))
                 (if (and (= "green" now) live)
-                  (do (inv/invoke! eng :ticket (str (:id live)) :mend
-                                   {:close_reason (str base " is green again at "
-                                                       head ".")}
-                                   (base-opts))
-                      [(update census :base-closed inc) stored-ticket])
+                  (let [kept (work-kept eng policy live)]
+                    (cond
+                      (nil? kept)
+                      (do (inv/invoke! eng :ticket (str (:id live)) :mend
+                                       {:close_reason (str base " is green again at "
+                                                           head ".")}
+                                       (base-opts))
+                          [(update census :base-closed inc) stored-ticket])
+
+                      ;; its change holds work: the ticket is not ended,
+                      ;; and the sentence is written one time
+                      (and (map? kept) (green-note-doors (state-of live))
+                           (str/blank? (str (get-in live [:data :green_note]))))
+                      (do (inv/invoke! eng :ticket (str (:id live))
+                                       (green-note-doors (state-of live))
+                                       {:green_note
+                                        (str base " is green again at " head
+                                             " on its own. The change on "
+                                             (bench/branch-of kept policy)
+                                             " holds work that is not submitted,"
+                                             " so this ticket was left open.")}
+                                       (base-opts))
+                          [(update census :base-kept inc) stored-ticket])
+
+                      ;; the bench did not answer: the ticket is held and
+                      ;; no sentence is written on it, so the log says so
+                      ;; (ticket 6d8e3a3e). The next green pass asks again
+                      (= :unknown kept)
+                      (do (log-fn "the red-base ticket " (:id live) " of " repo
+                                  " was left open on a green " base
+                                  ": the bench did not answer for its change")
+                          [(update census :base-kept inc) stored-ticket])
+
+                      ;; the bench refused: held the same way, and the
+                      ;; line names the refusal and the branch (ticket
+                      ;; 7984a8b1)
+                      (vector? kept)
+                      (let [[_ refusal branch] kept]
+                        (log-fn "the red-base ticket " (:id live) " of " repo
+                                " was left open on a green " base
+                                ": the bench refused " refusal
+                                " for its change on " branch)
+                        [(update census :base-kept inc) stored-ticket])
+
+                      ;; noted already: the next green pass asks again
+                      :else [(update census :base-kept inc) stored-ticket]))
                   [census stored-ticket])
 
                 ;; red twice, on a head the known ticket already carries:
@@ -1963,6 +2520,19 @@
   (str/starts-with? (str (get-in row [:data :title]))
                     (str floor-title-prefix repo ":")))
 
+(defn- floor-waits?
+  "Is this policy's floor ticket still draft or open? Found by the id
+  the policy keeps, whatever its title says now. A policy that filed
+  before it kept one is read by the title among `rows`, one time: the
+  id it finds is kept."
+  [eng policy repo rows]
+  (if-some [id (blank->nil (get-in policy [:data :floor_ticket]))]
+    (contains? #{:draft :open} (state-of (row-by-id eng :ticket id)))
+    (when-some [row (first (filter #(floor-ticket? repo %) rows))]
+      (bench/mark-row! eng :repo_policy (str (:id policy))
+                       {:floor_ticket (str (:id row))} #{})
+      true)))
+
 (defn- as-instant [v]
   (cond (instance? Instant v) v
         (str/blank? (str v)) nil
@@ -2006,18 +2576,20 @@
             ;; under a line, the floor asks only when a draft at or
             ;; above it waits; the default 4 asks as it always did
             (when-not (or (and (< line 4) (zero? waiting))
-                          (some #(floor-ticket? repo %) (concat drafts opened)))
-              (inv/create! eng :ticket
-                           {:title (cut (str floor-title-prefix repo ": " n
-                                             " open, floor " floor)
-                                        200)
-                            :detail (floor-detail repo n floor waiting)
-                            :type "chore"
-                            :priority 1
-                            :repo repo}
-                           (as-opts))
-              (bench/mark-row! eng :repo_policy (str (:id policy))
-                               {:floor_noted_at now :floor_count n} #{})
+                          (floor-waits? eng policy repo (concat drafts opened)))
+              (let [filed (inv/create! eng :ticket
+                                       {:title (cut (str floor-title-prefix repo ": " n
+                                                         " open, floor " floor)
+                                                    200)
+                                        :detail (floor-detail repo n floor waiting)
+                                        :type "chore"
+                                        :priority 1
+                                        :repo repo}
+                                       (as-opts))]
+                (bench/mark-row! eng :repo_policy (str (:id policy))
+                                 {:floor_noted_at now :floor_count n
+                                  :floor_ticket (some-> (get-in filed [:row :id]) str)}
+                                 #{}))
               true)))))))
 
 (defn floor-pass!
@@ -2106,6 +2678,7 @@
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
+   :base-kept 0
    :stale-noted 0 :floor-filed 0 :refused 0})
 
 ;; A REPOSITORY THE SOURCE CANNOT READ (ticket 116dfb0d). A repository
@@ -2118,6 +2691,13 @@
 ;; note that already says the same status for the same route is left
 ;; alone, so the log carries one transition when a repository goes dark
 ;; and one when it comes back.
+
+(defn- budget-of
+  "What the source last heard of the forge's rate limit, or nothing
+  from a source that keeps no budget (ticket cdba1f6a)."
+  [source]
+  (when (satisfies? ForgeBudget source)
+    (forge-budget source)))
 
 (defn- source-note-pass!
   [eng refusals answered census log-fn]
@@ -2152,6 +2732,124 @@
      census
      (bench/policies eng :active))))
 
+;; ── the mirror's own beat (ticket b53f78ac) ─────────────────────────
+;;
+;; A MIRROR THAT STOPS SAYS SO. The pass stamps `forge_pass_at` on every
+;; policy it ran over, so a stamp that stands still is a loop that
+;; stopped. The loop cannot say that itself. A second thread, in every
+;; process and under no election, reads the oldest stamp and files one
+;; draft ticket an outage, where mayor already reads.
+
+(def stale-passes
+  "How many cadences a stamp may stand still before the mirror is said
+  to have stopped. Four, which is twenty minutes at the default beat."
+  4)
+
+(def ^:private beat-title-prefix "The factory mirror stopped beating: ")
+
+(def ^:private last-census
+  "The last census line this process printed, and when: what the beat
+  ticket quotes."
+  (atom nil))
+
+(defn- note-census! [eng line]
+  (reset! last-census {:at (now-of eng) :line line})
+  line)
+
+(defn- oldest-stamp
+  "The oldest `forge_pass_at` among the active policies, with its
+  repository, or nil. A policy no pass stamped yet is no evidence."
+  [eng]
+  (->> (bench/policies eng :active)
+       (keep (fn [row]
+               (when-some [at (as-instant (get-in row [:data :forge_pass_at]))]
+                 {:at at :repo (str (get-in row [:data :repository]))})))
+       (sort-by :at)
+       first))
+
+(defn- beat-detail [repo ^Instant at ^Instant now every-seconds]
+  (let [{:keys [line] said :at} @last-census]
+    (cut (str "The factory mirror last stamped `forge_pass_at` at " at
+              " on the policy of `" repo "`. That is "
+              (.getSeconds (java.time.Duration/between at now))
+              " seconds ago, over the " stale-passes " passes of "
+              every-seconds " seconds a stamp may stand still. Nothing "
+              "is adopted, held or merged while the mirror does not "
+              "pass.\n\n"
+              (if line
+                (str "The last census line this process printed, at "
+                     said ":\n\n    " line)
+                (str "This process printed no census line: its mirror "
+                     "finished no pass since it started."))
+              "\n\nRestarting the engine starts the loop again. The "
+              "engine files no other ticket while this stamp stands, and "
+              "a stamp that moves ends the outage.")
+         ticket/detail-chars)))
+
+(defn beat-check!
+  "The mirror's health, judged once. `raised` is an atom the watch keeps:
+  the stamp its open outage was raised for, or nil.
+
+  → nil with no stamp to read, `:fresh` when the oldest stamp is within
+  `stale-passes` cadences (which ends an outage), `:raised` when a stale
+  one filed its draft ticket, `:standing` on every later beat of the
+  same outage. The ticket rides an idempotency key of the stamp, so two
+  processes watching one database file one between them."
+  [eng {:keys [every-seconds raised log-fn]
+        :or {every-seconds default-every-seconds}}]
+  (let [log-fn (or log-fn warn!)
+        {:keys [^Instant at repo]} (oldest-stamp eng)
+        ^Instant now (now-of eng)
+        allowed (* (long stale-passes) (long every-seconds))]
+    (cond
+      (nil? at) nil
+
+      (not (.isBefore (.plusSeconds at allowed) now))
+      (do (when (some? @raised)
+            (reset! raised nil)
+            (log-fn "the mirror beats again: stamped at " at))
+          :fresh)
+
+      (= (str at) @raised) :standing
+
+      :else
+      (try
+        (inv/create! eng :ticket
+                     {:title (cut (str beat-title-prefix "no pass since " at)
+                                  200)
+                      :detail (beat-detail repo at now every-seconds)
+                      :type "bug"
+                      :priority 1
+                      :repo repo}
+                     (assoc (as-opts) :idempotency-key
+                            (str "factory-mirror-stopped:" at)))
+        (reset! raised (str at))
+        (log-fn "the mirror stopped beating: no pass since " at
+                ", and a draft ticket says so")
+        :raised
+        (catch Exception e
+          (log-fn "the mirror stopped beating: no pass since " at
+                  ", and its ticket was refused (" (ex-message e) ")")
+          nil)))))
+
+(defn- stamp-pass!
+  "The pass's own clock on the policy of each repository it ran over,
+  with a maintenance write as `base_checked_at` is: a held pass and a
+  repository that did not answer are stamped too, so a stamp that
+  stands still is a pass that stopped (ticket e674e558)."
+  [eng repositories log-fn]
+  (let [ran (into #{} (map str) repositories)
+        at (now-of eng)]
+    (doseq [row (bench/policies eng :active)
+            :let [repo (str (get-in row [:data :repository]))]
+            :when (contains? ran repo)]
+      (try
+        (bench/mark-row! eng :repo_policy (str (:id row))
+                         {:forge_pass_at at} #{})
+        (catch Exception e
+          (log-fn "the policy of " repo " was not stamped with the pass ("
+                  (ex-message e) ")"))))))
+
 (defn pass!
   "One pass of the factory mirror.
 
@@ -2171,40 +2869,66 @@
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
     (let [{:keys [changes checks repositories complete? answered refusals]}
-          (forge-poll source)
+          ;; a poll that throws is a pass that ran (ticket b53f78ac): the
+          ;; stamp says the loop beats, and the warning says what failed
+          (try (forge-poll source)
+               (catch Exception e
+                 (stamp-pass! eng (map #(get-in % [:data :repository])
+                                       (bench/policies eng :active))
+                              log-fn)
+                 (throw e)))
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
+          ;; a spent rate limit holds the whole pass (ticket cdba1f6a):
+          ;; nothing below may ask the forge, and a row whose forge was
+          ;; not read is not moved, noted or failed
+          held (:held-until (budget-of source))
           ;; the base pass runs whatever a pass before it did (ticket
           ;; c4bac627): a throw above it is thrown again only after
           ;; every base was read
           [census thrown]
-          (try
-            (let [census (source-note-pass! eng refusals answered census
-                                            log-fn)
-                  refused (volatile! [])
-                  census (change-pass! eng changes census log-fn refused)
-                  _ (retry-refused! source @refused log-fn)
-                  census (unknown-pass! eng source changes census log-fn)
-                  read-checks (head-reader source)
-                  census (run-pass! eng source
-                                    (into (vec checks)
-                                          (live-reds eng read-checks checks
-                                                     log-fn))
-                                    census log-fn)
-                  census (stale-pass! eng changes census log-fn)
-                  census (label-pass! eng source census log-fn)
-                  census (failing-pass! eng source read-checks census log-fn)
-                  census (staleness-pass! eng source read-checks census
+          (if held
+            [census nil]
+            (try
+              (let [census (source-note-pass! eng refusals answered census
+                                              log-fn)
+                    refused (volatile! [])
+                    census (change-pass! eng changes census log-fn refused)
+                    _ (retry-refused! source @refused log-fn)
+                    census (unknown-pass! eng source changes census log-fn)
+                    read-checks (head-reader source)
+                    census (run-pass! eng source
+                                      (into (vec checks)
+                                            (live-reds eng read-checks checks
+                                                       log-fn))
+                                      census log-fn)
+                    census (stale-pass! eng changes census log-fn)
+                    census (label-pass! eng source census log-fn)
+                    census (failing-pass! eng source read-checks census
                                           log-fn)
-                  census (adoption-note-pass! eng source census log-fn)]
-              [census nil])
-            (catch Exception e [census e]))
-          census (base-pass! eng source census log-fn)
-          census (floor-pass! eng census log-fn)
+                    census (staleness-pass! eng source read-checks census
+                                            log-fn)
+                    census (adoption-note-pass! eng source census log-fn)]
+                [census nil])
+              (catch Exception e [census e])))
+          ;; the stamp is written whatever the two passes above it did
+          ;; (ticket b53f78ac): a pass that threw there still beat
+          census (try
+                   (floor-pass! eng
+                                (if held
+                                  census
+                                  (base-pass! eng source census log-fn))
+                                log-fn)
+                   (finally (stamp-pass! eng repositories log-fn)))
           _ (when thrown (throw thrown))
-          census (assoc census :calls (forge-calls source))]
-      (log-fn (:calls census) " calls, " (count changes) " pull requests, "
+          census (merge (assoc census :calls (forge-calls source))
+                        (budget-of source))]
+      (log-fn
+       (note-census!
+        eng
+        (str
+              (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
               " changes adopted, " (:moved census)
               " changes moved, " (:runs-minted census) " red runs minted, "
@@ -2229,16 +2953,30 @@
                      (:rerun-noted census) " interrupted again and left"))
               (when (pos? (long (+ (long (:base-opened census))
                                    (long (:base-noted census))
-                                   (long (:base-closed census)))))
+                                   (long (:base-closed census))
+                                   (long (:base-kept census)))))
                 (str ", " (:base-opened census) " red-base tickets opened, "
                      (:base-noted census) " red heads noted, "
-                     (:base-closed census) " closed on green"))
+                     (:base-closed census) " closed on green, "
+                     (:base-kept census) " kept on green"))
               (when (pos? (long (:floor-filed census)))
                 (str ", " (:floor-filed census) " groom-floor tickets filed"))
               (when (pos? (long (:refused census)))
                 (str ", " (:refused census) " refused"))
-              (when-not (:complete? census)
-                ", and a repository did not answer — the cursor stands"))
+              (when-some [left (:remaining census)]
+                (str ", " left
+                     (when-some [limit (:limit census)] (str " of " limit))
+                     " calls left"
+                     (when-some [reset (:reset census)]
+                       (str " until " reset))))
+              (when (:unchanged census)
+                (str ", " (:unchanged census)
+                     " answers unchanged and not counted"))
+              (when-some [until (:held-until census)]
+                (str ", every call held until " until
+                     ": the forge's rate limit is spent"))
+              (when-not (or (:complete? census) (:held-until census))
+                ", and a repository did not answer — the cursor stands"))))
       census)))
 
 ;; ── the cadence ─────────────────────────────────────────────────────
@@ -2254,17 +2992,54 @@
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
                    (fn []
-                     (loop [swept? false]
-                       (let [swept? (or swept? (sweep-at-boot! config))]
-                         (try (pass! config)
-                              (catch Exception e
-                                (warn! "pass failed (" (ex-message e)
-                                       "); the stored rows keep serving and "
-                                       "the next beat still runs")))
-                         (when-not (.await stop (long (* 1000 every-seconds))
-                                           TimeUnit/MILLISECONDS)
-                           (recur swept?)))))
+                     ;; an Error is caught as an Exception is (ticket
+                     ;; b53f78ac): a thread that dies on one says
+                     ;; nothing, and the loop's end is always said
+                     (try
+                       (loop [swept? false]
+                         (let [swept? (or swept?
+                                          (try (sweep-at-boot! config)
+                                               (catch Throwable e
+                                                 (warn! "the boot sweep failed ("
+                                                        (or (ex-message e) (class e))
+                                                        ")")
+                                                 true)))]
+                           (try (pass! config)
+                                (catch Throwable e
+                                  (warn! "pass failed ("
+                                         (or (ex-message e) (class e))
+                                         "); the stored rows keep serving and "
+                                         "the next beat still runs")))
+                           (when-not (.await stop (long (* 1000 every-seconds))
+                                             TimeUnit/MILLISECONDS)
+                             (recur swept?))))
+                       (finally
+                         (warn! "the pass loop ended: no pass runs in this "
+                                "process until the role is elected again"))))
                    "factory10-forge")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn start-watch!
+  "The watch over the mirror's stamp: one `beat-check!` every
+  :every-seconds on a daemon thread of its own, the first one a cadence
+  after boot so a pass has had its turn. It runs in every process and
+  under no election, because the thread it watches cannot say it
+  stopped. `stop-passes!` stops it."
+  [eng {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
+  (let [stop (CountDownLatch. 1)
+        watch {:every-seconds every-seconds :raised (atom nil)}
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long (* 1000 every-seconds))
+                                         TimeUnit/MILLISECONDS)
+                         (try (beat-check! eng watch)
+                              (catch Throwable e
+                                (warn! "the beat check failed ("
+                                       (or (ex-message e) (class e)) ")")))
+                         (recur))))
+                   "factory10-forge-watch")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :stop stop}))
 

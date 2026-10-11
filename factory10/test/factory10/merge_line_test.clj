@@ -197,7 +197,13 @@
 
 (deftest the-front-says-what-it-waits-on
   (is (= "update" (bench/front-waits-on {:state "behind"})))
-  (is (= "checks" (bench/front-waits-on {:state "waiting"})))
+  (is (= "checks" (bench/front-waits-on {:state "waiting"}))
+      "a rig that names no waits_on keeps the old reading")
+  (is (= "checks" (bench/front-waits-on {:state "waiting" :waits_on "checks"
+                                          :pending ["gate"]})))
+  (is (= "github" (bench/front-waits-on {:state "waiting" :waits_on "github"}))
+      "green checks GitHub has not judged wait on GitHub, not on checks")
+  (is (= "update" (bench/front-waits-on {:state "behind" :waits_on "github"})))
   (is (= "merge" (bench/front-waits-on {:refused "merge_refused"
                                          :reason "GitHub has not merged it"}))))
 
@@ -259,6 +265,40 @@
   (let [r (rig (atom {1 {:state "waiting"}}))]
     (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
                                   :missing_checks ["gate"] :behind_base false)] {})
+    (is (= [] (numbers-of r "bench__update_branch")))))
+
+;; ── a green front that is only behind its base (ticket fc997a92) ─────
+
+(deftest a-lone-green-front-behind-its-base-is-updated-in-one-pass
+  (let [r (rig (atom {1 {:state "waiting"}}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0
+                    :green_head "head-1" :missing_checks [] :behind_base true)
+        m (marks! r seen [a])]
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "the rig says waiting, but every check is green and the base moved")
+    (is (= {:line_front "change-1" :line_front_pr 1
+            :line_front_waiting "update" :line_waiting 0}
+           (get-in m [:policies "ckopsa/waymark"]))
+        "it waits on the update, not on checks")
+    (pass! r seen [a] {})
+    (is (= [1] (numbers-of r "bench__update_branch"))
+        "not again for the same head")))
+
+(deftest a-waiting-front-read-green-at-an-older-head-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))
+        m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                         :green_head "head-0" :missing_checks []
+                                         :behind_base true)])]
+    (is (= [] (numbers-of r "bench__update_branch"))
+        "the green read is of a head the row no longer names")
+    (is (= "checks" (get-in m [:policies "ckopsa/waymark" :line_front_waiting])))))
+
+(deftest a-waiting-green-front-that-is-not-behind-is-left-alone
+  (let [r (rig (atom {1 {:state "waiting"}}))]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                  :green_head "head-1" :missing_checks []
+                                  :behind_base false)] {})
     (is (= [] (numbers-of r "bench__update_branch")))))
 
 ;; ── the pass the mirror wakes (ticket 6e190062) ────────────────────────

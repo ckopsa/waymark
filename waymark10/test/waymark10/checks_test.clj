@@ -277,6 +277,28 @@
       (breaks :computed (assoc with-score :faceted [:score]))
       (breaks :computed (assoc with-score :summary "{data.score} · {state}")))))
 
+(deftest collection-doors
+  (let [door {:summary "Count the things." :input [:map]
+              :handler (fn [_eng _body _ctx] {:count 0})}]
+    (testing "a door that declares its handler is green"
+      (is (some? (load-quietly (assoc base :collection-doors {:tally door})))))
+    (testing "a door with no handler is refused"
+      (breaks :collection-doors
+              (assoc base :collection-doors {:tally (dissoc door :handler)}))
+      (breaks :collection-doors
+              (assoc base :collection-doors {:tally (assoc door :handler :tally)})))
+    (testing "the key is a map of maps"
+      (breaks :collection-doors (assoc base :collection-doors [:tally]))
+      (breaks :collection-doors (assoc base :collection-doors {:tally "count"})))
+    (testing "a door named as an action of the kind is refused, naming both"
+      (breaks :collection-doors (assoc base :collection-doors {:close door}))
+      (doseq [taken [:create :query :worksheet]]
+        (breaks :collection-doors (assoc base :collection-doors {taken door})))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"collection door :close shares its name with the action close"
+           (load-quietly (assoc base :collection-doors {:close door})))))))
+
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
 
@@ -504,6 +526,37 @@
                         :waives #{:edit-shape}
                         :safety {:idempotent true :reversible false
                                  :confirm false}})))))
+
+(defn- restating
+  "base holding name and note, with a restate action over the given
+  input fields and :edit declaration."
+  [fields edit]
+  (with-action (assoc base :schema [:map
+                                    [:name [:string {:max 100}]]
+                                    [:note [:string {:max 100}]]])
+    :restate
+    {:from #{:open} :to :open
+     :input (into [:map] fields)
+     :edit edit
+     :safety {:idempotent true :reversible false :confirm false}}))
+
+(deftest prefill-covers-its-input
+  (let [fields [[:name [:string {:max 100}]]
+                [:note [:string {:max 100}]]]]
+    (testing "a partial prefill warns, naming the fields it leaves out"
+      (warns "[edit] action restate's prefill leaves out [:note]; a patch restate writes their defaults"
+             (restating fields {:prefill [:name]})))
+    (testing "a full prefill does not"
+      (does-not-warn "prefill leaves out"
+                     (restating fields {:prefill [:name :note]})))
+    (testing ":prefill-partial true says the gap is meant"
+      (does-not-warn "prefill leaves out"
+                     (restating fields {:prefill [:name]
+                                        :prefill-partial true})))
+    (testing "patch is the restate's switch, never a field to prefill"
+      (does-not-warn "prefill leaves out"
+                     (restating (conj fields [:patch {:optional true} :boolean])
+                                {:prefill [:name :note]})))))
 
 (deftest prose-required-warns
   (warns "demands composition with no draft"
@@ -817,6 +870,19 @@
         (is (= [:no-way-out] (mapv (comp :name :guard) (:dead-ends c))))
         (is (= 1 (count (:unmatched c))))))))
 
+(deftest an-unwaived-dead-end-is-a-remedy-error
+  ;; a dead end that was only printed passed the gate, so a new one
+  ;; landed unanswered; counted, it fails check-queue.
+  (with-redefs [checks/waivers (delay [])]
+    (let [c (checks/census [(guarded no-way-out)])]
+      (is (= 1 (checks/remedy-error-count c [])))))
+  (testing "a waived one is the old debt, and passes"
+    (with-redefs [checks/waivers
+                  (delay [{:guard :no-way-out :kind :thing
+                           :bead "waymark-fp62.2"}])]
+      (let [c (checks/census [(guarded no-way-out)])]
+        (is (= 0 (checks/remedy-error-count c [])))))))
+
 (deftest the-waiver-list-only-shrinks
   ;; acceptance 2: adding :remedies to a waived guard and keeping the
   ;; waiver fails check-queue.
@@ -933,3 +999,18 @@
 (deftest unrefd-ids-a-waiver-without-a-reason-is-refused
   (unrefd-refuses [:owner {:not-a-ref ""} [:string {:max 64}]])
   (unrefd-refuses [:owner {:not-a-ref true} [:string {:max 64}]]))
+
+(deftest unrefd-ids-a-summary-that-prints-a-bare-id
+  (let [over (fn [template & fields]
+               (checks/summary-id-hits
+                (load-quietly (-> base
+                                  (update :schema into fields)
+                                  (assoc :summary template)))))]
+    (is (= ["summary field :place (an address, which the summary prints as a bare id)"]
+           (over "{data.place} · {state}"
+                 [:place {:x-ref {:address true}} [:string {:max 64}]])))
+    (testing "a principal ref is one the renderer names"
+      (is (empty? (over "{data.caller} · {state}"
+                        [:caller {:x-ref {:principal true}} [:string {:max 64}]]))))
+    (testing "a field that holds no ref is not judged"
+      (is (empty? (checks/summary-id-hits (load-quietly base)))))))

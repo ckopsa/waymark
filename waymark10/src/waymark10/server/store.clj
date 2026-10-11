@@ -65,7 +65,17 @@
     it, present only for a kind declaring :retain {:data true}
     (waymark10.server.decision/after-record), nil everywhere else.")
   (transitions [st tx where opts]
-    "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
+    "Log rows: where {:kind … :resource-id … :since id}, newest-last.
+    opts {:settled true} is for a reader that keeps a cursor: it
+    answers only rows under every append still in flight, so no lower
+    id can commit after the rows it returns. It blocks no writer. It
+    answers nil — no rows, and not the [] of a log with none to give —
+    when it has no row to give and the writers in flight under it do
+    not finish in time: the reader asks again on its next pass, and
+    one with no next pass asks through settled-transitions. A
+    :newest-first read answers the newest row UNDER the appends in
+    flight, not the newest committed. Such a read runs in a
+    transaction of its own.")
   (transitions-under-grant [st tx grant-id since until opts]
     "Log rows whose actor carries this grant (actor->>'grant') and
     whose `at` lies in [since, until] — a nil bound is open. A
@@ -137,7 +147,13 @@
     "COUNT of the kind's rows matching every cond — the maintainer's
     aggregate read. A cond is {:target :state|:id|:data, :field name,
     :cast sql-type, :op :=|:<|:<=|:>=|:>|:in, :value v | :values [vs]};
-    :data values cross as strings and cast server-side.")
+    :data values cross as strings and cast server-side. One more op
+    names a second kind, the anti-join: {:op :no-row, :target :id|:data,
+    :field name, :from {:kind k, :target :id|:data, :field name, :conds
+    [conds]}} keeps the row when NO row of k under those conds carries
+    this row's id (or its field's text) in the named place. The
+    collection's four reads answer it: count-matching, ids-matching,
+    search-rows and facet-counts.")
   (sum-matching [st tx kind of conds]
     "Exact SUM of the :of data field over the cond-matched rows (same
     grammar as count-matching) — the :sum aggregate's read (batch C's
@@ -171,15 +187,18 @@
   (search-rows [st tx kind conds opts]
     "The collection page: rows matching every cond (the maintainer's
     grammar, widened with :op :in-any — vocab-array membership via
-    JSONB containment). opts {:order-by field-kw :desc bool :limit n
-    :offset n}; ordering runs over the promoted generated column
-    (f_<field>), :state over its column, a sortable-timestamp over the
-    engine column of that name, nil over created_at — id tiebreak
-    always, so pages never overlap.")
-  (facet-counts [st tx kind field conds array?]
+    JSONB containment). opts {:order-by field-kw :desc bool :then-by
+    [{:field kw :desc bool} …] :limit n :offset n}; ordering runs over
+    the promoted generated column (f_<field>), :state over its column,
+    a sortable-timestamp over the engine column of that name, nil over
+    created_at — then each :then-by key in order among the ties, and id
+    tiebreak always, so pages never overlap.")
+  (facet-counts [st tx kind field conds array? absent-as]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array
-    field (one row counts once per member).")
+    field (one row counts once per member). absent-as, when not nil, is
+    the value a scalar field's absent rows count under (the kind's
+    :absent-as); nil leaves them uncounted.")
   (load-draft [st tx kind id action audience]
     "→ {:values … :base-version … :updated-at …} or nil.")
   (save-draft! [st tx kind id action audience values base-version]
@@ -238,6 +257,19 @@
   "Sugar: (with-tx st [tx] …)."
   [st f]
   (with-tx* st f))
+
+(defn settled-transitions
+  "The settled log (transitions' {:settled true}) for a reader with no
+  next pass of its own: it asks up to `tries` times, each in a
+  transaction of its own. → the rows, or nil when the writers in flight
+  outlasted every try. The caller says what a log that never settled
+  means for it; it is never an empty log."
+  [st where opts tries]
+  (loop [left (long tries)]
+    (when (pos? left)
+      (if-some [rows (with-tx st #(transitions st % where (assoc opts :settled true)))]
+        rows
+        (recur (dec left))))))
 
 (defn utc-week-start
   "The UTC ISO week bucket an instant falls in — Monday 00:00 UTC, as

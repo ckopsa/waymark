@@ -116,6 +116,8 @@
                           :received_at "2026-09-26T11:12:00Z"}})
         _ (assert (= 201 (:status made)) (pr-str (json made)))
         id (id-of made)
+        opened (move! h person id "open" {})
+        _ (assert (= 200 (:status opened)) (pr-str (json opened)))
         read (move! h person id "research"
                     {:summary "A receipt for a purchase already made."})
         _ (assert (= 200 (:status read)) (pr-str (json read)))

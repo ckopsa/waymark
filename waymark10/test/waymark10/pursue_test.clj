@@ -265,8 +265,13 @@
 (defn- coll [kind]
   (c/get-doc *session* (get-in (c/index *session*) [:resources kind :href])))
 
+;; a row of its own on every call: the session's key-store replays an
+;; identical create, so the key this create persisted is forgotten again
 (defn- make! [kind input]
-  (let [res (c/create! *session* (coll kind) input)]
+  (let [keys (:key-store *session*)
+        before @keys
+        res (c/create! *session* (coll kind) input)]
+    (reset! keys before)
     (is (c/doc? res) (pr-str res))
     res))
 
@@ -278,8 +283,7 @@
 (defn- chain!
   "A suggested meal, an undecided day, a draft plan over that day."
   []
-  ;; fresh inputs each call: the session's key-store replays an
-  ;; identical create, and every test needs rows of its own
+  ;; a suffix each call, so one test's rows read apart from another's
   (let [n (subs (str (random-uuid)) 0 8)
         meal (make! :meal {:name (str "Tacos " n) :themes ["test"]})
         day (make! :plan_day {:label (str "Monday " n)})]
@@ -399,6 +403,34 @@
         "the probe's binding named the latch; nobody was asked")
     (is (= "shut" (state-of lt)))))
 
+;; ── a door shut by the row's state names the row's own doors that
+;; lead to a state where it opens
+
+(defn- with-lifted [f]
+  (let [lt (make! :latch {:free true})]
+    (is (= "open" (:state (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil))))
+    (f lt)))
+
+(deftest an-out-of-state-door-names-the-doors-that-lead-to-it
+  (with-lifted
+    (fn [lt]
+      (let [doc (c/get-doc *session* (:self lt))]
+        (is (= ["latch.lower"] (get-in doc [:unavailable :lift :remedies])) (pr-str doc))
+        (is (= ["shut"] (get-in doc [:unavailable :lift :becomes_available :in_states])))))))
+
+(deftest pursue-walks-an-out-of-state-remedy-back-to-its-state
+  (with-lifted
+    (fn [lt]
+      (let [cr (crate! lt)
+            res (c/pursue! *session* cr :pry nil {:dry-run true})]
+        (is (empty? (:blocked-on res)) (pr-str res))
+        (is (= [["latch.lower" (:self lt)]
+                ["latch.lift" (:self lt)]
+                ["crate.pry" (:self cr)]]
+               (mapv (juxt :door :row) (:writes res)))
+            "lift is shut on an open latch: lower is the row's own door back")
+        (is (= "open" (state-of lt)))))))
+
 (deftest a-binding-naming-no-input-field-fails-the-battery
   (is (thrown-with-msg?
        Exception #"remedy-bindings"
@@ -436,6 +468,33 @@
                                                :id '(evidence :latch_id)}]})]
                  :safety fx/routine}
           :lower {:from #{:open} :to :shut :safety fx/routine}}}))))
+
+(deftest a-remedy-field-may-be-a-path-or-come-from-the-evidence
+  (let [fields (fn [declared evidence]
+                 (:fields (first (g/resolve-remedies
+                                  {:remedies [{:door :crate/pry :fields declared}]}
+                                  {} {} evidence))))
+        declares (fn [declared]
+                   (g/expr {:name :crate-fields
+                            :when '(= (data :free) true)
+                            :explain "The crate is shut."
+                            :remedies [{:door :crate/pry :fields declared}]}))]
+    (is (= ["title" "showcase.evidence.film_url"]
+           (fields [:title [:showcase :evidence :film_url]] nil))
+        "a path is written dotted, as the form names the nested input")
+    (is (= ["showcase.evidence.scene_ref"]
+           (fields ['(evidence :missing_field)]
+                   {:missing_field "showcase.evidence.scene_ref"}))
+        "the guard's evidence names the field it found missing")
+    (is (= ["showcase.evidence.film_url"]
+           (fields ['(evidence :missing_field)]
+                   {:missing_field [:showcase :evidence :film_url]})))
+    (is (nil? (fields ['(evidence :missing_field)] nil))
+        "evidence the guard did not find names no field")
+    (is (= ["title"] (fields [:title '(evidence :missing_field)] {})))
+    (is (some? (declares [:title [:showcase :evidence] '(evidence :missing_field)])))
+    (doseq [bad [[[]] ["showcase"] ['(input :title)] [[:showcase "evidence"]]]]
+      (is (thrown? Exception (declares bad)) (pr-str bad)))))
 
 (deftest the-depth-bound-stops-a-branch
   (let [{:keys [meal plan] :as rows} (chain!)
@@ -775,3 +834,98 @@
       (is (nil? (:done a)))
       (is (= [] (:steps_taken a)))
       (is (mcp-untouched? eng rows) "and nothing on the chain was written"))))
+
+;; ── Quests 0: mcp/rehearse, the same rehearsal for a caller named by ids
+
+(defn- http-pursue
+  "waymark_pursue's answer through the whole handler, so the identity
+  boundary resolves the caller (and makes them a member) as it does
+  for anybody."
+  [h headers args]
+  (let [resp (h {:request-method :post :uri "/api/-/mcp"
+                 :headers headers
+                 :body (wire/write-json
+                        {:jsonrpc "2.0" :id 1 :method "tools/call"
+                         :params {:name "waymark_pursue" :arguments args}})})]
+    (wire/read-json (get-in (wire/read-json (:body resp)) [:result :content 0 :text]))))
+
+(defn- as-wire [v] (wire/read-json (wire/write-json v)))
+
+(defn- grocery-lists [eng]
+  (str "/api/" (:plural (get (inv/resources eng) :grocery_list))))
+
+(def ^:private agent-7
+  {"x-waymark-principal" "agent-7" "x-waymark-actor-type" "agent"})
+
+(defn- grant-agent-7!
+  "An accepted grant for agent-7 over the whole chain."
+  [eng h id]
+  (inv/create! eng :grant
+               {:audience "agent-7"
+                :expires_at "2099-01-01T00:00:00Z"
+                :scope [{:kind "meal" :actions ["accept"]}
+                        {:kind "plan_day" :actions ["assign_meal"]}
+                        {:kind "plan" :actions ["finalize"]}
+                        {:kind "grocery_list" :actions ["create"]}]}
+               {:principal grants/approvals-actor :id id :mint? true})
+  (let [accepted (h {:request-method :post
+                     :uri (str "/api/grants/" id "/-/accept")
+                     :headers (assoc agent-7 "content-type" "application/json")
+                     :body "{}"})]
+    (is (= 200 (:status accepted)) (:body accepted))))
+
+(defn- same-rehearsal?
+  "The door's dry_run answer and the seam's, compared as the wire
+  carries them."
+  [a res]
+  (is (seq (:blocked_on a)) "the fixture goal stops at a choice, so the answers are not empty")
+  (is (true? (:rehearsal res)))
+  (is (= (:plan a) (as-wire (:writes res))))
+  (is (= (:blocked_on a) (as-wire (:blocked-on res))))
+  (is (= (:stack a) (as-wire (:stack res)))))
+
+(deftest rehearse-answers-as-waymark-pursue-does-for-a-person
+  (let [eng (mcp-boot)
+        h (engine/handler eng)
+        {:keys [plan] :as rows} (mcp-chain! eng)
+        a (http-pursue h {"x-waymark-principal" "elena"}
+                       {:kind "grocery_list" :action "create" :input {:plan_id plan}})
+        res (mcp/rehearse eng {:principal "elena"} (grocery-lists eng)
+                          :create {:plan_id plan})]
+    (same-rehearsal? a res)
+    (is (mcp-untouched? eng rows) "a rehearsal writes nothing")))
+
+(deftest rehearse-answers-as-waymark-pursue-does-for-a-granted-agent
+  (let [eng (mcp-boot)
+        h (engine/handler eng)
+        {:keys [plan] :as rows} (mcp-chain! eng)
+        _ (grant-agent-7! eng h "grant-rehearse-1")
+        a (http-pursue h (assoc agent-7 "x-waymark-grant" "grant-rehearse-1")
+                       {:kind "grocery_list" :action "create" :input {:plan_id plan}})
+        res (mcp/rehearse eng {:principal "agent-7" :grant "grant-rehearse-1"}
+                          (grocery-lists eng) "create" {:plan_id plan})]
+    (same-rehearsal? a res)
+    (is (mcp-untouched? eng rows) "a rehearsal writes nothing")))
+
+(deftest rehearse-refuses-a-grant-that-is-expired-or-gone
+  (let [eng (mcp-boot)
+        h (engine/handler eng)
+        {:keys [plan]} (mcp-chain! eng)
+        _ (grant-agent-7! eng h "grant-rehearse-2")
+        problem-of (fn [eng who]
+                     (try (mcp/rehearse eng who (grocery-lists eng)
+                                        :create {:plan_id plan})
+                          nil
+                          (catch clojure.lang.ExceptionInfo e
+                            (:waymark10/problem (ex-data e)))))]
+    (is (nil? (problem-of eng {:principal "agent-7" :grant "grant-rehearse-2"}))
+        "live, it rehearses")
+    (is (= :rehearse-grant-not-live
+           (problem-of (assoc eng :now-fn (constantly (java.time.Instant/parse
+                                                       "2100-01-01T00:00:00Z")))
+                       {:principal "agent-7" :grant "grant-rehearse-2"}))
+        "past its expiry the grant confers nothing")
+    (is (= :rehearse-grant-not-live
+           (problem-of eng {:principal "agent-7" :grant "no-such-grant"})))
+    (is (= :rehearse-no-such-member
+           (problem-of eng {:principal "nobody-here"})))))

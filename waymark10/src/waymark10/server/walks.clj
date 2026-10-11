@@ -24,21 +24,42 @@
   firehose transition that principal made, goes to `record-frame!` for
   each walk the follower is recording of that principal.
 
+  A SELF WALK NEEDS NO FOLLOWER. A walk whose `followed` is its
+  `recorder` is a person recording their own screen. Nobody's stream
+  carries those frames, so the doors that made them hand them over:
+  the beat (`presence/report!`, tapped by `self-recorder`) and the
+  write doors (`record-own!`, and `record-refused!` for a write a door
+  refused). The sight is the request's own.
+
   THE ROW OUTLIVES ITS FRAMES. The purge deletes every frame and moves
   the walk to `purged`; the row keeps its title and its counts as the
-  audit that a walk existed."
+  audit that a walk existed.
+
+  A WALK MAY CARRY ITS SCREENS (docs/spec-agent-demo-walks.md § 8a). A
+  walk created with `docs` follows each `move`, `ui` and `transition`
+  it took with a `doc` frame: the document of that screen as the
+  recorder's own read answers it then (`record-doc!`). Replay draws
+  the product's screen from it, and the export redacts it again under
+  the exporter (`export-doc`)."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
+            [waymark10.server.collections :as collections]
             [waymark10.server.events :as events]
+            [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.presence :as presence]
+            [waymark10.server.problems :as p]
+            [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time Duration Instant ZoneOffset)
+  (:import (java.net URLDecoder)
+           (java.security MessageDigest)
+           (java.time Duration Instant ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -59,7 +80,24 @@
   "A walk naming no retention keeps its frames a month."
   30)
 
-(def frame-types ["move" "ui" "transition" "invitation"])
+(def frame-ceiling
+  "The most frames one walk takes (docs/spec-agent-demo-walks.md § 4).
+  At this count the engine seals the walk with its own hand, so a walk
+  nobody seals does not grow without bound."
+  20000)
+
+(def ceiling-actor
+  "The hand that seals a walk at `frame-ceiling`: the engine's own actor,
+  displayed so the walk's history says why it was sealed."
+  (t/principal {:id "waymark10-walks" :type :system
+                :display "Walks (the frame ceiling was reached)"}))
+
+(def frame-types ["move" "ui" "transition" "invitation" "caption" "doc" "refusal"])
+
+(def caption-max
+  "A caption is one line of at most this many characters
+  (docs/spec-agent-demo-walks.md § 3)."
+  140)
 
 (def never-recorded
   "Body keys dropped at any depth before a frame is written: a request's
@@ -117,12 +155,18 @@
 (defn- born
   "The birth stamps: the recorder is the principal that created the
   row, never the body; the clock starts now; a walk naming no
-  retention gets the default."
+  retention gets the default. The clock is the recording's: on a demo
+  engine whose own clock is shifted (clock-shift), `started_at` is real
+  time, because each frame's `t` counts real time from it."
   [row ctx]
   (-> row
       (assoc-in [:data :recorder] (str (get-in ctx [:principal :id])))
-      (assoc-in [:data :started_at] (or (:now ctx) (Instant/now)))
+      (assoc-in [:data :started_at] (or (some-> (get-in ctx [:services :recording-clock])
+                                                (apply []))
+                                        (:now ctx)
+                                        (Instant/now)))
       (assoc-in [:data :frame_count] 0)
+      (update-in [:data :docs] boolean)
       (update-in [:data :retention_days] #(or % default-retention-days))))
 
 (defhandler stamp-end [row _inp ctx]
@@ -134,7 +178,7 @@
   [:followed {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who was followed"
-                          :help "The principal the recorder followed: their principal id."}}
+                          :help "The principal whose screen and writes this walk holds: their principal id. It is the recorder's own id when a person or an agent records itself."}}
    [:string {:min 1 :max 128}]])
 
 (def ^:private title-field
@@ -157,7 +201,7 @@
     [:recorder {:x-ref {:principal true}
                 :x-display {:raw true
                             :label "Who recorded"
-                            :help "The follower whose stream this walk records, stamped by the engine at birth. A frame holds only what this principal could see."}}
+                            :help "The principal who records this walk, stamped by the engine at birth: a follower recording someone else's stream, or a person or an agent recording its own. A frame holds only what this principal could see; recorded under a grant, only what that grant admits."}}
      [:string {:min 1 :max 128}]]
     followed-field
     title-field
@@ -175,7 +219,11 @@
     [:retention_days {:default default-retention-days
                       :x-display {:label "Kept for (days)"
                                   :help "Days the frames are kept after the walk ends; then the sweep deletes them."}}
-     [:int {:min 1 :max 3650}]]]
+     [:int {:min 1 :max 3650}]]
+    [:docs {:optional true
+            :x-display {:label "Carries its screens"
+                        :help "Whether each move and each write is followed by the document of the screen it shows, so a replay draws the product's own screens. It is chosen at the start and does not change."}}
+     :boolean]]
    ;; the recorder, the clock and the count are the engine's to write
    :create-schema
    [:map
@@ -184,13 +232,26 @@
     [:retention_days {:optional true
                       :x-display {:label "Kept for (days)"
                                   :help "Left empty, the frames are kept 30 days after the walk ends."}}
-     [:maybe [:int {:min 1 :max 3650}]]]]
+     [:maybe [:int {:min 1 :max 3650}]]]
+    [:docs {:optional true
+            :x-display {:label "Carry the screens"
+                        :help "Checked, each move and each write is followed by the document of the row or the collection it shows, as the recorder could read it, and a replay draws the real screens. Left empty, the walk records no documents."}}
+     [:maybe :boolean]]]
    :create-guards [a-named-recorder]
    :on-create born
    :filterable {:state #{:eq :in}
                 :recorder #{:eq}
                 :followed #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
+   ;; a walk is its recorder's own, so it rides beside any worn grant:
+   ;; the record button works under a grant that names no walk, and the
+   ;; frames still hold only what that grant admits (`record-frame!`)
+   :own-surface {:by :recorder :actions #{:create :seal :purge}}
+   ;; the one non-envelope answer: a safe GET a reader may follow, so a
+   ;; link and not a door (docs/waymark10-vocabulary.md § 13)
+   :links [{:rel "export" :href "/api/walks/{id}/export"
+            :states #{:sealed} :download true
+            :summary "The walk as a waymark-walk/1 file, newline-delimited JSON"}]
    :actions
    {:seal
     {:from #{:recording} :to :sealed
@@ -230,7 +291,7 @@
                      :help "Milliseconds since the walk started. The default sort."}}
      [:int {:min 0}]]
     [:type {:x-display {:label "Type"
-                        :help "move, ui, transition or invitation: what the recorder's stream carried."}}
+                        :help "move, ui, transition or invitation: what the recorder's stream carried. caption: the line its recorder said about a step. refusal: the answer a write door refused its recorder with. doc: the document of the screen the frame before it shows."}}
      (into [:enum] frame-types)]
     [:body {:x-display {:raw true
                         :label "What the stream carried"
@@ -267,6 +328,57 @@
   (some (fn [[k rdef]] (when (= plural (:plural rdef)) k))
         (inv/resources eng)))
 
+(defn- own-sight
+  "`sight` as section 1's redaction reads it for a recorder's OWN `ui`
+  frame: a kind whose create verb the sight admits counts as a whole
+  kind, so the redaction keeps their own create form on the collection
+  when their scope names only some rows. `own-create?` then judges
+  whether the frame is written. A row is still asked of `:row?`. nil,
+  an unscoped recorder, stays nil."
+  [eng sight]
+  (when sight
+    (let [whole? (:whole-kind? sight)
+          action? (:action? sight)]
+      (assoc sight :whole-kind?
+             (fn [k]
+               (boolean
+                (or (some-> whole? (apply [k]))
+                    (when action?
+                      (some #(action? k %)
+                            (:create-action-names
+                             (get (inv/resources eng) (keyword (name k)))))))))))))
+
+(defn- own-create?
+  "Is this frame a create form (`ui`, by its dialog) or a refused create
+  (`refusal`) on the collection of a kind whose create verb `sight`
+  admits? Such a frame is written, and exported to its recorder, though
+  the collection `self` is not seen whole: the form and its refusal are
+  the recorder's own, and permission to create is no sight of the
+  list, so a `move`, a `caption` and a `doc` on that collection still
+  ask `sees-self?`. A follower's stream redacted a create form under
+  presence's whole-kind rule before it came here, so this admits
+  nothing a follower was not sent."
+  [eng sight type body]
+  (let [at (fn [m k] (when (map? m) (or (get m k) (get m (name k)))))
+        collection (fn [self]
+                     (let [[_ plural] (re-matches #"/api/([^/?#]+)"
+                                                  (str/trim (str self)))]
+                       (when (and plural (not= "-" plural))
+                         (kind-of-plural eng plural))))
+        k (collection (at body :self))
+        door (case type
+               "refusal" body
+               "ui" (at (at body :ui) :dialog)
+               nil)
+        action (some-> (at door :action) name)
+        action? (:action? sight)]
+    (boolean
+     (and k action action?
+          (= k (collection (at door :self)))
+          (some #(= action (name %))
+                (:create-action-names (get (inv/resources eng) k)))
+          (action? k (keyword action))))))
+
 (defn- sees-self?
   "Could the recorder GET this `self`? A row path asks `:row?`, a bare
   collection path asks whole-kind sight, and a path naming no served
@@ -281,42 +393,224 @@
       id (boolean (some-> (:row? sight) (apply [k id])))
       :else (boolean (some-> (:whole-kind? sight) (apply [k]))))))
 
+(defn- seal-at-ceiling!
+  "Seal a walk that reached `frame-ceiling`, under the engine's hand
+  (`the-recorder-or-the-sweep` admits the system actor)."
+  [eng id]
+  (try
+    (inv/invoke! eng kind id :seal {} {:principal ceiling-actor})
+    (catch Exception e
+      (warn! "walk " id " could not be sealed at the frame ceiling ("
+             (ex-message e) ")"))))
+
 (defn record-frame!
   "Write one frame of a recording walk, as the recorder's stream
   received it. `sight` is the recorder's own visibility; `frame` is
   {:type :body}, and `(:self body)` names what the frame is about.
   → the frame row, or nil when nothing was written: the walk is not
   recording, the type is not a frame type, or the recorder could not
-  see the frame's `self`."
+  see the frame's `self` and the frame is not their own create form or
+  its refusal (`own-create?`). The frame that brings the walk to
+  `frame-ceiling` is written, and the engine then seals the walk."
   [eng walk-id sight {:keys [type body]}]
   (let [type (some-> type name)
         body (scrub (or body {}))
         self (or (:self body) (get body "self"))]
     (when (and (some #{type} frame-types)
-               (or (nil? self) (sees-self? eng sight self))
+               (or (nil? self) (sees-self? eng sight self)
+                   (own-create? eng sight type body))
                ;; a transition is the firehose's event projected by the
                ;; recorder's visibility, the export's own rule
                (or (not= "transition" type)
                    (some? (events/visible-transition sight body))))
       (let [st (:storage eng)
-            ^Instant now ((:now-fn eng))
-            id (str walk-id)]
-        (store/with-tx st
-          (fn [tx]
-            (when-some [row (store/load-row st tx kind id {:for-update true})]
-              (when (= "recording" (some-> (:state row) name))
-                (let [d (:data row)
-                      started (instant-of (:started_at d))
-                      ms (if started
-                           (max 0 (.toMillis (Duration/between started now)))
-                           0)
-                      frame (inv/insert-quiet! eng tx frame-kind
-                                               {:walk id :t ms :type type :body body}
-                                               {:principal engine-actor})]
-                  (store/update-data! st tx kind id
-                                      (update d :frame_count #(inc (long (or % 0))))
-                                      (:next-flip-at row))
-                  frame)))))))))
+            ;; recording time, not engine time: a demo engine's shifted
+            ;; clock (clock-shift) must not reorder the frames
+            ^Instant now ((or (get-in eng [:services :recording-clock])
+                              (:now-fn eng)))
+            id (str walk-id)
+            ceiling (long frame-ceiling)
+            {:keys [frame full?]}
+            (store/with-tx st
+              (fn [tx]
+                (when-some [row (store/load-row st tx kind id {:for-update true})]
+                  (when (= "recording" (some-> (:state row) name))
+                    (let [d (:data row)
+                          had (long (or (:frame_count d) 0))]
+                      (if (>= had ceiling)
+                        ;; an earlier seal at the ceiling did not land
+                        {:full? true}
+                        (let [started (instant-of (:started_at d))
+                              ms (if started
+                                   (max 0 (.toMillis (Duration/between started now)))
+                                   0)
+                              frame (inv/insert-quiet! eng tx frame-kind
+                                                       {:walk id :t ms :type type :body body}
+                                                       {:principal engine-actor})]
+                          (store/update-data! st tx kind id
+                                              (assoc d :frame_count (inc had))
+                                              (:next-flip-at row))
+                          {:frame frame :full? (>= (inc had) ceiling)})))))))]
+        ;; the seal is its own transition, after the frame's commit
+        (when full? (seal-at-ceiling! eng id))
+        frame))))
+
+;; the screens a walk carries (docs/spec-agent-demo-walks.md § 8a)
+
+(def doc-cap
+  "A document over this many bytes is not recorded."
+  (* 64 1024))
+
+(def docs-cap
+  "A walk's documents stop at this many bytes in total."
+  (* 8 1024 1024))
+
+(defn- sha-of ^String [^String s]
+  (let [md (MessageDigest/getInstance "SHA-256")]
+    (apply str (map #(format "%02x" %) (.digest md (.getBytes s "UTF-8"))))))
+
+(defn- body-of
+  "A stored body's value under `k`, however the store spelled the key."
+  [body k]
+  (or (get body k) (get body (name k))))
+
+(defn- params-of
+  "A self's query string as the collection grammar's params map."
+  [self]
+  (let [[_ q] (str/split (str self) #"\?" 2)]
+    (into {}
+          (keep (fn [kv]
+                  (let [[k v] (str/split kv #"=" 2)]
+                    (when-not (str/blank? k)
+                      [(URLDecoder/decode ^String k "UTF-8")
+                       (URLDecoder/decode ^String (or v "") "UTF-8")]))))
+          (some-> q (str/split #"&")))))
+
+(defn- screen-of
+  "The screen a frame leaves its recorder looking at → [self params],
+  or nil when it shows none: a `move`'s self, a `ui` frame's collection
+  under its query, a `transition`'s row. `self` is a path, and `params`
+  is the collection's query."
+  [{:keys [type body]}]
+  (let [path (fn [self]
+               (some-> self str (str/split #"[?#]" 2) first not-empty))]
+    (case (some-> type name)
+      "move" (when-some [self (path (:self body))]
+               [self (params-of (:self body))])
+      "ui" (let [c (get-in body [:ui :collection])]
+             (when-some [self (path (:self c))]
+               [self (cond-> (into {}
+                                   (keep (fn [[k v]]
+                                           (when (some? v) [(name k) (str v)])))
+                                   (:filter c))
+                       (:sort c) (assoc "sort" (str (:sort c)))
+                       (:page c) (assoc "page[number]" (str (:page c))))]))
+      "transition" (when-some [self (path (:self body))]
+                     [self nil])
+      nil)))
+
+(defn ref-summaries
+  "render's :ref-summary hook under `sight`: a referenced row's
+  {:href :summary} as the recorder may read it, nil when it may not.
+  The connector's staging labels a typed ref argument with it."
+  [eng sight]
+  (let [st (:storage eng)]
+    (fn [k id]
+      (let [id (str id)]
+        (when-some [trdef (get (inv/resources eng) k)]
+          (when (or (nil? sight) ((:row? sight) k id))
+            (when-some [raw (store/with-tx st
+                              (fn [tx] (store/load-row st tx k id {})))]
+              {:href (str "/api/" (:plural trdef) "/" id)
+               :summary (render/target-summary
+                         trdef (inv/decode-row trdef raw) sight)})))))))
+
+(defn- doc-of
+  "The document of `self` as `principal`'s own read under `sight`
+  answers it now: a row's envelope, or a collection's page under
+  `params`. nil when `self` names no served kind or no standing row."
+  [eng principal sight self params]
+  (let [[_ plural id] (re-matches #"/api/([^/?#]+)(?:/([^/?#]+))?" (str self))
+        k (when (and plural (not= "-" plural)) (kind-of-plural eng plural))
+        rdef (get (inv/resources eng) k)
+        st (:storage eng)
+        ;; router/render-opts, with the recorder where the request stood
+        opts (cond-> {:evidence-reads (inv/render-hooks eng)
+                      :principal principal
+                      :now ((:now-fn eng))
+                      :services (:services eng)
+                      :visibility sight
+                      :resources (inv/resources eng)
+                      :link-doors (:link-doors eng)}
+               (:probe-reads eng) (merge (inv/render-hooks eng)))]
+    (cond
+      (nil? rdef) nil
+      id (when-some [row (store/with-tx st
+                           (fn [tx] (store/load-row st tx k id {})))]
+           (render/envelope rdef (inv/decode-row rdef row)
+                            (assoc opts :ref-summary (ref-summaries eng sight))))
+      :else (collections/envelope eng rdef (or params {}) opts))))
+
+(defn- doc-frames
+  "The bodies of the `doc` frames a walk holds, in the order they were
+  recorded."
+  [eng walk-id frame-count]
+  (let [st (:storage eng)
+        frdef (get (inv/resources eng) frame-kind)]
+    (->> (store/with-tx st
+           (fn [tx]
+             (vec (store/query-rows st tx frame-kind
+                                    {:walk (str walk-id) :type "doc"}
+                                    {:limit (max 1 (long (or frame-count 0)))}))))
+         (map #(:data (inv/decode-row frdef %)))
+         (filter #(= "doc" (some-> (:type %) name)))
+         (map :body)
+         (sort-by #(long (or (body-of % :n) 0))))))
+
+(defn record-doc!
+  "Follow a frame with the screen it shows: the document of `self` as
+  `principal`'s own read under `sight` answers it now (`doc-of`),
+  written as a `doc` frame of a recording walk made with `docs`. The
+  body is {self, n, bytes, sha, doc}: `n` counts the walk's documents
+  and `sha` is the document's own. → the frame row, or nil when
+  nothing was written: the walk carries no screens, the recorder cannot
+  see `self`, the document is over `doc-cap`, it equals the last one
+  recorded for that `self`, or the walk's documents would pass
+  `docs-cap`. Replay then draws that screen from the other frames."
+  [eng walk-id principal sight self params]
+  (let [st (:storage eng)
+        id (str walk-id)
+        row (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))
+        d (:data row)]
+    (when (and (= "recording" (some-> (:state row) name))
+               (true? (:docs d))
+               (sees-self? eng sight self))
+      (when-some [doc (some-> (doc-of eng principal sight self params) scrub)]
+        (let [text (wire/write-json doc)
+              size (alength (.getBytes text "UTF-8"))
+              sha (sha-of text)
+              held (doc-frames eng id (:frame_count d))
+              prior (last (filter #(= self (body-of % :self)) held))
+              total (reduce + 0 (map #(long (or (body-of % :bytes) 0)) held))]
+          (when (and (<= size (long doc-cap))
+                     (not= sha (body-of prior :sha))
+                     (<= (+ size (long total)) (long docs-cap)))
+            (record-frame! eng id sight
+                           {:type "doc"
+                            :body {:self self :n (count held) :bytes size
+                                   :sha sha :doc doc}})))))))
+
+(defn- follow-with-doc!
+  "The frame a walk just took, followed by the screen it shows. Never
+  throws: the frame is already kept, and a screen that was not recorded
+  is one replay draws from the other frames."
+  [eng walk-id principal sight frame]
+  (try
+    (when-some [[self params] (screen-of frame)]
+      (record-doc! eng walk-id principal sight self params))
+    (catch Exception e
+      (warn! "a screen of the walk " walk-id " was not recorded — "
+             (ex-message e)))))
 
 ;; ── the recorder (a follower's own stream) ──────────────────────────
 
@@ -340,26 +634,42 @@
                                  :followed followed}
                                 {:limit recorder-page}))))))
 
-(defn- suggest-for
-  "An invitation's suggested values as `vis` may read them: the keys its
-  `:arg?` admits on the invited step, and none when the step names no
-  served kind. nil `vis` reads them whole. nil when there are none."
-  [eng vis {:keys [self action suggest]}]
-  (when (and (map? suggest) (seq suggest))
+(defn- args-for
+  "One map of an invitation's values, keyed by the invited step's
+  arguments, as `vis` may read it: the keys its `:arg?` admits on that
+  step, and none when the step names no served kind. nil `vis` reads
+  it whole. nil when there are none."
+  [eng vis {:keys [self action]} values]
+  (when (and (map? values) (seq values))
     (if-some [arg? (:arg? vis)]
       (let [[_ plural] (re-find #"/api/([^/?#]+)/[^/?#]+" (str self))
             k (some->> plural (kind-of-plural eng))
             action (some-> action name str/trim not-empty keyword)]
         (if (and k action)
-          (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) suggest)
+          (into {} (filter (fn [[arg _]] (arg? k action (name arg)))) values)
           {}))
-      suggest)))
+      values)))
+
+(defn- suggest-for
+  "An invitation's suggested values as `vis` may read them (`args-for`)."
+  [eng vis d]
+  (args-for eng vis d (:suggest d)))
+
+(defn- given-for
+  "An invitation's `given` values, the ones the invited person typed
+  already, as `vis` may read them: the rule of `suggest` (`args-for`)."
+  [eng vis d]
+  (args-for eng vis d (:given d)))
 
 (defn- invitation-frame
   "The `invitation` frame of one firehose event, when that event is the
   birth of an invitation the follower can see; nil otherwise. The body
-  is pinned: {id, author, subject, self, action, field, note, suggest},
-  and `suggest` keeps only the keys the follower's `:arg?` admits."
+  is pinned: {id, author, subject, self, action, field, fields, note,
+  suggest}; a row born before `fields` carries `field` alone,
+  and `suggest` keeps only the keys the follower's `:arg?` admits. An
+  invitation with `given` values carries them beside it, by that rule. A
+  walkthrough's step carries {walkthrough, step, of} beside them
+  (docs/spec-walkthrough.md § 6)."
   [eng sight t]
   (when (and (= "invitation" (some-> (:kind t) name))
              (nil? (:from-state t))
@@ -370,12 +680,70 @@
       (when (and rdef (or (nil? sight) ((:row? sight) :invitation id)))
         (when-some [row (store/with-tx st
                           (fn [tx] (store/load-row st tx :invitation id {})))]
-          (let [d (:data (inv/decode-row rdef row))]
+          (let [d (:data (inv/decode-row rdef row))
+                led (cond-> (into {} (filter (comp some? val))
+                                  (select-keys d [:step :of]))
+                      (some? (:walkthrough d))
+                      (assoc :walkthrough (str (:walkthrough d))))
+                given (given-for eng sight d)]
             {:type "invitation"
-             :body (assoc (select-keys d [:author :subject :self :action
-                                          :field :note])
-                          :id id
-                          :suggest (suggest-for eng sight d))}))))))
+             :body (cond-> (assoc (merge (select-keys d [:author :subject :self :action
+                                                         :field :fields :note])
+                                         led)
+                                  :id id
+                                  :suggest (suggest-for eng sight d))
+                     (seq given) (assoc :given given))}))))))
+
+(defn- invitation-birth? [t]
+  (and (= "invitation" (some-> (:kind t) name))
+       (nil? (:from-state t))
+       (some? (:resource-id t))))
+
+(defn- answers?
+  "Whether `t`, the recorder's own transition, answers an invitation the
+  followed principal `pid` wrote for the recorder `fid`: it takes the
+  invited (self, action), or it declines the invitation itself. The
+  stream and the invitations' consumer hear the log apart, so the
+  invitation is either still `open` and no younger than `t`, or already
+  `answered` with `t`'s own log id."
+  [eng pid fid t]
+  (let [st (:storage eng)
+        rs (inv/resources eng)
+        idef (get rs :invitation)
+        rdef (get rs (some-> (:kind t) keyword))
+        asked? (fn [row]
+                 (and (= pid (str (get-in row [:data :author])))
+                      (= fid (str (get-in row [:data :subject])))))
+        rows (fn [f]
+               (store/with-tx st
+                 (fn [tx] (mapv #(inv/decode-row idef %) (f tx)))))]
+    (boolean
+     (when (and idef rdef (:resource-id t) (:action t))
+       (let [action (name (:action t))]
+         (if (= :invitation (:kind rdef))
+           (and (= "decline" action)
+                (some asked?
+                      (rows (fn [tx]
+                              (some-> (store/load-row st tx :invitation
+                                                      (str (:resource-id t)) {})
+                                      vector)))))
+           (let [self (str "/api/" (:plural rdef) "/" (:resource-id t))
+                 at (instant-of (:at t))]
+             (some (fn [row]
+                     (let [d (:data row)
+                           born (instant-of (:created-at row))]
+                       (and (asked? row)
+                            (= self (str (:self d)))
+                            (= action (str/trim (str (:action d))))
+                            (case (some-> (:state row) name)
+                              "answered" (= (str (:id t)) (str (:answered_by d)))
+                              "open" (not (and at born (.isBefore at born)))
+                              false))))
+                   (rows (fn [tx]
+                           (store/query-rows st tx :invitation
+                                             {:subject fid :author pid}
+                                             {:limit recorder-page
+                                              :newest-first true})))))))))))
 
 (defn recorder
   "One stream's recorder (docs/spec-guided-follow.md § 4): the taps a
@@ -389,10 +757,19 @@
   its actor is the followed principal, and an `invitation` beside it
   when that transition created one (`invitation-frame`).
 
+  A walkthrough's steps are made by the engine's hand and answered by
+  the recorder's (docs/spec-walkthrough.md § 6), so `:event` also takes
+  two events of other actors: the birth of an invitation whose `author`
+  is the followed principal and whose `subject` is the follower, as an
+  `invitation` frame, and the follower's own transition that answers
+  such an invitation (`answers?`), as a `transition` frame.
+
   Each frame goes through `record-frame!` to every walk the follower
   is recording of `followed` at that moment. The walks are read per
   frame, so a walk started after the stream opened is recorded and a
   sealed or purged one takes nothing. Closing the stream seals no walk.
+  A walk made with `docs` is handed the screen each frame it took shows
+  (`follow-with-doc!`), as the follower's own read answers it.
   A tap never throws: the stream outlives a write that failed."
   [eng follower sight followed]
   (let [fid (str (:id follower))
@@ -403,7 +780,8 @@
                      (let [frames (frames)]
                        (doseq [id ids
                                frame frames]
-                         (record-frame! eng id sight frame))))
+                         (when (record-frame! eng id sight frame)
+                           (follow-with-doc! eng id follower sight frame)))))
                    (catch Exception e
                      (warn! "a " what " frame of " pid " was not recorded — "
                             (ex-message e)))))]
@@ -415,15 +793,297 @@
            (write! event (fn [] [{:type event :body frame}])))))
      :event
      (fn [t]
-       (when (and (not= :derivation (::events/class t))
-                  (= pid (str (get-in t [:actor :id]))))
-         (write! "transition"
-                 (fn []
-                   (keep identity
-                         [{:type "transition"
-                           :body (walk/keywordize-keys
-                                  (events/transition-payload eng t))}
-                          (invitation-frame eng sight t)])))))}))
+       (when (not= :derivation (::events/class t))
+         (let [actor (str (get-in t [:actor :id]))
+               transition (fn []
+                            {:type "transition"
+                             :body (walk/keywordize-keys
+                                    (events/transition-payload eng t))})]
+           (cond
+             (= pid actor)
+             (write! "transition"
+                     (fn []
+                       (keep identity
+                             [(transition) (invitation-frame eng sight t)])))
+
+             ;; keyed on the invitation's `author`, not on the hand that
+             ;; made it: the engine opens a walkthrough's steps
+             (invitation-birth? t)
+             (write! "invitation"
+                     (fn []
+                       (when-some [f (invitation-frame eng sight t)]
+                         (when (and (= pid (str (get-in f [:body :author])))
+                                    (= fid (str (get-in f [:body :subject]))))
+                           [f]))))
+
+             ;; the recorder's own answer: without it the replay shows
+             ;; the question and never what the row became
+             (= fid actor)
+             (write! "transition"
+                     (fn []
+                       (when (answers? eng pid fid t)
+                         [(transition)])))))))}))
+
+;; ── the self walk (a person's own screen, nobody following) ─────────
+
+(defn self-recorder
+  "A SELF walk's recorder: a walk whose `followed` is its `recorder` is
+  a person recording their own screen, and no follower's stream carries
+  its frames. This is `recorder` with the person as their own follower,
+  so `sight` is the person's own visibility, the one the request that
+  made the frame was judged under. → {:presence f :event f}, or nil on
+  an engine that serves no walks.
+
+  `:presence` is the tap `presence/report!` takes: it sees each `move`
+  and `ui` frame the person's own beat made. A `ui` frame passes
+  section 1's redaction under `sight` first, as a follower's stream
+  would have redacted it, but with the person's own create form kept
+  where they may create (`own-sight`). `:event` takes a transition the
+  person committed (`record-own!`)."
+  [eng principal sight]
+  (when (contains? (inv/resources eng) kind)
+    (let [pid (str (:id principal))
+          rec (recorder eng principal sight pid)
+          redact (presence/ui-redactor eng (own-sight eng sight))]
+      (assoc rec :presence
+             (fn [frame]
+               (try
+                 (when-some [frame (if (= "ui" (:event frame))
+                                     (redact frame)
+                                     frame)]
+                   ((:presence rec) frame))
+                 (catch Exception e
+                   (warn! "a frame of " pid "'s own walk was not recorded — "
+                          (ex-message e)))))))))
+
+(defn record-own!
+  "A write door's post-commit pass (router/count-committed! at the
+  create and action routes, router/bulk-action once per row it moved;
+  the connector's invoke rides those same routes): the
+  transition `principal` just committed goes to every self walk they
+  are recording, under `sight`, the request's own visibility. A replay,
+  a rehearsal and an anonymous write record nothing, and neither does a
+  move of a walk or a frame: the recording's own doors are not the work
+  it shows. Returns `result`, and never throws."
+  [eng principal sight result]
+  (try
+    (let [t (:transition result)]
+      (when (and t
+                 (nil? (:replayed? result))
+                 (not= (:id t/anonymous) (:id principal))
+                 (not (contains? #{"walk" "walk_frame"}
+                                 (some-> (:kind t) name))))
+        (when-some [event (:event (self-recorder eng principal sight))]
+          (event t))))
+    (catch Exception e
+      (warn! "a write was not recorded in its own walk — " (ex-message e))))
+  result)
+
+(defn- flat-errors
+  "One argument's errors `v` → [[path [sentence]]], `path` spelled as the
+  form names that field's widget: a map's child is `path.child` and a
+  list's entry `path[i]`, the entries that passed (nil) left out."
+  [path v]
+  (cond
+    (string? v) [[path [v]]]
+    (map? v) (mapcat (fn [[k c]]
+                       (flat-errors (if (= :malli/error k)
+                                      path
+                                      (str path "." (if (keyword? k) (name k) (str k))))
+                                    c))
+                     v)
+    (sequential? v) (if (every? string? v)
+                      (when (seq v) [[path (vec v)]])
+                      (mapcat (fn [i c]
+                                (when (some? c)
+                                  (flat-errors (str path "[" i "]") c)))
+                              (range) v))))
+
+(defn- refusal-errors
+  "A schema refusal's sentences by argument, as a `refusal` frame may
+  hold them → {argument [sentence]}, or nil when there are none. A
+  nested argument's are held by the dotted path the form's own slots
+  use (`shelf.label`, `items[1].name`: `flat-errors`). A secret
+  argument's entry is dropped, as presence's `clean-ui` drops its
+  value, a nested argument's secret child with it, and so is every
+  entry when `self` names no door `action`: the secret ones are then
+  unknown."
+  [eng self action errors]
+  (when (map? errors)
+    (when-some [secret (presence/secret-argument-paths eng self action)]
+      (let [open? (fn [path]
+                    (let [parts (str/split (str/replace path #"\[\d+\]" "") #"\.")]
+                      (not-any? secret (reductions #(str %1 "." %2) parts))))]
+        (not-empty
+         (reduce (fn [m [path said]]
+                   (if (open? path)
+                     (update m path (fnil into []) said)
+                     m))
+                 {}
+                 (mapcat (fn [[k v]]
+                           (flat-errors (if (keyword? k) (name k) (str k)) v))
+                         errors)))))))
+
+(defn record-refused!
+  "A write door's refusal (router's action route, which the connector's
+  invoke rides; its create route, where `self` is the collection; and
+  its bulk route, once for each row refused): the problem the exception
+  `e` carries goes, as a
+  `refusal` frame under `sight`, the request's own visibility, to every
+  self walk `principal` is recording. The body is {principal, self,
+  action, title, detail, remedies, errors}: what the refusal's box and
+  the form's fields show a person, and no more of the problem.
+  `remedies` are the door names as the wire spells them, and `errors`
+  a schema refusal's sentences by argument, a secret argument's left
+  out (`refusal-errors`). An exception that is no problem, an anonymous
+  write and a refusal by a walk's or a frame's own door record nothing;
+  a rehearsal's refusal is not handed here. `record-frame!` writes the
+  frame only when the recorder can see `self`. → the frames written. It
+  never throws."
+  [eng principal sight {:keys [self action]} e]
+  (try
+    (let [pid (str (:id principal))
+          d (ex-data e)
+          self (str self)
+          errors (refusal-errors eng self action (:errors d))]
+      (if (and (:waymark10/problem d)
+               (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal))
+               (not (re-find #"^/api/walk(s|_frames)(/|$)" self)))
+        (let [body (cond-> {:principal {:id pid :type (some-> (:type principal) name)}
+                            :self self
+                            :action (name action)
+                            :title (str (:title d))}
+                     (some? (:detail d)) (assoc :detail (str (:detail d)))
+                     (seq (:remedies d)) (assoc :remedies (p/wire-value (vec (:remedies d))))
+                     errors (assoc :errors errors))]
+          (into []
+                (keep #(record-frame! eng % sight {:type "refusal" :body body}))
+                (recording-walks eng pid pid)))
+        []))
+    (catch Exception e
+      (warn! "a refusal was not recorded in its own walk — " (ex-message e))
+      [])))
+
+(defn recording-own?
+  "Is `principal` recording a self walk now? The connector stages its
+  calls while, and only while, this is true
+  (docs/spec-agent-demo-walks.md § 2)."
+  [eng principal]
+  (let [pid (str (:id principal))]
+    (and (contains? (inv/resources eng) kind)
+         (boolean (seq (recording-walks eng pid pid))))))
+
+(defn record-seen!
+  "A screen of `principal`'s that another hand changed: the document of
+  `self`, as `principal`'s own read under `sight` answers it now, goes
+  to every self walk they are recording with `docs` (`record-doc!`).
+  The quests' consumer calls it for a quest its owner is filming, since
+  the engine's `plan` and `finish` pass no write door of the owner's
+  (docs/spec-agent-demo-walks.md § 8a). → the frames written. It never
+  throws."
+  [eng principal sight self]
+  (try
+    (let [pid (str (:id principal))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal)))
+        (into []
+              (keep #(record-doc! eng % principal sight (str self) nil))
+              (recording-walks eng pid pid))
+        []))
+    (catch Exception e
+      (warn! "a screen another hand changed was not recorded — " (ex-message e))
+      [])))
+
+(defn record-heard!
+  "A move another hand made that `principal`'s screen answers to: the
+  transition `t` goes, as a `transition` frame under `sight`, to every
+  self walk they are recording. The quests' consumer calls it for a
+  move on a row a quest's plan names, just before that quest's document
+  (`record-seen!`), so a replay says whose move planned the quest again
+  (docs/spec-agent-demo-walks.md § 8a). A row `sight` does not admit
+  writes no frame (`record-frame!`). → the frames written. It never
+  throws."
+  [eng principal sight t]
+  (try
+    (let [pid (str (:id principal))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal))
+               (not= :derivation (::events/class t)))
+        (let [frame {:type "transition"
+                     :body (walk/keywordize-keys
+                            (events/transition-payload
+                             eng (update t :kind keyword)))}]
+          (into []
+                (keep #(record-frame! eng % sight frame))
+                (recording-walks eng pid pid)))
+        []))
+    (catch Exception e
+      (warn! "a move another hand made was not recorded — " (ex-message e))
+      [])))
+
+;; ── captions (docs/spec-agent-demo-walks.md § 3) ────────────────────
+
+(defn caption-problem
+  "Why the caption `c`, {:self :action :field :text}, cannot be shown;
+  nil when it can. The text is one line of at most `caption-max`
+  characters, and the empty one clears. `field` names one argument of
+  `action` on `self`'s kind, and the invitation's own rule judges it
+  (`invitations/fields-problem`): the action has that argument, and the
+  argument is not secret."
+  [eng {:keys [self action field text]}]
+  (cond
+    (not (string? text))
+    "`caption` is one line of text."
+
+    (re-find #"[\r\n]" text)
+    "`caption` is one line: it holds no line break."
+
+    (> (count text) (long caption-max))
+    (str "`caption` is at most " caption-max " characters, and this one has "
+         (count text) ".")
+
+    (nil? field) nil
+
+    (str/blank? (str (some-> action name)))
+    "`caption_field` names an argument of the invoked action, and this call invokes none."
+
+    :else
+    (let [[_ plural] (re-find #"^/api/([^/?#]+)" (str self))
+          resources (inv/resources eng)]
+      (some->> (invitations/fields-problem
+                ;; the rule reads the door off a row's path, and which row
+                ;; it is does not matter to it: a create has none yet
+                {:self (str "/api/" plural "/-") :action (name action) :field field}
+                {:rdef-of (fn [p]
+                            (some (fn [[_ rdef]] (when (= p (:plural rdef)) rdef))
+                                  resources))})
+               (str "`caption_field`: ")))))
+
+(defn caption!
+  "One `caption` frame in every self walk `principal` is recording,
+  under `sight`, the request's own visibility. The body is {principal,
+  self, action, field, text}, with `action` and `field` only when the
+  caption names them. `record-frame!` writes it only when the recorder
+  can see `self`, and an empty `text` is the frame that clears the
+  line. → the frames written. It never throws."
+  [eng principal sight {:keys [self action field text]}]
+  (try
+    (let [pid (str (:id principal))
+          body (cond-> {:principal {:id pid :type (some-> (:type principal) name)}
+                        :self (str self)}
+                 (some? action) (assoc :action (name action))
+                 (some? field) (assoc :field (if (keyword? field) (name field) (str field)))
+                 true (assoc :text (str text)))]
+      (if (and (contains? (inv/resources eng) kind)
+               (not= (:id t/anonymous) (:id principal)))
+        (into []
+              (keep #(record-frame! eng % sight {:type "caption" :body body}))
+              (recording-walks eng pid pid))
+        []))
+    (catch Exception e
+      (warn! "a caption was not recorded — " (ex-message e))
+      [])))
 
 ;; ── the export (waymark-walk/1) ─────────────────────────────────────
 
@@ -474,7 +1134,7 @@
   [principal id, the actor type the frame recorded]."
   [type body]
   (let [p (case type
-            ("move" "ui") (:principal body)
+            ("move" "ui" "caption" "refusal") (:principal body)
             "transition" (:actor body)
             "invitation" (:author body)
             nil)]
@@ -540,8 +1200,146 @@
                     (assoc-in [:alias pid] alias)
                     (update :cast conj [alias entry])))))
           {:agents 0 :people 0 :alias {} :cast []}
-          (mapcat (fn [p] [[(::who p) (::who-type p)] [(::subject p) nil]])
+          (mapcat (fn [p]
+                    (concat [[(::who p) (::who-type p)] [(::subject p) nil]]
+                            ;; the principals a `doc` line's rows name
+                            (map (fn [pid] [pid nil]) (::refs p))))
                   parts)))
+
+(defn- doc-rdef
+  "The kind a recorded document is of: a row's, or a collection's own."
+  [eng doc]
+  (get (inv/resources eng)
+       (some-> (:kind doc) str (str/replace #"_collection$" "") keyword)))
+
+(defn- principal-fields
+  "The data fields of a kind that hold a principal id."
+  [rdef]
+  (into #{}
+        (keep (fn [entry]
+                (when (and (vector? entry) (map? (second entry))
+                           (get-in (second entry) [:x-ref :principal]))
+                  (first entry))))
+        (rest (:schema rdef))))
+
+(defn- doc-principals
+  "The principal ids a document names in a principal-ref field of a
+  row, at any depth: the row itself, a collection's items, a link's
+  embedded rows. The cast gives each an alias, and `clean` writes it."
+  [eng doc]
+  (->> (tree-seq coll? seq doc)
+       (filter #(and (map? %) (:kind %) (:self %)))
+       (mapcat (fn [d]
+                 (for [f (principal-fields (doc-rdef eng d))
+                       part [:data :fields]
+                       v (let [v (get-in d [part f])]
+                           (if (sequential? v) v [v]))
+                       :when (and (string? v) (not (str/blank? v)))]
+                   v)))
+       distinct))
+
+(defn- doc-under
+  "A recorded row document (a row's envelope, a collection's item or a
+  link's embedded row) as `vis` may read it, or nil when `vis` does not
+  see that row. `data`, `fields` and `refs` keep the keys :field?
+  admits, and `actions` and `unavailable` the entries :action? admits.
+  A summary, a display and a parts group may spell a field out, so they
+  cross only when every field of the kind does."
+  [eng vis doc]
+  (let [rdef (doc-rdef eng doc)
+        k (:kind rdef)
+        [_ id] (re-matches #"/api/[^/?#]+/([^/?#]+).*" (str (:self doc)))
+        field? (or (:field? vis) (constantly true))
+        action? (let [kind? (or (:action? vis) (constantly true))
+                      on? (:action-on? vis)]
+                  (fn [kd a]
+                    (and (kind? kd a) (or (nil? on?) (on? kd a id)))))
+        only (fn [d part ok?]
+               (if (map? (get d part))
+                 (update d part
+                         (fn [m]
+                           (into {}
+                                 (filter (fn [[n _]] (ok? k (keyword (name n)))))
+                                 m)))
+                 d))]
+    (when (and rdef id ((:row? vis) k id))
+      (cond-> (-> doc
+                  (only :data field?)
+                  (only :fields field?)
+                  (only :refs field?)
+                  (only :actions action?)
+                  (only :unavailable action?))
+        (not-every? #(field? k %) (schema/entry-keys (:schema rdef)))
+        (dissoc :summary :display :parts)
+        (map? (:links doc))
+        (update :links
+                (fn [links]
+                  (into {}
+                        (map (fn [[rel link]]
+                               [rel (if (sequential? (:embedded link))
+                                      (update link :embedded
+                                              #(vec (keep (fn [item]
+                                                            (doc-under eng vis item))
+                                                          %)))
+                                      link)]))
+                        links)))))))
+
+(defn- export-doc
+  "A `doc` frame's document under the exporter's visibility
+  (docs/spec-agent-demo-walks.md § 8a), or nil when nothing of it is
+  left. A row's envelope crosses by `doc-under`. A collection's page
+  keeps the items `doc-under` keeps and the collection doors :action?
+  admits, beside `query`. nil `vis` reads it whole."
+  [eng vis doc]
+  (cond
+    (nil? vis) doc
+    (str/ends-with? (str (:kind doc)) "_collection")
+    (let [k (:kind (doc-rdef eng doc))
+          action? (or (:action? vis) (constantly true))]
+      (cond-> doc
+        (sequential? (get-in doc [:data :items]))
+        (update-in [:data :items]
+                   #(vec (keep (fn [item] (doc-under eng vis item)) %)))
+        (map? (:actions doc))
+        (update :actions
+                (fn [m]
+                  (into {}
+                        (filter (fn [[n _]]
+                                  (or (= "query" (name n))
+                                      (action? k (keyword (name n))))))
+                        m)))))
+    :else (doc-under eng vis doc)))
+
+(defn- remedy-seen?
+  "Does the exporter's visibility admit the door a refusal's remedy names
+  (`kind.action`, the wire's spelling)? An unscoped exporter sees each."
+  [vis remedy]
+  (or (nil? vis)
+      (let [[_ k a] (re-matches #"([^./]+)[./]([^./]+)" (str remedy))
+            action? (:action? vis)]
+        (boolean (and k a action? (action? (keyword k) (keyword a)))))))
+
+(defn- errors-seen
+  "A refusal's field errors as `vis` may read them: the entries whose
+  argument its `:arg?` admits on the refused door, and none when the
+  door names no served kind. A nested argument's entry (`shelf.label`,
+  `items[1].name`) is judged by its top-level argument. nil `vis` reads
+  them whole. nil when there are none."
+  [eng vis {:keys [self action errors]}]
+  (when (and (map? errors) (seq errors))
+    (not-empty
+     (if-some [arg? (:arg? vis)]
+       (let [[_ plural] (re-find #"/api/([^/?#]+)" (str self))
+             k (some->> plural (kind-of-plural eng))
+             action (some-> action name str/trim not-empty keyword)]
+         (if (and k action)
+           (into {}
+                 (filter (fn [[arg _]]
+                           (arg? k action (or (re-find #"^[^.\[]+" (name arg))
+                                              (name arg)))))
+                 errors)
+           {}))
+       errors))))
 
 (defn- export-part
   "One frame re-redacted under the exporter's visibility → the line's
@@ -550,13 +1348,22 @@
   and a ui frame with every part redacted crosses as a plain move;
   `transition` events/visible-transition; `invitation` :row? on the
   invitation its pinned body names by `id` (`invitation-frame`), and
-  its `suggest` keeps the keys the exporter's :arg? admits."
-  [{:keys [vis visible? redact-ui suggest]} type body]
-  (let [self (path-of (:self body))]
+  its `suggest` and its `given` keep the keys the exporter's :arg?
+  admits; `caption`
+  presence's self rule, so the line crosses only with its `self`;
+  `refusal` that rule as well, of its `remedies` the doors the
+  exporter's :action? admits (`remedy-seen?`), and of its `errors` the
+  arguments the exporter's :arg? admits (`errors-seen`); `doc`
+  presence's self rule and `export-doc`, and the principals its rows
+  name ride as ::refs for the cast."
+  [{:keys [eng vis visible? own-create? redact-ui suggest given]} type body]
+  (let [self (path-of (:self body))
+        ;; the recorder's own create form and its refusal (`export`)
+        own? (fn [] (boolean (and own-create? (own-create? type body))))]
     (case type
       "move" (when (and self (visible? self))
                {:type "move" :self self})
-      "ui" (when (and self (visible? self))
+      "ui" (when (and self (or (visible? self) (own?)))
              (let [f (redact-ui (assoc body :self self))]
                (if (and (map? (:ui f)) (not= "move" (:event f)))
                  {:type "ui" :self self :ui (:ui f)}
@@ -569,12 +1376,33 @@
       "invitation" (let [id (:id body)]
                      (when (and id (or (nil? vis)
                                        ((:row? vis) :invitation (str id))))
-                       (let [suggested (suggest (assoc body :self self))]
-                         (cond-> (assoc (select-keys body [:action :field :note])
+                       (let [suggested (suggest (assoc body :self self))
+                             given (given (assoc body :self self))]
+                         (cond-> (assoc (select-keys body [:action :field :fields
+                                                           :note :step :of])
                                         :type "invitation"
                                         ::subject (some-> (:subject body) str))
                            self (assoc :self self)
-                           (seq suggested) (assoc :suggest suggested)))))
+                           (seq suggested) (assoc :suggest suggested)
+                           (seq given) (assoc :given given)))))
+      "caption" (when (and self (visible? self))
+                  (cond-> {:type "caption" :self self}
+                    (:action body) (assoc :action (:action body))
+                    (:field body) (assoc :field (:field body))
+                    true (assoc :text (str (:text body)))))
+      "refusal" (when (and self (or (visible? self) (own?)) (:action body))
+                  (let [seen (filterv #(remedy-seen? vis %) (:remedies body))
+                        errors (errors-seen eng vis body)]
+                    (cond-> {:type "refusal" :self self
+                             :action (:action body)
+                             :title (str (:title body))}
+                      (:detail body) (assoc :detail (str (:detail body)))
+                      (seq seen) (assoc :remedies seen)
+                      errors (assoc :errors errors))))
+      "doc" (when (and self (visible? self) (map? (:doc body)))
+              (when-some [doc (export-doc eng vis (:doc body))]
+                {:type "doc" :self self :doc doc
+                 ::refs (doc-principals eng doc)}))
       nil)))
 
 (defn- export-line [alias part]
@@ -582,7 +1410,8 @@
         subject (get alias (::subject part))]
     (cond-> (merge (array-map :t (:t part) :type (:type part))
                    (when who {:who who})
-                   (clean alias (dissoc part :t :type ::who ::who-type ::subject)))
+                   (clean alias (dissoc part :t :type ::who ::who-type ::subject
+                                        ::refs)))
       subject (assoc :subject subject))))
 
 (defn export
@@ -594,19 +1423,32 @@
   exporter could both see. A frame with nothing left is left out and
   the `t` of the others keeps the gap. A principal crosses only as a
   cast alias: no principal id, grant id, sitting id, header, key or
-  origin is written. → the text, or nil when the walk is absent or
-  not sealed."
-  [eng walk-id vis]
+  origin is written. `exporter` is the principal who asks, when the
+  caller knows it: the recorder of a self walk reads that walk's create
+  forms and their refusals as recording judged them (`own-create?`),
+  and anyone else reads them under presence's whole-kind rule. → the
+  text, or nil when the walk is absent or not sealed."
+  ([eng walk-id vis] (export eng walk-id vis nil))
+  ([eng walk-id vis exporter]
   (let [st (:storage eng)
         id (str walk-id)
         row (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))]
     (when (= "sealed" (some-> (:state row) name))
       (let [d (:data row)
             frdef (get (inv/resources eng) frame-kind)
-            rules {:vis vis
+            ;; the recorder's own screen: the rule that recorded it
+            own? (and (some? (:id exporter))
+                      (= (str (:id exporter)) (str (:recorder d)) (str (:followed d))))
+            rules {:eng eng
+                   :vis vis
                    :visible? (presence/self-visible? eng vis)
-                   :redact-ui (presence/ui-redactor eng vis)
-                   :suggest #(suggest-for eng vis %)}
+                   :own-create? (if own?
+                                  #(own-create? eng vis %1 %2)
+                                  (constantly false))
+                   :redact-ui (presence/ui-redactor
+                               eng (if own? (own-sight eng vis) vis))
+                   :suggest #(suggest-for eng vis %)
+                   :given #(given-for eng vis %)}
             frames (->> (store/with-tx st
                           (fn [tx]
                             (vec (store/query-rows
@@ -634,7 +1476,7 @@
                     :engine (or (:name eng) "waymark")
                     :cast (apply array-map (mapcat identity cast)))]
         (apply str (map #(str (wire/write-json %) "\n")
-                        (cons header (map #(export-line alias %) parts))))))))
+                        (cons header (map #(export-line alias %) parts)))))))))
 
 ;; ── the purge and the sweep ─────────────────────────────────────────
 

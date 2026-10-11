@@ -620,6 +620,221 @@
         "the order is the security property: the why refuses before
          the hold mints anything")))
 
+;; ── the shape is judged before the hold (ticket 327e584a) ───────────
+
+(def ^:private var-tools
+  [{:name "var_put" :description "Write one variable."
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string"}
+                               :value {:type "string"}}
+                  :required ["key" "value"]
+                  :additionalProperties false}}
+   {:name "var_get" :description "Read one variable."
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string"}}
+                  :required ["key"]
+                  :additionalProperties false}}])
+
+(defn- var-world
+  "`world`, with a server whose two tools have closed schemas:
+  `var_put` waits on a person and `var_get` runs at once."
+  []
+  (let [log (atom [])
+        clock (atom clock-start)
+        eng (fresh-engine
+             clock
+             (fn [method params]
+               (swap! log conj {:method method :params params})
+               (case method
+                 "tools/list" {:tools var-tools}
+                 "tools/call" {:content [{:type "text" :text "answered"}]
+                               :isError false})))
+        _ (mint-capabilities! eng)
+        _ (inv/create! eng :mcp_server
+                       {:name "emila" :transport "http"
+                        :url "http://fake.invalid/mcp/"
+                        :powers [{:power "email.read" :tools ["var_get"]
+                                  :approval "none"}
+                                 {:power "email.wire" :tools ["var_put"]
+                                  :approval "person"}]}
+                       {:principal colton})
+        {:keys [session]} (wear! eng clerk mail-scope)]
+    {:eng eng :log log :session session}))
+
+(defn- var-held-count [{:keys [eng]}]
+  (long (store/with-tx (:storage eng)
+          (fn [tx] (store/count-matching (:storage eng) tx :held_call [])))))
+
+(deftest a-held-tool-given-an-unknown-key-refuses-and-holds-nothing
+  (let [w (var-world)
+        out (tool! w "waymark_power"
+                   {:tool "emila__var_put"
+                    :arguments {:items {:mayor "x"}
+                                :why "The owner asked."}})]
+    (is (true? (:isError out)))
+    (is (str/includes? (text-of out) "`items` is not an argument"))
+    (is (str/includes? (text-of out) "`key` is required"))
+    (is (str/includes? (text-of out) "`value` is required"))
+    (is (= [] (calls w)))
+    (is (zero? (var-held-count w))
+        "the person is asked nothing about a call the server would refuse")))
+
+(deftest a-held-tool-missing-a-required-field-refuses-and-holds-nothing
+  (let [w (var-world)
+        out (tool! w "waymark_power"
+                   {:tool "emila__var_put"
+                    :arguments {:key "mayor" :why "The owner asked."}})]
+    (is (true? (:isError out)))
+    (is (str/includes? (text-of out) "`value` is required"))
+    (is (= [] (calls w)))
+    (is (zero? (var-held-count w)))))
+
+(deftest a-held-tool-given-a-wrong-type-refuses-and-holds-nothing
+  (let [w (var-world)
+        out (tool! w "waymark_power"
+                   {:tool "emila__var_put"
+                    :arguments {:key "mayor" :value 7
+                                :why "The owner asked."}})]
+    (is (true? (:isError out)))
+    (is (str/includes? (text-of out) "`value` takes string"))
+    (is (zero? (var-held-count w)))))
+
+(deftest a-held-tool-given-a-valid-call-is-held-as-before
+  (let [w (var-world)
+        out (tool! w "waymark_power"
+                   {:tool "emila__var_put"
+                    :arguments {:key "mayor" :value "x"
+                                :why "The owner asked."}})]
+    (is (false? (:isError out)))
+    (is (some? (not-empty (str (:held_call (doc-of out))))))
+    (is (= [] (calls w)))
+    (is (= 1 (var-held-count w)))))
+
+(deftest a-tool-that-is-not-held-gets-the-same-early-answer
+  (let [w (var-world)
+        bad (tool! w "waymark_power"
+                   {:tool "emila__var_get" :arguments {:path "mayor"}})]
+    (is (true? (:isError bad)))
+    (is (str/includes? (text-of bad) "`key` is required"))
+    (is (= [] (calls w)) "the wire is not touched")
+    (is (false? (:isError (tool! w "waymark_power"
+                                 {:tool "emila__var_get"
+                                  :arguments {:key "mayor"}}))))
+    (is (= 1 (count (calls w))))))
+
+;; ── one refusal teaches the call (ticket 316de9a6) ──────────────────
+
+(deftest an-unknown-argument-answers-the-tools-schema-and-the-next-call-runs
+  (let [w (var-world)
+        bad (tool! w "waymark_power"
+                   {:tool "emila__var_get" :arguments {:grep "mayor"}})
+        expected (:expected (doc-of bad))]
+    (is (true? (:isError bad)))
+    (is (str/includes? (text-of bad) "`grep` is not an argument"))
+    (is (= "string" (get-in expected [:properties :key :type]))
+        "the refusal carries that one tool's input schema")
+    (is (= ["key"] (:required expected)))
+    (is (nil? (get-in expected [:properties :value]))
+        "and no other tool's")
+    (is (= [] (calls w)))
+    (is (false? (:isError (tool! w "waymark_power"
+                                 {:tool "emila__var_get"
+                                  :arguments {:key "mayor"}}))))
+    (is (= 1 (count (calls w))))))
+
+(def ^:private open-tools
+  "One tool whose schema is open, so this door's own check passes a
+  key the server then refuses."
+  [{:name "var_get" :description "Read one variable."
+    :inputSchema {:type "object"
+                  :properties {:key {:type "string"
+                                     :description "The variable's name."}}}}])
+
+(defn- open-world
+  "`var-world`, with a server that judges the arguments itself: a call
+  with no `key` answers `isError`, and `said` is what it says."
+  [said]
+  (let [log (atom [])
+        clock (atom clock-start)
+        eng (fresh-engine
+             clock
+             (fn [method params]
+               (swap! log conj {:method method :params params})
+               (case method
+                 "tools/list" {:tools open-tools}
+                 "tools/call" (if (get-in params [:arguments :key])
+                                {:content [{:type "text" :text "answered"}]
+                                 :isError false}
+                                {:content [{:type "text" :text said}]
+                                 :isError true}))))
+        _ (mint-capabilities! eng)
+        _ (inv/create! eng :mcp_server
+                       {:name "emila" :transport "http"
+                        :url "http://fake.invalid/mcp/"
+                        :powers [{:power "email.read" :tools ["var_get"]
+                                  :approval "none"}]}
+                       {:principal colton})
+        {:keys [session]} (wear! eng clerk mail-scope)]
+    {:eng eng :log log :session session}))
+
+(deftest a-servers-own-argument-refusal-gains-the-tools-schema
+  (let [w (open-world "unknown argument: grep")
+        bad (tool! w "waymark_power"
+                   {:tool "emila__var_get" :arguments {:grep "mayor"}})
+        taught (str (:text (last (:content bad))))]
+    (is (true? (:isError bad)))
+    (is (= "unknown argument: grep" (text-of bad))
+        "the server's own words stay first")
+    (is (str/starts-with? taught "emila__var_get takes these arguments: "))
+    (is (str/includes? taught "The variable's name."))
+    (is (= 1 (count (calls w))) "the server was asked, and it refused")
+    (is (false? (:isError (tool! w "waymark_power"
+                                 {:tool "emila__var_get"
+                                  :arguments {:key "mayor"}}))))))
+
+(deftest a-servers-other-refusal-passes-as-it-came
+  (let [w (open-world "The mailbox is full.")
+        bad (tool! w "waymark_power"
+                   {:tool "emila__var_get" :arguments {}})]
+    (is (true? (:isError bad)))
+    (is (= [{:type "text" :text "The mailbox is full."}] (:content bad)))))
+
+;; ── the why is kept, and a cut says so (ticket e9f65194) ────────────
+
+(deftest a-long-why-is-kept-and-a-cut-ends-at-a-word-and-says-so
+  (let [w (world)
+        said (str/join " " (repeat 200 "refill"))
+        held! (fn [why]
+                (let [out (tool! w "waymark_power"
+                                 {:tool "emila__send"
+                                  :arguments {:to "otto@example.test"
+                                              :text "On my way."
+                                              :why why}})]
+                  (:data (held-row w (str (:held_call (doc-of out)))))))]
+
+    (testing "a 400-character why is stored whole"
+      (let [why (subs said 0 400)
+            data (held! why)]
+        (is (= 400 (count why)))
+        (is (= why (:why data)))
+        (is (not (contains? data :why_cut))
+            "a whole why carries no stamp: absent reads as not cut")))
+
+    (testing "a 1200-character why is cut at a word, marked, and flagged"
+      (let [why (subs said 0 1200)
+            data (held! why)
+            stored (str (:why data))
+            body (subs stored 0 (max 0 (dec (count stored))))]
+        (is (= 1200 (count why)))
+        (is (<= (count stored) 1000))
+        (is (str/ends-with? stored "…"))
+        (is (str/starts-with? why body)
+            "what is kept is the caller's own words, from the start")
+        (is (str/ends-with? body "refill") "the last word is whole")
+        (is (= \space (nth why (count body)))
+            "and the cut fell on the space after it")
+        (is (true? (:why_cut data)))))))
+
 ;; ── the office the call was made in ─────────────────────────────────
 
 (deftest a-held-call-names-the-sitting-the-session-sat-in

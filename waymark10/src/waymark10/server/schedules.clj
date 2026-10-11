@@ -593,7 +593,8 @@
         (assoc-in [:data :last_run_url] (:last_run_url inp)))
       (cond-> (:last_runner inp)
         (assoc-in [:data :last_runner] (:last_runner inp)))
-      (update :data dissoc :note :retry_after :wake_pending :wake_due_at)))
+      (update :data dissoc :note :retry_after :wake_pending :wake_due_at
+              :wake_first_at :wake_text :wake_texts :wake_textless)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -620,6 +621,34 @@
   (if (runners-of-row row)
     row
     (assoc-in row [:data :runners] (vec (:runners inp)))))
+
+;; ONE SEED DOOR PER STATE (waymark ticket 86c7501b): every schedule
+;; door names one to-state, and the seed must leave a paused, pending
+;; or broken row where it stands. So each state the seed may meet has
+;; a door that stays in it, and the seed takes the row's own.
+(def seed-doors
+  "The boot seed's door for each state a schedule may be seeded in."
+  {:live :seed_runners
+   :paused :seed_runners_paused
+   :pending :seed_runners_pending
+   :broken :seed_runners_broken})
+
+(defn- seed-door [state]
+  {:from #{state} :to state
+   :input [:map
+           [:runners {:x-display {:hidden true}}
+            [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
+   :record true
+   :guards [engine-writes-schedules]
+   :edit {:prefill [:runners] :fence false
+          :unfenced-reason
+          "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
+   :handler seed-runners
+   :display {:label (str "Runner list seeded"
+                         (when-not (= :live state)
+                           (str " while " (name state))))}})
 
 (defresource schedule
   {:kind :schedule
@@ -689,7 +718,7 @@
             :x-display
             {:widget "prose"
              :label "What the provider last said"
-             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire."}}
+             :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire. A fire that waits for a release grace says so here, and until when; that sentence is cleared when the fire goes out."}}
      [:maybe [:string {:max 280}]]]
     ;; ── the fire link (R-12.18) ─────────────────────────────────────
     ;; The URL is shown; the token never is. A linked row is a row a
@@ -752,6 +781,43 @@
                    {:label "The wake is due"
                     :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
      [:maybe :waymark/instant]]
+    ;; The settle's cap (ticket 8f482592). Matches that never stop
+    ;; would move `wake_due_at` forward for ever, so the first match of
+    ;; a waiting settled wake is kept here, and the due moment is never
+    ;; asked past it plus the entry's `max_wait_seconds`. Cleared with
+    ;; the two marks above.
+    [:wake_first_at {:optional true
+                     :x-display
+                     {:label "The wake's first match"
+                      :help "When the first transition of the waiting wake matched a wake_on entry that settles. Later matches move the due moment forward, but not past this moment plus the entry's max_wait_seconds. Engine-written."}}
+     [:maybe :waymark/instant]]
+    ;; The words a deferred fire carries (ticket afb445d4). A fire whose
+    ;; text names a row still in a closed sitting's release grace does
+    ;; not go out: it waits as `wake_pending` until `wake_due_at`, and
+    ;; the release fires it with this text rather than with none.
+    [:wake_text {:optional true
+                 :x-display
+                 {:label "The waiting fire's text"
+                  :help "The text of a fire that named a row still in its release grace. The fire waits until the grace lifts, and then goes out with this text. Engine-written."}}
+     [:maybe :string]]
+    ;; Every waiting fire's words (ticket 58573175). `wake_text` holds
+    ;; one string, so a second fire deferred in the same grace took the
+    ;; first's place. The list keeps each one time, in the order they
+    ;; came, and the release sends one run for each; `wake_text` stays
+    ;; as the first of them.
+    [:wake_texts {:optional true
+                  :x-display
+                  {:label "The waiting fires' texts"
+                   :help "The text of each fire that waits for a release grace, in the order they came. When the grace lifts, each goes out as its own run. Engine-written."}}
+     [:maybe [:vector :string]]]
+    ;; A wake with no text that waits beside those (ticket 58573175): a
+    ;; damped `wake_on` match walks the whole queue, so it goes out as
+    ;; its own fire and not as one of the texts' one-row runs.
+    [:wake_textless {:optional true
+                     :x-display
+                     {:label "A wake with no text waits too"
+                      :help "Set by the engine when a wake that names no row waits beside a waiting fire's text. It goes out as its own run, which walks the whole queue. Engine-written."}}
+     [:maybe :boolean]]
     ;; The replay's mark (waymark-fp62.21). The drain delivers at
     ;; least once, and a damped match carries no idempotency key, so
     ;; the wake remembers the last transitions it heard and a replay
@@ -1064,22 +1130,13 @@
      :display {:label "Routine throttled"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
-    ;; and a no-op on a row that already names a list. Only a live row:
-    ;; the seed must not wake a paused one.
-    :seed_runners
-    {:from #{:live} :to :live
-     :input [:map
-             [:runners {:x-display {:hidden true}}
-              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
-     :record true
-     :guards [engine-writes-schedules]
-     :edit {:prefill [:runners] :fence false
-            :unfenced-reason
-            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
-     :handler seed-runners
-     :display {:label "Runner list seeded"}}}
+    ;; and a no-op on a row that already names a list. One door per
+    ;; state (`seed-doors`), each staying where it is: the seed must
+    ;; not wake a paused row, nor mend a broken one.
+    :seed_runners (seed-door :live)
+    :seed_runners_paused (seed-door :paused)
+    :seed_runners_pending (seed-door :pending)
+    :seed_runners_broken (seed-door :broken)}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
@@ -1838,6 +1895,88 @@
                                   (catch Exception _ nil))
     :else nil))
 
+(defn waiting-texts
+  "The texts of the fires this row's data keeps waiting, in the order
+  they came (ticket 58573175): `wake_texts`, or the one `wake_text` of
+  a row written before the list. → a vector, empty when none waits."
+  [data]
+  (or (some->> (:wake_texts data) (keep #(some-> % str not-empty)) seq vec)
+      (some-> (:wake_text data) str not-empty vector)
+      []))
+
+(defn keep-waiting
+  "`data` with one more waiting text (ticket 58573175): added to
+  `wake_texts` unless it already waits there, with `wake_text` the
+  first of them. A wake already pending with NO text is marked
+  `wake_textless`, so the release still sends it as its own fire and
+  the text does not turn its queue walk into a one-row run."
+  [data text]
+  (let [held (waiting-texts data)
+        texts (if (some #{text} held) held (conj held text))]
+    (cond-> (assoc data
+                   :wake_pending true
+                   :wake_texts texts
+                   :wake_text (first texts))
+      (and (:wake_pending data) (empty? held))
+      (assoc :wake_textless true))))
+
+(defn keep-textless
+  "`data` with a wake of no text remembered beside its waiting texts,
+  when it has any (ticket 58573175). With none waiting, `wake_pending`
+  alone already says it, and `data` is answered as it is."
+  [data]
+  (cond-> data
+    (seq (waiting-texts data)) (assoc :wake_textless true)))
+
+(def ^:private waiting-note-opening
+  "How every note `defer-fire!` writes begins, so `clear-wake` can tell
+  it from a sentence of the provider's."
+  "Waiting for ")
+
+(defn- waiting-note? [note]
+  (.startsWith (str note) (str waiting-note-opening)))
+
+(defn- waiting-note
+  "The sentence a row with `n` deferred fires says while they wait."
+  [n ^Instant due]
+  (clip (if (= 1 n)
+          (str waiting-note-opening "the release grace of the row this fire"
+               " names; fires at " due ".")
+          (str waiting-note-opening "the release grace of the rows " n
+               " fires name; they fire at " due "."))))
+
+(defn clear-wake
+  "`data` with nothing waiting: the pending flag, its due moment, the
+  waiting texts, and the waiting note `defer-fire!` wrote. A note the
+  provider wrote stays."
+  [data]
+  (cond-> (dissoc data :wake_pending :wake_due_at :wake_first_at :wake_text
+                  :wake_texts :wake_textless)
+    (waiting-note? (:note data)) (dissoc :note)))
+
+(defn- defer-fire!
+  "Keep a fire that must wait for a release grace (ticket afb445d4) the
+  way a deferred wake is kept: `wake_pending`, `wake_due_at` at the
+  lift — forward only, as `wakes/due-at` holds it — and the fire's text
+  among the waiting texts (`keep-waiting`), so `wakes/release!` sends
+  it then with its words. The row's `note` says that a fire waits and
+  until when (ticket 58573175), unless the provider's own sentence
+  stands there. One maintenance write, and no transition."
+  [eng schedule-row ^Instant lift text]
+  (let [held (instant-of (get-in schedule-row [:data :wake_due_at]))
+        due (if (and held (.isAfter ^Instant held lift)) held lift)
+        data (keep-waiting (:data schedule-row) text)
+        note (get-in schedule-row [:data :note])]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                            (cond-> (assoc data :wake_due_at (str due))
+                              (or (nil? note) (waiting-note? note))
+                              (assoc :note (waiting-note
+                                            (count (waiting-texts data)) due)))
+                            (:next-flip-at schedule-row)))))
+  nil)
+
 (defn already-fired?
   "Has this row already been fired FOR this transition? `last_fired_at`
   is stamped after the provider answered, so a stamp at or after the
@@ -2375,8 +2514,18 @@
             ;; seat's instructions around it, so a firing cannot run
             ;; on instructions nobody in this house can read. And the
             ;; link is this row's, or else the chair's (R-5).
+            ;; A FIRE NAMING A ROW STILL IN ITS GRACE WAITS (ticket
+            ;; afb445d4): a run sent now would be told the row is held
+            ;; and stop, and the fire's text would be spent. The row
+            ;; keeps the fire as a deferred wake, text and all, and the
+            ;; tick's release sends it when the grace lifts.
             (when-some [row (schedule-for-seat eng (:resource-id t))]
               (when-not (already-fired? row (:at t))
+               (if-some [lift (when-some [text (some-> (get-in t [:inputs :text])
+                                                       str not-empty)]
+                                (seats/fire-deferred-until
+                                 eng seat-row text ((:now-fn eng))))]
+                (defer-fire! eng row lift (str (get-in t [:inputs :text])))
                 ;; AND THE KEY OF THIS ONE FIRING (R-12.37), minted
                 ;; here because here is where the text is composed. The
                 ;; engine mints 128 bits, the seat row keeps the hash,
@@ -2398,7 +2547,7 @@
                                    (some-> (get-in t [:inputs :text])
                                            str not-empty)))
                        (:at t)
-                       seat-row))))))
+                       seat-row)))))))
 
       (and (= :schedule kind) (= :restate action))
       (when-some [row (raw-row eng :schedule (:resource-id t))]

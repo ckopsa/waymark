@@ -96,11 +96,20 @@
 
 (defn- cond-matches?
   "One cond against one stored row — the grammar's Postgres meaning."
-  [row {:keys [target field cast op value values]}]
-  (if (= :in-any op)
+  [row {:keys [target field cast op value values absent? held]}]
+  (cond
+    ;; the anti-join, its other side already read (`bind-conds`)
+    (= :no-row op)
+    (not (contains? held (if (= :id target)
+                           (some-> (:id row) str)
+                           (json-text (get-in row [:data (keyword field)])))))
+
+    (= :in-any op)
     (let [arr (get-in row [:data (keyword field)])]
       (boolean (and (sequential? arr)
                     (some (set values) (filter string? arr)))))
+
+    :else
     (let [text (case target
                  :state (name (:state row))
                  :id (:id row)
@@ -108,8 +117,11 @@
       (if (= :set? op)
         ;; presence is the one op a SQL NULL answers instead of failing
         (= (boolean value) (some? text))
-        ;; SQL NULL: a nil left side fails every comparison
-        (when (some? text)
+        ;; SQL NULL: a nil left side fails every comparison — unless the
+        ;; cond carries :absent? (the kind's :absent-as), which says the
+        ;; absent row belongs in this answer
+        (if (nil? text)
+          (boolean absent?)
           (let [cast (if (contains? #{:state :id} target) "text" cast)
                 lval (coerce cast text)]
             (case op
@@ -130,6 +142,26 @@
 (defn- matches-all? [row conds]
   (every? #(cond-matches? row %) conds))
 
+(defn- bind-conds
+  "The conds, each :no-row one carrying as :held what the other kind's
+  rows under its own conds hold in the named place — the subquery of
+  the Postgres spelling, read one time for the whole filter."
+  [tables conds]
+  (if (some #(= :no-row (:op %)) conds)
+    (mapv (fn [{:keys [op from] :as c}]
+            (if (= :no-row op)
+              (assoc c :held
+                     (into #{}
+                           (comp (filter #(matches-all? % (:conds from)))
+                                 (keep #(if (= :id (:target from))
+                                          (some-> (:id %) str)
+                                          (json-text
+                                           (get-in % [:data (keyword (:field from))])))))
+                           (vals (get tables (:kind from)))))
+              c))
+          conds)
+    conds))
+
 (defn- sort-value
   "The ordering key one row contributes for a field — numbers compare
   numerically (the generated column's type), everything else as text."
@@ -142,25 +174,31 @@
 (defn- order-rows
   "search-rows's ordering: the promoted field's value (or state, or
   either engine timestamp, or created_at), ASC nulls last / DESC nulls
-  first, id tiebreak. The row map spells the timestamps in kebab
-  (:created-at/:updated-at) where the declaration names the column."
-  [rows order-by desc]
-  (let [keyfn (case order-by
-                nil #(:created-at %)
-                :state #(name (:state %))
-                :created_at #(:created-at %)
-                :updated_at #(:updated-at %)
-                #(sort-value (get-in % [:data order-by])))
-        cmp2 (fn [a b]
-               (let [ka (keyfn a) kb (keyfn b)
+  first, then each then-by key among the ties, id tiebreak. The row
+  map spells the timestamps in kebab (:created-at/:updated-at) where
+  the declaration names the column."
+  [rows order-by desc then-by]
+  (let [keyfn (fn [f]
+                (case f
+                  nil #(:created-at %)
+                  :state #(name (:state %))
+                  :created_at #(:created-at %)
+                  :updated_at #(:updated-at %)
+                  #(sort-value (get-in % [:data f]))))
+        ks (mapv (fn [{:keys [field desc]}] [(keyfn field) desc])
+                 (cons {:field order-by :desc desc} then-by))
+        cmp1 (fn [[k desc] a b]
+               (let [ka (k a) kb (k b)
                      c (cond
                          (= ka kb) 0
                          ;; nulls last ASC / first DESC = "nil is largest"
                          (nil? ka) 1
                          (nil? kb) -1
-                         :else (compare ka kb))
-                     c (if desc (- c) c)]
-                 (if (zero? c) (compare (:id a) (:id b)) c)))]
+                         :else (compare ka kb))]
+                 (if desc (- c) c)))
+        cmp2 (fn [a b]
+               (or (some #(let [c (cmp1 % a b)] (when-not (zero? c) c)) ks)
+                   (compare (:id a) (:id b))))]
     (sort cmp2 rows)))
 
 ;; ── the storage ─────────────────────────────────────────────────────
@@ -397,8 +435,9 @@
   ;; ── phase 6 ─────────────────────────────────────────────────────────
 
   (count-matching [_ _tx kind conds]
-    (count (filter #(matches-all? % conds)
-                   (vals (get-in @state [:tables kind])))))
+    (let [conds (bind-conds (:tables @state) conds)]
+      (count (filter #(matches-all? % conds)
+                     (vals (get-in @state [:tables kind]))))))
 
   (sum-matching [_ _tx kind of conds]
     ;; SQL SUM skips NULLs; the twin skips non-numbers. And SUM over
@@ -414,10 +453,11 @@
       (when (seq vs) (reduce + 0M vs))))
 
   (ids-matching [_ _tx kind conds limit]
-    (into []
-          (take limit)
-          (sort (map :id (filter #(matches-all? % conds)
-                                 (vals (get-in @state [:tables kind])))))))
+    (let [conds (bind-conds (:tables @state) conds)]
+      (into []
+            (take limit)
+            (sort (map :id (filter #(matches-all? % conds)
+                                   (vals (get-in @state [:tables kind]))))))))
 
   (update-data! [_ _tx kind id data next-flip-at]
     (swap! state update-in [:tables kind id]
@@ -443,16 +483,18 @@
 
   ;; ── phase 7 ─────────────────────────────────────────────────────────
 
-  (search-rows [_ _tx kind conds {:keys [order-by desc limit offset]}]
-    (let [rows (filter #(matches-all? % conds)
+  (search-rows [_ _tx kind conds {:keys [order-by desc then-by limit offset]}]
+    (let [conds (bind-conds (:tables @state) conds)
+          rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))]
       (into []
             (comp (drop (long (or offset 0)))
                   (take (long (or limit 100))))
-            (order-rows rows order-by desc))))
+            (order-rows rows order-by desc then-by))))
 
-  (facet-counts [_ _tx kind field conds array?]
-    (let [rows (filter #(matches-all? % conds)
+  (facet-counts [_ _tx kind field conds array? absent-as]
+    (let [conds (bind-conds (:tables @state) conds)
+          rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))
           vals* (if (= :state field)
                   (map #(name (:state %)) rows)
@@ -460,7 +502,7 @@
                             (let [v (get-in row [:data field])]
                               (if array?
                                 (map json-text (when (sequential? v) v))
-                                [(json-text v)])))
+                                [(or (json-text v) absent-as)])))
                           rows))]
       (into (sorted-map) (frequencies (remove nil? vals*)))))
 
