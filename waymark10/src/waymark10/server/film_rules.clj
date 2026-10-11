@@ -385,6 +385,7 @@
    :schema (conj (into [:map] made-fields) restated-by-field)
    ;; the create model omits `restated_by`: a create that names it is
    ;; refused at the schema, and the create form does not show it
+   :no-own-surface "restated_by is written by the restate door, not at birth; a rule is the house's and nobody's own row."
    :create-schema (into [:map] made-fields)
    :filterable {:state #{:eq :in}
                 :name #{:eq}

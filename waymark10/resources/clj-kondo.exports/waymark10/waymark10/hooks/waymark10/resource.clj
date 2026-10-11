@@ -23,7 +23,7 @@
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :on-rehearse
     :retain
-    :decision :process :own-surface :answered-at-a-door
+    :decision :process :own-surface :no-own-surface :answered-at-a-door
     :scenarios})
 
 (def action-keys

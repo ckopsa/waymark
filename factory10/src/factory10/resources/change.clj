@@ -1472,6 +1472,7 @@
    ;; because a first read does not always carry the counts.
    :create-guards [the-mirror-writes-this-row]
    :on-create take-the-tickets-domain
+   :no-own-surface "stalled_by is written by the stall door, not at birth; a change is the repository's record, shown by a grant that names it."
    :create-schema
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>

@@ -2005,6 +2005,38 @@
                 "the row has no field ")
               (name k)))))
 
+(defn- check-owned-surface
+  "A kind whose row carries a `:x-ref {:principal true}` field its
+  `:create-schema` omits has an owner no caller names: the engine
+  writes it. With no `:own-surface`, a worn grant that does not name
+  the kind hides the row from that owner in silence (ticket ce9fdb99).
+  `:no-own-surface` is the kind's one sentence saying why a
+  grant-wearer should not reach it; a WARNING names the kind that
+  declares neither. The declaration cannot say which door writes the
+  field, so one a later door writes is named too, and its sentence
+  says that."
+  [r]
+  (let [why (:no-own-surface r)]
+    (when-not (or (nil? why) (and (string? why) (not (str/blank? why))))
+      (err r :no-own-surface
+           ":no-own-surface is one sentence: why a grant-wearer does not reach their own rows of this kind"))
+    (when-some [cform (when-not (or why (:own-surface r)) (:create-schema r))]
+      (let [entries (schema/entry-map (:schema r))
+            asked (set (schema/entry-keys cform))
+            stamped (into []
+                          (filter (fn [k]
+                                    (and (not (contains? asked k))
+                                         (true? (get-in (entries k)
+                                                        [:properties :x-ref :principal])))))
+                          (schema/entry-keys (:schema r)))]
+        (when (seq stamped)
+          [(str "[owned-surface] data." (str/join ", data." (map name stamped))
+                " names a principal the create model omits, so the engine writes it, "
+                "and the kind declares no :own-surface: a worn grant that does not "
+                "name the kind hides the row from that principal. Declare "
+                ":own-surface {:by …}, or :no-own-surface with one sentence saying "
+                "why a grant-wearer should not reach it")])))))
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -2024,4 +2056,5 @@
           check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults check-answered-at-a-door check-remedy-bindings])})
+          check-defaults check-answered-at-a-door check-remedy-bindings
+          check-owned-surface])})
