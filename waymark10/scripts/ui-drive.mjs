@@ -3987,23 +3987,28 @@ async function questPhoneStory() {
     ok("Not now leaves no quest and shows no tracker",
        await evaljs(`${bar}.hidden === true`) && (await pinned()).length === 0);
     /* a wait on a row the owner cannot see is a seat's step on the goal's
-       own door and row (answer->plan, quests.clj). The sheet is drawn
+       own door and row, and the engine marks it (`unseen`, answer->plan,
+       quests.clj). A seat's real step of the same shape carries no mark
+       and keeps its door and row. The sheet is drawn
        from a preview that carries one and read as a film beat reads it
        (readSurface, 100-core.js), and the quest's page draws the same
        step (questStep, 200-events-follow.js). Nothing is written. */
     const wait = await evaljs(`(() => {
       const note = "This waits on work you cannot see.";
       const goal = {self: ${JSON.stringify(epic)}, action: "complete"};
-      const unseen = {self: goal.self, door: "complete", whose: "seat", waiting_on: "Juniper",
-                      note, door_label: "Complete", row_label: "The epic", state: "waiting"};
+      const real = {self: goal.self, door: "complete", whose: "seat", waiting_on: "Juniper",
+                    note, door_label: "Complete", row_label: "The epic", state: "waiting"};
+      const unseen = {...real, unseen: true};
       const held = {self: ${JSON.stringify(child)}, door: "complete", whose: "seat",
                     waiting_on: "Juniper", door_label: "Complete", row_label: "The child"};
       const dlg = questSheet({title: ""}, "complete", {}, null, goal,
-        {ok: true, body: {preview: {goal: "Complete the epic", plan: [unseen, held]}}});
+        {ok: true, body: {preview: {goal: "Complete the epic", plan: [unseen, held, real]}}});
       const read = readSurface("sheet");
       dlg.close();
       const li = questStep({state: "active", data: goal}, unseen);
+      const li2 = questStep({state: "active", data: goal}, real);
       return {note, steps: read && read.steps, page: li.textContent,
+              real_page: li2.textContent,
               links: li.querySelectorAll("a").length}; })()`);
     console.log("  the unseen wait: " + JSON.stringify(wait));
     ok("the sheet says an unseen wait by its note alone, and its turn names who is waited on",
@@ -4014,6 +4019,10 @@ async function questPhoneStory() {
        wait.steps[1].whose === "Juniper's");
     ok("the quest's page says the unseen wait with no row beside it",
        wait.page === wait.note + " · waiting on Juniper" && wait.links === 0);
+    ok("a seat's real step on the goal's own door and row, with a note, still names its door and row",
+       !!wait.steps && !!wait.steps[2] && wait.steps[2].label !== wait.note &&
+       wait.steps[2].label.startsWith("Complete") && wait.steps[2].whose === "Juniper's" &&
+       wait.real_page !== wait.page && wait.real_page.startsWith(wait.note + " · "));
     await press(door);
     await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
                   "the quest's sheet again, off a second tap", 15000,

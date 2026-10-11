@@ -1026,9 +1026,10 @@
       (is (str/includes? step "if (s.state === \"waiting\")"))
       (is (str/includes? step "? el(\"a\", {href: \"#\" + s.self}, \"your tap\")"))
       (is (str/includes? step ": s.waiting_on || \"someone else\"));")))
-    (testing "an unseen wait is on the goal's own door and row, and that row is left out"
-      (is (str/includes? step "&& s.self === d.self && s.door === d.action;"))
-      (is (str/includes? step "if (s.self && !unseen)"))
+    (testing "an unseen wait is the step the engine marks, and its row is left out"
+      (is (str/includes? body "function questUnseen(s) { return !!s && s.unseen === true; }"))
+      (is (not (str/includes? step "s.self === d.self")))
+      (is (str/includes? step "if (s.self && !questUnseen(s))"))
       (is (str/includes? body "text(\"b + span:not([data-quest-turn])\", li)")))
     (testing "a choice says what must be picked"
       (is (str/includes? step "if (s.whose === \"choice\" && s.state !== \"done\")"))
