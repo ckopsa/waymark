@@ -489,8 +489,9 @@
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open"}
    ;; the two people an invitation is between read it under any worn
-   ;; grant, and each ends it from their own side. Handing a step to
-   ;; another person is not here: a grant names that door or it is shut
+   ;; grant, and each ends it from their own side. `create` is not here:
+   ;; handing a step over lands in another person's view, so the grant
+   ;; must name it, and the ask door is how a wearer gets it
    :own-surface {:by [:author :subject] :actions #{:decline :withdraw}}
    :create-guards [only-the-engine-names-a-walkthrough
                    the-author-sees-the-step

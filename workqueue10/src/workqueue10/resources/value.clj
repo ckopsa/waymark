@@ -685,9 +685,17 @@
             (entry :affirmed_by {:optional true :filter #{:eq}
                                  :x-ref {:principal true}}
                    [:maybe [:string {:max 128}]])]
+   ;; what a principal owns rides beside any worn grant: the engine
+   ;; stamps `owner` on a value scoped "mine" and on no other, so the
+   ;; owner reads and moves their own value under any grant, and a
+   ;; household value, which carries no owner, stays judged by the grant
+   ;; alone. `create` is not here: one door writes both scopes and a
+   ;; household value lands in every member's view, so the grant must
+   ;; name it, and the ask door is how a wearer gets it
+   :own-surface {:by :owner
+                 :actions #{:revise :still_stands :retire :restore}}
    ;; the client states whose value and what it says; the OWNER, the
    ;; WRITER and the affirmation stamps are all the engine's
-   :no-own-surface "A value is the household's record, shown by the household's grant; it is not private to the principal it names."
    :create-schema [:map
                    (entry :name {} [:string {:min 1 :max 80}])
                    (entry :says {} [:string {:min 1 :max 2000}])

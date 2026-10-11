@@ -2029,8 +2029,10 @@
 ;;   secret (created_by)  a value of the house; only a grant shows it exists
 ;;   seat (owner)         the sitter reads its seat through the grant (R-4.9)
 ;;   member (invited_by)  the roster's row; the inviter does not own a member
-;;   value (owner), person (written_by), in workqueue10
+;;   person (written_by), in workqueue10
 ;;                        the household's record, shown by the household's grant
+;; value (owner), in workqueue10, declares one for its `mine` rows, and
+;; workqueue10's value_test holds it.
 ;; film_rule.restated_by, change.stalled_by, seat.approved_by and
 ;; walkthrough.stopped_by are written by a later door, not at birth.
 (def ^:private owned-kinds
@@ -2098,3 +2100,37 @@
             "no owner's door opens on a row its owner field does not name")
         (is (not-any? #((:action-on? (:grant theirs)) kind % (:id row)) doors)
             "and the guards read the same answer")))))
+
+;; THE OTHER HALF (ticket dcda56de): what a principal owns rides beside
+;; a worn grant, and anything that lands in another person's view must
+;; be named by the grant. An invitation and a walkthrough land in their
+;; subject's view, so `create` is on neither own-surface.
+(deftest an-outward-create-is-refused-under-a-grant-that-does-not-name-it
+  (let [eng (owned-engine)
+        vis (wearing eng person)
+        e (:id (:row (inv/create! eng :errand {:title "Post"} {:principal person})))
+        answer (-> ((engine/handler eng)
+                    {:request-method :post :uri "/api/-/mcp"
+                     :headers {"x-waymark-principal" "colton"
+                               "x-waymark-grant" (:gid vis)}
+                     :body (wire/write-json
+                            {:jsonrpc "2.0" :id 1 :method "tools/call"
+                             :params {:name "waymark_invoke"
+                                      :arguments
+                                      {:kind "invitation" :action "create"
+                                       :input {:subject "iris"
+                                               :self (str "/api/errands/" e)
+                                               :action "rename"
+                                               :field "title"
+                                               :note "Pick the new title here."}}}})})
+                   :body wire/read-json :result)
+        said (mapv :text (:content answer))]
+    (doseq [kind [:invitation :walkthrough]]
+      (is (not (contains? (:surface vis) (name kind))) "the grant does not name it")
+      (is (not ((:action? vis) kind :create))
+          (str (name kind) ": the own-surface does not carry create")))
+    (is (true? (:isError answer)) (pr-str answer))
+    (is (str/includes? (str (first said)) "Not found")
+        "the door answers as a door that is not there")
+    (is (str/includes? (str (second said)) "approval_request")
+        "and the remedy it names is the ask door")))
