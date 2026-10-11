@@ -3439,6 +3439,31 @@
         (is (empty? (sch/waiting-texts (:data (sched-of seat))))
             "the held row's text is dropped: its run answers for it")
         (close-sitting! s)
+        (seat-do! seat :retire)))
+
+    ;; each text is judged before this release fires any, so the second
+    ;; text on a row does not see the first's fire (ticket 2be02e40)
+    (testing "two waiting texts of different wording on one row start one run"
+      (let [batch "free-rows-twice"
+            seat (wide-seat "freerowstwice" batch)
+            [a _b] (vec (repeatedly 2 #(item! batch)))
+            first-text (str "Walk " a " again.")
+            row (sched-of seat)]
+        (store/with-tx (:storage *eng*)
+          (fn [tx]
+            (store/update-data! (:storage *eng*) tx :schedule (:id row)
+                                (assoc (:data row)
+                                       :wake_pending true
+                                       :wake_texts [first-text
+                                                    (str "Look at " a " once more.")]
+                                       :wake_text first-text
+                                       :wake_textless false)
+                                (:next-flip-at row))))
+        (wakes/tick! *eng*)
+        (is (= [first-text] (mapv #(get-in % [:inputs :text]) (seat-fires seat)))
+            "one row named, one run: the first text's, with a second row free")
+        (is (empty? (sch/waiting-texts (:data (sched-of seat))))
+            "the second text is dropped: the first's run answers for the row")
         (seat-do! seat :retire)))))
 
 ;; ── a walkthrough's author is woken on its turn ─────────────────────
