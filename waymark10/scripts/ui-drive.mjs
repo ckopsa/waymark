@@ -4059,14 +4059,19 @@ async function questPhoneStory() {
       const unseen = {...real, unseen: true};
       const held = {self: ${JSON.stringify(child)}, door: "complete", whose: "seat",
                     waiting_on: "Juniper", door_label: "Complete", row_label: "The child"};
+      const mine = {self: ${JSON.stringify(child)}, door: "complete", whose: "choice",
+                    state: "next", door_label: "Complete", row_label: "The child",
+                    alternatives: [{self: ${JSON.stringify(child)}, door: "drop",
+                                    door_label: "Drop"}]};
       const dlg = questSheet({title: ""}, "complete", {}, null, goal,
-        {ok: true, body: {preview: {goal: "Complete the epic", plan: [unseen, held, real]}}});
+        {ok: true, body: {preview: {goal: "Complete the epic",
+                                    plan: [unseen, held, real, mine]}}});
       const read = readSurface("sheet");
       dlg.close();
       const li = questStep({state: "active", data: goal}, unseen);
       const li2 = questStep({state: "active", data: goal}, real);
       return {note, steps: read && read.steps, page: li.textContent,
-              real_page: li2.textContent,
+              real_page: li2.textContent, mine_waits: questWaits(mine),
               links: li.querySelectorAll("a").length}; })()`);
     console.log("  the unseen wait: " + JSON.stringify(wait));
     ok("the sheet says an unseen wait by its note alone, and its turn names who is waited on",
@@ -4081,6 +4086,9 @@ async function questPhoneStory() {
        !!wait.steps && !!wait.steps[2] && wait.steps[2].label !== wait.note &&
        wait.steps[2].label.startsWith("Complete") && wait.steps[2].whose === "Juniper's" &&
        wait.real_page !== wait.page && wait.real_page.startsWith(wait.note + " · "));
+    ok("a choice the reader can take is theirs on the sheet, as the tracker judges it",
+       !!wait.steps && !!wait.steps[3] && wait.steps[3].whose === "yours" &&
+       wait.mine_waits === false);
     await press(door);
     await waitFor(`!!${sheet} && ${sheet}.querySelector("[data-surface='sheet.accept']").disabled === false`,
                   "the quest's sheet again, off a second tap", 15000,
