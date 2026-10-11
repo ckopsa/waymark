@@ -214,6 +214,40 @@
     ;; leave nothing queued behind this test
     (jobs/run-once! *eng* {:batch-size 10})))
 
+(deftest an-elected-role-is-started-again-after-an-error
+  (let [eng *eng*
+        calls (atom 0)
+        lines (atom [])
+        said? (fn [& parts]
+                (boolean (some (fn [line] (every? #(str/includes? line %) parts))
+                               @lines)))]
+    ;; warn! is the election's only voice; the redef is the root's, so
+    ;; the election thread speaks into `lines` too
+    (with-redefs [pg/warn! (fn [& parts] (swap! lines conj (apply str parts)))]
+      (let [role (coherence/start-role!
+                  (:storage eng) :f-error-once
+                  {:retry-ms 100
+                   :start-fn (fn []
+                               (when (= 1 (swap! calls inc))
+                                 (throw (AssertionError. "boom")))
+                               :handle)})]
+        (try
+          (let [deadline (+ (System/currentTimeMillis) 10000)]
+            (loop []
+              (when (and (not (and (<= 2 @calls) @(:held? role)))
+                         (< (System/currentTimeMillis) deadline))
+                (Thread/sleep 50)
+                (recur))))
+          (testing "the Error did not end the election: start-fn ran again"
+            (is (<= 2 @calls))
+            (is (<= 2 @(:starts role)))
+            (is (true? @(:held? role)) "and the second start holds the role"))
+          (testing "the log names the role and the throw"
+            (is (said? "f-error-once" "java.lang.AssertionError" "boom")))
+          (finally (coherence/stop-role! role)))
+        (testing "a role thread that ends says so"
+          (is (said? "f-error-once" "election thread ended")))))))
+
 ;; ── 4. the queued surface holds its shape on the wire ───────────────
 
 (deftest queued-shape-on-the-wire
