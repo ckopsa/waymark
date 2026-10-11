@@ -129,12 +129,14 @@ function readSurface(name) {
   const base = String(name).split("@")[0];
   /* the sheet (questSheet, 140-links-access.js). A step's label is its
      door and its row, or the row's path where the sheet could not name
-     it; the sheet draws no state for a step, so `state` is null. */
+     it; the sheet draws no state for a step, so `state` is null. An
+     unseen wait has no row beside its note, and the turn's span is not
+     taken for one. */
   if (base === "sheet")
     return {goal: text("[data-quest-sheet-goal]"),
             steps: [...e.querySelectorAll('[data-surface^="sheet.step:"]')].map((li, i) =>
               ({n: i + 1,
-                label: [text("b", li), text("b + span", li)].filter(Boolean).join(" "),
+                label: [text("b", li), text("b + span:not([data-quest-turn])", li)].filter(Boolean).join(" "),
                 whose: text("[data-quest-turn]", li),
                 state: li.getAttribute("data-quest-step")})),
             shut_reason: (text("[data-quest-why]") || "").replace(/^Not yet:\s*/, "") || null,

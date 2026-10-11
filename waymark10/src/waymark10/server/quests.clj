@@ -989,19 +989,26 @@
 (defn- unseen-waits
   "The rows the goal waits on that its owner's grant does not read, as
   `[{:self :doors}]`: the engine's own read, kept in the quest's
-  `waits_on` and never said to the owner. The goal door is judged once
-  more as the owner with no grant worn, so a guard that leaves a row out
-  of a grant's sight (`children-are-finished`) binds its remedies to it,
-  and each remedy bound to a row the grant does not read is a door that
-  would end the wait. None when no grant is worn, when the door would
-  open, or when the refusal binds no such row. Never throws."
+  `waits_on` and never said to the owner. The owner is whoever
+  `members/principal-for` answers: a person, an agent member, or a
+  seat's sitter (`seat:<id>`, the member row `members/ensure-sitter!`
+  mints). The goal door is judged once more as the owner with no grant
+  worn, so a guard that leaves a row out of a grant's sight
+  (`children-are-finished`) binds its remedies to it, and each remedy
+  bound to a row the grant does not read is a door that would end the
+  wait. When that judgment binds no such row (a guard ahead of that one
+  refuses a caller who wears no grant), the door is judged a second time
+  under the owner's grant with every row in its sight. None when no
+  grant is worn, when the door would open, or when neither refusal binds
+  such a row. Never throws."
   [eng {:keys [owner grant self action input]}]
   (try
     (let [gid (some-> grant str not-empty)
           who (when gid
                 (some->> (members/principal-for eng owner)
                          (grants/as-the-seats-sitter eng gid)))
-          row? (when who (get-in (grants/visibility eng gid who) [:grant :row?]))
+          worn (when who (:grant (grants/visibility eng gid who)))
+          row? (:row? worn)
           self (str/trim (str self))
           rdef (rdef-at eng self)
           id (id-of-path self)
@@ -1010,29 +1017,32 @@
         (let [st (:storage eng)
               kind (:kind rdef)
               version (:version (store/with-tx st
-                                  (fn [tx] (store/load-row st tx kind (str id) {}))))]
-          (try
-            (inv/invoke! eng kind (str id) (keyword door) (or input {})
-                         (cond-> {:principal who :dry-run :partial}
-                           version (assoc :if-match (inv/etag kind (str id) version))))
-            nil
-            (catch clojure.lang.ExceptionInfo e
-              (let [bound (keep (fn [remedy]
-                                  (let [[k action] (door-parts (:door remedy))
-                                        at (some->> k keyword (get (inv/resources eng)))
-                                        rid (some-> (:id remedy) str not-empty)]
-                                    (when (and at action rid
-                                               (not (row? (:kind at) rid)))
-                                      [(str "/api/" (:plural at) "/" rid) action])))
-                                (:resolved-remedies (ex-data e)))]
-                (into []
-                      (comp (map (fn [[path found]]
-                                   {:self path
-                                    :doors (into []
-                                                 (comp (map second) (distinct) (take 8))
-                                                 found)}))
-                            (take 16))
-                      (group-by first bound))))))))
+                                  (fn [tx] (store/load-row st tx kind (str id) {}))))
+              bound (fn [grant]
+                      (try
+                        (inv/invoke! eng kind (str id) (keyword door) (or input {})
+                                     (cond-> {:principal who :dry-run :partial}
+                                       grant (assoc :grant grant)
+                                       version (assoc :if-match (inv/etag kind (str id) version))))
+                        nil
+                        (catch clojure.lang.ExceptionInfo e
+                          (seq (keep (fn [remedy]
+                                       (let [[k action] (door-parts (:door remedy))
+                                             at (some->> k keyword (get (inv/resources eng)))
+                                             rid (some-> (:id remedy) str not-empty)]
+                                         (when (and at action rid
+                                                    (not (row? (:kind at) rid)))
+                                           [(str "/api/" (:plural at) "/" rid) action])))
+                                     (:resolved-remedies (ex-data e)))))))]
+          (into []
+                (comp (map (fn [[path found]]
+                             {:self path
+                              :doors (into []
+                                           (comp (map second) (distinct) (take 8))
+                                           found)}))
+                      (take 16))
+                (group-by first (or (bound nil)
+                                    (bound (assoc worn :row? (constantly true)))))))))
     (catch Exception e
       (warn! "the rows a quest waits on unseen could not be read — " (ex-message e))
       nil)))

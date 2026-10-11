@@ -1097,6 +1097,125 @@
       (is (= #{self} (set (map :self (:plan d))))
           "no step names the row the owner does not read"))))
 
+;; the owner is a seat's sitter (`seat:<id>`): the member row a first
+;; sitting mints, under the seat's grant, whose scope is the seat's own
+(deftest a-seat-sitters-goal-waits-on-the-row-its-grant-does-not-read
+  (let [eng (engine/engine {:storage (memory/storage) :resources [job]})
+        part (make! eng :q_job {})
+        whole (make! eng :q_job {:part_id part})
+        self (str "/api/q_jobs/" whole)
+        seat (:row (inv/create! eng :seat
+                                {:name "job-desk"
+                                 :charter "Finish a job when its part is finished."
+                                 :scope [{:kind "q_job" :actions ["finish"] :ids [whole]}]
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 60000}
+                                {:principal person}))
+        sid (str "seat:" (:id seat))
+        _ (members/ensure-sitter! eng sid "job-desk (seat)" nil)
+        made (:row (inv/create! eng :grant
+                                {:audience sid :seat (str (:id seat)) :substitute false}
+                                {:principal grants/approvals-actor}))
+        gid (str (:id (:row (inv/invoke! eng :grant (str (:id made)) :accept nil
+                                         {:principal grants/approvals-actor}))))
+        sitter (members/principal-for eng sid)
+        worn (:grant (grants/visibility eng gid sitter))
+        quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
+                                      {:principal sitter :grant worn})))]
+    (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (= sid (:id sitter)) "the sitter's member row answers for the owner")
+      (is (= sid (:owner d)))
+      (is (not ((:row? worn) :q_job part)) "the part is outside the seat's scope")
+      (is (= [(str "/api/q_jobs/" part)] (mapv :self (:waits_on d)))
+          (str "the engine finds the row for a sitter as it does for an agent: "
+               (pr-str d)))
+      (is (= [["finish"]] (mapv :doors (:waits_on d))))
+      (is (= "iris" (:waiting_on d)) "the step waits on who can finish the part")
+      (is (nil? (:blocked_reason d)) "and the cycle's sentence is not kept")
+      (is (= #{self} (set (map :self (:plan d))))
+          "no step names the row the sitter does not read"))))
+
+;; ── a goal door that refuses a caller with no grant before the guard
+;;    that binds the unseen row ──────────────────────────────────────
+
+;; the first hard deny ends the judgment (`invoke/run-guards`), so a
+;; caller with no grant never reaches the guard behind this one
+(g/defguard the-caller-wears-a-grant
+  {:reads [:q_task :grant]
+   :explain "Wear a grant to finish this."}
+  [_row _inp ctx]
+  (if (and (:read ctx) (nil? (:grant ctx))) (t/deny) (t/allow)))
+
+(g/defguard the-tasks-part-is-finished
+  {:reads [:q_task :grant]
+   :evidence [:part_id]
+   :explain "Finish the part first."
+   :remedies [{:door :q_task/finish :id '(evidence :part_id)}]}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [id (some-> (get-in row [:data :part_id]) str not-empty)
+          part (when id (read :q_task id))
+          row? (:row? (:grant ctx))]
+      (cond
+        (or (nil? part) (= "done" (some-> part :state name))) (t/allow)
+        (and row? (not (row? :q_task id))) (t/deny)
+        :else (t/deny {:evidence {:part_id id}})))
+    (t/allow)))
+
+(def ^:private task
+  "The job's shape, behind a guard that refuses a caller who wears no grant."
+  (r/resource
+   {:kind :q_task
+    :plural "q_tasks"
+    :states [:open :done]
+    :initial :open
+    :summary "Task · {state}"
+    :schema [:map
+             [:part_id {:optional true
+                        :not-a-ref "quests fixture: the-tasks-part-is-finished binds its remedy to it"}
+              [:maybe [:string {:max 80}]]]]
+    :actions
+    {:finish {:from #{:open} :to :done
+              :guards [the-caller-wears-a-grant the-tasks-part-is-finished]
+              :safety routine}
+     :reopen {:from #{:done} :to :open :safety routine}}}))
+
+(deftest a-goal-that-refuses-a-grantless-caller-first-still-finds-its-unseen-wait
+  (let [eng (engine/engine {:storage (memory/storage) :resources [task]})
+        part (make! eng :q_task {})
+        whole (make! eng :q_task {:part_id part})
+        self (str "/api/q_tasks/" whole)
+        m (:row (inv/create! eng :member {:display "Planner" :actor_type "agent"}
+                             {:principal person}))
+        gid (str (:id (grant! eng (str (:id m))
+                              [{:kind "q_task" :actions ["finish"] :ids [whole]}])))
+        agent (members/principal-for eng (str (:id m)))
+        worn (:grant (grants/visibility eng gid agent))
+        quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
+                                      {:principal agent :grant worn})))
+        grantless (try (inv/invoke! eng :q_task whole :finish {}
+                                    {:principal agent :dry-run :partial})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+    (grant! eng "iris" [{:kind "q_task" :actions ["finish"]}])
+    (hear! eng)
+    (let [d (data-of eng quest)]
+      (is (some? grantless) "the door refuses the owner with no grant worn")
+      (is (empty? (:resolved-remedies grantless))
+          "and that refusal binds no remedy to the part")
+      (is (= [(str "/api/q_tasks/" part)] (mapv :self (:waits_on d)))
+          (str "the engine, judging under the owner's grant with every row in "
+               "its sight, finds the row: " (pr-str d)))
+      (is (= [["finish"]] (mapv :doors (:waits_on d))))
+      (is (= "iris" (:waiting_on d)) "the step waits on who can finish the part")
+      (is (nil? (:blocked_reason d)) "and the cycle's sentence is not kept")
+      (is (= #{self} (set (map :self (:plan d))))
+          "no step names the row the owner does not read"))))
+
 ;; a seat held for a model serves nothing to a principal that declares
 ;; none, and the planner hears a principal id and holds no session: it
 ;; plans as the model the seat is held for
