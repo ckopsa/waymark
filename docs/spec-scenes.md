@@ -26,6 +26,7 @@ The author writes:
 | `devices` | one or two of `phone`, `desktop` | each device it is performed on; one take per device |
 | `cast` | 1 to 12 ids | cast ids from the seed; the first is the person filmed |
 | `given` | optional, at most 40 calls | setup calls made before filming, in order |
+| `wearing` | optional, a map | the grant each cast member wears when filming starts |
 | `shots` | 1 to 200 shots | the filmed moments, in order |
 
 The engine stamps `author` (the creating principal) and `version` (1)
@@ -35,7 +36,7 @@ look into, so a draft may be saved half written.
 | Door | From → to | What it does |
 |---|---|---|
 | `check` | `draft` → `ready` | judges every call and shot; nothing is run |
-| `revise` | `draft`, `ready` → `draft` | takes any of the six fields; a field not named is kept; `version` goes up by one |
+| `revise` | `draft`, `ready` → `draft` | takes any of the seven fields; a field not named is kept; `version` goes up by one |
 | `retire` | `draft`, `ready` → `retired` | the scene is no longer performed; its takes stay |
 | `restore` | `retired` → `draft` | brings it back; it must be checked again |
 
@@ -112,6 +113,26 @@ holds that kind. A `$ref` may stand in a call's `arguments`, in `self`,
 after `@`, and in a `value`. One that no earlier call or shot bound is
 refused.
 
+## `wearing`
+
+`wearing` is a map from a cast id to the grant that cast member wears
+when filming starts, so the film opens already scoped to it. A value is
+a grant id, or `"$<bind>"`: the `bind` of a `given` that reads the grant
+row, which is a `waymark_get` or `waymark_query` call whose
+`arguments.kind` is `grant`.
+
+```
+{"cast": ["ada", "juniper"],
+ "given": [{"as": "ada", "tool": "waymark_query", "bind": "ada_grant",
+            "arguments": {"kind": "grant"}}],
+ "wearing": {"ada": "$ada_grant"}}
+```
+
+`check` judges the map as it is written and resolves nothing. A grant
+id passes as written. The scene's envelope carries `wearing` unresolved.
+The performer resolves each bind after the givens run, and it refuses a
+grant whose audience is not that cast member.
+
 ## `expect`
 
 `expect` is a map of `envelope` and `screen`, and nothing else. Each is
@@ -127,10 +148,10 @@ shot bound.
 
 ## What `check` refuses
 
-The guard is `every-shot-can-be-performed`. It reads `given` first and
-then `shots`, and refuses with the first that cannot be performed, as
-`given N: <why>` or `shot N: <why>`, counted from 1. The scene stays a
-draft. The sentences:
+The guard is `every-shot-can-be-performed`. It reads `given` first,
+then `wearing`, and then `shots`, and refuses with the first that cannot
+be performed, as `given N: <why>`, `wearing <key>: <why>` or
+`shot N: <why>`, counted from 1. The scene stays a draft. The sentences:
 
 | Where | Why |
 |---|---|
@@ -142,6 +163,9 @@ draft. The sentences:
 | a call | `<action>` is not a door of `<kind>`. |
 | a call, `type` | `<field>` is not a field `<action>` takes. |
 | anywhere | `$<name>` is never bound. |
+| `wearing` | `<key>` is not in the cast. |
+| `wearing` | `$<bind>` names no given. |
+| `wearing` | `$<bind>` is bound by a given that does not read kind `grant`. |
 | a shot | a shot is a map with one verb. |
 | a shot | unknown verb `<key>`; the verbs are open, tap, press, type, hold, wait_for, meanwhile. |
 | a shot | a shot has one verb, and this one has `<n>`. |

@@ -8,6 +8,7 @@
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -183,6 +184,64 @@
     (is (str/includes? (str (refusal #(walk! eng stranger :check))) "given 1"))
     (is (str/includes? (str (refusal #(walk! eng field :check)))
                        "given 1: `colour` is not a field `create` takes"))))
+
+(def ^:private grant-read
+  "A given that reads a grant row and binds it."
+  {:as "planner" :tool "waymark_get"
+   :arguments {:kind "grant" :id "the-seed-grant"}
+   :bind "pass"})
+
+(defn- worn
+  "The well-formed scene with a given that reads a grant, and `wearing`."
+  [wearing]
+  (-> well-formed
+      (update :given conj grant-read)
+      (assoc :wearing wearing)))
+
+(defn- named [m]
+  (into {} (map (fn [[k v]] [(name k) v])) m))
+
+(deftest a-scene-may-say-which-grant-a-cast-member-wears
+  (let [eng (fresh-engine)
+        ready? (fn [scene]
+                 (let [id (write! eng scene)]
+                   (and (nil? (refusal #(walk! eng id :check)))
+                        (= "ready" (name (:state (row-of eng :scene id)))))))
+        why (fn [scene]
+              (let [id (write! eng scene)
+                    why (refusal #(walk! eng id :check))]
+                (is (= "draft" (name (:state (row-of eng :scene id))))
+                    "a refused scene stays a draft")
+                (str why)))]
+    (testing "the bind of a given that reads a grant"
+      (is (ready? (worn {:colton "$pass"})))
+      (is (ready? (-> (worn {:colton "$pass"})
+                      (assoc-in [:given 1 :tool] "waymark_query")
+                      (assoc-in [:given 1 :arguments] {:kind "grant"})))))
+    (testing "a grant id passes as written"
+      (is (ready? (assoc well-formed :wearing {:colton "400e8eff-7f8f"}))))
+    (testing "a key that is not in the cast"
+      (is (str/includes? (why (worn {:nobody "$pass"}))
+                         "wearing `nobody`: `nobody` is not in the cast.")))
+    (testing "a bind that names no given"
+      (is (str/includes? (why (worn {:colton "$lost"}))
+                         "wearing `colton`: `$lost` names no given.")))
+    (testing "a bind whose given does not read a grant"
+      (is (str/includes?
+           (why (worn {:colton "$dishes"}))
+           "wearing `colton`: `$dishes` is bound by a given that does not read kind `grant`."))
+      (is (str/includes?
+           (why (assoc-in (worn {:colton "$pass"}) [:given 1 :arguments :kind] "chore"))
+           "wearing `colton`: `$pass` is bound by a given that does not read kind `grant`.")))))
+
+(deftest the-envelope-carries-wearing-as-written
+  (let [eng (fresh-engine)
+        id (write! eng (worn {:colton "$pass"}))
+        _ (walk! eng id :check)
+        rdef (get (inv/resources eng) :scene)
+        env (render/envelope rdef (row-of eng :scene id) {:now ((:now-fn eng))})]
+    (is (= {"colton" "$pass"} (named (get-in env ["data" "wearing"])))
+        "the bind is not resolved: the performer does that")))
 
 (deftest revise-makes-a-draft-of-the-next-version
   (let [eng (fresh-engine)
