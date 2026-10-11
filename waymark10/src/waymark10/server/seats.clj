@@ -6857,6 +6857,28 @@
                                 {:limit open-sitting-page
                                  :newest-first true}))))))
 
+(defn sitting-down-count
+  "How many OPEN sittings of this seat have sat and hold no row YET:
+  no `walked_rows`, and neither stamp a finished sit leaves on a sitting
+  it handed nothing (`stamp-walked-nothing!`'s `walked_nothing` and
+  `halted`). A sitting is born before its sit claims its rows
+  (`claim-rows-atomically!`), so between the two its run is no longer a
+  fire on its way and its row is not yet held: a wake that counted free
+  rows then read that row free and fired a second run for it (ticket
+  c822d9e4)."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (count
+         (remove #(or (seq (get-in % [:data :walked_rows]))
+                      (true? (get-in % [:data :walked_nothing]))
+                      (some? (get-in % [:data :halted])))
+                 (store/query-rows st tx :sitting
+                                   {:seat (str seat-id) :state :open}
+                                   {:limit open-sitting-page
+                                    :newest-first true})))))))
+
 (defn- ticket-ended?
   "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
   the store does not hold."

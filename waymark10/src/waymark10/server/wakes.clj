@@ -904,15 +904,20 @@
   of its walk the sit would hand (no open sitting holds them, no stuck
   change stands beside them and no verdict of its judgment stands on
   them, `withheld-rows`), less the
-  rows those runs will take. A seat that walks nothing has no free row."
+  rows those runs will take, and less one for each open sitting that
+  has sat and not claimed its row yet (`seats/sitting-down-count`,
+  ticket c822d9e4): its run is no longer on its way, and the row it is
+  about to take reads unclaimed. A seat that walks nothing has no free
+  row."
   [eng seat-row ^Instant at]
   (let [seat-id (str (:id seat-row))
         flying (long (in-flight eng seat-id at))
+        sitting-down (long (seats/sitting-down-count eng seat-id))
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f (judged-out eng seat-row)))
         unclaimed (count (remove (withheld-rows eng seat-row) queue))]
     {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
-     :free (max 0 (- unclaimed flying))}))
+     :free (max 0 (- unclaimed flying sitting-down))}))
 
 (defn- damped?
   "Does the damper hold a wake of this seat at `at` (R-12.22's parts 1
