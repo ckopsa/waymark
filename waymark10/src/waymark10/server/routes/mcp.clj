@@ -206,7 +206,8 @@
                     true (assoc :bearer principal)
                     (:app-ui entry) (assoc :app-ui true)
                     ;; …and the clientInfo it named, which the sit copies
-                    ;; onto the sitting (ticket b9f90987)
+                    ;; onto the sitting (ticket b9f90987) and `app-session?`
+                    ;; reads against :app-undeclared-clients
                     (:client-name entry) (assoc :client-name (:client-name entry))
                     (:client-version entry)
                     (assoc :client-version (:client-version entry)))
