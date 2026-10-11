@@ -762,11 +762,18 @@ function questPlan(doc) {
 }
 function questStep(doc, s) {
   const needs = (s.needs_labels || (s.needs || []).map(prettyNeed)).join(", ");
+  /* a wait on a row the owner cannot see is a seat's step on the goal's
+     own door and row (answer->plan, quests.clj), as the sheet reads it
+     (questSheet, 140-links-access.js). That row is the goal and not the
+     wait, and nothing the reader can open sits behind it: it is left out. */
+  const d = doc.data || {};
+  const unseen = s.whose === "seat" && !!s.note && !!d.self
+    && s.self === d.self && s.door === d.action;
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
     el("span", {class: "quest-note"}, s.note || s.door_label || pretty(s.door)));
   /* the row the step is on, in words: the row's own summary, which the
      page reads (questRow, 120-nav-home.js). Its path is never text. */
-  if (s.self)
+  if (s.self && !unseen)
     row.append(el("small", {class: "muted quest-alt"}, " · ", questRow(s.self)));
   /* the refusal's other remedies: any one of them is this step */
   if (s.state !== "done")
