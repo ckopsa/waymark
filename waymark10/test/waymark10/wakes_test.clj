@@ -3312,6 +3312,49 @@
         (close-sitting! s)
         (seat-do! seat :retire)))))
 
+;; A sit that found every row held is stamped `walked_nothing` and stays
+;; open until the hook closes it with its spend. It holds no slot while
+;; it waits (ticket cc2f8e7f).
+
+(deftest a-sitting-that-walked-nothing-holds-no-slot
+  (let [wn :wake-walked-nothing-slot
+        fn' :wake-walked-nothing-slot-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        batch "walked-nothing-slot"
+        seat (:seat (linked-seat! "nothingslotclerk"
+                                  {:scope [{:kind "wake_item"
+                                            :actions ["complete" "touch"]
+                                            :filter {:batch batch}}]
+                                   :walk "wake_item"
+                                   :wake_on [{:kind "wake_item"
+                                              :actions ["touch"]}]
+                                   :max_open_sittings 2}
+                                  fn'))
+        model-id (str (model! "model-for-nothingslotclerk"))
+        open! (fn []
+                (:id (:row (inv/create! *eng* :sitting
+                                        {:seat (str seat)
+                                         :model model-id
+                                         :grant (str (grant!))}
+                                        {:principal clerk}))))
+        held (item! batch)
+        s1 (open!)
+        _ (seats/claim-rows! *eng* s1 [(str held)])
+        s2 (open!)
+        _ (seats/stamp-walked-nothing! *eng* s2 true)
+        row (item! batch)]
+    (is (= 2 (seats/open-sitting-count *eng* seat)))
+    (is (= 1 (seats/busy-sitting-count *eng* seat))
+        "the sitting that walked nothing is open and not busy")
+    (item-do! row :touch)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat)))
+        "its slot is free for the row that came free")
+    (close-sitting! s2)
+    (close-sitting! s1)
+    (seat-do! seat :retire)))
+
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
   (let [wn :wake-held-rows
         fn' :wake-held-rows-fires

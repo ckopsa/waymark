@@ -7107,6 +7107,23 @@
                                  {:limit open-sitting-page}))))
     0))
 
+(defn busy-sitting-count
+  "How many OPEN sittings of this seat hold a slot: every open one but
+  those the sit stamped `walked_nothing` (`stamp-walked-nothing!`). A
+  sit that found every row held, or an empty queue, has no work, and
+  its run is ending; the sitting stays open only so the Stop hook can
+  close it with the run's turns and tokens. Counted busy, it kept a
+  free slot from a row that came free meanwhile (ticket cc2f8e7f)."
+  [eng seat-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (count (remove #(true? (get-in % [:data :walked_nothing]))
+                   (store/with-tx (:storage eng)
+                     (fn [tx]
+                       (store/query-rows (:storage eng) tx :sitting
+                                         {:seat (str seat-id) :state :open}
+                                         {:limit open-sitting-page})))))
+    0))
+
 (defn resit-sitting
   "The OPEN sitting of the seat `named` names that this spent firing's
   key opened, for THIS harness session, or nil (R-12.16, R-12.37).
