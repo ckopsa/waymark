@@ -486,6 +486,10 @@
                 :walkthrough #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open"}
+   ;; the two people an invitation is between read it under any worn
+   ;; grant, and each ends it from their own side. Handing a step to
+   ;; another person is not here: a grant names that door or it is shut
+   :own-surface {:by [:author :subject] :actions #{:decline :withdraw}}
    :create-guards [only-the-engine-names-a-walkthrough
                    the-author-sees-the-step
                    the-field-is-an-open-argument]

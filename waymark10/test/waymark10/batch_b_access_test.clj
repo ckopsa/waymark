@@ -426,7 +426,11 @@
                    "verdict"
                    ;; and the walks it recorded — own-surface by
                    ;; :recorder
-                   "walk"}
+                   "walk"
+                   ;; ticket ce9fdb99: and the quests it accepted, by
+                   ;; :owner, with the invitations and walkthroughs it
+                   ;; is one side of, by :author and :subject
+                   "quest" "invitation" "walkthrough"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

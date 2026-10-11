@@ -511,6 +511,11 @@
    ;; the pinned quest first, then the newest
    :sortable {:fields [:pinned :created_at] :default ["-pinned" "-created_at"]}
    :default-filters {:state "active,paused"}
+   ;; an owner under any worn grant accepts a quest and moves their own:
+   ;; `born` records that grant, and each door's guard still judges the
+   ;; hand. `plan` and `finish` are the engine's and are not here
+   :own-surface {:by :owner
+                 :actions #{:create :pin :unpin :pause :resume :replan :abandon}}
    :create-guards [the-owner-sees-the-goal active-quests-are-few]
    :on-create born
    :on-rehearse (fn [eng inp who] (preview eng inp who))

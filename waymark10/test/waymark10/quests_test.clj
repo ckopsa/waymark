@@ -1940,3 +1940,110 @@
     (is (nil? open) "a goal create would take is no refusal")
     (is (str/includes? (str full) "at most 20")
         "the cap is said in the preview, not after Accept")))
+
+;; ── the own surface: a worn grant that names no quest kind ──────────
+
+(def ^:private stranger (t/principal {:id "zed" :display "Zed"}))
+
+(def ^:private errand
+  "A row with a door that takes an argument: what an invitation points at."
+  (r/resource
+   {:kind :errand
+    :plural "errands"
+    :states [:open]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:rename {:from #{:open} :to :open
+              :input [:map
+                      [:title {:x-display {:label "Title"}}
+                       [:string {:min 1 :max 80}]]]
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Rename" :order 1}}}}))
+
+(defn- wearing
+  "The visibility of `principal` under a new grant that names the chore
+  and errand kinds and nothing else."
+  [eng principal]
+  (let [gid (str (:id (grant! eng (:id principal)
+                              [{:kind "chore" :actions ["finish"]}
+                               {:kind "errand" :actions ["rename"]}])))]
+    (assoc (grants/visibility eng gid principal) :gid gid)))
+
+(defn- owned-engine []
+  (engine/engine {:storage (memory/storage) :resources [chore errand]}))
+
+(deftest a-worn-grant-that-names-no-quest-kind-still-accepts-a-quest
+  (let [eng (owned-engine)
+        c (chore! eng "Dishes")
+        vis (wearing eng person)
+        worn (:grant vis)
+        quest (accept! eng person c {} worn)
+        theirs (wearing eng other)]
+    (is (not (contains? (:surface vis) "quest")) "the grant names no quest kind")
+    (is ((:kind? vis) :quest) "the kind is there for its owner")
+    (is ((:action? vis) :quest :create) "and so is the door that accepts one")
+    (is ((:action? worn) :quest :create) "the guards read the same answer")
+    (is (= (:gid vis) (get-in quest [:data :grant]))
+        "the quest records the grant it was accepted under")
+    (is ((:row? vis) :quest (:id quest)) "the owner reads their own quest")
+    (is (every? #((:action? vis) :quest %) [:pin :unpin :pause :resume :replan :abandon])
+        "and sees the doors an owner moves it with")
+    (is (not-any? #((:action? vis) :quest %) [:plan :finish])
+        "the engine's two doors are not the owner's")
+    (is (not ((:row? theirs) :quest (:id quest)))
+        "another principal cannot read that quest")))
+
+;; THE AUDIT (ticket ce9fdb99): every kind with a field that is
+;; `:x-ref {:principal true}` and that the engine stamps at birth.
+;; quest, invitation and walkthrough declare an own-surface, and are
+;; the three below. The others, and why a grant-wearer does not reach
+;; them without a grant that names them:
+;;   scene (author)       a film's script, read by all who film it; not private
+;;   secret (created_by)  a value of the house; only a grant shows it exists
+;;   seat (owner)         the sitter reads its seat through the grant (R-4.9)
+;;   member (invited_by)  the roster's row; the inviter does not own a member
+;;   value (owner), person (written_by), in workqueue10
+;;                        the household's record, shown by the household's grant
+;; film_rule.restated_by, change.stalled_by, seat.approved_by and
+;; walkthrough.stopped_by are written by a later door, not at birth.
+(def ^:private owned-kinds
+  "Kind → how `person` makes one row of it under the grant they wear."
+  {:quest (fn [eng c worn] (accept! eng person c {} worn))
+   :invitation (fn [eng _c worn]
+                 (let [e (:id (:row (inv/create! eng :errand {:title "Post"}
+                                                 {:principal person})))]
+                   (:row (inv/create! eng :invitation
+                                      {:subject "iris"
+                                       :self (str "/api/errands/" e)
+                                       :action "rename"
+                                       :field "title"
+                                       :note "Pick the new title here."}
+                                      {:principal person :grant worn}))))
+   :walkthrough (fn [eng _c worn]
+                  (:row (inv/create! eng :walkthrough
+                                     {:subject "iris"
+                                      :title "Tidying the chores"
+                                      :steps [{:who "agent" :note "Watch me."}]}
+                                     {:principal person :grant worn})))})
+
+(deftest an-owned-kind-is-read-by-its-owner-under-a-grant-that-does-not-name-it
+  (doseq [[kind make] owned-kinds]
+    (testing (name kind)
+      (let [eng (owned-engine)
+            c (chore! eng "Dishes")
+            vis (wearing eng person)
+            row (make eng c (:grant vis))
+            theirs (wearing eng stranger)]
+        (is (some? (:own-surface (get (inv/resources eng) kind)))
+            "the kind declares who owns a row")
+        (is (not (contains? (:surface vis) (name kind))) "the grant does not name it")
+        (is ((:kind? vis) kind) "the kind is there")
+        (is ((:row? vis) kind (:id row)) "the owner reads their own row")
+        (is (not ((:row? theirs) kind (:id row)))
+            "a principal the row does not name cannot read it")))))
