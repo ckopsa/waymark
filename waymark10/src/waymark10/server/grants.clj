@@ -2481,7 +2481,13 @@
         ;; own-surface confers opens on the principal's own rows and
         ;; no others: when the scope also names the kind, :row? shows
         ;; rows that are not theirs, so the row is asked of own-row?
-        ;; here. A create has no row (nil id) and stays kind-level
+        ;; here. A create has no row (nil id) and stays kind-level.
+        ;; A READER WITH NO ROW IN HAND (the schema digest, a
+        ;; collection's doors, a mirror's sync trigger, a walk's create
+        ;; form, a refusal's remedy) asks :action? and is told of the
+        ;; owner's doors under a grant that names the kind: they open
+        ;; on the reader's own rows, and nil id here answers the same.
+        ;; Which row a door opens on is the row's reader's to say
         action-on?* (fn [kind action id]
                       (let [k (name kind) a (name action)]
                         (boolean
