@@ -2134,11 +2134,54 @@
    :walk {:make (fn [eng _c _worn]
                   (:row (inv/create! eng :walk
                                      {:followed "colton" :title "My own walk"}
-                                     {:principal person})))}})
-
-(def ^:private not-made
-  "Kind → why no row of it is made here."
-  {:sitting "A sitting is opened in a seat, under a grant that cites the seat, by the seat's sitter: its row needs a seat, a model and that grant, and this engine has none."})
+                                     {:principal person})))}
+   ;; a wake's row, as `seat_ledger_test/sitting!` makes one: an office,
+   ;; a model that prices it, and the grant an approved ask mints citing
+   ;; that office. Its two doors take the harness's counts, so an empty
+   ;; body is refused at both: they are there and shut
+   :sitting {:make (fn [eng _c _worn]
+                     (let [seat (:row (inv/create!
+                                       eng :seat
+                                       {:name "chore-desk"
+                                        :charter "Decide whether a chore is done."
+                                        :scope [{:kind "chore" :actions ["finish"]}]
+                                        :standing_ttl_seconds 604800
+                                        :cadence_seconds 3600
+                                        :budget_usd_per_week 5M
+                                        :sitting_budget_tokens 60000}
+                                       {:principal other}))
+                           model (:row (inv/create!
+                                        eng :model
+                                        {:name "quests-economy" :display "quests-economy"
+                                         :vendor "anthropic" :tier "economy"
+                                         :price_input_per_mtok 1M
+                                         :price_output_per_mtok 5M
+                                         :price_cache_read_per_mtok 0.1M
+                                         :price_cache_write_per_mtok 1.25M}
+                                        {:principal other}))
+                           asks (get (inv/resources eng) :approval_request)
+                           ask (:row (inv/create! eng :approval_request
+                                                  {:task "Walk the chores this seat owns."
+                                                   :seat "chore-desk"}
+                                                  {:principal person}))
+                           ;; the mint is a wire-boundary effect: the router
+                           ;; runs it after every invoke
+                           _ (grants/approval-effects!
+                              eng asks :approve
+                              (inv/invoke! eng :approval_request (:id ask) :approve nil
+                                           {:principal other}))
+                           st (:storage eng)
+                           grant (get-in (inv/decode-row
+                                          asks
+                                          (store/with-tx st
+                                            (fn [tx]
+                                              (store/load-row st tx :approval_request
+                                                              (str (:id ask)) {}))))
+                                         [:data :grant_id])]
+                       (:row (inv/create! eng :sitting
+                                          {:seat (:id seat) :model (:id model)
+                                           :grant (str grant)}
+                                          {:principal person}))))}})
 
 (deftest an-owners-door-is-not-found-on-anothers-row-at-the-http-door
   (let [served (inv/resources (owned-engine))
@@ -2149,8 +2192,8 @@
                               (when (and (seq doors) (not (grants/private-kind? rdef)))
                                 [kind (sort doors)]))))
                     served)]
-    (is (= (set (keys owned)) (into (set (keys owned-rows)) (keys not-made)))
-        "every kind with an owner's row door has a row made here, or a reason")
+    (is (= (set (keys owned)) (set (keys owned-rows)))
+        "every kind with an owner's row door has a row made here")
     (doseq [[kind doors] owned
             :let [{:keys [make opens]} (get owned-rows kind)]
             :when make]
