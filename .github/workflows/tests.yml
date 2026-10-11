@@ -727,6 +727,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         id: checkout
+      # "Remove postgres" is this job's last step, and a runner that
+      # dies mid-job (its allocation stops, the host restarts) never
+      # reaches it: the container and its data volume stay on the
+      # shared host. So each job first removes the labelled containers
+      # no living job can own. A job without `timeout-minutes` is
+      # stopped at 360 minutes, so one older than 6 hours is an orphan;
+      # a younger one may be another shard's and is left alone.
+      # Housekeeping: it never fails the job.
+      #
+      # The same script stands in test-queue: change both together.
+      - name: Reap postgres left by a dead runner
+        env:
+          REAP_AFTER_SECONDS: '21600'
+        run: |
+          now="$(date +%s)"
+          for cid in $(docker ps -aq --filter label=waymark-ci=postgres || true); do
+            created="$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null)" || continue
+            born="$(date -d "$created" +%s 2>/dev/null)" || continue
+            age=$(( now - born ))
+            if [ "$age" -gt "$REAP_AFTER_SECONDS" ]; then
+              echo "::warning::removing postgres container ${cid}, left ${age}s ago by a job that never ended"
+              docker rm -f -v "$cid" || true
+            fi
+          done
       # Postgres, started in a step and not as a `services:` container.
       # The runner pulls a service image itself, with three quick
       # retries the workflow cannot lengthen and one registry it cannot
@@ -991,6 +1015,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         id: checkout
+      # test10's reap step, word for word: a labelled container older
+      # than the longest job was left by a runner that died.
+      - name: Reap postgres left by a dead runner
+        env:
+          REAP_AFTER_SECONDS: '21600'
+        run: |
+          now="$(date +%s)"
+          for cid in $(docker ps -aq --filter label=waymark-ci=postgres || true); do
+            created="$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null)" || continue
+            born="$(date -d "$created" +%s 2>/dev/null)" || continue
+            age=$(( now - born ))
+            if [ "$age" -gt "$REAP_AFTER_SECONDS" ]; then
+              echo "::warning::removing postgres container ${cid}, left ${age}s ago by a job that never ended"
+              docker rm -f -v "$cid" || true
+            fi
+          done
       # test10's "Start postgres", word for word: a step and not a
       # `services:` container, so a throttled pull is retried and falls
       # back. No fixed host port, for the same shared host.
