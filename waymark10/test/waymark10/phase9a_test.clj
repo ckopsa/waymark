@@ -363,9 +363,11 @@
         ;; the house's law, nobody's own row.
         ;; …and held_call (waymark-fp62.10.2), the power calls it
         ;; made that wait on a person, own-surface by :caller
+        ;; …and walk, the walks it recorded itself, own-surface by
+        ;; :recorder
         (is (= ["approval_request"
                 "grant" "held_call" "job" "plan"
-                "scheduled_action" "sitting" "verdict"]
+                "scheduled_action" "sitting" "verdict" "walk"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]
