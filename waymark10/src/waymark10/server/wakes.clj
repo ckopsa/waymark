@@ -1302,27 +1302,49 @@
       nil
 
       :else
-      (let [texts (schedules/waiting-texts (:data schedule-row))
-            sends (if (seq texts)
+      (let [waiting (schedules/waiting-texts (:data schedule-row))
+            ;; a text that waited may name a row a run took since (ticket
+            ;; d65f9247): `runs-to-start` counts rows and not WHICH row,
+            ;; so it is dropped here as `wake-seat!` drops it. The run
+            ;; that has the row answers for it.
+            texts (if (< 1 (max-open-of seat-row))
+                    (vec (remove #(spoken-for? eng seat-row % at) waiting))
+                    waiting)
+            textless? (get-in schedule-row [:data :wake_textless])
+            sends (cond
+                    (seq texts)
                     (cond-> (vec (map-indexed
                                   (fn [i text]
                                     [text (if (zero? i) key (str key ":" i))])
                                   texts))
-                      (get-in schedule-row [:data :wake_textless])
+                      textless?
                       (conj [nil (str key ":queue")]))
+
+                    ;; every waiting text names a row a run already has
+                    (and (seq waiting) (not textless?))
+                    []
+
+                    :else
                     [[nil key]])
             room (runs-to-start eng seat-row at)
             [sends kept] (if room (split-at room sends) [sends nil])
             sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
-        (when (some true? sent)
-          (if (seq kept)
-            ;; no free row for these yet: they wait for the next release
-            (stamp-fired! eng
-                          (update schedule-row :data left-waiting
-                                  (map first kept))
-                          at false)
-            (stamp-fired! eng schedule-row at true))
-          true))))))
+        (cond
+          (and (empty? sends) (empty? kept))
+          (do (write-pending! eng schedule-row false)
+              (warn! "seat " (:id seat-row) " had only waiting wakes on rows"
+                     " a run of it already has — its release fires nothing")
+              nil)
+
+          (some true? sent)
+          (do (if (seq kept)
+                ;; no free row for these yet: they wait for the next release
+                (stamp-fired! eng
+                              (update schedule-row :data left-waiting
+                                      (map first kept))
+                              at false)
+                (stamp-fired! eng schedule-row at true))
+              true)))))))
 
 (defn release-linked!
   "The wake a broken schedule held, released by the link that mended
