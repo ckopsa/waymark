@@ -384,8 +384,9 @@
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open,running,stopped"}
    ;; the leader and the led read their walkthrough under any worn grant
-   ;; and move it from their own side. Writing one for another person is
-   ;; not here: a grant names that door or it is shut. `step` and
+   ;; and move it from their own side. `create` is not here: writing one
+   ;; for another person lands in that person's view, so the grant must
+   ;; name it, and the ask door is how a wearer gets it. `step` and
    ;; `finish` are the engine's
    :own-surface {:by [:author :subject]
                  :actions #{:start :stop :resume :advance :withdraw}}

@@ -313,6 +313,49 @@
 ;; is a `hypothesis`, on a row that carries a number instead of the
 ;; law.
 
+(defn- wearing
+  "A grant that names the task kind, read-only, and no `value`, minted
+  for a person and accepted by them → the headers that present it."
+  [member]
+  (let [hs (human member)
+        made (req :post "/api/grants"
+                  {:audience member :scope [{:kind "task" :actions []}]}
+                  (human "colton-grants"))
+        gid (when (= 201 (:status made)) (id-of made))
+        took (when gid (invoke! "grants" gid :accept nil hs))]
+    (is (= 201 (:status made)) (str "grant mint: " (json made)))
+    (is (= 200 (:status took)) (str "grant accept: " (json took)))
+    (assoc hs "x-waymark-grant" gid)))
+
+;; What a principal owns rides beside any worn grant (ticket dcda56de):
+;; the engine stamps `owner` on a value scoped "mine" and on no other,
+;; and the own-surface is by that field. A household value carries no
+;; owner, so the grant alone judges it.
+(deftest a-private-value-is-its-owners-under-a-grant-that-names-no-value
+  (let [mine (id-of (write-value! (human "ada-own")
+                                  "an hour alone before the house wakes"
+                                  {:scope "mine"}))
+        ours (id-of (write-value! (human "ada-own") "supper at one table"))
+        ada (wearing "ada-own")
+        bea (wearing "bea-own")]
+    (testing "the owner reads their own value"
+      (let [r (req :get (str "/api/values/" mine) ada)]
+        (is (= 200 (:status r)) (str "concealed: " (json r)))
+        (is (= "ada-own" (:owner (fields r))))))
+    (testing "and rewords it"
+      (let [r (word! "values" mine :revise
+                     {:name "an hour alone before the house wakes"
+                      :says "The first hour is mine, and the day goes better for it."}
+                     ada)]
+        (is (= 200 (:status r)) (str "refused: " (json r)))
+        (is (= "The first hour is mine, and the day goes better for it."
+               (:says (fields r))))))
+    (testing "another principal does not see it"
+      (is (= 404 (:status (req :get (str "/api/values/" mine) bea)))))
+    (testing "a household value stays concealed under that grant"
+      (is (= 404 (:status (req :get (str "/api/values/" ours) ada))))
+      (is (= 404 (:status (invoke! "values" ours :still_stands nil ada)))))))
+
 (deftest the-wording-door-is-the-owners-and-the-observers-is-gone
   (testing "a SCOPE cannot even name the observer's door any more, and that
             is the strongest way the door's absence can be watched: the

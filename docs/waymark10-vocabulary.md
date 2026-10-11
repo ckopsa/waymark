@@ -493,6 +493,19 @@ every invoke, so a self-judging asker meets the wall's honest 409 rather
 than a mute 404. Neither key is law: `fingerprint-of` names neither, so
 declaring either mints no revision.
 
+The rule every `:own-surface` follows: **what a principal owns rides beside
+any worn grant; anything that lands in another person's view must be named
+by the grant.** So `:actions` carries the doors an owner moves their own row
+with, and it carries `create` only when the new row is the creator's alone
+(a `:quest`). A create that hands a row to somebody else
+(`:invitation`, `:walkthrough`) or to the whole house (a household `:value`)
+stays off: under a grant that does not name it the door answers not found,
+and the ask door (`POST /api/approval_requests`) is how the wearer gets it.
+A kind where only SOME rows are one principal's says so with a `:by` field
+the engine stamps on those rows alone: `:value` stamps `owner` when the
+scope is `mine`, so a household value matches no owner and stays judged by
+the grant.
+
 `:no-own-surface` is the other answer, one sentence. A kind whose row
 carries a `:x-ref {:principal true}` field that its `:create-schema` omits
 has a principal the engine writes, and `check-owned-surface` warns when
