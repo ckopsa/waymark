@@ -839,6 +839,22 @@
                (flying-fires eng (str (:id seat-row)) at))
          (contains? (seats/open-walked-rows eng (:id seat-row)) named)))))
 
+(defn- one-for-a-row
+  "These wake `texts` with one kept for each walk row they name: the
+  first. `spoken-for?` is asked of each text before the release fires
+  any, so two texts of different wording on one row both passed it, and
+  the second run sat to a row the first had (ticket 2be02e40). A text
+  that names no walk row is always kept."
+  [eng seat-row texts]
+  (first
+   (reduce (fn [[kept seen] text]
+             (let [named (seats/fire-names eng seat-row text)]
+               (if (and named (contains? seen named))
+                 [kept seen]
+                 [(conj kept text) (cond-> seen named (conj named))])))
+           [[] #{}]
+           texts)))
+
 (defn- walk-query
   "The kind the seat's sit walks and the filter it walks it under, as
   [kind filter-map], or nil when the seat walks nothing this engine
@@ -900,7 +916,9 @@
 
 (defn- slots
   "What a seat with several slots has in hand at `at`. `:busy` is its
-  open sittings and the runs on their way to a sit; `:free` is the rows
+  open sittings and the runs on their way to a sit, less the sittings
+  whose sit handed them nothing (`seats/busy-sitting-count`, ticket
+  cc2f8e7f): those wait only for the hook's close; `:free` is the rows
   of its walk the sit would hand (no open sitting holds them, no stuck
   change stands beside them and no verdict of its judgment stands on
   them, `withheld-rows`), less the
@@ -916,7 +934,7 @@
         queue (when-some [[kind f] (walk-query eng seat-row)]
                 (ids-under eng kind f (judged-out eng seat-row)))
         unclaimed (count (remove (withheld-rows eng seat-row) queue))]
-    {:busy (+ (long (seats/open-sitting-count eng seat-id)) flying)
+    {:busy (+ (long (seats/busy-sitting-count eng seat-id)) flying)
      :free (max 0 (- unclaimed flying sitting-down))}))
 
 (defn- damped?
@@ -1306,9 +1324,12 @@
             ;; a text that waited may name a row a run took since (ticket
             ;; d65f9247): `runs-to-start` counts rows and not WHICH row,
             ;; so it is dropped here as `wake-seat!` drops it. The run
-            ;; that has the row answers for it.
+            ;; that has the row answers for it. Two texts that name one
+            ;; row are one send, for the same reason (ticket 2be02e40).
             texts (if (< 1 (max-open-of seat-row))
-                    (vec (remove #(spoken-for? eng seat-row % at) waiting))
+                    (one-for-a-row
+                     eng seat-row
+                     (remove #(spoken-for? eng seat-row % at) waiting))
                     waiting)
             textless? (get-in schedule-row [:data :wake_textless])
             sends (cond
