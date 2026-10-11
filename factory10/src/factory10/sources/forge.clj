@@ -2732,6 +2732,106 @@
      census
      (bench/policies eng :active))))
 
+;; ── the mirror's own beat (ticket b53f78ac) ─────────────────────────
+;;
+;; A MIRROR THAT STOPS SAYS SO. The pass stamps `forge_pass_at` on every
+;; policy it ran over, so a stamp that stands still is a loop that
+;; stopped. The loop cannot say that itself. A second thread, in every
+;; process and under no election, reads the oldest stamp and files one
+;; draft ticket an outage, where mayor already reads.
+
+(def stale-passes
+  "How many cadences a stamp may stand still before the mirror is said
+  to have stopped. Four, which is twenty minutes at the default beat."
+  4)
+
+(def ^:private beat-title-prefix "The factory mirror stopped beating: ")
+
+(def ^:private last-census
+  "The last census line this process printed, and when: what the beat
+  ticket quotes."
+  (atom nil))
+
+(defn- note-census! [eng line]
+  (reset! last-census {:at (now-of eng) :line line})
+  line)
+
+(defn- oldest-stamp
+  "The oldest `forge_pass_at` among the active policies, with its
+  repository, or nil. A policy no pass stamped yet is no evidence."
+  [eng]
+  (->> (bench/policies eng :active)
+       (keep (fn [row]
+               (when-some [at (as-instant (get-in row [:data :forge_pass_at]))]
+                 {:at at :repo (str (get-in row [:data :repository]))})))
+       (sort-by :at)
+       first))
+
+(defn- beat-detail [repo ^Instant at ^Instant now every-seconds]
+  (let [{:keys [line] said :at} @last-census]
+    (cut (str "The factory mirror last stamped `forge_pass_at` at " at
+              " on the policy of `" repo "`. That is "
+              (.getSeconds (java.time.Duration/between at now))
+              " seconds ago, over the " stale-passes " passes of "
+              every-seconds " seconds a stamp may stand still. Nothing "
+              "is adopted, held or merged while the mirror does not "
+              "pass.\n\n"
+              (if line
+                (str "The last census line this process printed, at "
+                     said ":\n\n    " line)
+                (str "This process printed no census line: its mirror "
+                     "finished no pass since it started."))
+              "\n\nRestarting the engine starts the loop again. The "
+              "engine files no other ticket while this stamp stands, and "
+              "a stamp that moves ends the outage.")
+         ticket/detail-chars)))
+
+(defn beat-check!
+  "The mirror's health, judged once. `raised` is an atom the watch keeps:
+  the stamp its open outage was raised for, or nil.
+
+  → nil with no stamp to read, `:fresh` when the oldest stamp is within
+  `stale-passes` cadences (which ends an outage), `:raised` when a stale
+  one filed its draft ticket, `:standing` on every later beat of the
+  same outage. The ticket rides an idempotency key of the stamp, so two
+  processes watching one database file one between them."
+  [eng {:keys [every-seconds raised log-fn]
+        :or {every-seconds default-every-seconds}}]
+  (let [log-fn (or log-fn warn!)
+        {:keys [^Instant at repo]} (oldest-stamp eng)
+        ^Instant now (now-of eng)
+        allowed (* (long stale-passes) (long every-seconds))]
+    (cond
+      (nil? at) nil
+
+      (not (.isBefore (.plusSeconds at allowed) now))
+      (do (when (some? @raised)
+            (reset! raised nil)
+            (log-fn "the mirror beats again: stamped at " at))
+          :fresh)
+
+      (= (str at) @raised) :standing
+
+      :else
+      (try
+        (inv/create! eng :ticket
+                     {:title (cut (str beat-title-prefix "no pass since " at)
+                                  200)
+                      :detail (beat-detail repo at now every-seconds)
+                      :type "bug"
+                      :priority 1
+                      :repo repo}
+                     (assoc (as-opts) :idempotency-key
+                            (str "factory-mirror-stopped:" at)))
+        (reset! raised (str at))
+        (log-fn "the mirror stopped beating: no pass since " at
+                ", and a draft ticket says so")
+        :raised
+        (catch Exception e
+          (log-fn "the mirror stopped beating: no pass since " at
+                  ", and its ticket was refused (" (ex-message e) ")")
+          nil)))))
+
 (defn- stamp-pass!
   "The pass's own clock on the policy of each repository it ran over,
   with a maintenance write as `base_checked_at` is: a held pass and a
@@ -2769,7 +2869,14 @@
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
     (let [{:keys [changes checks repositories complete? answered refusals]}
-          (forge-poll source)
+          ;; a poll that throws is a pass that ran (ticket b53f78ac): the
+          ;; stamp says the loop beats, and the warning says what failed
+          (try (forge-poll source)
+               (catch Exception e
+                 (stamp-pass! eng (map #(get-in % [:data :repository])
+                                       (bench/policies eng :active))
+                              log-fn)
+                 (throw e)))
           census (assoc fresh-census
                         :repositories (count repositories)
                         :complete? (boolean complete?))
@@ -2805,13 +2912,23 @@
                     census (adoption-note-pass! eng source census log-fn)]
                 [census nil])
               (catch Exception e [census e])))
-          census (if held census (base-pass! eng source census log-fn))
-          census (floor-pass! eng census log-fn)
-          _ (stamp-pass! eng repositories log-fn)
+          ;; the stamp is written whatever the two passes above it did
+          ;; (ticket b53f78ac): a pass that threw there still beat
+          census (try
+                   (floor-pass! eng
+                                (if held
+                                  census
+                                  (base-pass! eng source census log-fn))
+                                log-fn)
+                   (finally (stamp-pass! eng repositories log-fn)))
           _ (when thrown (throw thrown))
           census (merge (assoc census :calls (forge-calls source))
                         (budget-of source))]
-      (log-fn (:calls census) " calls, " (count changes) " pull requests, "
+      (log-fn
+       (note-census!
+        eng
+        (str
+              (:calls census) " calls, " (count changes) " pull requests, "
               (:minted census) " changes minted, " (:adopted census)
               " changes adopted, " (:moved census)
               " changes moved, " (:runs-minted census) " red runs minted, "
@@ -2859,7 +2976,7 @@
                 (str ", every call held until " until
                      ": the forge's rate limit is spent"))
               (when-not (or (:complete? census) (:held-until census))
-                ", and a repository did not answer — the cursor stands"))
+                ", and a repository did not answer — the cursor stands"))))
       census)))
 
 ;; ── the cadence ─────────────────────────────────────────────────────
@@ -2875,17 +2992,54 @@
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
                    (fn []
-                     (loop [swept? false]
-                       (let [swept? (or swept? (sweep-at-boot! config))]
-                         (try (pass! config)
-                              (catch Exception e
-                                (warn! "pass failed (" (ex-message e)
-                                       "); the stored rows keep serving and "
-                                       "the next beat still runs")))
-                         (when-not (.await stop (long (* 1000 every-seconds))
-                                           TimeUnit/MILLISECONDS)
-                           (recur swept?)))))
+                     ;; an Error is caught as an Exception is (ticket
+                     ;; b53f78ac): a thread that dies on one says
+                     ;; nothing, and the loop's end is always said
+                     (try
+                       (loop [swept? false]
+                         (let [swept? (or swept?
+                                          (try (sweep-at-boot! config)
+                                               (catch Throwable e
+                                                 (warn! "the boot sweep failed ("
+                                                        (or (ex-message e) (class e))
+                                                        ")")
+                                                 true)))]
+                           (try (pass! config)
+                                (catch Throwable e
+                                  (warn! "pass failed ("
+                                         (or (ex-message e) (class e))
+                                         "); the stored rows keep serving and "
+                                         "the next beat still runs")))
+                           (when-not (.await stop (long (* 1000 every-seconds))
+                                             TimeUnit/MILLISECONDS)
+                             (recur swept?))))
+                       (finally
+                         (warn! "the pass loop ended: no pass runs in this "
+                                "process until the role is elected again"))))
                    "factory10-forge")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn start-watch!
+  "The watch over the mirror's stamp: one `beat-check!` every
+  :every-seconds on a daemon thread of its own, the first one a cadence
+  after boot so a pass has had its turn. It runs in every process and
+  under no election, because the thread it watches cannot say it
+  stopped. `stop-passes!` stops it."
+  [eng {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
+  (let [stop (CountDownLatch. 1)
+        watch {:every-seconds every-seconds :raised (atom nil)}
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long (* 1000 every-seconds))
+                                         TimeUnit/MILLISECONDS)
+                         (try (beat-check! eng watch)
+                              (catch Throwable e
+                                (warn! "the beat check failed ("
+                                       (or (ex-message e) (class e)) ")")))
+                         (recur))))
+                   "factory10-forge-watch")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:thread t :stop stop}))
 

@@ -716,3 +716,65 @@
     (is (= 1 (floor-pass! eng)))
     (is (str/includes? (str (get-in (first (floor-tickets eng)) [:data :detail]))
                        "2 draft bugs, tasks and chores"))))
+
+;; ── the mirror's own beat (ticket b53f78ac) ─────────────────────────
+;;
+;; A stamp that stands still files one draft ticket an outage. The check
+;; is called directly, at the default beat: four passes of 300 seconds.
+
+(defn- beat-tickets [eng]
+  (filterv #(str/starts-with? (str (get-in % [:data :title]))
+                              "The factory mirror stopped beating: ")
+           (tickets eng)))
+
+(defn- ago ^Instant [seconds]
+  (Instant/ofEpochSecond (- (.getEpochSecond (Instant/now)) (long seconds))))
+
+(defn- pass-stamped! [eng ^Instant at]
+  (bench/mark-row! eng :repo_policy (str (:id (policy-of eng)))
+                   {:forge_pass_at at} #{}))
+
+(defn- beat-check! [eng raised]
+  (forge/beat-check! eng {:every-seconds 300 :raised raised
+                          :log-fn (fn [& _] nil)}))
+
+(deftest a-fresh-stamp-says-nothing
+  (let [eng (:engine (world))
+        raised (atom nil)]
+    (is (nil? (beat-check! eng raised)) "a policy no pass stamped is no evidence")
+    (pass-stamped! eng (ago 600))
+    (is (= :fresh (beat-check! eng raised)))
+    (is (nil? @raised))
+    (is (empty? (beat-tickets eng)))))
+
+(deftest a-stale-stamp-raises-one-draft-ticket-an-outage
+  (let [eng (:engine (world))
+        raised (atom nil)
+        stale (ago 1500)]
+    (pass-stamped! eng stale)
+    (is (= :raised (beat-check! eng raised)))
+    (is (= :standing (beat-check! eng raised)))
+    (let [[ticket & more] (beat-tickets eng)]
+      (is (nil? more))
+      (is (= :draft (state-of ticket)))
+      (is (= 1 (get-in ticket [:data :priority])))
+      (is (str/includes? (str (get-in ticket [:data :title])) (str stale)))
+      (is (str/includes? (str (get-in ticket [:data :detail])) (str stale))
+          "the ticket names the stamp that stands still"))
+    (testing "a second watch over the same stamp files no second ticket"
+      (beat-check! eng (atom nil))
+      (is (= 1 (count (beat-tickets eng)))))))
+
+(deftest a-recovered-mirror-clears-and-the-next-outage-raises-again
+  (let [eng (:engine (world))
+        raised (atom nil)]
+    (pass-stamped! eng (ago 1500))
+    (is (= :raised (beat-check! eng raised)))
+    (pass-stamped! eng (ago 60))
+    (is (= :fresh (beat-check! eng raised)))
+    (is (nil? @raised) "the outage is over")
+    (is (= :fresh (beat-check! eng raised)))
+    (is (= 1 (count (beat-tickets eng))) "a beating mirror files nothing")
+    (pass-stamped! eng (ago 1800))
+    (is (= :raised (beat-check! eng raised)))
+    (is (= 2 (count (beat-tickets eng))))))
