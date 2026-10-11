@@ -121,7 +121,7 @@ a grant id, or `"$<bind>"`: the `bind` of a `given` that reads the grant
 row, which is a `waymark_get` or `waymark_query` call whose
 `arguments.kind` is `grant`.
 
-```
+```json
 {"cast": ["ada", "juniper"],
  "given": [{"as": "ada", "tool": "waymark_query", "bind": "ada_grant",
             "arguments": {"kind": "grant"}}],
