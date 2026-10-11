@@ -90,6 +90,35 @@
     (is (re-find #"\[long-text\]" err))
     (is (re-find #"waymark10\.dev/explain decl_probe" err))))
 
+;; ── the owned-surface warning (ticket 799aa64c) ─────────────────────
+
+(def ^:private stamped
+  (assoc clean
+         :schema [:map
+                  [:name [:string {:min 1 :max 50}]]
+                  [:owner {:optional true :x-ref {:principal true}}
+                   [:string {:max 128}]]]
+         :create-schema [:map [:name [:string {:min 1 :max 50}]]]))
+
+(defn- warnings-of [rmap]
+  (with-out-str (binding [*err* *out*] (r/resource rmap))))
+
+(deftest a-kind-that-stamps-a-principal-and-declares-no-own-surface-is-named
+  (is (re-find #"\[decl_probe\] \[owned-surface\] data\.owner" (warnings-of stamped)))
+  (is (not (re-find #"owned-surface" (warnings-of (assoc stamped :own-surface {:by :owner}))))
+      "an own-surface answers it")
+  (is (not (re-find #"owned-surface"
+                    (warnings-of (assoc stamped :no-own-surface
+                                        "The roster's row; the inviter does not own it."))))
+      "and so does one declared sentence")
+  (is (not (re-find #"owned-surface"
+                    (warnings-of (assoc stamped :create-schema (:schema stamped)))))
+      "a principal the caller names is not the engine's stamp")
+  (is (= :no-own-surface
+         (:check (ex-data (try (r/resource (assoc stamped :no-own-surface true))
+                               (catch clojure.lang.ExceptionInfo e e)))))
+      "the sentence is a sentence"))
+
 ;; ── the kondo drift guard ───────────────────────────────────────────
 ;; The shipped hook cannot require project code, so it carries copies
 ;; of the three key sets; this test is what holds them equal.

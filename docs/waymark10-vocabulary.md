@@ -493,6 +493,14 @@ every invoke, so a self-judging asker meets the wall's honest 409 rather
 than a mute 404. Neither key is law: `fingerprint-of` names neither, so
 declaring either mints no revision.
 
+`:no-own-surface` is the other answer, one sentence. A kind whose row
+carries a `:x-ref {:principal true}` field that its `:create-schema` omits
+has a principal the engine writes, and `check-owned-surface` warns when
+such a kind declares no `:own-surface`: a worn grant that does not name the
+kind would hide the row from that principal in silence. The sentence says
+why a grant-wearer should not reach it, or that a later door writes the
+field, and it does nothing but silence the warning.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

@@ -687,6 +687,7 @@
                    [:maybe [:string {:max 128}]])]
    ;; the client states whose value and what it says; the OWNER, the
    ;; WRITER and the affirmation stamps are all the engine's
+   :no-own-surface "A value is the household's record, shown by the household's grant; it is not private to the principal it names."
    :create-schema [:map
                    (entry :name {} [:string {:min 1 :max 80}])
                    (entry :says {} [:string {:min 1 :max 2000}])

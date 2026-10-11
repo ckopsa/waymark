@@ -3093,6 +3093,7 @@
    ;; or a sweep owns: stale, halt, schedule and merged_into are absent
    ;; on purpose — a create that could stamp a halt would be a seat
    ;; born against a wall nobody hit.
+   :no-own-surface "The sitter reads its seat through the grant that cites it (R-4.9); the owner is named on the row and does not hold it alone."
    :create-schema
    [:map
     [:name {:examples ["inbox-clerk"]
