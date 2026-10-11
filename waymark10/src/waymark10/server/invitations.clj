@@ -216,7 +216,9 @@
       ;; one sentence for all three, so a refusal never says
       ;; whether a row the author cannot see exists
       (or (and (some? gr)
-               (not (and ((:action? gr) k action) ((:row? gr) k id))))
+               (not (and ((:action? gr) k action) ((:row? gr) k id)
+                         (or (nil? (:action-on? gr))
+                             ((:action-on? gr) k action id)))))
           (and (nil? gr) (= :agent (:type p)))
           (nil? ((:read ctx) k id)))
       "your grant does not see that row or does not admit that door.")))

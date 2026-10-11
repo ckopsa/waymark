@@ -2475,7 +2475,21 @@
                          ;; now each kind's own :own-surface :actions, so
                          ;; the affordance and the law it opens live in
                          ;; one file
-                         (contains? (:actions (own-of k) #{}) a))))]
+                         (contains? (:actions (own-of k) #{}) a))))
+        ;; the same question asked of ONE ROW. A door the scope names
+        ;; opens on every row the scope shows. A door only the
+        ;; own-surface confers opens on the principal's own rows and
+        ;; no others: when the scope also names the kind, :row? shows
+        ;; rows that are not theirs, so the row is asked of own-row?
+        ;; here. A create has no row (nil id) and stays kind-level
+        action-on?* (fn [kind action id]
+                      (let [k (name kind) a (name action)]
+                        (boolean
+                         (or (contains? (get-in surface [k :actions] #{}) a)
+                             (and (contains? (:actions (own-of k) #{}) a)
+                                  (or (nil? id)
+                                      (not (contains? surface k))
+                                      (own-row? k id)))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -2502,6 +2516,7 @@
      ;; stand-in.
      :grant (when (and live? (seq surface))
               {:id (str grant-id) :action? action?* :row? row?*
+               :action-on? action-on?*
                ;; a field this leash shows plain, neither hidden nor
                ;; hashed: what a scheduled action's conditions may
                ;; name (docs/spec-scheduled-actions.md R-2.3)
@@ -2530,6 +2545,7 @@
      :whole-kind? (fn [kind] (contains? whole-kinds (name kind)))
      :row? row?*
      :action? action?*
+     :action-on? action-on?*
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
