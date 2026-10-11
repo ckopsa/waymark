@@ -263,6 +263,32 @@ function listWidget(name, prop, items, value, makeRow) {
   refresh();
   return box;
 }
+/* A row is named by its mint order (items[2] stays items[2] when the
+   row above it goes), and the server names an entry by its POSITION in
+   the array it was sent: collectValues closes the hole a removed row
+   and a row left blank each leave. So a refusal's items[1] is the
+   second row that SENT something, whatever that row is named. This
+   turns the server's path into the form's, one list at a time so a
+   list inside a row is counted among its own rows; a path that names
+   no row on screen comes back as it was. */
+function sentRows(box) {
+  return [...box.querySelectorAll(":scope > .listrows > .listrow")].filter(row =>
+    [...row.querySelectorAll("[name]")].some(node =>
+      !node.closest(".field.off") && node.value !== "" && node.value !== null));
+}
+function rowPath(form, path) {
+  let out = "", rest = String(path);
+  for (;;) {
+    const m = rest.match(/^([^\[]*)\[(\d+)\]/);
+    if (!m) return out + rest;
+    const list = out + m[1];
+    const box = form.querySelector('[data-list="' + list + '"]');
+    const row = box && sentRows(box)[Number(m[2])];
+    if (!row) return path;
+    out = list + "[" + row.getAttribute("data-row") + "]";
+    rest = rest.slice(m[0].length);
+  }
+}
 /* the items' own x-ref, when this property is a LIST of refs — the
    advertisement schema.clj carries onto the items of a
    [:vector :waymark/ref] entry. A picker is only fetchable when it
