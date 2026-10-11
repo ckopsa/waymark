@@ -155,6 +155,7 @@
                 :name #{:eq}}
    :sortable {:fields [:name] :default "name"}
    :unique [[:name]]
+   :no-own-surface "A secret is a value of the house; only a grant that names the kind shows that one exists."
    :create-guards [a-person-enters-the-value]
    :on-create born
    :actions

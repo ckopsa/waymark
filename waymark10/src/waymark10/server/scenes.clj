@@ -505,6 +505,7 @@
                          :x-display {:label "Version"
                                      :help "1 at birth, and one more at each revise. A take names the version it performed."}}
                [:maybe [:int {:min 1}]]]]))
+   :no-own-surface "A scene is a film's script, read by all who film it; it is not its author's private row."
    :create-schema (into [:map] offer-fields)
    :filterable {:state #{:eq :in}
                 :seed #{:eq}

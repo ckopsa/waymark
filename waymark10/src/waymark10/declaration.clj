@@ -88,6 +88,11 @@
    ;; to be a literal set of kind names in grants.clj, relocated to
    ;; the seven declarations that always owned it
    :own-surface
+   ;; one sentence: why a grant-wearer should NOT reach their own rows
+   ;; of this kind, though the engine stamps a principal on them. It
+   ;; silences check-owned-surface's warning and does nothing else;
+   ;; never in the fingerprint — :own-surface's precedent
+   :no-own-surface
    ;; the states of this kind in which WORDS ARE NOT AN ANSWER
    ;; (waymark-vf8): {state {:door … :whose … :explain "… {door} …"}}.
    ;; A row sitting in such a state is waiting on an ACT by whoever

@@ -651,6 +651,7 @@
 (defresource member
   {:kind :member
    :plural "members"
+   :no-own-surface "A member is the roster's row; the inviter does not own the member they invited."
    :states [:invited :active :suspended]
    :initial :active
    ;; :invited is entered by the on-create landing (a token-bearing
