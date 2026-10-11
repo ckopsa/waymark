@@ -16,13 +16,14 @@
 #   CLAUDE.md                        <- seat/CLAUDE.md
 #   .claude/settings.json            <- seat/.claude/settings.json
 #   .claude/hooks/sitting-close.sh   <- .claude/hooks/sitting-close.sh
+#   inbox-feed.sh                    <- seat/inbox-feed.sh
 #
 # THE HOOK HAS ONE SOURCE. It stays at .claude/hooks/sitting-close.sh
 # on main, because an interactive sitting in this repository uses the
 # same script for its tally (spec-seat.md R-12.25). A change to it
 # reaches the seat's place in this same run, with no hand step.
 #
-# THE COUNT IS CHECKED, NOT TRUSTED. A fourth file in the tree fails
+# THE COUNT IS CHECKED, NOT TRUSTED. A fifth file in the tree fails
 # the run, and so does a CLAUDE.md of more than 20 lines. The point of
 # the branch is what it does NOT carry; a check is the only thing that
 # keeps it that way.
@@ -66,10 +67,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # Staged outside the working tree, because the next step empties
-      # the working tree. The whole of seat/ is copied, not the two
+      # the working tree. The whole of seat/ is copied, not the three
       # files by name: a stray file there must REACH the tree, so that
       # the count below can fail on it.
-      - name: Assemble the three files
+      - name: Assemble the four files
         run: |
           set -euo pipefail
           tree="${RUNNER_TEMP}/seat"
@@ -78,9 +79,9 @@ jobs:
           cp -R seat/. "$tree/"
           mkdir -p "$tree/.claude/hooks"
           cp .claude/hooks/sitting-close.sh "$tree/.claude/hooks/sitting-close.sh"
-          chmod +x "$tree/.claude/hooks/sitting-close.sh"
+          chmod +x "$tree/.claude/hooks/sitting-close.sh" "$tree/inbox-feed.sh"
 
-      - name: Check the three files
+      - name: Check the four files
         run: |
           set -euo pipefail
           tree="${RUNNER_TEMP}/seat"
@@ -88,9 +89,10 @@ jobs:
           want="$(printf '%s\n' \
             '.claude/hooks/sitting-close.sh' \
             '.claude/settings.json' \
-            'CLAUDE.md' | sort)"
+            'CLAUDE.md' \
+            'inbox-feed.sh' | sort)"
           if [ "$held" != "$want" ]; then
-            echo "::error::the seat's place must hold these three files and no other."
+            echo "::error::the seat's place must hold these four files and no other."
             echo "it holds:"; printf '%s\n' "$held"
             exit 1
           fi
@@ -101,8 +103,10 @@ jobs:
           fi
           test -x "$tree/.claude/hooks/sitting-close.sh"
           bash -n "$tree/.claude/hooks/sitting-close.sh"
+          test -x "$tree/inbox-feed.sh"
+          bash -n "$tree/inbox-feed.sh"
           python3 -m json.tool "$tree/.claude/settings.json" > /dev/null
-          echo "3 files, CLAUDE.md ${lines} lines."
+          echo "4 files, CLAUDE.md ${lines} lines."
 
       - name: Push the orphan branch
         run: |
@@ -113,7 +117,7 @@ jobs:
 
           # One commit, no history: the branch is a published artifact,
           # not a line of development. Anything already in the working
-          # tree goes, and only the three files come back.
+          # tree goes, and only the four files come back.
           git checkout --orphan seat
           git rm -rf --quiet . > /dev/null
           git clean -fdxq

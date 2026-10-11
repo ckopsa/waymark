@@ -19,11 +19,14 @@
             [factory10.main :as factory]
             [waymark10.client :as c]
             [waymark10.dev :as dev]
+            [waymark10.server.consumers :as consumers]
+            [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.members :as members]
+            [waymark10.server.quests :as quests]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -173,7 +176,7 @@
   "Ada as the identity gate hands her over: the seeded member's id and
   the roles her own row holds."
   [eng]
-  (t/principal {:id "ada" :display "Ada Example"
+  (t/principal {:id "ada" :display "Maya Okafor"
                 :roles (members/held-roles eng "ada")}))
 
 (defn- allow-as-ada!
@@ -334,13 +337,14 @@
                          (str (get-in (c/index session) [:resources :ticket :href])
                               "/" (id-of k))))
         self (fn [k] (:self (doc ada k)))
+        ;; Ada's grant does not read the seating plan: Juniper's does
+        seats (:self (doc planner :q-seats))
         rehearse (fn [choices]
                    (c/pursue! ada (doc ada :q-epic) :complete ending
                               {:dry-run true :choices choices}))
         ;; no id: the refusal binds the child, and a person gives only
         ;; the sentence that child's `complete` asks for
         sentence {"ticket.complete" {:input ending}}
-        on (fn [res k] (filterv #(= (self k) (:row %)) (:blocked-on res)))
         ;; a patch: the link alone, and the restate keeps the rest
         linked {:showcase {:evidence {:film_url film-url}}}]
     ;; a rehearsal reads one denier for each door, and the epic's own
@@ -373,33 +377,25 @@
                (steps (:writes res)))
             (pr-str res)))
       (is (= "done" (:state (c/act! ada (doc ada :q-guide) :complete ending)))))
-    (testing "the next: the deferred child, which is not Ada's to end"
-      (let [res (rehearse sentence)]
+    (testing "the next: the deferred child, which Ada's grant does not read"
+      (is (some? seats))
+      (is (not (c/doc? (doc ada :q-seats))) "the seating plan is outside her grant")
+      (let [res (rehearse nil)]
         (is (= [] (steps (:writes res))) (pr-str res))
-        (is (= (:blocked-on res) (on res :q-seats)) (pr-str res))
-        ;; still plain blocked-on entries, and not an `:unseen` door: Ada
-        ;; reads the child, and each refusal leaves her no way. The
-        ;; child's `complete` is shut by its state and names `resume`,
-        ;; the row's own door back to open, which her grant does not
-        ;; admit; `drop` names nothing. Neither asks her for an input,
-        ;; a tap or a confirm. That is the shape of a step that is a
-        ;; seat's (`whose: seat`), waiting on whoever holds `resume`.
-        (is (= [{:door "ticket.resume" :needs [] :or []
-                 :reason (str "ticket.resume is not afforded on " (self :q-seats) ".")}
-                {:door "ticket.drop" :needs [] :or ["ticket.complete"]
-                 :reason (str "ticket.drop is not afforded on " (self :q-seats) ".")}]
-               (mapv #(select-keys % [:door :needs :or :reason :confirm :held])
-                     (:blocked-on res)))
-            (pr-str res)))
-      (is (= ["ticket.resume"]
-             (get-in (doc ada :q-seats) [:unavailable :complete :remedies])))
-      (is (nil? (get-in (doc ada :q-seats) [:actions :resume])))
-      (testing "Planner, who holds resume, plans it as resume then complete"
-        (is (= [["ticket.resume" (self :q-seats)]
-                ["ticket.complete" (self :q-seats)]]
+        ;; the refusal binds no row she reads, so each remedy falls back
+        ;; to the epic's own row and the rehearsal gives that branch up
+        ;; as a cycle: no entry names the child. The engine's own read
+        ;; finds it (`quests/unseen-waits`), and the quest's test below
+        ;; reads the step that read makes.
+        (is (some #(= "cycle" (some-> (:reason %) name)) (:blocked-on res))
+            (pr-str res))
+        (is (not (str/includes? (pr-str res) (id-of :q-seats))) (pr-str res)))
+      (testing "Juniper, who holds resume, plans it as resume then complete"
+        (is (= [["ticket.resume" seats]
+                ["ticket.complete" seats]]
                (steps (:writes (c/pursue! planner (doc planner :q-seats)
                                           :complete ending {:dry-run true}))))))
-      (testing "Planner ends it"
+      (testing "Juniper ends it"
         (is (= "open" (:state (c/act! planner (doc planner :q-seats) :resume nil))))
         (is (= "done" (:state (c/act! planner (doc planner :q-seats)
                                       :complete ending))))))
@@ -409,6 +405,147 @@
       (let [res (c/pursue! ada (doc ada :q-epic) :complete ending)]
         (is (c/doc? (:done res)) (pr-str res))
         (is (= "done" (:state (doc ada :q-epic))))))))
+
+;; ── the quest's words: what the tracker and the sheet read ──────────
+;; The page draws a step's need from `needs_labels` where the plan has
+;; it: the sheet reads the preview of the create, and the tracker reads
+;; the stored plan. The epic's restate step needs a path into a nested
+;; map, and both say the label declared at its end.
+
+(def ^:private film-need ["showcase.evidence.film_url"])
+
+(defn- quest-data [eng id]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) :quest)]
+    (store/with-tx st
+      (fn [tx]
+        (some->> (store/load-row st tx :quest (str id) {})
+                 (inv/decode-row rdef)
+                 :data)))))
+
+(defn- restate-step [plan]
+  (first (filter #(= "restate" (:door %)) plan)))
+
+(deftest the-seeded-epics-restate-step-asks-for-the-film-in-words
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        refs (:refs (seed/load! eng (seed/read-seed "demo") {}))
+        session (c/connect "http://test" {:principal "ada" :handler (dev/handler eng)})
+        epic (:self (c/get-doc session
+                               (str (get-in (c/index session) [:resources :ticket :href])
+                                    "/" (get-in refs [:q-epic :id]))))
+        ada (t/principal {:id "ada" :display "Ada"})
+        goal {:self epic :action "complete"}]
+    (testing "the sheet: the preview of the quest names the need by its label"
+      (let [{:keys [preview]} (inv/create! eng :quest goal {:principal ada :dry-run true})
+            step (restate-step (:plan preview))]
+        (is (= film-need (:needs step)) (pr-str preview))
+        (is (= ["The film"] (:needs_labels step)) (pr-str preview))))
+    (let [quest (:id (:row (inv/create! eng :quest goal {:principal ada})))
+          _ (consumers/drain-consumer! eng quests/consumer-name (quests/consumer-fn eng)
+                                       {:from-origin? true})
+          held (quest-data eng quest)
+          at (first (keep-indexed #(when (= "restate" (:door %2)) %1) (:plan held)))]
+      (testing "the tracker: the stored plan names the need by its label"
+        (is (some? at) (pr-str held))
+        (is (= film-need (:needs (restate-step (:plan held)))) (pr-str held))
+        (is (= ["The film"] (:needs_labels (restate-step (:plan held)))) (pr-str held)))
+      (when at
+        (testing "a plan stored in older words is said again when the planner starts"
+          (inv/invoke! eng :quest (str quest) :plan
+                       (-> (select-keys held [:planned_at :blocked_reason :plan_is_estimate
+                                              :waiting_on :invitation])
+                           (update :planned_at str)
+                           (assoc :plan (assoc-in (vec (:plan held)) [at :needs_labels]
+                                                  ["Showcase.evidence.film url"])))
+                       {:principal quests/engine-actor
+                        :idempotency-key (str (random-uuid))})
+          (is (= ["Showcase.evidence.film url"]
+                 (:needs_labels (restate-step (:plan (quest-data eng quest)))))
+              "the plan as the older declaration said it")
+          (is (= 1 (quests/relabel! eng)) "the one plan whose words differ is written")
+          (let [after (quest-data eng quest)]
+            (is (= ["The film"] (:needs_labels (restate-step (:plan after)))))
+            (is (= (:plan held) (:plan after)) "and nothing else of the plan moved")))))))
+
+;; ── the child Maya's grant does not read ────────────────────────────
+;; Her grant names the epic and the guide by id, so the seating plan is
+;; outside it. The quest says who holds the next step and never which
+;; row: the engine keeps that row in `waits_on`, which no read shows.
+
+(defn- open-steps
+  "The steps of a stored plan that are not done, as door, row, whose
+  and state."
+  [data]
+  (mapv (juxt :door :self #(some-> (:whose %) name) #(some-> (:state %) name))
+        (remove #(= "done" (some-> (:state %) name)) (:plan data))))
+
+(deftest the-seeded-quest-waits-on-juniper-for-the-child-maya-cannot-see
+  (let [eng (dev/scratch! (factory/resources) {:name "demo-test"})
+        refs (:refs (seed/load! eng (seed/read-seed "demo") {}))
+        id-of (fn [k] (str (get-in refs [k :id])))
+        h (dev/handler eng)
+        gid (id-of :ada-grant)
+        worn (c/connect "http://test" {:principal "ada" :handler h :grant gid})
+        typed (c/connect "http://test" {:principal "ada" :handler h})
+        planner (c/connect "http://test" {:principal {:id "plan" :type :agent}
+                                          :handler h
+                                          :grant (id-of :plan-grant)})
+        tickets (get-in (c/index worn) [:resources :ticket :href])
+        doc (fn [session k] (c/get-doc session (str tickets "/" (id-of k))))
+        epic (:self (doc worn :q-epic))
+        seats (:self (doc planner :q-seats))
+        ada (members/principal-for eng "ada")
+        quest (:id (:row (inv/create! eng :quest {:self epic :action "complete"}
+                                      {:principal ada
+                                       :grant (:grant (grants/visibility eng gid ada))})))
+        drain! #(consumers/drain-consumer! eng quests/consumer-name (quests/consumer-fn eng)
+                                           {:from-origin? true})
+        ;; every read of hers: the quest under her grant and as herself,
+        ;; the tickets her grant lists, and the epic
+        reads (fn []
+                (pr-str [(c/get-doc worn (str "/api/quests/" quest))
+                         (c/get-doc typed (str "/api/quests/" quest))
+                         (c/get-doc worn tickets)
+                         (doc worn :q-epic)]))
+        waits (fn [label]
+                (testing label
+                  (let [d (quest-data eng quest)]
+                    (is (= [["complete" epic "seat" "waiting"]
+                            ["complete" epic "person" "later"]]
+                           (open-steps d))
+                        (pr-str d))
+                    (is (= "Juniper" (:waiting_on d)) (pr-str d))
+                    (is (= "waiting on Juniper" (quests/next-line {:data d} nil)))
+                    (is (nil? (:blocked_reason d)) (pr-str d))
+                    (is (= [seats] (mapv :self (:waits_on d)))
+                        "the engine keeps the row it waits on")
+                    (is (not (str/includes? (reads) (id-of :q-seats)))
+                        "and no read of hers holds its id")
+                    (is (not (str/includes? (reads) "Draw the seating plan"))
+                        "nor its title"))))]
+    (is (some? seats))
+    (is (not (c/doc? (doc worn :q-seats))) "the seating plan is outside her grant")
+    (c/act! worn (doc worn :q-epic) :restate
+            {:showcase {:evidence {:film_url film-url}} :patch true})
+    (is (= "done" (:state (c/act! worn (doc worn :q-guide) :complete ending))))
+    (drain!)
+    (waits "while the seating plan is deferred")
+    (let [planned (:planned_at (quest-data eng quest))]
+      (is (= "open" (:state (c/act! planner (doc planner :q-seats) :resume nil))))
+      (drain!)
+      (is (not= planned (:planned_at (quest-data eng quest)))
+          "Juniper's move on the row she cannot read planned the quest again"))
+    (waits "while it is open")
+    (is (= "done" (:state (c/act! planner (doc planner :q-seats) :complete ending))))
+    (drain!)
+    (testing "after Juniper completes it, the next step is the epic's complete"
+      (let [d (quest-data eng quest)]
+        (is (= [["complete" epic "next"]]
+               (mapv (juxt first second last) (open-steps d)))
+            (pr-str d))
+        (is (nil? (:waiting_on d)) (pr-str d))
+        (is (empty? (:waits_on d)) (pr-str d))
+        (is (not (str/includes? (reads) (id-of :q-seats))))))))
 
 ;; ── the clone's sign-in for the quest (spec-demo-clones § 2) ────────
 
@@ -431,7 +568,6 @@
       (is (some? (get-in (doc typed :ticket :q-seats) [:actions :resume]))))
     (testing "the grant Ada opens is her own"
       (is (= "ada" (get-in grant [:data :audience]))))
-    (testing "acting under it, the deferred child reads no resume door"
-      (let [seats (doc worn :ticket :q-seats)]
-        (is (= "deferred" (:state seats)))
-        (is (nil? (get-in seats [:actions :resume])) (pr-str (:actions seats)))))))
+    (testing "acting under it, the deferred child is outside what she reads"
+      (is (c/doc? (doc worn :ticket :q-epic)))
+      (is (not (c/doc? (doc worn :ticket :q-seats)))))))

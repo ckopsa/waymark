@@ -423,7 +423,14 @@
                    "held_call"
                    ;; waymark-fp62.11: and the verdicts it passed —
                    ;; own-surface by :said_by
-                   "verdict"}
+                   "verdict"
+                   ;; and the walks it recorded — own-surface by
+                   ;; :recorder
+                   "walk"
+                   ;; ticket ce9fdb99: and the quests it accepted, by
+                   ;; :owner, with the invitations and walkthroughs it
+                   ;; is one side of, by :author and :subject
+                   "quest" "invitation" "walkthrough"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"
@@ -435,6 +442,51 @@
                                  {:grant_id g1 :task "Asking again"
                                   :scope [{:kind "plan" :actions ["finalize"]}]}
                                  own-scoped))))))))
+
+;; ── 5b. the own-walk surface: recording under a grant naming no walk ─
+
+(deftest own-walk-surface
+  (let [scope [{:kind "plan" :actions ["finalize"]}]
+        g1 (offer-grant! {:audience "walk-agent" :scope scope})
+        g2 (offer-grant! {:audience "walk-other" :scope scope})
+        mine (dev-headers "walk-agent" {"x-waymark-actor-type" "agent"})
+        theirs (dev-headers "walk-other" {"x-waymark-actor-type" "agent"})
+        own-scoped (assoc mine "x-waymark-grant" g1)
+        other-scoped (assoc theirs "x-waymark-grant" g2)]
+    (accept! g1 mine)
+    (accept! g2 theirs)
+    (testing "well-known carries the walk door the record button reads,
+              though the worn grant names no walk"
+      (let [b (json (req :get "/api/.well-known/waymark" nil own-scoped))]
+        (is (= "/api/walks" (get-in b [:resources :walk :href])))
+        (is (not (contains? (:resources b) :walk_frame))
+            "the frames stay the engine's to write and the export's to show")))
+    (let [born (req :post "/api/walks"
+                    {:followed "walk-agent" :title "Recording under a leash"}
+                    own-scoped)
+          env (json born)
+          self (:self env)]
+      (testing "the grant-wearer starts a walk of its own screen"
+        (is (= 201 (:status born)))
+        (is (= "recording" (:state env)))
+        (is (= "walk-agent" (get-in env [:data :recorder]))))
+      (testing "a reload finds the open walk, as the record button asks"
+        (let [b (json (req :get (str "/api/walks?recorder=walk-agent"
+                                     "&followed=walk-agent&state=recording")
+                           nil own-scoped))]
+          (is (= [self] (mapv :self (get-in b [:data :items]))))))
+      (testing "another principal's grant shows it no such walk"
+        (is (= 404 (:status (req :get self nil other-scoped))))
+        (is (= 404 (:status (req :post (str self "/-/seal") {} other-scoped))))
+        (let [b (json (req :get "/api/walks" nil other-scoped))]
+          (is (not (some #{self} (map :self (get-in b [:data :items])))))))
+      (testing "the recorder seals it and reads it sealed"
+        (let [resp (req :post (str self "/-/seal") {} own-scoped)]
+          (is (= 200 (:status resp)))
+          (is (= "sealed" (:state (json resp)))))
+        (is (= 200 (:status (req :get self nil own-scoped))))
+        (is (= 200 (:status (req :get (str self "/export") nil own-scoped))))
+        (is (= 404 (:status (req :get (str self "/export") nil other-scoped))))))))
 
 ;; ── 6. scope honesty (waymark-vnc): asks and grants speak real names ─
 

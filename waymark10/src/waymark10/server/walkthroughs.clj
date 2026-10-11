@@ -383,6 +383,13 @@
                 :waiting_on #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "open,running,stopped"}
+   ;; the leader and the led read their walkthrough under any worn grant
+   ;; and move it from their own side. `create` is not here: writing one
+   ;; for another person lands in that person's view, so the grant must
+   ;; name it, and the ask door is how a wearer gets it. `step` and
+   ;; `finish` are the engine's
+   :own-surface {:by [:author :subject]
+                 :actions #{:start :stop :resume :advance :withdraw}}
    :create-guards [the-author-sees-every-step every-field-is-an-open-argument]
    :on-create born
    :actions

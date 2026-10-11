@@ -272,9 +272,14 @@
         ;; :caller. A power call that waits on a person is the
         ;; caller's own to read the answer of, and an ask you cannot
         ;; read the answer to is not an ask
+        ;; …and the walks it recorded itself, by :recorder: a person
+        ;; under any grant records their own screen
+        ;; …and (ticket ce9fdb99) the quests it accepted itself, by
+        ;; :owner, with the invitations and walkthroughs it is one side
+        ;; of, by :author and :subject
         (is (= ["approval_request"
-                "grant" "held_call" "job"
-                "scheduled_action" "sitting" "verdict"]
+                "grant" "held_call" "invitation" "job" "quest"
+                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

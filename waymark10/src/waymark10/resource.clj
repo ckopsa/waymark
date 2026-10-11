@@ -877,6 +877,18 @@
 ;; spellings, one law — if the hash had moved, the sugar would have
 ;; changed the law and the generalization would have failed.
 
+(defn everyday-doors
+  "The action names a kind's law marks `:everyday true` in `:display`,
+  beside `:order` and `:style`, sorted: the doors a row's bar keeps in
+  view while they are shut (ticket f66dd175). Empty for a kind that
+  marks none, and that kind's bar is drawn whole."
+  [rdef]
+  (->> (:actions rdef)
+       (filter (comp :everyday :display val))
+       (map (comp name key))
+       sort
+       vec))
+
 (def ^:private decision-keys
   #{:asks :by :decider :verdicts :stamps :expires :pacing :offered
     :own-surface :engine-fields})

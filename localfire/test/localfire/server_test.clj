@@ -70,10 +70,11 @@
   (.toFile (Files/createTempDirectory (str prefix) (make-array FileAttribute 0))))
 
 (defn make-place!
-  "The place is three files (R-5.3, §3), and the hook is executable."
+  "The place is four files (R-5.3, §3), and the hook is executable."
   ^File []
   (let [d (tmpdir "lf-place")]
     (spit (io/file d "CLAUDE.md") "# the seat's place\n")
+    (spit (io/file d "inbox-feed.sh") "#!/bin/bash\nexit 0\n")
     (.mkdirs (io/file d ".claude" "hooks"))
     (spit (io/file d ".claude" "settings.json") "{}\n")
     (let [h (io/file d ".claude" "hooks" "sitting-close.sh")]

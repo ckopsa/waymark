@@ -66,79 +66,41 @@
 
 (defn- serves? [eng kind] (contains? (inv/resources eng) kind))
 
-(def judged-page
-  "The most standing verdicts one walk subtracts by. A judgment whose
-  said verdicts outrun this in a single queue has more decided
-  subjects than one page can hold, and the honest fix there is a
-  narrower `queue`, not a longer read. The count wake reads the same
-  bound for its sealed transcripts (`wakes/unjudged-transcripts`)."
-  500)
+(defn walk-conds
+  "The conds that leave out of this judgment's queue what a walk of it
+  by this seat never hands, for the store to answer in the queue's own
+  query (ticket 279366ee). First, every subject with a standing (`said`)
+  verdict of the judgment, as an anti-join: an `overruled` row is not
+  among them, so a reopened subject comes back by this one rule and no
+  page of verdicts bounds it. Then, for a judge of sittings and whatever its `queue`
+  says: the seat's own sittings, every sitting still open, and every
+  sitting whose transcript is still being written (ticket f508c646).
+  What is left of those is a closed sitting with a sealed transcript,
+  or with none kept.
 
-(defn judged-subjects
-  "The subject ids this judgment has already spoken on: every verdict
-  of it still `said`. An `overruled` row is not here on purpose — a
-  correction overrules the first and the second verdict is the one
-  standing, so a subject leaves the queue once and stays gone.
-
-  …until its verdict is REOPENED. `verdict.reopen` moves the standing
-  row to `overruled` and writes nothing in its place, so this set no
-  longer holds the subject and the next walk hands it back. That is
-  the whole of the reopen's queue mechanism: this one rule, read the
-  same way, and no second list of subjects to re-admit.
-
-  One home for the sit's walk (`mcp/walk-of`) and the count wake
-  (`wakes/unjudged-transcripts`), so the two cannot drift."
-  [eng judgment-id]
-  (if (serves? eng :verdict)
-    (into #{}
-          (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :verdict
-                                       {:judgment (str judgment-id)
-                                        :state "said"}
-                                       {:limit judged-page}))))
-    #{}))
-
-(defn own-sittings
-  "The sitting ids of this seat, the newest `judged-page` of them. A
-  seat judging its own sitting is no judgment, so a judge of sittings
-  is never handed one of these and never wakes for one (ticket
-  f508c646)."
-  [eng seat-id]
-  (if (and seat-id (serves? eng :sitting))
-    (into #{}
-          (map #(str (:id %)))
-          (store/with-tx (:storage eng)
-            (fn [tx] (store/query-rows (:storage eng) tx :sitting
-                                       {:seat (str seat-id)}
-                                       {:limit judged-page
-                                        :newest-first true}))))
-    #{}))
-
-(defn unjudgeable-sittings
-  "The sitting ids a walk of this judgment by this seat leaves out,
-  whatever its `queue` says: the seat's own (`own-sittings`), every
-  sitting still open, and every sitting whose transcript is still being
-  written. What is left is a closed sitting with a sealed transcript,
-  or with none kept. Empty for a judgment about any other kind.
-
-  One home for the sit's walk (`mcp/walk-of`) and the wake's
-  (`wakes/withheld-rows`), as `judged-subjects` is (ticket f508c646)."
+  One home for the sit's walk (`mcp/walk-of`) and the wake's count of
+  it (`wakes/judged-out`), so the two cannot drift. → a vector, empty
+  when this engine serves no verdict."
   [eng judgment-row seat-id]
-  (if (and (= "sitting" (str (get-in judgment-row [:data :subject_kind])))
-           (serves? eng :sitting))
-    (let [st (:storage eng)
-          page {:limit judged-page :newest-first true}]
-      (into (own-sittings eng seat-id)
-            (store/with-tx st
-              (fn [tx]
-                (into (mapv #(str (:id %))
-                            (store/query-rows st tx :sitting {:state :open} page))
-                      (when (serves? eng :transcript)
-                        (keep #(some-> (get-in % [:data :sitting]) str not-empty)
-                              (store/query-rows st tx :transcript
-                                                {:state :open} page))))))))
-    #{}))
+  (cond-> []
+    (serves? eng :verdict)
+    (conj {:target :id :op :no-row
+           :from {:kind :verdict :target :data :field :subject_id
+                  :conds [{:target :state :op := :value "said"}
+                          {:target :data :field :judgment :cast "text"
+                           :op := :value (str (:id judgment-row))}]}})
+
+    (and (= "sitting" (str (get-in judgment-row [:data :subject_kind])))
+         (serves? eng :sitting))
+    (into (cond-> [{:target :state :op :not= :value "open"}]
+            seat-id
+            (conj {:target :data :field :seat :cast "text" :op :not=
+                   :value (str seat-id) :absent? true})
+
+            (serves? eng :transcript)
+            (conj {:target :id :op :no-row
+                   :from {:kind :transcript :target :data :field :sitting
+                          :conds [{:target :state :op := :value "open"}]}})))))
 
 (defn serving?
   "Does this engine have the two kinds to hear at all? The module's

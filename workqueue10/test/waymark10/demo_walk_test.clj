@@ -31,7 +31,7 @@
 
 (def ^:private engine-name "demo-walk")
 
-(def ^:private title "Planner puts the chore list first")
+(def ^:private title "Juniper puts the chore list first")
 
 ;; ── the door ────────────────────────────────────────────────────────
 
@@ -97,7 +97,7 @@
                          :caption "The house keeps its work in one queue."})
                   (call h "waymark_get"
                         {:kind "ticket" :id ticket
-                         :caption "Planner opens the chore list ticket."})
+                         :caption "Juniper opens the chore list ticket."})
                   (call h "waymark_invoke"
                         {:kind "ticket" :id ticket :action "prioritize"
                          :input {:priority 1}
@@ -146,7 +146,7 @@
         (is (contains? types type) type)))
     (testing "each caption the agent wrote is a line of the file"
       (is (= ["The house keeps its work in one queue."
-              "Planner opens the chore list ticket."
+              "Juniper opens the chore list ticket."
               "The house wants it soon, so it goes first."
               "The next morning."
               "The chore list is at the top of the queue."]
@@ -159,7 +159,7 @@
         cast (get-in export [:doc :header :cast])
         seeded (set (map :display (vals (:cast demo))))]
     (is (seq cast))
-    (is (= {:display "Planner" :type "agent"} (:a1 cast))
+    (is (= {:display "Juniper" :type "agent"} (:a1 cast))
         "the agent is the seed's agent member, and never a seat")
     (doseq [[alias member] cast]
       (is (contains? seeded (:display member)) (str alias " " (pr-str member))))))

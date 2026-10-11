@@ -429,7 +429,11 @@ walkthrough needs three more things:
    the hand that created it.* The engine creates a walkthrough's
    invitations. A frame is written when an invitation whose `author`
    is the followed pid and whose `subject` is the recorder is born.
-   Its pinned body gains `fields`, `walkthrough`, `step` and `of`.
+   Its pinned body gains `fields`, `walkthrough`, `step` and `of`. It
+   carries `given` beside `suggest` when the invitation has given
+   values (engine-written, guided follow § 3), and the export's
+   invitation line does too. Both keep only the keys the reader's
+   `:arg?` admits, as `suggest` does.
 2. *The recorder's own answer is a frame.* When the recorder's own
    transition answers such an invitation, a `transition` frame is
    written for it, projected by the recorder's visibility like any
@@ -437,6 +441,8 @@ walkthrough needs three more things:
    answer.
 3. *Replay draws an `invitation` frame.* It opens the dialog with the
    named fields lit, the note and the "Step 2 of 4" line, read-only.
+   `suggest` values fill their fields marked as suggestions, and
+   `given` values fill theirs with no mark. Nothing submits either.
    The next `transition` frame closes it.
 
 What the person typed is not recorded. Their form is theirs unless

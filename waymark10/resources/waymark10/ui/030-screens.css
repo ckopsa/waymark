@@ -88,6 +88,40 @@
                    border-radius: 0; box-shadow: none; font-size: 34px;
                    line-height: 1.3; max-height: 2.6em; overflow: hidden; }
 
+  /* ── presentation mode (docs/spec-agent-demo-walks.md §8b): the detail
+     that is useful day to day and is not for a demo film. wmPresent
+     (200-events-follow.js) sets `present` on the root element; the
+     crumb's row id and its separator, the version line, the grant chip
+     and the header's developer buttons are then not drawn. Nothing
+     else is touched, so no surface the performer clicks moves. The
+     recording chip is #recordbtn while a walk records (■ Stop 0:31),
+     and a demo engine's banner (its end and its export notices) is
+     true for the person who runs the engine and is not for a film ── */
+  html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,
+  html.present #grantchip, html.present #sharebtn, html.present #recordbtn,
+  html.present #replaybtn, html.present #ledgertoggle { display: none !important; }
+  html.present #demobanner { display: none !important; }
+  /* what a performed take still showed (ticket 9e7c21f5): the header's
+     law revision chip, the signed-in name with its sign-out link, the
+     ticker's live log line, a row's Data section with its raw field
+     prompts, and the reasons under the doors for the doors that are
+     shut. The dev principal box (#who) stays */
+  html.present #lawstamp, html.present #signedin, html.present #ticker,
+  html.present details.rowdata, html.present .blockedwhy { display: none !important; }
+  /* a ticket title's '[epic] ' marker (el, 100-core.js) is the tracker's
+     own word and is not for a film; the stored title keeps it */
+  html.present .epicmark { display: none !important; }
+  /* what a phone film still showed (ticket c0cb83af): the intent cards,
+     which name an actor by its id and an engine verb, and the phone's
+     bottom tab bar. A film's caption is burned over the bottom of the
+     frame, so the toast and the undo stack sit at the top while the
+     mode is on. The desktop header's nav stays */
+  html.present #intents { display: none !important; }
+  html.present[data-ui="mobile"] header nav { display: none !important; }
+  html.present #toast { top: 12px !important; bottom: auto !important; }
+  html.present #undostack { top: 64px !important; bottom: auto !important;
+                            max-height: 30vh; overflow-y: auto; }
+
   /* ── the ledger: the activity drawer ─────────────────────────────── */
   #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
             max-width: 92vw; z-index: 15; background: var(--paper);
@@ -170,6 +204,29 @@
 
   /* a guard-refused action keeps its seat in the bar, dimmed */
   button.blocked { opacity: .55; cursor: not-allowed; }
+  /* a shut door that names a way out takes a tap (shutDoor): dashed, in
+     the tracker's verdigris, and not dimmed */
+  button.blocked.notyet { opacity: 1; cursor: pointer; background: transparent;
+                          border: 1px dashed var(--verdigris);
+                          color: var(--verdigris-deep); }
+  .notyet-hint { color: var(--verdigris-deep); }
+  /* a refused rehearsal, create or pin, said in the tap's sheet
+     (questSheet) */
+  .notyet-refused { color: var(--law); font-weight: 700; }
+  .notyet-refused:empty { display: none; }
+  /* the sheet's steps scroll inside it, and under a thumb its two
+     buttons are 44px tall */
+  .quest-sheet-steps { margin: 8px 0; padding-left: 24px; max-height: 40vh;
+                       overflow-y: auto; }
+  .quest-sheet-steps li { margin: 6px 0; overflow-wrap: anywhere; }
+  @media (max-width: 600px), (pointer: coarse) {
+    dialog[data-quest-sheet] .dlgfoot button {
+      min-height: 44px; font-size: 14px; padding: 8px 14px; }
+  }
+  /* the shut doors that are not everyday ones, under one line (foldDoors) */
+  details.moredoors { margin: 4px 0; }
+  details.moredoors > summary { cursor: pointer; padding: 6px 0; }
+  details.moredoors > .actions { margin-top: 4px; }
   .blockedwhy { margin: 2px 0 4px; }
   .blockedwhy .item { font-size: 13px; padding: 3px 0; }
   .blockedwhy .item b { font-weight: 700; }
@@ -269,7 +326,10 @@
   .dlghead h3 { margin: 0 0 4px; font-weight: 800; font-size: 16px; }
   .dlghead .metaline { margin: 0; }
   .dlgbody { padding: 4px 18px 8px; }
+  /* the buttons wrap to a second row where one row is wider than the
+     dialog: none is cut by the screen's edge on a phone */
   .dlgfoot { padding: 12px 18px 16px; display: flex; gap: 8px;
+             flex-wrap: wrap;
              justify-content: flex-end; align-items: center; }
   .dlgfoot .hint { margin-right: auto; color: var(--muted); font-size: 12px; }
   .field { margin: 10px 0; }
@@ -300,8 +360,6 @@
                     font-size: 12.5px; }
   .field .err { color: var(--refusal); font-family: var(--serif);
                 font-size: 12.5px; margin-top: 2px; }
-  .field .err.srv::before { content: "server: "; color: var(--muted);
-                            font-family: var(--sans); font-size: 11px; }
   .field .const { padding: 7px 9px; border: 1px dashed var(--line);
                   border-radius: var(--radius); background: var(--chipbg);
                   color: var(--muted); font-family: var(--mono);

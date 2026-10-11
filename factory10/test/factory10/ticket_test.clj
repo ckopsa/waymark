@@ -224,6 +224,15 @@
     (testing "a plain ticket completes without a showcase"
       (is (= :available (:status (refusal (at :open) c :complete)))))))
 
+(deftest the-law-marks-the-everyday-doors
+  ;; ticket f66dd175: the bar keeps these in view while they are shut,
+  ;; and folds every other shut door under 'More doors'
+  (is (= ["block" "complete" "defer" "drop" "groom" "restate" "resume" "unblock"]
+         ((requiring-resolve 'waymark10.resource/everyday-doors) ticket)))
+  (testing "a door the law does not mark is not one"
+    (is (not (get-in ticket [:actions :merge_after :display :everyday])))
+    (is (not (get-in ticket [:actions :reparent :display :everyday])))))
+
 (deftest an-open-ticket-is-the-queue-and-offers-every-working-door
   (testing "a seat at an open ticket meets the doors that end or park it"
     (is (= #{:prioritize :block :defer :complete :drop :merge_after :reparent}
@@ -565,7 +574,8 @@
     (testing "blocking on an unrelated open ticket still works"
       (is (= :allow (:verdict (judge ["U"])))))
     (testing "setting a parent the ticket already waits on refuses"
-      (let [guard (last (:create-guards ticket))
+      (let [guard (first (filter #(= :the-parent-is-not-waited-on (:name %))
+                                 (:create-guards ticket)))
             row (at :blocked {:blocked_by ["G"]} "C")
             judge-parent (fn [parent]
                            (:verdict (first (g/evaluate guard row {:parent parent}
@@ -805,6 +815,19 @@
         "the import keeps the id each ask carried in beads"))
   (is (= 20000 tk/detail-chars)))
 
+;; A form draws its placeholder from the field's first example, and a
+;; ticket is a household's dinner task as often as a code change: the
+;; example of `close_reason` names no repository and no pull request.
+
+(deftest the-close-reason-example-suits-any-ticket
+  (doseq [[action {:keys [input]}] (:actions ticket)
+          entry (when (vector? input) (rest input))
+          :when (and (vector? entry) (= :close_reason (first entry)))
+          example (:examples (second entry))]
+    (testing (name action)
+      (is (not (re-find #"github:|#\d" example))
+          "no repo and no pull request in a placeholder"))))
+
 ;; ── the change's `why` says its limit (ticket e527f233) ─────────────
 ;; A seat walking a ticket learns the 480 characters before it spends
 ;; a refused submit or stall on them: the help names the limit, and an
@@ -908,7 +931,9 @@
                           (sitter "house-mayor"))]
       (is (nil? (:requested_by data)))
       (is (= 1 (:priority data)))))
-  (let [[_ _ known mayors] (:create-guards ticket)
+  (let [named (fn [n] (first (filter #(= n (:name %)) (:create-guards ticket))))
+        known (named :the-domain-is-one-we-have)
+        mayors (named :only-a-mayor-asks-another-domain)
         allowed? (fn [guard seat inp]
                    (= :allow (:verdict (first (g/evaluate guard nil inp (sitter seat))))))]
     (testing "only a mayor names another domain"
@@ -1040,3 +1065,52 @@
         "a requested ticket's sitting is the requester's cost")
     (is (== 3 (:factory spend))
         "a ticket nobody asked for, and a sitting that walked nothing, are factory's")))
+
+;; ── a seat does not file one failure twice (ticket 535d86ed) ──────────
+
+(deftest a-seat-is-warned-of-the-open-ticket-that-names-its-failure
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        seat (t/principal {:id "code-seat" :type :agent})
+        failure {:title "ui-drive is red on my pull request"
+                 :detail "The run says `FAILED: Accept closes the sheet and shows the tracker`."
+                 :type "bug"
+                 :repo "ckopsa/waymark"}
+        file! (fn [input opts]
+                (try (str (:id (:row (inv/create! eng :ticket input opts))))
+                     (catch clojure.lang.ExceptionInfo e (ex-data e))))
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"}
+                       {:principal colton})
+        first-id (file! failure {:principal colton})
+        _ (inv/invoke! eng :ticket first-id :groom {} {:principal colton})
+        warned (file! failure {:principal seat})]
+    (testing "a seat's second filing of the failure is refused with a warning"
+      (is (map? warned) (pr-str warned))
+      (is (= 409 (:status warned)) (pr-str warned))
+      (is (str/includes? (pr-str warned) "no-open-ticket-names-this-failure")
+          "the refusal names the guard to acknowledge")
+      (is (str/includes? (pr-str warned) first-id)
+          "and the ticket that already names the failure"))
+    (testing "and lands when the warning is acknowledged"
+      (is (string? (file! failure
+                          {:principal seat
+                           :acknowledged #{:no-open-ticket-names-this-failure}}))))
+    (testing "a person's identical create lands at once"
+      (is (string? (file! failure {:principal colton}))))
+    (testing "a seat naming an unrelated failure is not warned"
+      (is (string? (file! (assoc failure :detail
+                                 "The run says `FAILED: the offer under the refusal`.")
+                          {:principal seat}))))
+    (testing "a second filing is warned while the first is still a draft"
+      (let [fresh (assoc failure :detail
+                         "The run says `FAILED: the sheet keeps its scroll place`.")
+            draft (:row (inv/create! eng :ticket fresh {:principal seat}))
+            draft-id (str (:id draft))
+            warned (file! fresh {:principal seat})]
+        (is (= "draft" (some-> (:state draft) name))
+            "the first filing was not groomed")
+        (is (map? warned) (pr-str warned))
+        (is (= 409 (:status warned)) (pr-str warned))
+        (is (str/includes? (pr-str warned) draft-id)
+            "the refusal names the draft that already names the failure")))))

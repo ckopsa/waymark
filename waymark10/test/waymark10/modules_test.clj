@@ -99,6 +99,9 @@
            ;; …and the recorded walk and its frames (§ 4), core's
            ;; beside the invitation
            :walk :walk_frame
+           ;; …and the film rule (demo scorecard), core's beside the
+           ;; walk a film is rendered from
+           :film_rule
            ;; …and the scheduled action
            ;; (docs/spec-scheduled-actions.md R-1), core's beside the
            ;; held call it carries a ref to
@@ -110,6 +113,9 @@
            ;; …and the quest (docs/spec-quests.md), core's beside the
            ;; walkthrough: its goal is judged as an invitation's step is
            :quest
+           ;; …and the scene and the take (docs/spec-scenes.md): a demo
+           ;; written as shots, and one performance of it
+           :scene :take
            ;; …and the secret: a value the owner enters once, which a
            ;; power call on core's own mcp_server names by reference
            :secret}
@@ -141,7 +147,7 @@
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :quest :secret}
+             :walkthrough :quest :secret :film_rule :scene :take}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -241,6 +247,9 @@
                "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               ;; the names a scene addresses the page by, beside the
+               ;; page that carries them
+               "/api/-/ui/surfaces"
                ;; the prose fields' render door, beside the page that
                ;; calls it
                "/api/-/render/markdown"

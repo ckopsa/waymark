@@ -778,6 +778,52 @@
         (is (= [(+ 2 moved) refused] (counts))
             "each input is its own transition")))))
 
+(deftest an-answered-plain-http-read-after-a-refusal-is-not-refused-out
+  ;; ticket 3ff10737: the recovery rule of 28a5d117 held for the
+  ;; connector alone. This is the file where a plain-HTTP call is the
+  ;; sitting's own: the sitter is the audience of the grant it presents
+  (let [{:keys [h]} (world)
+        model (add-model! h "recover-model")
+        seat (open-seat! h "clerk-recover")
+        gid (sit! h (sitter "ari-recover") "clerk-recover" {})
+        as (sitter "ari-recover" {:grant gid})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers as :body {:seat seat :model model
+                                            :grant gid}}))
+        data (fn []
+               (:data (json (req h :get (str "/api/sittings/" sid)
+                                 {:headers human}))))
+        v (req h :post "/api/seat_vaults" {:headers as :body {:name "strongbox"}})
+        vault (str "/api/seat_vaults/" (id-of v))]
+    (is (= 201 (:status v)) (pr-str (json v)))
+
+    (testing "the guard's 409 is the sitting's last refusal"
+      (is (= 409 (:status (req h :post (str vault "/-/seal") {:headers as}))))
+      (is (some? (:last_refusal (data))))
+      (is (nil? (:last_answer_at (data)))))
+
+    (testing "a read that is refused answers nothing"
+      (is (= 404 (:status (req h :get (str "/api/seat_vaults/" (random-uuid))
+                               {:headers as}))))
+      (is (nil? (:last_answer_at (data)))))
+
+    (testing "a read that answers stamps last_answer_at"
+      (Thread/sleep 5)
+      (is (= 200 (:status (req h :get vault {:headers as}))))
+      (is (some? (:last_answer_at (data)))))
+
+    (testing "the close with a note is not refused_out"
+      (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                               {:headers as
+                                :body {:input_tokens 10 :output_tokens 10
+                                       :cache_read_tokens 0
+                                       :cache_write_tokens 0
+                                       :turns 1
+                                       :note "The vault stays open; nothing else to do."}}))))
+      (let [d (data)]
+        (is (some? (:outcome d)))
+        (is (not= "refused_out" (some-> (:outcome d) name)))))))
+
 (deftest a-closed-sitting-shows-the-rows-a-person-reversed
   (let [{:keys [h]} (world)
         model (add-model! h "correct-model")

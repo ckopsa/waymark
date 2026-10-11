@@ -61,7 +61,10 @@
 (defn- action-flags [entry]
   (let [safety (:safety entry)
         fields (keys (get-in entry [:input :properties]))
+        ;; a safe collection door (:collection-doors) says so first: it
+        ;; moves no row, so it prints no → and is never a bulk move
         flags (cond-> []
+                (:safe safety) (conj "safe")
                 (:confirm safety) (conj "confirm")
                 (:fence safety) (conj "if-match")
                 (not (:idempotent safety)) (conj "non-idempotent")

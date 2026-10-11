@@ -90,6 +90,23 @@
       (is (= (:header d) (wire/read-json (first (:lines d)))))
       (is (false? (:truncated d))))))
 
+(deftest the-route-admits-a-request-without-the-principal-headers
+  ;; what the route does today, stated and not chosen here: a plain
+  ;; navigation to the export href sends no x-waymark-principal and no
+  ;; grant. The identity boundary resolves it to the anonymous human,
+  ;; whose sight is unscoped, and the route asks nothing more of it.
+  (let [eng (boot)
+        id (walk! eng 2)]
+    (seal! eng id)
+    (let [res ((engine/handler eng)
+               {:request-method :get
+                :uri (str "/api/walks/" id "/export")
+                :headers {}})]
+      (is (= 200 (:status res)))
+      (is (= "application/x-ndjson" (get-in res [:headers "Content-Type"])))
+      (is (= "waymark-walk/1"
+             (:format (wire/read-json (first (str/split-lines (:body res))))))))))
+
 (deftest an-export-over-the-cap-is-truncated-and-says-so
   (with-redefs [mcp/export-lines-cap 300]
     (let [eng (boot)

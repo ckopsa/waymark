@@ -1139,6 +1139,39 @@
         (named ":summary" (map (comp keyword second)
                                (re-seq summary-data-root (str (:summary r)))))))))
 
+(defn- check-collection-doors
+  "A :collection-doors entry is a route the router mounts from the
+  declaration: the entry is advertised wherever the kind is, so one
+  with no :handler would be a door every document names and nothing
+  answers. A door and the bulk door share one address, POST
+  /api/{plural}/-/{name}, and the router answers a declared door
+  first: a door named as an action would hide that action's bulk
+  door and put two entries under one key of the collection document."
+  [r]
+  (let [doors (:collection-doors r)
+        taken (into #{"create" "query" "worksheet"}
+                    (map name) (keys (:actions r)))]
+    (when (and (some? doors) (not (map? doors)))
+      (err r :collection-doors
+           (str ":collection-doors is {name {:input … :summary … "
+                ":handler (fn [engine body ctx] …)}}")))
+    (doseq [[dname door] (sort-by key doors)]
+      (when-not (map? door)
+        (err r :collection-doors
+             (str "collection door " dname " is not a map; declare "
+                  "{:input … :summary … :handler (fn [engine body ctx] …)}")))
+      (when (contains? taken (name dname))
+        (err r :collection-doors
+             (str "collection door " dname " shares its name with the "
+                  "action " (name dname) " — both answer at POST /api/"
+                  "{plural}/-/" (name dname) ", and the door would hide "
+                  "the action; rename one of them")))
+      (when-not (fn? (:handler door))
+        (err r :collection-doors
+             (str "collection door " dname " declares no :handler — "
+                  "(fn [engine body ctx] answer) is what POST /api/"
+                  "{plural}/-/" (name dname) " answers with"))))))
+
 (def ^:private view-kinds #{:deck :feed})
 
 (defn- presence-field
@@ -1402,6 +1435,13 @@
 (defn- check-links [r]
   (let [dkeys (data-keys r)]
     (doseq [ld (:links r)]
+      (when (contains? ld :states)
+        (when-not (and (set? (:states ld)) (seq (:states ld))
+                       (every? (into #{} (map name) (:states r))
+                               (map name (:states ld))))
+          (err r :links (str "link " (:rel ld) ": :states " (pr-str (:states ld))
+                             " must be a non-empty set of this kind's states — "
+                             "the link is advertised only on a row in one of them"))))
       (when (:badge ld)
         (when-not (contains? dkeys (:badge ld))
           (err r :links (str "link " (:rel ld) ": badge " (:badge ld)
@@ -1965,6 +2005,38 @@
                 "the row has no field ")
               (name k)))))
 
+(defn- check-owned-surface
+  "A kind whose row carries a `:x-ref {:principal true}` field its
+  `:create-schema` omits has an owner no caller names: the engine
+  writes it. With no `:own-surface`, a worn grant that does not name
+  the kind hides the row from that owner in silence (ticket ce9fdb99).
+  `:no-own-surface` is the kind's one sentence saying why a
+  grant-wearer should not reach it; a WARNING names the kind that
+  declares neither. The declaration cannot say which door writes the
+  field, so one a later door writes is named too, and its sentence
+  says that."
+  [r]
+  (let [why (:no-own-surface r)]
+    (when-not (or (nil? why) (and (string? why) (not (str/blank? why))))
+      (err r :no-own-surface
+           ":no-own-surface is one sentence: why a grant-wearer does not reach their own rows of this kind"))
+    (when-some [cform (when-not (or why (:own-surface r)) (:create-schema r))]
+      (let [entries (schema/entry-map (:schema r))
+            asked (set (schema/entry-keys cform))
+            stamped (into []
+                          (filter (fn [k]
+                                    (and (not (contains? asked k))
+                                         (true? (get-in (entries k)
+                                                        [:properties :x-ref :principal])))))
+                          (schema/entry-keys (:schema r)))]
+        (when (seq stamped)
+          [(str "[owned-surface] data." (str/join ", data." (map name stamped))
+                " names a principal the create model omits, so the engine writes it, "
+                "and the kind declares no :own-surface: a worn grant that does not "
+                "name the kind hides the row from that principal. Declare "
+                ":own-surface {:by …}, or :no-own-surface with one sentence saying "
+                "why a grant-wearer should not reach it")])))))
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -1981,7 +2053,8 @@
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
-          check-absent-as
+          check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults check-answered-at-a-door check-remedy-bindings])})
+          check-defaults check-answered-at-a-door check-remedy-bindings
+          check-owned-surface])})

@@ -84,9 +84,11 @@ grant can be a seat's own. The owner's ruling, 2026-09-27: a guard
 that keeps a seat from its own transcripts is not necessary now
 (section 13).
 
-**D-7. The seat's place keeps three files.** The upload is a new
-step in `sitting-close.sh`. No file is added, so the sync workflow's
-count and the note in the seat's `CLAUDE.md` do not change.
+**D-7. The upload adds no file to the seat's place.** The upload is a
+new step in `sitting-close.sh`. No file is added, so the sync workflow's
+count and the note in the seat's `CLAUDE.md` do not change. The place
+holds four files: the three of this decision's day, and
+`inbox-feed.sh`, which came later (`docs/seat-inbox-feed.md`).
 
 ## 3. Requirements: the kinds
 

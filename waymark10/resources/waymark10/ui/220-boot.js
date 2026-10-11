@@ -36,6 +36,7 @@ function onPresenceFrame({event, data: f}) {
   /* guided follow (200-events-follow.js): the followed principal's
      screen state, applied — a snapshot's entry carries its last ui */
   if (f.event === "ui") applyGuidedUi(f);
+  else if (f.event === "move") guidedMove(f);
   else if (f.event === "snapshot" && followUi && followId) {
     guidedSeq = -1;
     const p = PRESENCE.get(followId);

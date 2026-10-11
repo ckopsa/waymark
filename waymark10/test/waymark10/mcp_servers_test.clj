@@ -29,7 +29,9 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.io File)
+  (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
+           (java.io File)
+           (java.net InetSocketAddress)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)
@@ -582,6 +584,178 @@
       (is (= :live (:state (servers/row-by-name eng "quick"))))
       (finally
         (.countDown latch)))))
+
+;; ── a tool that waits on purpose outlives the row's bound ───────────
+
+(deftest a-slow-tool-answers-past-the-rows-timeout
+  (let [tools [{:name "read" :description "Read a file."
+                :inputSchema {:type "object" :properties {}}}
+               {:name "test_result" :description "Read a run."
+                :inputSchema {:type "object" :properties {}}}]
+        latch (CountDownLatch. 1)
+        rig (fn [method params]
+              (case method
+                "tools/list" {:tools tools}
+                "tools/call" (do (if (= "read" (:name params))
+                                   (.await latch)
+                                   (Thread/sleep 900))
+                                 {:content [{:type "text" :text "pending"}]
+                                  :isError false})))
+        eng (fresh-engine {:clients {"bench" rig} :timeout-ms 300})
+        _ (a-server! eng {:name "bench"
+                          :powers [{:power "bench.read"
+                                    :tools ["read" "test_result"]
+                                    :why false}]})]
+    (try
+      (let [out (servers/call! eng "bench__test_result" {})]
+        (is (false? (:isError out))
+            "the rig's wait is longer than the row's bound, and it answers"))
+      (is (= :live (:state (servers/row-by-name eng "bench")))
+          "a wait is not a death: the row is not marked dark")
+      (let [e (refused #(servers/call! eng "bench__read" {}))]
+        (is (p/problem? e))
+        (is (= 502 (:status (ex-data e)))
+            "every other tool of the row keeps the row's bound"))
+      (finally
+        (.countDown latch)))))
+
+;; ── a call that waits on an http row does not hold up the next ──────
+
+(deftest a-waiting-call-does-not-delay-a-second-call-to-the-same-http-row
+  (let [tools [{:name "read" :description "Read a file."
+                :inputSchema {:type "object" :properties {}}}
+               {:name "test_result" :description "Read a run."
+                :inputSchema {:type "object" :properties {}}}]
+        waiting (CountDownLatch. 1)
+        latch (CountDownLatch. 1)
+        rig (fn [method params]
+              (case method
+                "tools/list" {:tools tools}
+                "tools/call" (do (when (= "test_result" (:name params))
+                                   (.countDown waiting)
+                                   (.await latch))
+                                 {:content [{:type "text" :text (:name params)}]
+                                  :isError false})))
+        eng (fresh-engine {:clients {"bench" rig} :timeout-ms 300})
+        _ (a-server! eng {:name "bench"
+                          :powers [{:power "bench.read"
+                                    :tools ["read" "test_result"]
+                                    :why false}]})
+        slow (future (servers/call! eng "bench__test_result" {}))]
+    (try
+      (is (.await waiting 5 TimeUnit/SECONDS) "the slow call is on the wire")
+      (let [out (deref (future (servers/call! eng "bench__read" {}))
+                       5000 ::queued)]
+        (is (not= ::queued out)
+            "the second call answers while the first still waits")
+        (is (false? (:isError out))))
+      (.countDown latch)
+      (is (false? (:isError (deref slow 5000 ::queued)))
+          "and the first answers when its wait ends")
+      (finally
+        (.countDown latch)))))
+
+;; ── the http client under two callers (ticket 08b88006) ─────────────
+
+(defn- session-server!
+  "An MCP server on loopback that answers `initialize` slowly, each with
+  its own session id, and lands every method it was sent on `seen`.
+  `boom` answers a JSON-RPC error and `down` answers HTTP 500.
+  `sessionless?` leaves the session id off every answer.
+  → [server url seen]."
+  [& {:keys [sessionless?]}]
+  (let [seen (atom [])
+        server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        answer! (fn [^HttpExchange ex status session body]
+                  (when session
+                    (.add (.getResponseHeaders ex) "mcp-session-id" session))
+                  (if body
+                    (let [bs (.getBytes ^String (wire/write-json body)
+                                        StandardCharsets/UTF_8)]
+                      (.add (.getResponseHeaders ex)
+                            "Content-Type" "application/json")
+                      (.sendResponseHeaders ex status (alength bs))
+                      (with-open [o (.getResponseBody ex)] (.write o bs)))
+                    (do (.sendResponseHeaders ex status -1) (.close ex))))]
+    (.createContext
+     server "/mcp"
+     (reify HttpHandler
+       (handle [_ ex]
+         (let [msg (wire/read-json (slurp (.getRequestBody ex)))
+               method (str (:method msg))
+               n (count (filter #{"initialize"} (swap! seen conj method)))
+               result #(hash-map :jsonrpc "2.0" :id (:id msg) :result %)]
+           (case method
+             "initialize" (do (Thread/sleep 300)
+                              (answer! ex 200
+                                       (when-not sessionless?
+                                         (str "session-" n))
+                                       (result {:capabilities {}})))
+             "notifications/initialized" (answer! ex 202 nil nil)
+             "tools/list" (answer! ex 200 nil (result {:tools []}))
+             "boom" (answer! ex 200 nil
+                             {:jsonrpc "2.0" :id (:id msg)
+                              :error {:code -32000 :message "no"}})
+             "down" (answer! ex 500 nil nil))))))
+    (.start server)
+    [server (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/mcp")
+     seen]))
+
+(deftest two-first-calls-on-one-http-client-make-one-initialize
+  (let [[^HttpServer server url seen] (session-server!)
+        c (client/http-client url {:timeout-ms 5000})
+        go (CountDownLatch. 1)
+        call! #(future (.await go) (c "tools/list" {}))
+        a (call!)
+        b (call!)]
+    (try
+      (.countDown go)
+      (is (= [] (:tools (deref a 10000 ::late))) "the first caller answers")
+      (is (= [] (:tools (deref b 10000 ::late))) "and so does the second")
+      (is (= 1 (count (filter #{"initialize"} @seen)))
+          "the second caller waited for the first handshake and reused it")
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
+
+(deftest a-server-that-gives-no-session-id-is-initialized-once
+  (let [[^HttpServer server url seen] (session-server! :sessionless? true)
+        c (client/http-client url {:timeout-ms 5000})
+        initializes #(count (filter #{"initialize"} @seen))]
+    (try
+      (is (= [] (:tools (c "tools/list" {}))) "the first call answers")
+      (is (= [] (:tools (c "tools/list" {}))) "and so does the second")
+      (is (= 1 (initializes))
+          "the second call reused the handshake, with no session id to hold")
+      (client/close! c)
+      (is (= [] (:tools (c "tools/list" {}))))
+      (is (= 2 (initializes)) "a closed client handshakes again")
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
+
+(deftest an-http-failure-is-judged-by-the-problem-it-threw
+  (let [[^HttpServer server url _] (session-server!)
+        c (client/http-client url {:timeout-ms 5000})]
+    (try
+      (let [wire-failure (refused #(c "down" {}))
+            rpc-failure (refused #(c "boom" {}))]
+        (is (p/problem? wire-failure))
+        (is (p/problem? rpc-failure))
+        (testing "each keeps its verdict whatever the client did since"
+          (is (true? (client/dead? c wire-failure))
+              "a wire failure is fatal after a later rpc error")
+          (is (= [] (:tools (c "tools/list" {}))))
+          (is (true? (client/dead? c wire-failure))
+              "and after a later answer")
+          (is (false? (client/dead? c rpc-failure))
+              "a JSON-RPC error is not")
+          (refused #(c "down" {}))
+          (is (false? (client/dead? c rpc-failure))
+              "nor after a later wire failure")))
+      (finally
+        (client/close! c)
+        (.stop server 0)))))
 
 ;; ── the stdio client's death policy (R-3) ───────────────────────────
 

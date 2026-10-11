@@ -203,8 +203,12 @@
                                       :arguments (:arguments params)})
         (when (:down @st)
           (throw (ex-info "Gate unreachable" {})))
-        (let [answer (get-in @st [:answers named]
-                             {:refused "unknown_tool"})]
+        (let [queued (first (get-in @st [:first-answers named]))
+              _ (when queued
+                  (swap! st update-in [:first-answers named] (comp vec rest)))
+              answer (or queued
+                         (get-in @st [:answers named]
+                                 {:refused "unknown_tool"}))]
           {:isError (boolean (:refused answer))
            :content [{:type "text" :text (wire/write-json answer)}]
            :structuredContent {:result answer}}))
@@ -748,6 +752,63 @@
          answered nothing at all — this one answered")
     (is (= [(str (:id change))] (mapv :id (get-in answer [:walk :rows])))
         "and the rows still ride")))
+
+(def ^:private a-fetch-refusal
+  "The rig's refusal of 2026-10-07, as it answered it: the fetch could
+  not reach the forge (ticket 2576d7a1)."
+  {:refused "git"
+   :command "fetch --prune origin"
+   :reason (str "fatal: unable to access "
+                "'https://github.com/ckopsa/waymark/': "
+                "Could not resolve host: github.com")})
+
+(defn- sit-answer
+  "One sit on a fresh engine over `st`, with no wait between two tries
+  of the prepare → [the sit's result, its document, the change]."
+  [st]
+  (with-redefs [mcp/bench-fetch-retry-pause-ms 0]
+    (let [eng (fresh-engine st)
+          _ (a-policy! eng {})
+          change (a-change! eng {})
+          _ (open-seat! eng {})
+          h (engine/handler eng)
+          sid (get-in (rpc h (bearer) "initialize"
+                           {:protocolVersion mcp/protocol-version
+                            :capabilities {}
+                            :clientInfo {:name "routine" :version "0"}})
+                      [:headers "Mcp-Session-Id"])
+          sat (call! h sid "waymark_sit" {:key a-key})]
+      [sat (doc-of sat) change])))
+
+(deftest one-failed-fetch-then-a-good-one-leaves-no-stall-advice
+  ;; Prod, 2026-10-07: the rig's fetch could not resolve the forge's
+  ;; host one time, the sit said to stall the change, and one prepare a
+  ;; minute later made the worktree (ticket 2576d7a1).
+  (let [st (state)
+        _ (swap! st assoc-in [:first-answers "bench__prepare"]
+                 [a-fetch-refusal])
+        [sat answer _] (sit-answer st)]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= 2 (count (calls-of st "bench__prepare")))
+        "the sit asked for the prepare one more time")
+    (is (some? (:bench answer))
+        "the second prepare made the worktree, so the bench is answered")
+    (is (nil? (:bench_note answer))
+        "and nothing tells the seat to stall a change it can build")
+    (is (not (str/includes? (text-of sat) "stall the change with"))
+        "anywhere in the answer")))
+
+(deftest a-fetch-that-fails-twice-still-reads-as-its-reason
+  (let [st (state)
+        _ (answer! st "bench__prepare" a-fetch-refusal)
+        [sat answer _] (sit-answer st)
+        note (str (:bench_note answer))]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= 2 (count (calls-of st "bench__prepare")))
+        "one more try, and then no more")
+    (is (nil? (:bench answer)))
+    (is (str/includes? note "Could not resolve host: github.com")
+        "a fetch that fails both times is a cause a person reads")))
 
 (deftest a-repository-with-no-orientation-file-answers-the-sentence
   (let [st (state)

@@ -1779,6 +1779,57 @@
           (inv/invoke! eng :sitting (str s) :abandon nil
                        {:principal seats/seats-actor}))))))
 
+(deftest a-second-seat-is-not-handed-the-row-another-seats-sitting-holds
+  ;; Ticket 40d8f04c: two seats walked one queue, and each sit handed
+  ;; the row the other seat's open sitting already worked.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        first-seat (open-walk-seat! eng {:rows_per_firing 1})
+        second-key "c2VhdC1rZXktZm9yLXRoZS1zZWNvbmQtY2xlcms"
+        second-seat (:row (inv/create!
+                           eng :seat
+                           {:name "post-clerk-two"
+                            :charter walk-charter
+                            :scope [{:kind "post"
+                                     :actions ["file" "drop"]
+                                     :filter {:box "house"}}]
+                            :walk "post"
+                            :held_for (get-in first-seat [:data :held_for])
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000
+                            :rows_per_firing 1}
+                           {:principal person}))
+        _ (schedules/ensure-schedule! eng second-seat)
+        _ (inv/invoke! eng :seat (:id second-seat) :offer_key {:key second-key}
+                       {:principal person})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        sit-as! (fn [k seat-name run]
+                  (let [[sid _] (initialize! h)
+                        r (tool h (with-session sid) "waymark_sit"
+                                {:key k :seat seat-name :session run})]
+                    [r (doc-of r)]))
+        [r1 one] (sit-as! walk-key "post-clerk" "run-one")]
+    (testing "the first seat's sit is handed the one row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (= [(str (:id gas))] (mapv :id (get-in one [:walk :rows])))))
+    (let [[r2 two] (sit-as! second-key "post-clerk-two" "run-two")]
+      (testing "the second seat's sit is not handed it, and says why"
+        (is (false? (:isError r2)) (text-of r2))
+        (is (empty? (get-in two [:walk :rows])))
+        (is (= [(str (:id gas))] (mapv :id (get-in two [:walk :withheld]))))
+        (is (str/includes? (str (get-in two [:walk :withheld 0 :reason]))
+                           "another seat"))
+        (is (contains? (seats/claimed-rows eng (:id second-seat) (:sitting two))
+                       (str (:id gas))))))
+    (testing "the hold ends when the holding sitting does"
+      (inv/invoke! eng :sitting (str (:sitting one)) :abandon nil
+                   {:principal seats/seats-actor})
+      (let [[r3 three] (sit-as! second-key "post-clerk-two" "run-two")]
+        (is (false? (:isError r3)) (text-of r3))
+        (is (= [(str (:id gas))] (mapv :id (get-in three [:walk :rows]))))))))
+
 (deftest a-fire-that-names-a-row-walks-that-row-or-the-next-free-one
   (let [eng (fresh-engine [fx/meal post])
         h (engine/handler eng)

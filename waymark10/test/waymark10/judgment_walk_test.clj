@@ -413,7 +413,7 @@
 ;; ── 4 · a reopened verdict puts its subject back in the queue ───────
 ;;
 ;; The walk subtracts subjects with a SAID verdict and nothing else
-;; (`mcp/judged-subjects`), so a reopen — which moves the standing
+;; (`judgments/walk-conds`), so a reopen — which moves the standing
 ;; verdict to overruled and writes nothing in its place — hands the
 ;; subject back by that one rule. And because the reopen is an
 ;; ordinary transition, the seat that walks the judgment wakes on it
@@ -644,6 +644,47 @@
         (is (= 4 (n)) "the default `sealed` leaves the open one out")
         (is (= 5 (#'wakes/entry-count eng (raw-of eng :seat (:id judge)) either))
             "open,sealed counts the four unjudged sealed and the open one")))))
+
+(deftest a-judges-count-over-transcripts-has-no-page-to-run-past
+  ;; the count read the newest 500 sealed transcripts and the oldest 500
+  ;; said verdicts, so an unjudged sitting older than 500 judged ones
+  ;; was counted by nobody (ticket 2abff5f9)
+  (let [eng (fresh-engine)
+        judgment (sitting-judgment! eng)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]
+                :wake_on [seal-count]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
+        waiting (sealed-sitting! eng worker model grant)]
+    (is (= 1 (n)) "one sealed transcript, its sitting unjudged")
+    (dotimes [_ 501]
+      (judge-sitting! eng judgment (sealed-sitting! eng worker model grant)))
+    (is (= 1 (n))
+        "501 judged sittings sealed after it, and the one waiting still counts")
+    (judge-sitting! eng judgment waiting)
+    (is (= 0 (n)) "judged, it counts no more")))
 
 ;; ── a judge of sittings is handed only what it can read (ticket f508c646) ──
 
@@ -1124,6 +1165,66 @@
                 "the walk read already carries a standing verdict of this "
                 "judgment.")
            why))))
+
+;; ── 9″ · the judged are left out past the page (ticket 245c880b) ─────
+
+(deftest a-judged-subject-past-the-page-of-verdicts-is-not-handed-again
+  ;; the judged were once read a page of said verdicts at a time: a
+  ;; judgment that had said more handed its newer subjects again, and
+  ;; the guard refused each verdict. The store's anti-join
+  ;; (`judgments/walk-conds`) has no page, so the sit's walk and the
+  ;; wake's count of it leave out every subject with a said verdict
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        seat (open-judge-seat! eng judgment {})
+        knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
+        flour (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        salt (expense! eng "Salt works" "kitchen" "2026-09-18T09:00:00Z")
+        ids #(mapv (comp str :id) %)
+        _ (say! eng judgment knives "keep" "Nothing to do: the amount fits.")
+        [r answer _] (empty-sit! eng h)]
+    (testing "three subjects, one judged: the other two are handed"
+      (is (false? (:isError r)) (text-of r))
+      (is (= (ids [flour salt]) (mapv :id (get-in answer [:walk :rows])))))
+    (doseq [e [flour salt]]
+      (say! eng judgment e "keep" "Nothing to do: the amount fits."))
+    (testing "all three judged: none is handed"
+      (let [[r answer _] (empty-sit! eng h)]
+        (is (false? (:isError r)) (text-of r))
+        (is (empty? (get-in answer [:walk :rows]))))
+      (is (= 0 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+          "and the wake counts none of them"))))
+
+;; ── 9‴ · the store leaves the judged out of the queue (ticket 279366ee) ─
+
+(deftest judged-subjects-past-the-walk's-pages-do-not-hide-the-free-one
+  ;; the judged were subtracted after each page was read, so a walk
+  ;; stopped at its cap of pages with a free subject behind them, and
+  ;; the wake counted the first ids of the queue alone. The cap is one
+  ;; page here and the wake's page ten ids, with 150 judged ahead
+  (with-redefs-fn {#'mcp/walk-pages-max 1
+                   #'wakes/queue-page 10}
+    (fn []
+      (let [eng (fresh-engine)
+            h (engine/handler eng)
+            judgment (promoted-judgment! eng {})
+            seat (open-judge-seat! eng judgment {})
+            at #(format "2026-09-18T07:%02d:%02dZ" (quot % 60) (rem % 60))
+            judged (mapv #(expense! eng (str "Vendor " %) "kitchen" (at %))
+                         (range 150))
+            free (expense! eng "Flour mill" "kitchen" (at 150))
+            _ (doseq [e judged]
+                (say! eng judgment e "keep" "Nothing to do: the amount fits."))]
+        (is (= 1 (#'wakes/walk-count eng (raw-of eng :seat (:id seat))))
+            "the wake counts the one free subject, behind 150 judged")
+        (let [[r answer why] (empty-sit! eng h)]
+          (is (false? (:isError r)) (text-of r))
+          (is (= 151 (get-in answer [:walk :total]))
+              "the total is still the whole queue")
+          (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows])))
+              "the free expense is handed from behind more pages than the cap")
+          (is (nil? why)))))))
 
 ;; ── 10 · an empty walk says when its filter emptied it (ticket 6ea8f277) ─
 

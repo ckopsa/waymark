@@ -11,7 +11,7 @@
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)
            (java.nio.charset StandardCharsets)
-           (java.sql Connection DriverManager Timestamp)
+           (java.sql Connection DriverManager SQLException Timestamp)
            (java.util.zip CRC32)
            (org.postgresql PGConnection)
            (org.postgresql.util PGobject)))
@@ -378,6 +378,146 @@
               (.update (.getBytes (name role-name) StandardCharsets/UTF_8)))]
     (bit-or (bit-shift-left (long lock-namespace) 32) (.getValue crc))))
 
+;; ── the log's commit order ──────────────────────────────────────────
+;; A transition's id comes from the sequence inside its writer's own
+;; transaction, so two overlapping writers can COMMIT out of id order,
+;; and a reader that walks the log by id (`id > cursor`) would step
+;; over the lower id for good. A transaction therefore, before its
+;; first append, reads the sequence's last value — a FLOOR: every id it
+;; allocates is above it — and holds a SHARED advisory lock whose key
+;; spells that floor until it ends. Nothing takes that lock
+;; exclusively, so it blocks no one: it is a note in pg_locks that a
+;; transaction in flight may hold any id above it.
+;;
+;; A reader asking for the settled log reads the sequence (B), then the
+;; notes (M, the lowest floor held), then the rows with id <= min(B, M).
+;; An id at or under B was allocated before the notes were read, so its
+;; writer has ended — and the statement's snapshot (READ COMMITTED,
+;; taken after) sees its row — or its note is among those read and its
+;; id is above M. The reader takes no lock, and no append waits on it
+;; (ticket 3a23b699; the exclusive lock this replaces queued every
+;; append behind a waiting reader).
+;;
+;; A long transaction that appended holds the watermark at its floor
+;; until it ends: the reader gets the rows under it and no row above.
+;; A long transaction that never appended leaves no note and holds
+;; nothing back. The sequence must keep CACHE 1 (bigserial's default):
+;; a cached id is under the last value another session reads.
+
+(def ^:private log-floor-sql
+  "The transition sequence's last value, 0 before the first id."
+  (str "coalesce(pg_sequence_last_value("
+       "pg_get_serial_sequence('waymark10_transitions', 'id')::regclass), 0)"))
+
+(def ^:private log-floor-setting
+  "Transaction-local: set once this transaction holds its floor, so a
+  transaction of many appends holds one lock and not one for each."
+  "waymark10.log_floor")
+
+;; What the watermark costs a writer, from `order-lock-cost-to-writers`
+;; (3 writers for 1.5 s behind a long writer, unsettled readers; one
+;; runner for both lines of a pair, and runners differ by a factor of
+;; two, so read a pair and not a number alone):
+;;   floor in statements of its own  10235 appends without it, 6891 with
+;;                                   (p50 0.4 ms against 0.6 ms)
+;;   floor in the append's INSERT     6845 appends without it, 6866 with
+;;                                   (p50 0.6 ms both, p99 1.7 against 1.6)
+;; And the notify, on one runner (run 37479201096, no long writer):
+;;   notify in a statement of its own  4271 and 4371 appends, p50 1.0 ms
+;;   notify in the append's INSERT     5597 and 5532 appends, p50 0.8 ms
+;; With the fold, settled readers behind a long writer: 6961 appends,
+;; p50 0.6 ms, p99 1.0 ms. The fall from 8678 to 2917 between two CI
+;; runs was mostly the runners; the floor's own statements took a third.
+(def ^:private settle-wait-ms
+  "How long a settled read with no row to give waits for the writers
+  in flight under it, before it answers nil. It waits by asking again
+  every `settle-poll-ms` and holds no lock, so no append waits on it
+  (`order-lock-cost-to-writers` prints the four cases). An append
+  commits in about 1 ms (p99 under 5 ms), so 50 outwaits the ordinary
+  writer."
+  50)
+
+(def ^:private settle-poll-ms 10)
+
+(def ^:private hold-log-floor-sql
+  "A transaction's first append: note in pg_locks the floor its ids
+  will be above (see the log's commit order), and give no row once the
+  transaction holds one. The lock is shared and never asked for
+  exclusively, so this waits on nothing."
+  ;; the two-key form, so the floor is read back from pg_locks.objid;
+  ;; its low 32 bits, which log-watermark reads against the sequence
+  (str "SELECT pg_advisory_xact_lock_shared(" (int lock-namespace)
+       ", (" log-floor-sql ")::bit(32)::int4),"
+       " set_config('" log-floor-setting "', 'held', true)"
+       " WHERE coalesce(current_setting('" log-floor-setting "', true), '') = ''"))
+
+(defn- append-sql
+  "The append's INSERT. With floor? the same statement holds the log's
+  floor first, so an append is one round trip: the INSERT reads its one
+  row from a count over the floor's, and the id's default is evaluated
+  for that row, after the lock is held. The INSERT is itself a CTE, and
+  the statement's own SELECT notifies the channel (the last parameter)
+  of the id it returned."
+  [floor?]
+  (str "WITH " (when floor? (str "floor AS (" hold-log-floor-sql "), "))
+       "appended AS ("
+       "INSERT INTO waymark10_transitions"
+       " (kind, resource_id, action, from_state, to_state, actor,"
+       "  law_revision, input_digest, inputs, acknowledged,"
+       "  judgment, after, correlation_id, idempotency_key, summary)"
+       " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+       (when floor? " FROM (SELECT count(*) FROM floor) held")
+       " RETURNING id, at)"
+       " SELECT id, at, pg_notify(?, id::text) AS notified FROM appended"))
+
+(def ^:private append-with-floor-sql (append-sql true))
+
+(defn- log-watermark
+  "→ {:bound id :cut? bool}: every id at or under :bound has committed
+  or is gone for good; :cut? says a transaction in flight may hold an
+  id between :bound and the newest allocated. The three reads are in
+  this order on purpose (see the log's commit order)."
+  [tx]
+  (let [last-id #(long (-> (jdbc/execute-one! tx [(str "SELECT " log-floor-sql " AS v")])
+                           vals first))
+        newest (last-id)
+        held (mapv #(long (first (vals %)))
+                   (jdbc/execute!
+                    tx [(str "SELECT objid::bigint AS v FROM pg_locks"
+                             " WHERE locktype = 'advisory' AND granted"
+                             " AND objsubid = 2 AND classid::bigint = ?"
+                             " AND database = (SELECT oid FROM pg_database"
+                             "  WHERE datname = current_database())")
+                        (long lock-namespace)]))
+        ;; a floor noted after `newest` was read may be above it: the
+        ;; 32 bits are read against a value no held floor is above
+        at (if (seq held) (last-id) newest)
+        floors (map #(- at (bit-and (- at %) 0xFFFFFFFF)) held)
+        bound (reduce min newest floors)]
+    {:bound bound :cut? (< bound newest)}))
+
+(defn- settled-read
+  "The settled log through `read`, a fn of the highest id it may
+  answer. The rows under the watermark are the answer when there are
+  any, in either order: a newest-first read then answers the newest id
+  UNDER the writers in flight, which is a sound cursor — every id at
+  or under it has committed, and the ids above it are a later read's
+  (ticket dea2b35e; answering nil here starved a seed under writers
+  that overlap without a gap). With none to give while a transaction
+  in flight holds the watermark down it asks again for
+  `settle-wait-ms` and then answers nil. It holds no lock while it
+  waits."
+  [tx read]
+  (let [deadline (+ (System/nanoTime) (* 1000000 (long settle-wait-ms)))]
+    (loop []
+      (let [{:keys [bound cut?]} (log-watermark tx)
+            rows (read bound)]
+        (cond
+          (or (seq rows) (not cut?)) rows
+          (< (System/nanoTime) deadline) (do (Thread/sleep (long settle-poll-ms))
+                                             (recur))
+          :else nil)))))
+
 (defn- lock-connection
   "A dedicated raw JDBC connection for one role's lock — deliberately
   NOT from the Hikari pool (the listen-connection discipline): the
@@ -397,60 +537,73 @@
   holder calls (start-fn) and holds until released or the session dies
   (checked every retry interval), then (stop-fn handle) runs and the
   session closes — releasing the lock, so the peer's next try takes
-  over."
+  over. A Throwable from start-fn, the lock or the hold is warned with
+  the role's name and the role contends again after :retry-ms: an
+  Error must not end the only thread that elects this role here. The
+  thread says so when it ends, whatever ended it."
   [^HikariDataSource ds role-name {:keys [retry-ms start-fn stop-fn]
                                    :or {retry-ms 5000}}]
   (let [key (role-lock-key role-name)
         running (atom true)
         held? (atom false)
         starts (atom 0)
+        thrown (fn [^Throwable e]
+                 (str (.getName (class e)) ": " (ex-message e)))
         t (Thread.
            ^Runnable
            (fn []
-             (while @running
-               (let [conn (try (lock-connection ds)
-                               (catch Exception e
-                                 (when @running
-                                   (warn! "role " (name role-name)
-                                          ": no lock connection ("
-                                          (ex-message e) "); retrying"))
-                                 nil))]
-                 (if (nil? conn)
-                   (try (Thread/sleep (long retry-ms))
-                        (catch InterruptedException _ nil))
-                   (try
-                     ;; contend
-                     (loop []
-                       (when (and @running (not (try-lock? conn key)))
-                         (Thread/sleep (long retry-ms))
-                         (recur)))
-                     ;; hold
-                     (when @running
-                       (swap! starts inc)
-                       (reset! held? true)
-                       (let [handle (start-fn)]
-                         (try
-                           (loop []
-                             (when (and @running (.isValid ^Connection conn 2))
-                               (Thread/sleep (long retry-ms))
-                               (recur)))
-                           (finally
-                             (reset! held? false)
-                             (try (when stop-fn (stop-fn handle))
-                                  (catch Exception e
-                                    (warn! "role " (name role-name)
-                                           " stop-fn: " (ex-message e))))))))
-                     (catch InterruptedException _ nil)
-                     (catch Exception e
+             (try
+               (while @running
+                 (let [conn (try (lock-connection ds)
+                                 (catch Throwable e
+                                   (when @running
+                                     (warn! "role " (name role-name)
+                                            ": no lock connection ("
+                                            (thrown e) "); retrying"))
+                                   nil))]
+                   (if (nil? conn)
+                     (try (Thread/sleep (long retry-ms))
+                          (catch InterruptedException _ nil))
+                     (try
+                       ;; contend
+                       (loop []
+                         (when (and @running (not (try-lock? conn key)))
+                           (Thread/sleep (long retry-ms))
+                           (recur)))
+                       ;; hold
                        (when @running
-                         (warn! "role " (name role-name) " loop: "
-                                (ex-message e))
-                         (try (Thread/sleep (long retry-ms))
-                              (catch InterruptedException _ nil))))
-                     (finally
-                       ;; closing the session releases the lock
-                       (try (.close ^Connection conn)
-                            (catch Exception _ nil))))))))
+                         (swap! starts inc)
+                         (reset! held? true)
+                         (let [handle (start-fn)]
+                           (try
+                             (loop []
+                               (when (and @running (.isValid ^Connection conn 2))
+                                 (Thread/sleep (long retry-ms))
+                                 (recur)))
+                             (finally
+                               (reset! held? false)
+                               (try (when stop-fn (stop-fn handle))
+                                    (catch Exception e
+                                      (warn! "role " (name role-name)
+                                             " stop-fn: " (ex-message e))))))))
+                       (catch InterruptedException _ nil)
+                       (catch Throwable e
+                         (when @running
+                           (warn! "role " (name role-name) " loop: "
+                                  (thrown e) "; contending again")
+                           (try (Thread/sleep (long retry-ms))
+                                (catch InterruptedException _ nil))))
+                       (finally
+                         ;; a start-fn that threw never reached the hold
+                         (reset! held? false)
+                         ;; closing the session releases the lock
+                         (try (.close ^Connection conn)
+                              (catch Exception _ nil)))))))
+               (warn! "role " (name role-name)
+                      ": election thread ended, released")
+               (catch Throwable e
+                 (warn! "role " (name role-name)
+                        ": election thread ended on " (thrown e)))))
            (str "waymark10-role-" (name role-name)))]
     (doto ^Thread t (.setDaemon true) (.start))
     {:role role-name :thread t :running running :held? held? :starts starts}))
@@ -474,6 +627,33 @@
       (throw (ex-info (str "unknown kind: " (pr-str kind)
                            " has no table on this storage (never ensured here)")
                       {:waymark10/unknown-kind true :kind kind}))))
+
+(defn- conds-sql
+  "Every cond → [sql-fragment params], for a query over `table`. A
+  :no-row cond is the anti-join: the row stays when no row of the
+  kind it names, under that kind's own conds, carries this row's id
+  (or its field's text) in the named place. It is spelled here and not
+  in `cond-sql` because it names a second table. The inner conds are
+  unqualified, and inside the subquery they read the inner table."
+  [tables table conds]
+  (map (fn [{:keys [op target field from] :as c}]
+         (if (= :no-row op)
+           (let [side (fn [t tgt f]
+                        (if (= :id tgt)
+                          (str t ".id")
+                          (str t ".data->>'"
+                               (store/definition-checked-name f) "'")))
+                 parts (map cond-sql (:conds from))]
+             [(str "NOT EXISTS (SELECT 1 FROM "
+                   (table-for tables (:kind from)) " AS j WHERE "
+                   (side "j" (:target from) (:field from))
+                   " = " (side table target field)
+                   (when (seq parts)
+                     (str " AND " (str/join " AND " (map first parts))))
+                   ")")
+              (vec (mapcat second parts))])
+           (cond-sql c)))
+       conds))
 
 (defrecord PostgresStorage [^HikariDataSource ds tables]
   store/Storage
@@ -577,14 +757,14 @@
                            jdbc-opts))))
 
   (append-transition! [_ tx record]
+    ;; the floor is held before the id is allocated, and to the commit:
+    ;; see the log's commit order
+    ;; the outbox IS the log: the notify is in the append's statement and
+    ;; so in the write transaction, and subscribers learn of exactly the
+    ;; transitions that committed
     (let [res (jdbc/execute-one!
                tx
-               [(str "INSERT INTO waymark10_transitions"
-                     " (kind, resource_id, action, from_state, to_state, actor,"
-                     "  law_revision, input_digest, inputs, acknowledged,"
-                     "  judgment, after, correlation_id, idempotency_key, summary)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                     " RETURNING id, at")
+               [append-with-floor-sql
                 (name (:kind record)) (:resource-id record)
                 (name (:action record))
                 (some-> (:from-state record) name)
@@ -598,26 +778,28 @@
                 (some-> (:after record) jsonb)
                 (:correlation-id record)
                 (:idempotency-key record)
-                (:summary record)]
-               jdbc-opts)
-          id (:id res)]
-      ;; the outbox IS the log: notify rides the write transaction,
-      ;; so subscribers learn of exactly the transitions that committed
-      (jdbc/execute-one! tx ["SELECT pg_notify(?, ?)" notify-channel (str id)])
-      (assoc record :id id :at (->inst (:at res)))))
+                (:summary record)
+                notify-channel]
+               jdbc-opts)]
+      (assoc record :id (:id res) :at (->inst (:at res)))))
 
   (transitions [_ tx where opts]
-    (let [clauses (cond-> []
-                    (:kind where) (conj ["kind = ?" (name (:kind where))])
-                    (:resource-id where) (conj ["resource_id = ?" (:resource-id where)])
-                    (:since where) (conj ["id > ?" (:since where)]))
-          sql (str "SELECT * FROM waymark10_transitions"
-                   (when (seq clauses)
-                     (str " WHERE " (str/join " AND " (map first clauses))))
-                   " ORDER BY id" (when (:newest-first opts) " DESC")
-                   " LIMIT " (long (:limit opts 500)))]
-      (mapv transition->map
-            (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
+    (let [read (fn [bound]
+                 (let [clauses (cond-> []
+                                 (:kind where) (conj ["kind = ?" (name (:kind where))])
+                                 (:resource-id where) (conj ["resource_id = ?" (:resource-id where)])
+                                 (:since where) (conj ["id > ?" (:since where)])
+                                 bound (conj ["id <= ?" bound]))
+                       sql (str "SELECT * FROM waymark10_transitions"
+                                (when (seq clauses)
+                                  (str " WHERE " (str/join " AND " (map first clauses))))
+                                " ORDER BY id" (when (:newest-first opts) " DESC")
+                                " LIMIT " (long (:limit opts 500)))]
+                   (mapv transition->map
+                         (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))]
+      (if (:settled opts)
+        (settled-read tx read)
+        (read nil))))
 
   (transitions-under-grant [_ tx grant-id since until opts]
     ;; the window bounds `at`, which ix_wm10_t_at serves; the grant is
@@ -740,7 +922,7 @@
 
   (count-matching [_ tx kind conds]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           sql (str "SELECT count(*) AS n FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts)))))]
@@ -761,7 +943,7 @@
 
   (ids-matching [_ tx kind conds limit]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           sql (str "SELECT id FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
@@ -813,7 +995,7 @@
 
   (search-rows [_ tx kind conds {:keys [order-by desc then-by limit offset]}]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           column (fn [f]
                    (cond
                      (nil? f) "created_at"
@@ -838,7 +1020,7 @@
 
   (facet-counts [_ tx kind field conds array? absent-as]
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (conds-sql tables table conds)
           ;; a scalar field's absent rows count under the declared value
           absent (when-not (or (= :state field) array?) absent-as)
           expr (cond

@@ -20,8 +20,8 @@
  :public-url "http://192.168.1.231:8112" ; big-colt
 
  ;; a clone of ckopsa/waymark-seat (R-8.1): CLAUDE.md,
- ;; .claude/settings.json, .claude/hooks/sitting-close.sh, and nothing
- ;; else. A person or a timer pulls it. The server copies it for each
+ ;; .claude/settings.json, .claude/hooks/sitting-close.sh,
+ ;; inbox-feed.sh, and nothing else. A person or a timer pulls it. The server copies it for each
  ;; run and never writes in it.
  :place "/srv/waymark-seat"
 

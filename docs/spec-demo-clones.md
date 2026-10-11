@@ -125,9 +125,9 @@ The seed is a cast and an ordered list of steps:
 
 ```clojure
 {:seed "demo" :version 1
- :cast  {:ada  {:id "ada"  :display "Ada Example" :type :human
+ :cast  {:ada  {:id "ada"  :display "Maya Okafor" :type :human
                 :household "Harbour House"}
-         :plan {:id "plan" :display "Planner"     :type :agent
+         :plan {:id "plan" :display "Juniper"     :type :agent
                 :household "Harbour House" :acts-for :ada}}
  :steps [{:as :ada  :kind :ticket :create {:title "…"} :ref :t1}
          {:as :ada  :kind :ticket :on :t1 :action "groom"}
@@ -265,19 +265,24 @@ clone.** That is the design, and it is why the loader refuses to seed
 an engine that has an IdP or a name that is not `demo-…`, and why the
 door refuses a route on a clone that restored a snapshot.
 
-**The quest's film wears Ada's grant.** The header alone makes the
+**The quest's film wears Maya's grant.** The header alone makes the
 person an unscoped member: she holds every door a person may take,
 `resume` on the quest's deferred child among them, because no ticket
 guard tells a person from an agent there. The seed tells them apart by
-grant (section 1's file: `:ada-grant` admits `complete` and `restate`,
-`:plan-grant` admits `resume`). So for the session that records the
-quest the sign-in has a second step: as Ada, open the grant whose
-audience is Ada and press "act under this grant". The UI then sends its
+grant (section 1's file: `:ada-grant` admits `complete` and `restate`
+on `:q-epic` and `:q-guide`, which it names by id, and the seating plan
+is outside it; `:plan-grant` admits `resume`). So for the session that records the
+quest the sign-in has a second step: as Maya, open the grant whose
+audience is Maya and press "act under this grant". The UI then sends its
 id as `X-Waymark-Grant` on every request and shows the grant chip, the
-deferred child reads no `resume` door, and the step waits on Planner.
+deferred child reads no `resume` door, and the step waits on Juniper.
+Maya's own rehearsal ends in a cycle there, because the refusal binds no
+row her grant reads. The engine finds the seating plan with a read of
+its own (`quests/unseen-waits`), keeps that row in the quest's
+`waits_on`, and never shows it to her.
 
 The engine does not put the grant on by itself. A worn grant narrows
-the whole session to its scope, and Ada's other films need what it
+the whole session to its scope, and Maya's other films need what it
 leaves out: the invitation's `prioritize` and the held call's tap. The
 person leaves the scope at the chip's ✕ before those.
 
@@ -332,7 +337,7 @@ states them:
 
 **The seed's held call ends at the wall.** The seed holds one call
 that waits on a person, `mail__send`. A held tool call is answered by
-the `approver` role, so the seed gives Ada that role. When the job
+the `approver` role, so the seed gives Maya that role. When the job
 names its wall (`WAYMARK_WALL_URL`), the loader makes one `mcp_server`
 row, `mail`, at that address, with the power the held call names. A
 person's Allow is then forwarded to the wall, the wall answers its

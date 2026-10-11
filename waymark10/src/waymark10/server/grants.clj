@@ -2330,6 +2330,30 @@
     (boolean (and (seat-cited row)
                   (not= (get-in row [:data :audience]) (:id principal))))))
 
+(defn as-the-seats-sitter
+  "`principal` as it sits under `grant-id` where no session is there to
+  declare a model: a planner hears a principal id and holds no session,
+  and a seat held for named models serves nothing to a hand that
+  declares none (`resolve-seat`, wall 2). So the principal takes the
+  name of the first model the grant's seat is held for —
+  `substitute_for` for a substitute — which is the claim its sitter's
+  own session makes. The principal comes back as it was when it declares
+  a model already, when the grant is not its own or cites no seat, and
+  when the seat names no model."
+  [eng grant-id principal]
+  (or (when-not (nonblank (:model principal))
+        (when-some [row (when grant-id (load-decoded eng :grant grant-id))]
+          (when (= (get-in row [:data :audience]) (:id principal))
+            (when-some [seat (some->> (seat-cited row) (load-decoded eng :seat))]
+              (when-some [held (some (fn [id]
+                                       (nonblank (get-in (load-decoded eng :model (str id))
+                                                         [:data :name])))
+                                     (get-in seat [:data (if (true? (get-in row [:data :substitute]))
+                                                           :substitute_for
+                                                           :held_for)]))]
+                (assoc principal :model held))))))
+      principal))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2451,7 +2475,27 @@
                          ;; now each kind's own :own-surface :actions, so
                          ;; the affordance and the law it opens live in
                          ;; one file
-                         (contains? (:actions (own-of k) #{}) a))))]
+                         (contains? (:actions (own-of k) #{}) a))))
+        ;; the same question asked of ONE ROW. A door the scope names
+        ;; opens on every row the scope shows. A door only the
+        ;; own-surface confers opens on the principal's own rows and
+        ;; no others: when the scope also names the kind, :row? shows
+        ;; rows that are not theirs, so the row is asked of own-row?
+        ;; here. A create has no row (nil id) and stays kind-level.
+        ;; A READER WITH NO ROW IN HAND (the schema digest, a
+        ;; collection's doors, a mirror's sync trigger, a walk's create
+        ;; form, a refusal's remedy) asks :action? and is told of the
+        ;; owner's doors under a grant that names the kind: they open
+        ;; on the reader's own rows, and nil id here answers the same.
+        ;; Which row a door opens on is the row's reader's to say
+        action-on?* (fn [kind action id]
+                      (let [k (name kind) a (name action)]
+                        (boolean
+                         (or (contains? (get-in surface [k :actions] #{}) a)
+                             (and (contains? (:actions (own-of k) #{}) a)
+                                  (or (nil? id)
+                                      (not (contains? surface k))
+                                      (own-row? k id)))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -2478,6 +2522,7 @@
      ;; stand-in.
      :grant (when (and live? (seq surface))
               {:id (str grant-id) :action? action?* :row? row?*
+               :action-on? action-on?*
                ;; a field this leash shows plain, neither hidden nor
                ;; hashed: what a scheduled action's conditions may
                ;; name (docs/spec-scheduled-actions.md R-2.3)
@@ -2506,6 +2551,7 @@
      :whole-kind? (fn [kind] (contains? whole-kinds (name kind)))
      :row? row?*
      :action? action?*
+     :action-on? action-on?*
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]

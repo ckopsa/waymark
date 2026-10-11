@@ -123,7 +123,8 @@ async function renderFeed(view, doc, hints, decl) {
     for (const [rel, l] of Object.entries(item.links || {}))
       if (l && (l.download || l.external))
         bar.append(el("a", {class: "chip link-chip", href: l.href,
-          target: "_blank", rel: "noopener", title: l.summary || rel},
+          target: "_blank", rel: "noopener", title: l.summary || rel,
+          onclick: e => exportChipClick(e, item, rel, l)},
           (l.download ? "⭳ " : "↗ ") + title(rel)));
     if (bar.childElementCount) box.append(bar);
     box.append(el("a", {class: "feed-open", href: "#" + item.self,

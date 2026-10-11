@@ -113,16 +113,59 @@ is its own step with `needs` `close_reason`: no guard declares one
 sentence for every child. The tracker's Go opens that row's dialog
 for the door with the `needs` fields lit.
 
+**A row the owner cannot read is one seat's step, with no address.**
+When the goal waits on a row outside the owner's grant, the refusal
+binds no row the owner reads and the owner's rehearsal ends in a
+cycle. The engine then judges the goal door once more with no grant
+worn (`unseen-waits`) and keeps the row and the doors that would end
+the wait in `waits_on`, a `:secret` field of the quest that no read
+shows. The plan carries one step for it: `whose` `seat`, `waiting_on`
+the names of those who can take those doors (`grants/door-takers`),
+on the goal's own door and row, with a note that says someone else
+holds the next step. It holds no id, title or link of the row. The
+consumer's index names the rows of `waits_on`, so a move on one plans
+the quest again.
+
+**A shut goal is the last step, from the first plan.** A door its row
+does not afford shows no form, so the rehearsal names no `needs` for
+it. When the goal's row does not afford the goal's door, the planner
+reads the goal from the kind's declaration (`declared-goal` in
+`waymark10/src/waymark10/server/quests.clj`) and `answer->plan` puts
+it last, after the steps that open it. Its `needs` are the door's
+required arguments in the resource definition, in the declaration's
+order, less those the quest's stored `input` gives, and of those only
+the ones an invitation may show. Its `note` stays empty, because no
+guard was asked about the form; only when a seat's step stands before
+it does it carry the planner's own sentence that more may follow. The owner's ruling of 2026-10-06
+(bd1fd962): the goal's form is the quest's last step, shown from the
+first plan. `declared-goal` answers nothing when the goal's row is of
+no served kind or the kind has no such door, and the plan is then the
+rehearsal's answer alone.
+
 **Counts.** The engine learns steps as the house moves, so a plan is
 never a total. A reader counts "k done, n known so far": k steps in
 `done`, n steps in the plan. It never says "k of n".
 
 ## What a reader sees
 
-A summary row carries no vector, so the kind works out two lines at
-read time: `progress` ("k done, n known so far") and `next_step` (the
-head step's note, or "waiting on <name>"). The collection orders the
-pinned quest first and then the newest.
+A summary row carries no vector, and the row stores no label, so the
+kind works out four fields at read time:
+
+- `progress`: "k done, n known so far".
+- `next_step`: the head step's note, or "waiting on <name>".
+- `action_label` (`action-label`): the goal door's display label. A
+  door that declares no label is its name in words.
+- `input_labels` (`input-labels`): the display label of each key of
+  `input`, under that key, from the goal door's input schema. It is
+  nil when the door is given nothing.
+
+The two labels come from the goal row's declaration, through
+`labels-of`: the kind of the goal's `self` is looked up, and its
+declaration says the door `action` and the keys of `input` in words.
+They do not come from the plan, which may not hold the goal's step.
+Both are nil where the goal row is of no served kind.
+
+The collection orders the pinned quest first and then the newest.
 
 The quest's row page shows the plan as a checklist (`questPlan` in
 `ui/200-events-follow.js`): a `done` step is struck through, the
@@ -131,6 +174,81 @@ waits on ("your tap" for a held call, linked to the step's row), a
 `later` step is dim, and a `choice` step names what must be picked.
 Go opens the viewer's open invitation for that row and door, and
 goes to the step's row when there is none.
+
+## A tap previews, Accept creates
+
+A shut door that names a way out is drawn as a reachable button
+(`shutDoor` in `ui/140-links-access.js`). A tap on it makes no quest.
+It rehearses the quest's create door (`POST /api/quests?dry_run=1` with
+the goal's `self` and `action`), and the rehearsal answers a `preview`
+beside its verdict:
+
+- `plan`, `plan_is_estimate` and `blocked_reason`, in the shape of a
+  planned quest's: the plan the planner would write for this owner
+  under this grant (`rehearsed`), with the goal's own step last and its
+  `needs`. Each step is said in words too (`in-words`): `door_label`,
+  the door's display label, `row_label`, the row's label when the
+  principal's grant sees the row, and `needs_labels`, the display label
+  of each of `needs` from the door's input schema. A need that is a
+  dotted path into a nested map (`showcase.evidence.film_url`) is the
+  label of the field at its end ('The film'); when two needs of one
+  step end in the same label, each is said after its nearest parent's
+  ('Evidence: The film'). A door or a field
+  that declares no label is its name in words. Each of a step's
+  `alternatives` carries its own `door_label` and `row_label`. A
+  planned quest stores `door_label` and `needs_labels` on each step of
+  `plan`, and `door_label` on each alternative (`labelled`): they come
+  from the kind's declaration, so a rename never moves them. A plan
+  stored in older words is written again in the words declared now when
+  the planner starts (`relabel!`), with its `planned_at` as it was, so
+  a quest planned before a label changed need not wait for its next
+  replan; the page's own fallback for a step with no `needs_labels`
+  says only the last step of a dotted need. It stores
+  no `row_label`, and its document projects none: a rename is a change
+  to the row and not to the quest. The tracker and the quest's page draw
+  a step's row from the row's own summary, which the page reads and
+  reads again when the row moves;
+- `goal`, the line the quest's title defaults to;
+- `shut_reason`, the goal door's own refusal now.
+
+The preview is a read. It writes no row, makes no invitation and fires
+no transition, and there is no `proposed` state. The kind declares it
+as `:on-rehearse` (`preview` in `quests.clj`), which the create door
+asks only on a full rehearsal and only after the create guards passed.
+So a goal that create would refuse (`the-owner-sees-the-goal`,
+`active-quests-are-few`) is refused by the rehearsal with the same
+sentence.
+
+The page shows the preview in a sheet (`questSheet`): the goal as the
+door's label on this row, with `goal` under it, why it is not available
+yet, the numbered steps with whose turn each is (the door's label, the
+row's label with its path as the step's title, and the labels of the
+fields it asks for), the estimate note, and **Not now** and **Accept quest**. Not now closes the
+sheet. Accept creates the quest and pins it. A refusal is said in the
+sheet, and Accept is disabled with that line.
+
+A recording keeps the sheet. While it is open, the recorder's `ui` beat
+carries a `quest` part: the goal, the door's label and what the
+rehearsal answered (docs/spec-guided-follow.md § 1). The beat after it
+closes carries none. A replay draws the sheet from that part
+(`replayQuestSheet`), asks the engine nothing and writes nothing. Its
+pointer presses the shut door, then **Accept quest** at the recorded
+create, or **Not now** at the beat that closes a sheet no quest was
+made from. An Accept the recording has refused (the create or the pin:
+a `refusal` frame while the sheet is open) is a press on **Accept
+quest** too, and the replay says the sentence in the sheet's own box
+with Accept disabled (`replaySheetRefused`), not in the caption band.
+
+A person following live in guided mode sees the same sheet from the
+same part, read-only, and it closes with the followed person's
+(docs/spec-guided-follow.md § 2).
+
+An agent's recording keeps the sheet too. While the caller records a
+self walk, the connector stages a rehearsed quest create
+(`waymark_invoke kind:quest action:create dry_run:true`) as that same
+`ui` beat on the goal's row, and no create form. The caller's next
+quest create for that goal is Accept, and any other staged call is Not
+now (docs/spec-agent-demo-walks.md § 2).
 
 ## What this change does not do
 
@@ -154,7 +272,12 @@ row's envelope.
   count. A `seat` or `held` head, or one in `waiting`, reads "waiting
   on <waiting_on>" with a live dot.
 - **Go** opens the head step's `door` on its `self`, with its `needs`
-  lit and its note shown. It goes through `openDoor`
+  lit and its note shown. On the goal's own step the form holds the
+  quest's stored `input` already, as the owner's own values and with no
+  suggestion mark; the step's invitation carries the same values as
+  `given`, which only the engine writes, so the quest page's Go shows
+  them too. A stored key the invitation may not show, a secret argument
+  or one the door does not take, is left out alone. It goes through `openDoor`
   (`ui/180-action-dialog.js`), the helper an invitation opens through.
   Go is disabled while the head waits. It is not shown when the plan
   has no step to take or `blocked_reason` is written; the reason is

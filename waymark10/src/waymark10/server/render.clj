@@ -387,6 +387,16 @@
          :evidence (not-empty (:evidence deny))
          :becomes-available (g/becomes-available denier deny row)}))
 
+(defn- shut-display
+  "A shut door's entry wears the door's declared :display, as its open
+  entry does (ticket 90540599): the label, the order and any other mark
+  its law declares ride the row, so a client labels and orders a shut
+  door without a second document. The per-origin description stays with
+  the open entry — a shut door has no consequence to confirm."
+  [entry defn']
+  (cond-> entry
+    (seq (:display defn')) (assoc :display (:display defn'))))
+
 (defn- out-of-state-entry [rdef defn' state]
   (let [states (sort (:from defn'))
         ;; the way there, shared with the invoke's wrong-state refusal
@@ -693,14 +703,17 @@
   map (ctx-opts :resources) for target plurals. A truthy :embed
   advertises its EFFECTIVE :limit/:max-limit (declared, else the
   framework defaults) rather than a bare true, so a client can read
-  the grid affordance's bounds straight off the envelope."
+  the grid affordance's bounds straight off the envelope. A link that
+  declares :states is left out of a row in any other state."
   [rdef row resources link-doors]
   (into (seams/lent-links link-doors (:kind rdef) row)
-        (keep (fn [{:keys [rel summary badge embed] :as ld}]
-                (when-some [entry (cond
-                                    (:edge ld) (edge-link rdef row resources ld)
-                                    (:owns ld) (owns-link rdef row resources ld)
-                                    (:href ld) (template-link row ld))]
+        (keep (fn [{:keys [rel summary badge embed states] :as ld}]
+                (when-some [entry (when (or (nil? states)
+                                            (contains? states (some-> (:state row) name keyword)))
+                                    (cond
+                                      (:edge ld) (edge-link rdef row resources ld)
+                                      (:owns ld) (owns-link rdef row resources ld)
+                                      (:href ld) (template-link row ld)))]
                   [rel (cond-> entry
                          summary (assoc :summary summary)
                          embed (assoc :embed
@@ -993,7 +1006,9 @@
   "The kind's :computed fields for one DECODED row, encoded as a
   stored field of the same schema would be; the ones this request
   conceals (redacted) are never computed. Each fn reads the row and a
-  read-only ctx (:read/:find — no writes, no invoke). A field that
+  read-only ctx (:read/:find — no writes, no invoke — and :rdef-of,
+  the registry consult a write's ctx carries, where the render lends
+  its :resources). A field that
   declares `:reads? true` renders nil when this render lends no :read:
   a wrong answer is worse than none (ticket 82589f6e). A throw prints
   one warning and the field renders nil: a read never fails because
@@ -1002,7 +1017,13 @@
   (when-some [computed (not-empty (apply dissoc (:computed rdef) redacted))]
     (let [hooks (:evidence-reads ctx-opts)
           cctx {:read (or (:read ctx-opts) (:read hooks))
-                :find (or (:find ctx-opts) (:find hooks))}]
+                :find (or (:find ctx-opts) (:find hooks))
+                :rdef-of (when-some [rs (:resources ctx-opts)]
+                           (fn [token]
+                             (let [t (name token)]
+                               (or (get rs (keyword t))
+                                   (some (fn [[_ r]] (when (= t (:plural r)) r))
+                                         rs)))))}]
       (into {}
             (map (fn [[f {s :schema compute :fn reads? :reads?}]]
                    [f (when-some [v (when (or (not reads?) (:read cctx))
@@ -1100,16 +1121,20 @@
                  :available
                  (if-some [field (empty-required-admission defn' row ctx)]
                    (assoc-in acc [:unavailable (:name defn')]
-                             (no-admissible-entry defn' field))
+                             (shut-display (no-admissible-entry defn' field)
+                                           defn'))
                    (assoc-in acc [:actions (:name defn')]
                              (action-entry defn' rdef self row ctx arg?)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
-                                        (unavailable-entry denier deny public-row))
+                                        (shut-display
+                                         (unavailable-entry denier deny public-row)
+                                         defn'))
                  :hidden acc))
              (if (probe-hidden-only? defn' row ctx)
                acc
                (assoc-in acc [:unavailable (:name defn')]
-                         (out-of-state-entry rdef defn' state)))))
+                         (shut-display (out-of-state-entry rdef defn' state)
+                                       defn')))))
          {:actions {} :unavailable {}}
          resolved)
         ;; the engine-injected adopt (phase 5): a row living under an
@@ -1133,7 +1158,13 @@
         ;; non-granted actions do not exist — dropped from both maps,
         ;; the engine-injected adopt included
         granted? (when visibility
-                   (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
+                   (let [on? (:action-on? visibility)]
+                     (fn [[aname _]]
+                       (and ((:action? visibility) (:kind rdef) aname)
+                            ;; an owner's door is drawn on the
+                            ;; owner's row alone
+                            (or (nil? on?)
+                                (on? (:kind rdef) aname (:id row)))))))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
         ;; hashed/hrow/public-row are built above the probe (the reasons

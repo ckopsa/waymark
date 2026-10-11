@@ -627,7 +627,15 @@
 (defn- seed-cursor!
   "A subscription with no cursor hears the world from its own creation
   transition — the newest transition of the subscription row itself
-  (its create when fresh, its resume after an outage)."
+  (its create when fresh, its resume after an outage).
+
+  THIS READ IS NOT SETTLED, and needs no retry. The seed is the row's
+  own transition and not the log's newest id, so it is the same id
+  whenever it is read: a lower id still in flight took its place in
+  the log before this subscription's own transition did, and is not
+  the subscription's to hear, committed or not. A newer transition of
+  this row still in flight only leaves the seed lower, and the drain
+  after it reads the settled log."
   [eng sub]
   (let [st (:storage eng)
         pos (or (:id (first (store/with-tx st
@@ -713,7 +721,10 @@
   subscription stays active — liveness over completeness, chosen per
   subscription. A delivery whose signing secret is a secret row with no
   value yet is not attempted: the drain stops there, the cursor stays,
-  and the subscription says what it waits for. The pass's tally —
+  and the subscription says what it waits for. The subscription's state
+  is read anew before each send: the batch was read before it, and a
+  subscription paused, failed or revoked since is sent nothing more —
+  the drain stops there and the cursor stays. The pass's tally —
   whether anything was delivered, how many were skipped — is written on
   the subscription once, at the end of the pass or before it is marked
   failed, never once per event."
@@ -731,8 +742,10 @@
    (try
     (loop [cursor cursor]
       (let [rows (store/with-tx st
+                   ;; :settled, as the consumers' drain reads: never
+                   ;; past a writer still in flight
                    (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200})))
+                                               {:limit 200 :settled true})))
             advance! (fn [t]
                        (store/with-tx st
                          #(store/cursor-set! st % consumer (:id t)))
@@ -745,6 +758,10 @@
                  (let [body (wire-body eng t)
                        secret (signing-key eng sub)]
                    (cond
+                     (not= :active
+                           (:state (stored-row eng :subscription (:id sub))))
+                     (reduced ::failed)
+
                      (= ::waiting secret)
                      (do (hold! eng sub)
                          (reduced ::failed))

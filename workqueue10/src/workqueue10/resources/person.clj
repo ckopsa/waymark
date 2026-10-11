@@ -628,6 +628,7 @@
                    [:maybe [:string {:max 128}]])]
    ;; the client states who somebody is; the WRITER and the answer
    ;; stamps are the engine's, and so is the `through_name` garnish
+   :no-own-surface "A person is the household's record, shown by the household's grant; whoever wrote it down does not own it."
    :create-schema [:map
                    (entry :name {} [:string {:min 1 :max 80}])
                    (entry :relation {} [:string {:min 1 :max 80}])

@@ -59,6 +59,7 @@
             [waymark10.registry :as registry]
             [waymark10.server.belief :as server-belief]
             [waymark10.server.definitions :as defs]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
@@ -305,7 +306,13 @@
                        (render/envelope rdef row
                                         (cond-> {:principal t/anonymous
                                                  :now ((:now-fn eng))
-                                                 :services (:services eng)}
+                                                 :services (:services eng)
+                                                 ;; the kind map, as the router's
+                                                 ;; render-opts lend it: a :computed
+                                                 ;; field's :rdef-of and a link's
+                                                 ;; target plural read it (ticket
+                                                 ;; 92ba2f71)
+                                                 :resources (:kinds @(:registry eng))}
                                           reads (assoc :evidence-reads reads)))))))]
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
@@ -335,9 +342,15 @@
 
   Idempotent in the only way that matters: an engine with no :runtime
   atom — nothing builds one, but the shape allows it — starts
-  nothing."
+  nothing.
+
+  The film rule's boot seed runs here, before the surfaces start: the
+  kind is enrolled `:always`, so every application's engine has the
+  scorecard's first rules once it has started, and not workqueue10's
+  alone. It is a seed and no running surface, so it is no hook."
   [eng]
   (when-some [rt (:runtime eng)]
+    (film-rules/ensure-seed-rules! eng)
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 
 (defn stop-runtime!

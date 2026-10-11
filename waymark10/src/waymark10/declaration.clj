@@ -88,6 +88,11 @@
    ;; to be a literal set of kind names in grants.clj, relocated to
    ;; the seven declarations that always owned it
    :own-surface
+   ;; one sentence: why a grant-wearer should NOT reach their own rows
+   ;; of this kind, though the engine stamps a principal on them. It
+   ;; silences check-owned-surface's warning and does nothing else;
+   ;; never in the fingerprint — :own-surface's precedent
+   :no-own-surface
    ;; the states of this kind in which WORDS ARE NOT AN ANSWER
    ;; (waymark-vf8): {state {:door … :whose … :explain "… {door} …"}}.
    ;; A row sitting in such a state is waiting on an ACT by whoever
@@ -113,6 +118,16 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; the kind's SAFE collection doors (ticket 80c6c9e2): {name {:input
+   ;; <malli> :summary "…" :handler (fn [engine body ctx])}}. Each is
+   ;; POST /api/{plural}/-/{name}, a route that reads and writes
+   ;; nothing, so it is no action: it moves no row, and whoever may read
+   ;; the kind may call it. The key is the ADVERTISEMENT — the
+   ;; collection document, the connector and the OpenAPI document read
+   ;; it — and the MOUNT: the router checks the kind, holds the body to
+   ;; :input and answers what :handler returns. Never in the
+   ;; fingerprint — :computed's precedent
+   :collection-doors
    ;; edges
    :owns :links :related
    ;; advertisement
@@ -128,6 +143,12 @@
    :summary-fn
    ;; hooks & engine weaves
    :on-create :mirror
+   ;; what the create door's FULL rehearsal answers beyond its verdict:
+   ;; `(fn [engine inp {:keys [principal grant]}])` → a map that rides
+   ;; the dry-run's body as `preview`. Asked after the create guards
+   ;; passed and outside their transaction; it writes nothing. Never in
+   ;; the fingerprint — :on-create's precedent
+   :on-rehearse
    ;; what the log carries forward past the write (spec-decision-record,
    ;; spec-time-travel): {:judgment true} retains the evidence the
    ;; guards read, {:data true} the document as it stood. ONE map, two
@@ -164,9 +185,11 @@
   an :href that leaves this engine entirely (another engine's row, a
   foreign system): the same real-browser navigation as :download,
   under an honest name — a client must never read an origin hop as
-  bytes to save."
+  bytes to save. :states is a set of this kind's states: the link is
+  advertised only on a row in one of them (a walk's export, which
+  answers only once the walk is sealed)."
   [:rel :owns :edge :href :kind :summary :badge :embed :where :download
-   :external])
+   :external :states])
 
 (def ^:private link-schema
   (into [:map {:closed true}]

@@ -3118,10 +3118,16 @@ judging questions the form hadn't answered yet — so the wire grows
   transition, no handler, nothing committed. The 200 answers
   `{"valid": true, "judged": […], "awaiting": […]}` (both arrays
   always present in partial mode — the mode is recognizable on the
-  wire); refusals answer the usual problem shapes.
+  wire); refusals answer the usual problem shapes. One member is
+  added: when a judged leaf refuses (the guard's 409) while other
+  leaves still wait, the problem carries `awaiting` too — the same
+  names the 200 would have listed — so the caller learns the form's
+  guards from the first refusal. It is absent when nothing waits,
+  and the 404 of a hidden leaf says nothing more.
 
 Partial composes with every door: it rides `create!` (provided
-entries, covered create-guard leaves) and, per item, the bulk/batch
+entries, covered create-guard leaves; its 409 names `awaiting` the
+same way) and, per item, the bulk/batch
 fan-outs — for free, because they all run the one per-item
 algorithm.
 
@@ -3181,7 +3187,8 @@ proves it — warnings as data, acknowledged names pass); the partial
 obligations (silence on unprovided fields, provided-field errors
 keyed only by provided fields, covered leaves judged now, uncovered
 leaves named `awaiting`). `router_test` (wire): the create door's
-200/verdict/422 and the partial door's shape. `bulk_batch_test`:
+200/verdict/422, the partial door's shape, and the partial 409's
+`awaiting` member. `bulk_batch_test`:
 mixed verdicts with the guard's own sentence per item, no row moved,
 no job minted on an over-threshold rehearsal, nothing stored under a
 presented key, the batch rehearsal's full verdict list, and the 428
@@ -3204,6 +3211,7 @@ considering cards on the live stream.
 | --- | --- | --- |
 | `?dry_run=partial` (wire mode; engine `:dry-run :partial`) | the blur judge should judge only what the form has answered — judged-when-answerable | 2026-07-10 |
 | `judged`/`awaiting` (partial verdict body), `verdicts` (bulk/batch dry-run body) | the rehearsal names what it judged and what still waits | 2026-07-10 |
+| `awaiting` on the partial rehearsal's guard-refused 409 (row door and create door) | a judged leaf's refusal should not hide the leaves that still wait; the caller learns them from the first answer | 2026-10-06 |
 | create dry-run tiers = waymark9 `_create_entry` | schema-only without create guards; guards judged with warnings as data | 2026-07-10 |
 | bulk dry-run exists (9 had none); batch dry-run judges independently (9 rolled back real executions) | the iron rule: a rehearsal never fires a handler | 2026-07-10 |
 | dry-runs never defer, never touch idempotency | a job is an effect; a key is a record | 2026-07-10 |
@@ -3437,6 +3445,30 @@ Proof: `waymark10/test/waymark10/process_sugar_test.clj` (memory twin).
 Follow-up beads: respell `outcome.make_it_so` through `:process :atomic`
 (the `approval_request` proof shape), and advertise the steps on the
 envelope.
+
+## `:collection-doors` — the safe door on a collection
+
+A kind's doors were all moves: an action takes a row from one state to
+another, and `create` and the bulk entries do the same from the
+collection. `film_rule`'s `judge` is none of these. It scores a take
+against the active rules and writes nothing, so it has no `:from`, no
+`:to`, no guards and no log entry, and the router mounts it from the
+declaration (`POST /api/film_rules/-/judge`): kind check, body read,
+`collections/door-errors`, then the entry's `:handler`. A route no document names is a
+route a client must construct, which client rule 1 forbids. So the kind
+declares it under `:collection-doors`, a `{name {:input … :summary …
+:handler …}}` map, and the collection document names each entry under `actions` with
+`safety {safe: true, idempotent: true, reversible: true, confirm:
+false}` and NO `effect`. `safety.safe` is the mark a reader keys on: the
+door moves no row, and whoever may read the kind may call it, so a
+scoped grant keeps it as it keeps `query`. The key is the advertisement
+and the mount, and is never in the fingerprint. The OpenAPI document lists the
+route, the connector's `waymark_invoke` with no id calls it, and the
+generic UI offers no button for it, because its answer is a verdict and
+not an envelope. The CLI prints the entry flagged `[safe]` with no
+`→ state`, and `act <collection> <name> --input …` posts it and prints
+the answer as JSON; `waymark10.cli-test` runs that against a started
+engine. The vocabulary's § 13 is the reference.
 
 ## The charter as conformance — an advertised door is an obligation
 

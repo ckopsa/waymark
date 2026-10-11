@@ -220,6 +220,7 @@ function follow(actor, opts) {
   else { localStorage.removeItem("wm10.follow.ui"); closeGuided(); }
   guidedSeq = -1;
   guidedDismissed = null;
+  guidedQuestSheet(null);
   followId = actor.id;
   followName = actor.display || actor.id;
   followGaze = null;
@@ -282,6 +283,7 @@ function unfollow() {
   localStorage.removeItem("wm10.follow.name");
   localStorage.removeItem("wm10.follow.ui");
   closeGuided();
+  guidedQuestSheet(null);
   guidedFocus = null;
   paintGuidedFocus();
   followChip();
@@ -322,6 +324,35 @@ function paintGuidedFocus() {
 function closeGuided() {
   const g = $("dialog[open][data-guided]");
   if (g) { g.dataset.guidedAuto = "1"; g.close(); }
+}
+/* the quest's sheet the followed person has open, live (questSheet,
+   140-links-access.js; docs/spec-guided-follow.md § 2): drawn from the
+   `quest` part of their `ui` beat, as a replay draws it. It is
+   read-only: it names whose it is, Accept is disabled, and nothing is
+   asked of the engine or reported. Not now closes it here alone, and
+   the same goal does not reopen it. It is never opened over a dialog
+   this person has open. Null closes it; a beat for the sheet already
+   open draws nothing. */
+let guidedQuestDismissed = null;  // the goal of the sheet this person closed by hand
+function guidedQuestSheet(q, who) {
+  const open = $("dialog[open][data-guided-quest]");
+  const key = q && q.goal ? JSON.stringify([q.goal.self, q.goal.action]) : null;
+  if (!key) guidedQuestDismissed = null;
+  if (open && key && open.getAttribute("data-guided-quest") === key) return;
+  if (open) { open.dataset.guidedAuto = "1"; open.close(); }
+  if (!key || key === guidedQuestDismissed || $("dialog[open]")) return;
+  const name = q.goal.action;
+  const dlg = questSheet(replayShutDoor(q.goal) || {title: ""}, name,
+    {unavailable: {[name]: {display: {label: q.label}}}}, null, q.goal,
+    q.seen || {ok: false});
+  dlg.setAttribute("data-guided-quest", key);
+  dlg.querySelector(".dlgbody").prepend(
+    el("p", {class: "guided-note", "data-guided-note": ""},
+      `${who} has this open`));
+  dlg.querySelector("[data-surface='sheet.accept']").disabled = true;
+  dlg.addEventListener("close", () => {
+    if (!dlg.dataset.guidedAuto) guidedQuestDismissed = key;
+  });
 }
 /* a ref field's row as a form names it: the label the beat itself
    carries (a staged call's, read under the recorder's own grant; a list
@@ -375,10 +406,34 @@ function applyGuidedUi(f) {
   /* seq counts up per principal: a frame arriving late across
      processes is dropped */
   if (typeof f.seq === "number") {
+    /* the frame this screen already holds, sent again after a move
+       that changed nothing on theirs: it takes that move's close back */
+    if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);
     if (f.seq <= guidedSeq) return;
     guidedSeq = f.seq;
   }
+  clearTimeout(guidedMoveTimer);
   applyUiFrame(f);
+}
+/* a `move` of the followed person is also what a `ui` beat becomes when
+   every part of it was redacted for this follower (presence/ui-redactor):
+   it closes the guided dialog and the quest's sheet, as a beat that
+   carries neither does. The close waits a moment: a beat that changes
+   their screen sends a move and then its `ui` frame, and that frame,
+   applied, takes the close back. */
+const GUIDED_MOVE_MS = 250;
+let guidedMoveTimer = null;
+function guidedMove(f) {
+  if (replay || !followUi || !followId || !f ||
+      (f.principal || {}).id !== followId) return;
+  const id = followId;
+  clearTimeout(guidedMoveTimer);
+  guidedMoveTimer = setTimeout(() => {
+    if (replay || !followUi || followId !== id) return;
+    guidedDismissed = null;
+    closeGuided();
+    guidedQuestSheet(null);
+  }, GUIDED_MOVE_MS);
 }
 /* one `ui` frame applied to this screen: a live one, or a replay's.
    The navigation, the dialog and the focused row are the same code
@@ -393,6 +448,10 @@ function applyUiFrame(f) {
   const typing = !!d && typeof ui.focus === "string" && !ui.focus.startsWith("/");
   guidedTyping = typing ? ui.focus : null;
   guidedFocus = typing ? null : ui.focus || null;
+  /* the quest's sheet closes with the beat that carries none, before
+     the guards below: the sheet is a dialog of its own. A replay's is
+     replayQuestSheet's, a live follower's is guidedQuestSheet's. */
+  if (!ui.quest) (replay ? replayQuestSheet : guidedQuestSheet)(null);
   /* the existing guards: the Access panel parks, and a dialog this
      person opened themselves is never replaced; nor is a replayed
      invitation's, which stands where the invited person's own stood */
@@ -416,15 +475,22 @@ function applyUiFrame(f) {
       openGuidedDialog(d, f.principal.display || f.principal.id, key);
     }
   }
+  /* and opens it over the screen the beat is on, from the rehearsal's
+     answer the beat carries */
+  if (ui.quest) {
+    if (replay) replayQuestSheet(ui.quest);
+    else guidedQuestSheet(ui.quest, f.principal.display || f.principal.id);
+  }
   paintGuidedFocus();
 }
 
 /* ── share my screen, the reporter's side (§2): per tab, OFF by
    default. While on, every beat carries this tab's `ui` part — the
    dialog and its fields (180-action-dialog.js, 170-forms.js), the
-   collection query (130-collection.js) and the focused row. A
+   collection query (130-collection.js), the focused row and the quest's
+   sheet a tap on a shut door opened (140-links-access.js). A
    person's form is never broadcast because someone chose to watch. */
-const UI_SHARE = {dialog: null, fields: null, focus: null};
+const UI_SHARE = {dialog: null, fields: null, focus: null, quest: null};
 let uiShareTimer = null, uiShareClear = false;
 function uiSharing() {
   try { return sessionStorage.getItem("wm10.share.ui") === "1"; }
@@ -434,7 +500,8 @@ function uiShareState() {
   return {dialog: UI_SHARE.dialog,
           fields: UI_SHARE.dialog ? UI_SHARE.fields : null,
           collection: collectionShareOf(location.hash.slice(1)),
-          focus: UI_SHARE.focus};
+          focus: UI_SHARE.focus,
+          quest: UI_SHARE.quest};
 }
 function shareUi(part) {
   Object.assign(UI_SHARE, part);
@@ -694,17 +761,29 @@ function questPlan(doc) {
       : null);
 }
 function questStep(doc, s) {
-  const needs = (s.needs || []).map(pretty).join(", ");
+  const needs = (s.needs_labels || (s.needs || []).map(prettyNeed)).join(", ");
   const row = el("li", {class: "quest-step", "data-quest-step": s.state},
-    el("span", {class: "quest-note"}, s.note || pretty(s.door)));
+    el("span", {class: "quest-note"}, s.note || s.door_label || pretty(s.door)));
+  /* the row the step is on, in words: the row's own summary, which the
+     page reads (questRow, 120-nav-home.js). Its path is never text.
+     An unseen wait stands on the goal's row and is not on it
+     (questUnseen, 140-links-access.js), so it names no row. */
+  if (s.self && !questUnseen(s))
+    row.append(el("small", {class: "muted quest-alt"}, " · ", questRow(s.self)));
   /* the refusal's other remedies: any one of them is this step */
   if (s.state !== "done")
-    for (const a of s.alternatives || [])
+    for (const a of s.alternatives || []) {
+      const other = a.self && a.self !== s.self;
       row.append(el("small", {class: "muted quest-alt", "data-quest-alt": ""},
-        ` or ${pretty(a.door)}`));
+        ` or ${a.door_label || pretty(a.door)}`,
+        other ? " on " : null, other ? questRow(a.self) : null));
+    }
   if (s.whose === "choice" && s.state !== "done")
     row.append(el("span", {class: "muted", "data-quest-choice": ""},
       needs ? ` · choose ${needs}` : " · a choice is yours to make"));
+  else if (needs && s.state !== "done")
+    row.append(el("span", {class: "muted", "data-quest-needs": ""},
+      ` · asks for ${needs}`));
   if (s.state === "waiting")
     /* a held call waits for the owner's own tap: the link is the row
        the tap is made on */
@@ -714,6 +793,7 @@ function questStep(doc, s) {
         : s.waiting_on || "someone else"));
   if (s.state === "next" && doc.state === "active")
     row.append(el("button", {class: "primary small", "data-quest-go": "",
+      "data-surface": "quest.go",
       onclick: () => questGo(s)}, "Go"));
   return row;
 }
@@ -957,14 +1037,21 @@ async function demoRefresh() {
   }
   demoBanner();
 }
+/* where a walk's row says its export is: the envelope's links.export,
+   which the engine declares on a sealed walk. No address is built
+   here, and a row without the link has no export. */
+function walkExportHref(doc) {
+  return (doc && doc.kind === "walk" && doc.links?.export?.href) || null;
+}
 /* the export as a download in this browser: the one thing that leaves
    a demo clone. The walk is marked exported only once the file is
    handed to the browser. */
-async function exportWalk(self) {
+async function exportWalk(doc) {
+  const self = doc.self, href = walkExportHref(doc);
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* told below */ }
   if (text === null) { toast("This walk's export could not be read"); return; }
   const url = URL.createObjectURL(new Blob([text], {type: "application/x-ndjson"}));
@@ -976,6 +1063,17 @@ async function exportWalk(self) {
   URL.revokeObjectURL(url);
   markWalkExported(self);
   demoRefresh();
+}
+/* a list row's chip for a walk's export makes that same download: as
+   the viewer, and marked exported. Any other chip stays the plain
+   navigation it was. A list item may not say its kind, so its own
+   address answers for it. */
+function exportChipClick(e, item, rel, l) {
+  const isWalk = item.kind === "walk" ||
+    /\/walks\/[^/?#]+$/.test(item.self || "");
+  if (!isWalk || rel !== "export" || !l || !l.href) return;
+  e.preventDefault();
+  exportWalk({...item, kind: "walk"});
 }
 async function demoBoot() {
   const w = await wellKnown();
@@ -1064,11 +1162,13 @@ function parseWalk(text) {
                         .sort((a, b) => (a.t || 0) - (b.t || 0)))};
 }
 /* a `move` to the row a hand's open form stands on moves no screen.
-   The engine records one when their presence was elsewhere with no beat
-   of their tab's (a stream the page opened, a read) and the form's next
-   beat brought it back: the beat that closes a form kept as a quest,
-   after the tracker opened the quest's stream. It is left out, so it
-   does not end the form before the press that closes it. */
+   The engine no longer records one: `presence/report!` judges a `move`
+   from the `self` of the principal's last beat. A walk recorded before
+   ticket 5c1acbcb may hold one, from a beat that brought presence back
+   after a stream or a read had moved it: the beat that closes a form
+   kept as a quest, after the tracker opened the quest's stream. The
+   filter is kept for those walks. Such a move is left out, so it does
+   not end the form before the press that closes it. */
 function replayFormMoves(frames) {
   const on = new Map();          // who → the row their open form is on
   return frames.filter(f => {
@@ -1116,7 +1216,8 @@ function startReplay(text) {
     if (!r.recorder && (f.type === "move" || f.type === "ui")) r.recorder = f.who || null;
     const ui = (f.type === "ui" && f.ui) || {};
     /* an invitation names a dialog as well: its row's door, with the
-       invited fields and the suggested ones; and so does a caption
+       invited fields, the suggested ones and the given ones; and so
+       does a caption
        anchored to a field */
     const inv = (f.type === "invitation" || (f.type === "caption" && f.field))
       && f.self && f.action;
@@ -1130,7 +1231,8 @@ function startReplay(text) {
       const key = d.self + " " + d.action;
       const names = r.fields.get(key) || new Set();
       const typed = inv ? [f.field, ...(f.fields || []),
-                           ...Object.keys(f.suggest || {})]
+                           ...Object.keys(f.suggest || {}),
+                           ...Object.keys(f.given || {})]
                         : Object.keys(ui.fields || {});
       for (const k of typed) if (k) names.add(k);
       r.fields.set(key, names);
@@ -1180,7 +1282,7 @@ function replayDialogDoc(d) {
 }
 /* an `invitation` frame applied: the invited row, and its door's
    dialog as actionDialog draws a live invitation — the suggestions
-   marked, every invited field lit, the note beside the first, a
+   marked, the given values with no mark, every invited field lit, the note beside the first, a
    walkthrough's "Step 2 of 4" line above the form — read-only, with
    only Cancel in the footer. It holds the screen as an invited
    person's own dialog does, until the transition that answers it. A
@@ -1196,6 +1298,7 @@ async function openReplayInvitation(f, actor) {
   const doc = replayDialogDoc(d).body;
   await actionDialog({name: d.action, entry: doc.actions[d.action], doc,
     suggest: f.suggest || {},
+    given: f.given || {},
     /* a frame recorded before `fields` holds `field` alone */
     invitation: {doc: {}, note: f.note, step: f.step, of: f.of,
                  fields: f.fields || (f.field ? [f.field] : [])},
@@ -1205,7 +1308,8 @@ async function openReplayInvitation(f, actor) {
   if (!g) return;
   if (replay !== r) { closeGuided(); return; }
   g.setAttribute("data-replay-invite", "");
-  g.guidedSet(f.suggest || {});
+  /* a suggestion outranks a given value, as in the live form */
+  g.guidedSet(Object.assign({}, f.given || {}, f.suggest || {}));
 }
 /* the form is gone: the frames that waited behind it (replay.held) are
    drawn on the screen it was over, in the order they were recorded,
@@ -1320,6 +1424,11 @@ function applyReplayFrame(f, landed) {
     const inv = $("dialog[open][data-replay-invite]");
     if (inv && inv.getAttribute("data-guided") === f.self + " " + f.action)
       closeGuided();
+    /* the quest its open sheet was accepted for: the beat that closes
+       the sheet is then no press on Not now (replayGestureTarget) */
+    const sheet = $("dialog[open][data-quest-sheet]");
+    if (sheet && replaySheetMade(replay, f, sheet))
+      sheet.setAttribute("data-replay-accepted", "");
     /* as the firehose steers: go where they wrote, unless a dialog is
        open; a row already on screen is drawn again from the frame, and
        one that was not was walked to before this (replayWalkOf), so
@@ -1521,6 +1630,7 @@ function replayCaption() {
   if (!band && (c || n))
     document.body.append(band = el("div", {id: "replaycaption", role: "status"}));
   if (band) {
+    band.setAttribute("data-surface", "caption");
     band.textContent = c ? c.text : "";
     band.style.display = c && !filmBeside(c) ? "block" : "none";
     if (n) {
@@ -1586,6 +1696,73 @@ function replayKeeps(r, f, who, key) {
   const d = (held && held.doc.data) || {};
   return String(d.self || "").split("?")[0] + " " + d.action === key;
 }
+/* whether the frame `f` is the `create` of the quest the open sheet
+   `sheet` shows: its goal, read as replayKeeps reads it, is the sheet's
+   own (replayQuestSheet). A quest made elsewhere while the sheet was
+   open, in another tab or over the connector, is not the sheet's Accept. */
+function replaySheetMade(r, f, sheet) {
+  if (f.type !== "transition" || f.kind !== "quest" || f.action !== "create")
+    return false;
+  /* a sheet whose Accept was refused its create made no quest: Accept
+     is disabled from the refusal on (questSheet, 140-links-access.js),
+     so a create before that refusal, of the same goal even, was made
+     elsewhere. The sheet's frames end at the beat that closes it. */
+  for (let i = r.frames.indexOf(f) + 1; i > 0 && i < r.frames.length; i++) {
+    const g = r.frames[i];
+    if (g.type === "ui" && !(g.ui || {}).quest) break;
+    if (g.type === "refusal" && g.action === "create") return false;
+  }
+  const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+  const d = (held && held.doc.data) || {};
+  let goal = null;
+  try { goal = JSON.parse(sheet.getAttribute("data-replay-quest")); }
+  catch (e) { goal = null; }
+  const row = s => String(s || "").split("?")[0];
+  return Array.isArray(goal) && !!d.self && row(d.self) === row(goal[0]) &&
+    d.action === goal[1];
+}
+/* the reachable button a quest's `create` was tapped on, with no form
+   open: the shut door of the quest's goal, on the screen shown
+   (shutDoor, 140-links-access.js). The goal is read as replayKeeps
+   reads it. Null for every other frame, and when no such button is
+   shown. */
+function replayQuestDoor(r, f) {
+  if (f.type !== "transition" || f.kind !== "quest" || f.action !== "create")
+    return null;
+  const held = r.frames.find(g => g.type === "doc" && g.self === f.self && g.doc);
+  const d = (held && held.doc.data) || {};
+  return replayShutDoor(d);
+}
+/* the reachable button of the door `goal` names ({self, action}), on
+   the screen shown, or null. One folded under 'More doors' is not drawn
+   until its line is opened: the line is opened first (unfoldDoor,
+   140-links-access.js), so the pointer rests on a button that is seen. */
+function replayShutDoor(goal) {
+  const self = String(goal.self || "").split("?")[0];
+  const all = [...document.querySelectorAll("#view button[data-quest-door]")]
+    .filter(b => b.dataset.questDoor === goal.action &&
+                 b.dataset.questSelf === self);
+  const seen = b => b.getClientRects().length > 0;
+  return all.find(seen) ||
+    all.map(unfoldDoor).find(seen) || null;
+}
+/* the quest's sheet of a replay (questSheet, 140-links-access.js), from
+   the `quest` part of a `ui` beat: the goal, the door's label and the
+   rehearsal's answer, as the recording had them. Nothing is asked of
+   the engine, and Accept writes nothing. Null closes the sheet; a beat
+   for the sheet already open draws nothing. */
+function replayQuestSheet(q) {
+  const open = $("dialog[open][data-quest-sheet]");
+  const key = q && q.goal ? JSON.stringify([q.goal.self, q.goal.action]) : null;
+  if (open && key && open.getAttribute("data-replay-quest") === key) return;
+  if (open) open.close();
+  if (!key) return;
+  const name = q.goal.action;
+  const dlg = questSheet(replayShutDoor(q.goal) || {title: ""}, name,
+    {unavailable: {[name]: {display: {label: q.label}}}}, null, q.goal,
+    q.seen || {ok: false});
+  dlg.setAttribute("data-replay-quest", key);
+}
 /* the door a `refusal` frame is about, as a guided dialog is keyed */
 function replayRefusedKey(f) {
   return String(f.self || "").split("?")[0] + " " + f.action;
@@ -1634,9 +1811,25 @@ function replayKept(r, f) {
    not drawn yet draws it when it opens (openGuidedDialog). A refusal no
    form was open for (replayFormless) is drawn in the caption band
    (replayCaption), one line for each, and the form that is open keeps
-   its own. */
+   its own. A refused Accept quest is said in the quest's sheet
+   (replaySheetRefused), as the recording said it: its box, with Accept
+   disabled, and the sheet then closes off Not now. */
+function replaySheetRefused(f) {
+  /* the sheet is modal: while it is open the recorder's hand writes
+     with Accept quest alone, and the write it was refused is the
+     quest's create or its pin (questSheet, 140-links-access.js) */
+  const sheet = $("dialog[open][data-quest-sheet]");
+  return sheet && sheet.questRefuse && f && f.type === "refusal" &&
+    (f.action === "create" || f.action === "pin") ? sheet : null;
+}
 function replayRefuse(f) {
   if (!replay) return;
+  const sheet = replaySheetRefused(f);
+  if (sheet) {
+    sheet.questRefuse({title: f.title, detail: f.detail});
+    sheet.removeAttribute("data-replay-accepted");
+    return;
+  }
   if (f && replayFormless(replay, f)) {
     replay.refusals.push(replayRefusedLine(replay, f));
     replayCaption();
@@ -1731,7 +1924,7 @@ function replayGestureTarget(f) {
        the refusal's own box; the footer's is for a walk recorded before
        a walk held its refusals */
     if (replayAccepted(replay, key))
-      return g.querySelector("[data-quest-accept]") || g.guidedAccept();
+      return g.querySelector("[data-surface='dialog.accept']") || g.guidedAccept();
     /* the button that writes, drawn unlit until the pointer presses it */
     let write = g.querySelector("[data-replay-write]");
     if (!write) {
@@ -1741,7 +1934,42 @@ function replayGestureTarget(f) {
     }
     return write;
   }
+  /* under the quest's sheet (replayQuestSheet): the recorder's create
+     is a press on Accept quest, and so is the create or the pin it was
+     refused (replaySheetRefused); the beat that closes a sheet no
+     quest was made from is a press on Not now */
+  const sheet = $("dialog[open][data-quest-sheet]");
+  if (sheet) {
+    /* one tap on Accept quest makes the quest and then pins it: a pin
+       refused under a sheet whose own create was made (replaySheetMade,
+       data-replay-accepted) is that same tap, pressed at the create.
+       That create never carries a notice (replayNotice), so the tap is
+       not left with no press: a `refusal` frame is written to the
+       refused hand's self walk alone (walks.clj, record-refused!), a
+       followed walk of another person holds none, and in a self walk
+       the sheet's create is the recorder's own. Another hand's move
+       reaches a self walk only as a move on a row a quest's plan names
+       (record-heard!), with no document of a quest it made, and
+       replaySheetMade reads the goal from that document */
+    if (f.type === "refusal" && f.action === "pin" &&
+        sheet.hasAttribute("data-replay-accepted")) return null;
+    if (f.type === "refusal")
+      return replaySheetRefused(f) ? sheet.querySelector("[data-surface='sheet.accept']") : null;
+    if (f.type === "transition")
+      return replaySheetMade(replay, f, sheet) && !replayNotice(replay, f)
+        ? sheet.querySelector("[data-surface='sheet.accept']") : null;
+    return f.type === "ui" && !ui.quest && !sheet.hasAttribute("data-replay-accepted")
+      ? sheet.querySelector("[data-surface='sheet.decline']") : null;
+  }
   if (replay.door || $("dialog[open]")) return null;
+  /* a tap on a shut door: the press is on that button, and the beat
+     opens its sheet */
+  if (ui.quest && ui.quest.goal) return replayShutDoor(ui.quest.goal);
+  /* a quest accepted by a tap on its shut door, in a walk that holds no
+     sheet for it: the press is on that button, for the recorder's own
+     create */
+  if (f.type === "transition")
+    return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);
   const link = (box, hit) =>
     [...document.querySelectorAll(box + " a[href^=\"#/\"]")]
       .find(a => seen(a) && hit(a.getAttribute("href").slice(1)));
@@ -1757,7 +1985,7 @@ function replayGestureTarget(f) {
     if (d.self + " " + d.action === guidedDismissed) return null;
     /* the tracker's head step is taken from the tracker: its Go */
     const head = replay.quest && questHead(replay.quest);
-    const go = $("#questbar [data-tracker-go]");
+    const go = $("#questbar [data-surface='tracker.go']");
     if (go && seen(go) && head && !questWaits(head) &&
         row(head.self) === d.self && head.door === d.action) return go;
     const doors = [...document.querySelectorAll("#view button[data-action]")]
@@ -1825,6 +2053,8 @@ function replayGesture(r) {
   /* a beat equal to the one before it is on screen already: no click */
   const to = replayStill(r.frames, r.at) ? null : replayGestureTarget(f);
   if (!to) return;
+  /* the frame before this one has had its hold: a film says its beat */
+  filmBeatSay();
   r.gesture = {at: r.at, until: performance.now()
                  + (REPLAY_GLIDE_MS + REPLAY_PRESS_MS) / r.speed,
                walk,
@@ -1838,6 +2068,8 @@ function replayGesture(r) {
     if (replay !== r || !lit) return;
     if (lit !== to) replayPointerTo(lit, r.speed);
     const form = lit.closest("dialog[data-guided]");
+    /* a field's click lights no button: a film keeps it for the beat */
+    if (form && r.gesture && r.gesture.field) filmPress(filmField(lit, r.gesture.field));
     if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }
     lit.classList.add("invited");
     lit.setAttribute("data-replay-press", "");
@@ -1875,6 +2107,8 @@ function replayGestureRest(r, gone) {
    applied as a move with no link is. */
 function replayWalkOf(r, f) {
   if (!f || r.walked === r.at || r.door || $("dialog[open]")) return null;
+  /* a write whose button is on the screen shown is pressed there */
+  if (f.type === "transition" && !replayNotice(r, f) && replayGestureTarget(f)) return null;
   const row = s => String(s || "").split("?")[0];
   const ui = (f.type === "ui" && f.ui) || {}, c = ui.collection;
   const list = !!ui.dialog && !!c && !!c.self;
@@ -1899,6 +2133,7 @@ function replayHopOf(f, to) {
 function replayHop(r) {
   const list = r.gesture.hop;
   r.hopped = r.at;
+  filmPress(filmPressed());
   replayGestureRest(r);
   location.hash = "#" + list;
   replayGaze("list", list);
@@ -1911,6 +2146,7 @@ function replayHop(r) {
 function replayArrive(r) {
   const walk = r.gesture.walk;
   r.walked = r.at;
+  filmPress(filmPressed());
   replayGestureRest(r);
   applyFollowMove(walk.self);
   replayGaze(walk.list ? "list" : "row", walk.self);
@@ -1943,12 +2179,26 @@ function replayStep() {
     r.timer = setTimeout(replayStep, wait);
     return;
   }
+  /* a frame with no gesture: the one before it has had its hold */
+  filmBeatSay();
   /* no jump: the pressed navigation entry draws its list first */
   if (r.gesture && r.gesture.hop) { replayHop(r); return; }
   /* nor for a frame on another row: the pressed link draws its row first */
   if (r.gesture && r.gesture.walk) { replayArrive(r); return; }
   const shows = replayShows(r.frames, r.at);
+  /* a film's beat for this frame (filmBeatSay): the press is read now,
+     before the frame draws over the button it was made on, and it ends
+     the presses made on the way to the frame (filmPress) */
+  const owed = film ? {i: r.at, f: r.frames[r.at], pressed: filmPressed()} : null;
+  if (owed) {
+    /* the pressed element itself, for the beat's focus (filmFocus) */
+    owed.at = $("[data-replay-press]");
+    filmPress(owed.pressed);
+    owed.presses = filmPresses;
+    filmPresses = [];
+  }
   applyReplayFrame(r.frames[r.at++]);
+  if (replay === r) filmBeatOwed = owed;
   /* the stillness a change is owed is counted from here, or from the
      end of its draw when that is later (replayDrawn) */
   if (shows) r.drawn = performance.now();
@@ -1972,6 +2222,7 @@ function playReplay() {
     r.rows.clear();
     r.docs.clear();
     closeGuided();
+    replayQuestSheet(null);
     guidedFocus = null;
     guidedDismissed = null;
   }
@@ -2000,6 +2251,7 @@ function stopReplay(quiet) {
   clearTimeout(r.timer);
   replayGestureRest(r, true);
   closeGuided();
+  replayQuestSheet(null);
   replay = null;
   apiHeld = false;
   guidedFocus = null;
@@ -2123,8 +2375,9 @@ function renderReplayDoc(view, doc) {
    and says where the page is: `ready` while the title card holds for
    FILM_TITLE_MS, `playing` once play starts by itself at 1×, and
    `ended` when the last screen has held for FILM_HOLD_MS. The camera
-   reads that and nothing else. The export GET is the one read, as it
-   is for ▶ Replay. ──────────────────────────────────────────────── */
+   reads that and nothing else. The film has an address and no row, so
+   it reads the row for its links.export and then the export; ▶ Replay
+   has the row in hand and makes the one read. ─────────────────────── */
 const FILM_TITLE_MS = 2000, FILM_HOLD_MS = 1500;
 /* the walk being filmed, by its self, or null */
 let film = null;
@@ -2136,7 +2389,464 @@ function filmWalkOf(raw) {
 function filmState(s) { document.documentElement.setAttribute("data-film", s); }
 /* the last frame is applied: the screen holds, then the page says so */
 function filmEnd() {
+  /* the last frame's beat is said before the page says it has ended */
+  setTimeout(filmBeatSay, FILM_HOLD_MS);
   setTimeout(() => filmState("ended"), FILM_HOLD_MS);
+}
+/* ── presentation mode (docs/spec-agent-demo-walks.md §8b): the detail a
+   demo film must not show. window.wmPresent(true) sets the class
+   `present` on the root element and wmPresent(false) takes it off;
+   030-screens.css hides the marked chrome: the crumb's row id, the
+   version line, the grant chip and the header's developer buttons.
+   Recording and replay are driven by page functions and not by those
+   buttons, so both work while it is on. ──────────────────────────── */
+window.wmPresent = on => document.documentElement.classList.toggle("present", on !== false);
+/* ── film beats (docs/spec-agent-demo-walks.md §8b): what a take showed,
+   for a reader that cannot watch it. In film mode each frame the replay
+   steps to is said one time: a `waymark:film-beat` CustomEvent on
+   `document` whose detail is the beat, and every beat of the take is
+   kept, in order, on window.wmFilmBeats. A beat is read from the page
+   as drawn and not from the frame, when the frame has had its hold:
+   just before the next frame's gesture or act, and before `ended` for
+   the last. Outside film mode nothing is said. ─────────────────────── */
+/* the frame whose beat is not said yet: {i, f, pressed, presses}, or null */
+let filmBeatOwed = null;
+/* what the pointer pressed on the way to the frame at the playhead, in
+   order, each as {label, target}: a click on a form's field, the
+   navigation entry of a hop (replayHop), the link of a walk to another
+   row (replayArrive), and last the press the frame is applied under.
+   The frame's beat takes the list when the frame is applied. */
+let filmPresses = [];
+function filmPress(p) { if (film && p) filmPresses.push(p); }
+/* a click on the field `name` of an open form, where the pointer is on
+   `spot`: the label's own words, and `field:<name>` */
+function filmField(spot, name) {
+  const lab = spot.closest("label");
+  const own = lab && [...lab.childNodes].filter(n => n.nodeType === 3)
+    .map(n => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+  return {label: own || null, target: "field:" + name};
+}
+const filmText = e => e ? e.textContent.replace(/\s+/g, " ").trim() : "";
+/* the button or the link the pointer has lit for the frame at the
+   playhead, as {label, target}, or null. `label` is its own text;
+   `target` is a stable name where there is one, and `nav:<path>` for a
+   link to a screen. The name is the element's own `data-surface` where
+   the beat says that name; a dotted 'not yet' button (`door-shut:<action>`)
+   is said as its door. A click on a form's field lights nothing: it is
+   in the beat's `presses` (filmField). */
+function filmPressed() {
+  const e = $("[data-replay-press]");
+  if (!e) return null;
+  const s = e.dataset.surface || "";
+  const target = /^(sheet\.(accept|decline)|dialog\.accept|tracker\.go)$/.test(s) ? s
+    : e.hasAttribute("data-replay-write") ? "dialog.submit"
+    : e.dataset.action ? "door:" + e.dataset.action
+    : s.startsWith("door-shut:") ? "door:" + s.slice("door-shut:".length)
+    : e.matches("a[href^='#']") ? "nav:" + e.getAttribute("href").slice(1)
+    : null;
+  return {label: filmText(e), target};
+}
+/* the caption band's text when it is shown, or the caption drawn beside
+   a field (filmBeside) */
+function filmCaption() {
+  const band = $("#replaycaption");
+  return (band && band.style.display !== "none" && band.textContent.trim()) ||
+    filmText($("dialog[open] [data-caption-note]")) || null;
+}
+/* the refusal on screen (replayRefuse): the form's box, the sheet's
+   line, or the band's line for a refusal no form was open for */
+function filmRefusal() {
+  const band = $("#replaycaption[data-replay-notice]");
+  return filmText($("dialog[open] .problem")) ||
+    filmText($("dialog[open] [data-quest-refused]")) ||
+    (band && band.textContent.split("\n").find(l => l.startsWith("Refused: "))) || null;
+}
+/* ── what a viewer could read, and where things are (§8b): the part of a
+   beat a scorer that cannot see pixels measures. All of it is read from
+   the page as drawn, in CSS pixels of the viewport. ──────────────────── */
+const FILM_TEXT_MAX = 2048, FILM_FOCUS_TEXT_MAX = 1024, FILM_BEAT_MAX = 8000;
+const filmRect = b => ({x: Math.round(b.left), y: Math.round(b.top),
+                        w: Math.round(b.width), h: Math.round(b.height)});
+const filmOnScreen = b => b.width > 0 && b.height > 0 && b.right > 0 && b.bottom > 0 &&
+  b.left < innerWidth && b.top < innerHeight;
+/* the modal drawn over the page, or null */
+const filmFront = () => [...document.querySelectorAll("dialog[open]")].pop() || null;
+/* the runs of text under `root` a viewer could read, in document order,
+   each as {s, p}: its words and the element that draws them. A run is
+   left out when it is not drawn, when no line of it can be seen, when
+   it is under `skip`, and when it is a field's value. A line can be
+   seen when a part of its box is in the viewport and in every ancestor
+   that clips it (filmClip). Five points of that part are asked
+   (filmPoints), each for what is drawn over it (filmCovered), and a run
+   is left out when more than half of the points asked for its lines
+   are covered: a run mostly covered is not listed, and a run half
+   covered or less is listed whole. Where filmClip says to ask the page
+   (`ask`), a point the page does not answer the run's element at is
+   clipped away and is not counted, and a run with no point left is
+   left out. Where the page cannot be asked that (an inert run, or no
+   sheet to adopt), a point outside one of filmClip's `cuts` is clipped
+   away the same way. The secret dialog says its
+   heading and its buttons and nothing else, as readSurface does: a beat
+   is kept. */
+/* the part of the viewport `p`'s text can be drawn in, as {left, top,
+   right, bottom}: the viewport cut by the padding box of `p` and of
+   each ancestor that clips (`overflow` other than visible), on the axis
+   it clips. An ancestor clips a positioned box only when it holds it:
+   none clips a fixed box, and one with no position does not clip an
+   absolute one. `ask` is true when a box cannot say the clip: `p` or an
+   ancestor has a `clip-path`, or an ancestor that clips is transformed,
+   itself or by one above it. That ancestor's box is then not applied,
+   and filmRuns asks the page at each point instead. `cuts` holds those
+   clips as geometry can say them, for a run the page cannot be asked
+   for: each is a function of a point {x, y} of the viewport, true when
+   the point is inside the clip. A clip geometry cannot say is not in
+   it. */
+/* `m` times what `cs` turns a box by, as a DOMMatrix: `rotate`, `scale`
+   and `transform`, without `translate`, since only the linear part is
+   used (filmLocal). Null when it is out of the plane or is not read. */
+function filmTurn(m, cs) {
+  const on = v => v && v !== "none";
+  try {
+    const own = new DOMMatrix([on(cs.rotate) ? `rotate(${cs.rotate})` : "",
+      on(cs.scale) ? `scale(${cs.scale.trim().split(/\s+/).join(",")})` : "",
+      on(cs.transform) ? cs.transform : ""].join(" ").trim());
+    return own.is2D ? m.multiply(own) : null;
+  } catch (e) {
+    return null;
+  }
+}
+/* the viewport's point `q` in the box of `a`, as {x, y} from the left
+   top corner of its border box, where `m` is filmTurn's answer for `a`
+   and each one above it: a transform in the plane keeps the centre of a
+   box at the centre of its client rect */
+function filmLocal(a, m, q) {
+  const b = a.getBoundingClientRect(), i = m.inverse();
+  const x = q.x - (b.left + b.right) / 2, y = q.y - (b.top + b.bottom) / 2;
+  return {x: i.a * x + i.c * y + a.offsetWidth / 2,
+          y: i.b * x + i.d * y + a.offsetHeight / 2};
+}
+/* whether a point of the viewport is inside the `clip-path` of `a`, as
+   a function of the point; null when geometry cannot say. It reads
+   `inset()`, `circle()`, `ellipse()` and `polygon()` on the border box,
+   with lengths in px and in percent. The round corners of an `inset()`
+   are read as square. */
+function filmPath(a, cs, m) {
+  const shape = /^(inset|circle|ellipse|polygon)\((.*)\)$/.exec(cs.clipPath.trim());
+  if (!m || !shape || !(a instanceof HTMLElement) || cs.display === "inline") return null;
+  const w = a.offsetWidth, h = a.offsetHeight;
+  const len = (s, of) => {
+    const v = /^(-?[\d.]+(?:e-?\d+)?)(px|%)$/.exec(s || "");
+    return !v ? NaN : v[2] === "px" ? +v[1] : +v[1] * of / 100;
+  };
+  const words = s => s.trim().split(/\s+/).filter(Boolean);
+  let holds;
+  if (shape[1] === "inset") {
+    const v = words(shape[2].split(/\bround\b/)[0]);
+    const t = len(v[0], h), r = len(v[1] || v[0], w), b = len(v[2] || v[0], h),
+          l = len(v[3] || v[1] || v[0], w);
+    if (v.length > 4 || [t, r, b, l].some(isNaN)) return null;
+    holds = (x, y) => x >= l && x < w - r && y >= t && y < h - b;
+  } else if (shape[1] === "polygon") {
+    const parts = shape[2].split(",").map(words);
+    const rule = parts[0].length === 1 ? parts.shift()[0] : "nonzero";
+    const at = parts.map(v => ({x: len(v[0], w), y: len(v[1], h), n: v.length}));
+    if (!/^(nonzero|evenodd)$/.test(rule) ||
+        at.some(v => v.n !== 2 || isNaN(v.x) || isNaN(v.y))) return null;
+    /* the edges that cross the line to the right of the point, counted
+       by their direction and by their number */
+    holds = (x, y) => {
+      let wound = 0, odd = false;
+      at.forEach((v, n) => {
+        const u = at[(n + 1) % at.length];
+        if ((v.y <= y) === (u.y <= y)) return;
+        const side = (u.x - v.x) * (y - v.y) - (x - v.x) * (u.y - v.y);
+        if (u.y > v.y ? side > 0 : side < 0) { wound += u.y > v.y ? 1 : -1; odd = !odd; }
+      });
+      return rule === "evenodd" ? odd : wound !== 0;
+    };
+  } else {
+    const [radii, centre] = shape[2].split(/(?:^|\s+)at\s+/), rs = words(radii);
+    const c = centre == null ? null : words(centre);
+    if (c && c.length !== 2) return null;
+    const cx = c ? len(c[0], w) : w / 2, cy = c ? len(c[1], h) : h / 2;
+    const far = k => k === "farthest-side", key = k => !k || k === "closest-side" || far(k);
+    const side = (k, at, of) =>
+      (far(k) ? Math.max : Math.min)(Math.abs(at), Math.abs(of - at));
+    let rx, ry;
+    if (shape[1] === "circle") {
+      const k = rs[0];
+      if (rs.length > 1) return null;
+      rx = ry = key(k) ? (far(k) ? Math.max : Math.min)(side(k, cx, w), side(k, cy, h))
+                       : len(k, Math.hypot(w, h) / Math.SQRT2);
+    } else {
+      if (rs.length !== 0 && rs.length !== 2) return null;
+      rx = key(rs[0]) ? side(rs[0], cx, w) : len(rs[0], w);
+      ry = key(rs[1]) ? side(rs[1], cy, h) : len(rs[1], h);
+    }
+    if ([cx, cy, rx, ry].some(isNaN)) return null;
+    holds = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
+  }
+  return q => {
+    const l = filmLocal(a, m, q);
+    return holds(l.x, l.y);
+  };
+}
+function filmClip(p) {
+  const c = {left: 0, top: 0, right: innerWidth, bottom: innerHeight, ask: false, cuts: []};
+  const up = [];
+  for (let a = p; a && a !== document.body && a !== document.documentElement;
+       a = a.parentElement) up.push({a, cs: getComputedStyle(a)});
+  /* from the top down: whether the box or one above it is transformed,
+     and by what (filmTurn) */
+  let turned = false, m = window.DOMMatrix ? new DOMMatrix() : null;
+  for (const u of [...up].reverse()) {
+    const own =
+      [u.cs.transform, u.cs.rotate, u.cs.scale, u.cs.translate].some(v => v && v !== "none");
+    turned = u.turned = turned || own;
+    if (own) m = m && filmTurn(m, u.cs);
+    u.m = m;
+    if (u.cs.clipPath && u.cs.clipPath !== "none") {
+      const cut = filmPath(u.a, u.cs, m);
+      c.ask = true;
+      if (cut) c.cuts.push(cut);
+    }
+  }
+  let out = null;
+  for (const {a, cs, turned, m} of up) {
+    if (out === "fixed") break;
+    if (out === "absolute" && cs.position === "static") continue;
+    out = cs.position === "absolute" || cs.position === "fixed" ? cs.position : null;
+    /* a box that `overflow` does not apply to clips nothing */
+    if (!(a instanceof HTMLElement) ||
+        /^(inline|contents|table-(row|column|header|footer).*)$/.test(cs.display)) continue;
+    if (turned && (cs.overflowX !== "visible" || cs.overflowY !== "visible")) {
+      c.ask = true;
+      /* its padding box, in its own box, on the axis it clips */
+      if (m) c.cuts.push(q => {
+        const l = filmLocal(a, m, q);
+        return (cs.overflowX === "visible" ||
+                (l.x >= a.clientLeft && l.x < a.clientLeft + a.clientWidth)) &&
+               (cs.overflowY === "visible" ||
+                (l.y >= a.clientTop && l.y < a.clientTop + a.clientHeight));
+      });
+      continue;
+    }
+    const b = a.getBoundingClientRect(), l = b.left + a.clientLeft, t = b.top + a.clientTop;
+    if (cs.overflowX !== "visible") {
+      c.left = Math.max(c.left, l);
+      c.right = Math.min(c.right, l + a.clientWidth);
+    }
+    if (cs.overflowY !== "visible") {
+      c.top = Math.max(c.top, t);
+      c.bottom = Math.min(c.bottom, t + a.clientHeight);
+    }
+  }
+  return c;
+}
+/* the points asked for the part of a line from (l, t) to (r, u), each
+   as {x, y}: its centre, and the four points a quarter in from its
+   corners */
+const filmPoints = (l, t, r, u) =>
+  [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]
+    .map(([a, b]) => ({x: l + (r - l) * a, y: t + (u - t) * b}));
+/* what `f` answers while every element takes the pointer, so that
+   `document.elementsFromPoint` lists the ones that take none where they
+   are drawn; null where no sheet can be adopted for it */
+function filmAllTake(f) {
+  if (!document.elementsFromPoint || !document.adoptedStyleSheets || !window.CSSStyleSheet)
+    return null;
+  /* a copy: the document's own list is live, and would keep the sheet */
+  const was = [...document.adoptedStyleSheets];
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("* { pointer-events: auto !important }");
+    document.adoptedStyleSheets = [...was, sheet];
+    return f();
+  } catch (e) {
+    return null;
+  } finally {
+    document.adoptedStyleSheets = was;
+  }
+}
+/* whether `e` draws something of its own a viewer cannot read through:
+   a background colour or image, or a picture. A box that only holds
+   others, or draws with a pseudo-element as the replay pointer does,
+   draws nothing here. */
+function filmDraws(e) {
+  if (e.checkVisibility &&
+      !e.checkVisibility({opacityProperty: true, visibilityProperty: true})) return false;
+  if (e.closest("svg") || e.matches("img, canvas, video, iframe")) return true;
+  const cs = getComputedStyle(e), c = filmRgba(cs.backgroundColor);
+  return cs.backgroundImage !== "none" || !c || c[3] > 0;
+}
+/* whether something that is not `p`'s ancestor is drawn over the point
+   `q` of `p`'s text. `q` is {x, y, h}, where `h` is the element the
+   page answers there, and `stack` is what the page answers there, from
+   the top down, while every element takes the pointer (filmAllTake).
+   The point is covered by the caption band, which is asked by its rect;
+   by an element above `h` and above the text in `stack`, which takes no
+   pointer and is asked for what it draws (filmDraws); and by `h`. A
+   modal is drawn over the band, and a modal's backdrop dims the page
+   and does not hide it. */
+function filmCovered(p, q, stack) {
+  const within = e => {
+    const b = e.getBoundingClientRect();
+    return q.x >= b.left && q.x < b.right && q.y >= b.top && q.y < b.bottom;
+  };
+  const own = e => e.contains(p) || p.contains(e);
+  const band = $("#replaycaption"), front = filmFront();
+  if (band && !band.contains(p) && !(front && front.contains(p)) && within(band)) return true;
+  if (!document.elementFromPoint) return false;
+  for (const e of stack) {
+    if (e === q.h || own(e)) break;
+    if (filmDraws(e)) return true;
+  }
+  if (getComputedStyle(p).pointerEvents === "none") return false;
+  if (!q.h || own(q.h)) return false;
+  return !(q.h.matches("dialog") && !within(q.h));
+}
+function filmRuns(root, skip) {
+  const found = [], range = document.createRange(), front = filmFront();
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    const p = n.parentElement, s = n.textContent.replace(/\s+/g, " ").trim();
+    if (!s || !p || (skip && skip.contains(p))) continue;
+    if (p.closest("script, style, template, textarea, [aria-hidden='true']")) continue;
+    if (p.closest("[data-secret]") && !p.closest("h3, button")) continue;
+    if (p.checkVisibility ? !p.checkVisibility({visibilityProperty: true})
+                          : !p.getClientRects().length) continue;
+    range.selectNodeContents(n);
+    const c = filmClip(p);
+    const pts = [...range.getClientRects()].flatMap(b => {
+      const l = Math.max(b.left, c.left), t = Math.max(b.top, c.top),
+            r = Math.min(b.right, c.right), u = Math.min(b.bottom, c.bottom);
+      return r > l && u > t ? filmPoints(l, t, r, u) : [];
+    });
+    if (!pts.length) continue;
+    if (document.elementFromPoint)
+      for (const q of pts) q.h = document.elementFromPoint(q.x, q.y);
+    /* the page answers no inert element at a point: one under an open
+       modal, or under `inert`, is not asked this way, and its points are
+       read by filmClip's `cuts` */
+    const ask = c.ask && !(front && !front.contains(p)) && !p.closest("[inert]");
+    found.push({s, p, pts, ask, cuts: c.cuts});
+  }
+  const stacks = filmAllTake(() =>
+    found.map(f => f.pts.map(q => document.elementsFromPoint(q.x, q.y))));
+  return found.filter((f, i) => {
+    const at = f.pts.map((q, j) => ({q, stack: stacks ? stacks[i][j] : []}));
+    const seen = f.ask && stacks ? at.filter(a => a.stack.includes(f.p))
+                                 : at.filter(a => f.cuts.every(cut => cut(a.q)));
+    const covered = seen.filter(a => filmCovered(f.p, a.q, a.stack));
+    return seen.length > 0 && covered.length * 2 <= seen.length;
+  }).map(({s, p}) => ({s, p}));
+}
+const filmRunsText = (runs, max) => runs.map(r => r.s).join(" ").slice(0, max);
+/* the screen's text in reading order: the modal's first, since it is
+   drawn over the page, then the page's */
+function filmScreenText() {
+  const front = filmFront();
+  return filmRunsText(front ? [...filmRuns(front), ...filmRuns(document.body, front)]
+                            : filmRuns(document.body), FILM_TEXT_MAX);
+}
+/* every named surface in the viewport (surfaceNode, 100-core.js), as
+   {name, rect} */
+function filmBoxes() {
+  const out = [];
+  for (const e of document.querySelectorAll("[data-surface]")) {
+    const b = e.getBoundingClientRect();
+    if (filmOnScreen(b)) out.push({name: e.dataset.surface, rect: filmRect(b)});
+  }
+  return out;
+}
+/* the surface the beat is about, as {name, node}, or null: the pressed
+   element's surface while it is still drawn and no modal has opened over
+   it; otherwise the open sheet, then the open form, then the tracker
+   when it is not as the beat before said it */
+function filmFocus(o, beat) {
+  const front = filmFront(), at = o.at && o.at.isConnected ? o.at : null;
+  if (at && filmOnScreen(at.getBoundingClientRect()) && (!front || front.contains(at))) {
+    const node = at.closest("[data-surface]") || at;
+    return {name: node.dataset.surface || (o.pressed && o.pressed.target) || null, node};
+  }
+  const was = (window.wmFilmBeats || []).slice(-1)[0];
+  const name = beat.sheet ? "sheet" : beat.dialog ? "dialog"
+    : beat.tracker && JSON.stringify(beat.tracker) !== JSON.stringify(was ? was.tracker : null)
+      ? "tracker" : null;
+  const node = name && surfaceNode(name);
+  return node ? {name, node} : null;
+}
+/* a computed colour as [r, g, b, a], or null for one this does not read */
+function filmRgba(c) {
+  const m = /^(rgba?\(|color\(srgb )/.exec(String(c));
+  const v = m && String(c).match(/[\d.]+/g).map(Number);
+  if (!v || v.length < 3) return null;
+  const k = m[1].startsWith("color") ? 255 : 1;
+  return [v[0] * k, v[1] * k, v[2] * k, v[3] == null ? 1 : v[3]];
+}
+/* the WCAG contrast ratio of `e`'s text against the background colours
+   drawn behind it: its own and its ancestors', to the first opaque one,
+   over white where none is. Null when those colours are not what is
+   drawn: a background image (a gradient is one) on any of them, or a
+   modal's backdrop between the text and the page. */
+function filmContrast(e) {
+  const fg = filmRgba(getComputedStyle(e).color), layers = [], front = filmFront();
+  if (!fg || (front && !front.contains(e))) return null;
+  for (let n = e; n; n = n.parentElement) {
+    const cs = getComputedStyle(n), c = filmRgba(cs.backgroundColor);
+    if (!c || cs.backgroundImage !== "none") return null;
+    if (c[3] > 0) layers.push(c);
+    if (c[3] >= 1) break;
+    if (n === front) return null;
+  }
+  const over = (top, under) => under.map((u, i) => top[i] * top[3] + u * (1 - top[3]));
+  const bg = layers.reverse().reduce((under, l) => over(l, under), [255, 255, 255]);
+  const lum = c => {
+    const [r, g, b] = c.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const a = lum(over(fg, bg)), b = lum(bg);
+  return Math.round((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) * 100) / 100;
+}
+/* the measurements of a beat: `text`, `viewport`, `boxes`, `focus`,
+   `type_px`, `contrast` and `pointer`. The beat stays under about
+   FILM_BEAT_MAX: `text` is cut first, then the focus text, then boxes. */
+function filmMeasure(o, beat) {
+  const focus = filmFocus(o, beat), runs = focus ? filmRuns(focus.node) : [];
+  let big = null;
+  for (const r of runs) {
+    const px = parseFloat(getComputedStyle(r.p).fontSize);
+    if (!big || px > big.px) big = {px, p: r.p};
+  }
+  const p = $("#replaypointer"), pb = p && p.getBoundingClientRect();
+  Object.assign(beat, {
+    text: filmScreenText(), viewport: {w: innerWidth, h: innerHeight}, boxes: filmBoxes(),
+    focus: focus ? {name: focus.name, rect: filmRect(focus.node.getBoundingClientRect()),
+                    text: filmRunsText(runs, FILM_FOCUS_TEXT_MAX)} : null,
+    type_px: big ? big.px : null, contrast: big ? filmContrast(big.p) : null,
+    pointer: pb ? {x: Math.round(pb.left), y: Math.round(pb.top)} : null});
+  const over = () => JSON.stringify(beat).length - FILM_BEAT_MAX;
+  let n = over();
+  if (n > 0) beat.text = beat.text.slice(0, Math.max(0, beat.text.length - n));
+  if (beat.focus && (n = over()) > 0)
+    beat.focus.text = beat.focus.text.slice(0, Math.max(0, beat.focus.text.length - n));
+  while (beat.boxes.length && over() > 0) beat.boxes.pop();
+}
+function filmBeatSay() {
+  const o = filmBeatOwed;
+  filmBeatOwed = null;
+  if (!o || !film) return;
+  const f = o.f, beat = {i: o.i, t: f.t == null ? null : f.t, type: f.type};
+  for (const k of ["who", "self", "action", "kind"]) if (f[k] != null) beat[k] = f[k];
+  /* the form, the sheet and the tracker are read by the page's one
+     reader of its surfaces (readSurface, 100-core.js) */
+  Object.assign(beat, {pressed: o.pressed, presses: o.presses, screen: hereHref() || null,
+                       dialog: readSurface("dialog"), sheet: readSurface("sheet"),
+                       tracker: readSurface("tracker"),
+                       caption: filmCaption(), refusal: filmRefusal()});
+  filmMeasure(o, beat);
+  (window.wmFilmBeats = window.wmFilmBeats || []).push(beat);
+  document.dispatchEvent(new CustomEvent("waymark:film-beat", {detail: beat}));
 }
 /* a caption that names a field is drawn beside that field and not in
    the band, as an invitation's note is, once its form is open */
@@ -2150,13 +2860,17 @@ async function filmBoot() {
   const self = filmWalkOf(location.hash.slice(1));
   if (!self || film) return;
   film = self;
+  window.wmFilmBeats = [];
+  filmPresses = [];
   /* the chrome is gone before the walk is read; a walk that cannot be
      read never says `ready` */
   filmState("");
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const row = await api(self);
+    const href = row.ok ? walkExportHref(row.body) : null;
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* never ready */ }
   const walk = parseWalk(text);
   if (!walk) return;
@@ -2175,11 +2889,12 @@ filmBoot();
 /* the two ways in: a sealed walk's row page (160-resource-surface.js),
    whose export is the one read a replay makes, and a .ndjson file the
    person picks, which makes none */
-async function replayWalk(self) {
+async function replayWalk(doc) {
+  const href = walkExportHref(doc);
   let text = null;
   try {
-    const res = await fetch(self + "/export", {headers: principalHeaders()});
-    if (res.ok) text = await res.text();
+    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;
+    if (res && res.ok) text = await res.text();
   } catch (_e) { /* told below */ }
   if (text === null) { toast("This walk's export could not be read"); return; }
   startReplay(text);

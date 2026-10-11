@@ -968,6 +968,24 @@
             (is (= "assign" (get-in e [:ui :dialog :action])))
             (is (some? (:seq e)))))))))
 
+(deftest a-move-with-no-new-beat-says-the-carried-ui-again
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (presence/report! reg elena "/api/pres_notes/n1" assigning)
+        (let [f (next-frame follower (ui-of? "elena"))]
+          (is (= "assign" (get-in f [:ui :dialog :action])))
+          (testing "a read of theirs from a second tab moves self and reports no ui"
+            (presence/read! reg elena "/api/pres_notes/n2")
+            (let [m (next-frame follower #(and (= "move" (:event %))
+                                               (= "elena" (get-in % [:principal :id]))))
+                  g (next-frame follower (ui-of? "elena"))]
+              (is (= "/api/pres_notes/n2" (:self m)))
+              (is (some? g) "the ui frame follows the move, so the follower's dialog stays open")
+              (is (= (:seq f) (:seq g)) "under the seq it was reported with")
+              (is (= (:ui f) (:ui g))))))))))
+
 (deftest a-stream-without-ui-is-byte-for-byte-today
   (with-ui-reg {}
     (fn [_eng reg]
@@ -983,6 +1001,47 @@
           (is (= [#{:principal :self :source :at}] (mapv (comp set keys) snap)))
           (is (not (str/includes? (presence/frame {:event "snapshot" :presences snap})
                                   "assign"))))))))
+
+(deftest a-quests-sheet-rides-the-ui-part
+  (with-ui-reg {}
+    (fn [eng reg]
+      (let [plan [{:door "assign" :self "/api/pres_notes/n2" :whose "person"}
+                  {:door "assign" :self "/api/pres_notes/n1" :whose "person"
+                   :needs [["assignee"]]}]
+            quest {:goal {:self "/api/pres_notes/n1" :action "assign"}
+                   :label "Assign"
+                   :seen {:ok true :status 200
+                          :body {:preview {:goal "Assign n1" :plan plan}
+                                 :valid true}}}
+            kept {:goal {:self "/api/pres_notes/n1" :action "assign"}
+                  :label "Assign"
+                  :seen {:ok true :body {:preview {:goal "Assign n1" :plan plan}}}}
+            follower (presence/subscribe reg nil {:ui "elena"
+                                                  :redact (presence/ui-redactor eng nil)})]
+        (testing "the sheet's goal, label and rehearsal are stored, and no more"
+          (presence/report! reg elena "/api/pres_notes/n1" (assoc assigning :quest quest))
+          (is (= kept (get-in (next-frame follower (ui-of? "elena")) [:ui :quest]))))
+        (testing "a beat whose sheet names no goal carries none"
+          (presence/report! reg elena "/api/pres_notes/n1"
+                            (assoc assigning :quest {:goal {:action "assign"}
+                                                     :seen {:ok true}}))
+          (let [g (next-frame follower (ui-of? "elena"))]
+            (is (some? g))
+            (is (not (contains? (:ui g) :quest)))))
+        (testing "it crosses with its goal's row, and its plan keeps the rows seen"
+          (let [frame {:event "ui" :principal {:id "elena" :display "Elena" :type "human"}
+                       :self "/api/pres_notes/n1" :source "heartbeat" :at "t" :seq 7
+                       :ui (assoc assigning :quest kept)}
+                vis (fn [rows]
+                      {:row? (fn [_k id] (contains? rows id))
+                       :action? (fn [_k _a] true)
+                       :arg? (fn [_k _a _arg] true)
+                       :field? (fn [_k _f] true)
+                       :whole-kind? (fn [_k] true)})
+                redact #((presence/ui-redactor eng (vis %)) frame)]
+            (is (= [(second plan)]
+                   (get-in (redact #{"n1"}) [:ui :quest :seen :body :preview :plan])))
+            (is (not (contains? (:ui (redact #{"n2"})) :quest)))))))))
 
 (deftest ui-fields-the-follower-cannot-read-are-absent
   (with-ui-reg {}
@@ -1041,6 +1100,24 @@
         (is (not (str/includes? (pr-str @(:local reg)) "8675309"))
             "removed at report time: never stored, so never notified")
         (is (not (str/includes? (pr-str @(:published reg)) "8675309")))))))
+
+(deftest a-secret-under-an-or-with-a-map-arm-is-a-secret-path
+  (let [paths (fn [form] (set (#'presence/secret-paths "" form)))
+        code [:code {:optional true :x-secret true} [:maybe [:string {:max 12}]]]]
+    (is (= #{"shelf.code"}
+           (paths [:map [:shelf [:or
+                                 [:string {:max 80}]
+                                 [:map [:label [:string {:max 80}]] code]]]])))
+    (is (= #{"shelves.code"}
+           (paths [:map [:shelves [:maybe [:vector [:or
+                                                    [:map code]
+                                                    [:string {:max 80}]]]]]]))
+        "a list's entries still share their map's path")
+    (is (= #{"pin"}
+           (paths [:map
+                   [:pin {:optional true :x-secret true} [:maybe [:string {:max 12}]]]
+                   [:shelf [:or [:string {:max 80}] [:map [:label [:string {:max 80}]]]]]]))
+        "a map arm with no secret adds no path")))
 
 (deftest ui-over-the-cap-elides-longest-first
   (with-ui-reg {}

@@ -252,7 +252,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns. idle: none of these; it moved nothing."))
 
@@ -265,7 +265,7 @@
          " of the bytes served dropped. rewalk: a row it walked was walked by "
          rewalk-sittings " or more earlier sittings of the seat that did not submit. over_budget: it cost over $"
          cost-usd ". refusals_high: " refusals
-         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>.")))
+         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>, and so does one that a later answered call spared from refused_out.")))
 
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
@@ -1758,6 +1758,19 @@
                   (.isAfter moved at)))
               transitions)))
 
+(defn- answered-since?
+  "Did the sitting recover from its newest refusal and end cleanly: a
+  call answered after it (`last_answer_at` is newer than
+  `last_refusal`), and the close carries a note. A seat that retried
+  once, read what it came for and said it had nothing to do was not
+  stopped by the refusal."
+  [data]
+  (let [^java.time.Instant refused (->instant (get-in data [:last_refusal :at]))
+        ^java.time.Instant answered (->instant (:last_answer_at data))]
+    (boolean (and refused answered
+                  (.isAfter answered refused)
+                  (some-> (:note data) str not-empty)))))
+
 (defn- served-of
   "One count of `served` (`:calls`, `:bytes`, `:dropped`), summed over
   the named tools, or over every tool when none is named."
@@ -1795,12 +1808,15 @@
         turns (long (or (:turns data) 0))
         served (:served data)
         refusal (:last_refusal data)
+        refused-last (refused-last? data transitions)
+        ;; a later call answered and the close said so: not refused out
+        recovered (boolean (and refused-last (answered-since? data)))
         outcome (cond
                   (delivered? transitions delivers) "submitted"
                   (change-moved? transitions "stall") "stalled"
                   (or (= "missed" closed) (true? (:missed data))
                       (and (zero? turns) (empty? served))) "never_sat"
-                  (refused-last? data transitions) "refused_out"
+                  (and refused-last (not recovered)) "refused_out"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
@@ -1823,8 +1839,10 @@
               (>= (long (or (:refusals data) 0)) refusals)
               (conj "refusals_high")
 
-              ;; which law refused it out, beside the outcome
-              (= "refused_out" outcome)
+              ;; which law refused it out, beside the outcome; a sitting
+              ;; that recovered keeps the record of what refused it
+              (or (= "refused_out" outcome)
+                  (and recovered (contains? #{"cut_short" "idle"} outcome)))
               (into (keep (fn [[label v]]
                             (when-some [s (some-> v str not-empty)]
                               (str label ":" s))))
@@ -2419,7 +2437,7 @@
     [:row {:optional true
            :x-display
            {:label "The row it named"
-            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting of the seat already holds it."}}
+            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting already holds it, of this seat or of another seat that walks the same kind."}}
      [:string {:min 1 :max 128}]]]])
 
 (def ^:private delivers-help
@@ -3075,6 +3093,7 @@
    ;; or a sweep owns: stale, halt, schedule and merged_into are absent
    ;; on purpose — a create that could stamp a halt would be a seat
    ;; born against a wall nobody hit.
+   :no-own-surface "The sitter reads its seat through the grant that cites it (R-4.9); the owner is named on the row and does not hold it alone."
    :create-schema
    [:map
     [:name {:examples ["inbox-clerk"]
@@ -4530,6 +4549,15 @@
                     {:label "Last call"
                      :spelled-by-hand "Stamped by the engine on every call counted against an open sitting; the sweep ends a fired sitting silent past its seat's idle limit."}}
      [:maybe :waymark/instant]]
+    ;; THE LAST ANSWER (ticket 28a5d117). Stamped by the MCP door on a
+    ;; tool call that answered and was not a refusal, so the close can
+    ;; tell a sitting its last refusal stopped from one that called
+    ;; again and was answered.
+    [:last_answer_at {:optional true
+                      :x-display
+                      {:label "Last answer"
+                       :spelled-by-hand "Stamped by the engine on each tool call that answered without an error; the close reads it against the last refusal."}}
+     [:maybe :waymark/instant]]
     ;; THE TRACE OF THE FIRING'S KEY (R-12.37). The sit that spends a
     ;; firing's key keeps its hash here, on the sitting it opened and
     ;; not on the seat, so a run that loses its bind to a restart may
@@ -4633,14 +4661,15 @@
                               :help "The instant after which this token is refused, when the sitting has not closed before it."}}
                 [:string {:max 40}]]]]]]
     ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
-    ;; walk here, and a second sitting of the same seat opened while
-    ;; this one is open walks past them to the next rows. The claim
+    ;; walk here, and a second sitting opened while this one is open,
+    ;; of this seat or of another seat that walks the same kind, walks
+    ;; past them to the next rows. The claim
     ;; ends with the sitting: only an OPEN sitting's rows are read.
     [:walked_rows {:optional true
                    :x-display
                    {:raw true
                     :label "The rows it was handed"
-                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting of the same seat is not handed them."}}
+                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting is not handed them, whether it is of this seat or of another seat that walks the same kind."}}
      [:maybe [:vector [:string {:max 128}]]]]
     ;; A WAKE THAT WALKED NOTHING. The sit stamps this when the walk it
     ;; hands has no rows at all — an empty queue, a queue whose every
@@ -4926,7 +4955,7 @@
 
   A SEAT THAT SAYS A JUDGMENT HAS A THIRD WAY IN. Its queue is the
   judgment's subjects minus the ones with a standing verdict
-  (`judgments/judged-subjects`), so a subject re-enters it when its verdict
+  (`judgments/walk-conds`), so a subject re-enters it when its verdict
   is REOPENED — a transition on kind verdict, not on the walked kind.
   The computed default therefore carries a second entry, `verdict`
   `reopen` under this seat's own judgment, and a reopen wakes the
@@ -5077,21 +5106,32 @@
   (ticket 900764ce): a READ through the router is activity the idle
   sweep must see, but it is neither a transition nor a refusal, and
   `served` is the MCP door's per-tool ledger. The same MAINTENANCE
-  write as `bump-counter!` — document only, version untouched. → the
-  stamp, or nil when there was nothing to stamp: no id, an unknown
-  id, a sitting already closed, or a kind this engine does not serve."
-  [eng sitting-id]
-  (when (and sitting-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :sitting
-                                        (str sitting-id) {:for-update true})]
-          (when (= :open (:state row))
-            (let [at (call-stamp eng)]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) :last_call_at at)
-                                  nil)
-              at)))))))
+  write as `bump-counter!` — document only, version untouched.
+
+  `answered?` is optional (ticket 3ff10737): true when the read was
+  not refused, and then the same write stamps `last_answer_at`, as
+  `add-served!` does for the MCP door. That stamp is the wall clock's,
+  because the close compares it with `last_refusal`'s.
+
+  → the stamp, or nil when there was nothing to stamp: no id, an
+  unknown id, a sitting already closed, or a kind this engine does not
+  serve."
+  ([eng sitting-id] (stamp-call! eng sitting-id false))
+  ([eng sitting-id answered?]
+   (when (and sitting-id (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (when-some [row (store/load-row (:storage eng) tx :sitting
+                                         (str sitting-id) {:for-update true})]
+           (when (= :open (:state row))
+             (let [at (call-stamp eng)]
+               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                   (cond-> (assoc (:data row) :last_call_at at)
+                                     answered?
+                                     (assoc :last_answer_at
+                                            (str (java.time.Instant/now))))
+                                   nil)
+               at))))))))
 
 (defn claim-sitting!
   "Claim an open sitting for the connector session whose hash is
@@ -5717,12 +5757,19 @@
   only when it is more than nothing, so a tool nobody shaped keeps the
   two counts it always had.
 
+  `answered?` is the fifth and it is optional too (ticket 28a5d117):
+  true when the answer was not a refusal, and then the same write
+  stamps `last_answer_at`. The stamp is the wall clock's, as
+  `last_refusal`'s is, because the close compares the two.
+
   → the tool's new line, {:calls n :bytes b} and `:dropped` when
   there is one, or nil when there was nothing to count: an unknown id,
   a sitting already closed, a call with no tool name, or a kind this
   engine does not serve."
   ([eng sitting-id tool bytes] (add-served! eng sitting-id tool bytes 0))
   ([eng sitting-id tool bytes dropped]
+   (add-served! eng sitting-id tool bytes dropped false))
+  ([eng sitting-id tool bytes dropped answered?]
    (let [tool (some-> tool str not-empty)
          bytes (long (or bytes 0))
          dropped (long (or dropped 0))]
@@ -5740,9 +5787,12 @@
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                     (-> (:data row)
-                                         (assoc-in [:served k] line)
-                                         (assoc :last_call_at (call-stamp eng)))
+                                     (cond-> (-> (:data row)
+                                                 (assoc-in [:served k] line)
+                                                 (assoc :last_call_at (call-stamp eng)))
+                                       answered?
+                                       (assoc :last_answer_at
+                                              (str (java.time.Instant/now))))
                                      nil)
                  line)))))))))
 
@@ -6526,8 +6576,50 @@
                    sort
                    first))))))))
 
+(defn- other-seats-rows
+  "The walk row ids the open sittings of OTHER seats that walk this
+  seat's kind were handed (ticket 40d8f04c). Two seats over one queue
+  are two offices on one row: without this each sit hands the row the
+  other already works, and both runs edit one branch. The hold is the
+  open sitting's alone - a closed or swept sitting of another seat
+  holds nothing, and the grace stays the seat's own. → a set of ids."
+  [st tx seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+        seat-id (str (:id seat-row))
+        walks-it? (memoize
+                   (fn [id]
+                     (= walk (some-> (store/load-row st tx :seat id {})
+                                     (get-in [:data :walk])
+                                     str))))]
+    (if-not walk
+      #{}
+      (into #{}
+            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
+                  (filter #(some-> (get-in % [:data :seat]) str not-empty
+                                   walks-it?))
+                  (mapcat #(get-in % [:data :walked_rows]))
+                  (keep #(some-> % str not-empty)))
+            (store/query-rows st tx :sitting
+                              {:state :open}
+                              {:limit open-sitting-page
+                               :newest-first true})))))
+
+(defn other-seats-row-ids
+  "The part of `claimed-rows` an open sitting of ANOTHER seat holds
+  (`other-seats-rows`), so a walk they emptied can say so. → a set of
+  ids."
+  [eng seat-id]
+  (if (and seat-id (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (other-seats-rows st tx (store/load-row st tx :seat (str seat-id) {})))))
+    #{}))
+
 (defn claimed-rows
-  "The walk row ids the OTHER open sittings of this seat were handed:
+  "The walk row ids the OTHER open sittings of this seat were handed,
+  and the ones the open sittings of another seat over the same kind
+  were (`other-seats-rows`):
   the rows a second run of the seat must not walk again. A fire and a
   wake that land together start two runs, and without this both sits
   answer the same first row, so both work one branch and the next row
@@ -6542,8 +6634,9 @@
       (store/with-tx st
         (fn [tx]
           (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
-                  (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                               sitting-id ((:now-fn eng))))
+                  (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                     sitting-id ((:now-fn eng)))
+                        (other-seats-rows st tx seat-row)))
                 (comp (remove #(= (str sitting-id) (str (:id %))))
                       (mapcat #(get-in % [:data :walked_rows]))
                       (keep #(some-> % str not-empty)))
@@ -6764,6 +6857,28 @@
                                 {:limit open-sitting-page
                                  :newest-first true}))))))
 
+(defn sitting-down-count
+  "How many OPEN sittings of this seat have sat and hold no row YET:
+  no `walked_rows`, and neither stamp a finished sit leaves on a sitting
+  it handed nothing (`stamp-walked-nothing!`'s `walked_nothing` and
+  `halted`). A sitting is born before its sit claims its rows
+  (`claim-rows-atomically!`), so between the two its run is no longer a
+  fire on its way and its row is not yet held: a wake that counted free
+  rows then read that row free and fired a second run for it (ticket
+  c822d9e4)."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (count
+         (remove #(or (seq (get-in % [:data :walked_rows]))
+                      (true? (get-in % [:data :walked_nothing]))
+                      (some? (get-in % [:data :halted])))
+                 (store/query-rows st tx :sitting
+                                   {:seat (str seat-id) :state :open}
+                                   {:limit open-sitting-page
+                                    :newest-first true})))))))
+
 (defn- ticket-ended?
   "Has the ticket `id` ended, `done` or `dropped`? False for a ticket
   the store does not hold."
@@ -6879,8 +6994,13 @@
   so every claim of one seat runs one at a time: two sits of the seat
   at the same instant cannot both find a row free and both write it.
 
+  Two seats over one kind lock two seat rows, so the rows asked for are
+  read FOR UPDATE as well, in the order of their ids: the sits of two
+  seats that ask for one row run one at a time too, and the second
+  reads the first one's claim (`other-seats-rows`, ticket 40d8f04c).
+
   The claim is all or nothing. When a row asked for is already held by
-  another open sitting of the seat, nothing is written, and the answer
+  another open sitting, nothing is written, and the answer
   says which rows are held, so the sit reads its walk again past them.
   → {:claimed? bool :taken #{ids other open sittings hold}}."
   [eng seat-id sitting-id row-ids]
@@ -6891,12 +7011,18 @@
       (store/with-tx st
         (fn [tx]
           (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
+                _ (when-some [walk (some-> (get-in seat-row [:data :walk])
+                                           str not-empty keyword)]
+                    (when (get (inv/resources eng) walk)
+                      (doseq [id (sort ids)]
+                        (store/load-row st tx walk id {:for-update true}))))
                 open (store/query-rows st tx :sitting
                                        {:seat (str seat-id) :state :open}
                                        {:limit open-sitting-page
                                         :newest-first true})
-                taken (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                                         sitting-id ((:now-fn eng)))
+                taken (into (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                                               sitting-id ((:now-fn eng)))
+                                  (other-seats-rows st tx seat-row))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))

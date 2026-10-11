@@ -13,6 +13,7 @@
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live :as live]
+            [waymark10.server.openapi :as openapi]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -283,6 +284,34 @@
       (is (nil? (walks/export eng "no-such-walk" nil)))
       (is (= 404 (:status (get! "no-such-walk")))))))
 
+(deftest a-sealed-walk-links-its-export
+  (let [eng (fresh-engine)
+        w (walk! eng)
+        h (engine/handler eng)
+        get! (fn [uri]
+               (h {:request-method :get
+                   :uri uri
+                   :headers {"x-waymark-principal" "colton"}}))
+        links (fn []
+                (let [b (:body (get! (str "/api/walks/" (:id w))))]
+                  (:links (cond (map? b) b
+                                (string? b) (wire/read-json b)
+                                :else (wire/read-json (slurp b))))))]
+    (walks/record-frame! eng (:id w) nil {:type "move" :body {:self "/api/chores"}})
+    (testing "while it records the row names no export"
+      (is (nil? (:export (links)))))
+    (seal! eng w)
+    (testing "sealed, the envelope names the export and the link answers the file"
+      (let [link (:export (links))
+            resp (get! (:href link))]
+        (is (= (str "/api/walks/" (:id w) "/export") (:href link)))
+        (is (true? (:download link)))
+        (is (= 200 (:status resp)))
+        (is (= (walks/export eng (:id w) nil) (:body resp)))))
+    (testing "the OpenAPI document lists the route"
+      (is (some? (get-in (openapi/document eng)
+                         [:paths "/api/walks/{id}/export" :get]))))))
+
 (deftest the-cast-types-agents-and-humans
   (let [[eng tick!] (clocked-engine {})
         colton (member! eng "Colton" "human")
@@ -544,6 +573,53 @@
     (testing "the transition that created it is written beside it"
       (is (= ["invitation"] (mapv #(get-in % [:body :kind]) (of narrow "transition")))))))
 
+(deftest an-invitation-frame-carries-the-given-values
+  (let [eng (stream-engine)
+        typed-errand (errand! eng "Dishes")
+        plain-errand (errand! eng "Laundry")
+        ;; only the engine writes `given`, so the engine's actor is followed
+        engine-id (str (:id invitations/engine-actor))
+        narrow (walk! eng {:followed engine-id})
+        whole (:row (inv/create! eng :walk
+                                 {:followed engine-id :title "The same, seen whole"}
+                                 {:principal other}))
+        ;; a follower that sees every row and one argument of the step
+        title-only (assoc (vis-of)
+                          :row? (fn [_kind _id] true)
+                          :arg? (fn [_kind _action arg] (= "title" arg)))
+        invite! (fn [errand-id extra]
+                  (str (:id (:row (inv/create! eng :invitation
+                                               (merge {:subject "colton"
+                                                       :self (errand-path errand-id)
+                                                       :action "rename"
+                                                       :field "title"
+                                                       :note "Pick the new title here."}
+                                                      extra)
+                                               {:principal invitations/engine-actor})))))
+        typed (invite! typed-errand {:given {:title "Dishes, twice" :room "Kitchen"}})
+        plain (invite! plain-errand {})
+        body-of (fn [w id]
+                  (some #(when (and (= "invitation" (:type %))
+                                    (= id (get-in % [:body :id])))
+                           (:body %))
+                        (frames-in eng (:id w))))
+        scoped (walks/recorder eng person title-only engine-id)
+        unscoped (walks/recorder eng other nil engine-id)]
+    (doseq [t (log-of eng)]
+      ((:event scoped) t)
+      ((:event unscoped) t))
+    (testing "an unscoped follower's frame carries given whole"
+      (is (= {:title "Dishes, twice" :room "Kitchen"}
+             (:given (body-of whole typed)))))
+    (testing "given keeps only the keys the follower's :arg? admits"
+      (is (= {:title "Dishes, twice"}
+             (:given (body-of narrow typed)))))
+    (testing "an invitation with no given values has no given key in its frame"
+      (doseq [w [whole narrow]]
+        (let [body (body-of w plain)]
+          (is (some? body))
+          (is (not (contains? body :given))))))))
+
 (deftest the-export-reads-the-pinned-invitation-body
   (let [[eng tick!] (clocked-engine {:resources [chore errand]})
         c (errand! eng "Dishes")
@@ -584,6 +660,36 @@
                                              (vis-of c "inv-1" colton planner))))))))
     (testing "an exporter that cannot see the invitation gets no line"
       (is (empty? (:lines (export-of eng w (vis-of c colton planner))))))))
+
+(deftest the-export-carries-an-invitation's-given-values
+  (let [[eng tick!] (clocked-engine {:resources [chore errand]})
+        c (errand! eng "Dishes")
+        colton (member! eng "Colton" "human")
+        planner (member! eng "Planner" "agent")
+        w (walk! eng)
+        title-only (fn [vis] (assoc vis :arg? (fn [_kind _action arg] (= "title" arg))))]
+    (tick!)
+    (is (some? (walks/record-frame!
+                eng (:id w) nil
+                {:type "invitation"
+                 :body {:id "inv-1"
+                        :author planner
+                        :subject colton
+                        :self (errand-path c)
+                        :action "rename"
+                        :field "title"
+                        :note "Pick the new title here."
+                        :given {:title "Dishes, twice" :room "Kitchen"}}})))
+    (seal! eng w)
+    (testing "an unscoped exporter reads them whole, beside no suggest"
+      (let [[line] (:lines (export-of eng w nil))]
+        (is (= {:title "Dishes, twice" :room "Kitchen"} (:given line)))
+        (is (not (contains? line :suggest)))))
+    (testing "given crosses under the exporter's :arg?, as suggest does"
+      (is (= [{:title "Dishes, twice"}]
+             (mapv :given
+                   (:lines (export-of eng w (title-only
+                                             (vis-of c "inv-1" colton planner))))))))))
 
 ;; ── a walkthrough is recorded (docs/spec-walkthrough.md § 6) ────────
 

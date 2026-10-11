@@ -153,7 +153,7 @@ asked to be woken by (R-12.19, R-12.22).
 
 The Routine attaches the repository `ckopsa/waymark-seat`, and not
 this one. A Routine attaches a repository and not a branch. The
-seat's place holds three files for the session, and nothing else:
+seat's place holds four files for the session, and nothing else:
 
 - `CLAUDE.md`, a note of at most 20 lines. It says that this is a
   seat's session, that the instructions are in the Routine, and
@@ -163,6 +163,8 @@ seat's place holds three files for the session, and nothing else:
   firing builds nothing.
 - `.claude/hooks/sitting-close.sh`, the same script that `main`
   holds here.
+- `inbox-feed.sh`, the one client of the inbox door
+  (`docs/seat-inbox-feed.md`).
 
 There is no skill, no document and no code in that place. A
 sitter's turn therefore reads the harness's prefix and the
@@ -170,20 +172,21 @@ Routine's instructions, and not this repository. The place names
 no seat, so one place serves every seat: the key in each Routine's
 instructions tells the seats apart.
 
-The three files have one source, and it is here. `seat/CLAUDE.md`
-and `seat/.claude/settings.json` on `main` are two of them. The
+The four files have one source, and it is here. `seat/CLAUDE.md`,
+`seat/.claude/settings.json` and `seat/inbox-feed.sh` on `main` are
+three of them. The
 hook keeps its source at `.claude/hooks/sitting-close.sh`, because
 an interactive sitting in this repository uses the same script.
 Two workflows carry them, and neither holds a secret:
 
 1. `.github/workflows/seat-place.yml` here runs on each push to
    `main` that changes `seat/**`, the hook, or the workflow itself.
-   It puts the three files in a clean tree, counts them, measures
+   It puts the four files in a clean tree, counts them, measures
    `CLAUDE.md`, and pushes the tree as the orphan branch `seat` of
-   this repository. A fourth file fails the run.
+   this repository. A fifth file fails the run.
 2. `.github/workflows/sync.yml` in `ckopsa/waymark-seat` runs each
    hour and by hand. It checks out that branch, which is public,
-   copies the three files into its own `main`, counts them again,
+   copies the four files into its own `main`, counts them again,
    and commits with its own token when they changed.
 
 A change to the hook here reaches the seat's place within the

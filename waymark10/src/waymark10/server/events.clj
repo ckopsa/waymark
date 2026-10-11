@@ -222,15 +222,35 @@
   (store/with-tx storage
     (fn [tx] (store/transitions storage tx {:since after} {:limit limit}))))
 
+(def ^:private replay-tries
+  "How many times a replay asks for the settled log before it reads the
+  log as it stands."
+  6)
+
+(defn- backlog
+  "Every log row after after-id, for a replay. A replay has one pass,
+  and the floor it leaves (`:delivered`) drops every lower id that
+  comes later, so each page is a SETTLED read: no id still in flight
+  is passed. When the writers outlast `replay-tries` the page is read
+  as it stands, the read this was before, and the log says so: a
+  stream that opens and may miss an event in flight is asked for again
+  by Last-Event-ID, and one that never opens is not."
+  [storage after-id]
+  (loop [acc [] after after-id]
+    (let [batch (or (store/settled-transitions storage {:since after}
+                                               {:limit 500} replay-tries)
+                    (do (warn! "replay after " after ": the log did not"
+                               " settle; reading it as it stands")
+                        (log-since storage after 500)))]
+      (if (= 500 (count batch))
+        (recur (into acc batch) (:id (last batch)))
+        (into acc batch)))))
+
 (defn- replay!
   "Enqueue the backlog after after-id, then flush live events buffered
   past the replayed horizon, in order — then go live."
   [d sub after-id]
-  (let [rows (loop [acc [] after after-id]
-               (let [batch (log-since (:storage d) after 500)]
-                 (if (= 500 (count batch))
-                   (recur (into acc batch) (:id (last batch)))
-                   (into acc batch))))]
+  (let [rows (backlog (:storage d) after-id)]
     (locking (:state sub)
       (let [delivered
             (reduce (fn [last-id t]
@@ -284,9 +304,22 @@
 
 ;; ── the dispatcher ──────────────────────────────────────────────────
 
-(defn- drain! [d]
+(defn- drain!
+  "Deliver the log after `:last-seen`, then the observations. The log
+  is a SETTLED read: `:last-seen` and each subscription's `:delivered`
+  floor drop every lower id that comes later, so no id still in flight
+  is passed. A read that answers nil keeps `:last-seen`, and the next
+  wake (the lower id's own NOTIFY, or the poll) asks again. The cost:
+  the read takes the log's order lock exclusively on every wake, and
+  while a writer is in flight appends queue behind it for up to the
+  store's settle wait, as they do behind the consumers' drain."
+  [d]
   (loop []
-    (let [rows (log-since (:storage d) @(:last-seen d) 500)]
+    (when-some [rows (store/with-tx (:storage d)
+                       (fn [tx]
+                         (store/transitions (:storage d) tx
+                                            {:since @(:last-seen d)}
+                                            {:limit 500 :settled true})))]
       (doseq [t rows]
         (doseq [sub @(:subs d)]
           (when (wants? sub t) (deliver-event! sub t)))
@@ -318,11 +351,25 @@
                             " running on the poll backstop alone"))
         d {:eng eng
            :storage storage
-           :last-seen (atom (or (:id (first (store/with-tx storage
-                                              (fn [tx]
-                                                (store/transitions
-                                                 storage tx {}
-                                                 {:newest-first true :limit 1})))))
+           ;; a SETTLED read, as the consumers' seed is: drain! reads
+           ;; after this id, so a lower id still in flight here would
+           ;; commit under it and reach no live subscriber. When the
+           ;; writers outlast `replay-tries` the log is read as it
+           ;; stands, as `backlog` reads it, and the log says so; that
+           ;; read never answers nil, so 0 here is an empty log.
+           :last-seen (atom (or (:id (first
+                                      (or (store/settled-transitions
+                                           storage {}
+                                           {:newest-first true :limit 1}
+                                           replay-tries)
+                                          (do (warn! "dispatcher seed: the log did"
+                                                     " not settle; reading it as"
+                                                     " it stands")
+                                              (store/with-tx storage
+                                                (fn [tx]
+                                                  (store/transitions
+                                                   storage tx {}
+                                                   {:newest-first true :limit 1})))))))
                                 0))
            :last-obs (atom (last-observation-id storage))
            :subs (atom #{})

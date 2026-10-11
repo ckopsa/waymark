@@ -464,8 +464,8 @@ and `abandoned` are terminal.
 | `person` | string, optional, up to 200 | the member the delegate acts for, when the sitter is a delegate. Engine-written. |
 | `fire_key_hash` | string, secret, optional, up to 64 | the SHA-256 of the key of the firing that opened this sitting, base64url and unpadded. The engine keeps the hash and never the key. The same session can sit again in this sitting with that key, and the hash answers only while the sitting is open. Engine-written by the sit that spends the key, as a maintenance write, on an open sitting only. The engine never answers it. R-12.37. |
 | `tallied_at` | instant, optional | when the harness last tallied this open sitting. Engine-written. R-12.25. |
-| `walked_rows` | list of row ids, optional | the rows of the walk that the sit handed this sitting. They are this sitting's own until it closes: a second open sitting of the seat walks past them, and a re-sit is handed them back. Engine-written at the sit, on an open sitting only. |
-| `walked_nothing` | boolean, optional | `true` when the sit handed this sitting no rows and the sitting holds no `walked_rows`. It covers these causes: no queue was read, because the seat walks no kind or its grant does not admit the kind; the queue held no rows under the walk's filter and the seat's grant; every row the queue offered was left out, because another open sitting of the seat holds it or its change is stuck; the queue held rows and none was free to hand. It does not cover a seat at a wall: a halted sit is stamped with `halted` and not with this field. A re-sit that is handed a row takes the stamp off. Engine-written at the sit, on an open sitting only. |
+| `walked_rows` | list of row ids, optional | the rows of the walk that the sit handed this sitting. They are this sitting's own until it closes: a second open sitting walks past them, whether it is of this seat or of another seat that walks the same kind, and a re-sit is handed them back. Engine-written at the sit, on an open sitting only. |
+| `walked_nothing` | boolean, optional | `true` when the sit handed this sitting no rows and the sitting holds no `walked_rows`. It covers these causes: no queue was read, because the seat walks no kind or its grant does not admit the kind; the queue held no rows under the walk's filter and the seat's grant; every row the queue offered was left out, because another open sitting holds it, of this seat or of another seat that walks the same kind, or its change is stuck; the queue held rows and none was free to hand. It does not cover a seat at a wall: a halted sit is stamped with `halted` and not with this field. A re-sit that is handed a row takes the stamp off. Engine-written at the sit, on an open sitting only. |
 | `walked_nothing_why` | string, optional, up to 480 | one sentence beside `walked_nothing`: the cause, and each row left out with its reason. Engine-written at the sit, and taken off with `walked_nothing`. |
 | `halted` | map, optional | the wall the sit found its seat against: `wall` (string, up to 64), which wall; `detail` (string, optional, up to 480), the sentence that says why; `lifts_at` (string, optional, up to 64), when the wall lifts, absent when no roll of the window lifts it. A halted sit is stamped with this field in place of `walked_nothing`, because it was not let walk. A re-sit that is not halted takes the stamp off. Engine-written at the sit, on an open sitting only. |
 | `cost_usd` | decimal | written at close, and again at each tally of an open sitting (R-12.27) |
@@ -894,7 +894,13 @@ the close of a sitting ends every key of it.
   With no `after`, it reads from the sitting's start. With
   `after=now` it answers at once, with no event, and
   `Waymark-Inbox-After` names the log's newest event: a tail of a
-  long-open sitting begins at the present.
+  long-open sitting begins at the present. That event, and the start
+  of a sitting the log does not know, is read under every write still
+  in flight, so no lower event lands behind the cursor: while a write
+  is in flight it is the newest event below that write, and the tail
+  then serves the events above it. When the log has no event below
+  the writes in flight and does not settle, the door answers 503
+  `inbox-unsettled` and names no cursor, and the caller asks again.
 - It keeps only the transitions whose kind the seat's `inbox.only`
   names, with an action that kind lists; an empty list is every
   action. It keeps only the kinds the sitting's grant can read. It
@@ -1043,6 +1049,11 @@ that reason in `bench_note`: "The bench refused to open the worktree:
 reason, and a person reads the cause on the row. The sentence for a
 bench that said nothing is for a rig that threw and for a rig that
 answered nothing at all.
+
+A refusal whose reason is a network error is not carried at once. The
+sit waits a short time and asks for the `prepare` one more time. A
+good answer then gives the `bench` and no `bench_note`. A second
+refusal is carried as written above.
 
 **R-12.30** A bench grant must be able to name less than the whole
 rig. The bench has five powers: `bench.find`, `bench.read`,
@@ -3391,7 +3402,7 @@ On the active `repo_policy` of each repository with a line:
 |---|---|
 | `line_front` | the id of the front change |
 | `line_front_pr` | the front's pull request number |
-| `line_front_waiting` | `update` (it was brought up to date and CI runs), `checks` (its checks run), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
+| `line_front_waiting` | `update` (it was brought up to date and CI runs; also a head the rig calls `waiting` that the mirror read green and behind its base, `head-answer`), `checks` (its checks run; the rig's `waiting` with `waits_on: checks`, or with no `waits_on`), `github` (the rig's `waiting` with `waits_on: github`: its checks are green and GitHub has not judged it mergeable yet), `merge` (it was offered and GitHub has not merged it yet), or `train` (it rides a standing train, R-15.11); see `front-waits-on` |
 | `line_waiting` | how many other changes stand in the line |
 | `line_at` | when the pass last wrote the line; it rides a write and never causes one |
 

@@ -665,6 +665,11 @@
         (is (= "https://waymark.dev/problems/guard-refused" (:type last-one)))
         (is (= "not-yours" (:guard last-one)))
         (is (string? (:at last-one))))
+      (testing "an answered call stamps last_answer_at; a refused one does not"
+        (seats/add-served! *eng* (:id sitting) "waymark_power" 10 0 false)
+        (is (nil? (get-in (row-of :sitting (:id sitting)) [:data :last_answer_at])))
+        (seats/add-served! *eng* (:id sitting) "waymark_power" 10 0 true)
+        (is (some? (get-in (row-of :sitting (:id sitting)) [:data :last_answer_at]))))
       (is (= 1 (count (log-of :sitting (:id sitting))))
           "the create, and no transition per count — the counter must not
            cost more log than the thing it counts"))

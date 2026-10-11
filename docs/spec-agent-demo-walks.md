@@ -128,6 +128,9 @@ What each call becomes:
 | `waymark_invoke`, `dry_run` | `move` to the row; `ui` with `dialog {self, action}` and no fields; then one `ui` per argument, each adding one value. The dialog stays open. |
 | `waymark_invoke` | the same beats, unless the last `ui` already shows this dialog with these values; then the write; then `ui` with `dialog: null` |
 | a create (no `id`) | as an invoke, with the collection as `self` |
+| a `quest` create, `dry_run` | `move` to the goal's row, then `ui` with `quest {goal, label, seen {ok, body}}`: the quest's sheet. No dialog and no typing. |
+| a `quest` create, its goal's sheet open | the write, then `ui` with `quest: null` |
+| any other staged call, a sheet open | first `ui` with `quest: null`, then its own beats |
 | a bulk invoke | `move` to the collection, then the writes |
 
 `waymark_discover`, `waymark_schema`, `waymark_resolve` and
@@ -136,6 +139,18 @@ and a viewer does not need to see them. A query with `rows: "none"`
 makes none either. `waymark_pursue` is ordinary invokes, so each step
 is staged as one. A call with `at` stages its dialog, and the
 `scheduled_action` it creates is the write.
+
+A quest's preview is staged the way the page makes it. A person taps
+the goal's shut door and sees the sheet, not the quests create form
+(docs/spec-quests.md, "A tap previews, Accept creates"). So a rehearsed
+`quest` create whose answer carries `preview`, or a refusal, writes one
+`ui` beat on the goal's row with the `quest` part the page's sheet
+reports: the goal, the goal door's label on its row, and the `preview`
+or the refusal's title and detail. It passes `presence/clean-quest` and
+the gates of every staged beat. The next `quest` create for that goal
+is Accept: the write, then a `ui` beat with no `quest` part. Any other
+staged call closes the sheet first with such a beat, which a replay
+shows as Not now.
 
 Arguments are typed in the order of the action's input schema. A call
 with more than twelve arguments types the first eleven one by one and
@@ -425,7 +440,7 @@ takes no chosen identity. The seat reaches it as it reaches any power,
 through `waymark_power`.
 
 The agent acts as the seed's agent member, so the export's cast reads
-"Planner" and never a seat's id.
+"Juniper" and never a seat's id.
 
 **6b. The seat and its routine** (waymark). A seat, `demo-walker`,
 whose grant holds the clone door's powers and nothing of the working
@@ -573,6 +588,36 @@ replay.
 
 - The shell's chrome is hidden: the nav's dev principal box, the replay
   chip, the demo banner and every toast.
+- **Presentation mode.** Some detail is useful day to day and is not
+  for a demo film. The page function `window.wmPresent(true)` turns the
+  mode on and `window.wmPresent(false)` turns it off; there is no query
+  flag. It sets the class `present` on the root element, and the CSS
+  hides these with `display: none` and moves nothing else: the row id
+  at the end of a row's crumb (the crumb keeps its kind), the version
+  line (`v2 · law r1 · …`) of a row and of a dashboard, the grant chip
+  (it shows a grant's id), and the header's developer buttons: share
+  (⧉), ● Record, ▶ file and ◷ Activity. The recording chip is that
+  Record button while a walk records (`■ Stop 0:31`), so it is hidden
+  with it. A demo engine's banner (docs/spec-demo-clones.md § 3: when
+  the engine ends, and each walk that is not exported) is hidden too:
+  it is true for the person who runs the engine and is not for a film.
+  Outside presentation mode both show. A ticket title's leading
+  `[epic] ` marker is hidden the same way wherever the shell draws the
+  title: the row's heading, a list's line, the quest bar and tracker,
+  and the sheet's goal and steps. The shell draws the marker in a span
+  of its own (`.epicmark`); the stored title keeps it, and outside
+  presentation mode it shows. A performed Quests take still
+  showed five more things, and they are hidden as well: the header's
+  law revision chip (`⚖ rev 1`, `#lawstamp`), the signed-in name with
+  its sign-out link (`#signedin`), the ticker's live log line at the
+  foot (`#ticker`), a row's Data section with its raw field prompts
+  (`details.rowdata`), and the reasons under the doors for the doors
+  that are shut (`.blockedwhy`, with their remedy chips: a performer
+  who needs a remedy opens it from the row it acts on). The theme
+  control and the dev principal box stay. It is separate from film mode, so the performer can
+  record a walk with it on: recording and replay are driven by page
+  functions and not by those buttons. A beat's `text` carries none of
+  the hidden chrome, because a run that is not drawn is not read.
 - A title card shows the walk's title for 2 s. Play starts by itself at
   1×. The last screen holds for 1.5 s.
 - **Captions on video.** A caption is a band across the bottom of the
@@ -588,6 +633,142 @@ replay.
 - The page says where it is in `data-film` on the root element:
   `ready`, `playing`, then `ended`. The camera reads that and nothing
   else.
+- **The page says each beat.** A reader that cannot watch the film
+  reads what it showed. For each frame the replay steps to, the page
+  dispatches a `waymark:film-beat` CustomEvent on `document`; its
+  `detail` is the beat, and `window.wmFilmBeats` is the array of every
+  beat of the take, in order. This is the contract the renderer (8c)
+  and the scorer read. Outside film mode nothing is dispatched. A beat is plain JSON:
+  - `i` is the frame's index and `t` its own time. `type` is the
+    frame's type. `who` (the cast id), `self`, `action` and `kind` are
+    there when the frame has them.
+  - `pressed` is what the pointer pressed for the frame, as
+    `{label, target}`, or null. `label` is the button's visible text.
+    `target` is a stable name where one exists: `door:<action>`,
+    `sheet.accept`, `sheet.decline`, `tracker.go`, `dialog.submit`, and
+    `dialog.accept` for "Accept as quest" under a form's refusal, and
+    `nav:<path>` for a link or a navigation entry, where `<path>` is
+    the address it leads to. A click on a form's field is no press
+    here: it is in `presses`.
+  - `presses` is every press the pointer made on the way to the frame,
+    in order, each as `{label, target}`. It is empty when the frame had
+    no gesture. It holds a click on a form's field as `field:<name>`,
+    with the field's label as `label` or null; the navigation entry of
+    a hop and the link of a walk to another row as `nav:<path>`; and
+    last the frame's own press, the same value as `pressed`. So a
+    typing beat has `pressed` null and one `field:<name>` press, and a
+    frame on a row that was not on screen lists the entry and the link
+    pressed to reach it before its button.
+  - `screen` is the address shown.
+  - `dialog` is the open form as `{self, action, lit}`, or null. `lit`
+    lists the names of the fields that are lit.
+  - `sheet` is the open quest's sheet as
+    `{goal, steps, shut_reason, refused}`, or null. Each step is
+    `{n, label, whose, state}`. `label` is the step's door and row as
+    the sheet says them. `state` is null, because the sheet draws none.
+  - `tracker` is `{title, next, waiting_on, progress, text}`, or null
+    when no tracker shows. `text` is the whole bar without its menu.
+  - `caption` is the caption band's text, or the caption beside a
+    field, or null. `refusal` is the refusal line on screen, or null.
+  - `text` is the text a viewer could read: every run of text that is
+    drawn and in the viewport, in reading order, cut at 2048
+    characters. An open modal's text comes first, because it is drawn
+    over the page; the page's follows. A field's value is not in it,
+    and the secret dialog gives its heading and its buttons only. A run
+    is left out, here and in the focus text, when no line of it can be
+    seen. What is read for a line:
+    - Its box is cut to the viewport, and to the padding box of the
+      run's element and of each ancestor that clips it (`overflow`
+      other than `visible`, on the axis it clips). So a run scrolled
+      out of a scrolling ancestor, or inside a collapsed one, is left
+      out. An ancestor clips a positioned box only when it holds it:
+      none clips a fixed box, and one with no position does not clip
+      an absolute one.
+    - Five points of what is left of the box are then asked: its
+      centre, and the four points a quarter in from its corners. A
+      line with nothing left of its box is asked no point.
+    - A point is covered when the page's `document.elementFromPoint`
+      there is an element that is not the run's ancestor, or when the
+      point is in the caption band. A modal's backdrop dims the page
+      and does not cover it.
+    - A point is also covered by an element that takes no pointer
+      (`pointer-events: none`) and is drawn over the text there. The
+      page does not answer such an element, so it is found another
+      way: for the length of the measure every element is made to
+      take the pointer, and `document.elementsFromPoint` lists what is
+      at the point from the top down. An element above the page's own
+      answer and above the text covers the point when it draws
+      something of its own: a background colour or image, or a picture
+      (`img`, `svg`, `canvas`, `video`, `iframe`). One that draws
+      nothing of its own covers nothing. The replay pointer is one:
+      its arrow is a pseudo-element, smaller than its box.
+    - A box cannot say every clip. When the run's element or an
+      ancestor has a `clip-path`, or when an ancestor that clips is
+      transformed, itself or by one above it, the page is asked
+      instead: that ancestor's box is not applied, and a point is
+      clipped away when that same list, taken while every element
+      takes the pointer, does not hold the run's element. A point
+      clipped away is not counted, and a run with no point left is
+      left out.
+    - The page answers no inert element, so a run under an open modal,
+      or under `inert`, is not asked this way, and no run is where the
+      page cannot be asked (no `document.elementsFromPoint`, or no
+      sheet to adopt). Those clips are then read by geometry. A point
+      is put into the box of the element that clips: the transforms on
+      it and above it are undone about the centre of its client rect.
+      The point is clipped away when it is outside that element's
+      padding box on an axis it clips, or outside its `clip-path`.
+      Geometry reads a transform in the plane (`rotate`, `scale`,
+      `transform`), and a `clip-path` of `inset()`, `circle()`,
+      `ellipse()` or `polygon()` on the border box with lengths in px
+      and in percent. A clip it cannot read is not applied.
+
+    A run is left out when more than half of the points asked for its
+    lines are covered. So a run mostly covered is not listed, and a run
+    half covered or less is listed whole. What is not read: which
+    words of a listed run are the covered ones; a line that is clipped
+    away, which is asked no point and so does not count against its
+    run; and, for a run the page is not asked for, a clip that
+    geometry cannot read, where the run is listed as if the clip were
+    not there: a `clip-path` of `path()` or `url()`, one on another
+    reference box or with a `calc()` length, the round corners of an
+    `inset()`, and a clipping ancestor or a `clip-path` under a
+    transform out of the plane.
+  - `viewport` is `{w, h}`. Every rect and position in a beat is in
+    CSS pixels of the viewport, rounded.
+  - `boxes` lists every named surface in the viewport (8a) as
+    `{name, rect}`, where `rect` is its client rect `{x, y, w, h}`.
+  - `focus` is the surface the beat is about, as `{name, rect, text}`,
+    or null. It is the pressed element's surface while that element is
+    still drawn and no modal has opened over it; a pressed element
+    with no surface around it is named by the press's `target`.
+    Otherwise it is the open sheet (`sheet`), then the open form
+    (`dialog`), then the tracker (`tracker`) when it differs from the
+    beat before. So the beat of a press that opened the sheet has
+    `focus.name` = `sheet`. `text` is the focus's readable text, cut at
+    1024 characters.
+  - `type_px` is the computed font size of the largest run of the
+    focus text. `contrast` is that run's WCAG contrast ratio, to two
+    places, against the background colours drawn behind it: its own
+    and its ancestors', to the first opaque one, over white where
+    there is none. Both are null when the focus has no readable text.
+    `contrast` is null, and never a number from a colour that is not
+    what is drawn, when one of those elements has a background image
+    (a gradient is one), when a modal's backdrop lies between the run
+    and the page, and for a colour the page cannot read as sRGB.
+  - `pointer` is where the replay pointer is drawn, as `{x, y}`, or
+    null when there is none.
+
+  A beat stays under about 8 KB: `text` is cut first, then the focus's
+  text, then `boxes` from its end.
+
+  Every value but the frame's own (`i` to `kind`) is read from the page
+  as drawn, in its visible words. The press is read as the frame is
+  applied, and each earlier press as it is made. The rest is read when
+  the frame has had its hold: just
+  before the next frame's gesture or act, and before `ended` for the
+  last. A frame that waits behind an open form has its beat when it is
+  stepped to, so its beat shows the form.
 
 ### 8c. The renderer and its door (waymark-doors)
 
@@ -630,6 +811,223 @@ and a person downloads the video from there.
 The files do not become attachments of the working engine. That would
 need a byte door on the connector or a credential in the clone door,
 and the attachment cap is 10 MiB. It is a punt.
+
+### 8d. The rules a film is scored by (waymark)
+
+Each measured rule of a good demo is a `film_rule` row
+(`server/film_rules.clj`), so a critique a person makes of a film
+becomes a row and an agent can meet the scorecard without seeing the
+film. A rule carries `name` (a slug, unique), `metric`, `op` (`>=`,
+`<=` or `=`), `threshold` (a number), `scope` (`film`, `shot` or
+`beat`; with `shot`, an optional `role`: `friction`, `turn` or
+`payoff`), `severity` (`fail` or `warn`), `why` (one sentence) and
+`origin` (a person's words, quoted, or `craft`). Two more fields are
+optional. `output` (`phone` or `desktop`) is a filter like `role`: the
+rule is scored only on a film whose take says that output in
+`film.output`, and a rule with no `output` is scored at any. `unless`
+(`zoom`, with the scope `shot` only) names the shot property that
+exempts a shot: a shot whose take says `shot.zoom` is true passes the
+rule whatever it measures. `film-rules/verdict` judges both, and
+answers `:unscored`, `:pass` or `:miss`. Its states are
+`active` and `retired`. A person or the sitter of a domain's mayor
+seat makes one; only a person retires one, and only a person restores
+a retired one.
+
+The metric vocabulary is closed (`film-rules/metrics`). A rule that
+names any other metric is refused, and the refusal lists these. Each
+metric is read from one field of the take:
+
+| Metric | What it measures | Source in the take |
+|---|---|---|
+| `frame_fill` | The content box over the frame. | `film.content_box` over `film.frame` |
+| `focus_share` | The focus box's area over the viewport. | `shot.focus_box` over `shot.viewport` |
+| `type_px` | The focus text's size at output pixels. | `shot.focus_type_px` |
+| `contrast` | The focus text's WCAG contrast ratio. | `shot.focus_contrast` |
+| `read_time_ratio` | The hold over the time the words take at 3 a second. | `shot.hold_s` over `shot.words / 3` |
+| `dead_air_s` | The longest span in which nothing changes. | `film.dead_air_s` |
+| `surfaces_changed` | The named surfaces that changed in a shot, besides the pointer. | `shot.surfaces_changed` |
+| `chrome_leaks` | The count of `/api` paths, uuids, raw snake_case keys or `[epic]` in visible text. | `film.chrome_leaks` |
+| `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
+| `runtime_s` | The film's length in seconds. | `film.runtime_s` |
+| `frame_match_min` | The lowest score of a film frame against the still of the beat its caption is for, over every caption run. | the lowest `run.frame_match` |
+
+A take is a map with `film`, the fields read once, `shots`, one
+map per shot in order, and `runs`, one map per caption run in order. A
+box is `{x, y, w, h}`; a frame and a viewport
+are `{w, h}`. `surfaces_changed` is a count or the list of names. A
+run carries its `caption` and `frame_match`: one score, or the scores
+by frame, as `{held, mid}`, where each one counts.
+`film-rules/measure` reads one metric from a take by these names: one
+number for a film metric, and one number per shot for a shot metric.
+`film.output` is `phone` or `desktop`, `shot.zoom` is true on a shot
+that asks for a zoom, and a shot may carry its `caption`.
+
+`POST /api/film_rules/-/judge` is the door that judges a take
+(`film-rules/judge`). The kind declares it under `:collection-doors`,
+the key for a safe door on a collection, so `GET /api/film_rules` names
+`judge` under `actions` with its method, href, input schema and
+`safety`, the OpenAPI document lists the route, and `waymark_invoke`
+with the kind, the action `judge`, the input and no id answers what the
+route answers. It is safe: it reads the rules and writes
+nothing, and whoever may read `film_rule` rows may call it. Its input
+is `{take: {film, shots}}` in the field names above. Its answer is
+`{verdict, unmeasured, rules}`. `rules` holds one entry for each active
+rule, in order of name: the rule's `name`, `metric`, `op`, `threshold`,
+`severity` and `why`, and a `verdict`:
+
+- `pass`: the value holds, or the shot is exempt.
+- `miss`: the value does not hold.
+- `unscored`: a filter leaves the rule out, as `output` does for
+  `type-size` on a desktop film.
+- `unmeasured`: the take lacks a field the metric needs. `missing`
+  names each one, as `film.dead_air_s`. An unmeasured rule is not a
+  pass.
+
+A scored film rule carries its `value`. A rule read from each shot
+misses when any shot misses, and carries `worst`: the `index`,
+`caption` and `value` of the shot that misses by the most, or of the
+measured shot nearest to a miss when none does. A rule read from each
+run holds the lowest score over the runs against the threshold, and
+carries that `value` and `worst`: the `index`, `caption` and `value` of
+the run that carries it. It is unmeasured when the take has no `runs`
+(`missing` names `runs`) or a run has no score (`run.frame_match`),
+unless a measured run already misses. The overall `verdict`
+is `red` when a `fail` rule misses, else `warn` when any rule misses,
+else `green`; `unmeasured` lists the names of the unmeasured rules
+beside it. The scorer builds the take from its measurements and reads
+this answer; it holds no operator, filter or exemption of its own.
+
+The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
+starts (`engine/start-runtime!`), in every application, because the
+kind is enrolled in every one. It makes eight rules,
+each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
+`chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
+(`type_px >= 28` per shot, `output: phone`, warn), `read-time`
+(`read_time_ratio >= 1.2` per shot, warn), `dead-air`
+(`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
+per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
+`unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
+rule only when none carries its name. An active `type-size` or
+`focus-share` row made before these fields existed gains the field
+the seed names at the next boot, through `restate`; a value a row
+carries is not written over, and a retired row is left as it is.
+
+Whoever may make a rule may restate its `output` and `unless`: a
+person, or the sitter of a domain's mayor seat. A seat with no right to
+make a rule is refused. Such a restate writes the caller's id in
+`restated_by`; the boot seed's own restate does not. The seed leaves a
+rule that carries `restated_by` alone, so a `type-size` a person
+restated to no `output` stays that way at the next boot.
+
+## 8a. The surfaces a scene names
+
+A scene and a browser drive address the screen by meaning, not by a
+selector. Every interactive surface a demo can name carries
+`data-surface="<name>"`, from one vocabulary:
+
+| Name | What it is |
+|---|---|
+| `nav.<kind>` | A kind's tab in the navigation bar, or its line in the ⋯ menu when it has no tab. |
+| `nav-home` | The Home tab of the phone's navigation bar. |
+| `nav-domain` | The active application's name in the navigation bar, a link to its home. |
+| `nav-access` | The Access tab in the navigation bar. |
+| `nav-more` | The navigation bar's ⋯ button, which opens the menu of the kinds without a tab. |
+| `nav-jump` | The ⋯ menu's 'Jump to a kind…' line, which opens the jump box. |
+| `jump` | The jump box, drawn only while it is open. |
+| `jump.query` | The jump box's input, where the kind's name is typed. |
+| `jump.line` | One result line of the jump box; `data-row` carries the address it goes to. |
+| `jump.home` | The jump box's line that goes home; it has no address, so it has this name. |
+| `nav-shell` | The ⋯ menu's Desktop view or Mobile view line, which reloads the page in the other shell. |
+| `row` | One row of a collection's table; `data-self` carries its address. |
+| `door:<action>` | An action's button on the shown row, open or shut; `data-row` carries the row's address. |
+| `door-shut:<action>` | The dotted 'not yet' button of a shut action that a quest can reach. |
+| `dialog` | An action's open form; `data-self` and `data-action` say whose it is. |
+| `dialog.field:<name>` | One field of a form, its label and its input. |
+| `dialog.submit` | The button that writes an action's form. |
+| `dialog.cancel` | The button that closes an action's form and writes nothing. |
+| `dialog.check` | The form's Check button, which rehearses the write. |
+| `dialog.discard` | The form's Discard draft button. |
+| `dialog.later` | The form's Do this later button. |
+| `dialog.decline` | The form's Decline button for an invitation; it reads Skip in a led walk. |
+| `dialog.stop` | The form's Stop button in a led walk. |
+| `dialog.accept` | The form's Accept as quest button, offered under a refusal. |
+| `secret` | The dialog that shows a secret one time, with its Copy button; its value field has no name, so a scene cannot read the secret. |
+| `secret.copy` | The secret dialog's first Copy button. |
+| `secret.copy-other` | The secret dialog's second copy button, where the dialog has one. |
+| `secret.close` | The secret dialog's Done button, which closes it. |
+| `report` | The dialog that reports a bulk action's verdicts. |
+| `report.row` | A refused row's link in the report dialog's table; `data-row` carries the row's address. |
+| `report.close` | The report dialog's Close button. |
+| `upload` | The dialog that uploads a file as an attachment. |
+| `upload.file` | The upload dialog's file input. |
+| `upload.submit` | The upload dialog's Upload button, shut until a file is chosen. |
+| `upload.cancel` | The upload dialog's Cancel button. |
+| `sheet` | The quest sheet a tap on a dotted button opens. |
+| `sheet.step:<n>` | The sheet's step n of the plan, counted from 1. |
+| `sheet.accept` | The sheet's Accept quest button. |
+| `sheet.decline` | The sheet's Not now button. |
+| `tracker` | The bar that shows the pinned quest. |
+| `tracker.go` | The tracker's Go button, for the step at the plan's head. |
+| `tracker.next` | The tracker's line for the step at the plan's head. |
+| `tracker.more` | The tracker's ⋯ menu; the quest's own actions inside it are `door:<action>`. |
+| `quest.go` | The Go button of the next step on a quest's own page. |
+| `caption` | The caption band of a replay. |
+| `refusal` | The line a refused write is said in, in a form or in the sheet. |
+
+The fixed parts of the navigation bar are spelled with a hyphen
+(`nav-home`), so that no kind's name can make `nav.<kind>` mean one of
+them. A kind folded behind ⋯ is drawn only while the menu is open: a
+scene presses `nav-more` first. The same holds for `nav-jump` and
+`nav-shell`, which are lines of that menu. A press on `nav-shell`
+loads the page again, so a scene's next step waits for the new page.
+The upload dialog says a refused upload in a `refusal` line of its own.
+
+The jump box is drawn only while it is open, and its lines are drawn
+again at each letter typed: a scene presses `nav-jump`, types in
+`jump.query`, and then picks `jump.line@/api/tickets`. The line that
+goes home has no address, so it carries the name `jump.home` in place
+of `jump.line`, and a scene picks it by that name. `readSurface('jump')`
+answers what is typed, the lines as drawn and the one selected. A press on
+`report.row@/api/tickets/<id>` closes the report and goes to that row;
+`readSurface('report')` answers the same addresses. The secret
+dialog's read-only value field is left without a name and out of
+`readSurface('secret')` on purpose: a beat is kept, and a kept beat
+must never hold the secret. A scene copies it with `secret.copy`.
+
+The same list is served as JSON at `GET /api/-/ui/surfaces`:
+`{"surfaces": [{"name": "tracker.go", "is": "…"}, …]}`. The page's own
+code is the source. A test (`ui-surfaces-are-the-names-the-page-sets`)
+fails when the page sets a `data-surface` value the list does not
+hold, or the list holds a name the page never sets.
+
+Where several elements carry one name, the scene qualifies it by row:
+`door:complete@/api/tickets/<id>`. The row is the address the element
+carries in `data-row`, or the one the row or the dialog around it
+carries in `data-self`. Of several that remain, the one drawn is meant.
+
+The page answers two functions over these names. `surfaceNode(name)`
+answers the element. `readSurface(name)` answers what the surface
+shows now, read from the page as drawn, and null when it is not on the
+screen:
+
+- `sheet`: `{goal, steps: [{n, label, whose, state}], shut_reason, refused}`;
+- `tracker`: `{title, next, waiting_on, progress, text}`;
+- `dialog`: `{self, action, lit: [field names]}`;
+- `secret`: `{heading, copy, copy_other}`, the heading and the labels
+  of the two copy buttons. It does not answer the secret, because a
+  beat is kept and a secret is shown one time;
+- `report`: `{heading, totals, refused: [{row, reason}]}`;
+- `upload`: `{file, ready, refused}`: the line under the file input,
+  whether Upload can be pressed, and the refusal's text;
+- `jump`: `{query, lines: [{name, row, label, where, selected}], selected}`:
+  `name` is `jump.line` or `jump.home`, `row` is null for the home
+  line, and the outer `selected` is the selected line or null;
+- `jump.query`: `{text, disabled}`, where `text` is what is typed;
+- `caption` and `refusal`: the line's text;
+- any other name: `{text, disabled}`.
+
+These are the shapes a film beat's `screen` carries (§ 8), so a beat
+and a scene's screen check read the same thing.
 
 ## 9. What this amends
 

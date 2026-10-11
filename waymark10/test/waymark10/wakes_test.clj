@@ -3256,6 +3256,62 @@
         (close-sitting! s)
         (seat-do! seat :retire)))))
 
+;; A sitting is born before its sit claims its row. Between the two its
+;; fire is no longer a run on its way and its row is not held, so a wake
+;; read the row free and fired a second run that sat to a held row
+;; (ticket c822d9e4).
+
+(deftest a-sitting-that-has-not-claimed-yet-keeps-its-row-from-a-second-fire
+  (let [wn :wake-sitting-down
+        fn' :wake-sitting-down-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        wide-seat (fn [nm batch]
+                    (:seat (linked-seat! nm
+                                         {:scope [{:kind "wake_item"
+                                                   :actions ["complete" "touch"]
+                                                   :filter {:batch batch}}]
+                                          :walk "wake_item"
+                                          :wake_on [{:kind "wake_item"
+                                                     :actions ["touch"]}]
+                                          :max_open_sittings 8}
+                                         fn')))]
+
+    (testing "one row, and a sitting open that has not claimed it: no fire"
+      (let [batch "sitting-down-one-row"
+            seat (wide-seat "sittingdownclerk" batch)
+            row (item! batch)
+            s (sitting! seat)]
+        (is (= 1 (seats/sitting-down-count *eng* seat)))
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat))
+            "the open sitting is about to take the one row")
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+            "the wake is remembered, not spent")
+        (seats/claim-rows! *eng* s [(str row)])
+        (is (= 0 (seats/sitting-down-count *eng* seat)))
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat))
+            "and once it is claimed the row is spoken for")
+        (close-sitting! s)
+        (seat-do! seat :retire)))
+
+    (testing "a sitting whose sit handed it nothing keeps no row back"
+      (let [batch "sitting-down-nothing"
+            seat (wide-seat "satnothingclerk" batch)
+            s (sitting! seat)
+            _ (seats/stamp-walked-nothing! *eng* s true)
+            row (item! batch)]
+        (is (= 0 (seats/sitting-down-count *eng* seat)))
+        (item-do! row :touch)
+        (drain-wakes! wn)
+        (is (= 1 (count (seat-fires seat)))
+            "a free slot for a free row")
+        (close-sitting! s)
+        (seat-do! seat :retire)))))
+
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
   (let [wn :wake-held-rows
         fn' :wake-held-rows-fires
@@ -3299,6 +3355,71 @@
         (drain-wakes! wn)
         (is (= 1 (count (seat-fires seat))))
         (close-sitting! s)
+        (seat-do! seat :retire)))))
+
+;; A release sends one run for each waiting text and one for the wake of
+;; no text. Three of them over two free rows started a third run that
+;; sat to a walk its siblings had taken (ticket 8c071e14). A seat of
+;; several slots now starts no more runs than it has free rows.
+
+(deftest a-release-starts-no-more-runs-than-the-seat-has-free-rows
+  (let [fn' :wake-free-rows-fires
+        _ (drain-fires! fn')
+        wide-seat (fn [nm batch]
+                    (:seat (linked-seat! nm
+                                         {:scope [{:kind "wake_item"
+                                                   :actions ["complete" "touch"]
+                                                   :filter {:batch batch}}]
+                                          :walk "wake_item"
+                                          :max_open_sittings 3}
+                                         fn')))
+        waiting! (fn [seat texts]
+                   (let [row (sched-of seat)]
+                     (store/with-tx (:storage *eng*)
+                       (fn [tx]
+                         (store/update-data! (:storage *eng*) tx :schedule (:id row)
+                                             (assoc (:data row)
+                                                    :wake_pending true
+                                                    :wake_texts texts
+                                                    :wake_text (first texts)
+                                                    :wake_textless true)
+                                             (:next-flip-at row))))))]
+
+    (testing "three slots and two walkable rows start two runs"
+      (let [batch "free-rows-two"
+            seat (wide-seat "freerowstwo" batch)
+            [a b] (vec (repeatedly 2 #(item! batch)))
+            texts [(str "Walk " a " again.") (str "Walk " b " again.")]]
+        (waiting! seat texts)
+        (wakes/tick! *eng*)
+        (is (= texts (mapv #(get-in % [:inputs :text]) (seat-fires seat)))
+            "two rows, two runs: the wake of no text has no row left")
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+            "and it waits for a row rather than being spent")
+        (is (empty? (sch/waiting-texts (:data (sched-of seat)))))
+        (wakes/tick! *eng*)
+        (is (= 2 (count (seat-fires seat)))
+            "the two runs on their way have both rows")
+        (seat-do! seat :retire)))
+
+    (testing "with every row held by an open sitting, none starts"
+      (let [batch "free-rows-none"
+            seat (wide-seat "freerowsnone" batch)
+            rows (vec (repeatedly 2 #(item! batch)))
+            model-id (str (model! "model-for-freerowsnone"))
+            sittings (mapv (fn [row]
+                             (let [s (:id (:row (inv/create! *eng* :sitting
+                                                             {:seat (str seat)
+                                                              :model model-id
+                                                              :grant (str (grant!))}
+                                                             {:principal clerk})))]
+                               (seats/claim-rows! *eng* s [(str row)])
+                               s))
+                           rows)]
+        (waiting! seat [(str "Walk " (first rows) " again.")])
+        (wakes/tick! *eng*)
+        (is (empty? (seat-fires seat)))
+        (doseq [s sittings] (close-sitting! s))
         (seat-do! seat :retire)))))
 
 ;; ── a walkthrough's author is woken on its turn ─────────────────────

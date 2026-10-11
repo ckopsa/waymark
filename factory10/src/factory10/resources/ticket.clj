@@ -1078,6 +1078,11 @@
                (vec (take-last 50 (distinct (conj (vec heads)
                                                   (:red_head inp))))))))
 
+(defhandler note-a-green-base [row inp _ctx]
+  ;; The base went green while this ticket's change held work (ticket
+  ;; d5000a1c): the sentence is written, and the ticket is not ended.
+  (assoc-in row [:data :green_note] (str (:green_note inp))))
+
 ;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
 
 (def ^:private move-doors
@@ -1461,7 +1466,7 @@
                    :help "The day this ask comes back into the queue. Empty unless the ticket is deferred."}}
     [:maybe :waymark/date]]
    [:close_reason {:optional true
-                   :examples ["Merged: github:ckopsa/waymark#41."]
+                   :examples ["Done: written, checked and sent to the person who asked."]
                    :x-display
                    {:widget "prose"
                     :label "How it ended"
@@ -1476,6 +1481,15 @@
                  :label "Red heads of the base"
                  :help "Each head of the base branch that went red while this ticket was open, with its red checks. Empty for a ticket the engine did not open."}}
     [:maybe [:vector [:string {:max 400}]]]]
+   ;; ticket d5000a1c: written by the base pass when the base went green
+   ;; while this ticket's change held work, in place of the ending
+   [:green_note {:optional true
+                 :examples ["main is green again at 1f0c2d3e4a5b60718293a4b5c6d7e8f901234567 on its own. The change on bench/1f0c holds work that is not submitted, so this ticket was left open."]
+                 :x-display
+                 {:raw true
+                  :label "Green on its own"
+                  :help "What the base pass wrote when the base went green while this ticket's change held work that was not submitted. The ticket was left open, so its groomers decide whether that work still ships."}}
+    [:maybe [:string {:max 480}]]]
    ;; ticket d069bc3b: written by the house merge pass, as the change's
    ;; place in the line is, and cleared when nothing holds the merge
    [:merge_waits {:optional true
@@ -1620,6 +1634,61 @@
           (t/allow)
           (t/deny {:vars {:domain stated :own own}}))))))
 
+;; ── a seat does not file one failure twice (ticket 535d86ed) ─────────
+
+(def ^:private failure-key-patterns
+  "What names a failing check in a ticket's words: the ui-drive step
+  after `FAILED: `, a `timed out waiting for <what>` phrase, and the
+  Clojure test of a `FAIL in (<name>)` line."
+  [#"FAILED:\s*([^\n`\"]+)"
+   #"(timed out waiting for [^\n`\".;,]+)"
+   #"FAIL in \(([^)\s]+)\)"])
+
+(defn- failure-keys
+  "The failing checks a title and a detail name, as the strings another
+  ticket would hold. A key shorter than six characters names nothing."
+  [text]
+  (into #{}
+        (comp (mapcat #(re-seq % (str text)))
+              (map #(str/replace (str/trim (second %)) #"[\s.,;:')]+$" ""))
+              (filter #(<= 6 (count %))))
+        failure-key-patterns))
+
+(defn- tickets-naming
+  "The draft, open, in-review and blocked tickets of `repo` whose title
+  or detail holds one of `named`. A seat's follow-up is born a draft and
+  stays one until it is groomed, so drafts are read too (ticket
+  901e3c37). A bounded read of each state, with no index: the queue is
+  hundreds of rows, not thousands."
+  [named repo ctx]
+  (when-some [find' (:find ctx)]
+    (for [state ["draft" "open" "in_review" "blocked"]
+          row (find' :ticket (cond-> {:state state} repo (assoc :repo repo))
+                     {:limit 200})
+          :let [words (str (get-in row [:data :title]) "\n"
+                           (get-in row [:data :detail]))]
+          :when (some #(str/includes? words %) named)]
+      row)))
+
+(defguardfn no-open-ticket-names-this-failure
+  {:severity :warning
+   :judges [:title :detail]
+   :reads [:principal :ticket]
+   :vars [:which]
+   :open "The tickets that already name a failure are read from the queue at the write; no form can recite them. Acknowledge the warning by its name to file the ticket anyway."
+   :explain "A ticket in the queue already names this failing check: {which}. Restate that ticket with your run instead of filing a second one, or acknowledge this warning to file anyway."}
+  [_row inp ctx]
+  ;; a person's create is not slowed, and neither is the engine's
+  (let [named (when (= :agent (:type (:principal ctx)))
+                (failure-keys (str (:title inp) "\n" (:detail inp))))
+        hits (when (seq named)
+               (take 5 (tickets-naming named (some-> (:repo inp) str not-empty) ctx)))]
+    (if (seq hits)
+      (t/deny {:vars {:which (str/join "; "
+                                       (map #(str (:id %) " \"" (get-in % [:data :title]) "\"")
+                                            hits))}})
+      (t/allow))))
+
 (defn- take-the-domain
   "The birth's other stamp. A ticket that names a domain keeps it; one
   with a parent takes what its parent stores, and any other takes the
@@ -1658,7 +1727,7 @@
 (def ^:private close-input
   [:map
    [:close_reason
-    {:examples ["Merged: github:ckopsa/waymark#41."]
+    {:examples ["Done: written, checked and sent to the person who asked."]
      :x-display
      {:widget "prose"
       :label "How it ended"
@@ -1773,6 +1842,7 @@
    :create-schema (into [:map] (concat stated-fields birth-fields))
    :create-guards [the-parent-is-open-at-birth the-merge-order-makes-no-cycle
                    the-domain-is-one-we-have only-a-mayor-asks-another-domain
+                   no-open-ticket-names-this-failure
                    the-parent-is-not-waited-on]
    ;; a fired seat's follow-up lands at 4 and a groomer raises it; a
    ;; person or an interactive seat is born at what it named
@@ -1789,6 +1859,12 @@
                :reads? true
                :fn parent-scene}}
    :actions
+   ;; THE EVERYDAY DOORS (ticket f66dd175). Eight doors are marked
+   ;; `:everyday` in their display: restate, groom, block, unblock,
+   ;; defer, resume, complete and drop. They are the ones a person's
+   ;; hand walks, and a row's bar keeps them in view while they are
+   ;; shut. The others are the engine's or a change's, or a rarer
+   ;; statement, and a shut one of those is drawn under 'More doors'.
    {:restate
     {:from #{:draft} :to :draft
      :input (into [:map] stated-fields)
@@ -1797,7 +1873,7 @@
      :record true
      :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Restate" :order 2
+     :display {:label "Restate" :order 2 :everyday true
                :description "Say what needs doing again, whole"}}
 
     ;; THE STATEMENT OF A BLOCKED TICKET (ticket 470abe2a). `restate`'s
@@ -1827,7 +1903,7 @@
               the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Groom" :style :primary :order 1
+     :display {:label "Groom" :style :primary :order 1 :everyday true
                :description "It is stated well enough to build as written — into the queue"}}
 
     :ungroom
@@ -1881,7 +1957,7 @@
      :edit {:prefill [:blocked_by :then]}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This ticket leaves the queue until the tickets it waits on end. When the last of them ends it goes back where it stood — the queue, or draft for a draft — and a person's unblock lands it in the queue sooner."}
-     :display {:label "Blocked by" :order 4
+     :display {:label "Blocked by" :order 4 :everyday true
                :description "Wait on other tickets — this one leaves the queue until they end"}}
 
     ;; THE MERGE ORDER, STATED WHOLE (ticket d069bc3b). It holds the
@@ -2035,7 +2111,7 @@
     {:from #{:blocked} :to :open
      :handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Unblock" :style :primary :order 1
+     :display {:label "Unblock" :style :primary :order 1 :everyday true
                :description "Back into the queue — nothing holds this one now"}}
 
     ;; THE ENGINE'S WAY BACK FOR A DRAFT. The last blocker's ending
@@ -2080,14 +2156,14 @@
      :handler defer-the-ticket
      :edit {:prefill [:defer_until]}
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Defer" :order 5
+     :display {:label "Defer" :order 5 :everyday true
                :description "Not now — take it out of the queue until a day"}}
 
     :resume
     {:from #{:deferred} :to :open
      :handler resume-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Resume" :style :primary :order 1
+     :display {:label "Resume" :style :primary :order 1 :everyday true
                :description "Back into the queue now"}}
 
     ;; THE TWO ENDINGS, from `draft` or `open`. A draft may already be
@@ -2105,7 +2181,7 @@
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Complete" :style :primary :order 6
+     :display {:label "Complete" :style :primary :order 6 :everyday true
                :description "The work is done — say what was done"}}
 
     :drop
@@ -2118,7 +2194,7 @@
      :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This is the ending on the record, with its sentence, and a ticket that waited only on this one goes back where it was blocked from. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
-     :display {:label "Drop" :style :danger :order 7
+     :display {:label "Drop" :style :danger :order 7 :everyday true
                :description "Let this go — say why"}}
 
     ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────
@@ -2228,6 +2304,83 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Red head noted" :order 15
                :description "The base went red again on a new head"}}
+
+    ;; ── GREEN ON ITS OWN, WITH WORK ON THE BENCH (ticket d5000a1c) ───
+    ;; `mend` ends the ticket, and the ending closes its open change.
+    ;; A change that holds work is not closed: the base pass walks this
+    ;; door in place of `mend`, and the ticket stays where it is. A seat
+    ;; that stalled its change sent the ticket to draft, and a person
+    ;; may have blocked or deferred it since (ticket e666bd6a): a
+    ;; self-loop, spelled once for each state it serves. A ticket under
+    ;; review is served too (ticket 1188f3ed): `work-kept` reads every
+    ;; change born from the ticket, and one with no pull request may
+    ;; hold work beside the submitted one.
+    :note_green
+    {:from #{:open} :to :open
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     ;; `note_merge`'s reason: the engine writes a first value onto a
+     ;; blank field, with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_in_review
+    {:from #{:in_review} :to :in_review
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_draft
+    {:from #{:draft} :to :draft
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_blocked
+    {:from #{:blocked} :to :blocked
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
+
+    :note_green_deferred
+    {:from #{:deferred} :to :deferred
+     :guards [only-the-base-pass-writes-this]
+     :handler note-a-green-base
+     :input [:map
+             [:green_note {:x-display {:hidden true :raw true
+                                       :label "Green on its own"}}
+              [:string {:min 1 :max 480}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Green on its own" :order 17
+               :description "The base went green while this ticket's change held work"}}
 
     :mend
     {:from #{:draft :open :in_review :blocked :deferred} :to :done

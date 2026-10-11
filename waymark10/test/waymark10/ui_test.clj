@@ -204,9 +204,13 @@
   ;; Go opens the head step's door through the helper an invitation uses
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
     (is (str/includes? body "<div id=\"questbar\""))
-    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, invitation}, what)"))
+    (is (str/includes? body "async function openDoor({self, action, fields, note, suggest, given, invitation}, what)"))
     (is (str/includes? body "return openDoor({self: d.self, action: d.action, note: d.note,"))
     (is (str/includes? body "openDoor({self: head.self, action: head.door, fields: head.needs || [],"))
+    ;; the goal's own step opens with the quest's stored input in the form,
+    ;; as the owner's own: `given` wears no suggestion mark
+    (is (str/includes? body "note: head.note, given: goal ? d.input || {} : {}},"))
+    (is (str/includes? body "given: d.given || {},"))
     (is (str/includes? body "\"/api/quests?state=active&pinned=true&owner=\""))
     (is (str/includes? body "`${done} done, ${plan.length} known so far`"))
     (is (not (str/includes? body "${done} of ${"))
@@ -330,6 +334,12 @@
     (is (str/includes? body "is filling this in"))
     (is (str/includes? body "dialog[open]:not([data-guided])"))
     (is (str/includes? body "data-guided-mark"))
+    (testing "a move of the followed person, which a wholly redacted ui beat becomes, closes the guided dialog and the quest's sheet"
+      (is (str/includes? body "else if (f.event === \"move\") guidedMove(f);"))
+      (is (str/includes? body "guidedDismissed = null;\n    closeGuided();\n    guidedQuestSheet(null);\n  }, GUIDED_MOVE_MS);"))
+      (is (str/includes? body "clearTimeout(guidedMoveTimer);\n  applyUiFrame(f);")))
+    (testing "the ui frame already held, sent again after a move that carries no new beat, takes the close back"
+      (is (str/includes? body "if (f.seq === guidedSeq) clearTimeout(guidedMoveTimer);\n    if (f.seq <= guidedSeq) return;")))
     (testing "a guided dialog's read that fails or is not answered gives its key back"
       (is (str/includes? body "await Promise.race([api(d.self),\n      new Promise(done => setTimeout(done, GUIDED_READ_MS, null))]);"))
       (is (str/includes? body "} catch (_e) { res = null; }\n  finally {\n    mine = guidedOpening === key;"))
@@ -463,7 +473,7 @@
     (is (str/includes? body "dlg.guidedRefuse = (problem, kept) => {"))
     (is (str/includes? body "if (f.type === \"refusal\") {"))
     (is (str/includes? body "if (replay) replayRefuse(replay.refused);"))
-    (is (str/includes? body "return g.querySelector(\"[data-quest-accept]\") || g.guidedAccept();"))))
+    (is (str/includes? body "return g.querySelector(\"[data-surface='dialog.accept']\") || g.guidedAccept();"))))
 
 (deftest ui-replay-draws-a-formless-refusal-in-the-band
   ;; docs/spec-agent-demo-walks.md §2: a bulk write opens no form, so
@@ -476,6 +486,19 @@
     (is (str/includes? body "[...replay.refusals, replay.notice].filter(Boolean).join(\"\\n\");"))
     (is (str/includes? body "if (f.type === \"move\" || f.type === \"ui\") replay.refusals = [];"))
     (is (str/includes? body "#replaycaption[data-replay-notice] { white-space: pre-line; }"))))
+
+(deftest ui-replay-says-a-refused-accept-in-the-quests-sheet
+  ;; docs/spec-quests.md: a `refusal` frame while the quest's sheet is
+  ;; open is the answer Accept quest got; the replay says it in the
+  ;; sheet's own box, by the sheet's own code, and not in the band
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "dlg.questRefuse = refused;"))
+    (is (str/includes? body "function replaySheetRefused(f) {"))
+    (is (str/includes? body "sheet.questRefuse({title: f.title, detail: f.detail});"))
+    (is (str/includes? body "return replaySheetRefused(f) ? sheet.querySelector(\"[data-surface='sheet.accept']\") : null;"))
+    ;; one tap makes the quest and then pins it: the refused pin of a
+    ;; sheet whose own create was made draws no second press
+    (is (str/includes? body "if (f.type === \"refusal\" && f.action === \"pin\" &&\n        sheet.hasAttribute(\"data-replay-accepted\")) return null;"))))
 
 (deftest ui-replay-presses-the-submit-before-the-close
   ;; the moment of a write: for the frame that closes a form after its
@@ -750,7 +773,30 @@
     (is (str/includes? body "localStorage.getItem(\"wm10.walk.exported\")"))
     (is (str/includes? body "markWalkExported(self);"))
     (is (str/includes? body "\"data-export-walk\""))
-    (is (str/includes? body "onclick: () => exportWalk(doc.self)"))))
+    (is (str/includes? body "onclick: () => exportWalk(doc)"))
+    ;; the export's address is the row's links.export, and a row without
+    ;; the link offers no export
+    (is (str/includes? body "doc.links?.export?.href"))
+    (is (not (str/includes? body "self + \"/export\"")))))
+
+(deftest ui-list-export-chip-exports-as-the-button-does
+  ;; a walk's export chip on a table row or a feed item makes the row
+  ;; page's download: as the viewer, and marked exported in this browser
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function exportChipClick(e, item, rel, l) {"))
+    (is (str/includes? body "if (!isWalk || rel !== \"export\" || !l || !l.href) return;"))
+    (is (str/includes? body "exportWalk({...item, kind: \"walk\"});"))
+    (is (str/includes? body "onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},"))
+    (is (str/includes? body "onclick: e => exportChipClick(e, item, rel, l)},"))))
+
+(deftest ui-row-page-offers-a-walks-export-one-time
+  ;; a walk's row page draws its export as the Export button, which reads
+  ;; as the viewer and marks the walk exported: the links strip leaves
+  ;; that rel out, so no plain chip stands beside the button
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "function linksStrip(doc, held = []) {"))
+    (is (str/includes? body ".filter(([rel, l]) => l && l.href && !held.includes(rel));"))
+    (is (str/includes? body "const chips = linksStrip(doc, walkExportHref(doc) ? [\"export\"] : []);"))))
 
 (deftest ui-replay-draws-an-invitation-frame
   ;; docs/spec-walkthrough.md §6: replay opens an `invitation` frame's
@@ -772,6 +818,20 @@
     (testing "the transition that answers it closes it"
       (is (str/includes? body "const inv = $(\"dialog[open][data-replay-invite]\");"))
       (is (str/includes? body "if (inv && inv.getAttribute(\"data-guided\") === f.self + \" \" + f.action)")))))
+
+(deftest ui-replay-fills-an-invitations-given-values-unmarked
+  ;; docs/spec-walkthrough.md §6: a replayed invitation's `given` values
+  ;; fill their fields as `suggest` values do, and only a suggestion
+  ;; wears the `suggested-value` mark
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (testing "a given key has an input in the replayed form"
+      (is (str/includes? body "...Object.keys(f.given || {})]")))
+    (testing "the frame's given values reach the dialog and fill it"
+      (is (str/includes? body "    given: f.given || {},"))
+      (is (str/includes? body "g.guidedSet(Object.assign({}, f.given || {}, f.suggest || {}));")))
+    (testing "the mark is put on the keys of `suggest` alone"
+      (is (str/includes? body "for (const k of Object.keys(suggest || {})) {"))
+      (is (= 1 (count (re-seq #"classList\.add\(\"suggested-value\"\)" body)))))))
 
 (deftest ui-replay-draws-a-row-from-its-doc
   ;; docs/spec-agent-demo-walks.md §8a: a `doc` frame is kept as the
@@ -818,9 +878,76 @@
     (is (str/includes? body "html[data-film] #demobanner, html[data-film] #toast { display: none !important; }"))
     (testing "the chrome is gone before the walk is read"
       (is (< (str/index-of body "filmState(\"\");")
-             (str/index-of body "const res = await fetch(self + \"/export\", {headers: principalHeaders()});\n    if (res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
+             (str/index-of body "const row = await api(self);\n    const href = row.ok ? walkExportHref(row.body) : null;\n    const res = href ? await fetch(href, {headers: principalHeaders()}) : null;\n    if (res && res.ok) text = await res.text();\n  } catch (_e) { /* never ready */ }"))))
     (is (str/includes? body "if (filmWalkOf(raw)) {"))
     (is (str/includes? body "if (film) return;"))))
+
+(deftest ui-presentation-mode-hides-the-developer-detail
+  ;; docs/spec-agent-demo-walks.md §8b: window.wmPresent(true) sets
+  ;; `present` on the root element; the crumb's row id, the version
+  ;; line, the grant chip and the header's developer buttons are hidden
+  ;; with display: none, and the everyday UI keeps them
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "window.wmPresent = on => document.documentElement.classList.toggle(\"present\", on !== false);"))
+    (is (str/includes? body "html.present .crumbs .idsep, html.present .crumbs .id, html.present .version,"))
+    (is (str/includes? body "html.present #grantchip, html.present #sharebtn, html.present #recordbtn,"))
+    (is (str/includes? body "html.present #replaybtn, html.present #ledgertoggle { display: none !important; }"))
+    (testing "the marked elements are the ones the pages draw"
+      (is (str/includes? body "el(\"span\", {class:\"idsep\"}, \" / \"),\n    el(\"span\", {class:\"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class: \"idsep\"}, \" / \"),\n    el(\"span\", {class: \"id\", title: doc.self},"))
+      (is (str/includes? body "el(\"span\", {class:\"version\"},"))
+      (is (str/includes? body "el(\"span\", {class: \"version\"},"))
+      (doseq [id ["sharebtn" "recordbtn" "replaybtn" "ledgertoggle" "grantchip"]]
+        (is (str/includes? body (str "id=\"" id "\"")))))
+    (testing "what a performed Quests take still showed is hidden too"
+      ;; ticket 9e7c21f5: the law revision chip, the signed-in name and
+      ;; its sign-out link, the ticker, a row's Data section and the
+      ;; reasons under the doors
+      (is (str/includes? body "html.present #lawstamp, html.present #signedin, html.present #ticker,"))
+      (is (str/includes? body "html.present details.rowdata, html.present .blockedwhy { display: none !important; }"))
+      (is (str/includes? body "<span id=\"lawstamp\"></span>"))
+      (is (str/includes? body "$who.after(el(\"span\", {id: \"signedin\","))
+      (is (str/includes? body "<div id=\"ticker\"></div>"))
+      (is (str/includes? body "el(\"details\", {class:\"rowdata\", open:\"\"},\n      el(\"summary\", {class:\"muted\"}, \"Data\"),"))
+      (is (str/includes? body "dataPanel.append(el(\"details\", {class:\"rowdata\", open:\"\"},"))
+      (is (str/includes? body "const box = el(\"ul\", {class:\"blockedwhy notnow\"});"))
+      (testing "and nothing but the `present` class takes them away"
+        (is (empty? (remove #(str/starts-with? % "html.present")
+                            (map (comp str/trim second)
+                                 (re-seq #"([^\s,{}]*\s?(?:#lawstamp|#signedin|#ticker|details\.rowdata|\.blockedwhy))(?=\s*[,{])[^{}]*\{[^}]*display:\s*none" body)))))))
+    (testing "the theme control and the principal box are not among them"
+      (is (not (re-find #"html\.present[^{]*(#themepick|#who|#curtainbtn)[^{]*\{" body))))
+    (testing "a demo engine's banner and the recording chip are not drawn"
+      ;; the recording chip is #recordbtn itself: recordChip writes the
+      ;; `■ Stop m:ss` into the button the rule above already names
+      (is (str/includes? body "html.present #demobanner { display: none !important; }"))
+      (is (str/includes? body "<div id=\"demobanner\" role=\"status\" aria-live=\"polite\" hidden></div>"))
+      (is (str/includes? body "function recordChip() {\n  const b = $(\"#recordbtn\");"))
+      (is (str/includes? body "b.textContent = `■ Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, \"0\")}`;")))
+    (testing "a ticket title's '[epic] ' marker is not drawn, and is drawn out of the mode"
+      (is (str/includes? body "html.present .epicmark { display: none !important; }"))
+      (is (str/includes? body "mark.className = \"epicmark\";"))
+      (is (= #{"html.present .epicmark"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?\.epicmark)\s*\{" body))))))
+    (testing "the phone's tab bar and the intent cards are not drawn, and the toast and the undo stack sit at the top"
+      ;; ticket c0cb83af: a film's caption is burned over the bottom of
+      ;; the frame, and an intent card names an actor by its id
+      (is (str/includes? body "html.present #intents { display: none !important; }"))
+      (is (str/includes? body "html.present[data-ui=\"mobile\"] header nav { display: none !important; }"))
+      (is (str/includes? body "html.present #toast { top: 12px !important; bottom: auto !important; }"))
+      (is (str/includes? body "html.present #undostack { top: 64px !important; bottom: auto !important;"))
+      (is (str/includes? body "<div id=\"toast\"></div>"))
+      (is (str/includes? body "<div id=\"intents\" aria-live=\"polite\" aria-label=\"live intents\"></div>"))
+      (is (str/includes? body "<div id=\"undostack\" aria-live=\"polite\" aria-label=\"undo the last few things you did\"></div>"))
+      (testing "and the desktop header's nav is not among them"
+        (is (not (re-find #"html\.present header nav" body)))))
+    (testing "and out of presentation mode both are drawn"
+      ;; nothing but the banner's own [hidden], film mode and the
+      ;; `present` class takes either away
+      (is (= #{"#demobanner[hidden]" "html[data-film] #demobanner" "html.present #demobanner"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#demobanner(?:\[hidden\])?)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body)))))
+      (is (= #{"html.present #recordbtn"}
+             (set (map (comp str/trim second) (re-seq #"([^\s,{}]*\s?#recordbtn)(?:,[^{}]*)?\s*\{[^}]*display:\s*none" body))))))))
 
 (deftest ui-film-mode-says-when-it-has-ended
   ;; the root element's data-film is what the camera reads: `ready` under
@@ -899,6 +1026,11 @@
       (is (str/includes? step "if (s.state === \"waiting\")"))
       (is (str/includes? step "? el(\"a\", {href: \"#\" + s.self}, \"your tap\")"))
       (is (str/includes? step ": s.waiting_on || \"someone else\"));")))
+    (testing "an unseen wait is the step the engine marks, and its row is left out"
+      (is (str/includes? body "function questUnseen(s) { return !!s && s.unseen === true; }"))
+      (is (not (str/includes? step "s.self === d.self")))
+      (is (str/includes? step "if (s.self && !questUnseen(s))"))
+      (is (str/includes? body "text(\"b + span:not([data-quest-turn])\", li)")))
     (testing "a choice says what must be picked"
       (is (str/includes? step "if (s.whose === \"choice\" && s.state !== \"done\")"))
       (is (str/includes? step "needs ? ` · choose ${needs}`")))
@@ -908,4 +1040,46 @@
       (is (str/includes? body "\"data-quest-estimate\": \"\"")))
     (testing "Go opens the viewer's invitation for the step, else its row"
       (is (str/includes? body "if (inv) openInvitationRow(inv);"))
-      (is (str/includes? body "else go(step.self);")))))
+      (is (str/includes? body "else go(step.self);")))
+    (testing "the data table leaves the plan out and draws the goal row in words"
+      (is (str/includes? body "if (kind === \"quest\") delete plainData.plan;"))
+      (is (str/includes? body "tr.lastChild.replaceChildren(questRow(plainData.self));")))
+    (testing "the goal door and the keys of its input are drawn by their labels"
+      (is (str/includes? body "el(\"span\", {\"data-quest-door\": \"\", title: plainData.action},"))
+      (is (str/includes? body "goal.door_label || title(plainData.action)));"))
+      (is (str/includes? body "(goal.needs_labels || [])[needs.indexOf(k)] || title(k)),")))))
+
+(deftest ui-row-page-header-carries-no-path
+  ;; the row's own path is the crumb's title on every row page, and is
+  ;; not header text
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "el(\"span\", {class:\"id\", title: doc.self},"))
+    (is (str/includes? body "el(\"span\", {class: \"id\", title: doc.self},"))
+    (is (not (str/includes? body "title: doc.self}, doc.self)")))))
+
+(deftest ui-surfaces-are-the-names-the-page-sets
+  ;; docs/spec-agent-demo-walks.md § 8a: the list at /api/-/ui/surfaces
+  ;; and the data-surface values the page's code sets are one
+  ;; vocabulary. A listed name that ends in <…> is a stem the page
+  ;; completes ("door:" + name), so both sides are compared by stem.
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        resp (*h* {:request-method :get :uri "/api/-/ui/surfaces" :headers {}})
+        listed (map :name (:surfaces (some-> (:body resp) wire/read-json)))
+        stem #(first (str/split % #"<"))
+        in-page (set (map second
+                          (re-seq #"data-surface\"?[:,=]\s*\"([a-z][a-z.:-]*)\""
+                                  body)))]
+    (is (= 200 (:status resp)))
+    (is (seq listed))
+    (is (= (count listed) (count (distinct listed))) "a name is listed once")
+    (testing "every name the page sets is in the list"
+      (doseq [s in-page]
+        (is (some #(= s (stem %)) listed)
+            (str s " is set in ui/ and is not in the list"))))
+    (testing "every listed name is set somewhere in the page"
+      (doseq [n listed]
+        (is (contains? in-page (stem n))
+            (str n " is listed and the page never sets it"))))
+    (testing "the page reads a surface by its name"
+      (is (str/includes? body "function surfaceNode(name)"))
+      (is (str/includes? body "function readSurface(name)")))))

@@ -13,7 +13,7 @@ const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
 async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
-                             idemKey: callerKey, suggest, invitation,
+                             idemKey: callerKey, suggest, given, invitation,
                              guided}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
@@ -69,6 +69,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        not hold. Never for a bulk write, as above. */
     (!bulkIds && entry.prefill_values) || {},
     prefill || {},
+    /* what the person typed already (a quest's stored input): in the
+       form as their own, with no mark */
+    given || {},
     /* an invitation's suggestions: in the form, marked, and sent only
        by the person's own submit */
     suggest || {},
@@ -77,7 +80,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   const kind = (doc.kind || "").replace("_collection", "");
   const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
-  const errBox = el("div", {});
+  const errBox = el("div", {"data-surface": "refusal"});
   /* "Do this later" (docs/spec-scheduled-actions.md R-7.3): a row's own
      door, in the person's own hand. A bulk write and a create have no
      one row to hold a rule against, and a scheduled action's own doors
@@ -102,19 +105,15 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       `⚠ draft from an older version of this ${pretty(kind)} — review before submitting · `));
 
   const h3 = el("h3", {}, entry.display?.label || title(name));
-  if (entry.effort && entry.effort !== "assent")
-    h3.append(el("span", {class:"effort-chip",
-      title: `effort: ${entry.effort}`}, entry.effort));
-  const dlg = el("dialog", {},
+  const dlg = el("dialog", {"data-surface": "dialog", "data-action": name,
+                            "data-self": (doc.self || "").split("?")[0] || null},
     el("div", {class: "dlghead"},
       h3,
       el("p", {class: "metaline"},
         el("span", {class:"mono"}, doc.state ? pretty(doc.state) : "—"),
         " → ", el("span", {class:"mono"}, pretty((entry.effect || {}).to || "?")),
         ((entry.effect || {}).terminal ? " (terminal)" : "") +
-        (bulkIds ? ` · ${bulkIds.length} selected row(s)` : "") +
-        (safety.fence ? " · fenced (If-Match)" : "") +
-        (safety.idempotent ? "" : " · idempotency-key attached"))),
+        (bulkIds ? ` · ${bulkIds.length} selected row(s)` : ""))),
     el("div", {class: "dlgbody"},
       /* how far along the walkthrough is, above the form */
       led ? el("p", {class: "walk-step", "data-walk-step": ""},
@@ -127,32 +126,37 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         : null,
       form, laterBox, errBox, draftBar),
     el("div", {class: "dlgfoot"},
-      el("span", {class: "hint"},
-        entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
-                                          : "draft — saved on blur") : ""),
+      /* empty on purpose: the draft bar says "draft saved" once one is */
+      el("span", {class: "hint"}),
       dryNote,
-      entry.draft ? el("button", {onclick: async () => {
+      entry.draft ? el("button", {"data-surface": "dialog.discard", onclick: async () => {
         disarmDraft();
         await api(entry.draft.href, {method: "DELETE"});
         toast("Draft discarded");
         closeDlg(); render();
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
-        ? el("button", {onclick: () => check()}, "Check") : null,
+        ? el("button", {"data-surface": "dialog.check", onclick: () => check()},
+            "Check")
+        : null,
       invitation && ((invitation.doc || {}).actions || {}).decline
         ? el("button", {class: "danger", "data-invite-decline": "",
+                        "data-surface": "dialog.decline",
                         onclick: () => declineInvitation()},
             led ? "Skip" : "Decline")
         : null,
-      led ? el("button", {"data-walk-stop": "", onclick: () => stopLed()}, "Stop")
+      led ? el("button", {"data-walk-stop": "", "data-surface": "dialog.stop",
+                          onclick: () => stopLed()}, "Stop")
           : null,
-      el("button", {onclick: () => closeDlg()}, "Cancel"),
+      el("button", {"data-surface": "dialog.cancel", onclick: () => closeDlg()},
+         "Cancel"),
       laterable
-        ? el("button", {"data-later": "", onclick: () => openLater()},
+        ? el("button", {"data-later": "", "data-surface": "dialog.later",
+                        onclick: () => openLater()},
             "Do this later")
         : null,
       el("button", {class: safety.confirm ? "danger" : "primary",
-                    onclick: () => submit()},
+                    "data-surface": "dialog.submit", onclick: () => submit()},
         safety.confirm
           ? "Confirm & " + (entry.display?.label || title(name))
           : (entry.display?.label || title(name)))));
@@ -194,7 +198,12 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
   };
   const showPeers = participants => {
     const me = viewerId() || "anonymous";
-    const others = (participants || []).filter(p => p.id !== me);
+    /* a socket the engine could not name is no one to name: under the
+       dev box it is this page's own, which carries no principal header */
+    const others = (participants || [])
+      .filter(p => p.id !== me && p.id !== "anonymous");
+    /* the roster's arrival, for a reader that waits on the socket */
+    peers.dataset.roster = String((participants || []).length);
     peers.textContent = others.length
       ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
   };
@@ -424,7 +433,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       return !guidedKept ? null
         : el("span", {class: "questoffer", "data-quest-offer": "offered"},
             el("button", {type: "button", class: "primary",
-                          "data-quest-accept": ""}, "Accept as quest"));
+                          "data-surface": "dialog.accept"}, "Accept as quest"));
     /* the slot says how the read ended (data-quest-offer), so a refusal
        with no button tells why. A read that failed, and was not refused,
        is tried one more time. */
@@ -441,7 +450,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       says(create ? "offered" : res.ok ? "no-create" : "refused " + res.status);
       if (!create) return;
       slot.append(el("button", {type: "button", class: "primary",
-        "data-quest-accept": "",
+        "data-surface": "dialog.accept",
         title: "Keep this as a goal: the engine plans the steps to it",
         onclick: () => acceptQuest(create)}, "Accept as quest"));
     };
@@ -709,7 +718,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        write shows it before its form closes (200-events-follow.js). */
     dlg.guidedWrite = () => {
       const lit = el("button", {class: write.className + " invited",
-                               type: "button", "data-guided-write": ""},
+                               type: "button", "data-guided-write": "",
+                               "data-surface": "dialog.submit"},
         write.textContent);
       foot.append(lit);
       return lit;
@@ -728,7 +738,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
        its pointer (200-events-follow.js) */
     dlg.guidedAccept = () => {
       const kept = el("button", {class: "primary", type: "button",
-                                 "data-quest-accept": ""}, "Accept as quest");
+                                 "data-surface": "dialog.accept"},
+                      "Accept as quest");
       foot.append(kept);
       return kept;
     };
@@ -864,7 +875,7 @@ function markTyped(form, name) {
 /* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */
 function reportDialog(report) {
   const d = report.data || {};
-  const dlg = el("dialog", {"data-report": ""},
+  const dlg = el("dialog", {"data-report": "", "data-surface": "report"},
     el("div", {class: "dlghead"},
       el("h3", {}, "Bulk report · " + pretty(report.action || ""))),
     el("div", {class: "dlgbody"},
@@ -880,13 +891,15 @@ function reportDialog(report) {
               el("tr", {},
                 el("td", {class:"mono"},
                   el("a", {href: "#" + r.self,
+                           "data-surface": "report.row", "data-row": r.self,
                            onclick: () => { dlg.close(); dlg.remove(); }},
                     String(r.self || "").split("/").pop().slice(0, 8))),
                 el("td", {}, el("span", {class:"verdict-refused"}, "refused")),
                 el("td", {class:"reason"}, r.reason || "")))))
         : el("p", {class: "validok"}, "every row succeeded")),
     el("div", {class: "dlgfoot"},
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
+      el("button", {"data-surface": "report.close",
+                    onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
 }
@@ -895,8 +908,10 @@ function reportDialog(report) {
    to the row, and the door's dialog opens with the named fields lit and
    the note beside them. An invitation and a quest's Go (120-nav-home.js)
    both come through here; `invitation` is what only an invitation adds,
-   and `what` names the row in the sentence that says it was not read ── */
-async function openDoor({self, action, fields, note, suggest, invitation}, what) {
+   and `what` names the row in the sentence that says it was not read.
+   A door taken here may be a step of the quest in hand, so the tracker
+   reads its quest again after it (questAfterGo) ── */
+async function openDoor({self, action, fields, note, suggest, given, invitation}, what) {
   const res = await api(self);
   if (!res.ok) {
     toast(`${what} cannot be read: ${(res.body || {}).detail || res.status}`);
@@ -913,8 +928,9 @@ async function openDoor({self, action, fields, note, suggest, invitation}, what)
     return;
   }
   actionDialog({name: action, entry, doc: target, suggest: suggest || {},
+                given: given || {},
                 invitation: {note, fields: fields || [], ...(invitation || {})},
-                onDone: () => render()});
+                onDone: () => { render(); questAfterGo().catch(() => {}); }});
 }
 /* ── an invitation, opened in the person's own hand: the invited row,
    its door's dialog with the inputs live, and the engine answering the
@@ -923,6 +939,8 @@ async function openInvitation(inv) {
   const d = inv.data || {};
   return openDoor({self: d.self, action: d.action, note: d.note,
                    suggest: d.suggest || {},
+                   /* a quest's stored input: the person's own values */
+                   given: d.given || {},
                    /* a row born before `fields` holds `field` alone */
                    fields: d.fields || (d.field ? [d.field] : []),
                    invitation: {doc: inv,

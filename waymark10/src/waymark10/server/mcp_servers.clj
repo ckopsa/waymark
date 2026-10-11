@@ -151,7 +151,8 @@
 ;; ── the client registry ─────────────────────────────────────────────
 
 (defonce ^:private clients
-  ;; row id → {:key config :client fn :lock Object}
+  ;; row id → {:key config :client fn :lock Object}; :lock is nil for
+  ;; an http row
   (atom {}))
 
 (defonce ^:private build-lock (Object.))
@@ -227,7 +228,9 @@
 
 (defn client-for
   "The row's client entry {:client :lock}, built on first use and
-  rebuilt when the row's transport fields moved."
+  rebuilt when the row's transport fields moved. A stdio row has a
+  lock, because its calls share one pipe. An http row has none: each
+  call is its own request, so one that waits holds up no other."
   [seam row]
   (let [id (str (:id row))
         k (config-key row)]
@@ -235,7 +238,9 @@
       (let [e (get @clients id)]
         (if (and e (= k (:key e)))
           e
-          (let [fresh {:key k :client (build-client seam row) :lock (Object.)}]
+          (let [fresh {:key k :client (build-client seam row)
+                       :lock (when (= "stdio" (str (get-in row [:data :transport])))
+                               (Object.))}]
             (when e (client/close! (:client e)))
             (swap! clients assoc id fresh)
             fresh))))))
@@ -250,16 +255,18 @@
     nil))
 
 (defn- wire!
-  "One call on a row's client, under the row's lock. Throws the
-  client's problem."
+  "One call on a row's client, under the row's lock when it has one.
+  Throws the client's problem."
   [seam row method params]
   (let [{:keys [client lock]} (client-for seam row)]
-    (locking lock (client method params))))
+    (if lock
+      (locking lock (client method params))
+      (client method params))))
 
 (defn- fatal?
-  "Did the row's client call its last failure fatal?"
-  [seam row]
-  (client/dead? (:client (client-for seam row))))
+  "Did the row's client call the failure `e` fatal?"
+  [seam row e]
+  (client/dead? (:client (client-for seam row)) e))
 
 ;; ── the rows ────────────────────────────────────────────────────────
 
@@ -729,6 +736,23 @@
           (let [now (row-by-name eng (get-in row [:data :name]))]
             (when (= :live (:state now)) {:row now})))))))
 
+(def ^:private slow-tool-timeout-ms
+  "The tools that hold a call open on purpose, by prefixed name, and
+  the bound each gets in place of the row's own. The rig's
+  `bench__test_result` waits up to 40 s for a run to finish before it
+  answers `pending`, which is longer than the 30 s every other call
+  gets: the forward timed out first, the seat read a timeout where the
+  rig meant `pending`, and the timeout marked the row dark (ticket
+  4d075b02)."
+  {"bench__test_result" 60000})
+
+(defn- call-bound
+  "The bound of one tools/call: a caller's own binding first, then the
+  slow tool's, and nil — the client's own — for every other call."
+  [row bare]
+  (or client/*call-timeout-ms*
+      (get slow-tool-timeout-ms (str (get-in row [:data :name]) "__" bare))))
+
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
@@ -754,10 +778,12 @@
                        (get-in row [:data :tools]))
           {:keys [args values]} (secrets/resolve-refs! eng schema args)]
       (try
-        (secrets/scrub (wire! seam row "tools/call" {:name bare :arguments args})
+        (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)]
+                         (wire! seam row "tools/call"
+                                {:name bare :arguments args}))
                        values)
         (catch Exception e
-          (when (and (p/problem? e) (fatal? seam row))
+          (when (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e)))
           (throw e))))))
 
@@ -1385,7 +1411,7 @@
             (inv/invoke! eng :mcp_server (str (:id row)) :discover
                          {:seen_hash hash} {:principal engine-actor})))
         (catch Exception e
-          (if (and (p/problem? e) (fatal? seam row))
+          (if (and (p/problem? e) (fatal? seam row e))
             (darken! eng row (ex-message e))
             (warn! "discover of " (get-in row [:data :name]) " failed ("
                    (ex-message e) ")")))))))

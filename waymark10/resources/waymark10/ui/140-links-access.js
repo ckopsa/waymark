@@ -1,7 +1,9 @@
 /* ── the read surface, up front: link chips with badges as scent ───── */
-function linksStrip(doc) {
+/* `held` names the rels the page draws with a control of its own: a
+   link is offered one time */
+function linksStrip(doc, held = []) {
   const rels = Object.entries(doc.links || {})
-    .filter(([, l]) => l && l.href);
+    .filter(([rel, l]) => l && l.href && !held.includes(rel));
   if (!rels.length) return null;
   const row = el("div", {class:"chips", "data-links": ""});
   for (const [rel, l] of rels)
@@ -61,6 +63,313 @@ function splitRefusals(doc) {
   for (const g of byReason.values())
     if (g.length === 1) blocked.push(g[0]); else grouped.push(g);
   return {blocked, grouped, gated};
+}
+
+/* ── a shut door that names a way out (docs/spec-quests.md) ────────────
+   A refused action with remedies is a goal the engine can plan toward,
+   so its seat in the bar takes a tap: dashed, flagged, aria-disabled and
+   not disabled, so it keeps focus. One tap makes and pins the quest
+   whose goal is this row and this door, with no input: the goal's form
+   is the quest's last step. A refusal with no remedy stays the plain
+   dimmed button, and so does one on a collection: a quest's goal is a
+   door on ONE row. */
+function questReach(entry, doc) {
+  return !!(entry.remedies || []).length && !!doc.self &&
+    !/_collection$/.test(doc.kind || "");
+}
+/* the entries of repeated reasons that name a way out: they have no
+   dimmed seat in the bar, and get a reachable one */
+function reachGrouped(grouped, doc) {
+  return grouped.flat().filter(([, entry]) => questReach(entry, doc));
+}
+function shutDoor(name, entry, doc) {
+  if (!questReach(entry, doc))
+    return el("button", {class:"blocked", disabled:"",
+      "data-surface": "door:" + name,
+      "data-row": (doc.self || "").split("?")[0] || null,
+      title: entry.reason || ""}, label(name, entry));
+  const btn = el("button", {type: "button", class: "blocked notyet",
+    "aria-disabled": "true", "data-quest-door": name,
+    "data-surface": "door-shut:" + name, "data-row": doc.self.split("?")[0],
+    "data-quest-self": doc.self.split("?")[0],
+    title: entry.reason || ""},
+    label(name, entry),
+    el("span", {class: "notyet-flag", "aria-hidden": "true"}, " ⚑"));
+  btn.addEventListener("click", () => questFromDoor(btn, name, doc));
+  return btn;
+}
+/* ── everyday doors (ticket f66dd175) ──────────────────────────────────
+   A kind's law may mark some doors `everyday` in their display, and the
+   kind's entry in the well-known document lists them: a shut door's
+   entry carries no display. On such a kind the bar keeps every door the
+   viewer can use now, every shut door that is everyday, and the door the
+   pinned quest names as its goal or its next step. Every other shut door
+   moves under one closed 'More doors (n)' line, and the reasons move
+   with them. Each keeps its surface name. A kind that marks none keeps
+   its bar as it is. */
+function everydayDoors(kind) {
+  return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];
+}
+function questDoors(self) {
+  const q = replay ? replay.quest : questDoc;
+  const d = (q || {}).data || {}, head = q ? questHead(q) : null;
+  const out = new Set();
+  if (d.self === self && d.action) out.add(d.action);
+  if (head && head.self === self && head.door) out.add(head.door);
+  return out;
+}
+function foldDoors(bar, notes, doc) {
+  const every = everydayDoors(doc.kind);
+  if (!every.length) return null;
+  /* the marks stay on the bar: sinkQuestDoors folds by them later */
+  bar.setAttribute("data-everyday", every.join(" "));
+  const pinned = questDoors((doc.self || "").split("?")[0]);
+  const rest = [...bar.querySelectorAll("button.blocked[data-surface]")]
+    .filter(b => {
+      const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+      return !every.includes(name) && !pinned.has(name);
+    });
+  if (!rest.length) return null;
+  return el("details", {class: "moredoors"},
+    el("summary", {class: "muted", "data-surface": "doors-more"},
+       `More doors (${rest.length})`),
+    el("div", {class: "actions"}, rest), notes);
+}
+/* the fold reads the quest when the row page is drawn. The tracker may
+   take up a quest after that, or its plan may move (questTracker,
+   120-nav-home.js): the door it now names as its goal or its next step
+   leaves the fold for the bar, with no reload. The line counts what is
+   left, and with none left the reasons stand where they did before a
+   fold. A door the quest has let go returns to the fold in the same
+   draw (sinkQuestDoors). */
+function liftQuestDoors() {
+  for (const more of document.querySelectorAll("#view details.moredoors")) {
+    const bar = more.previousElementSibling;
+    const box = more.querySelector(":scope > .actions");
+    if (!bar || !bar.classList.contains("actions") || !box) continue;
+    const folded = [...box.querySelectorAll("button.blocked[data-surface]")];
+    const lifted = folded.filter(b => {
+      const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+      return questDoors(b.getAttribute("data-row") || "").has(name);
+    });
+    if (!lifted.length) continue;
+    bar.append(...lifted);
+    const left = folded.length - lifted.length;
+    if (left) more.querySelector("summary").textContent = `More doors (${left})`;
+    else more.replaceWith(
+      ...[...more.children].filter(k => k !== box && k.tagName !== "SUMMARY"));
+  }
+  sinkQuestDoors();
+}
+/* the other way (ticket f82b5683). The quest finishes, is unpinned, or
+   its next step moves to another door: a shut door in the bar that the
+   quest no longer names, and that is not an everyday one, returns under
+   'More doors' as a fresh draw would put it, and the line counts it.
+   A bar whose fold was emptied, or never drawn, gets the line again,
+   and the reasons go back under it. */
+function sinkQuestDoors() {
+  for (const bar of document.querySelectorAll("#view .actions[data-everyday]")) {
+    const every = bar.getAttribute("data-everyday").split(" ");
+    const sunk = [...bar.querySelectorAll("button.blocked[data-surface]")]
+      .filter(b => {
+        const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+        return !every.includes(name) &&
+          !questDoors(b.getAttribute("data-row") || "").has(name);
+      });
+    if (!sunk.length) continue;
+    let more = bar.nextElementSibling;
+    if (!more || !more.classList.contains("moredoors")) {
+      const notes = more && more.classList.contains("blockedwhy") ? more : null;
+      more = el("details", {class: "moredoors"},
+        el("summary", {class: "muted", "data-surface": "doors-more"}),
+        el("div", {class: "actions"}));
+      bar.after(more);
+      if (notes) more.append(notes);
+    }
+    const box = more.querySelector(":scope > .actions");
+    box.append(...sunk);
+    const n = box.querySelectorAll("button.blocked[data-surface]").length;
+    more.querySelector("summary").textContent = `More doors (${n})`;
+  }
+}
+/* a folded door is under a closed line and is not drawn: a replay opens
+   the line before it points, as a person taps `doors-more`. Answers the
+   node. */
+function unfoldDoor(node) {
+  const more = node && node.closest("details.moredoors:not([open])");
+  if (more) more.open = true;
+  return node;
+}
+/* the tap: the create door is read off the quests collection, as every
+   button is, and rehearsed (dry_run=1). The rehearsal writes nothing and
+   answers `preview`, the plan the quest would be given; the sheet shows
+   it (questSheet), and the quest is made only on Accept. A replay
+   asks nothing and writes nothing: it draws the sheet the recording
+   had open (replayQuestSheet, 200-events-follow.js). A live follower
+   in guided mode is shown the followed person's sheet the same way
+   (guidedQuestSheet). */
+async function questFromDoor(btn, name, doc) {
+  if (replay || btn.hasAttribute("data-quest-busy")) return;
+  btn.setAttribute("data-quest-busy", "");
+  try {
+    const col = collectionHref(await wellKnown(), "quest");
+    const res = col ? await api(col + "?page%5Bsize%5D=1") : {ok: false};
+    const create = res.ok && ((res.body || {}).actions || {}).create;
+    if (!create) { toast("A quest cannot be made here"); return; }
+    const goal = {self: doc.self.split("?")[0], action: name};
+    const seen = await api(
+      create.href + (create.href.includes("?") ? "&" : "?") + "dry_run=1",
+      {method: create.method || "POST", body: JSON.stringify(goal)});
+    questSheet(btn, name, doc, create, goal, seen);
+  } finally { btn.removeAttribute("data-quest-busy"); }
+}
+/* the sheet a tap opens, from the create door's rehearsal `seen`: the
+   goal in words, why its door is shut now, the steps the engine found
+   with whose turn each is (the goal's own form last, with the fields it
+   asks for), and two buttons. A step is said in words: the door's label,
+   the row's label and the fields' labels, as the preview answers them.
+   The row's path is the step's title, and is shown only for a row the
+   preview could not name. Not now closes it and writes nothing.
+   Accept creates the quest and pins it, and the tracker shows it
+   (120-nav-home.js). A refused rehearsal, create or pin is said in the
+   sheet, and Accept is disabled with that line. */
+/* a wait on a row the owner cannot see: the engine marks the step
+   (`unseen`, answer->plan, quests.clj). Its door and row are the goal's
+   own, so it is said by its note alone: the door's label beside the
+   seat's name would say the seat takes the goal's door. The sheet and
+   the quest's page (questStep, 200-events-follow.js) read it here and
+   nowhere else; the tracker says a waiting head by who it waits on. */
+function questUnseen(s) { return !!s && s.unseen === true; }
+function questSheet(btn, name, doc, create, goal, seen) {
+  const p = (seen.ok && (seen.body || {}).preview) || {};
+  const steps = p.plan || [];
+  const unseen = questUnseen;
+  /* whose turn, by the tracker's own judgment (questWaits,
+     120-nav-home.js): a step that does not wait is the reader's, a
+     choice as much as a write or a confirm */
+  const turn = s => unseen(s) ? "waiting on " + (s.waiting_on || "someone else")
+    : !questWaits(s) ? "yours"
+    : s.whose === "seat" ? (s.waiting_on ? s.waiting_on + "'s" : "another seat's")
+    : "waiting on " + (s.waiting_on || "a person");
+  const errBox = el("p", {class: "notyet-refused", role: "alert",
+                          "data-quest-refused": "", "data-surface": "refusal"});
+  const accept = el("button", {class: "primary", "data-surface": "sheet.accept"},
+    "Accept quest");
+  const refused = p => {
+    errBox.textContent = `${(p || {}).title || "Refused"} — ${(p || {}).detail || ""}`;
+    accept.disabled = true;
+  };
+  const dlg = el("dialog", {"data-quest-sheet": "", "data-surface": "sheet"},
+    el("div", {class: "dlghead"},
+      /* the door's label on this row, as its button says it; the line
+         under it is the title the quest would be given */
+      el("h3", {"data-quest-sheet-goal": ""},
+        label(name, (doc.unavailable || {})[name] || {})),
+      el("p", {class: "metaline", "data-quest-title-line": ""},
+        p.goal ? "Quest: " + p.goal
+               : "A quest: the steps to this door, kept in view.")),
+    el("div", {class: "dlgbody"},
+      el("p", {"data-quest-why": ""}, el("b", {}, "Not yet: "),
+        p.shut_reason || btn.title || "This door is shut now."),
+      steps.length
+        ? el("ol", {class: "quest-sheet-steps", "data-quest-steps": ""},
+            ...steps.map((s, i) => el("li", {title: s.self || "",
+                                             "data-surface": "sheet.step:" + (i + 1)},
+              el("b", {}, unseen(s) ? s.note : s.door_label || title(s.door || "")), " ",
+              unseen(s) ? null
+                : s.row_label
+                ? el("span", {"data-quest-row": ""}, s.row_label)
+                : el("span", {class: "mono muted"}, s.self || ""),
+              " · ", el("span", {"data-quest-turn": ""}, turn(s)),
+              ...(s.alternatives || []).map(a =>
+                el("small", {class: "muted", "data-quest-alt": ""},
+                  ` or ${a.door_label || title(a.door || "")}` +
+                  (a.row_label && a.row_label !== s.row_label ? ` on ${a.row_label}` : ""))),
+              (s.needs || []).flat().length
+                ? el("div", {class: "muted", "data-quest-needs": ""},
+                    "asks for: " + (s.needs_labels
+                      || (s.needs || []).flat().map(n => title(prettyNeed(n)))).join(", "))
+                : null,
+              s.note && !unseen(s) ? el("div", {class: "muted"}, s.note) : null)))
+        : seen.ok
+          ? el("p", {"data-quest-blocked": ""},
+              p.blocked_reason || "The engine found no step yet.")
+          : null,
+      steps.length && p.plan_is_estimate
+        ? el("p", {class: "muted", "data-quest-estimate": ""},
+            "An estimate: the engine learns more steps as each one lands.")
+        : null,
+      errBox),
+    el("div", {class: "dlgfoot"},
+      el("button", {"data-surface": "sheet.decline",
+                    onclick: () => dlg.close()}, "Not now"),
+      accept));
+  if (!seen.ok) refused(seen.body);
+  /* a replay says the recorded Accept's refusal by the same door
+     (replayRefuse, 200-events-follow.js) */
+  dlg.questRefuse = refused;
+  accept.addEventListener("click", async () => {
+    if (replay || !create || accept.disabled) return;
+    accept.disabled = true;
+    const h = {};
+    if (create.safety && create.safety.idempotent === false)
+      h["Idempotency-Key"] = uuid();
+    const made = await api(create.href,
+      {method: create.method || "POST", body: JSON.stringify(goal), headers: h});
+    if (!made.ok) { refused(made.body); return; }
+    const quest = made.body || {};
+    const pin = (quest.actions || {}).pin;
+    if (pin && !(quest.data || {}).pinned) {
+      const pinned = await invokeBare(pin, quest);
+      if (!pinned.ok) { refused(pinned.body); return; }
+    }
+    dlg.close();
+    await refreshQuest();
+  });
+  /* a recording keeps the sheet: while it is open the `ui` beat carries
+     the goal, the door's label and what the rehearsal answered (shareUi,
+     200-events-follow.js), and the beat after it closes carries none. A
+     replay's sheet is drawn from that part and reports nothing; so is
+     the sheet of a person followed live (guidedQuestSheet), which has
+     no create door. */
+  const own = !replay && !!create;
+  if (own) shareUi({quest: {goal,
+    label: label(name, (doc.unavailable || {})[name] || {}),
+    seen: {ok: !!seen.ok, body: seen.ok
+      ? {preview: {goal: p.goal, shut_reason: p.shut_reason || btn.title,
+                   blocked_reason: p.blocked_reason,
+                   plan_is_estimate: p.plan_is_estimate,
+                   plan: steps.map(s => ({door: s.door, self: s.self, whose: s.whose,
+                     waiting_on: s.waiting_on, needs: s.needs, note: s.note,
+                     unseen: s.unseen,
+                     door_label: s.door_label, row_label: s.row_label,
+                     needs_labels: s.needs_labels}))}}
+      : {title: (seen.body || {}).title, detail: (seen.body || {}).detail}}}});
+  document.body.append(dlg);
+  dlg.addEventListener("close", () => {
+    dlg.remove();
+    if (own) shareUi({quest: null});
+  });
+  dlg.showModal();
+  return dlg;
+}
+/* each reachable button is described by its reason line (data-whynot,
+   below), and that line says what a tap does. Called again when a line
+   is drawn late: a button already described is left alone. */
+let whyNotSeq = 0;
+function wireNotYet(root) {
+  const lines = [...root.querySelectorAll("[data-whynot]")];
+  for (const btn of root.querySelectorAll(
+         "button[data-quest-door]:not([aria-describedby])")) {
+    const line = lines.find(l =>
+      l.getAttribute("data-whynot").split(" ").includes(btn.dataset.questDoor));
+    if (!line) continue;
+    if (!line.id) line.id = "whynot-" + (++whyNotSeq);
+    if (!line.querySelector(".notyet-hint"))
+      line.append(el("span", {class: "notyet-hint"},
+        " Not yet. Tap to see the quest."));
+    btn.setAttribute("aria-describedby", line.id);
+  }
 }
 
 /* A live countdown from becomes_available.at — the literal moment
@@ -140,28 +449,32 @@ function reentryToken() {
    optional; the invite and guest call sites pass none and behave as before. */
 function secretDialog({heading, note, value, copyOk, copyFallback,
                        instructions, copyValue, copyLabel, copy2}) {
+  /* the value field carries no surface name, and readSurface('secret')
+     leaves it out: a kept beat never holds the secret
+     (docs/spec-agent-demo-walks.md §8a) */
   const field = el("input", {value, readonly: "true",
                              style:"width:100%;font-family:var(--mono)",
                              onclick: e => e.target.select()});
   /* the primary Copy carries copyValue when given (the full handoff),
      else the shown value — so a lone token still copies itself */
   const primaryText = copyValue !== undefined ? copyValue : value;
-  const dlg = el("dialog", {"data-secret": ""},
+  const dlg = el("dialog", {"data-secret": "", "data-surface": "secret"},
     el("div", {class:"dlghead"}, el("h3", {}, heading)),
     el("div", {class:"dlgbody"},
       instructions || null,
       note ? el("div", {class:"muted", style:"margin-bottom:6px"}, note) : null,
       field),
     el("div", {class:"dlgfoot"},
-      el("button", {class:"primary", onclick: () =>
+      el("button", {class:"primary", "data-surface": "secret.copy", onclick: () =>
         navigator.clipboard?.writeText(primaryText).then(
           () => toast(copyOk),
           () => { field.select(); toast(copyFallback); })}, copyLabel || "Copy"),
-      copy2 ? el("button", {onclick: () =>
+      copy2 ? el("button", {"data-surface": "secret.copy-other", onclick: () =>
         navigator.clipboard?.writeText(copy2.value).then(
           () => toast(copy2.ok),
           () => { field.select(); toast(copy2.fallback); })}, copy2.label) : null,
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
+      el("button", {"data-surface": "secret.close",
+                    onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
@@ -554,7 +867,7 @@ function blockedNotes(blocked, doc) {
   if (!blocked.length) return null;
   const box = el("ul", {class:"blockedwhy notnow"});
   for (const [name, entry] of blocked) {
-    const li = el("li", {class:"item"},
+    const li = el("li", {class:"item", "data-whynot": name},
       el("b", {}, label(name, entry)), " — ",
       el("span", {class:"why"}, entry.reason || ""),
       entry.becomes_available
@@ -574,7 +887,7 @@ function notNowFooter(grouped, gated, doc) {
   if (!n) return null;
   const box = el("div", {class:"cantyet"});
   for (const g of grouped)          // one reason, many actions: say it once
-    box.append(el("div", {class:"item"},
+    box.append(el("div", {class:"item", "data-whynot": g.map(([nm]) => nm).join(" ")},
       el("b", {}, g.map(([nm, e]) => label(nm, e)).join(", ")),
       el("div", {class:"why"}, g[0][1].reason || ""),
       remedyChips(g[0][1].remedies, doc)));
@@ -582,11 +895,11 @@ function notNowFooter(grouped, gated, doc) {
   for (const [nm, e] of gated) {
     const k = e.becomes_available.in_states.join(", ");
     if (!byStates.has(k)) byStates.set(k, []);
-    byStates.get(k).push(label(nm, e));
+    byStates.get(k).push([nm, label(nm, e)]);
   }
   for (const [states, names] of byStates)
-    box.append(el("div", {class:"item"},
-      el("b", {}, names.join(", ")),
+    box.append(el("div", {class:"item", "data-whynot": names.map(n => n[0]).join(" ")},
+      el("b", {}, names.map(n => n[1]).join(", ")),
       el("span", {class:"muted"}, ` — available in state(s) ${states}`)));
   return el("details", {class:"unavail"},
     el("summary", {class:"muted"}, `not now (${n})`), box);

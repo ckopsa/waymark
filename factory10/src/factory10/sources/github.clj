@@ -670,6 +670,20 @@
                 (ex-message e) ")")
          nil)))
 
+(defn- settled
+  "A check run that carries a conclusion and the time it ended is
+  finished, whatever its `status` says: GitHub has left a run reading
+  `in_progress` beside `conclusion: success` and a `completed_at`, and
+  a pass that waits on the status word waits on it forever (ticket
+  9112f56e). A job of the Actions read is judged the same way (ticket
+  b5e8bbd8); a workflow run has no `completed_at`, and `latest-runs!`
+  reads its conclusion alone."
+  [check]
+  (if (and (word (:conclusion check)) (word (:completed_at check))
+           (not= "completed" (word (:status check))))
+    (assoc check :status "completed")
+    check))
+
 (defn job->check
   "One Actions job → the check run shape this source reads. A job's
   page names its run and itself, which is what `job-of` looks for in
@@ -695,7 +709,7 @@
     (into []
           (mapcat
            (fn [run]
-             (map #(job->check sha %)
+             (map #(settled (job->check sha %))
                   (:jobs (call! this "GET"
                                 (str "/repos/" repo "/actions/runs/"
                                      (:id run) "/jobs")
@@ -717,7 +731,10 @@
 (defn- latest-runs!
   "The latest workflow run of each workflow on the head, newest first
   as GitHub lists them, with the jobs of a run that finished and did
-  not pass (ticket 22f91244)."
+  not pass (ticket 22f91244). A run that carries a conclusion is
+  finished, whatever its `status` says: GitHub sets a conclusion only
+  when a run has ended, and a workflow run has no `completed_at` to ask
+  for beside it (ticket 62e29b7b)."
   [this repo sha]
   (let [runs (:workflow_runs
               (call! this "GET" (str "/repos/" repo "/actions/runs")
@@ -728,8 +745,8 @@
                              {}
                              runs))]
     (mapv (fn [run]
-            (let [status (word (:status run))
-                  conclusion (word (:conclusion run))]
+            (let [conclusion (word (:conclusion run))
+                  status (if conclusion "completed" (word (:status run)))]
               (cond-> {:run_id (whole (:id run))
                        :status status
                        :conclusion conclusion}
@@ -792,7 +809,7 @@
        (let [resp (call! this "GET"
                          (str "/repos/" repo "/commits/" sha "/check-runs")
                          {:params {:per_page page-size :filter "latest"}})]
-         (vec (:check_runs resp)))
+         (mapv settled (:check_runs resp)))
        (catch clojure.lang.ExceptionInfo e
          (if (refused? e)
            (do (swap! actions-only conj repo)
@@ -1251,7 +1268,8 @@
 
 (defn fake-state
   "A fresh in-memory GitHub. Script it with `seed-pull!`,
-  `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!` and `down!`;
+  `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!`,
+  `fail-path!` and `down!`;
   read it back with `requests` and `labels-pushed`."
   []
   (atom {:repos {} :logs {} :log-mode :text :labels [] :requests []
@@ -1297,6 +1315,14 @@
   read walks (ticket 47217098). Any other pair of commits has diverged."
   [state repo head sha]
   (swap! state update-in [:repos repo :ancestors head] (fnil conj #{}) sha))
+
+(defn fail-path!
+  "Make every request whose path `pattern` finds throw, as a GitHub
+  that does not answer that one route. The request is recorded first,
+  so `requests` still says it was asked. nil lifts every such failure."
+  [state pattern]
+  (swap! state update :failing
+         (fn [ps] (if pattern (conj (vec ps) pattern) []))))
 
 (defn seed-run!
   "One workflow run on one head, for the Actions read the source makes
@@ -1416,6 +1442,8 @@
             ;; the blob host the job log redirects to
             :anonymous (boolean anonymous)})
     (when (:down @state)
+      (throw (ex-info "github unreachable" {})))
+    (when (some #(re-find % (str path)) (:failing @state))
       (throw (ex-info "github unreachable" {})))
     (when-some [status (some->> path (re-matches repo-path) second
                                 (get (:refused @state)))]

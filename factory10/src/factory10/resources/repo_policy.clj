@@ -768,14 +768,26 @@
     [:maybe [:string {:max 500}]]]
    ;; the GitHub source's cursor for this repository (ticket c07b581f):
    ;; stored, so a boot starts where the last pass stopped and does not
-   ;; read every pull request again
+   ;; read every pull request again. It is GitHub's stamp and never the
+   ;; engine's clock (`github/high-water`), so it stands still while no
+   ;; pull request moves: an old cursor is a quiet repository, and the
+   ;; pass's own clock is `forge_pass_at` (tickets 028b292e, e674e558)
    [:forge_cursor {:optional true
                    :examples ["2026-10-01T20:32:00Z"]
                    :x-display
                    {:raw true
                     :label "Pull requests read up to"
-                    :help "The newest change GitHub showed the source in this repository. The next pass asks for what moved after it."}}
+                    :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Forge pass ran at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
     [:maybe [:string {:max 64}]]]
+   ;; the pass's own clock (ticket e674e558): `base_checked_at` stands
+   ;; still on a held pass and on a base that was not read, so the pass
+   ;; stamps this at its end, whatever it read
+   [:forge_pass_at {:optional true
+                    :examples ["2026-10-10T02:46:00Z"]
+                    :x-display
+                    {:label "Forge pass ran at"
+                     :help "When the forge pass last ran over this repository, by the engine's clock. Every pass writes this at its end, also a pass whose calls were held by GitHub's rate limit and a pass GitHub did not answer, so a time that stands still here means the pass stopped. What the GitHub source could not read and Base read at say what the pass read."}}
+    [:maybe :waymark/instant]]
    ;; the base branch's own state (ticket ade81ae9), so a person reads
    ;; whether main is red without opening GitHub
    [:base_state {:optional true
@@ -808,7 +820,7 @@
                       :examples ["2026-09-27T19:30:00Z"]
                       :x-display
                       {:label "Base read at"
-                       :help "When the pass last wrote the base's state, which it does when that state moves."}}
+                       :help "When the pass last read the base branch's head, by the engine's clock. Every pass that reads it writes this, whether or not the state moved, so a time that stands still here means the pass stopped or could not read the base."}}
     [:maybe :waymark/instant]]
    ;; one deploy at a time (ticket 47217098): the merge pass writes the
    ;; house's merges here, and the forge pass takes each off once the
@@ -872,9 +884,10 @@
                          {:label "The front waits on"
                           :choices {"update" "It was just brought up to date, and its checks run on the new head"
                                     "checks" "Its checks are still running"
+                                    "github" "Its checks are green, and GitHub has not judged it mergeable yet"
                                     "merge" "It was offered the merge, and GitHub has not merged it yet"
                                     "train" "It rides a train, and the train's checks run"}}}
-    [:maybe [:enum "update" "checks" "merge" "train"]]]
+    [:maybe [:enum "update" "checks" "github" "merge" "train"]]]
    [:line_waiting {:optional true
                    :examples [2]
                    :x-display

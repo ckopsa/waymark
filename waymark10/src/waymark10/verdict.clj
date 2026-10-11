@@ -49,7 +49,7 @@
   pcore PR 554). `reopen` is that answer. It moves the standing
   verdict to `overruled` and writes NOTHING in its place, so the
   subject has no standing verdict under the judgment and is back in
-  its queue — by the walk's one existing rule (`judgments/judged-subjects`
+  its queue — by the walk's one existing rule (`judgments/walk-conds`
   subtracts `said` rows and nothing else), not by a second mechanism.
   The row stays; the note rides the transition and the row, so the
   record says who reopened it and why.

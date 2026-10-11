@@ -479,6 +479,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -517,10 +518,13 @@ jobs:
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       # Also after a retry that passed: the first attempt's hs_err is
       # still on disk, and a green job is no reason to lose it.
+      # Only after a checkout that succeeded: this is a local action, and
+      # a job that died before checkout has no action.yml to run.
       - name: JVM crash report
         if: >-
-          failure() || steps.check-queue.outputs.retried == 'true' ||
-          steps.calendar10.outputs.retried == 'true' || steps.localfire.outputs.retried == 'true'
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.check-queue.outputs.retried == 'true' ||
+           steps.calendar10.outputs.retried == 'true' || steps.localfire.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: quick
@@ -545,6 +549,7 @@ jobs:
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+        id: checkout
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -563,10 +568,12 @@ jobs:
           bash scripts/jvm-retry.sh "test-factory factory10" factory10 "$RUNNER_TEMP/factory10.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       # Also after a retry that passed, as in `quick`.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
         if: >-
-          failure() || steps.check-factory.outputs.retried == 'true' ||
-          steps.factory10.outputs.retried == 'true'
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.check-factory.outputs.retried == 'true' ||
+           steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-factory
@@ -717,25 +724,124 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.discover.outputs.waymark10) }}
     name: test10 (shard ${{ matrix.shard.id }})
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ckopsa
-          POSTGRES_DB: waymark10_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        # No fixed host port: on a self-hosted runner the host is shared
-        # with every other shard and with the household's own services
-        # (5433 there is immich's postgres). Docker picks a free one and
-        # the job reads it back from job.services.postgres.ports.
-        ports: ['5432']
-        options: >-
-          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
+        id: checkout
+      # "Remove postgres" is this job's last step, and a runner that
+      # dies mid-job (its allocation stops, the host restarts) never
+      # reaches it: the container and its data volume stay on the
+      # shared host. So each job first removes the labelled containers
+      # no living job can own. A job without `timeout-minutes` is
+      # stopped at 360 minutes, so one older than 6 hours is an orphan;
+      # a younger one may be another shard's and is left alone.
+      # Housekeeping: it never fails the job.
+      #
+      # The same script stands in test-queue: change both together.
+      - name: Reap postgres left by a dead runner
+        env:
+          REAP_AFTER_SECONDS: '21600'
+        run: |
+          now="$(date +%s)"
+          for cid in $(docker ps -aq --filter label=waymark-ci=postgres || true); do
+            created="$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null)" || continue
+            born="$(date -d "$created" +%s 2>/dev/null)" || continue
+            age=$(( now - born ))
+            if [ "$age" -gt "$REAP_AFTER_SECONDS" ]; then
+              echo "::warning::removing postgres container ${cid}, left ${age}s ago by a job that never ended"
+              docker rm -f -v "$cid" || true
+            fi
+          done
+      # Postgres, started in a step and not as a `services:` container.
+      # The runner pulls a service image itself, with three quick
+      # retries the workflow cannot lengthen and one registry it cannot
+      # fall back from, so one `toomanyrequests` failed the job in
+      # "Initialize containers" before any test ran (run 38120427626,
+      # test-queue shard 3) and reddened the gate with no fault in the
+      # change. Here the pull is ours: every registry in turn, then a
+      # longer wait, and last of all a copy the host already holds.
+      #
+      # The image is Docker Hub's library one, first from the ECR Public
+      # mirror: an anonymous pull from Docker Hub is rate limited by
+      # runner IP. ECR Public throttles too, so Google's mirror and
+      # Docker Hub itself follow.
+      #
+      # No fixed host port (-p 5432): on a self-hosted runner the host
+      # is shared with every other shard and with the household's own
+      # services (5433 there is immich's postgres). Docker picks a free
+      # one and the step answers it as its `port` output.
+      #
+      # The same script stands in test-queue, ui-access and ui-guided:
+      # change all four together.
+      - name: Start postgres
+        id: postgres
+        env:
+          POSTGRES_DB: waymark10_test
+          PUBLISH: '5432'
+        run: |
+          set -euo pipefail
+          images=(
+            public.ecr.aws/docker/library/postgres:16
+            mirror.gcr.io/library/postgres:16
+            docker.io/library/postgres:16
+          )
+          image=""
+          for wait in 0 5 15 30 60; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave the image; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "${images[@]}"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          # A stale postgres:16 from an earlier job runs the suite as well.
+          if [ -z "$image" ]; then
+            for candidate in "${images[@]}"; do
+              if docker image inspect "$candidate" >/dev/null 2>&1; then
+                image="$candidate"
+                echo "::warning::no registry gave the image; using the host's copy of ${image}"
+                break
+              fi
+            done
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave postgres:16 and the host holds no copy"
+            exit 1
+          fi
+          cid="$(docker run -d --label waymark-ci=postgres \
+            -e POSTGRES_USER=ckopsa -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p "$PUBLISH" "$image")"
+          # Before the wait, so a container that never gets ready is
+          # still removed by "Remove postgres".
+          echo "POSTGRES_CONTAINER=${cid}" >> "$GITHUB_ENV"
+          # -h 127.0.0.1: the image's first start runs a server on the
+          # unix socket only, to make the database, and restarts it.
+          # Over TCP only the real server answers.
+          for i in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -q -h 127.0.0.1 -U ckopsa -d "$POSTGRES_DB"; then
+              echo "postgres ready after ${i} attempt(s), from ${image}"
+              break
+            fi
+            if [ "$i" = "120" ]; then
+              docker logs "$cid" || true
+              echo "::error::postgres never became ready"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          # One line per address family (0.0.0.0:32790, [::]:32790):
+          # the first line, after its last colon.
+          port="$(docker port "$cid" 5432/tcp | head -n 1)"
+          port="${port##*:}"
+          if [ -z "$port" ]; then
+            echo "::error::docker published no host port for postgres"
+            exit 1
+          fi
+          echo "port=${port}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -769,7 +875,7 @@ jobs:
       # localhost is NOT on that box.
       - name: Locate the postgres service
         env:
-          SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          SERVICE_PORT: ${{ steps.postgres.outputs.port }}
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
           case "$host" in
@@ -859,8 +965,11 @@ jobs:
       # the banner in the log above is eight lines of it. Keep the rest.
       # Also after a retry that passed: the first attempt's hs_err is
       # still on disk, and a green job is no reason to lose it.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
-        if: failure() || steps.run-shard.outputs.retried == 'true'
+        if: >-
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.run-shard.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test10-${{ matrix.shard.id }}
@@ -885,6 +994,13 @@ jobs:
           path: shard-output.txt
           retention-days: 3
 
+      # The runner removes a service container when the job ends, and
+      # it does not know this one; a self-hosted host would keep it.
+      # -v: its data volume with it.
+      - name: Remove postgres
+        if: always() && env.POSTGRES_CONTAINER != ''
+        run: docker rm -f -v "$POSTGRES_CONTAINER"
+
   test-queue:
     needs: [changes, discover]
     if: >-
@@ -896,25 +1012,98 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.discover.outputs.workqueue10) }}
     name: test-queue (shard ${{ matrix.shard.id }})
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ckopsa
-          POSTGRES_DB: waymark10_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        # No fixed host port: on a self-hosted runner the host is shared
-        # with every other shard and with the household's own services
-        # (5433 there is immich's postgres). Docker picks a free one and
-        # the job reads it back from job.services.postgres.ports.
-        ports: ['5432']
-        options: >-
-          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
+        id: checkout
+      # test10's reap step, word for word: a labelled container older
+      # than the longest job was left by a runner that died.
+      - name: Reap postgres left by a dead runner
+        env:
+          REAP_AFTER_SECONDS: '21600'
+        run: |
+          now="$(date +%s)"
+          for cid in $(docker ps -aq --filter label=waymark-ci=postgres || true); do
+            created="$(docker inspect -f '{{.Created}}' "$cid" 2>/dev/null)" || continue
+            born="$(date -d "$created" +%s 2>/dev/null)" || continue
+            age=$(( now - born ))
+            if [ "$age" -gt "$REAP_AFTER_SECONDS" ]; then
+              echo "::warning::removing postgres container ${cid}, left ${age}s ago by a job that never ended"
+              docker rm -f -v "$cid" || true
+            fi
+          done
+      # test10's "Start postgres", word for word: a step and not a
+      # `services:` container, so a throttled pull is retried and falls
+      # back. No fixed host port, for the same shared host.
+      - name: Start postgres
+        id: postgres
+        env:
+          POSTGRES_DB: waymark10_test
+          PUBLISH: '5432'
+        run: |
+          set -euo pipefail
+          images=(
+            public.ecr.aws/docker/library/postgres:16
+            mirror.gcr.io/library/postgres:16
+            docker.io/library/postgres:16
+          )
+          image=""
+          for wait in 0 5 15 30 60; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave the image; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "${images[@]}"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          # A stale postgres:16 from an earlier job runs the suite as well.
+          if [ -z "$image" ]; then
+            for candidate in "${images[@]}"; do
+              if docker image inspect "$candidate" >/dev/null 2>&1; then
+                image="$candidate"
+                echo "::warning::no registry gave the image; using the host's copy of ${image}"
+                break
+              fi
+            done
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave postgres:16 and the host holds no copy"
+            exit 1
+          fi
+          cid="$(docker run -d --label waymark-ci=postgres \
+            -e POSTGRES_USER=ckopsa -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p "$PUBLISH" "$image")"
+          # Before the wait, so a container that never gets ready is
+          # still removed by "Remove postgres".
+          echo "POSTGRES_CONTAINER=${cid}" >> "$GITHUB_ENV"
+          # -h 127.0.0.1: the image's first start runs a server on the
+          # unix socket only, to make the database, and restarts it.
+          # Over TCP only the real server answers.
+          for i in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -q -h 127.0.0.1 -U ckopsa -d "$POSTGRES_DB"; then
+              echo "postgres ready after ${i} attempt(s), from ${image}"
+              break
+            fi
+            if [ "$i" = "120" ]; then
+              docker logs "$cid" || true
+              echo "::error::postgres never became ready"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          # One line per address family (0.0.0.0:32790, [::]:32790):
+          # the first line, after its last colon.
+          port="$(docker port "$cid" 5432/tcp | head -n 1)"
+          port="${port##*:}"
+          if [ -z "$port" ]; then
+            echo "::error::docker published no host port for postgres"
+            exit 1
+          fi
+          echo "port=${port}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -948,7 +1137,7 @@ jobs:
       # localhost is NOT on that box.
       - name: Locate the postgres service
         env:
-          SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          SERVICE_PORT: ${{ steps.postgres.outputs.port }}
         run: |
           host="${CI_SERVICE_HOST:-localhost}"
           case "$host" in
@@ -1029,8 +1218,11 @@ jobs:
           bash scripts/jvm-retry.sh "test-queue shard ${{ matrix.shard.id }}" workqueue10 shard-output.txt \
             clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}"
       # Also after a retry that passed, as in test10.
+      # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
-        if: failure() || steps.run-shard.outputs.retried == 'true'
+        if: >-
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.run-shard.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-queue-${{ matrix.shard.id }}
@@ -1054,6 +1246,11 @@ jobs:
           name: timings-test-queue-${{ matrix.shard.id }}
           path: shard-output.txt
           retention-days: 3
+
+      # As in test10: the runner does not remove this container.
+      - name: Remove postgres
+        if: always() && env.POSTGRES_CONTAINER != ''
+        run: docker rm -f -v "$POSTGRES_CONTAINER"
 
   # ── THE WORKFLOWS THEMSELVES ────────────────────────────────────────
   #
@@ -1125,21 +1322,82 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ckopsa
-          POSTGRES_DB: waymark10_ui_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U ckopsa -d waymark10_ui_test"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
+      # test10's "Start postgres", word for word: a step and not a
+      # `services:` container, so a throttled pull is retried and falls
+      # back. The host port is fixed here, on a VM of the job's own, and
+      # the VM goes with the job, so no step removes the container.
+      - name: Start postgres
+        id: postgres
+        env:
+          POSTGRES_DB: waymark10_ui_test
+          PUBLISH: '5432:5432'
+        run: |
+          set -euo pipefail
+          images=(
+            public.ecr.aws/docker/library/postgres:16
+            mirror.gcr.io/library/postgres:16
+            docker.io/library/postgres:16
+          )
+          image=""
+          for wait in 0 5 15 30 60; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave the image; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "${images[@]}"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          # A stale postgres:16 from an earlier job runs the suite as well.
+          if [ -z "$image" ]; then
+            for candidate in "${images[@]}"; do
+              if docker image inspect "$candidate" >/dev/null 2>&1; then
+                image="$candidate"
+                echo "::warning::no registry gave the image; using the host's copy of ${image}"
+                break
+              fi
+            done
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave postgres:16 and the host holds no copy"
+            exit 1
+          fi
+          cid="$(docker run -d --label waymark-ci=postgres \
+            -e POSTGRES_USER=ckopsa -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p "$PUBLISH" "$image")"
+          # Before the wait, so a container that never gets ready is
+          # still removed by "Remove postgres".
+          echo "POSTGRES_CONTAINER=${cid}" >> "$GITHUB_ENV"
+          # -h 127.0.0.1: the image's first start runs a server on the
+          # unix socket only, to make the database, and restarts it.
+          # Over TCP only the real server answers.
+          for i in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -q -h 127.0.0.1 -U ckopsa -d "$POSTGRES_DB"; then
+              echo "postgres ready after ${i} attempt(s), from ${image}"
+              break
+            fi
+            if [ "$i" = "120" ]; then
+              docker logs "$cid" || true
+              echo "::error::postgres never became ready"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          # One line per address family (0.0.0.0:32790, [::]:32790):
+          # the first line, after its last colon.
+          port="$(docker port "$cid" 5432/tcp | head -n 1)"
+          port="${port##*:}"
+          if [ -z "$port" ]; then
+            echo "::error::docker published no host port for postgres"
+            exit 1
+          fi
+          echo "port=${port}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
@@ -1216,7 +1474,14 @@ jobs:
         env:
           SHOTS: ${{ runner.temp }}/ui-access-shots
         run: node waymark10/scripts/ui-drive.mjs access
-      # the drive's screenshots ("Accept as quest": the offer, the tracker)
+      # the quest flow again at 390x844 with touch, live and as a film,
+      # against the same engine
+      - name: Drive the quest flow on a phone
+        env:
+          SHOTS: ${{ runner.temp }}/ui-access-shots
+        run: node waymark10/scripts/ui-drive.mjs quest-phone
+      # the drives' screenshots ("Accept as quest": the offer, the tracker;
+      # phone-quest-*: the same on a phone)
       - name: Upload the drive's screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -1241,21 +1506,80 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ckopsa
-          POSTGRES_DB: waymark10_ui_test
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U ckopsa -d waymark10_ui_test"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
+      # test10's "Start postgres", word for word, with ui-access's fixed
+      # host port and, as there, no step to remove the container.
+      - name: Start postgres
+        id: postgres
+        env:
+          POSTGRES_DB: waymark10_ui_test
+          PUBLISH: '5432:5432'
+        run: |
+          set -euo pipefail
+          images=(
+            public.ecr.aws/docker/library/postgres:16
+            mirror.gcr.io/library/postgres:16
+            docker.io/library/postgres:16
+          )
+          image=""
+          for wait in 0 5 15 30 60; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave the image; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "${images[@]}"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          # A stale postgres:16 from an earlier job runs the suite as well.
+          if [ -z "$image" ]; then
+            for candidate in "${images[@]}"; do
+              if docker image inspect "$candidate" >/dev/null 2>&1; then
+                image="$candidate"
+                echo "::warning::no registry gave the image; using the host's copy of ${image}"
+                break
+              fi
+            done
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave postgres:16 and the host holds no copy"
+            exit 1
+          fi
+          cid="$(docker run -d --label waymark-ci=postgres \
+            -e POSTGRES_USER=ckopsa -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p "$PUBLISH" "$image")"
+          # Before the wait, so a container that never gets ready is
+          # still removed by "Remove postgres".
+          echo "POSTGRES_CONTAINER=${cid}" >> "$GITHUB_ENV"
+          # -h 127.0.0.1: the image's first start runs a server on the
+          # unix socket only, to make the database, and restarts it.
+          # Over TCP only the real server answers.
+          for i in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -q -h 127.0.0.1 -U ckopsa -d "$POSTGRES_DB"; then
+              echo "postgres ready after ${i} attempt(s), from ${image}"
+              break
+            fi
+            if [ "$i" = "120" ]; then
+              docker logs "$cid" || true
+              echo "::error::postgres never became ready"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          # One line per address family (0.0.0.0:32790, [::]:32790):
+          # the first line, after its last colon.
+          port="$(docker port "$cid" 5432/tcp | head -n 1)"
+          port="${port##*:}"
+          if [ -z "$port" ]; then
+            echo "::error::docker published no host port for postgres"
+            exit 1
+          fi
+          echo "port=${port}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}

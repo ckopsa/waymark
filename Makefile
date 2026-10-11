@@ -17,13 +17,16 @@ NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_S
 
 .PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 test-queue dev-queue migrate-queue check-queue check-factory test-factory check-localfire serve-localfire image-queue deploy-queue
 
+# The image is the one .github/workflows/tests.yml names: Docker Hub's
+# library image, from the ECR Public mirror, because an anonymous pull
+# from Docker Hub is rate limited.
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
 		docker run -d --name $(PG_CONTAINER) \
 			-e POSTGRES_USER=$(PG_USER) \
 			-e POSTGRES_DB=waymark_test \
 			-e POSTGRES_HOST_AUTH_METHOD=trust \
-			-p $(PG_PORT):5432 postgres:16 >/dev/null
+			-p $(PG_PORT):5432 public.ecr.aws/docker/library/postgres:16 >/dev/null
 	@until docker exec $(PG_CONTAINER) pg_isready -U $(PG_USER) -q; do sleep 0.5; done
 
 # The eight test databases live in scripts/test-databases.sh, shared

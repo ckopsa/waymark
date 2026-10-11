@@ -255,6 +255,22 @@
               (println "factory10 change merge: the duplicate" (:id dup)
                        "was not closed -" (ex-message e)))))))))
 
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
+
+(defn- without-the-wait
+  "The row without what the forge pass said of its held head. That pass
+  clears these only on a change it still reads, at submitted or failing,
+  so a door that ends the change drops them itself (ticket 1a72eea8)."
+  [row]
+  (reduce (fn [row k]
+            (cond-> row
+              (some? (get-in row [:data k])) (assoc-in [:data k] nil)))
+          row held-fields))
+
+(defhandler drop-what-the-wait-said [row _inp _ctx]
+  (without-the-wait row))
+
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
   ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
   ;; waymark-fp62.6.3.14, spec-seat.md R-12.32). The seat is told to
@@ -288,7 +304,7 @@
             (println "factory10 change merge: the" (name (:kind entry)) id
                      "did not complete -" (ex-message e)))))))
   (close-the-duplicates! row ctx)
-  row)
+  (without-the-wait row))
 
 ;; ── the ticket follows its change's review (ticket 2e869934) ─────────
 
@@ -323,7 +339,8 @@
   ;; so a reader of a closed duplicate sees which change did the work
   ;; (ticket 3ec37f66). Its ticket already ended with that merge, so
   ;; nothing is sent back.
-  (assoc-in row [:data :superseded_by] (str (:superseded_by inp))))
+  (assoc-in (without-the-wait row)
+            [:data :superseded_by] (str (:superseded_by inp))))
 
 (defhandler fold-into-the-house-row [row inp _ctx]
   ;; A row the forge minted beside a house row on the same branch
@@ -340,7 +357,7 @@
   ;; the queue again, where the seat that wrote the change wakes on its
   ;; `return`, and a person can ungroom it.
   (move-the-ticket! row ctx #{:in_review} :return)
-  row)
+  (without-the-wait row))
 
 (defhandler shelve-the-ticket [row inp ctx]
   ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
@@ -1262,6 +1279,29 @@
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; a submitted head that waits (ticket b256d053): the forge pass
+    ;; stamps the head and the time it first saw it held, counts the wait
+    ;; from that time, writes why when the wait is long, and clears all
+    ;; three when the head is no longer held; a door that merges or
+    ;; closes the change drops them too (ticket 1a72eea8)
+    [:held_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:held_since {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    ;; the held head's compare (ticket 93072465): when the pass asks it
+    ;; again, and how many compares in a row threw, so a restart keeps
+    ;; the backoff; cleared with the three around them
+    [:held_again {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    [:held_threw {:optional true :x-display {:hidden true}}
+     [:maybe [:int {:min 0}]]]
+    [:held_reason {:optional true
+                   :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
+                   :x-display
+                   {:widget "prose"
+                    :label "Why its head waits"
+                    :help "Why this submitted head has not merged after a long wait: the required checks that have no verdict yet, or that it is only behind its base. Empty while the wait is short, and when the head is not held."}}
+     [:maybe [:string {:max 500}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
               :x-display
@@ -1432,6 +1472,7 @@
    ;; because a first read does not always carry the counts.
    :create-guards [the-mirror-writes-this-row]
    :on-create take-the-tickets-domain
+   :no-own-surface "stalled_by is written by the stall door, not at birth; a change is the repository's record, shown by a grant that names it."
    :create-schema
    [:map
     ;; github:owner/repo#number from the source, and <kind>:<row id>
@@ -1461,6 +1502,14 @@
      [:maybe [:string {:max 500}]]]
     ;; the seat's own mint writes it and the forge never does
     ;; (waymark-fp62.6.3.14)
+    ;;
+    ;; A SECOND LIVE ROW WITH THE SAME `born_from` IS NOT REFUSED HERE
+    ;; (ticket 5aa79167), and no caller needs one: the sit's mint
+    ;; (waymark10.server.mcp/minted-change) is the only writer and looks
+    ;; for a live row first, the forge's mint, `adopt` and `fold` never
+    ;; write the field, and factory10.bench-test builds its duplicates by
+    ;; hand; one that is born anyway, when that lookup misses, is closed
+    ;; by the merge (`close-the-duplicates!`) and by the ticket's ending.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
    :actions
@@ -1613,6 +1662,7 @@
      :edit {:draft {:shared true :live true}}
      :guards [no-pull-request-to-close
               only-a-person-closes-a-change]
+     :handler drop-what-the-wait-said
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open."}
      :display {:label "Close" :style :danger :order 30

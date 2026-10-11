@@ -561,7 +561,7 @@ function itemTable(items, opts) {
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
-    const row = el("tr", {"data-self": item.self},
+    const row = el("tr", {"data-self": item.self, "data-surface": "row"},
       opts.selectable ? el("td", {class:"c-check"},
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
@@ -615,7 +615,7 @@ function itemTable(items, opts) {
         if (l && (l.download || l.external))
           cell.append(el("a", {class:"chip link-chip", href: l.href,
             target:"_blank", rel:"noopener", title: l.summary || rel,
-            onclick: e => e.stopPropagation()},
+            onclick: e => { e.stopPropagation(); exportChipClick(e, item, rel, l); }},
             (l.download ? "⭳ " : "↗ ") + title(rel)));
       row.append(cell);
     }
@@ -679,12 +679,14 @@ function renderCollection(view, doc, hints) {
     panel.append(...facetChips(query, doc.self, hints));
   }
 
-  /* bulk affordances: a checkbox column plus one button per bulk action */
-  const bulkActions = Object.entries(doc.actions || {})
-    .filter(([, e]) => e.effect && e.effect.bulk);
+  /* bulk affordances: a checkbox column plus one button per bulk action.
+     A safe collection door is neither a bulk move nor a create, and
+     the bar draws no button for it: see collectionDoors */
+  const doors = collectionDoors(doc.actions);
+  const bulkActions = doors.bulk;
   const selected = new Set();
   const bar = el("div", {class:"actions"});
-  const create = doc.actions?.create;
+  const create = doors.create;
   if (create) {
     const prefill = filterPrefill(doc.self, create);
     if (kind === "attachment")
@@ -730,6 +732,23 @@ function renderCollection(view, doc, hints) {
   view.append(panel);
   watchScope({kind});
 }
+
+/* the collection document's actions, sorted by what the bar may do
+   with them. A bulk move carries effect.bulk. A SAFE door (the kind's
+   :collection-doors) carries safety.safe and no effect: it moves no
+   row and answers a verdict, not an envelope, so it is no bulk move
+   and no create, whatever its name, and this client offers no button
+   for it. Its callers are the connector and the CLI. */
+function collectionDoors(actions) {
+  const out = {create: null, bulk: [], safe: []};
+  for (const [name, entry] of Object.entries(actions || {})) {
+    if (entry.safety?.safe) out.safe.push([name, entry]);
+    else if (name === "create") out.create = entry;
+    else if (entry.effect && entry.effect.bulk) out.bulk.push([name, entry]);
+  }
+  return out;
+}
+/* end collectionDoors */
 
 /* ── the deploy history: the definitions collection, rendered as what
    it is — the record of what the law has been, when. Violet is spent

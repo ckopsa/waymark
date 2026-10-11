@@ -493,6 +493,27 @@ every invoke, so a self-judging asker meets the wall's honest 409 rather
 than a mute 404. Neither key is law: `fingerprint-of` names neither, so
 declaring either mints no revision.
 
+The rule every `:own-surface` follows: **what a principal owns rides beside
+any worn grant; anything that lands in another person's view must be named
+by the grant.** So `:actions` carries the doors an owner moves their own row
+with, and it carries `create` only when the new row is the creator's alone
+(a `:quest`). A create that hands a row to somebody else
+(`:invitation`, `:walkthrough`) or to the whole house (a household `:value`)
+stays off: under a grant that does not name it the door answers not found,
+and the ask door (`POST /api/approval_requests`) is how the wearer gets it.
+A kind where only SOME rows are one principal's says so with a `:by` field
+the engine stamps on those rows alone: `:value` stamps `owner` when the
+scope is `mine`, so a household value matches no owner and stays judged by
+the grant.
+
+`:no-own-surface` is the other answer, one sentence. A kind whose row
+carries a `:x-ref {:principal true}` field that its `:create-schema` omits
+has a principal the engine writes, and `check-owned-surface` warns when
+such a kind declares no `:own-surface`: a worn grant that does not name the
+kind would hide the row from that principal in silence. The sentence says
+why a grant-wearer should not reach it, or that a later door writes the
+field, and it does nothing but silence the warning.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:
@@ -595,6 +616,69 @@ by the generic client as an ordinary removable chip whose ✕ sends the param
 EMPTY rather than dropping it. Embedded collections (`embed.<rel>.*`) take
 no default filters — their href is the parent's, and their advertised
 columns drop the `default` the parent will not apply.
+
+## 13 · `:collection-doors` — a safe door on a collection
+
+```clojure
+:collection-doors
+{:judge {:summary "Score a take against the active rules. It reads the rules and writes nothing."
+         :input [:map [:take [:map …]]]
+         :handler (fn [engine body ctx] …)}}
+```
+
+A `{name {:input <malli> :summary "…" :handler <fn>}}` map: each entry is
+`POST /api/{plural}/-/{name}`, a route that moves no row and writes
+nothing. It is not an action: it has no `:from`, no `:to`, no guards and
+no log entry, and whoever may read the kind may call it — a scoped grant
+keeps it as it keeps `query`. The key is the advertisement AND the
+mount: the router serves every declared door at
+`/api/{plural}/-/{name}` — kind check, body read,
+`collections/door-errors`, then the entry's `:handler`, a
+`(fn [engine body ctx])` whose answer is the JSON body and whose `ctx`
+carries the caller's `:visibility` and `:principal`. The declaration
+checker refuses an entry with no `:handler`. It is never in the
+fingerprint (`:computed`'s precedent). The one kind that declares it today is
+`film_rule` (`judge`, [spec](spec-agent-demo-walks.md) § 8d).
+
+The collection document names each door under `actions`, beside `create`,
+`query` and the bulk entries, with `method`, `href`, `input`, `summary`
+and `safety {safe: true, idempotent: true, reversible: true, confirm:
+false}` — and NO `effect`. `safety.safe` is the mark a reader keys on:
+
+- the OpenAPI document lists the route;
+- the connector's `waymark_invoke` with the kind, the door's name, the
+  input and no id answers what the route answers;
+- the CLI prints the entry flagged `[safe]`, with no `→ state`, and
+  `act <collection> <name> --input …` posts it and prints the answer;
+- the generic UI offers NO button for it. Its answer is a verdict, not
+  an envelope, so there is no row to land on; `collectionDoors`
+  (`ui/130-collection.js`) sorts a `safety.safe` entry away from the
+  bulk moves and the create before the bar is drawn, whatever its name.
+
+What a safe collection door does with each kind of call:
+
+- its body is held to the declared `:input`, closed, by one framework
+  function (`collections/door-errors`): a field the input does not name
+  and a field of the wrong type are refused 422, naming the field. A
+  `:double` is read as any number, as the advertised JSON Schema's
+  `number` says, so a JSON `1080` passes;
+- a scoped caller: the KIND is checked, the grant's actions are not. A
+  grant that admits the kind may call the door whatever actions it
+  lists; a grant that does not admit the kind gets the collection's own
+  not-found;
+- `at`: refused, "Not a call to schedule". The door answers now and
+  writes nothing, so there is nothing to make later;
+- `dry_run`: changes nothing. The call writes nothing, so it is its own
+  rehearsal and answers what the plain call answers.
+
+The key is for a POST on a COLLECTION. A safe GET on a ROW — a walk's
+`GET /api/walks/{id}/export` — does not belong under it or under a
+sibling key: a GET a reader may follow is a link, and it is advertised
+under the row's `links`, as the collection's `worksheet` download is.
+The walk declares it as `{:rel "export" :href "/api/walks/{id}/export"
+:states #{:sealed} :download true}`: a link's `:states` keeps it off a
+row in any other state, and the OpenAPI document lists a template link
+under the row's own address as a GET.
 
 ## 14 · `:process` — the workflow as a resource
 

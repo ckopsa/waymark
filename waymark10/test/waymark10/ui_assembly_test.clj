@@ -539,3 +539,97 @@
     (testing "the click shows the tracker, in place of the toast"
       (is (re-find #"closeDlg\(\);\s+await refreshQuest\(\);" page))
       (is (not (str/includes? page "Quest accepted and pinned"))))))
+
+(deftest a-shut-door-with-remedies-is-a-tap-from-a-quest
+  ;; 525f4038 (docs/spec-quests.md). The page is not executed here, so
+  ;; this pins the seams: a refused action with remedies is drawn as a
+  ;; reachable button and one without stays disabled, the tap creates
+  ;; and pins a quest with no input, the reason line describes the
+  ;; button, and a replay presses it for the quest's create
+  (let [page (sut/assemble)]
+    (testing "only a door on one row that names a remedy is reachable"
+      (is (str/includes? page "return !!(entry.remedies || []).length && !!doc.self &&"))
+      (is (str/includes? page "if (!questReach(entry, doc))")))
+    (testing "it is aria-disabled, not disabled, and flagged"
+      (is (str/includes? page "\"aria-disabled\": \"true\", \"data-quest-door\": name,"))
+      (is (str/includes? page "\" ⚑\"")))
+    (testing "every bar draws its shut doors through it"
+      (is (= 3 (count (re-seq #"bar\.append\(shutDoor\(name, entry, " page)))))
+    (testing "the tap makes the quest from the row and the door, with no input, and pins it"
+      (is (str/includes? page "btn.addEventListener(\"click\", () => questFromDoor(btn, name, doc));"))
+      (is (str/includes? page "if (!pinned.ok) { refused(pinned.body); return; }"))
+      (is (str/includes? page "if (replay || btn.hasAttribute(\"data-quest-busy\")) return;")
+          "and a replay writes nothing"))
+    (testing "the reason line describes the button and says what a tap does"
+      (is (str/includes? page "btn.setAttribute(\"aria-describedby\", line.id);"))
+      (is (str/includes? page "\" Not yet. Tap to see the quest.\"")))
+    (testing "it is dashed, and 44px tall under a thumb"
+      (is (str/includes? page "border: 1px dashed var(--verdigris);"))
+      (is (str/includes? page "#questbar button, .questoffer button, button.notyet {")))
+    (testing "a replay presses it for the quest's create, and walks to no quest row"
+      (is (str/includes? page "return replayNotice(replay, f) ? null : replayQuestDoor(replay, f);"))
+      (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))
+
+(deftest a-row-folds-the-doors-that-are-not-everyday-ones
+  ;; f66dd175. The page is not executed here, so this pins the seams: the
+  ;; marks are read from the kind's well-known entry, a kind with none
+  ;; keeps its bar, a lit door is never folded, and an everyday door or
+  ;; the pinned quest's door stays in the bar while it is shut
+  (let [page (sut/assemble)]
+    (testing "the marks are the kind's, and a kind with none is unchanged"
+      (is (str/includes? page "return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];"))
+      (is (str/includes? page "if (!every.length) return null;"))
+      (is (str/includes? page "else if (notes) panel.append(notes);")))
+    (testing "only a shut door folds, and not an everyday one or the quest's"
+      (is (str/includes? page "[...bar.querySelectorAll(\"button.blocked[data-surface]\")]"))
+      (is (str/includes? page "return !every.includes(name) && !pinned.has(name);"))
+      (is (str/includes? page "if (d.self === self && d.action) out.add(d.action);"))
+      (is (str/includes? page "if (head && head.self === self && head.door) out.add(head.door);")))
+    (testing "the rest and the reasons are under one closed line, with their names"
+      (is (str/includes? page "`More doors (${rest.length})`),"))
+      (is (str/includes? page "el(\"div\", {class: \"actions\"}, rest), notes);"))
+      (is (str/includes? page "el(\"summary\", {class: \"muted\", \"data-surface\": \"doors-more\"},"))
+      (is (not (str/includes? page "el(\"details\", {class: \"moredoors\", open"))))
+    (testing "the row page draws the bar, and then folds it"
+      (is (str/includes? page "const more = foldDoors(bar, notes, doc);")))))
+
+(deftest a-replay-and-a-late-quest-reach-a-folded-door
+  ;; 44b59909. The page is not executed here, so this pins the seams: a
+  ;; replay opens the line before it points at a folded door, and the
+  ;; tracker's draw moves the quest's door from the fold into the bar
+  (let [page (sut/assemble)]
+    (testing "a replay opens 'More doors' for a door that is not drawn"
+      (is (str/includes? page "const more = node && node.closest(\"details.moredoors:not([open])\");"))
+      (is (str/includes? page "if (more) more.open = true;"))
+      (is (str/includes? page "all.map(unfoldDoor).find(seen) || null;")))
+    (testing "the tracker's draw lifts the quest's door, live and in a replay"
+      (is (str/includes? page "return questDoors(b.getAttribute(\"data-row\") || \"\").has(name);"))
+      (is (str/includes? page "bar.append(...lifted);"))
+      (is (str/includes? page "if (left) more.querySelector(\"summary\").textContent = `More doors (${left})`;"))
+      (is (= 2 (count (re-seq #"\n  +liftQuestDoors\(\);" page)))))))
+
+(deftest a-door-the-quest-lets-go-returns-to-the-fold
+  ;; f82b5683. The page is not executed here, so this pins the seams: the
+  ;; bar keeps the kind's marks, the tracker's draw sinks a shut door the
+  ;; quest no longer names and that is not an everyday one, and the line
+  ;; is drawn again and counts what it holds
+  (let [page (sut/assemble)]
+    (testing "the bar keeps the marks the fold read"
+      (is (str/includes? page "bar.setAttribute(\"data-everyday\", every.join(\" \"));"))
+      (is (str/includes? page "document.querySelectorAll(\"#view .actions[data-everyday]\")")))
+    (testing "the tracker's draw sinks what the quest let go"
+      (is (str/includes? page "\n  sinkQuestDoors();\n}"))
+      (is (str/includes? page "!questDoors(b.getAttribute(\"data-row\") || \"\").has(name);"))
+      (is (str/includes? page "box.append(...sunk);")))
+    (testing "the line comes back with the reasons, and counts the doors"
+      (is (str/includes? page "if (notes) more.append(notes);"))
+      (is (str/includes? page "more.querySelector(\"summary\").textContent = `More doors (${n})`;")))))
+
+(deftest the-lite-dialog-shows-no-machinery
+  ;; ui_lite.html is one file, not assembled, and the bench check skips
+  ;; it: the four internal strings ticket 78effb3b took out of its
+  ;; action dialog stay out only while this reads the file
+  (let [lite (slurp (io/resource "waymark10/ui_lite.html"))]
+    (doseq [s ["fenced (If-Match)" "idempotency-key attached"
+               "saved on blur" "server: "]]
+      (is (not (str/includes? lite s)) s))))
