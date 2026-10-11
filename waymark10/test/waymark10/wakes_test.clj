@@ -3507,6 +3507,38 @@
             "one row named, one run: the first text's, with a second row free")
         (is (empty? (sch/waiting-texts (:data (sched-of seat))))
             "the second text is dropped: the first's run answers for the row")
+        (seat-do! seat :retire)))
+
+    ;; a seat of one slot sends each waiting text, and two of them on
+    ;; one row were two runs for it (ticket fd179d32)
+    (testing "a seat of one slot starts one run for two texts on one row"
+      (let [batch "free-rows-one-slot"
+            seat (:seat (linked-seat! "freerowsoneslot"
+                                      {:scope [{:kind "wake_item"
+                                                :actions ["complete" "touch"]
+                                                :filter {:batch batch}}]
+                                       :walk "wake_item"}
+                                      fn'))
+            [a b] (vec (repeatedly 2 #(item! batch)))
+            first-text (str "Walk " a " again.")
+            other-text (str "Walk " b " again.")
+            row (sched-of seat)]
+        (store/with-tx (:storage *eng*)
+          (fn [tx]
+            (store/update-data! (:storage *eng*) tx :schedule (:id row)
+                                (assoc (:data row)
+                                       :wake_pending true
+                                       :wake_texts [first-text
+                                                    (str "Look at " a " once more.")
+                                                    other-text]
+                                       :wake_text first-text
+                                       :wake_textless false)
+                                (:next-flip-at row))))
+        (wakes/tick! *eng*)
+        (is (= [first-text other-text]
+               (mapv #(get-in % [:inputs :text]) (seat-fires seat)))
+            "one run for each row named: the second text on the first row is dropped")
+        (is (empty? (sch/waiting-texts (:data (sched-of seat)))))
         (seat-do! seat :retire)))))
 
 ;; ── a walkthrough's author is woken on its turn ─────────────────────
