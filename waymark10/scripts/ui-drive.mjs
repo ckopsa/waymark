@@ -2924,6 +2924,64 @@ async function guidedStory() {
        inputs.length > 0 && inputs.every(n => n.disabled) }`));
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
+  /* walk is the recorder's own surface (walks.clj, :own-surface): a
+     worn grant that names no walk still carries the record door */
+  console.log("· record: ada again, wearing a grant that names no walk");
+  await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
+  const wkKinds = `(async () => Object.keys((await wellKnown()).resources || {}))()`;
+  const wideKinds = await A.js(wkKinds);
+  const sys = {"Content-Type": "application/json",
+               "x-waymark-principal": "admin", "x-waymark-actor-type": "system"};
+  const nRes = await fetch(BASE + "/api/grants", {method: "POST", headers: sys,
+    body: JSON.stringify({audience: "ada", scope: [{kind: "meal", actions: []}],
+      expires_at: new Date(Date.now() + 86400000).toISOString()})});
+  const nDoc = await nRes.json().catch(() => null);
+  ok("a grant to ada admits meal and nothing else", nRes.status === 201 && !!nDoc?.self);
+  const nId = nDoc.self.split("/").pop();
+  /* an offered grant is the audience's to accept; one born active
+     refuses this, and what the page reads below is the proof either way */
+  await call("POST", "/api/grants/" + nId + "/-/accept", {}, "ada");
+  await A.js(`localStorage.setItem("wm10.grant", ${JSON.stringify(nId)}); true`);
+  await boot(A, "ada");
+  const narrowKinds = await A.js(wkKinds);
+  ok("the page reads through the grant: fewer kinds, and walk among them",
+     await A.js(`localStorage.getItem("wm10.grant")`) === nId &&
+     narrowKinds.length < wideKinds.length &&
+     narrowKinds.includes("meal") && narrowKinds.includes("walk"));
+  await A.until(`!!${recordBtn} && ${recordBtn}.style.display !== "none" &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`,
+                "the record button, shown and off, under the grant");
+  await A.js(`window.prompt = () => "Ada records under a grant"; ${recordBtn}.click(); true`);
+  await A.until(recordingOn, "the recording to start under the grant");
+  const narrowWalk = await A.js(`recording.self`);
+  ok("record under the grant starts a new walk whose recorder is the grant-wearer",
+     narrowWalk !== walkSelf &&
+     await (async () => {
+       const d = must(await call("GET", narrowWalk, null, "ada"), 200, "ada reads the walk").body;
+       return d.state === "recording" && d.data.recorder === "ada";
+     })());
+  await A.js(`${recordBtn}.click(); true`);
+  await A.until(`hereHref() === ${JSON.stringify(narrowWalk)} &&
+                 ${recordBtn}.getAttribute("aria-pressed") === "false"`,
+                "the sealed walk's page, under the grant");
+  ok("stop under the grant seals the walk",
+     must(await call("GET", narrowWalk, null, "ada"), 200, "ada reads the walk").body.state === "sealed");
+  await A.until(`!!document.querySelector("dialog[open] .dlgfoot") ||
+                 !!document.querySelector("[data-replay-walk]")`, "the walk's page to draw");
+  if (await A.js(`!!${button("dialog[open] .dlgfoot", "Cancel")}`))
+    await press(A, "dialog[open] .dlgfoot", "Cancel");
+  await A.until(`!document.querySelector("dialog[open]") &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "Replay on the walk's page, under the grant");
+  ok("the sealed walk's page opens with Replay under the grant", true);
+  /* the replays below start and stop on the first walk's page */
+  await A.js(`localStorage.removeItem("wm10.grant"); true`);
+  await boot(A, "ada");
+  await A.js(`location.hash = ${JSON.stringify("#" + walkSelf)}; true`);
+  await A.until(`hereHref() === ${JSON.stringify(walkSelf)} &&
+                 !!document.querySelector("[data-replay-walk]")`,
+                "the first walk's page again, with no grant worn");
+
   console.log("· replay: a walk file's invitation frame");
   await A.until(`!replay && !document.querySelector("dialog[open]")`, "the replay to stop");
   const replayNote = `Write the recipe here, ${tag}, in the replay.`;
