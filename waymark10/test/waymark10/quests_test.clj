@@ -2101,6 +2101,92 @@
         (is (not-any? #((:action-on? (:grant theirs)) kind % (:id row)) doors)
             "and the guards read the same answer")))))
 
+;; THE SAME LAW AT THE HTTP DOOR (ticket e6c7daab), over every kind this
+;; engine serves whose own-surface carries a door that moves a row. A
+;; private kind (`:grantable false`) is left out: no grant names it, so
+;; no wearer reads a row that is not theirs.
+(def ^:private owned-rows
+  "Kind → `:make`, how `person` makes one row of it, and `:opens`, an
+  owner's door that row takes at birth, when it has one."
+  {:quest {:make (:quest owned-kinds) :opens "pin"}
+   :invitation {:make (:invitation owned-kinds) :opens "withdraw"}
+   :walkthrough {:make (:walkthrough owned-kinds)}
+   ;; its audience's `revoke` is there and answers 409 at this door
+   :grant {:make (fn [eng _c _worn]
+                   (grant! eng "colton" [{:kind "errand" :actions ["rename"]}]))}
+   ;; its owner's doors are the verdicts, and the four-eyes guard
+   ;; refuses the requester's own verdict: the door is there and shut
+   :approval_request {:make (fn [eng _c _worn]
+                              (:row (inv/create! eng :approval_request
+                                                 {:task "Rename the errand."
+                                                  :scope [{:kind "errand"
+                                                           :actions ["rename"]}]}
+                                                 {:principal person})))}
+   :scheduled_action {:make (fn [eng c _worn]
+                              (:row (inv/create!
+                                     eng :scheduled_action
+                                     {:target {:kind "chore" :action "finish" :id (str c)}
+                                      :run_at (str (.truncatedTo
+                                                    (.plusDays (java.time.OffsetDateTime/now) 30)
+                                                    java.time.temporal.ChronoUnit/SECONDS))}
+                                     {:principal person})))
+                      :opens "cancel"}
+   :walk {:make (fn [eng _c _worn]
+                  (:row (inv/create! eng :walk
+                                     {:followed "colton" :title "My own walk"}
+                                     {:principal person})))}})
+
+(def ^:private not-made
+  "Kind → why no row of it is made here."
+  {:sitting "A sitting is opened in a seat, under a grant that cites the seat, by the seat's sitter: its row needs a seat, a model and that grant, and this engine has none."})
+
+(deftest an-owners-door-is-not-found-on-anothers-row-at-the-http-door
+  (let [served (inv/resources (owned-engine))
+        owned (into {}
+                    (keep (fn [[kind rdef]]
+                            (let [doors (remove (set (map name (:create-action-names rdef)))
+                                                (map name (:actions (:own-surface rdef))))]
+                              (when (and (seq doors) (not (grants/private-kind? rdef)))
+                                [kind (sort doors)]))))
+                    served)]
+    (is (= (set (keys owned)) (into (set (keys owned-rows)) (keys not-made)))
+        "every kind with an owner's row door has a row made here, or a reason")
+    (doseq [[kind doors] owned
+            :let [{:keys [make opens]} (get owned-rows kind)]
+            :when make]
+      (testing (name kind)
+        (let [eng (owned-engine)
+              c (chore! eng "Dishes")
+              row (make eng c (:grant (wearing eng person)))
+              h (engine/handler eng)
+              at (str "/api/" (:plural (get served kind)) "/" (:id row))
+              ;; a grant that names the owned kind to READ, with none of its doors
+              reading (fn [principal]
+                        (str (:id (grant! eng (:id principal)
+                                          [{:kind "chore" :actions ["finish"]}
+                                           {:kind (name kind) :actions []}]))))
+              as (fn [principal gid]
+                   {"x-waymark-principal" (:id principal) "x-waymark-grant" gid})
+              gid (reading person)
+              mine (as person gid)
+              theirs (as stranger (reading stranger))
+              post (fn [hs door]
+                     (:status (h {:request-method :post :uri (str at "/-/" door)
+                                  :headers hs :body (wire/write-json {})})))]
+          (is (= 200 (:status (h {:request-method :get :uri at :headers theirs})))
+              "the grant names the kind, so its wearer reads another's row")
+          (doseq [door doors]
+            (is (= 404 (post theirs door))
+                (str door " is not there on a row its owner field does not name")))
+          (is (every? #((:action? (grants/visibility eng gid person)) kind %) doors)
+              "a reader with no row in hand is told of the owner's doors")
+          (when opens
+            (is (= 200 (post mine opens))
+                (str "the owner moves their own row through " opens)))
+          (doseq [door doors]
+            (is (not= 404 (post mine door))
+                (str door " is there on the owner's own row"))))))))
+
 ;; THE OTHER HALF (ticket dcda56de): what a principal owns rides beside
 ;; a worn grant, and anything that lands in another person's view must
 ;; be named by the grant. An invitation and a walkthrough land in their
