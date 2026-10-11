@@ -608,6 +608,23 @@
       (is (str/includes? page "if (left) more.querySelector(\"summary\").textContent = `More doors (${left})`;"))
       (is (= 2 (count (re-seq #"\n  +liftQuestDoors\(\);" page)))))))
 
+(deftest a-door-the-quest-lets-go-returns-to-the-fold
+  ;; f82b5683. The page is not executed here, so this pins the seams: the
+  ;; bar keeps the kind's marks, the tracker's draw sinks a shut door the
+  ;; quest no longer names and that is not an everyday one, and the line
+  ;; is drawn again and counts what it holds
+  (let [page (sut/assemble)]
+    (testing "the bar keeps the marks the fold read"
+      (is (str/includes? page "bar.setAttribute(\"data-everyday\", every.join(\" \"));"))
+      (is (str/includes? page "document.querySelectorAll(\"#view .actions[data-everyday]\")")))
+    (testing "the tracker's draw sinks what the quest let go"
+      (is (str/includes? page "\n  sinkQuestDoors();\n}"))
+      (is (str/includes? page "!questDoors(b.getAttribute(\"data-row\") || \"\").has(name);"))
+      (is (str/includes? page "box.append(...sunk);")))
+    (testing "the line comes back with the reasons, and counts the doors"
+      (is (str/includes? page "if (notes) more.append(notes);"))
+      (is (str/includes? page "more.querySelector(\"summary\").textContent = `More doors (${n})`;")))))
+
 (deftest the-lite-dialog-shows-no-machinery
   ;; ui_lite.html is one file, not assembled, and the bench check skips
   ;; it: the four internal strings ticket 78effb3b took out of its

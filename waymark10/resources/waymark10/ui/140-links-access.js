@@ -121,6 +121,8 @@ function questDoors(self) {
 function foldDoors(bar, notes, doc) {
   const every = everydayDoors(doc.kind);
   if (!every.length) return null;
+  /* the marks stay on the bar: sinkQuestDoors folds by them later */
+  bar.setAttribute("data-everyday", every.join(" "));
   const pinned = questDoors((doc.self || "").split("?")[0]);
   const rest = [...bar.querySelectorAll("button.blocked[data-surface]")]
     .filter(b => {
@@ -138,7 +140,8 @@ function foldDoors(bar, notes, doc) {
    120-nav-home.js): the door it now names as its goal or its next step
    leaves the fold for the bar, with no reload. The line counts what is
    left, and with none left the reasons stand where they did before a
-   fold. */
+   fold. A door the quest has let go returns to the fold in the same
+   draw (sinkQuestDoors). */
 function liftQuestDoors() {
   for (const more of document.querySelectorAll("#view details.moredoors")) {
     const bar = more.previousElementSibling;
@@ -155,6 +158,38 @@ function liftQuestDoors() {
     if (left) more.querySelector("summary").textContent = `More doors (${left})`;
     else more.replaceWith(
       ...[...more.children].filter(k => k !== box && k.tagName !== "SUMMARY"));
+  }
+  sinkQuestDoors();
+}
+/* the other way (ticket f82b5683). The quest finishes, is unpinned, or
+   its next step moves to another door: a shut door in the bar that the
+   quest no longer names, and that is not an everyday one, returns under
+   'More doors' as a fresh draw would put it, and the line counts it.
+   A bar whose fold was emptied, or never drawn, gets the line again,
+   and the reasons go back under it. */
+function sinkQuestDoors() {
+  for (const bar of document.querySelectorAll("#view .actions[data-everyday]")) {
+    const every = bar.getAttribute("data-everyday").split(" ");
+    const sunk = [...bar.querySelectorAll("button.blocked[data-surface]")]
+      .filter(b => {
+        const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+        return !every.includes(name) &&
+          !questDoors(b.getAttribute("data-row") || "").has(name);
+      });
+    if (!sunk.length) continue;
+    let more = bar.nextElementSibling;
+    if (!more || !more.classList.contains("moredoors")) {
+      const notes = more && more.classList.contains("blockedwhy") ? more : null;
+      more = el("details", {class: "moredoors"},
+        el("summary", {class: "muted", "data-surface": "doors-more"}),
+        el("div", {class: "actions"}));
+      bar.after(more);
+      if (notes) more.append(notes);
+    }
+    const box = more.querySelector(":scope > .actions");
+    box.append(...sunk);
+    const n = box.querySelectorAll("button.blocked[data-surface]").length;
+    more.querySelector("summary").textContent = `More doors (${n})`;
   }
 }
 /* a folded door is under a closed line and is not drawn: a replay opens
