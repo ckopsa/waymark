@@ -1042,6 +1042,12 @@
                                      {:every-seconds
                                       (factory-every-seconds)})
                          :stop-fn forge/stop-passes!}))
+        ;; …and the watch over its stamp (ticket b53f78ac), under NO
+        ;; election: the mirror's own thread cannot say it stopped,
+        ;; and neither can a process that never won the role
+        factory-watch (when factory-pass
+                        (forge/start-watch!
+                         eng {:every-seconds (factory-every-seconds)}))
         ;; …and the bench's enrolment retry (waymark-fp62.6.3.8), on
         ;; the same shape and behind FACTORY10=1 ALONE: a house with a
         ;; bench and no GitHub token still owes its policy rows an
@@ -1058,6 +1064,7 @@
             :stop-fn bench/stop-enrol-sweeper!}))]
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass
+                 :factory-watch factory-watch
                  :factory-enrol-pass factory-enrol-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
@@ -1065,9 +1072,10 @@
 
 (defn stop! []
   (when-some [{:keys [engine server storage inbox-pass factory-pass
-                      factory-enrol-pass]} @dev]
+                      factory-watch factory-enrol-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
+    (when factory-watch (forge/stop-passes! factory-watch))
     (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
     (engine/stop! engine server)
     (pg/close! storage)
