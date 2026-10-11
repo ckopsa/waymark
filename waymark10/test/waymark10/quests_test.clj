@@ -2101,6 +2101,30 @@
         (is (not-any? #((:action-on? (:grant theirs)) kind % (:id row)) doors)
             "and the guards read the same answer")))))
 
+;; A REHEARSAL PAST THE ROUTER (ticket 33877746): `shut-reason` reaches
+;; `inv/invoke!` with no router ahead of it, so it asks the worn grant
+;; the router's question itself.
+(deftest shut-reason-asks-the-worn-grant-whether-the-door-is-on-the-row
+  (let [eng (owned-engine)
+        c (chore! eng "Dishes")
+        quest (accept! eng person c {} (:grant (wearing eng person)))
+        rdef (get (inv/resources eng) :quest)
+        ;; a grant that names the owned kind to READ, with none of its doors
+        reading (fn [principal]
+                  (grants/visibility
+                   eng
+                   (str (:id (grant! eng (:id principal)
+                                     [{:kind "chore" :actions ["finish"]}
+                                      {:kind "quest" :actions []}])))
+                   principal))
+        shut (fn [principal]
+               (#'quests/shut-reason eng rdef (:id quest) "pin" {}
+                                     {:principal principal
+                                      :grant (:grant (reading principal))}))]
+    (is (str/includes? (str (shut stranger)) "has no action pin")
+        "an owner's door is not there on a row its owner field does not name")
+    (is (nil? (shut person)) "and opens on the owner's own row")))
+
 ;; THE OTHER HALF (ticket dcda56de): what a principal owns rides beside
 ;; a worn grant, and anything that lands in another person's view must
 ;; be named by the grant. An invitation and a walkthrough land in their

@@ -59,6 +59,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.members :as members]
+            [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.walks :as walks]
             [waymark10.summary :as summary]
@@ -996,6 +997,18 @@
                  :needs (into [] (comp (filter #(contains? shown %)) (map name)) required)}
           confirm (assoc :confirm true :consequence sentence))))))
 
+(defn- door-there?
+  "Whether the worn grant admits `action` on this row of `kind`: the
+  question the router asks before a door is judged
+  (`router/check-action!`), for a rehearsal that reaches `inv/invoke!`
+  past the router. A door only the own-surface confers is not there on a
+  row the principal does not own. True when no grant is worn."
+  [grant kind action id]
+  (let [action? (:action? grant)
+        on? (:action-on? grant)]
+    (boolean (and (or (nil? action?) (action? kind action))
+                  (or (nil? id) (nil? on?) (on? kind action (str id)))))))
+
 (defn- unseen-waits
   "The rows the goal waits on that its owner's grant does not read, as
   `[{:self :doors}]`: the engine's own read, kept in the quest's
@@ -1010,7 +1023,8 @@
   refuses a caller who wears no grant), the door is judged a second time
   under the owner's grant with every row in its sight. None when no
   grant is worn, when the door would open, or when neither refusal binds
-  such a row. Never throws."
+  such a row, or when the grant it is judged under does not admit the
+  door on that row (`door-there?`). Never throws."
   [eng {:keys [owner grant self action input]}]
   (try
     (let [gid (some-> grant str not-empty)
@@ -1030,6 +1044,8 @@
                                   (fn [tx] (store/load-row st tx kind (str id) {}))))
               bound (fn [grant]
                       (try
+                        (when-not (door-there? grant kind door id)
+                          (throw (p/no-such-action kind door)))
                         (inv/invoke! eng kind (str id) (keyword door) (or input {})
                                      (cond-> {:principal who :dry-run :partial}
                                        grant (assoc :grant grant)
@@ -1106,7 +1122,9 @@
 (defn- shut-reason
   "Why the goal's door refuses `principal` now, in the door's own
   sentence: the door rehearsed partially, so a form not filled yet is
-  no refusal. nil when the door would open.
+  no refusal. nil when the door would open. A door the worn grant does
+  not admit on this row (`door-there?`) answers the router's sentence:
+  the rehearsal alone would not ask the grant.
 
   The rehearsal hands the fence the row's version as it stands, the
   way the worksheet does (`worksheet/apply-invocations!`): nobody read
@@ -1121,6 +1139,8 @@
         version (:version (store/with-tx st
                             (fn [tx] (store/load-row st tx kind (str id) {}))))]
     (try
+      (when-not (door-there? grant kind action id)
+        (throw (p/no-such-action kind action)))
       (inv/invoke! eng kind (str id) (keyword action) (or input {})
                    (cond-> {:principal principal :grant grant :dry-run :partial}
                      version (assoc :if-match (inv/etag kind (str id) version))))
