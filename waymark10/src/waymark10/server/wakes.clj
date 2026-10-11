@@ -1325,12 +1325,15 @@
             ;; d65f9247): `runs-to-start` counts rows and not WHICH row,
             ;; so it is dropped here as `wake-seat!` drops it. The run
             ;; that has the row answers for it. Two texts that name one
-            ;; row are one send, for the same reason (ticket 2be02e40).
-            texts (if (< 1 (max-open-of seat-row))
-                    (one-for-a-row
-                     eng seat-row
-                     (remove #(spoken-for? eng seat-row % at) waiting))
-                    waiting)
+            ;; row are one send, for the same reason (ticket 2be02e40),
+            ;; and that holds for a seat of one slot too (ticket
+            ;; fd179d32): no run of it is open here, so no text of its
+            ;; own is spoken for, but two of them may still name one row.
+            texts (one-for-a-row
+                   eng seat-row
+                   (if (< 1 (max-open-of seat-row))
+                     (remove #(spoken-for? eng seat-row % at) waiting)
+                     waiting))
             textless? (get-in schedule-row [:data :wake_textless])
             sends (cond
                     (seq texts)
