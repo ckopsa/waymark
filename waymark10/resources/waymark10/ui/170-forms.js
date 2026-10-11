@@ -243,6 +243,10 @@ function listWidget(name, prop, items, value, makeRow) {
     const i = seq++;
     const row = el("div", {class: "listrow", "data-row": i});
     row.append(build(name + "[" + i + "]", seed));
+    /* the entry's own slot, named by the row's path: a refusal that
+       names the entry itself (held_for[1]) and no sub-field of it
+       lands here, found through rowPath like a sub-field's is */
+    row.append(el("div", {class: "err srv", "data-srverr": name + "[" + i + "]"}));
     row.append(el("button", {type: "button", class: "listdrop",
                              "aria-label": "remove this entry",
                              onclick: () => { row.remove(); refresh(); }}, "✕"));
