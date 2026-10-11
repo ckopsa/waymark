@@ -201,7 +201,7 @@
     [:recorder {:x-ref {:principal true}
                 :x-display {:raw true
                             :label "Who recorded"
-                            :help "The principal who records this walk, stamped by the engine at birth: a follower recording someone else's stream, or a person or an agent recording its own. A frame holds only what this principal could see."}}
+                            :help "The principal who records this walk, stamped by the engine at birth: a follower recording someone else's stream, or a person or an agent recording its own. A frame holds only what this principal could see; recorded under a grant, only what that grant admits."}}
      [:string {:min 1 :max 128}]]
     followed-field
     title-field
@@ -243,6 +243,10 @@
                 :recorder #{:eq}
                 :followed #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
+   ;; a walk is its recorder's own, so it rides beside any worn grant:
+   ;; the record button works under a grant that names no walk, and the
+   ;; frames still hold only what that grant admits (`record-frame!`)
+   :own-surface {:by :recorder :actions #{:create :seal :purge}}
    ;; the one non-envelope answer: a safe GET a reader may follow, so a
    ;; link and not a door (docs/waymark10-vocabulary.md § 13)
    :links [{:rel "export" :href "/api/walks/{id}/export"
