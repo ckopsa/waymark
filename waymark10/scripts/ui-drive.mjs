@@ -926,6 +926,95 @@ async function accessStory() {
                 "the caller's, the door author's and the door row's links to the seat");
   ok("a seat principal, a nested principal and a kind-from id link to the seat's row", true);
 
+  /* a refusal that names one ENTRY of a list of refs (ticket e07d8361).
+     The seat's restate form draws held_for as one select per row, and
+     listWidget gives each row a slot named by the row's own path. A
+     ref is any string, so no value a select holds draws that refusal:
+     the page's fetch is wrapped to spoil one entry of what the form
+     sent, and the sentence is the server's own, read under the row.
+     Then the mint-order case: with the first row gone, the refusal's
+     [0] is the row minted second, and lands under it. Nothing is
+     written; each submit is refused on its schema. */
+  console.log("· a refusal naming one entry of a list of refs");
+  await evaljs(`location.hash = ${JSON.stringify("/api/seats/" + sid)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify("/api/seats/" + sid)} &&
+                 !!document.querySelector('#view [data-action="restate"]')`,
+                "the seat's restate door");
+  await evaljs(`document.querySelector('#view [data-action="restate"]').click(); true`);
+  const heldList = `document.querySelector('dialog[open] [data-list="held_for"]')`;
+  const heldRows = `[...${heldList}.querySelectorAll(":scope > .listrows > .listrow")]`;
+  await waitFor(`!!${heldList}`, "the restate form's list of models");
+  /* three fresh rows, whatever the seat held; their selects are seated
+     from the one fetch of the models before a value is put in them */
+  await evaljs(`(() => {
+    for (const r of ${heldRows}) r.querySelector(":scope > .listdrop").click();
+    for (let n = 0; n < 3; n++) ${heldList}.querySelector(":scope > .listadd").click();
+    return true; })()`);
+  await sleep(600);
+  const heldMinted = await evaljs(`(() => {
+    const rows = ${heldRows};
+    const model = [...rows[0].querySelector("select").options]
+      .map(o => o.value).find(v => v !== "") || "drive-model";
+    for (const r of rows) {
+      const s = r.querySelector("select");
+      if (![...s.options].some(o => o.value === model)) s.append(new Option(model, model));
+      s.value = model;
+    }
+    const fetch0 = window.__listFetch = window.fetch;
+    window.fetch = (u, o) => {
+      let b = null;
+      try { b = JSON.parse(o.body); } catch (e) {}
+      if (b && Array.isArray(b.held_for) && window.__listBad != null) {
+        window.__listSent = b.held_for.length;
+        b.held_for[window.__listBad] = 0;
+        o = {...o, body: JSON.stringify(b)};
+      }
+      return fetch0(u, o);
+    };
+    return rows.map(r => r.getAttribute("data-row")); })()`);
+  ok("the form holds three rows of models, named in mint order",
+     heldMinted.length === 3 && new Set(heldMinted).size === 3);
+  /* submit with entry `at` of what is sent spoiled; answer what the
+     form sent, the sentence under each row, and any left in the box */
+  const heldRefused = async at => {
+    await evaljs(`(() => {
+      const d = document.querySelector("dialog[open]");
+      for (const n of d.querySelectorAll("[data-srverr]")) n.textContent = "";
+      for (const n of d.querySelectorAll(".problem")) n.remove();
+      window.__listBad = ${at}; window.__listSent = null;
+      [...d.querySelectorAll(".dlgfoot button")].at(-1).click(); return true; })()`);
+    const read = `(() => {
+      const d = document.querySelector("dialog[open]");
+      return {sent: window.__listSent,
+              rows: ${heldRows}.map(r => r.getAttribute("data-row")),
+              under: ${heldRows}.map(r =>
+                r.querySelector(":scope > [data-srverr]")?.textContent || ""),
+              loose: [...d.querySelectorAll(".problem")].map(p => p.textContent)}; })()`;
+    await waitFor(`(s => s.sent !== null && (s.under.some(t => t) || s.loose.length > 0))(${read})`,
+                  "the refusal of entry " + at, 6000, read);
+    const seen = await evaljs(read);
+    console.log("  entry " + at + " refused: " + JSON.stringify(seen));
+    return seen;
+  };
+  const heldSecond = await heldRefused(1);
+  ok("a refusal naming one entry of a list of refs reads under that row",
+     heldSecond.sent === 3 && heldSecond.under[1] !== "" &&
+     heldSecond.under[0] === "" && heldSecond.under[2] === "");
+  ok("and none of it is left in the box, named by its path",
+     !heldSecond.loose.some(t => t.includes("held_for[")));
+  await evaljs(`${heldRows}[0].querySelector(":scope > .listdrop").click(); true`);
+  const heldFirst = await heldRefused(0);
+  ok("with the first row removed, the refusal's [0] lands under the row that is now first",
+     heldFirst.sent === 2 && heldFirst.rows.join() === heldMinted.slice(1).join() &&
+     heldFirst.under[0] !== "" && heldFirst.under[1] === "" &&
+     !heldFirst.loose.some(t => t.includes("held_for[")));
+  await evaljs(`(() => {
+    window.fetch = window.__listFetch;
+    delete window.__listFetch; delete window.__listBad; delete window.__listSent;
+    [...document.querySelectorAll("dialog[open] .dlgfoot button")]
+      .find(b => b.textContent === "Cancel").click(); return true; })()`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the restate form closed");
+
   /* a ref_card (access-dev's fixture) carries the other two forms: a
      plain :kind ref and a typed address, both naming one ref_target,
      and a second address naming a row that is not there. */
