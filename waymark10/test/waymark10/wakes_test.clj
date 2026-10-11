@@ -3420,6 +3420,25 @@
         (wakes/tick! *eng*)
         (is (empty? (seat-fires seat)))
         (doseq [s sittings] (close-sitting! s))
+        (seat-do! seat :retire)))
+
+    ;; the slots count rows and not WHICH row: a text that waited names
+    ;; a row a sitting took since, and the second row is free (ticket
+    ;; d65f9247)
+    (testing "a waiting text on a row an open sitting holds is not fired"
+      (let [batch "free-rows-held"
+            seat (wide-seat "freerowsheld" batch)
+            [a b] (vec (repeatedly 2 #(item! batch)))
+            s (sitting! seat)
+            text-b (str "Walk " b " again.")]
+        (seats/claim-rows! *eng* s [(str a)])
+        (waiting! seat [(str "Walk " a " again.") text-b])
+        (wakes/tick! *eng*)
+        (is (= [text-b] (mapv #(get-in % [:inputs :text]) (seat-fires seat)))
+            "the free row's text goes out, and the held row's does not")
+        (is (empty? (sch/waiting-texts (:data (sched-of seat))))
+            "the held row's text is dropped: its run answers for it")
+        (close-sitting! s)
         (seat-do! seat :retire)))))
 
 ;; ── a walkthrough's author is woken on its turn ─────────────────────
