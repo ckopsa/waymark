@@ -365,9 +365,12 @@
         ;; made that wait on a person, own-surface by :caller
         ;; …and walk, the walks it recorded itself, own-surface by
         ;; :recorder
+        ;; …and quest, invitation and walkthrough (ticket ce9fdb99):
+        ;; the quests it accepted, by :owner, and the steps it is one
+        ;; side of, by :author and :subject
         (is (= ["approval_request"
-                "grant" "held_call" "job" "plan"
-                "scheduled_action" "sitting" "verdict" "walk"]
+                "grant" "held_call" "invitation" "job" "plan" "quest"
+                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]
