@@ -593,6 +593,21 @@
     (testing "the row page draws the bar, and then folds it"
       (is (str/includes? page "const more = foldDoors(bar, notes, doc);")))))
 
+(deftest a-replay-and-a-late-quest-reach-a-folded-door
+  ;; 44b59909. The page is not executed here, so this pins the seams: a
+  ;; replay opens the line before it points at a folded door, and the
+  ;; tracker's draw moves the quest's door from the fold into the bar
+  (let [page (sut/assemble)]
+    (testing "a replay opens 'More doors' for a door that is not drawn"
+      (is (str/includes? page "const more = node && node.closest(\"details.moredoors:not([open])\");"))
+      (is (str/includes? page "if (more) more.open = true;"))
+      (is (str/includes? page "all.map(unfoldDoor).find(seen) || null;")))
+    (testing "the tracker's draw lifts the quest's door, live and in a replay"
+      (is (str/includes? page "return questDoors(b.getAttribute(\"data-row\") || \"\").has(name);"))
+      (is (str/includes? page "bar.append(...lifted);"))
+      (is (str/includes? page "if (left) more.querySelector(\"summary\").textContent = `More doors (${left})`;"))
+      (is (= 2 (count (re-seq #"\n  +liftQuestDoors\(\);" page)))))))
+
 (deftest the-lite-dialog-shows-no-machinery
   ;; ui_lite.html is one file, not assembled, and the bench check skips
   ;; it: the four internal strings ticket 78effb3b took out of its

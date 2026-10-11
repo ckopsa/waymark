@@ -502,10 +502,14 @@ function questTracker() {
   if (replay) {
     questDraw(replay.quest, replay.questDone);
     for (const b of $("#questbar").querySelectorAll("button")) b.disabled = true;
+    liftQuestDoors();
     return;
   }
   questFollow();
   questDraw(questDoc, questDone);
+  /* a quest taken up after the row page was drawn brings its door out
+     of 'More doors' (liftQuestDoors, 140-links-access.js) */
+  liftQuestDoors();
 }
 /* the tracker of one quest document; `finished` is the title of a
    quest that has just finished, shown in its place */

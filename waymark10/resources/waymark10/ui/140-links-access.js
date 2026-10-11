@@ -133,6 +133,38 @@ function foldDoors(bar, notes, doc) {
        `More doors (${rest.length})`),
     el("div", {class: "actions"}, rest), notes);
 }
+/* the fold reads the quest when the row page is drawn. The tracker may
+   take up a quest after that, or its plan may move (questTracker,
+   120-nav-home.js): the door it now names as its goal or its next step
+   leaves the fold for the bar, with no reload. The line counts what is
+   left, and with none left the reasons stand where they did before a
+   fold. */
+function liftQuestDoors() {
+  for (const more of document.querySelectorAll("#view details.moredoors")) {
+    const bar = more.previousElementSibling;
+    const box = more.querySelector(":scope > .actions");
+    if (!bar || !bar.classList.contains("actions") || !box) continue;
+    const folded = [...box.querySelectorAll("button.blocked[data-surface]")];
+    const lifted = folded.filter(b => {
+      const name = b.getAttribute("data-surface").replace(/^door(-shut)?:/, "");
+      return questDoors(b.getAttribute("data-row") || "").has(name);
+    });
+    if (!lifted.length) continue;
+    bar.append(...lifted);
+    const left = folded.length - lifted.length;
+    if (left) more.querySelector("summary").textContent = `More doors (${left})`;
+    else more.replaceWith(
+      ...[...more.children].filter(k => k !== box && k.tagName !== "SUMMARY"));
+  }
+}
+/* a folded door is under a closed line and is not drawn: a replay opens
+   the line before it points, as a person taps `doors-more`. Answers the
+   node. */
+function unfoldDoor(node) {
+  const more = node && node.closest("details.moredoors:not([open])");
+  if (more) more.open = true;
+  return node;
+}
 /* the tap: the create door is read off the quests collection, as every
    button is, and rehearsed (dry_run=1). The rehearsal writes nothing and
    answers `preview`, the plan the quest would be given; the sheet shows

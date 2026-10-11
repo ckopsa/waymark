@@ -1734,13 +1734,17 @@ function replayQuestDoor(r, f) {
   return replayShutDoor(d);
 }
 /* the reachable button of the door `goal` names ({self, action}), on
-   the screen shown, or null */
+   the screen shown, or null. One folded under 'More doors' is not drawn
+   until its line is opened: the line is opened first (unfoldDoor,
+   140-links-access.js), so the pointer rests on a button that is seen. */
 function replayShutDoor(goal) {
   const self = String(goal.self || "").split("?")[0];
-  return [...document.querySelectorAll("#view button[data-quest-door]")]
-    .find(b => b.getClientRects().length > 0 &&
-               b.dataset.questDoor === goal.action &&
-               b.dataset.questSelf === self) || null;
+  const all = [...document.querySelectorAll("#view button[data-quest-door]")]
+    .filter(b => b.dataset.questDoor === goal.action &&
+                 b.dataset.questSelf === self);
+  const seen = b => b.getClientRects().length > 0;
+  return all.find(seen) ||
+    all.map(unfoldDoor).find(seen) || null;
 }
 /* the quest's sheet of a replay (questSheet, 140-links-access.js), from
    the `quest` part of a `ui` beat: the goal, the door's label and the
