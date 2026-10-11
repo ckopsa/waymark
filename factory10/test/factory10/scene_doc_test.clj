@@ -24,9 +24,13 @@
                          (io/file "docs/spec-scenes.md")]))))
 
 (def ^:private worked-scene
-  "The document's one json block, with keyword keys."
-  (json/read-value (second (re-find #"(?s)```json\n(.*?)\n```" doc))
-                   json/keyword-keys-object-mapper))
+  "The json block under the document's `## A worked scene` heading, with
+  keyword keys. Found by that heading and not by being first, so another
+  json example anywhere in the document leaves it alone."
+  (json/read-value
+   (second (re-find #"(?s)\n## A worked scene[^\n]*\n(?:(?!\n## ).)*?```json\n(.*?)\n```"
+                    doc))
+   json/keyword-keys-object-mapper))
 
 (def ^:private mayor (t/principal {:id "mayor" :display "Mayor"}))
 
