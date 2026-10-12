@@ -11,7 +11,9 @@
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.definitions :as defs]
             [waymark10.server.delegation :as delegation]
+            [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
@@ -806,3 +808,97 @@
       (is (thrown? clojure.lang.ExceptionInfo (move! lights music 5M)))
       (is (== 3 (budget-of h lights)))
       (is (== 7 (budget-of h music))))))
+
+;; ── break glass · a scope entry with an end (ticket b177a14b) ───────
+
+(def ^:private glass-until (str (.plusSeconds t0 3600)))
+
+(defn- glass [extra]
+  (merge {:kind "dl_gadget" :actions ["poke"] :until glass-until
+          :because "The sprocket jammed in incident 12."}
+         extra))
+
+(deftest an-end-is-judged-to-the-instant
+  (let [e (glass {})]
+    (is (not (grants/lapsed? (.plusSeconds t0 3540) e)) "the minute before")
+    (is (grants/lapsed? (.plusSeconds t0 3600) e) "the end itself is past")
+    (is (grants/lapsed? (.plusSeconds t0 3660) e) "the minute after")
+    (is (not (grants/lapsed? (.plusSeconds t0 3660) (dissoc e :until)))
+        "an entry with no end never lapses")
+    (is (= [e] (grants/lapsing-entries t0 (* 7 86400) [e {:kind "seat" :actions []}])))
+    (is (= [] (grants/lapsing-entries (.plusSeconds t0 3660) (* 7 86400) [e]))
+        "an entry already ended is not one that is about to")))
+
+(deftest a-break-glass-entry-works-until-its-end-and-the-sweep-takes-it-off
+  (let [{:keys [h eng clock]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        gid (id-of (req h :post "/api/dl_gadgets"
+                        {:headers person :body {:name "sprocket"}}))
+        poke! (fn [] (:status (req h :post (str "/api/dl_gadgets/" gid "/-/poke")
+                                   {:headers as})))
+        row! (fn [] (get-row h "seats" mayor person))
+        stated (restate-as! h person mayor {:scope (conj mayor-scope (glass {}))
+                                            :delegates ceiling})]
+    (is (= 200 (:status stated)) (pr-str (json stated)))
+    (testing "the minute before its end the door is the sitter's"
+      (reset! clock (.plusSeconds t0 3540))
+      (is (= 200 (poke!)))
+      (is (= [glass-until] (mapv :until (get-in (row!) [:data :lapsing])))
+          "and the row says which entries end within seven days"))
+    (testing "the minute after it the entry is judged absent"
+      (reset! clock (.plusSeconds t0 3660))
+      (is (contains? #{403 404} (poke!)))
+      (is (= 1 (count (filter :until (get-in (row!) [:data :scope]))))
+          "with no write: the row still carries it"))
+    (testing "the sweep restates the seat without it, and the history says why"
+      (is (= 1 (defs/sweep-lapsed! eng)))
+      (is (= mayor-scope (get-in (row!) [:data :scope])))
+      (let [gone (last (filter #(= :lapse (:action %)) (log-of eng :seat mayor)))]
+        (is (some? gone) "the write is a logged transition")
+        (is (= "system" (some-> (get-in gone [:actor :type]) name)))
+        (is (str/includes? (str (get-in gone [:inputs :note])) "incident 12")
+            "and it names the reason the entry was added for"))
+      (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
+
+(deftest an-end-is-stated-with-a-reason-and-inside-thirty-days
+  (let [{:keys [h]} (world)
+        {:keys [mayor]} (open-mayor! h)
+        state! (fn [entry]
+                 (:status (restate-as! h person mayor
+                                       {:scope (conj mayor-scope entry)
+                                        :delegates ceiling})))
+        days (fn [n] (str (.plusSeconds t0 (* n 86400))))]
+    (is (not= 200 (state! (dissoc (glass {}) :because)))
+        "an end with no reason is refused")
+    (is (not= 200 (state! (glass {:until (days 31)})))
+        "and so is one more than 30 days ahead")
+    (is (not= 200 (state! (glass {:until "tomorrow"})))
+        "and one that is not a time")
+    (is (= 200 (state! (glass {:until (days 30)}))))))
+
+(deftest an-entry-with-an-end-is-judged-by-the-ceiling-and-never-widens-it
+  (let [{:keys [h]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        ends {:until glass-until :because "The bench caught fire in incident 12."}]
+    (testing "inside the ceiling it is authored like any other"
+      (let [made (author! h as "bench-glass"
+                          {:scope [(merge {:kind "dl_ticket" :actions ["finish"]
+                                           :filter {:repo "bench"}}
+                                          ends)]})]
+        (is (= 201 (:status made)) (pr-str (json made)))))
+    (testing "past the ceiling it is held like any other"
+      (let [over (author! h as "bench-glass-wide"
+                          {:scope [(merge {:kind "dl_ticket" :actions ["drop"]
+                                           :filter {:repo "bench"}}
+                                          ends)]})]
+        (is (= 202 (:status over)) (pr-str (json over)))
+        (is (str/includes? (str (:why (json over))) "Invariant 2"))))
+    (testing "a ceiling entry with an end admits nothing"
+      (let [stated (restate-as! h person mayor
+                                {:scope mayor-scope
+                                 :delegates (update ceiling :scope conj (glass {}))})
+            asked (author! h as "gadget-poker"
+                           {:scope [{:kind "dl_gadget" :actions ["poke"]}]})]
+        (is (= 200 (:status stated)) (pr-str (json stated)))
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (str/includes? (str (:why (json asked))) "Invariant 2"))))))
