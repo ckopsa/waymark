@@ -2801,6 +2801,12 @@ async function guidedStory() {
                  localStorage.getItem("wm10.follow.ui") === "1"`,
                 "the walkthrough in hand and its author followed in guided mode", 15000);
   ok("Start follows the author in guided mode", true);
+  /* that follow reopens bo's live stream to ask for ada's `ui`, and the
+     three values above are set before the stream is open again. Its
+     snapshot carries ada's last screen, and follow put guidedSeq back to
+     -1: a seq held again says the stream is open before ada moves */
+  await B.until(`guidedSeq >= 0`, "ada's screen on bo's reopened guided stream", 15000,
+                guidedState);
   await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
   /* the stew's own door, not a row's: ada comes from the collection, and
      its rows carry the same door for another meal until the page is drawn */
@@ -2809,6 +2815,13 @@ async function guidedStory() {
                /^update recipe/i.test(b.textContent))`;
   await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
                 "ada's recipe door on the stew's page");
+  /* ada's beat from the stew's page has reached bo before she opens her
+     form. The registry orders two beats by which it takes first, so a
+     page's beat that came after the form's would close the form on bo's
+     screen until ada's next heartbeat */
+  await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meals[1])} &&
+                 hereHref() === ${JSON.stringify(meals[1])}`,
+                "ada on the stew's page, and bo's screen with her", 15000, guidedState);
   await A.js(`${stewButton}.click(); true`);
   await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
   await B.until(`!!document.querySelector(${JSON.stringify(
