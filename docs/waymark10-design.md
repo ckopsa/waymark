@@ -3512,10 +3512,17 @@ the door's input beside the scope key, at the top level, so an invented
 (`assign_meal`, `conformance-test/dangling-ref-truth`) and at the
 household's `plan_day.assign_meal`, where a themed night answers in the
 day's own acceptance sentence and a rotating Sunday, which binds no set,
-meets the wall (`mealplan10.plan-day-machine-test`). Two shapes are out
-of reach and named as such: a ref nested inside a part that a door takes
-WHOLE (`schema/ref-fields` reads an input model's top-level entries
-only), and a pointer that is a KIND-AND-ID PAIR rather
+meets the wall (`mealplan10.plan-day-machine-test`). A ref nested inside
+a part that a door takes WHOLE is inside the wall as well:
+`schema/nested-ref-fields` walks the input model's nested maps and its
+lists of maps, however deep, and the wall follows each ref's path, so a
+create or an edit that carries the plan's `days` array resolves every
+item's `meal_id` and the sentence names the path and the position
+(`days[1].meal_id names no meal`; the roster's `plan_week` and the plan's
+create door, `conformance-test/dangling-ref-truth`). `schema/ref-fields`
+keeps its top-level answer, which is what the picker, the filter and the
+cell read. One shape is out of reach and named as such: a pointer that is
+a KIND-AND-ID PAIR rather
 than a typed ref (`insight`'s `offer_kind`/`offer_id`, a journal's
 `evidence` addresses). Those stay their kind's own checkers —
 `insight/unresolved-addresses` is the one of them, shared with
@@ -3536,8 +3543,10 @@ named guard, never with the machine's own wrong-state answer), the ending
 shutting the doors (an ended row offers only its ways back, and an
 exception that names no door refuses at the def site), and dangling-ref
 truth (an invented id, an id of the wrong kind, and a list with one
-unresolved item, each refused with the field named). The walker's own
-generator fills refs with rows that stand — a walk that proved a door
+unresolved item, each refused with the field named; a ref nested in a
+part taken whole, refused with its path and position). The walker's own
+generator fills refs with rows that stand, and drops an optional nested
+ref it would otherwise invent — a walk that proved a door
 took an invented id was proving a lie.
 
 # 25. GRAIL 2b — the refusal names the row its remedy acts on

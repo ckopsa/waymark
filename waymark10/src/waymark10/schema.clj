@@ -334,6 +334,52 @@
                    :listed (listed-form? schema)})))
         (entry-map form)))
 
+(defn- held-map-form
+  "`[map-form each?]` for an entry form that holds a map of its own: the
+  `[:map …]` itself, the one under `:maybe`, or the item of a `:vector`
+  (`each?` true). nil for every other form."
+  [form]
+  (when (vector? form)
+    (case (first form)
+      :map [form false]
+      :maybe (held-map-form (last form))
+      :vector (let [item (last form)]
+                (when (and (vector? item) (= :map (first item)))
+                  [item true]))
+      nil)))
+
+(defn nested-ref-fields
+  "The refs `ref-fields` does not reach: every `:kind` entry BELOW the
+  top level of a :map schema, inside a nested map or a list's item map,
+  however deep — the shape of a part a door takes whole (a plan's
+  `days`, each item carrying `meal_id`).
+
+  Each is a `ref-fields` entry plus `:path`, the steps down to the map
+  that holds the field — `[{:key :days :each true}]`, `:each` saying the
+  step enters a list and reaches every item — and `:optional`, whether
+  that map may leave the field out. The dangling-ref wall walks the path
+  and its sentence names it, with the position (`days[1].meal_id`).
+  `ref-fields` keeps its top-level answer, because the picker, the
+  filter and the cell read a field of the row itself."
+  [form]
+  (letfn [(below [path form]
+            (let [em (entry-map form)]
+              (mapcat
+               (fn [k]
+                 (when-some [[sub each] (held-map-form (:schema (get em k)))]
+                   (let [path' (conj path {:key k :each each})
+                         sub-em (entry-map sub)]
+                     (concat
+                      (map (fn [r]
+                             (assoc r
+                                    :optional (boolean
+                                               (:optional (get sub-em (:field r))))
+                                    :path path'))
+                           (ref-fields sub))
+                      (below path' sub)))))
+               (entry-keys form))))]
+    (vec (below [] form))))
+
 (defn conceal
   "A published JSON Schema minus the named fields — absent from
   properties and required alike, so a reader can neither see the
