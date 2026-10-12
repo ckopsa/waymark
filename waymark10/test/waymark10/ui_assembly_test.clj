@@ -571,13 +571,17 @@
       (is (str/includes? page "if (f.type === \"transition\" && !replayNotice(r, f) && replayGestureTarget(f)) return null;")))))
 
 (deftest a-row-folds-the-doors-that-are-not-everyday-ones
-  ;; f66dd175. The page is not executed here, so this pins the seams: the
-  ;; marks are read from the kind's well-known entry, a kind with none
-  ;; keeps its bar, a lit door is never folded, and an everyday door or
-  ;; the pinned quest's door stays in the bar while it is shut
+  ;; f66dd175, cf624ed4. The page is not executed here, so this pins the
+  ;; seams: the marks are read from the row's own entries, open and shut,
+  ;; a row with none keeps its bar, a lit door is never folded, and an
+  ;; everyday door or the pinned quest's door stays in the bar while it
+  ;; is shut
   (let [page (sut/assemble)]
-    (testing "the marks are the kind's, and a kind with none is unchanged"
-      (is (str/includes? page "return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];"))
+    (testing "the marks are the row's, and a row with none is unchanged"
+      (is (str/includes? page "return Object.entries({...(doc.actions || {}), ...(doc.unavailable || {})})"))
+      (is (str/includes? page ".filter(([, entry]) => (entry.display || {}).everyday)"))
+      (is (str/includes? page "const every = everydayDoors(doc);"))
+      (is (not (str/includes? page "{}).everyday || [];")))
       (is (str/includes? page "if (!every.length) return null;"))
       (is (str/includes? page "else if (notes) panel.append(notes);")))
     (testing "only a shut door folds, and not an everyday one or the quest's"
@@ -591,7 +595,13 @@
       (is (str/includes? page "el(\"summary\", {class: \"muted\", \"data-surface\": \"doors-more\"},"))
       (is (not (str/includes? page "el(\"details\", {class: \"moredoors\", open"))))
     (testing "the row page draws the bar, and then folds it"
-      (is (str/includes? page "const more = foldDoors(bar, notes, doc);")))))
+      (is (str/includes? page "const more = foldDoors(bar, notes, doc);")))
+    (testing "the dashboard's and the surface's bars fold as the row page's does"
+      (is (str/includes? page "const dashMore = foldDoors(bar, notes, doc);"))
+      (is (str/includes? page "const anchorMore = foldDoors(bar, notes, anchor);")))
+    (testing "the three bars put their doors, open and shut, in one order"
+      (is (= 3 (count (re-seq #"\(\w+\.actions \|\| \{\}\)\.sort\(doorOrder\)" page))))
+      (is (= 3 (count (re-seq #"\)\.sort\(doorOrder\)\)\n +bar\.append\(shutDoor\(" page)))))))
 
 (deftest a-replay-and-a-late-quest-reach-a-folded-door
   ;; 44b59909. The page is not executed here, so this pins the seams: a
