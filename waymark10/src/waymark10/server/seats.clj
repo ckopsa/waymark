@@ -5743,6 +5743,31 @@
               health)))
       (catch Exception _ nil))))
 
+(def ^:private roll-page
+  "The most seats of one state one `roll-all-health!` pass reads: every
+  seat an engine carries, with room."
+  500)
+
+(defn roll-all-health!
+  "Roll the `health` of every active and parked seat once
+  (`roll-health!`): the boot's pass (ticket bb3e1c1a), so a seat that
+  has not closed a sitting since the deploy carries one. A merged or a
+  retired seat is left alone. Each seat is its own best-effort write,
+  and a second pass counts the same sittings again. → the number of
+  seats rolled."
+  [eng]
+  (if (and (get (inv/resources eng) :seat)
+           (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)
+          ids (store/with-tx st
+                (fn [tx]
+                  (->> [:active :parked]
+                       (mapcat #(store/query-rows st tx :seat {:state %}
+                                                  {:limit roll-page}))
+                       (mapv (comp str :id)))))]
+      (count (filterv #(some? (roll-health! eng %)) ids)))
+    0))
+
 (defn after-write
   "The engine's `:maintain` hook, this module's arm (seat health 2): a
   committed write that leaves a sitting closed rolls its seat's

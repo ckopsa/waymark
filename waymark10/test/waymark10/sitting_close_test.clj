@@ -845,6 +845,56 @@
         (is (= 200 (:status resp)))
         (is (= 10 (get-in item [:fields :health :sittings])))))))
 
+;; the boot's pass over every seat (ticket bb3e1c1a)
+
+(deftest the-boot-pass-rolls-a-seat-that-has-not-closed
+  (let [eng (fresh-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago outcome]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (inv/insert-quiet!
+                       eng tx :sitting
+                       {:seat seat-id
+                        :model (str (:id model))
+                        :member (seats/sitter-id seat)
+                        :mode seats/default-mode
+                        :started_at started
+                        :ended_at (.plusSeconds started 60)
+                        :input_tokens 0 :output_tokens 0
+                        :cache_read_tokens 0
+                        :cache_write_tokens 0
+                        :turns 12 :transitions 0 :refusals 0
+                        :served {:waymark_sit {:calls 1 :bytes 4000}}
+                        :closed_by "door"
+                        :cost_usd 0.5M
+                        :outcome outcome
+                        :flags []}
+                       {:principal seats/seats-actor
+                        :state :closed})))))
+        _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2) ten-outcomes))
+        health #(:health (:data (row-of eng :seat seat-id)))
+        counted #(select-keys (health) [:sittings :outcomes :cost_usd
+                                        :last_outcome])]
+    (testing "judged closed sittings, and no health before the pass"
+      (is (nil? (health))))
+
+    (testing "the pass rolls the seat"
+      (is (pos? (long (seats/roll-all-health! eng))))
+      (is (= 10 (:sittings (health))))
+      (is (= 6 (get-in (health) [:outcomes :submitted])))
+      (is (== 0.6 (bigdec (:submit_rate (health)))))
+      (is (= "cut_short" (:last_outcome (health)))))
+
+    (testing "a second pass leaves the counts the same"
+      (let [before (counted)]
+        (is (pos? (long (seats/roll-all-health! eng))))
+        (is (= before (counted)))
+        (is (== 0.6 (bigdec (:submit_rate (health)))))))))
+
 ;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
 
 (def ^:private groomers-ticket
