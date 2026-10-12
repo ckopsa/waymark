@@ -367,6 +367,31 @@
           (finally (engine/stop! (:server rcv))
                    (engine/stop! (:server moved))))))))
 
+(deftest a-restate-before-the-first-drain-loses-no-event
+  (fresh!)
+  (with-eng {:webhook-attempts 2 :webhook-backoff-ms 5}
+    (fn [eng]
+      (let [rcv (receiver!)]
+        (try
+          (let [{sub :row} (inv/create! eng :subscription
+                                        {:url (:url rcv)
+                                         :kinds ["wh_gizmo"]}
+                                        {:principal elena})]
+            (inv/create! eng :wh_gizmo {:name "a"} {:principal elena})
+            (restate! eng (:id sub) :restate {:description "restated"})
+            (inv/create! eng :wh_gizmo {:name "b"} {:principal elena})
+            (inv/invoke! eng :subscription (:id sub) :pause nil
+                         {:principal elena})
+            (inv/invoke! eng :subscription (:id sub) :resume nil
+                         {:principal elena})
+            (testing "no drain has seeded the cursor yet"
+              (is (nil? (cursor-of eng (:id sub)))))
+            (webhooks/drain! eng)
+            (testing "the first drain starts at the create, not at the
+                      row's newest move"
+              (is (= 2 (count @(:hits rcv))))))
+          (finally (engine/stop! (:server rcv))))))))
+
 ;; ── 2d. domains: a subscription keeps to the domains it names ───────
 
 ;; wh_ask keeps a domain's NAME as a ticket does: absent counts as

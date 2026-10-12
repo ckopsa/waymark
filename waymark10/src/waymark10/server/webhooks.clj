@@ -626,16 +626,17 @@
 
 (defn- seed-cursor!
   "A subscription with no cursor hears the world from its own creation
-  transition — the newest transition of the subscription row itself
-  (its create when fresh, its resume after an outage).
+  transition — the OLDEST transition of the subscription row itself.
+  Not the newest: a restate, or a pause and a resume, made before the
+  first drain is a later transition of this row, and a seed there
+  would pass over every event since the create. The cursor is never
+  cleared once set, so a row with none has delivered nothing yet.
 
   THIS READ IS NOT SETTLED, and needs no retry. The seed is the row's
-  own transition and not the log's newest id, so it is the same id
+  own create and not the log's newest id, so it is the same id
   whenever it is read: a lower id still in flight took its place in
-  the log before this subscription's own transition did, and is not
-  the subscription's to hear, committed or not. A newer transition of
-  this row still in flight only leaves the seed lower, and the drain
-  after it reads the settled log."
+  the log before this subscription's create did, and is not the
+  subscription's to hear, committed or not."
   [eng sub]
   (let [st (:storage eng)
         pos (or (:id (first (store/with-tx st
@@ -643,7 +644,7 @@
                                 (store/transitions
                                  st tx {:kind :subscription
                                         :resource-id (:id sub)}
-                                 {:newest-first true :limit 1})))))
+                                 {:limit 1})))))
                 0)]
     (store/with-tx st #(store/cursor-set! st % (consumer-of sub) pos))
     pos))
