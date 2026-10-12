@@ -79,6 +79,7 @@
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.server.walks :as walks]
             [waymark10.types :as t]
@@ -435,16 +436,26 @@
 
 (defn- power-problem
   "What the scheduling check refuses in a power call (R-4.4), as one
-  sentence, or nil: a tool that is not among the scheduler's powers, and
-  a call with no `why` where the tool's entry demands one."
+  sentence, or nil: a tool that is not among the scheduler's powers, a
+  call with no `why` where the tool's entry demands one, and an
+  `x-secret-ref` argument that names no secret row. The run would refuse
+  that last one at the forward; it is judged here, before the row or a
+  person's tap is spent on it."
   [tool inp ctx]
-  (let [{:keys [problem why]} (power-at-scheduling tool ctx)
+  (let [{:keys [problem why row bare]} (power-at-scheduling tool ctx)
         said? #(not (str/blank? (str (get-in inp [:input %]))))]
     (cond
       problem problem
 
       (and why (not (said? :why)) (not (said? :__why)))
-      (str "`" tool "` takes one sentence of reason. Send `why` in `input`: the person who approves the call reads it."))))
+      (str "`" tool "` takes one sentence of reason. Send `why` in `input`: the person who approves the call reads it.")
+
+      :else
+      (when-some [read (:read ctx)]
+        (secrets/ref-problem (some #(when (= bare (:name %)) (:input_schema %))
+                                   (get-in row [:data :tools]))
+                             (or (:input inp) {})
+                             #(some? (read :secret %)))))))
 
 (defn- power-snapshot
   "What a power tool's server row was when this was scheduled (R-4.4):

@@ -252,10 +252,25 @@
      input-schema
      (sort (ref-fields input-schema)))))
 
+(defn- no-such [field id]
+  (str "No secret " (pr-str id) ". The argument `" field
+       "` takes " ref-form "."))
+
 (defn- no-such-secret [field id]
-  (p/problem :not-found 404 "Not found"
-             {:detail (str "No secret " (pr-str id) ". The argument `" field
-                           "` takes " ref-form ".")}))
+  (p/problem :not-found 404 "Not found" {:detail (no-such field id)}))
+
+(defn ref-problem
+  "The sentence for the first ref argument of `args` that names no
+  secret row, saying the form a ref takes, or nil. `known?` answers
+  whether an id names a row: the reader is the caller's, so a guard
+  judges inside its own transaction."
+  [input-schema args known?]
+  (some (fn [field]
+          (when-some [k (some #(when (contains? args %) %) [(keyword field) field])]
+            (let [id (str (get args k))]
+              (when-not (known? id)
+                (no-such field id)))))
+        (sort (ref-fields input-schema))))
 
 (defn check-refs!
   "Refuses when a ref argument of `args` names no secret row, saying
@@ -264,12 +279,8 @@
   that could not resolve. A row the owner has not filled yet passes;
   the owner may fill it before the tap."
   [eng input-schema args]
-  (doseq [field (sort (ref-fields input-schema))
-          :let [k (some #(when (contains? args %) %) [(keyword field) field])]
-          :when (some? k)
-          :let [id (str (get args k))]]
-    (when (nil? (row-of eng id))
-      (throw (no-such-secret field id)))))
+  (when-some [problem (ref-problem input-schema args #(some? (row-of eng %)))]
+    (throw (p/problem :not-found 404 "Not found" {:detail problem}))))
 
 (defn resolve-refs!
   "→ {:args :values}: `args` with each ref argument's secret row id

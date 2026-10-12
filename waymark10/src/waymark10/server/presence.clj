@@ -576,21 +576,57 @@
             (keep identity [(:input door) (:schema rdef)])))))
 
 (defn- ref-kinds
-  "The plain `:kind` ref arguments of these :map schemas → {key kind}:
-  an entry a picker is drawn for, one row or a list of them."
+  "The ref arguments of these :map schemas → {key form}: an entry a
+  picker is drawn for, one row or a list of them. A plain `:kind` ref's
+  form is its kind, a keyword. A ref whose target the value names has
+  its `:x-ref` map: `{:principal true}`, `{:address true}` or
+  `{:kind-from <sibling>}`."
   [& forms]
   (into {}
         (for [form forms
               :when form
               [k e] (try (schema/entry-map form) (catch Exception _ nil))
-              :let [kind (:kind (:properties e))]
-              :when (or (keyword? kind) (string? kind))]
-          [(keyword (name k)) (keyword (name kind))])))
+              :let [kind (:kind (:properties e))
+                    xr (:x-ref (:properties e))
+                    ref (cond
+                          (or (keyword? kind) (string? kind)) (keyword (name kind))
+                          (map? xr) xr)]
+              :when ref]
+          [(keyword (name k)) ref])))
+
+(defn- ref-target
+  "[kind id head?] of the row one ref argument's value `v` names, or nil
+  when it names none. `form` is the argument's entry in `ref-kinds`, and
+  `value` holds the form's values by argument name. A plain ref names a
+  row of its kind. A principal is the row its `<kind>:<id>` spelling
+  names (`seat:<id>`), else the member of that id, and `head?` says its
+  label is the head of that row's summary line: its name. An address is
+  `<kind>:<id>`. A `kind-from` ref reads its kind from the sibling.
+  Outside a plain ref, a kind this engine does not serve names no row."
+  [eng form value v]
+  (let [served (fn [k id head?]
+                 (let [k (some-> k name not-empty keyword)]
+                   (when (and k (not (str/blank? (str id)))
+                              (contains? (inv/resources eng) k))
+                     [k (str id) head?])))
+        typed (fn [head?]
+                (let [[k id] (str/split (str v) #":" 2)]
+                  (when id (served k id head?))))]
+    (when (or (string? v) (uuid? v))
+      (cond
+        (keyword? form) [form (str v) false]
+        (:principal form) (or (typed true) (served :member v true))
+        (:address form) (typed false)
+        (:kind-from form) (let [k (get value (name (:kind-from form)))]
+                            (when (or (string? k) (keyword? k))
+                              (served k v false)))))))
 
 (defn ref-labels
-  "The `labels` of a staged dialog's `fields`: for each plain `:kind` ref
-  argument of `self`'s `action`, the target row's summary line as
-  `summary-of`, (fn [kind id]) → string or nil, reads it. A list of refs
+  "The `labels` of a staged dialog's `fields`: for each ref argument of
+  `self`'s `action` (a plain `:kind` ref, or an `:x-ref` form whose
+  target the value names, `ref-target`), the target row's summary line
+  as `summary-of`, (fn [kind id]) → string or nil, reads it; a
+  principal has its name, the head of that line. A list of refs
   has one label for each id, nil where there is none. An argument whose
   rows have no label is left out; nil when no argument has one. It is
   how a replayed form names a ref's row as a live picker does
@@ -599,9 +635,13 @@
   (let [[_ _ door] (when action
                      (dialog-door eng (normalize-self self) action))
         kinds (when door (ref-kinds (:input door)))
-        label (fn [kind id]
-                (when (or (string? id) (uuid? id))
-                  (try (let [s (summary-of kind (str id))]
+        value (into {} (map (fn [[k v]] [(name k) v])) fields)
+        label (fn [form v]
+                (when-some [[kind id head?] (ref-target eng form value v)]
+                  (try (let [s (summary-of kind id)
+                             s (if (and head? (string? s))
+                                 (first (str/split s #" · " 2))
+                                 s)]
                          (when (string? s) (not-empty s)))
                        (catch Exception _ nil))))]
     (not-empty
@@ -623,9 +663,10 @@
   (let [kinds (some-> (dialog-door eng (:self dialog) (:action dialog))
                       (nth 2) :input ref-kinds)
         value (into {} (map (fn [[k v]] [(name k) v])) fields)
-        may (fn [kind id label]
-              (when (and (string? label) (some? id) (row? kind (str id)))
-                label))]
+        may (fn [form v label]
+              (when (string? label)
+                (when-some [[kind id] (ref-target eng form value v)]
+                  (when (row? kind id) label))))]
     (not-empty
      (into {}
            (keep (fn [[f l]]

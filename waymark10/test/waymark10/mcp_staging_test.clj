@@ -21,6 +21,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.walks :as walks]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -39,9 +40,10 @@
   row)
 
 (def ^:private errand
-  "A row with five doors: two plain arguments, one secret argument, a
-  ref argument and a list of them, an argument of its own named
-  `caption`, and a guard that refuses."
+  "A row with six doors: two plain arguments, one secret argument, a
+  ref argument and a list of them, the three refs whose target the
+  value names, an argument of its own named `caption`, and a guard that
+  refuses."
   (r/resource
    {:kind :errand
     :plural "errands"
@@ -75,6 +77,17 @@
                     [:note {:optional true} [:maybe [:string {:max 80}]]]]
             :handler assign-handler
             :safety {:idempotent true :reversible true :confirm false}}
+     :route {:from #{:open} :to :open
+             :input [:map
+                     [:owner {:optional true :x-ref {:principal true}}
+                      [:maybe [:string {:min 1 :max 128}]]]
+                     [:target {:optional true :x-ref {:address true}}
+                      [:maybe [:string {:min 1 :max 128}]]]
+                     [:about_kind {:optional true} [:maybe [:string {:min 1 :max 64}]]]
+                     [:about_id {:optional true :x-ref {:kind-from :about_kind}}
+                      [:maybe [:string {:min 1 :max 128}]]]]
+             :handler assign-handler
+             :safety {:idempotent true :reversible true :confirm false}}
      :label {:from #{:open} :to :open
              :input [:map [:caption [:string {:max 80}]]]
              :handler assign-handler
@@ -345,6 +358,81 @@
                           (frames eng w))]
         (is (seq typed) "the argument is typed all the same")
         (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))
+
+;; ticket be4cbb9d: the refs whose target the VALUE names are labelled
+;; as a plain `:kind` ref is, each under the recorder's own grant
+
+(defn- member!
+  "A member row → its id, which is the principal id an argument carries."
+  [eng display]
+  (str (:id (:row (inv/create! eng :member
+                               {:display display :actor_type "human"}
+                               {:principal walks/engine-actor})))))
+
+(defn- typed-labels
+  "The `labels` of a walk's last typing beat that has any, or nil."
+  [eng walk-id]
+  (->> (frames eng walk-id)
+       (filter #(= "ui" (:type %)))
+       (keep #(get-in % [:body :ui :labels]))
+       last))
+
+(defn- routes-unseen
+  "The typing beats of `input` on errand `a`'s `route`, called by the
+  mayor under a grant over errands and nothing else, in a walk of its
+  own → the frames that show `field`."
+  [eng h a input field]
+  (let [scoped (under-a-grant eng ["route"])
+        w (str (get-in (inv/create! eng :walk
+                                    {:followed "mayor" :title "The mayor's walk"}
+                                    {:principal (t/principal {:id "mayor" :type :agent})})
+                       [:row :id]))]
+    (tool-as h scoped "waymark_invoke" {:kind "errand" :id a :action "route"
+                                        :input input})
+    (filter #(some? (get-in % [:body :ui :fields field])) (frames eng w))))
+
+(deftest a-principal-argument-is-typed-with-the-members-name
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (member! eng "Ada")
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "route"
+                                      :input {:owner ada}}))
+        (is (= {:owner "Ada"} (typed-labels eng w)))
+        (testing "a member the recorder may not see has no label"
+          (let [typed (routes-unseen eng h a {:owner ada} :owner)]
+            (is (seq typed) "the argument is typed all the same")
+            (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
+
+(deftest an-address-argument-is-typed-with-its-rows-summary-line
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (crew! h "Ada")
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "route"
+                                      :input {:target (str "crew:" ada)}}))
+        (is (= {:target "Ada"} (typed-labels eng w)))
+        (testing "a row the recorder may not see has no label"
+          (let [typed (routes-unseen eng h a {:target (str "crew:" ada)} :target)]
+            (is (seq typed) "the argument is typed all the same")
+            (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
+
+(deftest a-kind-from-argument-is-typed-with-its-rows-summary-line
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (crew! h "Ada")
+            w (self-walk! h)
+            input {:about_kind "crew" :about_id ada}]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "route"
+                                      :input input}))
+        (is (= {:about_id "Ada"} (typed-labels eng w)))
+        (testing "a row the recorder may not see has no label"
+          (let [typed (routes-unseen eng h a input :about_id)]
+            (is (seq typed) "the argument is typed all the same")
+            (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
 
 (deftest a-dry-run-leaves-the-dialog-open-and-the-invoke-does-not-retype
   (with-stage

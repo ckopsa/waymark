@@ -255,6 +255,37 @@
                                                {} {:limit 10})))))
       (is (empty? (calls log))))))
 
+(deftest a-ref-that-names-no-secret-is-refused-when-the-call-is-scheduled
+  (let [{:keys [eng log]} (world)
+        id (a-secret! eng)
+        session (wear eng [{:kind "vault.echo" :actions []}
+                           {:kind "vault.login" :actions []}])
+        later! (fn [tool token]
+                 (inv/create! eng :scheduled_action
+                              {:target {:tool tool}
+                               :input {:token token :host "tail.example"
+                                       :why "The tofu run needs it."}
+                               :run_at "2026-10-03T09:05:00Z"}
+                              {:principal clerk
+                               :grant (:grant (:visibility session))}))
+        rows (fn [kind]
+               (store/with-tx (:storage eng)
+                 (fn [tx] (store/query-rows (:storage eng) tx kind {} {:limit 10}))))]
+    (doseq [tool ["vault__echo" "vault__login"]]
+      (testing (str tool ": the refusal names the reference and the form a ref takes")
+        (let [d (refusal #(later! tool (str "secret:" id)))]
+          (is (= "the-door-would-take-it" (some-> (:guard d) name)))
+          (is (str/includes? (pr-str d) (str "secret:" id)))
+          (is (str/includes? (pr-str d) "id of a secret row")))))
+    (testing "nothing was stored, nobody was asked and nothing went out"
+      (is (empty? (rows :scheduled_action)))
+      (is (empty? (rows :held_call)))
+      (is (empty? (calls log))))
+    (testing "a ref that names a secret row is stored for its time"
+      (is (some? (:id (:row (later! "vault__echo" id)))))
+      (is (= 1 (count (rows :scheduled_action))))
+      (is (empty? (calls log))))))
+
 (deftest the-published-schema-names-the-form-a-ref-takes
   (let [{:keys [eng]} (world)
         session (wear eng [{:kind "vault.login" :actions []}])
