@@ -1277,6 +1277,33 @@
                       (list 'waymark10.machine/door-shut-when-over?
                             (:kind rdef) 'row action-name))})})))
 
+(defn- ref-holders
+  "`[label map]` for every map of `inp` a ref's `:path` reaches: `inp`
+  itself under an empty label for a ref at the top level, and for a
+  nested one (`schema/nested-ref-fields`) each map the steps lead to. A
+  step into a list reaches every item map and the label carries its
+  position (`days[1].`); a part the caller left out reaches nothing."
+  [inp path]
+  (reduce
+   (fn [holders {:keys [key each]}]
+     (mapcat
+      (fn [[label m]]
+        (let [v (some (fn [k] (clojure.core/when (contains? m k) (get m k)))
+                      [key (clojure.core/name key)])
+              label' (str label (clojure.core/name key))]
+          (if each
+            (clojure.core/when (sequential? v)
+              (keep-indexed
+               (fn [i item]
+                 (clojure.core/when (map? item)
+                   [(str label' "[" i "].") item]))
+               v))
+            (clojure.core/when (map? v)
+              [[(str label' ".") v]]))))
+      holders))
+   [["" inp]]
+   path))
+
 (defn- ref-problem
   "The first ref in `inp` that names no row, as a sentence, or nil.
   `read'` is the ctx's cross-kind read; `rdef-of` resolves the target
@@ -1285,26 +1312,30 @@
   that names nothing belongs."
   [refs inp read' rdef-of]
   (some
-   (fn [{:keys [field kind listed]}]
-     (clojure.core/when (clojure.core/and (contains? inp field)
-                                          (some? (get inp field))
-                                          (rdef-of kind))
-       (let [v (get inp field)
-             ids (if listed (vec v) [v])
-             missing (fn [id] (nil? (read' kind (str id))))]
-         (if listed
-           (clojure.core/when-some [i (first (keep-indexed
-                                              (fn [i id]
-                                                (clojure.core/when (missing id) i))
-                                              ids))]
-             (str (clojure.core/name field) "[" i "] names no "
-                  (clojure.core/name kind) ": "
-                  (pr-str (str (nth ids i)))
-                  " is not a row this house holds."))
-           (clojure.core/when (missing v)
-             (str (clojure.core/name field) " names no "
-                  (clojure.core/name kind) ": " (pr-str (str v))
-                  " is not a row this house holds."))))))
+   (fn [{:keys [field kind listed path]}]
+     (clojure.core/when (rdef-of kind)
+       (some
+        (fn [[label held]]
+          (clojure.core/when (clojure.core/and (contains? held field)
+                                               (some? (get held field)))
+            (let [v (get held field)
+                  at (str label (clojure.core/name field))
+                  ids (if listed (vec v) [v])
+                  missing (fn [id] (nil? (read' kind (str id))))]
+              (if listed
+                (clojure.core/when-some [i (first (keep-indexed
+                                                   (fn [i id]
+                                                     (clojure.core/when (missing id) i))
+                                                   ids))]
+                  (str at "[" i "] names no "
+                       (clojure.core/name kind) ": "
+                       (pr-str (str (nth ids i)))
+                       " is not a row this house holds."))
+                (clojure.core/when (missing v)
+                  (str at " names no "
+                       (clojure.core/name kind) ": " (pr-str (str v))
+                       " is not a row this house holds."))))))
+        (ref-holders inp path))))
    refs))
 
 (defn names-a-row-that-stands
@@ -1316,8 +1347,10 @@
   sentence names the position of the first that stands for nothing.
 
   `refs` is `schema/ref-fields` of the door's own input model, so the
-  wall judges exactly the fields the form offers a picker for. A kind
-  writes none of this.
+  wall judges exactly the fields the form offers a picker for, and
+  behind them `schema/nested-ref-fields`: a ref inside a part the door
+  takes whole resolves too, and the sentence names its path and its
+  position (`days[1].meal_id`). A kind writes none of this.
 
   It advertises optimistically with no read in scope — the
   storage-free render probe carries no hooks, and an envelope must not

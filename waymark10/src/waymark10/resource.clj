@@ -136,7 +136,8 @@
           ;; nothing and the fingerprint does not move — action-fp
           ;; projects a named set of keys and this is not one of them
           ref-fields (when (:input a)
-                       (not-empty (schema/ref-fields (:input a))))]
+                       (not-empty (into (schema/ref-fields (:input a))
+                                        (schema/nested-ref-fields (:input a)))))]
       (cond-> (assoc a
                      :from from
                      :to (:to a)
@@ -1981,9 +1982,10 @@
         ;; dangling-ref wall in front of the create guards is built
         ;; from this list. Outside the fingerprint's whitelist, so it
         ;; moves no kind's hash
-        (as-> r (let [refs (not-empty
-                            (schema/ref-fields
-                             (or (:create-schema r) (:schema r))))]
+        (as-> r (let [model (or (:create-schema r) (:schema r))
+                      refs (not-empty
+                            (into (schema/ref-fields model)
+                                  (schema/nested-ref-fields model)))]
                   (cond-> r refs (assoc :create-ref-fields refs))))
         (update :allow-undo set)
         (update :deviations #(vec (or % [])))

@@ -280,6 +280,30 @@
       (try (:id (:row (create-example eng kind {:seed seed})))
            (catch Exception _ nil))))
 
+(defn- without-nested-refs
+  "`value` minus every OPTIONAL ref nested below the top level of
+  `model` (`schema/nested-ref-fields`). The engine resolves those at the
+  door too, so a generated uuid inside a part taken whole is a 409; an
+  optional one is the walk's to earn, as an optional top-level field
+  is. A required one stays, for an example to answer."
+  [model value]
+  (reduce
+   (fn [v {:keys [field path]}]
+     (letfn [(strip [m steps]
+               (if-some [{:keys [key each]} (first steps)]
+                 (let [sub (get m key)]
+                   (cond
+                     (and each (sequential? sub))
+                     (assoc m key (mapv #(if (map? %) (strip % (rest steps)) %)
+                                        sub))
+                     (and (not each) (map? sub))
+                     (assoc m key (strip sub (rest steps)))
+                     :else m))
+                 (dissoc m field)))]
+       (if (map? v) (strip v path) v)))
+   value
+   (filter :optional (schema/nested-ref-fields model))))
+
 (defn synthesize-input
   "An input map that (a) validates against the action's :input schema
   and (b) satisfies every leaf guard's declared acceptance: single-
@@ -372,7 +396,9 @@
                                       (name kind) ", and this engine holds"
                                       " none to name" fix)))))
                     sample (schema/ref-fields input-form))]
-        (some->> sample (schema/encode input-form))))))
+        (some->> sample
+                 (without-nested-refs input-form)
+                 (schema/encode input-form))))))
 
 ;; ── create ──────────────────────────────────────────────────────────
 
@@ -398,8 +424,10 @@
                                     (keep (fn [[k e]] (when (:optional e) k)))
                                     (schema/entry-map model))
                      derived (set (keys (:derived rdef)))]
-                 (schema/encode model (apply dissoc generated
-                                             (into optional derived)))))
+                 (schema/encode model (without-nested-refs
+                                       model
+                                       (apply dissoc generated
+                                              (into optional derived))))))
            overrides)))
 
 (defn create-example
