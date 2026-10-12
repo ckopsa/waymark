@@ -96,8 +96,13 @@
 
 (defn- cond-matches?
   "One cond against one stored row — the grammar's Postgres meaning."
-  [row {:keys [target field cast op value values absent? held]}]
+  [row {:keys [target field cast op value values absent? held of]}]
   (cond
+    ;; the OR of conjunctions: a grant's sight over several filtered
+    ;; entries of one kind (grants/conds-of)
+    (= :any-of op)
+    (boolean (some (fn [conds] (every? #(cond-matches? row %) conds)) of))
+
     ;; the anti-join, its other side already read (`bind-conds`)
     (= :no-row op)
     (not (contains? held (if (= :id target)

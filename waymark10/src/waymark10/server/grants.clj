@@ -437,7 +437,7 @@
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and only ONE entry may filter a kind; a filter on a dotted power names a field the server's powers entry lists in `constraints`, and a power that lists none admits no filter at all."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -454,15 +454,31 @@
           ;; mcp_server row's powers name (waymark-fp62.6.3.5). Its
           ;; vocabulary is that entry's `constraints`, and the power
           ;; door admits a call ANY entry admits — so a grant narrows
-          ;; one power to two repositories with two entries. A kind's
-          ;; filters are a query's conds and keep the one-entry rule;
-          ;; so does a dotted token only the capability registry names
-          ;; (this engine's own powers), whose own enforcement point
-          ;; reads the first filter and must not be handed a second.
+          ;; one power to two repositories with two entries. A KIND
+          ;; takes several filtered entries too (ticket d4211f9a): its
+          ;; sight is the union of their filters (`conds-of` spells
+          ;; the OR) and a door opens only under an entry that names
+          ;; it (`door-on-row?`) — read these, act on those. Entries
+          ;; that ALL name no action are still refused, as they were
+          ;; before the ticket: nothing sets them apart but their
+          ;; filters, and that is the scope a doubled renewal spelled
+          ;; (waymark-ycp). The one-entry rule is kept for a
+          ;; dotted token only the capability registry names (this
+          ;; engine's own powers), whose own enforcement point reads
+          ;; the first filter and must not be handed a second.
           power? (fn [e] (and (str/includes? (str (:kind e)) ".")
                               (contains? @allowed (str (:kind e)))))
-          dup (->> entries (remove power?) (map :kind) frequencies
+          dup (->> entries (remove power?)
+                   (filter #(str/includes? (str (:kind %)) "."))
+                   (map :kind) frequencies
                    (some (fn [[k n]] (when (< 1 n) k))))
+          idle (->> entries (remove power?)
+                    (remove #(str/includes? (str (:kind %)) "."))
+                    (group-by :kind)
+                    (some (fn [[k es]]
+                            (when (and (next es)
+                                       (not-any? (comp seq :actions) es))
+                              k))))
           bad (first
                (for [e entries
                      :when (not (power? e))
@@ -501,6 +517,8 @@
                        {:kind k :field (name f)}))]
       (cond
         dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
+        idle (t/deny {:vars {:kind idle
+                             :field "(two filtered entries, neither naming an action)"}})
         bad (t/deny {:vars bad})
         bad-power (t/deny {:vars bad-power})
         :else (t/allow)))
@@ -619,19 +637,33 @@
   always welcome."
   [e s]
   (when-some [sk (get s (str (:kind e)))]
-    (and (empty? (remove (:actions sk) (map str (:actions e))))
-         (or (nil? (:ids sk))
-             (and (seq (:ids e))
-                  (every? (:ids sk) (map str (:ids e)))))
-         (or (nil? (:filters sk))
-             (and (:filter e)
-                  (every? (fn [[f v]]
-                            (= (str v)
-                               (str (get (:filter e) (keyword (name f))))))
-                          (first (:filters sk)))))
-         (nil? (:fields sk))
-         (empty? (:hashed sk))
-         (empty? (:args sk)))))
+    (let [acts (map str (:actions e))
+          rides? (fn [fm]
+                   (and (:filter e)
+                        (every? (fn [[f v]]
+                                  (= (str v)
+                                     (str (get (:filter e) (keyword (name f))))))
+                                fm)))]
+      (and (empty? (remove (:actions sk) acts))
+           (or (nil? (:ids sk))
+               (and (seq (:ids e))
+                    (every? (:ids sk) (map str (:ids e)))))
+           (or (nil? (:filters sk))
+               (some rides? (:filters sk)))
+           ;; several entries on one kind: the minted entry sits inside
+           ;; ONE of them — its actions, its ids and its filter — and
+           ;; never inside their union, which no entry conferred
+           (or (nil? (next (:entries sk)))
+               (some (fn [n]
+                       (and (every? (:actions n) acts)
+                            (or (nil? (:ids n))
+                                (and (seq (:ids e))
+                                     (every? (:ids n) (map str (:ids e)))))
+                            (or (nil? (:filter n)) (rides? (:filter n)))))
+                     (:entries sk)))
+           (nil? (:fields sk))
+           (empty? (:hashed sk))
+           (empty? (:args sk))))))
 
 (g/defguard agents-mint-within-their-leash
   {:judges [:scope]
@@ -746,10 +778,38 @@
       (first filt)        (assoc :filter (first filt))
       (first flds)        (assoc :fields (first flds)))))
 
+(defn- filter-key
+  "One filter map as {field-name value-text}, however its keys were
+  spelled: what makes two entries' filters the same filter."
+  [fm]
+  (into {} (map (fn [[f v]] [(scope-name f) (str v)])) fm))
+
+(defn- split-scope-entries
+  "One kind's entries, folded to one PER FILTER, filters in first-seen
+  order. An entry silent about its filter joins the last one spelled,
+  so its actions land on one filter's rows and never on every row."
+  [entries]
+  (let [last-f (last (keep :filter entries))
+        keyed (mapv (fn [e]
+                      (let [f (or (:filter e) last-f)]
+                        [(filter-key f) (assoc e :filter f)]))
+                    entries)]
+    (into [] (comp (map first) (distinct)
+                   (map (fn [k]
+                          (merge-scope-entries
+                           (into [] (comp (filter #(= k (first %))) (map second))
+                                 keyed)))))
+          keyed)))
+
 (defn merge-scope
   "The scopes folded into ONE ENTRY PER KIND, kinds in first-seen
   order. Called with the grant's stored scope and the approved ask's,
-  it is both the extension and the heal."
+  it is both the extension and the heal.
+
+  A kind that ONE scope filters in two different ways keeps an entry
+  per filter (ticket d4211f9a): those entries read the kind as a union
+  and each admits its own actions, so folding them would hand one
+  entry's actions to the other's rows."
   [& scopes]
   (let [all (into [] (comp cat (filter map?)) scopes)
         ;; an entry with an end is never folded (ticket b177a14b): a
@@ -757,9 +817,20 @@
         ;; for good. It rides behind the folded entries as written.
         ending (filterv #(some? (:until %)) all)
         entries (into [] (remove #(some? (:until %))) all)
-        by-kind (group-by #(scope-name (:kind %)) entries)]
+        by-kind (group-by #(scope-name (:kind %)) entries)
+        split? (into #{}
+                     (mapcat (fn [scope]
+                               (for [[k es] (group-by #(scope-name (:kind %))
+                                                      (remove #(some? (:until %))
+                                                              (filter map? scope)))
+                                     :when (next (distinct (map filter-key
+                                                                (keep :filter es))))]
+                                 k)))
+                     scopes)]
     (into (into [] (comp (map #(scope-name (:kind %))) (distinct)
-                         (map #(merge-scope-entries (by-kind %))))
+                         (mapcat #(if (split? %)
+                                    (split-scope-entries (by-kind %))
+                                    [(merge-scope-entries (by-kind %))])))
                 entries)
           ending)))
 
@@ -1859,8 +1930,10 @@
                  :hashed (into #{} (comp (mapcat :hashed) (map str)) entries)
                  ;; filter-scoped admission: nil when any entry lacks a
                  ;; filter (openness absorbs, the ids rule). For a KIND
-                 ;; the guard keeps filtered entries to one, so the vec
-                 ;; is the row?/conds-of contract, not an OR machine.
+                 ;; the vec is the SIGHT: a row any of them admits is
+                 ;; seen (row-matches?), and conds-of spells the same
+                 ;; union for a listing. What a row AFFORDS is asked of
+                 ;; :entries below, one entry at a time.
                  ;; For a dotted POWER it holds every entry and the
                  ;; power door admits a call that ANY of them admits
                  ;; (waymark-fp62.6.3.5) — two repositories on one
@@ -1868,6 +1941,16 @@
                  ;; two different paths for two different repositories
                  :filters (when-not (some #(nil? (:filter %)) entries)
                             (mapv :filter entries))
+                 ;; each entry as it was written: the actions it names,
+                 ;; under its own ids and its own filter. A door opens
+                 ;; on a row only where ONE entry names the door and
+                 ;; admits the row (`door-on-row?`, ticket d4211f9a)
+                 :entries (mapv (fn [e]
+                                  {:actions (into #{} (map str) (:actions e))
+                                   :ids (when (some? (:ids e))
+                                          (into #{} (map str) (:ids e)))
+                                   :filter (:filter e)})
+                                entries)
                  :args (args-of entries)}]))
         (group-by :kind (get-in row [:data :scope]))))
 
@@ -1909,6 +1992,27 @@
                        (boolean (some #(= have %) (filter-values rdef f v)))))
                    fm))
          filter-maps)))
+
+(defn- door-on-row?
+  "Does the scope open `action` on the row `id`, given `e`, the kind's
+  entry of the surface? An action is admitted only by an entry that
+  names it, under that entry's own ids and filter (ticket d4211f9a):
+  one entry may read a kind widely while another acts on part of it.
+  When every entry names the action the row's sight has already
+  answered, and nothing is loaded."
+  [eng k e action id]
+  (let [a (name action)
+        entries (:entries e)
+        named (filter #(contains? (:actions %) a) entries)]
+    (boolean
+     (or (= (count named) (count entries))
+         (when-some [row (load-decoded eng (keyword k) id)]
+           (let [rdef (get (inv/resources eng) (keyword k))]
+             (some (fn [n]
+                     (and (or (nil? (:ids n)) (contains? (:ids n) (str id)))
+                          (or (nil? (:filter n))
+                              (row-matches? row [(:filter n)] rdef))))
+                   named)))))))
 
 (def dead
   "The scoped-to-nothing surface a dead or unknown grant confers."
@@ -2597,7 +2701,11 @@
         action-on?* (fn [kind action id]
                       (let [k (name kind) a (name action)]
                         (boolean
-                         (or (contains? (get-in surface [k :actions] #{}) a)
+                         (or (and (contains? (get-in surface [k :actions] #{}) a)
+                                  ;; the scope names the door: it opens
+                                  ;; on the rows of an entry that names it
+                                  (or (nil? id)
+                                      (door-on-row? eng k (get surface k) a id)))
                              (and (contains? (:actions (own-of k) #{}) a)
                                   (or (nil? id)
                                       (not (contains? surface k))
@@ -2680,12 +2788,15 @@
                  (own-kind? k))))
      ;; the filter entry's query half: conds the collection ANDs into
      ;; its search, so listings, totals and facets tell the same story
-     ;; row? tells — the guard's one-filtered-entry rule is what keeps
-     ;; this a conjunction instead of an OR machine
+     ;; row? tells. One filtered entry is a conjunction, as it always
+     ;; was; several are ONE :any-of cond over a conjunction each, the
+     ;; union row? reads (ticket d4211f9a)
      :conds-of (fn [kind]
                  (when-some [fms (get-in surface [(name kind) :filters])]
-                   (let [rdef (get (inv/resources eng) (keyword (name kind)))]
-                    (vec (for [[f v] (first fms)
+                   (let [rdef (get (inv/resources eng) (keyword (name kind)))
+                         conds-for
+                         (fn [fm]
+                    (vec (for [[f v] fm
                               ;; a comma value on an :in field is any
                               ;; of — `row-matches?` reads it the same
                               :let [vs (filter-values rdef f v)
@@ -2705,7 +2816,11 @@
                             (merge {:target :state :vis? true} one)
                             (merge {:target :data :field (keyword (name f))
                                     :cast "text" :vis? true}
-                                   one)))))))
+                                   one)))))
+                         fms (vec (distinct fms))]
+                     (if (next fms)
+                       [{:op :any-of :vis? true :of (mapv conds-for fms)}]
+                       (conds-for (first fms))))))
      :ids-of (fn [kind]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
@@ -2826,7 +2941,8 @@
                    (or (nil? (:filters e))
                        (when-some [row (load-decoded eng (keyword k) id)]
                          (row-matches? row (:filters e)
-                                       (get (inv/resources eng) (keyword k)))))))))))
+                                       (get (inv/resources eng) (keyword k)))))
+                   (door-on-row? eng k e action id)))))))
 
 (defn- display-of
   "The display name of the member a principal id names: the row of that
