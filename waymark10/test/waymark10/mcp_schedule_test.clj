@@ -110,7 +110,12 @@
             row (doc (tool eng "waymark_get" {:kind "scheduled_action"
                                               :id (:scheduled_action d)}))]
         (is (= "strict" (:validity d)))
-        (is (= 120 (get-in row [:data :grace_seconds])))))))
+        (is (= 120 (get-in row [:data :grace_seconds])))))
+    (testing "`tell` rides the call onto the stored row"
+      (let [d (doc (later eng c {:tell "problems"}))
+            row (doc (tool eng "waymark_get" {:kind "scheduled_action"
+                                              :id (:scheduled_action d)}))]
+        (is (= "problems" (get-in row [:data :tell])))))))
 
 (deftest dry-run-with-at-rehearses-the-check-and-writes-nothing
   (let [eng (fresh-engine)
