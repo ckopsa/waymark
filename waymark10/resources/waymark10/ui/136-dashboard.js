@@ -190,17 +190,15 @@ async function renderDashboard(view, doc) {
   if (data.description)
     panel.append(el("p", {class: "prose slot-desc"}, data.description));
   const bar = el("div", {class: "actions"});
-  const entries = Object.entries(doc.actions || {})
-    .sort(([a, ea], [b, eb]) =>
-      ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
-      a.localeCompare(b));
+  const entries = Object.entries(doc.actions || {}).sort(doorOrder);
   for (const [name, entry] of entries)
     bar.append(actionButton({name, entry, doc, onDone: out => {
       if (out && out.self && out.self !== doc.self) go(out.self);
       else render();
     }}));
   const {blocked, grouped, gated} = splitRefusals(doc);
-  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+  for (const [name, entry] of
+       blocked.concat(gated, reachGrouped(grouped, doc)).sort(doorOrder))
     bar.append(shutDoor(name, entry, doc));
   const slotsLink = (doc.links || {}).slots || {};
   if (slotsLink.href)
@@ -209,7 +207,10 @@ async function renderDashboard(view, doc) {
              "add, revise, remove"}, "Slots ↗"));
   panel.append(bar);
   const notes = blockedNotes(blocked, doc);
-  if (notes) panel.append(notes);
+  /* the bar folds as the row page's does (foldDoors) */
+  const dashMore = foldDoors(bar, notes, doc);
+  if (dashMore) panel.append(dashMore);
+  else if (notes) panel.append(notes);
   view.append(panel);
 
   /* the slot grid: embedded ACTIVE parts (the link's own :where), in
