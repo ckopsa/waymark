@@ -743,8 +743,8 @@
           (schema/entry-keys form))))
 
 (defn- check-resolvers
-  "The dangling-ref wall resolves every top-level entry that carries
-  `:kind`; a KIND-AND-ID PAIR it cannot reach, because the kind is a
+  "The dangling-ref wall resolves every entry that carries `:kind`,
+  nested ones too; a KIND-AND-ID PAIR it cannot reach, because the kind is a
   value the caller types. Such a pair is the kind's own to resolve: each
   field of one warns unless a guard at that door (the create guards for
   the create door, the action's guards otherwise) names it in
