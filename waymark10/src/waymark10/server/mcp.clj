@@ -1093,6 +1093,11 @@
                                    :description (str "With at: how late the run may be when the "
                                                      "engine was down at its time. An hour unless "
                                                      "said, a day at most.")}
+                   :tell {:type "string" :enum ["all" "problems" "none"]
+                          :description (str "With at: when the engine tells you how the "
+                                            "call ended. all (default): when it runs, is "
+                                            "skipped or fails. problems: only when it is "
+                                            "skipped or fails. none: never.")}
                    :acknowledge {:type "string"
                                  :description (str "The consequence sentence, echoed "
                                                    "exactly — required when "
@@ -2395,7 +2400,7 @@
   "The scheduler's fields `waymark_invoke` carries beside `at` (R-7.2),
   spelled as the scheduled_action create spells them."
   [:zone :validity :conditions :expect_state :expect_refusals :grace_seconds
-   :acknowledge :acknowledge_warnings])
+   :tell :acknowledge :acknowledge_warnings])
 
 (defn- in-zone
   "An instant as the wire spells it, written on the clock of `zone`: a
