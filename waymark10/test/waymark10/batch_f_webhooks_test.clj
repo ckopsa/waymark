@@ -179,6 +179,8 @@
                 (is (= :active (:state row)))
                 (is (pos? n))
                 (is (some? (get-in row [:data :last_skipped_at])))
+                (is (= "status 500" (get-in row [:data :last_skip_error]))
+                    "the row says why the deliveries were skipped")
                 (is (nil? (get-in row [:data :last_delivered_at])))
                 (is (= 1 (count (notes-of eng (:id sub))))
                     "one write a pass, not one an event")
@@ -204,6 +206,7 @@
               (let [row (sub-row eng (:id sub))]
                 (is (some? (get-in row [:data :last_delivered_at])))
                 (is (nil? (get-in row [:data :skipped_count])))
+                (is (nil? (get-in row [:data :last_skip_error])))
                 (is (= 1 (count (notes-of eng (:id sub))))))))
           (testing "the tally is the deliverer's: a person's call refuses"
             (let [{sub :row} (inv/create! eng :subscription
@@ -235,5 +238,7 @@
             (testing "no declared policy: the subscription fails, cursor parked"
               (let [row (sub-row eng (:id sub))]
                 (is (= :failed (:state row)))
-                (is (some? (get-in row [:data :failure_reason]))))))
+                (is (re-find #"status 500"
+                             (str (get-in row [:data :failure_reason])))
+                    "the reason names the last error"))))
           (finally (engine/stop! (:server rcv))))))))
