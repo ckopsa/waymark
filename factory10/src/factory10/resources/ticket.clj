@@ -797,13 +797,11 @@
           (read' (keyword (subs scene-ref 0 (long colon))) id)
           (catch Exception _ nil))))))
 
-(defguardfn an-epic-shows-its-evidence
-  {:reads [:storage]
-   :vars [:missing]
-   :evidence [:missing_field]
-   :remedies [{:door :ticket/restate :fields ['(evidence :missing_field)]}]
-   :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
-  [row _inp ctx]
+(defn- missing-evidence
+  "What an epic's showcase still owes before it ends: `:missing`, the
+  sentence that says so, and `:field`, the one input that answers it.
+  nil for an epic that owes nothing and for a ticket that is no epic."
+  [row ctx]
   (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
         film (evidence-of row :film_url)
         scene-ref (evidence-of row :scene_ref)
@@ -821,14 +819,73 @@
                     "Its `scene_ref` names no row that exists: write it kind:id, for the journal or other row whose text is the told scene.")
                   :else
                   "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")
-        ;; the one input the refusal is missing, as the restate's form names it
+        ;; the one input the refusal is missing, as the remedy's form names it
         field (case fmt
                 "film" "showcase.evidence.film_url"
                 "text" "showcase.evidence.scene_ref"
                 "showcase")]
-    (if missing
-      (t/deny {:vars {:missing missing} :evidence {:missing_field field}})
-      (t/allow))))
+    (when missing
+      {:missing missing :field field})))
+
+(defn- evidence-or-deny [row ctx]
+  (if-some [{:keys [missing field]} (missing-evidence row ctx)]
+    (t/deny {:vars {:missing missing} :evidence {:missing_field field}})
+    (t/allow)))
+
+;; THE REMEDY IS AFFORDED WHERE THE EPIC STANDS (ticket ce2e4008). A
+;; guard's remedies are declared once and do not read the row's state,
+;; and `restate` is a draft's door. So the one law is two guards on
+;; `complete`, one for each state it leaves from: a draft is refused
+;; toward `restate`, and an open epic toward `show_evidence`. Each
+;; allows in the other's state, and a pursuit meets one door it can take.
+
+(defguardfn a-draft-epic-shows-its-evidence
+  {:reads [:storage]
+   :vars [:missing]
+   :evidence [:missing_field]
+   :remedies [{:door :ticket/restate :fields ['(evidence :missing_field)]}]
+   :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Restate it with that in its showcase, and then this door opens."}
+  [row _inp ctx]
+  (if (= :draft (state-of row))
+    (evidence-or-deny row ctx)
+    (t/allow)))
+
+(defguardfn an-epic-shows-its-evidence
+  {:reads [:storage]
+   :vars [:missing]
+   :evidence [:missing_field]
+   :remedies [{:door :ticket/show_evidence :fields ['(evidence :missing_field)]}]
+   :explain "This ticket is an epic, and an epic is done when its scene can be watched or read. {missing} Show the evidence with that in its showcase, and then this door opens."}
+  [row _inp ctx]
+  (if (= :draft (state-of row))
+    (t/allow)
+    (evidence-or-deny row ctx)))
+
+(defguardfn only-an-epic-shows-evidence
+  ;; not hidden: the door is its own way back (checks/check-reversible),
+  ;; and a hidden guard would leave a reversible self-loop with none
+  {:reads []
+   :open "No door changes this where the ticket stands: an epic is a ticket whose title says so, and a groomed title is restated from draft."
+   :explain "Only an epic shows evidence: a ticket whose title starts `[epic]`. Every other ticket ends without it."}
+  [row _inp _ctx]
+  (if (epic? row)
+    (t/allow)
+    (t/deny)))
+
+(defhandler show-the-evidence [row inp _ctx]
+  ;; The scene and its format are the groomed statement, so they stay
+  ;; as stored and the evidence alone lands. An open epic that never
+  ;; stated a showcase (one groomed before the groom asked) states it
+  ;; here, whole.
+  (let [shown (:showcase inp)
+        stored (get-in row [:data :showcase])]
+    (cond
+      (nil? shown) row
+      (nil? stored) (assoc-in row [:data :showcase] shown)
+      :else (assoc-in row [:data :showcase]
+                      (assoc shown
+                             :format (showcase-part stored :format)
+                             :scene (showcase-part stored :scene))))))
 
 (defn- parent-scene
   "The `parent_scene` computed field: the scene of the ticket this one
@@ -1893,6 +1950,23 @@
      :display {:label "Restate" :order 26
                :description "Say what needs doing again, whole — it stays blocked"}}
 
+    ;; AN OPEN EPIC TAKES ITS EVIDENCE WHERE IT STANDS (ticket
+    ;; ce2e4008). An epic is open while its children are worked, and
+    ;; the film exists only when they are done. The way round was
+    ;; `ungroom`, `restate` and `complete` from draft, by hand. This
+    ;; self-loop writes `showcase.evidence` and leaves the scene as
+    ;; groomed. A ticket that is no epic is refused it.
+    :show_evidence
+    {:from #{:open} :to :open
+     :input (into [:map] (filter #(= :showcase (first %))) stated-fields)
+     :guards [only-an-epic-shows-evidence]
+     :handler show-the-evidence
+     :record true
+     :edit {:prefill [:showcase]}
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Show the evidence" :order 31
+               :description "Attach the film's link or the told scene — the scene stays as groomed"}}
+
     ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
     ;; a person read it and stands behind it as written. The way back
     ;; is `ungroom`, so a statement that needs work leaves the queue
@@ -2174,7 +2248,8 @@
     :complete
     {:from #{:draft :open} :to :done
      :input close-input
-     :guards [children-are-finished an-epic-shows-its-evidence]
+     :guards [children-are-finished a-draft-epic-shows-its-evidence
+              an-epic-shows-its-evidence]
      :handler close-the-ticket
      ;; the sentence is composed, so it is drafted (change's `stall`):
      ;; a mis-click must not discard what was typed
@@ -2446,6 +2521,7 @@
             :summary "The ticket whose work surfaced this one"}]
    :deviations
    ["`restate` is two doors, `restate` for `draft` and `restate_blocked` for `blocked`, and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`. A blocked ticket is restated where it stands: the way round was `unblock`, which lands in `open` and wakes a seat before the blockers end. A deferred ticket is restated when it returns; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
+    "`show_evidence` (open → open) is the one door that writes a stated field on a groomed ticket. It serves an epic alone and lands `showcase.evidence` alone: the handler keeps the stored scene and format, so what a seat builds from does not move. The law that asks for the evidence is two guards on `complete`, `a-draft-epic-shows-its-evidence` and `an-epic-shows-its-evidence`, because a guard's remedies do not read the row's state and each refusal must name a door afforded where the epic stands."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
     "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
     "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."

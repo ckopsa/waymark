@@ -125,10 +125,20 @@ it reads the row alone, so its scenarios are check-tier too. Every
 other ticket grooms without a showcase. `restate` takes `showcase`
 with the other stated fields.
 `an-epic-shows-its-evidence` refuses the `complete` of an epic whose
-showcase carries no evidence of its format, with the remedy `restate`:
-a film needs `evidence.film_url`, an https link, and a text needs
+showcase carries no evidence of its format: a film needs
+`evidence.film_url`, an https link, and a text needs
 `evidence.scene_ref`, a `kind:id` that names a row that exists. Every
 other ticket completes without it, and `drop` asks an epic for none.
+The remedy must be a door afforded where the epic stands, so the law
+is two guards: `a-draft-epic-shows-its-evidence` refuses a draft with
+the remedy `restate`, and `an-epic-shows-its-evidence` refuses an open
+epic with the remedy `show_evidence`.
+
+**R-4.0a** `show_evidence` (open → open) takes `showcase` and prefills
+it. It lands `showcase.evidence` alone and keeps the stored scene and
+format, and a ticket that is no epic is refused it
+(`only-an-epic-shows-evidence`). An open epic with no showcase states
+it here, whole.
 
 **R-4.1** `restate` (draft → draft) takes the four stated fields
 again, whole, and prefills them. A groomed ticket is not restated: it
