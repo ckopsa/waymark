@@ -3392,7 +3392,9 @@
   on the page it answers and cannot be in what this shapes. `total`
   stays the collection's own count under that filter — the queue as
   the list page would show it — and the rows are what this firing
-  works.
+  works. A judging walk's first page answers that count beside the
+  anti-joined one (`listed_total`), so the sit makes no read whose
+  only purpose is `total` (ticket 7b308e02).
 
   `claimed` is the rows another open sitting of this seat was already
   handed (`seats/claimed-rows`). They are subtracted as the judged
@@ -3496,19 +3498,10 @@
                 named? #(= (str only) (id-of %))
                 total (long (or (get-in doc ["data" "total"]) 0))
                 ;; the answer's `total` stays the queue as the list page
-                ;; shows it, judged subjects and all: one count beside
-                ;; the read that left them out
-                queue-total (or (when without
-                                  (let [resp (call (request
-                                                    session :get
-                                                    (str "/api/" (:plural rdef))
-                                                    {:query (query-string
-                                                             (assoc params
-                                                                    "page[size]" "1"))}))
-                                        d (when (<= 200 (:status resp 500) 299)
-                                            (verbatim-json resp))]
-                                    (when (collection-doc? d)
-                                      (get-in d ["data" "total"]))))
+                ;; shows it, judged subjects and all: the collection
+                ;; counts it in the read that left them out, so no read
+                ;; is made for the count alone (ticket 7b308e02)
+                queue-total (or (get-in doc ["data" "listed_total"])
                                 (get-in doc ["data" "total"]))
                 first-page (vec (get-in doc ["data" "items"]))
                 queue (if only
