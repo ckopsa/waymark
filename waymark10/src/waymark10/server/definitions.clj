@@ -1015,9 +1015,10 @@
            (rows-of eng :seat {:state :parked}))))
 
 (defn sweep-lapsed!
-  "Break glass runs out (ticket b177a14b): every active seat whose scope
-  carries an entry past its `until` is restated without it, through
-  the concealed `lapse`, which records each entry and its `because`.
+  "Break glass runs out (ticket b177a14b): every active or parked seat
+  whose scope carries an entry past its `until` is restated without
+  it, through the concealed `lapse` (`lapse_parked` on a parked seat,
+  ticket 50843da5), which records each entry and its `because`.
   The resolve judged the entry absent from that instant, so this pass
   only makes the row say what the seat holds today. A seat with
   nothing ended is not written. → how many entries went."
@@ -1033,7 +1034,8 @@
                            0))))
          n))
      0
-     (rows-of eng :seat {:state :active}))))
+     (concat (rows-of eng :seat {:state :active})
+             (rows-of eng :seat {:state :parked})))))
 
 (def ^:private default-idle-seconds
   "R-12.25's own default, for a seat row written before the field
