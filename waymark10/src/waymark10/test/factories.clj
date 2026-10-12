@@ -269,6 +269,12 @@
 
 (declare create-example)
 
+(def ^:private ^:dynamic *creating*
+  "The kinds `a-standing-row` is creating a row of right now. A create
+  body fills its own required refs the same way, so a kind that needs
+  itself — directly or round a ring — would otherwise never end."
+  #{})
+
 (defn- a-standing-row
   "The id of a row of `kind` that GENUINELY STANDS: the first this
   engine holds, or one the walker creates for the purpose. nil when
@@ -277,32 +283,56 @@
   [eng kind ctx seed]
   (or (when-some [find' (:find ctx)]
         (:id (first (find' kind {} {:limit 1}))))
-      (try (:id (:row (create-example eng kind {:seed seed})))
-           (catch Exception _ nil))))
+      (when-not (contains? *creating* kind)
+        (binding [*creating* (conj *creating* kind)]
+          (try (:id (:row (create-example eng kind {:seed seed})))
+               (catch Exception _ nil))))))
 
-(defn- without-nested-refs
-  "`value` minus every OPTIONAL ref nested below the top level of
-  `model` (`schema/nested-ref-fields`). The engine resolves those at the
-  door too, so a generated uuid inside a part taken whole is a 409; an
-  optional one is the walk's to earn, as an optional top-level field
-  is. A required one stays, for an example to answer."
-  [model value]
-  (reduce
-   (fn [v {:keys [field path]}]
-     (letfn [(strip [m steps]
-               (if-some [{:keys [key each]} (first steps)]
-                 (let [sub (get m key)]
-                   (cond
-                     (and each (sequential? sub))
-                     (assoc m key (mapv #(if (map? %) (strip % (rest steps)) %)
-                                        sub))
-                     (and (not each) (map? sub))
-                     (assoc m key (strip sub (rest steps)))
-                     :else m))
-                 (dissoc m field)))]
-       (if (map? v) (strip v path) v)))
-   value
-   (filter :optional (schema/nested-ref-fields model))))
+(defn- standing-rows
+  "kind → `a-standing-row`, asked once a kind: one body names one row,
+  however many of its fields name that kind."
+  [eng ctx seed]
+  (memoize (fn [kind] (a-standing-row eng kind ctx seed))))
+
+(defn- with-nested-refs
+  "`[value missing]`: `value` with every ref nested below the top level
+  of `model` (`schema/nested-ref-fields`) answered. The engine resolves
+  those at the door too, so a generated uuid inside a part taken whole
+  is a 409. An OPTIONAL one is dropped: it is the walk's to earn, as an
+  optional top-level field is. A REQUIRED one is pointed at the row
+  `(standing kind)` answers. When that answers nil the generated value
+  stays, and `missing` is the first such `{:field … :kind …}` for the
+  caller to skip on."
+  [model value standing]
+  (let [missing (volatile! nil)
+        filled
+        (reduce
+         (fn [v {:keys [field path kind listed optional]}]
+           (letfn [(fill [m]
+                     (cond
+                       optional (dissoc m field)
+                       (not (contains? m field)) m
+                       :else
+                       (if-some [id (standing kind)]
+                         (assoc m field (if listed [id] id))
+                         (do (when-not @missing
+                               (vreset! missing {:field field :kind kind}))
+                             m))))
+                   (strip [m steps]
+                     (if-some [{:keys [key each]} (first steps)]
+                       (let [sub (get m key)]
+                         (cond
+                           (and each (sequential? sub))
+                           (assoc m key (mapv #(if (map? %) (strip % (rest steps)) %)
+                                              sub))
+                           (and (not each) (map? sub))
+                           (assoc m key (strip sub (rest steps)))
+                           :else m))
+                       (fill m)))]
+             (if (map? v) (strip v path) v)))
+         value
+         (schema/nested-ref-fields model))]
+    [filled @missing]))
 
 (defn synthesize-input
   "An input map that (a) validates against the action's :input schema
@@ -383,6 +413,7 @@
             decided (into (set (keys singles))
                           (mapcat :judges)
                           (filter :relation leaves))
+            standing (standing-rows eng ctx seed)
             sample (reduce
                     (fn [s {:keys [field kind listed]}]
                       (cond
@@ -390,15 +421,22 @@
                         (contains? decided field) s
                         (not (contains? s field)) s
                         :else
-                        (if-some [id (a-standing-row eng kind ctx seed)]
+                        (if-some [id (standing kind)]
                           (assoc s field (if listed [id] id))
                           (skip! (str who ": " (name field) " names a "
                                       (name kind) ", and this engine holds"
                                       " none to name" fix)))))
                     sample (schema/ref-fields input-form))]
-        (some->> sample
-                 (without-nested-refs input-form)
-                 (schema/encode input-form))))))
+        ;; and the refs BELOW the top level, inside a part the door
+        ;; takes whole: the same wall reads them, so a required one is
+        ;; answered the same way
+        (when sample
+          (let [[filled missing] (with-nested-refs input-form sample standing)]
+            (if missing
+              (skip! (str who ": " (name (:field missing)) " names a "
+                          (name (:kind missing)) ", and this engine holds"
+                          " none to name" fix))
+              (schema/encode input-form filled))))))))
 
 ;; ── create ──────────────────────────────────────────────────────────
 
@@ -407,7 +445,12 @@
   registered :create example when present, else malli generation over
   :create-schema (or :schema) with derived facts and optional fields
   dropped — derived facts are the engine's to write, optional fields
-  the walk's to earn. :overrides merge last (wire-shaped).
+  the walk's to earn. A required ref, at the top level or inside a part
+  the door takes whole, names a row that stands: the first the engine
+  holds of that kind, or one CREATED here for the purpose — so a
+  generated body is not always free of writes. A ref whose kind cannot
+  be created keeps its generated value, and the door refuses it.
+  :overrides merge last (wire-shaped).
 
   Public because a create body is sometimes wanted as DATA rather
   than as a row: waymark-jfv.4's outcome pieces carry `prepared`, the
@@ -423,11 +466,18 @@
                      optional (into #{}
                                     (keep (fn [[k e]] (when (:optional e) k)))
                                     (schema/entry-map model))
-                     derived (set (keys (:derived rdef)))]
-                 (schema/encode model (without-nested-refs
-                                       model
-                                       (apply dissoc generated
-                                              (into optional derived))))))
+                     derived (set (keys (:derived rdef)))
+                     standing (standing-rows eng (probe-ctx eng) seed)
+                     kept (reduce
+                           (fn [b {:keys [field kind listed]}]
+                             (if-some [id (when (contains? b field)
+                                            (standing kind))]
+                               (assoc b field (if listed [id] id))
+                               b))
+                           (apply dissoc generated (into optional derived))
+                           (schema/ref-fields model))]
+                 (schema/encode model
+                                (first (with-nested-refs model kept standing)))))
            overrides)))
 
 (defn create-example
