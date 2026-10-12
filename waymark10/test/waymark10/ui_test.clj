@@ -851,6 +851,19 @@
       (is (str/includes? body "if (apiHeld) return dataHintsCache[kind] || {};"))
       (is (str/includes? body "if (loaded || apiHeld) return;")))))
 
+(deftest ui-replay-reads-hints-from-the-walk
+  ;; a replay makes no read, so the x-display hints of its screens are
+  ;; the schemas the walk's header carries; the page's own are what is
+  ;; left for a walk exported without them
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        held "if (apiHeld) return dataHintsCache[kind] || {};"
+        carried "if (apiHeld && replay && replay.schemas[kind]) return replay.schemas[kind];"]
+    (is (str/includes? body "schemas: walk.header.schemas || {},"))
+    (is (str/includes? body "const hints = replay.schemas[kind] || dataHintsCache[kind] || {};"))
+    (testing "a held schema read answers the walk's schema before the page's"
+      (is (str/includes? body carried))
+      (is (< (str/index-of body carried) (str/index-of body held))))))
+
 (deftest ui-replay-falls-back-without-a-doc
   ;; a screen the walk holds no document for is today's panel, and a
   ;; walk with no document at all holds no request

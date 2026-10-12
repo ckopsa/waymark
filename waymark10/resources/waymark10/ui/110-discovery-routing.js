@@ -63,6 +63,8 @@ function kindAtHref(idx, href) {
 /* published data schemas: x-display hints per kind */
 const dataHintsCache = {};
 async function kindSchema(kind) {
+  /* a replay's screens read the schema their walk carries */
+  if (apiHeld && replay && replay.schemas[kind]) return replay.schemas[kind];
   /* a held read is not an answer: nothing is remembered from it */
   if (apiHeld) return dataHintsCache[kind] || {};
   if (!(kind in dataHintsCache)) {
