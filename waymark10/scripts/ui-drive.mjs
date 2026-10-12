@@ -3004,8 +3004,12 @@ async function guidedStory() {
   await A.until(`!document.querySelector("dialog[open]") &&
                  !!document.querySelector("[data-replay-walk]")`, "Replay on the walk's page");
   await A.js(`document.querySelector("[data-replay-walk]").click(); true`);
-  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
-                "the replay to reach its last frame", 60000);
+  /* the chip says ended when the last frame is applied, and that frame's
+     dialog is drawn a moment after it (openGuidedDialog): wait for both */
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !!document.querySelector(${JSON.stringify(
+                   `dialog[open][data-guided="${recipeKey}"]`)})`,
+                "the replay to reach its last frame, with ada's dialog drawn", 60000);
   ok("the sealed walk replays the dialog ada opened, read-only",
      await A.js(`{ const g = document.querySelector(${JSON.stringify(
          `dialog[open][data-guided="${recipeKey}"]`)});
