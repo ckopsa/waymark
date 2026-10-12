@@ -336,6 +336,31 @@
     (is (= 0 (total (get-q "/api/visits" "notes_contains=1_0")))
         "an unescaped _ would match any character and hit \"100\"")))
 
+(deftest the-id-filter-reads-the-named-rows
+  ;; Ticket ba123a99: every collection takes id=, one id or a comma list.
+  (let [page (json (req :get "/api/visits"))
+        items (get-in page [:data :items])
+        id-of #(last (str/split (:self %) #"/"))
+        [a b] (map id-of items)
+        selves (fn [query]
+                 (set (map :self (get-in (json (get-q "/api/visits" query))
+                                         [:data :items]))))]
+    (testing "one id answers that one row"
+      (is (= 1 (total (get-q "/api/visits" (str "id=" a)))))
+      (is (= #{(:self (first items))} (selves (str "id=" a)))))
+    (testing "a comma list answers each row named"
+      (is (= 2 (total (get-q "/api/visits" (str "id=" a "," b)))))
+      (is (= (set (map :self (take 2 items))) (selves (str "id=" a "," b)))))
+    (testing "an id no row carries answers an empty page, not a refusal"
+      (let [resp (get-q "/api/visits" "id=no-such-row")]
+        (is (= 200 (:status resp)))
+        (is (= 0 (total resp)))))
+    (testing "it composes with the other filters"
+      (is (= 0 (total (get-q "/api/visits" (str "id=" a "&guest_contains=zzzz"))))))
+    (testing "the query input declares it, as a comma list"
+      (is (= {:type "string" :x-in true}
+             (get-in page [:actions :query :input :properties :id]))))))
+
 ;; ── 3. sort ─────────────────────────────────────────────────────────
 
 (defn- shown [b field]
