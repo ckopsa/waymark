@@ -425,7 +425,7 @@
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -446,7 +446,11 @@
           ;; takes several filtered entries too (ticket d4211f9a): its
           ;; sight is the union of their filters (`conds-of` spells
           ;; the OR) and a door opens only under an entry that names
-          ;; it (`door-on-row?`). The one-entry rule is kept for a
+          ;; it (`door-on-row?`) — read these, act on those. Entries
+          ;; that ALL name no action are still refused, as they were
+          ;; before the ticket: nothing sets them apart but their
+          ;; filters, and that is the scope a doubled renewal spelled
+          ;; (waymark-ycp). The one-entry rule is kept for a
           ;; dotted token only the capability registry names (this
           ;; engine's own powers), whose own enforcement point reads
           ;; the first filter and must not be handed a second.
@@ -456,6 +460,13 @@
                    (filter #(str/includes? (str (:kind %)) "."))
                    (map :kind) frequencies
                    (some (fn [[k n]] (when (< 1 n) k))))
+          idle (->> entries (remove power?)
+                    (remove #(str/includes? (str (:kind %)) "."))
+                    (group-by :kind)
+                    (some (fn [[k es]]
+                            (when (and (next es)
+                                       (not-any? (comp seq :actions) es))
+                              k))))
           bad (first
                (for [e entries
                      :when (not (power? e))
@@ -494,6 +505,8 @@
                        {:kind k :field (name f)}))]
       (cond
         dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
+        idle (t/deny {:vars {:kind idle
+                             :field "(two filtered entries, neither naming an action)"}})
         bad (t/deny {:vars bad})
         bad-power (t/deny {:vars bad-power})
         :else (t/allow)))

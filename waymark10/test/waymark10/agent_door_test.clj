@@ -561,8 +561,8 @@
     (testing "state is a grant filter, and it lands"
       (is (= 201 (:status (try-grant [{:kind "guest_chore" :actions []
                                        :filter {:state "open"}}])))))
-    (testing "two filtered entries on one kind land (ticket d4211f9a)"
-      (is (= 201
+    (testing "two filtered entries on one kind refuse"
+      (is (contains? #{409 422}
                      (:status (try-grant [{:kind "guest_chore" :actions []
                                            :filter {:assignee "a"}}
                                           {:kind "guest_chore" :actions []
