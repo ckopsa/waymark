@@ -413,6 +413,25 @@
             (is (seq typed) "the argument is typed all the same")
             (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
 
+;; ticket 88dfb7b0: a principal id is also the `subject` a binding
+;; stamped on a member row
+
+(deftest a-principal-argument-given-a-subject-is-typed-with-the-members-name
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            _ (inv/create! eng :member
+                           {:display "Ada" :actor_type "human" :subject "ada-bound"}
+                           {:principal walks/engine-actor})
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "route"
+                                      :input {:owner "ada-bound"}}))
+        (is (= {:owner "Ada"} (typed-labels eng w)))
+        (testing "a member the recorder may not see has no label"
+          (let [typed (routes-unseen eng h a {:owner "ada-bound"} :owner)]
+            (is (seq typed) "the argument is typed all the same")
+            (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
+
 (deftest an-address-argument-is-typed-with-its-rows-summary-line
   (with-stage
     (fn [eng h _reg]
