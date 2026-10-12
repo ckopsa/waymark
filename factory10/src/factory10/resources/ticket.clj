@@ -224,9 +224,12 @@
       (when (and follow' @under-review?)
         (follow' {:kind :ticket :id (:id row) :action :rejoin_review})))))
 
-(defhandler groom-the-ticket [row _inp ctx]
+(defhandler groom-the-ticket [row inp ctx]
+  ;; a priority given lands with the groom, in the one transition; none
+  ;; given keeps the stored one (ticket f7420404)
   (put-its-change-back-to-work! row ctx)
-  row)
+  (cond-> row
+    (some? (:priority inp)) (assoc-in [:data :priority] (:priority inp))))
 
 (defhandler clear-the-blockers [row _inp _ctx]
   ;; The transition log keeps who blocked what; the row says what
@@ -767,6 +770,50 @@
   (if (and (epic? row) (nil? (scene-of row)))
     (t/deny)
     (t/allow)))
+
+;; P4 IS THE BACKLOG (ticket f7420404). The owner's rule, 2026-09-30:
+;; only P0-P3 work is built, and a seat walks every open ticket whatever
+;; its priority. So no door lands a ticket in the queue at 4. The
+;; ceiling is fixed here, house-wide, and both guards read the row and
+;; the input alone, so groom's scenarios stay check-tier. repo_policy's
+;; `groom_floor_max_priority` is the floor's own count and is not read.
+
+(def ^:private queue-max-priority 3)
+
+(defn- backlog? [priority]
+  (and (some? priority) (> (long priority) queue-max-priority)))
+
+(defguardfn a-groomed-ticket-lands-above-the-backlog
+  ;; the priority is the input's to give, so the render probe, which
+  ;; carries none, keeps the door offered on a P4 draft
+  {:reads []
+   :needs-input true
+   :vars [:lands_at]
+   :remedies [{:door :ticket/groom :fields [:priority]}]
+   :explain "This ticket would enter the queue at priority {lands_at}, and the queue takes 0 to 3: priority 4 is the backlog, which no seat builds. Groom it with a priority of 0 to 3 when it earns one, or leave it in draft."}
+  [row inp _ctx]
+  (let [lands-at (or (:priority inp) (get-in row [:data :priority]))]
+    (if (backlog? lands-at)
+      (t/deny {:vars {:lands_at lands-at}})
+      (t/allow))))
+
+(defguardfn a-draft-queued-ahead-lands-above-the-backlog
+  ;; `a-person-or-their-delegate-queues-a-draft`'s reading of the one
+  ;; input that grooms: `then: open` on a ticket that did not stand in
+  ;; the queue. Every other block passes.
+  {:reads []
+   :vars [:lands_at]
+   :remedies [{:door :ticket/block :fields [:then]}]
+   :explain "A block that says then: open puts this draft in the queue when its blockers end, and it stands at priority {lands_at}. The queue takes 0 to 3: priority 4 is the backlog, which no seat builds. Block it with then: draft, or raise it first: groom it with a priority of 0 to 3, and block it from the queue."}
+  [row inp _ctx]
+  (let [queued? (or (= :open (state-of row))
+                    (= "open" (get-in row [:data :blocked_from])))
+        stands-at (get-in row [:data :priority])]
+    (if (and (= "open" (some-> (:then inp) name))
+             (not queued?)
+             (backlog? stands-at))
+      (t/deny {:vars {:lands_at stands-at}})
+      (t/allow))))
 
 ;; AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). `complete` asks the
 ;; showcase for the evidence its format names: a film's `film_url`, or a
@@ -1323,6 +1370,30 @@
              :data (assoc a-draft-epic :showcase
                           {:format "film"
                            :scene "You open a proposal and cannot tell why anyone wants it. Then the scene plays, and you can."})}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(def ^:private a-backlog-draft
+  (assoc a-draft-ticket :priority 4))
+
+(defscenario a-backlog-ticket-is-not-groomed-where-it-stands
+  "Only priority 0 to 3 is built, and a seat walks every open ticket.
+   So a draft at 4 is refused the queue even at the person's tap, and
+   the refusal says to groom it with a priority."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-backlog-draft}
+   :input   {}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :a-groomed-ticket-lands-above-the-backlog
+             :because "priority 4 is the backlog"}})
+
+(defscenario a-backlog-ticket-is-groomed-with-a-priority
+  "And the groom that raises it lands it, in the one transition."
+  {:kind    :ticket
+   :attempt :groom
+   :row     {:state :draft :data a-backlog-draft}
+   :input   {:priority 3}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
@@ -1973,12 +2044,24 @@
     ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
     ;; a person read it and stands behind it as written. The way back
     ;; is `ungroom`, so a statement that needs work leaves the queue
-    ;; before it changes.
+    ;; before it changes. The groom may say the priority the ticket
+    ;; lands at, and it never lands at 4 (ticket f7420404).
     :groom
     {:from #{:draft} :to :open
+     :input [:map
+             [:priority {:optional true
+                         :examples [2]
+                         :x-display
+                         {:label "Priority (0 first, 3 last)"
+                          :help "The priority this ticket enters the queue at. Leave it empty to keep the one it has. Priority 4 is the backlog and never enters the queue: a ticket that stands at 4 is groomed with a priority of 0 to 3, or stays in draft."}}
+              [:maybe [:int {:min 0 :max queue-max-priority}]]]]
      :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
+              a-groomed-ticket-lands-above-the-backlog
               the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
+     ;; not an edit door: a groom is one tap and is fenced on no version,
+     ;; and a prefilled 4 would be refused by the door's own schema
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Groom" :style :primary :order 1 :everyday true
                :description "It is stated well enough to build as written — into the queue"}}
@@ -2026,10 +2109,11 @@
                      :x-display
                      {:label "When they end"
                       :choices then-choices
-                      :help "Where a draft goes when the last ticket it waits on ends: open puts it in the queue, as groomed; draft, or nothing, returns it to draft. A ticket blocked from the queue goes back to the queue either way."}}
+                      :help "Where a draft goes when the last ticket it waits on ends: open puts it in the queue, as groomed; draft, or nothing, returns it to draft. A ticket blocked from the queue goes back to the queue either way. A draft at priority 4 is the backlog and is not sent to the queue from here."}}
               [:maybe (into [:enum] (sort (keys then-choices)))]]]
      :guards [the-blockers-are-open-and-not-itself
-              a-person-or-their-delegate-queues-a-draft]
+              a-person-or-their-delegate-queues-a-draft
+              a-draft-queued-ahead-lands-above-the-backlog]
      :handler state-the-blockers
      :edit {:prefill [:blocked_by :then]}
      :safety {:idempotent true :reversible false :confirm false

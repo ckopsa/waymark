@@ -152,7 +152,8 @@
   {:as :fay :kind :ticket :ref :o-dropped
    :create {:title "Translate every chore into three languages"
             :type "feature" :priority 4}}
-  {:as :fay :kind :ticket :on :o-dropped :action "groom"}
+  {:as :fay :kind :ticket :on :o-dropped :action "groom"
+   :input {:priority 3}}
   {:as :dov :kind :ticket :on :o-dropped :action "drop"
    :input {:close_reason "Let go: nobody in the flat asked for it."}}
 
