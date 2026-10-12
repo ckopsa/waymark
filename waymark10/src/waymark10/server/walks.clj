@@ -272,7 +272,9 @@
    :deviations
    ["§ 4 lists `export` as a door; it is the route GET /api/walks/{id}/export (router/walk-export) and not an action, because it answers newline-delimited JSON and not an envelope."
     "`purge` also leaves `recording`, so a walk nobody sealed is still swept after its days, counted from its start."
-    "The purge deletes the frames with `store/delete-rows!`, a maintenance delete with no transition per frame; the `purge` transition on this row is the record of it."]})
+    "The purge deletes the frames with `store/delete-rows!`, a maintenance delete with no transition per frame; the `purge` transition on this row is the record of it."
+    "§ 4 has `seal` as the recorder's stop; the engine also seals a walk at `frame-ceiling` (20 000 frames) under `ceiling-actor`, and because `seal` takes no input and a transition has no reason field, that actor's display is the history's only record of why."
+    "The connector's `waymark_get` with `return: \"export\"` on a sealed walk answers a summary of the export (size, digest, href and its first lines up to 64 KB), not the whole file, which is read at the route."]})
 
 (defresource walk-frame
   {:kind :walk_frame
