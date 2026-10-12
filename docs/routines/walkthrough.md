@@ -106,8 +106,33 @@ waymark_query kind "walkthrough"
           "waiting_on": "agent"}
 ```
 
-The session reads this queue itself. The seat does not name
-`walkthrough` as its `walk`.
+The session can read this queue itself. As an alternative, the seat
+can name `walkthrough` as its `walk`. Then the queue is the seat's
+walk, and a release into an empty queue fires nothing.
+
+The walk's filter is the filter of the scope entry on `walkthrough`.
+That filter names the seat's id, so write the walk and the scope with
+the same `restate` that writes the wake entry:
+
+```json
+{"walk": "walkthrough",
+ "scope": [
+   {"kind": "walkthrough",
+    "actions": ["create", "advance", "stop", "resume", "withdraw"],
+    "filter": {"author": "seat:<seat id>", "state": "running",
+               "waiting_on": "agent"}}]}
+```
+
+The charter of such a seat does not tell the session to read the
+queue. The sit gives the rows of the walk.
+
+CAUTION: The filter of a scope entry also limits the rows that the
+seat's grant admits. With this filter, the seat sees a walkthrough
+only while the walkthrough waits on the seat. The tests do not prove
+that such a seat can take `create`, or `resume` on a stopped row,
+through its own grant. The tests prove the walk's filter, its count
+and the release. They do not call the sit door itself. Until those
+cases are proven, the safe recipe is the query above.
 
 ## What the tests prove
 
@@ -116,3 +141,7 @@ The session reads this queue itself. The seat does not name
 - `a-seat-is-woken-when-its-walkthrough-waits-on-it`
 - `a-person-step-opening-does-not-wake-the-author`
 - `a-damped-wake-leaves-the-walkthrough-in-the-seats-queue`
+
+One more case is for the seat that names `walkthrough` as its `walk`:
+
+- `a-leading-seat-that-walks-walkthrough-is-handed-its-waiting-row`

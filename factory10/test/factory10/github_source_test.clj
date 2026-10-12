@@ -1985,33 +1985,35 @@
     (pass! r)
     tid))
 
-(defn- put-ticket-at! [engine id state]
-  (let [st (:storage engine)]
-    (store/with-tx st
-      (fn [tx]
-        (let [row (store/load-row st tx :ticket id {})]
-          (store/save-row! st tx :ticket
-                           (assoc row :state state
-                                  :version (inc (long (:version row))))
-                           (:version row)))))))
+(defn- end-ticket!
+  "A person's `complete` or `drop` on one ticket."
+  [engine id action]
+  (let [st (:storage engine)
+        row (store/with-tx st (fn [tx] (store/load-row st tx :ticket id {})))]
+    (inv/invoke! engine :ticket id action {:close_reason "Ended for the test."}
+                 {:principal a-person
+                  :if-match (inv/etag :ticket id (:version row))})))
 
+;; The ticket's own ending closes it (ticket 458d65c5); the pass no
+;; longer reads a stuck change.
 (deftest a-stuck-change-that-never-opened-a-pull-request-closes-when-its-ticket-ends
-  (doseq [state [:done :dropped]]
-    (testing (name state)
+  (doseq [[action ending] [[:complete "done"] [:drop "dropped"]]]
+    (testing ending
       (let [{:keys [engine] :as r} (unadopted-world nil)
             tid (a-stuck-unopened! r)
             before (the-unadopted engine)]
         (is (= "stuck" (name (:state before))))
         (is (nil? (get-in before [:data :number])))
         (is (some #{"no pull request"} (get-in before [:data :failing_checks])))
-        (put-ticket-at! engine tid state)
-        (let [census (pass! r)
-              row (the-unadopted engine)]
+        (end-ticket! engine tid action)
+        (let [row (the-unadopted engine)]
           (is (= "closed" (name (:state row))))
-          (is (= (str "closed: ticket " tid " ended; this change never opened"
-                      " a pull request")
-                 (get-in row [:data :superseded_by])))
-          (is (= 1 (:unopened-closed census))))))))
+          (is (= (str "ticket " ending ": Ended for the test.")
+                 (get-in row [:data :superseded_by]))))
+        (let [census (pass! r)]
+          (is (= "closed" (name (:state (the-unadopted engine)))))
+          (is (= 0 (:unopened-closed census))
+              "the pass finds nothing left to close"))))))
 
 (deftest a-stuck-change-that-never-opened-a-pull-request-stays-stuck-while-its-ticket-is-open
   (let [{:keys [engine] :as r} (unadopted-world nil)
