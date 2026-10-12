@@ -579,6 +579,8 @@
   [row _inp _ctx]
   (update row :data dissoc :fire_url :fire_token :note))
 
+(declare waiting-texts waiting-note?)
+
 (defhandler stamp-fire
   [row inp _ctx]
   ;; a fire that went out supersedes the throttle that held the last
@@ -587,14 +589,26 @@
   ;; flag and the settle's due moment go the way of the note and
   ;; `retry_after` — the pair wakes/stamp-fired! clears after its own
   ;; fire, cleared here for the fires that never pass through it.
-  (-> row
-      (assoc-in [:data :last_fired_at] (:last_fired_at inp))
-      (cond-> (:last_run_url inp)
-        (assoc-in [:data :last_run_url] (:last_run_url inp)))
-      (cond-> (:last_runner inp)
-        (assoc-in [:data :last_runner] (:last_runner inp)))
-      (update :data dissoc :note :retry_after :wake_pending :wake_due_at
-              :wake_first_at :wake_text :wake_texts :wake_textless)))
+  ;;
+  ;; Not so the fires that wait for a release grace (ticket c84f747a):
+  ;; this fire named another row, or no row, and theirs are still owed.
+  ;; Their texts stay, with the flag, the due moment and the note that
+  ;; says they wait; `wakes/release!` clears the ones it sends.
+  (let [waiting? (seq (waiting-texts (:data row)))]
+    (-> row
+        (assoc-in [:data :last_fired_at] (:last_fired_at inp))
+        (cond-> (:last_run_url inp)
+          (assoc-in [:data :last_run_url] (:last_run_url inp)))
+        (cond-> (:last_runner inp)
+          (assoc-in [:data :last_runner] (:last_runner inp)))
+        (update :data dissoc :retry_after :wake_first_at :wake_textless)
+        (update :data
+                (fn [data]
+                  (if waiting?
+                    (cond-> data
+                      (not (waiting-note? (:note data))) (dissoc :note))
+                    (dissoc data :note :wake_pending :wake_due_at
+                            :wake_text :wake_texts)))))))
 
 (defhandler hold-throttle
   [row inp _ctx]
