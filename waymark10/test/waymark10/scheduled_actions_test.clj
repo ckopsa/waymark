@@ -450,6 +450,33 @@
                                       :input {:title "Laundry"}}))]
         (is (= #{:law_revision} (set (keys s))))))))
 
+(deftest a-reschedule-runs-the-scheduling-check-again
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        id (:id (schedule! eng c {}))
+        snap #(get-in (row-of eng id) [:data :snapshot])
+        before (snap)]
+    (testing "a door that would still take it: the time moves and the snapshot stays"
+      (inv/invoke! eng :chore (str c) :retitle {:title "Pans"} {:principal person})
+      (move! eng id :reschedule {:run_at "2026-10-03T09:00:00-06:00"} person)
+      (is (= (Instant/parse "2026-10-03T15:00:00Z")
+             (get-in (row-of eng id) [:data :run_at])))
+      (is (= before (snap))))
+    (testing "a door that would now refuse, in the door's own sentence"
+      ;; by another door: a second `finish` is a replay, and no refusal
+      (inv/invoke! eng :chore (str c) :file {:title "Pans, done"} {:principal person})
+      (is (str/includes?
+           (refusal #(move! eng id :reschedule {:run_at "2026-10-04T09:00:00-06:00"} person))
+           "Available in state"))
+      (is (= (Instant/parse "2026-10-03T15:00:00Z")
+             (get-in (row-of eng id) [:data :run_at])))
+      (is (= before (snap))))
+    (testing "an expected refusal the row stores is still passed over"
+      (let [c2 (chore! eng)
+            id2 (:id (schedule! eng c2 (on c2 "scrub" {:expect_refusals ["not-before-monday"]})))]
+        (is (nil? (refusal #(move! eng id2 :reschedule
+                                   {:run_at "2026-10-03T09:00:00-06:00"} person))))))))
+
 (deftest a-confirm-door-takes-its-sentence-at-scheduling
   (let [eng (fresh-engine)
         c (chore! eng)

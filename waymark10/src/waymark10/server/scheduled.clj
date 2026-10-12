@@ -551,6 +551,22 @@
     (t/deny {:vars {:problem problem}})
     (t/allow)))
 
+(g/defguard the-door-would-still-take-it
+  {:reads [:principal :grant :storage]
+   :vars [:problem]
+   :explain "A scheduled action is checked against its door again when its time moves: {problem}"
+   :open "The refusal is the target door's own, rehearsed now with the call this row stores: what clears it is what that door's sentence names, and no door of this kind does."}
+  ;; R-1: the stored call is the input of the check, and the snapshot is
+  ;; not read and not written
+  [row _inp ctx]
+  (let [call (:data row)]
+    (if-some [problem (when (and (:rehearse ctx) (map? (:target call)))
+                        (if-some [tool (tool-of (:target call))]
+                          (power-problem tool call ctx)
+                          (refused-now call ctx)))]
+      (t/deny {:vars {:problem problem}})
+      (t/allow))))
+
 ;; ── the conditions (R-2.3) ──────────────────────────────────────────
 
 (defn- condition-params
@@ -1711,7 +1727,8 @@
    {:reschedule
     {:from #{:scheduled} :to :scheduled
      :input (into [:map] time-fields)
-     :guards [the-scheduler-moves-it the-time-names-one-instant the-time-is-in-range]
+     :guards [the-scheduler-moves-it the-time-names-one-instant the-time-is-in-range
+              the-door-would-still-take-it]
      :handler move-time
      :edit {:fence false
             :unfenced-reason "Only the time moves, and only its scheduler moves it; the call and its rule stay as they were written, so there is no second writer's work here to clobber."}
@@ -1757,7 +1774,6 @@
     "R-1 says `cancel` is the scheduler's. A refused held call cancels the row with the engine's own hand, and `outcome_why` keeps the decider's reason. A `proposed` row that is cancelled or skipped leaves its held call waiting, and an allow of it then fails at `arm`."
     "R-1 says `input` is capped as held_calls/capped caps. A cut input is a different call, so an input over the same 16 KB ceiling is refused at scheduling with a sentence and never stored cut."
     "R-1 lists `etag` in the snapshot. An etag is spelled from the kind, the id and the version, so the snapshot keeps `version` and a reader spells the etag from it."
-    "R-1 says `reschedule` runs the scheduling check again. It does not yet: the check runs at the create, and a moved row meets its door at the run."
     "R-3.1 asks a confirm door for its sentence. The sentence is asked of a row's door; a create target is rehearsed in full and asked for none."
     "R-6.2 says the summary is `outcome_why` after an ending. A summary is one template, so the line stays `{target} · {run_at} · {state}` and the sentence is read from the field. The notice of an ending says the sentence."
     "R-6.1 says one engine-declared notice rule per ending. A `notice_rule` is a row a person writes, and it names a notifier the engine cannot choose. The three rules are declared in code (held-calls/engine-rules) and the notifier's consumer reads them beside the rows: the told member's own notifier makes the text and carries the send, and sent, failed and held are counted on that notifier, because a declared rule has no row to count on."
