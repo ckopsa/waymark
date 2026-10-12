@@ -1190,6 +1190,7 @@ function startReplay(text) {
   closeGuided();
   const r = {title: walk.header.title || "a walk", engine: walk.header.engine,
              cast: walk.header.cast || {}, frames: walk.frames,
+             schemas: walk.header.schemas || {},  // kind → its published schema
              at: 0, speed: 1, playing: false, timer: null, who: null, back,
              caption: null,       // the caption frame on screen
              gaze: null,          // the address last outlined
@@ -2356,12 +2357,16 @@ function renderReplay(view, href) {
    document recorded for this address, handed to the code that draws a
    live row or collection. The screen is inert, so no action on it can
    be taken, and apiHeld answers every read that code makes with
-   nothing. The hints are the ones this page already holds. */
+   nothing. The hints are the walk's own: the header's `schemas` holds
+   the published schema of each kind it shows, as its exporter read it.
+   A walk exported before that has none, and then the hints are the
+   ones this page already holds. */
 function renderReplayDoc(view, doc) {
   const screen = el("div", {"data-replay-screen": doc.self || "",
                             "data-replay-doc": "", inert: ""});
   view.append(screen);
-  const hints = dataHintsCache[String(doc.kind).replace(/_collection$/, "")] || {};
+  const kind = String(doc.kind).replace(/_collection$/, "");
+  const hints = replay.schemas[kind] || dataHintsCache[kind] || {};
   /* a row's draw is done when its promise is: render() waits for it */
   let drawn = null;
   if (String(doc.kind).endsWith("_collection")) renderCollection(screen, doc, hints);

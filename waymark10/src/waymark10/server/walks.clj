@@ -48,6 +48,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.events :as events]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.presence :as presence]
@@ -1414,6 +1415,33 @@
                                         ::refs)))
       subject (assoc :subject subject))))
 
+(defn- export-schemas
+  "The published schema of each kind the export's `doc` lines show
+  (docs/spec-agent-demo-walks.md § 8a), kind name → what
+  /api/schemas/{kind} answers the exporter: a secret field is not in
+  it, and neither is one `:field?` does not admit. A replay makes no
+  read, so these are the x-display hints its screens are drawn with.
+  `parts` are the lines that crossed, so a kind the exporter sees no
+  document of has no schema here."
+  [eng vis parts]
+  (let [kind? (or (:kind? vis) (constantly true))]
+    (into (sorted-map)
+          (comp (filter #(= "doc" (:type %)))
+                (keep #(doc-rdef eng (:doc %)))
+                (distinct)
+                (filter #(kind? (:kind %)))
+                (map (fn [rdef]
+                       [(name (:kind rdef))
+                        (p/wire-value
+                         (grants/project-json-schema
+                          vis (:kind rdef)
+                          (schema/conceal
+                           (schema/with-computed
+                            (schema/json-schema (:schema rdef))
+                            (:computed rdef))
+                           (schema/secret-fields (:schema rdef)))))])))
+          parts)))
+
 (defn export
   "A sealed walk as `waymark-walk/1` (docs/spec-guided-follow.md § 4):
   newline-delimited JSON, the header line and then one line per frame.
@@ -1426,8 +1454,10 @@
   origin is written. `exporter` is the principal who asks, when the
   caller knows it: the recorder of a self walk reads that walk's create
   forms and their refusals as recording judged them (`own-create?`),
-  and anyone else reads them under presence's whole-kind rule. → the
-  text, or nil when the walk is absent or not sealed."
+  and anyone else reads them under presence's whole-kind rule. A walk
+  whose `doc` lines crossed names their kinds' schemas in the header's
+  `schemas` (`export-schemas`); with none the header has no such key.
+  → the text, or nil when the walk is absent or not sealed."
   ([eng walk-id vis] (export eng walk-id vis nil))
   ([eng walk-id vis exporter]
   (let [st (:storage eng)
@@ -1468,13 +1498,15 @@
                              frames))
             {:keys [alias cast]} (cast-of eng vis parts)
             started (instant-of (:started_at d))
-            header (array-map
-                    :format export-format
-                    :title (:title d)
-                    :recorded (when started
-                                (str (.toLocalDate (.atZone started ZoneOffset/UTC))))
-                    :engine (or (:name eng) "waymark")
-                    :cast (apply array-map (mapcat identity cast)))]
+            schemas (export-schemas eng vis parts)
+            header (cond-> (array-map
+                            :format export-format
+                            :title (:title d)
+                            :recorded (when started
+                                        (str (.toLocalDate (.atZone started ZoneOffset/UTC))))
+                            :engine (or (:name eng) "waymark")
+                            :cast (apply array-map (mapcat identity cast)))
+                     (seq schemas) (assoc :schemas schemas))]
         (apply str (map #(str (wire/write-json %) "\n")
                         (cons header (map #(export-line alias %) parts)))))))))
 
