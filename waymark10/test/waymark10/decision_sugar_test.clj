@@ -168,7 +168,8 @@
                    grants/scope-names-real-kinds
                    grants/scope-names-real-actions
                    grants/scope-filters-are-filterable
-                   grants/scope-omits-private-kinds]
+                   grants/scope-omits-private-kinds
+                   grants/scope-ends-are-stated]
    :scenarios [grants/the-asker-does-not-decide
                grants/another-principal-may-deny]
    :deviations
@@ -310,7 +311,13 @@
   ;; ask gained `domain`, the name of its requester's seat's domain,
   ;; filterable by :eq with :absent-as factory. Re-pinned from the
   ;; bench's run 37167345732, where this assertion alone failed.
-  "971f54aabbba09bbbc3a5700aae484785e1502ba78a9cf25aa67d7c2ea068d5a")
+  ;;
+  ;; THE LAW MOVED AGAIN (ticket c823dc49): create gained
+  ;; scope-ends-are-stated, the wall the seat already carried — an
+  ;; ask's scope entry with `until` states `because`, parses, and ends
+  ;; at most 30 days ahead. Re-pinned from CI run 38269877348 (PR
+  ;; #1188), which printed this hash.
+  "fbbafb5cd916bc117600cba5d4de8f3f15f205498d27d3a7e51863a55524cb61")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
