@@ -1186,6 +1186,189 @@
         (is (true? (:isError got))
             "one map says what the seat sees and what it walks")))))
 
+;; ── 6b′. a leading seat walks its own walkthroughs ──────────────────
+;;
+;; docs/routines/walkthrough.md § "The queue" (ticket 6ec9d108). The
+;; seat's ONE scope entry on `walkthrough` carries the queue's filter,
+;; and the filter names the seat's own id, so a `restate` writes the
+;; walk and the scope after the create answered that id.
+;; `waymark10.wakes-test` proves the walk's filter, its count and the
+;; release under a stub grant. These cases go through the real doors:
+;; the sit, and the grant the sit binds.
+
+(def ^:private lead-key
+  "The leading clerk's own key — a fourth office."
+  "c2VhdC1rZXktZm9yLXRoZS1sZWFkLWNsZXJr")
+
+(def ^:private lead-charter
+  "Lead each person through the form they asked about.")
+
+(defn- open-leading-seat!
+  "A seat restated to walk `walkthrough` under the queue's own filter,
+  as the routine's doc writes it. → the seat's id."
+  [eng]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "claude-lead-5" :display "Lead 5"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))
+        seat (:row (inv/create!
+                    eng :seat
+                    {:name "lead-clerk"
+                     :charter lead-charter
+                     :scope [{:kind "meal" :actions ["accept"]}]
+                     :held_for [(:id model)]
+                     :standing_ttl_seconds 604800
+                     :cadence_seconds 3600
+                     :budget_usd_per_week 5M
+                     :sitting_budget_tokens 60000}
+                    {:principal person}))
+        id (str (:id seat))]
+    (schedules/ensure-schedule! eng seat)
+    (inv/invoke! eng :seat id :offer_key {:key lead-key} {:principal person})
+    (let [current (store/with-tx (:storage eng)
+                    (fn [tx] (store/load-row (:storage eng) tx :seat id {})))]
+      (inv/invoke! eng :seat id :restate
+                   {:charter lead-charter
+                    :walk "walkthrough"
+                    :scope [{:kind "walkthrough"
+                             :actions ["create" "advance" "stop" "resume"
+                                       "withdraw"]
+                             :filter {:author (str "seat:" id)
+                                      :state "running"
+                                      :waiting_on "agent"}}]
+                    :substitute_drop []
+                    :held_for [(:id model)]
+                    :substitute_for []
+                    :standing_ttl_seconds 604800
+                    :cadence_seconds 3600
+                    :budget_usd_per_week 5M
+                    :sitting_budget_tokens 60000
+                    :rows_per_firing 20}
+                   {:principal person
+                    :if-match (inv/etag :seat id (:version current))}))
+    id))
+
+(defn- led-row [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :walkthrough (str id) {}))))
+
+(defn- led-state [eng id] (some-> (led-row eng id) :state name))
+
+(defn- led-ids
+  "Every walkthrough the engine holds, by id. The create's answer is
+  not asked: the row is born outside the seat's filter."
+  [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (mapv #(str (:id %))
+                   (store/query-rows (:storage eng) tx :walkthrough {}
+                                     {:limit 100})))))
+
+(defn- lead-through!
+  "The bound session offers one agent step to Colton through
+  waymark_invoke, under the seat's own grant. → the tool's result."
+  [h sid]
+  (tool h (with-session sid) "waymark_invoke"
+        {:kind "walkthrough" :action "create"
+         :input {:subject "colton"
+                 :title "Filing the gas bill"
+                 :steps [{:who "agent"
+                          :note "Watch me: reading the open forms."}]}}))
+
+(defn- start-led! [eng id]
+  (inv/invoke! eng :walkthrough (str id) :start {}
+               {:principal person
+                :idempotency-key (str (random-uuid))}))
+
+(deftest a-leading-seat-is-handed-its-waiting-walkthrough-by-the-sit
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        seat-id (open-leading-seat! eng)
+        [sid _] (initialize! h)
+        sit! #(tool h (with-session sid) "waymark_sit" {:key lead-key})
+        first-sit (sit!)
+        made (lead-through! h sid)
+        ids (led-ids eng)
+        id (str (first ids))]
+
+    (testing "the sit answers the walk, and nothing waits in it yet"
+      (is (false? (:isError first-sit)) (text-of first-sit))
+      (let [walk (:walk (doc-of first-sit))]
+        (is (= "walkthrough" (:kind walk)))
+        (is (= lead-charter (:charter walk)))
+        (is (empty? (:rows walk)))))
+
+    (testing "a walkthrough nobody started is not in the walk"
+      (is (false? (:isError made)) (text-of made))
+      (is (= 1 (count ids)) (text-of made))
+      (is (= (str "seat:" seat-id) (str (get-in (led-row eng id) [:data :author])))
+          "the sitter is the author the filter names")
+      (is (empty? (get-in (doc-of (sit!)) [:walk :rows]))))
+
+    (testing "once the person starts, the sit hands the row with its advance door"
+      (start-led! eng id)
+      (let [r (sit!)
+            walk (:walk (doc-of r))
+            row (first (:rows walk))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= [id] (mapv :id (:rows walk))))
+        (is (= 1 (:total walk)))
+        (is (= "running" (:state row)))
+        (is (some #{"advance"} (mapv :action (:doors row)))
+            "the door that ends the agent's step rides the row")))
+
+    (testing "the sitter takes that door, and the row leaves the walk"
+      (let [r (tool h (with-session sid) "waymark_invoke"
+                    {:kind "walkthrough" :id id :action "advance"})]
+        (is (false? (:isError r)) (text-of r)))
+      (is (not= "agent" (some-> (get-in (led-row eng id) [:data :waiting_on])
+                                name)))
+      (is (empty? (get-in (doc-of (sit!)) [:walk :rows]))))))
+
+(deftest a-leading-seats-grant-creates-and-loses-the-row-outside-the-filter
+  ;; The scope entry's filter is also the leash. `create` names no row,
+  ;; so the grant admits it. Every other door is asked of a row, and a
+  ;; row that does not wait on the seat is outside the filter: to this
+  ;; grant it does not exist, though the seat is its author.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-leading-seat! eng)
+        [sid _] (initialize! h)
+        seated (tool h (with-session sid) "waymark_sit" {:key lead-key})
+        take! (fn [id action]
+                (tool h (with-session sid) "waymark_invoke"
+                      {:kind "walkthrough" :id id :action action}))
+        made (lead-through! h sid)
+        ids (led-ids eng)
+        id (str (first ids))]
+
+    (testing "the seat's own grant takes create"
+      (is (false? (:isError seated)) (text-of seated))
+      (is (false? (:isError made)) (text-of made))
+      (is (= 1 (count ids)) (text-of made))
+      (is (= "open" (led-state eng id))))
+
+    (testing "the row is born open, outside the filter, so the seat cannot read it"
+      (is (true? (:isError (tool h (with-session sid) "waymark_get"
+                                 {:kind "walkthrough" :id id}))))
+      (is (true? (:isError (take! id "withdraw")))
+          "nor take it back before the person starts")
+      (is (= "open" (led-state eng id))))
+
+    (testing "while the row waits on the seat, the seat stops it"
+      (start-led! eng id)
+      (let [r (take! id "stop")]
+        (is (false? (:isError r)) (text-of r)))
+      (is (= "stopped" (led-state eng id))))
+
+    (testing "and its own stop is not the grant's to lift: the row left the filter"
+      (is (true? (:isError (take! id "resume"))))
+      (is (true? (:isError (take! id "withdraw"))))
+      (is (= "stopped" (led-state eng id))))))
+
 ;; ── 6c. a change in another repository withholds no ticket ──────────
 ;;
 ;; Ticket 0eba219c: `seats/stuck-walk-reasons` counts only a submitted,
