@@ -1732,9 +1732,9 @@
 ;; A submitted change with no number whose bench names no pull request
 ;; either has an ended ticket, and is closed so the submitted list is
 ;; the real queue, or has a live one, and goes stuck once the window
-;; has passed so a person sees it. One already stuck for that is still
-;; closed when its ticket later ends (ticket 91694681). Close only: the
-;; branch is untouched.
+;; has passed so a person sees it. One already stuck for that is closed
+;; by its ticket's own ending (ticket 458d65c5), not by this pass. Close
+;; only: the branch is untouched.
 
 (defn- ticket-of
   "The id of the ticket a seat-born change was built for, or nil."
@@ -1777,30 +1777,6 @@
   [:supersede {:superseded_by
                (str "closed: ticket " tid " ended; this change "
                     "never opened a pull request")}])
-
-(defn- stuck-unopened-move
-  "The `supersede` door and input for a change already stuck for
-  having no pull request, once its ticket ended; else nil. A change
-  whose ticket is not known is left."
-  [eng row repo]
-  (when-some [tid (ticket-of row)]
-    (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
-      (when (unopened-ended? eng row repo tid t)
-        (unopened-close tid)))))
-
-(defn- stuck-unopened-changes
-  "Every change stuck because it never opened a pull request: no
-  number, and `no pull request` among its failing checks."
-  [eng]
-  (let [st (:storage eng)]
-    (store/with-tx st
-      (fn [tx]
-        (into []
-              (filter #(and (nil? (get-in % [:data :number]))
-                            (some #{"no pull request"}
-                                  (get-in % [:data :failing_checks]))))
-              (store/query-rows st tx :change {:state "stuck"}
-                                {:limit failing-scan-limit}))))))
 
 (defn- unopened-move
   "The door and input for a submitted change with no number whose bench
@@ -1924,7 +1900,7 @@
   has no number → the pull request its landing opened, adopted when
   the forge answers it by number, else at most one `note_adoption`;
   when its landing opened none, the `unopened-move`. A change already
-  stuck for having no pull request is closed once its ticket ends. The
+  stuck is not read here: its ticket's ending closes it. The
   first-sight stamp never stands in the adoption's way: the adopt door
   clears it.
   A rig that does not answer, or a door the engine refuses, costs that
@@ -1942,17 +1918,15 @@
        (let [repo (str (get-in row [:data :repository]))
              policy (get by-repo repo)]
          (if-not (and policy
-                      (#{:submitted :stuck} (state-of row))
+                      (= :submitted (state-of row))
                       (nil? (get-in row [:data :number])))
            census
            (try
-             (let [stuck? (= :stuck (state-of row))
-                   pr (when-not stuck? (landed-pull-request eng row policy))
+             (let [pr (landed-pull-request eng row policy)
                    branch (bench/branch-of row policy)]
                (if-some [doc (when pr (forge-doc-of source row repo pr log-fn))]
                  (change-pass! eng [doc] census log-fn)
                  (let [[door input] (cond
-                                      stuck? (stuck-unopened-move eng row repo)
                                       pr (some->> (adoption-move row repo branch
                                                                  pr now)
                                                   (vector :note_adoption))
@@ -1971,7 +1945,7 @@
                        " was refused its adoption note (" (ex-message e) ")")
                (update census :refused inc))))))
      census
-     (into (live-changes eng) (stuck-unopened-changes eng)))))
+     (live-changes eng))))
 
 (defn- ended-ticket-close
   "The `supersede` input closing a change with no pull request whose
