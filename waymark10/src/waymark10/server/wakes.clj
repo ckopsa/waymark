@@ -497,6 +497,8 @@
       (.isBefore at (.plusSeconds ^Instant fired (long interval-seconds)))
       false)))
 
+(declare withheld-ended?)
+
 (defn- stamp-fired!
   "The wake consumer's own clock (see `fired-recently?`), by the same
   maintenance write as the pending flag: no version bump, no
@@ -504,17 +506,22 @@
   settle's due moment with it. The wake that was waiting has gone
   out, so nothing is due any more."
   [eng schedule-row ^Instant at clear-pending?]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          ;; a fire that went out is past the fuel wall, so
-                          ;; the `halted` a wall hold stamped comes off, as
-                          ;; a sit clear of the wall takes it off
-                          (cond-> (-> (:data schedule-row)
-                                      (assoc :wake_fired_at (str at))
-                                      (dissoc :halted))
-                            clear-pending? (schedules/clear-wake))
-                          (:next-flip-at schedule-row))))
+  (let [ended? (withheld-ended? eng schedule-row)]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                            ;; a fire that went out is past the fuel wall, so
+                            ;; the `halted` a wall hold stamped comes off, as
+                            ;; a sit clear of the wall takes it off; what
+                            ;; held the wake back (`stamp-silent!`) holds it
+                            ;; no more
+                            (cond-> (-> (:data schedule-row)
+                                        (assoc :wake_fired_at (str at))
+                                        (dissoc :halted :last_silent_wake
+                                                :last_silent_wake_at))
+                              clear-pending? (schedules/clear-wake)
+                              ended? (dissoc :last_withheld_wake))
+                            (:next-flip-at schedule-row)))))
   nil)
 
 (defn- write-pending!
@@ -724,7 +731,10 @@
   "A match withheld by name (ticket 80a8e60b): NOT pending, since the
   row stays withheld until its change moves, but `last_withheld_wake`
   stamped with the row the wake named, so this branch is told apart
-  from an empty walk (ticket d803df2d), which stamps nothing. One
+  from an empty walk (ticket d803df2d), which stamps `last_silent_wake`
+  instead. Written here and nowhere else, and it stays after the row
+  it names has ended: the next fire that goes out takes it off when
+  that row has left the walk (`withheld-ended?`, ticket d1c371db). One
   maintenance write, for `write-pending!`'s reason."
   [eng schedule-row resource-id]
   (store/with-tx (:storage eng)
@@ -986,6 +996,76 @@
       (seq texts) (assoc :wake_texts texts :wake_text (first texts))
       (and (seq texts) (some nil? kept)) (assoc :wake_textless true))))
 
+;; ── a wake that does not go out says why (ticket d1c371db) ───────────
+;;
+;; A seat with rows waiting and no run was silence on the schedule row:
+;; every branch that holds or drops a wake wrote a line on *err* and
+;; nothing a person could read. Each of them now leaves
+;; `last_silent_wake`, a token, and `last_silent_wake_at`, when that
+;; reason began to hold. The fire that goes out takes both off
+;; (`stamp-fired!`).
+
+(defn- withheld-ended?
+  "Has the row `last_withheld_wake` names left this seat's walk? A
+  stamp on a row that is done reads as the reason for a silence it has
+  nothing to do with. A walk that could not be read ends nothing."
+  [eng schedule-row]
+  (boolean
+   (when-some [id (some-> (get-in schedule-row [:data :last_withheld_wake])
+                          str not-empty)]
+     (when-some [[kind f] (walk-query
+                           eng (raw-row eng :seat
+                                        (get-in schedule-row [:data :seat])))]
+       (when-some [queue (ids-under eng kind f nil)]
+         (not (contains? queue id)))))))
+
+(defn- silent
+  "`schedule-row` saying `why` its wake did not go out at `at`. The
+  moment is the first one this reason held, so a reason that still
+  holds keeps its moment."
+  [schedule-row ^Instant at why]
+  (if (= why (get-in schedule-row [:data :last_silent_wake]))
+    schedule-row
+    (update schedule-row :data assoc
+            :last_silent_wake why
+            :last_silent_wake_at (str at))))
+
+(defn- stamp-silent!
+  "Write `silent` onto the row, unless the row already says exactly
+  that: a wake held at every tick writes one time. One maintenance
+  write, for `write-pending!`'s reason. → nil."
+  [eng schedule-row ^Instant at why]
+  (when (not= why (get-in schedule-row [:data :last_silent_wake]))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                            (:data (silent schedule-row at why))
+                            (:next-flip-at schedule-row)))))
+  nil)
+
+(defn- held-back
+  "Why `release!` holds this seat's wake at `at`, or nil when nothing
+  does: \"no_live_link\" (`schedules/held?`), \"settling\" (the quiet
+  time has not passed and no cadence is owed), \"throttled\" (the
+  provider named a later time), \"slots_busy\" (`damped?`, a seat of
+  several slots), \"open_sitting\" or \"fire_gap\" (a seat of one)."
+  [eng seat-row schedule-row ^Instant at]
+  (cond
+    (schedules/held? eng schedule-row seat-row) "no_live_link"
+
+    (not (or (settled? schedule-row at)
+             (backstop-due? seat-row schedule-row at)))
+    "settling"
+
+    (throttled? schedule-row at) "throttled"
+
+    (< 1 (max-open-of seat-row))
+    (when (damped? eng seat-row schedule-row at) "slots_busy")
+
+    (some? (seats/open-sitting-for-seat eng (:id seat-row))) "open_sitting"
+
+    (fired-recently? schedule-row (interval-of seat-row) at) "fire_gap"))
+
 (declare empty-walk? grace-lift)
 
 (defn- wake-seat!
@@ -1108,7 +1188,7 @@
                           (due-at row lift 0))
           (do (warn! "seat " (:id seat) " has an empty walk — its wake"
                      " fires nothing")
-              nil))
+              (stamp-silent! eng row at "empty_walk")))
 
         ;; the row the wake names rests in a closed sitting's grace
         ;; while others wait (ticket afb445d4): the wake waits for the
@@ -1295,21 +1375,17 @@
              (= :active (:state seat-row))
              (or (get-in schedule-row [:data :wake_pending])
                  (and slot? (free-slot? eng seat-row at)))
-             (schedules/fires-out? eng schedule-row)
-             (not (schedules/held? eng schedule-row seat-row))
-             (or (settled? schedule-row at)
-                 (backstop-due? seat-row schedule-row at))
-             (not (throttled? schedule-row at))
-             (if (< 1 (max-open-of seat-row))
-               (not (damped? eng seat-row schedule-row at))
-               (and (not (fired-recently? schedule-row (interval-of seat-row) at))
-                    (nil? (seats/open-sitting-for-seat eng (:id seat-row))))))
+             (schedules/fires-out? eng schedule-row))
+   (if-some [why (held-back eng seat-row schedule-row at)]
+    ;; a wake that waits says what holds it (ticket d1c371db)
+    (when (get-in schedule-row [:data :wake_pending])
+      (stamp-silent! eng schedule-row at why))
     (cond
       (empty-walk? eng seat-row)
       (if-some [lift (grace-lift eng seat-row at)]
         ;; a row still in a closed sitting's grace: held until it ends
         (mark-settling! eng schedule-row (due-at schedule-row lift 0))
-        (do (write-pending! eng schedule-row false)
+        (do (write-pending! eng (silent schedule-row at "empty_walk") false)
             (warn! "seat " (:id seat-row) " has an empty queue — its pending"
                    " wake is cleared without a fire")
             nil))
@@ -1355,7 +1431,7 @@
             sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
         (cond
           (and (empty? sends) (empty? kept))
-          (do (write-pending! eng schedule-row false)
+          (do (write-pending! eng (silent schedule-row at "rows_taken") false)
               (warn! "seat " (:id seat-row) " had only waiting wakes on rows"
                      " a run of it already has — its release fires nothing")
               nil)
@@ -1368,7 +1444,11 @@
                                       (map first kept))
                               at false)
                 (stamp-fired! eng schedule-row at true))
-              true)))))))
+              true)
+
+          ;; the door said no: the wake keeps waiting, and says so
+          (seq sends)
+          (stamp-silent! eng schedule-row at "fire_refused"))))))))
 
 (defn release-linked!
   "The wake a broken schedule held, released by the link that mended

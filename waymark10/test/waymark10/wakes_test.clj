@@ -668,6 +668,41 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-wake-that-waits-says-why-on-the-schedule-row
+  ;; ticket d1c371db: a heard wake that starts no run leaves its reason
+  (let [wn :wake-silent
+        fn' :wake-silent-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "silentclerk"
+                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
+                       :fire_interval_seconds 3}
+                      fn')]
+    (task-do! (task! "the first of two, said") :complete)
+    (drain-wakes! wn)
+    (drain-fires! fn')
+    (is (= 1 (count (fires-of token))) "the first match fires at once")
+    (is (nil? (get-in (sched-of seat) [:data :last_silent_wake])))
+
+    (task-do! (task! "the second, held by the gap") :complete)
+    (drain-wakes! wn)
+    (wakes/sweep-pending! *eng*)
+    (testing "the wake the gap holds names the gap, and when it began"
+      (is (= 1 (count (seat-fires seat))))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (= "fire_gap" (get-in (sched-of seat) [:data :last_silent_wake])))
+      (is (some? (get-in (sched-of seat) [:data :last_silent_wake_at]))))
+
+    (testing "the fire that goes out takes the reason off"
+      (Thread/sleep 3200)
+      (wakes/sweep-pending! *eng*)
+      (is (= 2 (count (seat-fires seat))))
+      (is (nil? (get-in (sched-of seat) [:data :last_silent_wake])))
+      (is (nil? (get-in (sched-of seat) [:data :last_silent_wake_at]))))
+
+    (seat-do! seat :retire)))
+
 (deftest a-damped-match-delivered-twice-fires-the-seat-once
   ;; waymark-fp62.21: the drain re-delivered a damped match while the
   ;; released run's sitting was open, and the next release fired again
