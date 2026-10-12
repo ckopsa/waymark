@@ -831,19 +831,26 @@
         ;; conds the engine itself adds for this one read: a judging
         ;; walk's anti-join (ticket 279366ee). No query parameter
         ;; spells them, so neither the hrefs nor the filter echo do
-        conds (into conds (:extra-conds ctx-opts))
+        ;; The same read counts the collection WITHOUT them, as the list
+        ;; page shows it, so that caller makes no second read for the
+        ;; count (ticket 7b308e02)
+        own (seq (:extra-conds ctx-opts))
+        listed conds
+        conds (into conds own)
         st (:storage eng)
-        {:keys [rows total]}
+        {:keys [rows total listed-total]}
         (store/with-tx st
           (fn [tx]
-            {:rows (store/search-rows st tx (:kind rdef) conds
-                                      {:order-by (:field sort)
-                                       :desc (:desc sort)
-                                       :then-by (:then sort)
-                                       :limit (:size page)
-                                       :offset (* (:size page)
-                                                  (dec (:number page)))})
-             :total (store/count-matching st tx (:kind rdef) conds)}))
+            (cond-> {:rows (store/search-rows st tx (:kind rdef) conds
+                                              {:order-by (:field sort)
+                                               :desc (:desc sort)
+                                               :then-by (:then sort)
+                                               :limit (:size page)
+                                               :offset (* (:size page)
+                                                          (dec (:number page)))})
+                     :total (store/count-matching st tx (:kind rdef) conds)}
+              own (assoc :listed-total
+                         (store/count-matching st tx (:kind rdef) listed)))))
         facets (facet-map eng rdef conds)
         items (mapv #(item-of rdef (decode-row rdef %) ctx-opts picked)
                     rows)
@@ -911,9 +918,12 @@
                       :self self
                       :state "ok"
                       :summary summary
-                      :data {:items items
-                             :total total
-                             :page {:size size :number number}}
+                      :data (cond-> {:items items
+                                     :total total
+                                     :page {:size size :number number}}
+                              ;; only beside the engine's own conds:
+                              ;; no wire request is answered this key
+                              listed-total (assoc :listed_total listed-total))
                       :actions acts
                       :links links}
                ;; the declared+saved alternate views, advertised beside
