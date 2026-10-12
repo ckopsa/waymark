@@ -1896,9 +1896,11 @@
                                                     :refusals [{:self (href @at)
                                                                 :reason (problem-reason e)}]}}))
                                   (throw e))))]
-                        (doseq [res results]
-                          (after-write! engine kind action-name res)
-                          (when on-item (on-item res)))
+                        ;; every row committed: the same guarded pass
+                        ;; as the partial loop, so a throw here costs
+                        ;; neither the report nor the rows after it
+                        (doseq [[it res] (map vector items results)]
+                          (committed! (:id it) res))
                         {:succeeded (count items) :refused 0 :failed 0 :refusals []})
                       ;; partial success: one transaction PER item — a
                       ;; refusal never poisons its neighbors. Stop mode
