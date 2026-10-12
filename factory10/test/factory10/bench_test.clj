@@ -3015,6 +3015,46 @@
          {:kind "change" :id (get-in (:answer w) [:change :id])
           :action action :input input}))
 
+;; A PRIORITY TIE IS BROKEN BY ARRIVAL (ticket c944fd8c). An id is
+;; random, so five tickets at one priority are filed here: by id they
+;; would come in filing order one time in a hundred and twenty.
+
+(deftest the-walk-hands-the-older-of-two-tickets-at-one-priority-first
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        filed (mapv (fn [n]
+                      (let [row (:row (inv/create!
+                                       eng :ticket
+                                       {:title (str "Ticket number " n)
+                                        :type "feature"
+                                        :priority 2
+                                        :repo a-repository}
+                                       {:principal person}))]
+                        (inv/invoke! eng :ticket (str (:id row)) :groom {}
+                                     {:principal person})
+                        ;; the twin stamps a birth with the clock's own
+                        ;; grain; two births are kept apart
+                        (Thread/sleep 5)
+                        (str (:id row))))
+                    (range 5))
+        _ (open-seat! eng {:scope ticket-scope :walk "ticket"
+                           :rows_per_firing 5})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        sat (call! h sid "waymark_sit" {:key a-key})
+        rows (get-in (doc-of sat) [:walk :rows])]
+    (is (false? (:isError sat)) (text-of sat))
+    (is (= 1 (count (into #{} (map #(get-in % [:fields :priority])) rows)))
+        "the five stand at one priority, so only the tie orders them")
+    (is (= filed (mapv :id rows))
+        "the oldest ticket is handed first, and each after it in the
+         order it was filed")))
+
 (def ^:private a-stall-sentence
   "The file the ticket names is not on main yet, so there is nothing to build on.")
 

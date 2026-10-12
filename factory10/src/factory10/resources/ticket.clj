@@ -1832,9 +1832,12 @@
    :absent-as {:domain "factory"}
    ;; THE QUEUE IS THE COLLECTION UNDER ITS DEFAULT FILTER: a walker
    ;; opens /api/tickets and gets the work that is READY — groomed,
-   ;; not blocked, not deferred — lowest priority number first.
+   ;; not blocked, not deferred — lowest priority number first, and the
+   ;; older of two tickets at one priority before the newer (ticket
+   ;; c944fd8c: an id is random, and broke that tie in no order).
    :default-filters {:state "open"}
-   :sortable {:fields [:priority :created_at] :default "priority"}
+   :sortable {:fields [:priority :created_at]
+              :default ["priority" "created_at"]}
    :schema (into [:map] (concat stated-fields birth-fields engine-fields))
    ;; THE BIRTH IS THE STATEMENT AND WHERE IT SITS. The blockers, the
    ;; date and the ending are on no birth: a ticket is born a draft,
