@@ -3851,7 +3851,8 @@
               grants/scope-names-real-kinds
               grants/scope-names-real-actions
               grants/scope-filters-are-filterable
-              grants/scope-omits-private-kinds]
+              grants/scope-omits-private-kinds
+              grants/scope-ends-are-stated]
      :safety {:idempotent true :reversible false :confirm false}
      :handler absorb-fold
      :display {:label "Absorb" :order 13}}

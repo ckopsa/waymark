@@ -232,6 +232,28 @@
       (is (= "done" (:state (get-row (str "/api/chores/" a)))))
       (is (= "done" (:state (get-row (str "/api/chores/" b))))))))
 
+(deftest atomic-bulk-answers-its-report-when-a-post-commit-pass-throws
+  ;; the one transaction has committed before :on-item runs, so a throw
+  ;; from it is no failure of the call: the report says every row
+  ;; succeeded, and the rows after it still get their pass
+  (let [[a b] (chores! [true true])
+        calls (atom 0)
+        result (inv/bulk! *eng* :chore :complete_all {:ids [a b]}
+                          {:principal (t/principal {:id "colton"
+                                                    :display "Colton"})
+                           :on-item (fn [_res]
+                                      (when (= 1 (swap! calls inc))
+                                        (throw (ex-info "the post-commit pass broke" {}))))})
+        doc (wire/read-json (wire/write-json (:report result)))]
+    (is (= {:succeeded 2 :refused 0 :failed 0}
+           (select-keys (:data doc) [:succeeded :refused :failed])))
+    (is (empty? (get-in doc [:data :refusals])))
+    (testing ":on-item was called for both rows"
+      (is (= 2 @calls)))
+    (testing "every row is in its new state"
+      (is (= "done" (:state (get-row (str "/api/chores/" a)))))
+      (is (= "done" (:state (get-row (str "/api/chores/" b))))))))
+
 ;; ── 2. the atomic twin rolls all back ───────────────────────────────
 
 (deftest bulk-atomic-rolls-back
