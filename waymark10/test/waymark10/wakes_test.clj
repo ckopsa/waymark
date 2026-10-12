@@ -2541,6 +2541,72 @@
     (is (not (get-in (sched-of seat) [:data :wake_pending])))
     (seat-do! seat :retire)))
 
+;; A fire that goes out stamps the schedule `fired`, and that stamp
+;; dropped every waiting text: a fire naming a free row wiped the one
+;; that waited for a held row's grace, and it never went out (ticket
+;; c84f747a).
+
+(deftest a-fire-that-goes-out-during-a-grace-keeps-the-fire-that-waits
+  (let [fn' :fire-grace-kept-fires
+        _ (drain-fires! fn')
+        held (item! "grace-kept")
+        free (item! "grace-kept")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text-held (str "Walk " held " again.")
+        text-free (str "Walk " free ".")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "gracekept"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-kept"}}]
+                           ;; the second fire starts the seat's gap, and
+                           ;; the gap is not what this test is about
+                           :fire_interval_seconds 1}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [held] t0)
+        (drain-fires! fn')
+
+        (testing "a fire naming the held row waits"
+          (at 10)
+          (fire-with! seat text-held)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (= [text-held]
+                 (vec (get-in (sched-of seat) [:data :wake_texts])))))
+
+        (testing "a fire naming a free row goes out at once, and the first
+                  still waits"
+          (at 20)
+          (fire-with! seat text-free)
+          (drain-fires! fn')
+          (let [fs (fires-of token)]
+            (is (= 1 (count fs)))
+            (is (clojure.string/includes? (str (:text (first fs))) (str free))))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+          (is (= [text-held]
+                 (vec (get-in (sched-of seat) [:data :wake_texts]))))
+          (is (= text-held (get-in (sched-of seat) [:data :wake_text])))
+          (is (= (.plusSeconds t0 120) (due-of seat)))
+          (is (clojure.string/starts-with?
+               (str (get-in (sched-of seat) [:data :note])) "Waiting for ")))
+
+        (testing "when the grace lifts the first goes out, with its own text"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (let [fs (fires-of token)]
+            (is (= 2 (count fs)))
+            (is (clojure.string/includes? (str (:text (second fs))) (str held))))
+          (is (= text-held (get-in (last (seat-fires seat)) [:inputs :text])))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (get-in (sched-of seat) [:data :wake_texts]))))
+        (seat-do! seat :retire)))))
+
 ;; ── the fuel wall holds the wake ─────────────────────────────────────
 ;;
 ;; Production, 2026-09-27: code-seat was past its week's fuel and a

@@ -88,6 +88,14 @@
                       [:maybe [:string {:min 1 :max 128}]]]]
              :handler assign-handler
              :safety {:idempotent true :reversible true :confirm false}}
+     ;; the id is listed before the sibling its kind is read from
+     :trace {:from #{:open} :to :open
+             :input [:map
+                     [:of_id {:optional true :x-ref {:kind-from :of_kind}}
+                      [:maybe [:string {:min 1 :max 128}]]]
+                     [:of_kind {:optional true} [:maybe [:string {:min 1 :max 64}]]]]
+             :handler assign-handler
+             :safety {:idempotent true :reversible true :confirm false}}
      :label {:from #{:open} :to :open
              :input [:map [:caption [:string {:max 80}]]]
              :handler assign-handler
@@ -405,6 +413,25 @@
             (is (seq typed) "the argument is typed all the same")
             (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
 
+;; ticket 88dfb7b0: a principal id is also the `subject` a binding
+;; stamped on a member row
+
+(deftest a-principal-argument-given-a-subject-is-typed-with-the-members-name
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            _ (inv/create! eng :member
+                           {:display "Ada" :actor_type "human" :subject "ada-bound"}
+                           {:principal walks/engine-actor})
+            w (self-walk! h)]
+        (is (tool h "waymark_invoke" {:kind "errand" :id a :action "route"
+                                      :input {:owner "ada-bound"}}))
+        (is (= {:owner "Ada"} (typed-labels eng w)))
+        (testing "a member the recorder may not see has no label"
+          (let [typed (routes-unseen eng h a {:owner "ada-bound"} :owner)]
+            (is (seq typed) "the argument is typed all the same")
+            (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
+
 (deftest an-address-argument-is-typed-with-its-rows-summary-line
   (with-stage
     (fn [eng h _reg]
@@ -433,6 +460,28 @@
           (let [typed (routes-unseen eng h a input :about_id)]
             (is (seq typed) "the argument is typed all the same")
             (is (every? #(nil? (get-in % [:body :ui :labels])) typed))))))))
+
+;; ticket 6528a10f: the label waits for the beat that shows the sibling
+
+(deftest a-kind-from-label-waits-for-the-beat-that-types-its-sibling
+  (with-stage
+    (fn [eng h _reg]
+      (let [a (errand! h {})
+            ada (crew! h "Ada")
+            w (self-walk! h)
+            _ (is (tool h "waymark_invoke" {:kind "errand" :id a :action "trace"
+                                            :input {:of_kind "crew" :of_id ada}}))
+            typed (filter #(= ada (get-in % [:body :ui :fields :of_id]))
+                          (frames eng w))
+            sibling? #(some? (get-in % [:body :ui :fields :of_kind]))
+            alone (remove sibling? typed)
+            both (filter sibling? typed)]
+        (is (seq alone) "the id is typed before its sibling")
+        (is (every? #(nil? (get-in % [:body :ui :labels])) alone)
+            "the beat that types only the id has no label")
+        (is (seq both) "a later beat adds the sibling")
+        (is (every? #(= {:of_id "Ada"} (get-in % [:body :ui :labels])) both)
+            "the beat that adds the sibling has it")))))
 
 (deftest a-dry-run-leaves-the-dialog-open-and-the-invoke-does-not-retype
   (with-stage
