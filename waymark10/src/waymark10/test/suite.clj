@@ -113,13 +113,16 @@
   [{:keys [engine handler kinds seed] :or {seed 97}}]
   (let [rdef (fn [kind] (get (inv/resources engine) kind))
         self-of (fn [kind id] (str "/api/" (:plural (rdef kind)) "/" id))
+        ;; a `?` in the uri opens its query string, as on the wire
         req (fn [method uri & [body headers]]
-              (handler (cond-> {:request-method method
-                                :uri uri
-                                :headers (or headers walker-headers)}
-                         body (assoc :body (if (string? body)
-                                             body
-                                             (wire/write-json body))))))
+              (let [[path query] (str/split uri #"\?" 2)]
+                (handler (cond-> {:request-method method
+                                  :uri path
+                                  :headers (or headers walker-headers)}
+                           query (assoc :query-string query)
+                           body (assoc :body (if (string? body)
+                                               body
+                                               (wire/write-json body)))))))
         text (fn [resp]
                (when-some [b (:body resp)]
                  (if (string? b) b (slurp b))))

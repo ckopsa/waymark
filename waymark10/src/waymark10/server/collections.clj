@@ -4,7 +4,8 @@
   list), field_ne= (:ne, comma list negates as NOT IN), field_gte=/
   field_lte= (:range), field_after=/field_before= (:after/:before,
   strict bounds), field_set=true|false (:set, presence), field_contains=
-  (:contains, case-insensitive substring), state= always, vocab-array
+  (:contains, case-insensitive substring), state= always, id= always
+  (one row's id, or a comma list of ids; ticket ba123a99), vocab-array
   membership via JSONB containment — ordered by
   the declared :sortable fields over their promoted columns, paged
   1-based (size cap 100, default 25). The envelope carries the items
@@ -93,7 +94,9 @@
 (defn- grammar
   "param name → {:field :mode :in? :array? :head (:states)} for one
   declared kind. state= always filters, enum-checked against the
-  machine; everything else comes from :filterable."
+  machine. id= always filters too, on the row's own id, unless the
+  kind declares a filterable field of that name, which keeps the
+  param; everything else comes from :filterable."
   [rdef]
   (let [entries
         (into {}
@@ -124,8 +127,10 @@
                         [[(str fname "_contains")
                           (assoc e :mode :contains)]]))))))
               (:filterable rdef))]
-    (assoc entries "state" {:field :state :state? true :mode :eq :in? true
-                            :states (into #{} (map name) (:states rdef))})))
+    (cond-> (assoc entries "state" {:field :state :state? true :mode :eq :in? true
+                                    :states (into #{} (map name) (:states rdef))})
+      (not (contains? entries "id"))
+      (assoc "id" {:field :id :id? true :mode :eq :in? true}))))
 
 (defn- cond-of
   "One validated param → one storage cond (the phase-6 grammar,
@@ -138,6 +143,10 @@
       (:state? e) (if multi?
                     {:target :state :op :in :values values}
                     {:target :state :op := :value v})
+      ;; the row's own id: the cond an id-scoped grant already adds
+      (:id? e) (if multi?
+                 {:target :id :op :in :values values}
+                 {:target :id :op := :value v})
       (and (:array? e) (= :eq (:mode e)))
       {:target :data :field f :op :in-any :values values}
       :else
@@ -287,6 +296,9 @@
                                               (when-not (contains? (:states e) v)
                                                 (str (pr-str v) " is not a state; one of "
                                                      (vec (sort (:states e)))))
+                                              ;; an id is text: one no row
+                                              ;; carries matches nothing
+                                              (:id? e) nil
                                               (= :set (:mode e))
                                               (when-not (contains? #{"true" "false"} v)
                                                 "must be true or false")
@@ -391,7 +403,10 @@
                    (assoc (str fname "_contains") {:type "string"}))))))
          {} (sort-by (comp name key) (:filterable rdef)))
         props (cond-> props
-                (not (contains? props "state")) (assoc "state" state-prop))
+                (not (contains? props "state")) (assoc "state" state-prop)
+                ;; the row's own id, one or a comma list (`grammar`)
+                (not (contains? props "id")) (assoc "id" {:type "string"
+                                                          :x-in true}))
         sortable (get-in rdef [:sortable :fields])
         props (cond-> props
                 (seq sortable)
