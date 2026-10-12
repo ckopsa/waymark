@@ -482,15 +482,17 @@
     ;; waymark-fp62.6.9). Hidden, and the engine's hand alone, as
     ;; `stamp_label` is: the source is the one reader that knows which
     ;; commit the branch carries now, so the source walks this door on
-    ;; every red run of a head the change no longer names. It takes no
-    ;; input, because the row already says which commit it ran on.
+    ;; every red run of a head the change no longer names, and on every
+    ;; red run of a change that is merged or closed (ticket ebe54a72).
+    ;; It takes no input, because the row already says which commit it
+    ;; ran on.
     :supersede
     {:from #{:red} :to :superseded
      :guards [the-mirror-writes-this-row]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The run leaves the queue with no verdict on it, and the transition says so. The commit it ran on is not the head any more, so there is nothing left to classify; the new head's own red runs are the work now."}
+              :one-way "The run leaves the queue with no verdict on it, and the transition says so. The commit it ran on is not the head any more, or its change is merged or closed, so there is nothing left to classify; a new head's own red runs are the work now."}
      :display {:label "Superseded" :order 6
-               :description "The commit this run ran on is not the head any more — the run leaves the queue unclassified"}}}
+               :description "The commit this run ran on is not the head any more, or its change ended — the run leaves the queue unclassified"}}}
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The check run, at GitHub"}]
    :scenarios [an-agent-may-not-correct-its-own-verdict

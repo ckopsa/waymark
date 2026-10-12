@@ -116,6 +116,12 @@
   costs nothing, and an unbounded read costs the pass."
   50)
 
+(def red-scan-limit
+  "How many red runs one pass reads for the runs whose change ended,
+  oldest first. A ceiling above the queue as it stood when the sweep
+  was written (135 rows, ticket ebe54a72), so one pass clears it."
+  200)
+
 ;; ── the seam ────────────────────────────────────────────────────────
 
 (defprotocol ForgeSource
@@ -662,6 +668,48 @@
        census))
    census
    changes))
+
+(defn- settled-reds
+  "The red rows no seat can answer, whatever the forge listed this
+  pass (ticket ebe54a72): a run whose change is merged or closed, and
+  a run on a head its change no longer carries. `stale-reds` reads only
+  the changes one pass was answered, so a change that ended before its
+  runs were revisited kept them red for good. Oldest first, so the
+  legacy rows go before the new ones. A run that names no change this
+  house holds is left where it is."
+  [eng]
+  (let [st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (store/query-rows st tx :ci_run {:state "red"}
+                                          {:limit red-scan-limit})))]
+    (filterv
+     (fn [row]
+       (when-some [change-row (row-by-id eng :change
+                                         (get-in row [:data :change]))]
+         (let [head (str (get-in change-row [:data :head_sha]))]
+           (or (contains? #{:merged :closed} (keyword (:state change-row)))
+               (and (not (str/blank? head))
+                    (not= head (str (get-in row [:data :head_sha]))))))))
+     rows)))
+
+(defn- settled-pass!
+  "Every red run of a change that is merged or closed, or of a head
+  its change no longer carries → the `supersede` door. The door stays
+  the engine's hand alone; this pass is what walks it for the rows
+  `stale-pass!` never meets. A row the engine refuses is counted and
+  skipped: the next pass offers it again."
+  [eng census log-fn]
+  (reduce
+   (fn [census row]
+     (try
+       (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
+       (update census :runs-superseded inc)
+       (catch Exception e
+         (log-fn "the red run " (get-in row [:data :run_id])
+                 " was refused the supersede door (" (ex-message e) ")")
+         (update census :refused inc))))
+   census
+   (settled-reds eng)))
 
 ;; ── the checks' verdict on a submitted change (ticket d1742908) ───────
 
@@ -2878,6 +2926,7 @@
                                                        log-fn))
                                       census log-fn)
                     census (stale-pass! eng changes census log-fn)
+                    census (settled-pass! eng census log-fn)
                     census (label-pass! eng source census log-fn)
                     census (failing-pass! eng source read-checks census
                                           log-fn)
@@ -2909,7 +2958,7 @@
               (:labelled census) " labels pushed"
               (when (pos? (long (:runs-superseded census)))
                 (str ", " (:runs-superseded census) " red runs superseded "
-                     "on a head that moved"))
+                     "on a head that moved or a change that ended"))
               (when (pos? (long (+ (long (:failing census))
                                    (long (:recovered census))
                                    (long (:stuck census)))))
