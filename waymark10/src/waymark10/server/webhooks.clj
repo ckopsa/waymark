@@ -421,6 +421,9 @@
                       :record true
                       :replay false
                       :guards [deliverer-only]
+                      ;; the deliverer's own bookkeeping, not a person's
+                      ;; edit: there is no form to prefill
+                      :waives #{:edit-shape}
                       :handler record-deliveries
                       :safety {:idempotent true :reversible false :confirm false
                                :one-way "Bookkeeping the deliverer writes after a drain pass; the next pass writes over it."}
