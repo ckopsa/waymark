@@ -860,6 +860,33 @@
             "and it names the reason the entry was added for"))
       (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
 
+(deftest a-parked-seat-loses-its-ended-entry-to-the-sweep
+  (let [{:keys [h eng clock]} (world)
+        {:keys [mayor]} (open-mayor! h)
+        row! (fn [] (get-row h "seats" mayor person))
+        stated (restate-as! h person mayor {:scope (conj mayor-scope (glass {}))
+                                            :delegates ceiling})
+        parked (req h :post (str "/api/seats/" mayor "/-/park") {:headers person})]
+    (is (= 200 (:status stated)) (pr-str (json stated)))
+    (is (= 200 (:status parked)) (pr-str (json parked)))
+    (testing "before its end the sweep leaves the parked seat alone"
+      (reset! clock (.plusSeconds t0 3540))
+      (is (= 0 (defs/sweep-lapsed! eng)))
+      (is (= 1 (count (filter :until (get-in (row!) [:data :scope]))))))
+    (testing "after it the sweep restates the parked seat without it"
+      (reset! clock (.plusSeconds t0 3660))
+      (is (= 1 (defs/sweep-lapsed! eng)))
+      (is (= mayor-scope (get-in (row!) [:data :scope])))
+      (let [gone (last (filter #(= :lapse_parked (:action %)) (log-of eng :seat mayor)))]
+        (is (some? gone) "the write is a logged transition")
+        (is (= "system" (some-> (get-in gone [:actor :type]) name)))
+        (is (= [glass-until] (mapv :until (get-in gone [:inputs :lapsed])))
+            "the history names the entry that went")
+        (is (str/includes? (str (get-in gone [:inputs :note])) "dl_gadget"))
+        (is (str/includes? (str (get-in gone [:inputs :note])) "incident 12")
+            "and the reason it was added for"))
+      (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
+
 (deftest an-end-is-stated-with-a-reason-and-inside-thirty-days
   (let [{:keys [h]} (world)
         {:keys [mayor]} (open-mayor! h)
@@ -875,6 +902,31 @@
     (is (not= 200 (state! (glass {:until "tomorrow"})))
         "and one that is not a time")
     (is (= 200 (state! (glass {:until (days 30)}))))))
+
+(deftest an-ask-and-a-grant-state-an-end-the-same-way
+  (let [{:keys [h]} (world)
+        days (fn [n] (str (.plusSeconds t0 (* n 86400))))
+        badly? (fn [resp] (str/includes? (pr-str (json resp)) "states its end badly"))
+        offer! (fn [entry]
+                 (req h :post "/api/grants"
+                      {:headers person
+                       :body {:audience "claude" :scope [entry]}}))
+        ask! (fn [entry]
+               (req h :post "/api/approval_requests"
+                    {:headers {"x-waymark-principal" "claude"
+                               "x-waymark-actor-type" "agent"
+                               "x-waymark-acts-for" "colton"}
+                     :body {:task "Free the sprocket." :scope [entry]}}))]
+    (doseq [[door send!] [["a grant" offer!] ["an ask" ask!]]]
+      (testing door
+        (is (badly? (send! (dissoc (glass {}) :because)))
+            "an end with no reason is refused")
+        (is (badly? (send! (glass {:until (days 31)})))
+            "and so is one more than 30 days ahead")
+        (is (badly? (send! (glass {:until "tomorrow"})))
+            "and one that is not a time")
+        (let [stated (send! (glass {:until (days 30)}))]
+          (is (= 201 (:status stated)) (pr-str (json stated))))))))
 
 (deftest an-entry-with-an-end-is-judged-by-the-ceiling-and-never-widens-it
   (let [{:keys [h]} (world)
@@ -892,7 +944,9 @@
                                            :filter {:repo "bench"}}
                                           ends)]})]
         (is (= 202 (:status over)) (pr-str (json over)))
-        (is (str/includes? (str (:why (json over))) "Invariant 2"))))
+        (is (str/includes? (str (:why (json over))) "Invariant 2"))
+        (is (str/includes? (pr-str (json over)) (str "until " glass-until))
+            "and the sentence says the entry ends")))
     (testing "a ceiling entry with an end admits nothing"
       (let [stated (restate-as! h person mayor
                                 {:scope mayor-scope

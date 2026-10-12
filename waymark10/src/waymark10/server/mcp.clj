@@ -1093,6 +1093,11 @@
                                    :description (str "With at: how late the run may be when the "
                                                      "engine was down at its time. An hour unless "
                                                      "said, a day at most.")}
+                   :tell {:type "string" :enum ["all" "problems" "none"]
+                          :description (str "With at: when the engine tells you how the "
+                                            "call ended. all (default): when it runs, is "
+                                            "skipped or fails. problems: only when it is "
+                                            "skipped or fails. none: never.")}
                    :acknowledge {:type "string"
                                  :description (str "The consequence sentence, echoed "
                                                    "exactly — required when "
@@ -1837,19 +1842,21 @@
   replay lights that field. A typing beat also carries `labels`: the
   summary line of the row each ref argument it shows names, as the
   session may read it (`presence/ref-labels`), so a replay names the
-  row and not its id. A row the session may not see has no label. An
-  action the kind does not declare opens no form, and only the gaze
-  moves."
+  row and not its id. A row the session may not see has no label. The
+  labels are read from the beat's own fields, so a `kind-from`
+  argument has its label from the beat that also shows its sibling,
+  and not before. An action the kind does not declare opens no form,
+  and only the gaze moves."
   [eng st self aname input]
   (let [dialog {:self self :action (name aname)}
         ks (presence/typed-keys eng self (name aname) input)
         given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
-        labels (when ks
-                 (try (presence/ref-labels eng self (name aname)
-                                           (select-keys given ks) (:summary-of st))
-                      (catch Exception _ nil)))
+        ;; one read for each row, however many beats show it
+        summary-of (memoize (fn [kind id] ((:summary-of st) kind id)))
         typed (fn [fields]
-                (let [named (not-empty (select-keys labels (keys fields)))]
+                (let [named (try (presence/ref-labels eng self (name aname)
+                                                      fields summary-of)
+                                 (catch Exception _ nil))]
                   (cond-> {:dialog dialog :fields fields}
                     named (assoc :labels named))))
         shown? (and ks
@@ -2395,7 +2402,7 @@
   "The scheduler's fields `waymark_invoke` carries beside `at` (R-7.2),
   spelled as the scheduled_action create spells them."
   [:zone :validity :conditions :expect_state :expect_refusals :grace_seconds
-   :acknowledge :acknowledge_warnings])
+   :tell :acknowledge :acknowledge_warnings])
 
 (defn- in-zone
   "An instant as the wire spells it, written on the clock of `zone`: a
@@ -3385,7 +3392,9 @@
   on the page it answers and cannot be in what this shapes. `total`
   stays the collection's own count under that filter — the queue as
   the list page would show it — and the rows are what this firing
-  works.
+  works. A judging walk's first page answers that count beside the
+  anti-joined one (`listed_total`), so the sit makes no read whose
+  only purpose is `total` (ticket 7b308e02).
 
   `claimed` is the rows another open sitting of this seat was already
   handed (`seats/claimed-rows`). They are subtracted as the judged
@@ -3489,19 +3498,10 @@
                 named? #(= (str only) (id-of %))
                 total (long (or (get-in doc ["data" "total"]) 0))
                 ;; the answer's `total` stays the queue as the list page
-                ;; shows it, judged subjects and all: one count beside
-                ;; the read that left them out
-                queue-total (or (when without
-                                  (let [resp (call (request
-                                                    session :get
-                                                    (str "/api/" (:plural rdef))
-                                                    {:query (query-string
-                                                             (assoc params
-                                                                    "page[size]" "1"))}))
-                                        d (when (<= 200 (:status resp 500) 299)
-                                            (verbatim-json resp))]
-                                    (when (collection-doc? d)
-                                      (get-in d ["data" "total"]))))
+                ;; shows it, judged subjects and all: the collection
+                ;; counts it in the read that left them out, so no read
+                ;; is made for the count alone (ticket 7b308e02)
+                queue-total (or (get-in doc ["data" "listed_total"])
                                 (get-in doc ["data" "total"]))
                 first-page (vec (get-in doc ["data" "items"]))
                 queue (if only

@@ -128,11 +128,20 @@ queue. The sit gives the rows of the walk.
 
 CAUTION: The filter of a scope entry also limits the rows that the
 seat's grant admits. With this filter, the seat sees a walkthrough
-only while the walkthrough waits on the seat. The tests do not prove
-that such a seat can take `create`, or `resume` on a stopped row,
-through its own grant. The tests prove the walk's filter, its count
-and the release. They do not call the sit door itself. Until those
-cases are proven, the safe recipe is the query above.
+only while the walkthrough waits on the seat. The tests show what
+that means for each door:
+
+- `create` goes through. It names no row, so the filter does not
+  judge it. The answer does not show the new row to the seat, because
+  the row is born `open`.
+- `advance` and `stop` go through while the row waits on the seat.
+- `resume` and `withdraw` are refused on a row that does not wait on
+  the seat. The seat cannot read such a row, though the seat is its
+  author. The seat cannot lift its own stop, and it cannot withdraw a
+  walkthrough that is open or stopped.
+
+A seat that must take `resume` or `withdraw` uses the query above,
+and does not name `walkthrough` as its `walk`.
 
 ## What the tests prove
 
@@ -145,3 +154,9 @@ cases are proven, the safe recipe is the query above.
 One more case is for the seat that names `walkthrough` as its `walk`:
 
 - `a-leading-seat-that-walks-walkthrough-is-handed-its-waiting-row`
+
+`waymark10.mcp-sit-test` holds two cases for the same seat, through
+the sit door and the seat's own grant:
+
+- `a-leading-seat-is-handed-its-waiting-walkthrough-by-the-sit`
+- `a-leading-seats-grant-creates-and-loses-the-row-outside-the-filter`

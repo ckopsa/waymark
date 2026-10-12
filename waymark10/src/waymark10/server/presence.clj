@@ -594,12 +594,31 @@
               :when ref]
           [(keyword (name k)) ref])))
 
+(defn- subject-member
+  "The id of the member a binding stamped with principal id `v` as its
+  `subject`, when no member row has `v` as its own id; nil otherwise,
+  and when the read fails. It is `grants/member-named`'s second
+  resolution."
+  [eng v]
+  (let [st (:storage eng)
+        v (str v)]
+    (when (and st (not (str/blank? v)))
+      (try
+        (store/with-tx st
+          (fn [tx]
+            (when-not (store/load-row st tx :member v {})
+              (some-> (store/query-rows st tx :member {:subject v} {:limit 1})
+                      first :id str))))
+        (catch Exception _ nil)))))
+
 (defn- ref-target
   "[kind id head?] of the row one ref argument's value `v` names, or nil
   when it names none. `form` is the argument's entry in `ref-kinds`, and
   `value` holds the form's values by argument name. A plain ref names a
   row of its kind. A principal is the row its `<kind>:<id>` spelling
-  names (`seat:<id>`), else the member of that id, and `head?` says its
+  names (`seat:<id>`), else the member of that id, else the member whose
+  `subject` it is, by that member's own id (`subject-member`), and
+  `head?` says its
   label is the head of that row's summary line: its name. An address is
   `<kind>:<id>`. A `kind-from` ref reads its kind from the sibling.
   Outside a plain ref, a kind this engine does not serve names no row."
@@ -615,7 +634,10 @@
     (when (or (string? v) (uuid? v))
       (cond
         (keyword? form) [form (str v) false]
-        (:principal form) (or (typed true) (served :member v true))
+        (:principal form) (or (typed true)
+                              (when-some [m (served :member v true)]
+                                (assoc m 1 (or (subject-member eng v)
+                                               (str v)))))
         (:address form) (typed false)
         (:kind-from form) (let [k (get value (name (:kind-from form)))]
                             (when (or (string? k) (keyword? k))

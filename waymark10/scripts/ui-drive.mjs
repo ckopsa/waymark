@@ -2801,6 +2801,12 @@ async function guidedStory() {
                  localStorage.getItem("wm10.follow.ui") === "1"`,
                 "the walkthrough in hand and its author followed in guided mode", 15000);
   ok("Start follows the author in guided mode", true);
+  /* that follow reopens bo's live stream to ask for ada's `ui`, and the
+     three values above are set before the stream is open again. Its
+     snapshot carries ada's last screen, and follow put guidedSeq back to
+     -1: a seq held again says the stream is open before ada moves */
+  await B.until(`guidedSeq >= 0`, "ada's screen on bo's reopened guided stream", 15000,
+                guidedState);
   await A.js(`location.hash = ${JSON.stringify(meals[1])}; true`);
   /* the stew's own door, not a row's: ada comes from the collection, and
      its rows carry the same door for another meal until the page is drawn */
@@ -2809,6 +2815,13 @@ async function guidedStory() {
                /^update recipe/i.test(b.textContent))`;
   await A.until(`hereHref() === ${JSON.stringify(meals[1])} && !!${stewButton}`,
                 "ada's recipe door on the stew's page");
+  /* ada's beat from the stew's page has reached bo before she opens her
+     form. The registry orders two beats by which it takes first, so a
+     page's beat that came after the form's would close the form on bo's
+     screen until ada's next heartbeat */
+  await B.until(`PRESENCE.get("ada")?.self === ${JSON.stringify(meals[1])} &&
+                 hereHref() === ${JSON.stringify(meals[1])}`,
+                "ada on the stew's page, and bo's screen with her", 15000, guidedState);
   await A.js(`${stewButton}.click(); true`);
   await A.until(`!!document.querySelector("dialog[open] [name=recipe]")`, "ada's recipe form");
   await B.until(`!!document.querySelector(${JSON.stringify(
@@ -3004,8 +3017,12 @@ async function guidedStory() {
   await A.until(`!document.querySelector("dialog[open]") &&
                  !!document.querySelector("[data-replay-walk]")`, "Replay on the walk's page");
   await A.js(`document.querySelector("[data-replay-walk]").click(); true`);
-  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended"`,
-                "the replay to reach its last frame", 60000);
+  /* the chip says ended when the last frame is applied, and that frame's
+     dialog is drawn a moment after it (openGuidedDialog): wait for both */
+  await A.until(`document.querySelector("#replaychip")?.getAttribute("data-replay-state") === "ended" &&
+                 !!document.querySelector(${JSON.stringify(
+                   `dialog[open][data-guided="${recipeKey}"]`)})`,
+                "the replay to reach its last frame, with ada's dialog drawn", 60000);
   ok("the sealed walk replays the dialog ada opened, read-only",
      await A.js(`{ const g = document.querySelector(${JSON.stringify(
          `dialog[open][data-guided="${recipeKey}"]`)});
@@ -3325,6 +3342,59 @@ async function guidedStory() {
      await A.js(`replayHoldTime(replay.frames, 11) === 0 &&
                  replayHoldTime(replay.frames, 10) === REPLAY_MIN_STILL`) &&
      !!shown && !!last && last.from - shown.to < 1900 + 300);
+
+  console.log("· replay: the schedule's floors, computed");
+  /* walk 082fefa5's shape, recorded milliseconds apart, and the same
+     walk with the form closed and one move after it. The schedule is
+     computed as replayStep does it at 1x with every draw done at once:
+     `gap` is the wait before the frame, `lead` the part of it before
+     the gesture starts. The floors are numbers here and not the page's
+     constants, so a constant that is lowered fails. */
+  const floorDialog = {self: meals[1], action: "update_recipe"};
+  const floorWalk = [
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 5, type: "doc", who: "a1", self: meals[1], doc: {kind: "meal", id: "m"}},
+    {t: 10, type: "ui", who: "a1", self: meals[1], ui: {dialog: floorDialog, fields: {}}},
+    {t: 15, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: floorDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 20, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list"},
+    {t: 25, type: "doc", who: "a1", self: meals[1], doc: {kind: "meal", id: "m"}},
+  ];
+  const floorLanded = floorWalk.concat([
+    {t: 30, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+    {t: 35, type: "move", who: "a1", self: meals[0]},
+  ]);
+  const floorSchedule = async frames => {
+    const steps = JSON.parse(await A.js(`{ const frames = ${JSON.stringify(frames)};
+      JSON.stringify(frames.map((f, at) => {
+        const still = replayHoldTime(frames, at);
+        const gap = Math.max(replayGap({frames, at}),
+          still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
+        return {shows: replayShows(frames, at), gap,
+                lead: Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS)};
+      })) }`));
+    /* for each change of the screen after the first: how long the
+       screen was still before the gesture toward it started */
+    let now = 0, shown = null;
+    for (const s of steps) {
+      s.still = s.shows && shown !== null ? now + s.lead - shown : null;
+      now += s.gap;
+      if (s.shows) shown = now;
+    }
+    return steps;
+  };
+  const walked = await floorSchedule(floorWalk), landed = await floorSchedule(floorLanded);
+  console.log("  the stillness before each change (ms): " +
+              landed.map((s, i) => i + " " + (s.still === null ? "-" : s.still)).join(", "));
+  ok("computed at 1x, no change of the screen starts less than 1000 ms after the one before it",
+     walked.filter(s => s.still !== null).length === 3 &&
+     landed.filter(s => s.still !== null).length === 4 &&
+     walked.concat(landed).every(s => s.still === null || s.still >= 1000));
+  ok("computed at 1x, a doc of the screen already shown waits 0",
+     [walked[1], walked[5], landed[1], landed[5]].every(s => !s.shows && s.gap === 0));
+  ok("computed at 1x, the write that waited behind its form is still 1500 ms once the form is gone",
+     !landed[4].shows && landed[4].gap === 0 && landed[7].still >= 1500);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
   console.log("· replay: the floor counts from the draw");

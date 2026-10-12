@@ -224,6 +224,69 @@
     (testing "a plain ticket completes without a showcase"
       (is (= :available (:status (refusal (at :open) c :complete)))))))
 
+;; ── the remedy is afforded where the epic stands (ticket ce2e4008) ──
+
+(deftest an-epics-refusal-names-a-door-its-state-affords
+  (let [epic (fn [state]
+               (at state {:title "[epic] Every epic names its scene"
+                          :showcase a-showcase} "E"))
+        c (ctx the-person)]
+    (testing "an open epic is sent to show_evidence, which it offers"
+      (let [shut (refusal (epic :open) c :complete)]
+        (is (= :an-epic-shows-its-evidence (:name (:denier shut))))
+        (is (= [:ticket/show_evidence] (g/remedy-doors (:denier shut))))
+        (is (contains? (offers (epic :open) c) :show_evidence))
+        (is (not (contains? (offers (epic :open) c) :restate)))))
+    (testing "a draft epic is sent to restate, which it offers"
+      (let [shut (refusal (epic :draft) c :complete)]
+        (is (= :a-draft-epic-shows-its-evidence (:name (:denier shut))))
+        (is (= [:ticket/restate] (g/remedy-doors (:denier shut))))
+        (is (contains? (offers (epic :draft) c) :restate))
+        (is (not (contains? (offers (epic :draft) c) :show_evidence)))))
+    (testing "a ticket that is no epic is offered no evidence door"
+      (is (not (contains? (offers (at :open) c) :show_evidence))))))
+
+(deftest an-open-epic-is-pursued-to-done-through-its-evidence
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        colton (t/principal {:id "colton" :display "Colton"})
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"}
+                       {:principal colton})
+        epic (str (:id (:row (inv/create! eng :ticket
+                                          {:title "[epic] Every epic names its scene"
+                                           :showcase a-showcase
+                                           :type "task"
+                                           :repo "ckopsa/waymark"}
+                                          {:principal colton}))))
+        _ (inv/invoke! eng :ticket epic :groom {} {:principal colton})
+        session (c/connect "http://test" {:principal "colton"
+                                          :handler (engine/handler eng)})
+        href (str (get-in (c/index session) [:resources :ticket :href]) "/" epic)
+        film "https://films.example/inbox"
+        ending {:close_reason "The film plays."}
+        linked {"ticket.show_evidence"
+                {:input {:showcase {:evidence {:film_url film}}}}}]
+    (is (= "open" (:state (c/get-doc session href))))
+    (testing "a rehearsal asks for the film's link, on a door the open epic affords"
+      (let [res (c/pursue! session (c/get-doc session href) :complete ending
+                           {:dry-run true})]
+        (is (= [{:door "ticket.show_evidence"
+                 :needs [:showcase.evidence.film_url]}]
+               (mapv #(select-keys % [:door :needs]) (:blocked-on res)))
+            (pr-str res))))
+    (testing "with the link it walks to done, and the scene stands as groomed"
+      (let [res (c/pursue! session (c/get-doc session href) :complete ending
+                           {:choices linked})
+            after (c/get-doc session href)]
+        (is (c/doc? (:done res)) (pr-str res))
+        (is (= ["ticket.show_evidence" "ticket.complete"]
+               (mapv :door (:writes res)))
+            (pr-str res))
+        (is (= "done" (:state after)))
+        (is (= film (get-in after [:data :showcase :evidence :film_url])))
+        (is (= (:scene a-showcase) (get-in after [:data :showcase :scene])))
+        (is (= "film" (get-in after [:data :showcase :format])))))))
+
 (deftest the-law-marks-the-everyday-doors
   ;; ticket f66dd175: the bar keeps these in view while they are shut,
   ;; and folds every other shut door under 'More doors'

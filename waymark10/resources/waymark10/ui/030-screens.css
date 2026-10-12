@@ -611,8 +611,8 @@
      clicked wears the ring a focused field does, since a guided form's
      fields are disabled and take no focus; and a step with no click
      behind it is a notice in the caption band */
-  [data-replay-click] { outline: 2px solid Highlight;
-                        outline: -webkit-focus-ring-color auto 1px; }
+  [data-replay-click] { outline: 2px solid var(--verdigris); outline-offset: 1px;
+                        border-radius: 2px; }
   #replaycaption[data-replay-notice] { font-style: italic; }
   /* one line for each refused row of a bulk write */
   #replaycaption[data-replay-notice] { white-space: pre-line; }

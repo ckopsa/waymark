@@ -3827,6 +3827,29 @@
      :handler drop-lapsed
      :display {:label "Lapse" :order 18}}
 
+    ;; The same write on a parked seat (ticket 50843da5). A v10 action
+    ;; declares one `:to`, so `parked → parked` is a door of its own.
+    :lapse_parked
+    {:from #{:parked} :to :parked
+     :input [:map
+             [:scope {:x-display
+                      {:label "The scope that stays"
+                       :spelled-by-hand "The seat's scope without the entries that ended, written by the clock sweep."}}
+              grants/scope-schema]
+             [:lapsed {:x-display
+                       {:label "The entries that ended"
+                        :spelled-by-hand "The scope entries whose until has passed, written by the clock sweep."}}
+              grants/scope-schema]
+             [:note {:x-display {:widget "prose"
+                                 :label "Why each was added"}}
+              [:string {:min 1 :max 2000}]]]
+     :record true
+     :waives #{:edit-shape}
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler drop-lapsed
+     :display {:label "Lapse while parked" :order 19}}
+
     ;; ── the merge's landing (§ 6) ───────────────────────────────────
     :absorb
     {:from #{:active} :to :active
@@ -3851,7 +3874,8 @@
               grants/scope-names-real-kinds
               grants/scope-names-real-actions
               grants/scope-filters-are-filterable
-              grants/scope-omits-private-kinds]
+              grants/scope-omits-private-kinds
+              grants/scope-ends-are-stated]
      :safety {:idempotent true :reversible false :confirm false}
      :handler absorb-fold
      :display {:label "Absorb" :order 13}}
@@ -3914,7 +3938,8 @@
     "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."
     "`fire` runs from `parked` as well as `active`, and the `not-parked` guard refuses it there. R-12.20 asks for the sentence \"The seat is parked. Unpark it first.\", and a door absent from a parked seat's envelope could only answer 409 with the machine's own words."
     "THE HALT LINE IS A RECORD, AND THREE DOORS LIFT IT (waymark-fp62.7.13). R-7.7 gives the line one writer and one lifter — the router, at a sitter's request. A FIRED seat makes no request of its own, so a line that outlived its wall left the seat stuck until a person ran the Routine by hand. Now: a `restate` that changes the wall's own input drops the line in the same transaction (`stale`'s precedent), `unpark` drops a `seat_not_active` line, and the `fire` door judges the week's fuel again for itself and lets the fire out when the wall no longer holds — the schedules consumer then lifts the line through `clear_halt`, so every lift is one audited door. The router's own path is untouched."
-    "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
+    "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. A v10 action declares ONE `:to` (definitions.clj records the same wart for `measure`/`measure_pilot`), so covering `parked` would mean six doors instead of three — and a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."
+    "`lapse` has a second door, `lapse_parked`, declared `parked → parked` (ticket 50843da5). A parked seat serves nothing, so an ended entry on it leaks no power, but the row is what a person reads before they unpark it, and it must say what the seat holds today. The stale list and the halt line are marks the engine adds; an ended entry is one the person wrote with its own end, so taking it off is what they asked for. One `:to` an action, so two doors with one handler."]})
 
 ;; ── :model ──────────────────────────────────────────────────────────
 
@@ -5772,11 +5797,30 @@
   "The engine's `:maintain` hook, this module's arm (seat health 2): a
   committed write that leaves a sitting closed rolls its seat's
   `health`. It answers nil for every write, so the composition keeps
-  the row the passes before it decided on."
-  [eng kind _action-name res]
-  (when (and (= :sitting kind)
-             (= "closed" (some-> (get-in res [:row :state]) name)))
-    (roll-health! eng (get-in res [:row :data :seat])))
+  the row the passes before it decided on.
+
+  Ticket 8bda4005: a seat's restate that moves `health_window` rolls
+  too. The hook is handed the row as the restate left it and not the
+  row before, so the move is read off the rollup: a `health` counted
+  over the window the row names now has that many sittings, and one
+  with another count was counted over another window or over a seat
+  with fewer sittings than its window. The second is rolled to the
+  same counts. A seat with no `health` yet waits for its first close."
+  [eng kind action-name res]
+  (cond
+    (and (= :sitting kind)
+         (= "closed" (some-> (get-in res [:row :state]) name)))
+    (roll-health! eng (get-in res [:row :data :seat]))
+
+    (and (= :seat kind)
+         (= "restate" (some-> action-name name)))
+    (let [data (get-in res [:row :data])
+          counted (get-in data [:health :sittings])]
+      (when (and (some? counted)
+                 (not= (long counted)
+                       (max 1 (long (or (:health_window data)
+                                        (:window health-thresholds))))))
+        (roll-health! eng (get-in res [:row :id])))))
   nil)
 
 (defn- a-persons-write?
@@ -5960,8 +6004,10 @@
   "Take the scope entries whose `until` has passed off one seat, through
   the concealed `lapse`: system actor, logged, and the input names each
   entry and its `because` (ticket b177a14b). The resolve judged them
-  absent from their instant; this makes the row say so. → how many
-  entries went: 0 when none has ended, or the seat is not active."
+  absent from their instant; this makes the row say so. A parked seat
+  goes through `lapse_parked`, the same write declared `parked →
+  parked` (ticket 50843da5). → how many entries went: 0 when none has
+  ended, or the seat is neither active nor parked."
   [eng seat-id]
   (let [row (seat-row eng seat-id)
         now ((:now-fn eng))
@@ -5973,8 +6019,9 @@
                                         "] ended " (:until e) ": "
                                         (or (:because e) "no reason given")))
                                  gone))]
-    (if (and row (= :active (:state row)) (seq gone))
-      (do (inv/invoke! eng :seat (:id row) :lapse
+    (if (and row (#{:active :parked} (:state row)) (seq gone))
+      (do (inv/invoke! eng :seat (:id row)
+                       (if (= :parked (:state row)) :lapse_parked :lapse)
                        {:scope (grants/live-entries now scope)
                         :lapsed gone
                         :note (if (< 2000 (count note)) (subs note 0 2000) note)}

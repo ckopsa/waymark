@@ -298,7 +298,7 @@ walk        one row per recording
   states: recording → sealed → purged
   doors:  create (start; the recorder is a follower in guided mode,
                   or the person themselves: a self walk, below)
-          seal   (stop)
+          seal   (stop; or the engine's own hand at 20 000 frames)
           export (sealed only; answers the export document)
           purge  (the recorder, or the sweep after retention_days)
 
@@ -341,6 +341,16 @@ is a batch on one row or a bulk call deferred to a job.
 transcript sweep is the precedent. The row itself stays, with its
 title and counts, as the audit that a walk existed.
 
+**A walk seals itself at 20 000 frames.** A walk nobody seals does not
+grow without bound: when the frame that reaches `walks/frame-ceiling`
+(20 000) is written, the engine seals the walk with its own hand,
+`walks/ceiling-actor`, whose display is "Walks (the frame ceiling was
+reached)". `seal` takes no input and a transition has no reason field,
+so that actor is the whole of the walk's history on why it was sealed:
+the `seal` transition names it as its actor, and no recorder's hand
+is. That is enough, because the engine seals for no other reason
+(docs/spec-agent-demo-walks.md § 4).
+
 **Export.** The `export` door answers `application/x-ndjson` in the
 format `waymark-walk/1`:
 
@@ -378,6 +388,14 @@ The export has no keys and no secrets:
   shared with someone else). The exporter sees the intersection. A
   frame that fails entirely is left out, and `t` keeps the gap.
 - Secret-marked fields were never recorded (section 1).
+
+**The connector answers a summary of the export.** `waymark_get` with
+`return: "export"` on a sealed walk answers what the export file is:
+its format, header, frame count, bytes, sha256 and `href`, with its
+first lines up to 64 KB and `truncated` when that was not all of it.
+Those bytes are the route's own bytes. The whole file is read at
+`href` over HTTP. An unsealed walk is refused, with `seal` as the
+remedy (docs/spec-agent-demo-walks.md § 4).
 
 **Replay.** The UI can play an export in a read-only follow view. The
 same code that applies live `ui` and `move` frames applies the frames

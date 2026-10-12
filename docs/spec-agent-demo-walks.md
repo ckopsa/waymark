@@ -282,9 +282,7 @@ only way the screen changes:
   `focus` names, or the first whose value differs from the beat before
   it. The clicked field is not lit: it alone wears a focus ring
   (`[data-replay-click]` in `ui/030-screens.css`), because a replayed
-  form's fields are disabled and take no focus. That ring is the
-  browser's own and not the outline the app's `:focus-visible` rule
-  draws; ticket d4040832 is to make them the same. The lit field of a
+  form's fields are disabled and take no focus. The lit field of a
   typing beat is now live follow's alone.
 - **A ref field** names its row as a live form does. A staged typing
   beat on a `:kind` ref argument carries `labels: {<field>: <the row's

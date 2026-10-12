@@ -625,7 +625,23 @@
                              [:meal_ids {:kind :meal}
                               [:vector :waymark/ref]]]
                      :safety {:idempotent true :reversible false
-                              :confirm false :one-way "Seated."}}}}))
+                              :confirm false :one-way "Seated."}}
+              ;; the WHOLE-part shape: a list of maps and a nested map,
+              ;; each carrying a ref below the input's top level
+              :plan_week {:from #{:open} :to :open
+                          :input [:map
+                                  [:days
+                                   [:vector
+                                    [:map
+                                     [:date :waymark/date]
+                                     [:meal_id {:optional true :kind :meal}
+                                      [:maybe :waymark/ref]]]]]
+                                  [:host {:optional true}
+                                   [:maybe
+                                    [:map
+                                     [:meal_id {:kind :meal} :waymark/ref]]]]]
+                          :safety {:idempotent true :reversible false
+                                   :confirm false :one-way "Planned."}}}}))
 
 (defn- action-map [rdef aname]
   (assoc (get-in rdef [:actions aname]) :name aname))
@@ -765,6 +781,19 @@
     (is (= [{:field :meal_id :kind :meal :listed false}]
            (:ref-fields (action-map fx/plan :assign_meal)))))
 
+  (testing "and the ones a part carries below the top level, by their path"
+    (let [nested [{:field :meal_id :kind :meal :listed false :optional true
+                   :path [{:key :days :each true}]}
+                  {:field :meal_id :kind :meal :listed false :optional false
+                   :path [{:key :host :each false}]}]]
+      (is (= nested
+             (schema/nested-ref-fields (:input (action-map roster :plan_week)))))
+      (is (= nested (:ref-fields (action-map roster :plan_week))))
+      (is (= [] (schema/nested-ref-fields (:input (action-map roster :seat)))))
+      (is (some #(= [{:key :days :each true}] (:path %))
+                (:create-ref-fields fx/plan))
+          "the plan's create door takes `days` whole")))
+
   (let [row {:id "r1" :state :open :version 1 :data {:title "Sunday"}}
         held #{"m-real" "m-also"}
         ctx {:rdef-of {:meal fx/meal}
@@ -806,7 +835,34 @@
     (testing "no read in scope advertises optimistically"
       (let [v (wall-verdict roster :seat row {:meal_id "m-nope"}
                             {:rdef-of {:meal fx/meal}})]
-        (is (false? (:denied v))))))
+        (is (false? (:denied v)))))
+
+    (testing "a ref inside a list of maps a door takes whole: path and position"
+      (let [v (wall-verdict roster :plan_week row
+                            {:days [{:date "2025-01-06" :meal_id "m-real"}
+                                    {:date "2025-01-07" :meal_id "m-nope"}]}
+                            ctx)]
+        (is (true? (:denied v)))
+        (is (= :names-a-row-that-stands (:guard v)))
+        (is (re-find #"days\[1\]\.meal_id names no meal" (:reason v)))))
+
+    (testing "a ref inside a nested map, a row of the wrong kind"
+      (let [v (wall-verdict roster :plan_week row
+                            {:days [] :host {:meal_id "p-real"}} ctx)]
+        (is (true? (:denied v)))
+        (is (= :names-a-row-that-stands (:guard v)))
+        (is (re-find #"host\.meal_id names no meal" (:reason v)))))
+
+    (testing "nested refs that stand, are nil, or were left out refuse nothing"
+      (let [v (wall-verdict roster :plan_week row
+                            {:days [{:date "2025-01-06" :meal_id "m-real"}
+                                    {:date "2025-01-07" :meal_id nil}
+                                    {:date "2025-01-08"}]
+                             :host {:meal_id "m-also"}}
+                            ctx)]
+        (is (false? (:denied v))))
+      (is (false? (:denied (wall-verdict roster :plan_week row
+                                         {:days [] :host nil} ctx))))))
 
   (testing "through the real door: an invented ref refuses by name"
     (let [row (fac/walk-to-state *eng* :plan :draft {:seed 97})
@@ -838,4 +894,15 @@
                            {:principal (fac/walker-principal)})]
       (is (= :draft (get-in res [:row :state])))
       (is (= (:id meal)
-             (some :meal_id (get-in res [:row :data :days])))))))
+             (some :meal_id (get-in res [:row :data :days]))))))
+
+  (testing "through the real door: a part taken whole resolves its refs"
+    (let [p (problem-of
+             #(fac/create-example
+               *eng* :plan
+               {:seed 109
+                :overrides {:days [{:date "2025-01-06"
+                                    :meal_id (str (random-uuid))}]}}))]
+      (is (= 409 (:status p)))
+      (is (= :names-a-row-that-stands (:guard p)))
+      (is (re-find #"days\[0\]\.meal_id" (str (:detail p)))))))
