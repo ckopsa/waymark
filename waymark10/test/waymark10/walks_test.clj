@@ -1547,6 +1547,32 @@
       (doseq [never ["Kitchen" "Laundry" (str hidden)]]
         (is (not (str/includes? (:text narrow) never)) (str never " crossed"))))))
 
+(deftest an-export-carries-the-schema-of-each-kind-it-shows
+  (let [eng (stream-engine)
+        seen (errand! eng "Dishes")
+        plain (self-walk! eng)
+        w (doc-walk! eng)
+        rec (walks/self-recorder eng person nil)]
+    (look! rec (errand-path seen))
+    (look! rec "/api/errands")
+    (seal! eng plain)
+    (seal! eng w)
+    (let [schemas-of (fn [walk vis] (:schemas (:header (export-of eng walk vis))))
+          whole (schemas-of w nil)
+          narrow (schemas-of w (assoc (vis-of seen)
+                                      :field? (fn [_kind field] (not= "room" (name field)))))]
+      (testing "a row and its collection are one kind, with its declared labels"
+        (is (= [:errand] (keys whole)))
+        (is (= "Title" (get-in whole [:errand :properties :title :x-display :label])))
+        (is (= "Room" (get-in whole [:errand :properties :room :x-display :label]))))
+      (testing "the schema keeps the fields the exporter's :field? admits"
+        (is (= "Title" (get-in narrow [:errand :properties :title :x-display :label])))
+        (is (not (contains? (get-in narrow [:errand :properties]) :room))))
+      (testing "an exporter who sees no document of a kind reads no schema of it"
+        (is (nil? (schemas-of w (vis-of)))))
+      (testing "a walk without docs carries none"
+        (is (not (contains? (:header (export-of eng plain nil)) :schemas)))))))
+
 (deftest an-exported-doc-names-principals-by-alias
   (let [eng (stream-engine)
         about (walk! eng)

@@ -310,7 +310,13 @@
   ;; ask gained `domain`, the name of its requester's seat's domain,
   ;; filterable by :eq with :absent-as factory. Re-pinned from the
   ;; bench's run 37167345732, where this assertion alone failed.
-  "971f54aabbba09bbbc3a5700aae484785e1502ba78a9cf25aa67d7c2ea068d5a")
+  ;;
+  ;; THE LAW MOVED AGAIN (ticket d4211f9a): scope-filters-are-filterable,
+  ;; a create wall here, lets several entries filter one kind when one
+  ;; of them names an action — read these, act on those — and its
+  ;; sentence says so. Re-pinned from the bench's run 38260956126, where
+  ;; this assertion alone failed.
+  "8b1d68e1a9792520887daab42956cd0a935a37a3b5bb266f99837158dc8082f4")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

@@ -3402,10 +3402,12 @@
 
   `only` is the one row a fire's text named (`seats/fire-key-row`):
   when it is given, the page holds that row alone, or nothing when the
-  row is not in the queue or is claimed. The read goes on through the
-  queue's pages until that row is seen or the queue ends, past
-  `walk-pages-max`: the row a fire named may sit on any page (ticket
-  59582777). A named OPEN ticket whose
+  row is not in the queue or is claimed. The row a fire named may sit
+  on any page (ticket 59582777), so when the queue's first page does
+  not hold it, ONE more read asks the queue for that row by its id
+  (the collection's `id` filter, ticket ba123a99): two queue reads
+  however long the queue is. `total` and `withheld` stay the first
+  page's. A named OPEN ticket whose
   change is submitted is withheld as the plain walk withholds it
   (ticket 6ca380da).
 
@@ -3456,16 +3458,19 @@
             ;; so no page of judged rows is read (ticket 279366ee)
             without (when judgment
                       (not-empty (judgments/walk-conds eng judgment (:id seat))))
-            page (fn [k]
+            ;; `more` is one read's own filter: the named row's id
+            page (fn page*
+                   ([k] (page* k nil))
+                   ([k more]
                    (let [resp (call (request session :get (str "/api/" (:plural rdef))
                                              {:query (query-string
-                                                      (cond-> params
+                                                      (cond-> (merge params more)
                                                         (> k 1) (assoc "page[number]"
                                                                        (str k))))
                                               :conds without}))
                          doc (when (<= 200 (:status resp 500) 299)
                                (verbatim-json resp))]
-                     (when (collection-doc? doc) doc)))
+                     (when (collection-doc? doc) doc))))
             doc (page 1)]
         (when doc
           (let [id-of #(id-of-self (get % "self"))
@@ -3476,9 +3481,11 @@
                 ;; the subtraction can empty a whole page while free
                 ;; rows wait on the next, so the read goes on until the
                 ;; firing's rows are found or the queue ends (ticket
-                ;; f175f8c5). A named row is looked for on every page
-                ;; until it is seen: it is one row, and the cap on
-                ;; pages would hide it in a long queue (ticket 59582777)
+                ;; f175f8c5). A named row the first page does not hold
+                ;; is asked for by its id, in one read under the same
+                ;; filter: it is one row, and neither the cap on pages
+                ;; nor the queue's length stands between the run and it
+                ;; (tickets 59582777, ba123a99)
                 named? #(= (str only) (id-of %))
                 total (long (or (get-in doc ["data" "total"]) 0))
                 ;; the answer's `total` stays the queue as the list page
@@ -3496,23 +3503,30 @@
                                     (when (collection-doc? d)
                                       (get-in d ["data" "total"]))))
                                 (get-in doc ["data" "total"]))
-                queue (loop [k 1
-                             acc (vec (get-in doc ["data" "items"]))]
-                        (if (or (>= (* k (long asked)) total)
-                                (if only
-                                  (some named? acc)
-                                  (or (not subtract?)
-                                      (>= (count (filter free? acc)) n)
-                                      (>= k (long walk-pages-max)))))
-                          acc
-                          (let [more (get-in (page (inc k)) ["data" "items"])
-                                seen (into #{} (map id-of) acc)]
-                            (if (empty? more)
-                              acc
-                              (recur (inc k)
-                                     (into acc
-                                           (remove #(contains? seen (id-of %)))
-                                           more))))))
+                first-page (vec (get-in doc ["data" "items"]))
+                queue (if only
+                        (if (or (some named? first-page)
+                                (>= (long asked) total))
+                          first-page
+                          (into first-page
+                                (filter named?)
+                                (get-in (page 1 {"id" (str only)})
+                                        ["data" "items"])))
+                        (loop [k 1
+                               acc first-page]
+                          (if (or (>= (* k (long asked)) total)
+                                  (not subtract?)
+                                  (>= (count (filter free? acc)) n)
+                                  (>= k (long walk-pages-max)))
+                            acc
+                            (let [more (get-in (page (inc k)) ["data" "items"])
+                                  seen (into #{} (map id-of) acc)]
+                              (if (empty? more)
+                                acc
+                                (recur (inc k)
+                                       (into acc
+                                             (remove #(contains? seen (id-of %)))
+                                             more)))))))
                 items (cond->> (filter free? queue)
                         only (filter named?))
                 ;; the rows this sitting already walks, while they are

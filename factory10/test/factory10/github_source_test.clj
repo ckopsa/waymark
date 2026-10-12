@@ -757,6 +757,33 @@
     (testing "and a second pass supersedes nothing, because nothing is red"
       (is (= 0 (:runs-superseded (pass! r)))))))
 
+(deftest a-change-that-ends-supersedes-its-red-runs
+  ;; ticket ebe54a72: the head did not move, the change ENDED. A red
+  ;; run of a merged or closed change is a question no seat can answer,
+  ;; and the seat is not offered the door, so the pass walks it.
+  (doseq [[ending expected] [[{:merged_at "2026-09-18T15:00:00Z"} :merged]
+                             [{} :closed]]]
+    (testing (str "a change that is " (name expected))
+      (let [{:keys [state engine] :as r} (rig)
+            _ (pass! r)
+            _ (is (= :red (:state (the-run engine)))
+                  "the run is red while its change is open at that head")
+            _ (gh/seed-pull! state repo
+                             (merge a-pull-request
+                                    {:state "closed"
+                                     :updated_at "2026-09-18T15:00:00Z"}
+                                    ending))
+            census (pass! r)]
+        (is (= expected (:state (the-change engine))))
+        (is (= 1 (:runs-superseded census))
+            "the pass says it superseded the run")
+        (is (= :superseded (:state (the-run engine)))
+            "the red queue holds no run of a change that ended")
+        (is (nil? (get-in (the-run engine) [:data :verdict]))
+            "and it left with no verdict on it")
+        (is (= 0 (:runs-superseded (pass! r)))
+            "a second pass supersedes nothing")))))
+
 ;; ── acceptance 4 ────────────────────────────────────────────────────
 
 (deftest a-classified-run-gets-one-label-and-one-stamp

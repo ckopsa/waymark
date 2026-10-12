@@ -459,7 +459,9 @@
 (defn- collection-honesty-violations
   "The collection door for every application kind, plus the row
   affordances it advertises: an action offered on a list row that
-  404s on that row's own address is a lie the grid would tell."
+  404s on that row's own address is a lie the grid would tell. The
+  door's `id` filter is owed too (ticket ba123a99): it is advertised,
+  and a row the page shows is the one row its own id answers."
   [ctx]
   (into []
         (mapcat
@@ -471,6 +473,26 @@
               (when (not= 200 (:status resp))
                 [(str (name kind) " collection: GET " (:status resp))])
               (conf/collection-envelope-violations b {:kind kind})
+              (when (and (= 200 (:status resp))
+                         (nil? (get-in b [:actions :query :input :properties :id])))
+                [(str (name kind) " collection: the query input names no id filter")])
+              ;; an id the query string spells as it stands: a comma
+              ;; would read as a list of two
+              (when-some [item (first (filter #(re-matches #".*/[A-Za-z0-9._~-]+"
+                                                           (str (:self %)))
+                                              (get-in b [:data :items])))]
+                (let [id (last (str/split (:self item) #"/"))
+                      one (req ctx :get (str "/api/" (:plural (rdef ctx kind))
+                                             "?id=" id))
+                      ob (json ctx one)]
+                  (when-not (and (= 200 (:status one))
+                                 (= 1 (get-in ob [:data :total]))
+                                 (= [(:self item)]
+                                    (mapv :self (get-in ob [:data :items]))))
+                    [(str (name kind) " collection: ?id=" id " answered "
+                          (:status one) " with "
+                          (pr-str (mapv :self (get-in ob [:data :items])))
+                          ", not that one row")])))
               (mapcat
                (fn [item]
                  (for [wname (keys (:actions item))
