@@ -571,6 +571,78 @@
       (is (= 201 (:status (try-grant [{:kind "guest_chore" :actions []
                                        :filter {:assignee "jack"}}])))))))
 
+;; ── one kind, two filtered entries: read these, act on those ────────
+
+(deftest a-grant-reads-a-kind-more-widely-than-it-acts-on-it
+  ;; ticket d4211f9a: the sight is the union of the entries' filters,
+  ;; and a door opens only under the entry that names it
+  (let [mk (fn [title assignee]
+             (json (req* *raw* :post "/api/guest_chores"
+                         {:body {:title title :assignee assignee}
+                          :headers admin})))
+        mine (mk "Sweep the doors" "doors-w")
+        theirs (mk "Read the epic" "engine-w")
+        other (mk "Nobody's row" "stranger-w")
+        _ (is (every? (comp some? :self) [mine theirs other]))
+        gtok "guest-tok-4211"
+        member (json (req* *raw* :post "/api/members"
+                           {:body {:display "guest-two-entries" :actor_type "agent"
+                                   :bind_token gtok}
+                            :headers admin}))
+        mid (last (str/split (str (:self member)) #"/"))
+        grant (json (req* *raw* :post "/api/grants"
+                          {:body {:audience mid
+                                  :scope [{:kind "guest_chore"
+                                           :actions ["complete"]
+                                           :filter {:assignee "doors-w"}}
+                                          {:kind "guest_chore"
+                                           :actions []
+                                           :filter {:assignee "engine-w"}}]
+                                  :expires_at (str (.plusSeconds
+                                                    (java.time.Instant/now)
+                                                    259200))}
+                           :headers admin}))
+        _ (is (some? (:self grant)) (pr-str grant))
+        cookie (-> (req* *gated* :get "/auth/guest"
+                         {:query (str "invite=" gtok)})
+                   (get-in [:headers "Set-Cookie"]) str
+                   (str/split #";") first)
+        as-guest (fn [method uri & [opts]]
+                   (req* *gated* method uri
+                         (update opts :headers merge {"cookie" cookie})))
+        total (fn [query]
+                (get-in (json (as-guest :get "/api/guest_chores"
+                                        (when query {:query query})))
+                        [:data :total]))]
+    (is (str/starts-with? cookie "waymark_session="))
+
+    (testing "a row under either entry is read, and no other"
+      (is (= 200 (:status (as-guest :get (:self mine)))))
+      (is (= 200 (:status (as-guest :get (:self theirs)))))
+      (is (= 404 (:status (as-guest :get (:self other))))))
+
+    (testing "the collection is the union, with an honest total"
+      (is (= 2 (total nil))))
+
+    (testing "a query whose filter crosses the two entries answers rows
+              of both, and one that names an entry's own value answers
+              that entry's rows"
+      (is (= 2 (total "state=open")))
+      (is (= 1 (total "assignee=engine-w")))
+      (is (= 0 (total "assignee=stranger-w"))))
+
+    (testing "the door the read-only entry does not name is refused on
+              its row, and the row is unmoved"
+      (is (= 404 (:status (as-guest :post (str (:self theirs) "/-/complete")
+                                    {:body {}}))))
+      (is (not= "done" (:state (json (as-guest :get (:self theirs)))))))
+
+    (testing "and it opens on the row of the entry that names it"
+      (is (= 200 (:status (as-guest :post (str (:self mine) "/-/complete")
+                                    {:body {}}))))
+      (is (= "done" (:state (json (as-guest :get (:self mine))))))
+      (is (= 2 (total nil)) "both rows are still in sight"))))
+
 ;; ── attenuated delegation: an agent mints only within its leash ──────
 
 (deftest an-agent-mints-only-within-its-leash
