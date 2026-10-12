@@ -895,6 +895,71 @@
         (is (= before (counted)))
         (is (== 0.6 (bigdec (:submit_rate (health)))))))))
 
+;; a restate that moves the window (ticket 8bda4005)
+
+(deftest a-restate-that-moves-the-window-rolls-the-seats-health
+  (let [eng (fresh-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        now (java.time.Instant/now)
+        born! (fn [minutes-ago outcome]
+                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (inv/insert-quiet!
+                       eng tx :sitting
+                       {:seat seat-id
+                        :model (str (:id model))
+                        :member (seats/sitter-id seat)
+                        :mode seats/default-mode
+                        :started_at started
+                        :ended_at (.plusSeconds started 60)
+                        :input_tokens 0 :output_tokens 0
+                        :cache_read_tokens 0
+                        :cache_write_tokens 0
+                        :turns 12 :transitions 0 :refusals 0
+                        :served {:waymark_sit {:calls 1 :bytes 4000}}
+                        :closed_by "door"
+                        :cost_usd 0.5M
+                        :outcome outcome
+                        :flags []}
+                       {:principal seats/seats-actor
+                        :state :closed})))))
+        _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2)
+                              (take 12 (cycle ten-outcomes))))
+        health #(:health (:data (row-of eng :seat seat-id)))
+        restate! (fn [extra]
+                   (let [row (row-of eng :seat seat-id)]
+                     (inv/invoke! eng :seat seat-id :restate
+                                  (merge {:charter "Decide whether a meal belongs on the list."
+                                          :scope [{:kind "meal" :actions ["accept"]}]
+                                          :held_for [(:id model)]
+                                          :standing_ttl_seconds 604800
+                                          :cadence_seconds 3600
+                                          :budget_usd_per_week 5M
+                                          :sitting_budget_tokens 60000}
+                                         extra)
+                                  {:principal person
+                                   :if-match (inv/etag :seat seat-id
+                                                       (:version row))})))]
+    (testing "twelve judged sittings, and a health over the default ten"
+      (is (= 10 (:sittings (seats/roll-health! eng seat-id))))
+      (is (= 10 (:sittings (health)))))
+
+    (testing "a restate that leaves the window leaves the counts"
+      (restate! {})
+      (is (= 10 (:sittings (health)))))
+
+    (testing "a restate to five counts five, with no sitting closed between"
+      (restate! {:health_window 5})
+      (is (= 5 (get-in (row-of eng :seat seat-id) [:data :health_window])))
+      (is (= 5 (:sittings (health))))
+      (is (= 5 (reduce + (vals (:outcomes (health)))))))
+
+    (testing "and back to twenty counts all twelve"
+      (restate! {:health_window 20})
+      (is (= 12 (:sittings (health)))))))
+
 ;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
 
 (def ^:private groomers-ticket

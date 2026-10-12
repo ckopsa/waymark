@@ -5772,11 +5772,30 @@
   "The engine's `:maintain` hook, this module's arm (seat health 2): a
   committed write that leaves a sitting closed rolls its seat's
   `health`. It answers nil for every write, so the composition keeps
-  the row the passes before it decided on."
-  [eng kind _action-name res]
-  (when (and (= :sitting kind)
-             (= "closed" (some-> (get-in res [:row :state]) name)))
-    (roll-health! eng (get-in res [:row :data :seat])))
+  the row the passes before it decided on.
+
+  Ticket 8bda4005: a seat's restate that moves `health_window` rolls
+  too. The hook is handed the row as the restate left it and not the
+  row before, so the move is read off the rollup: a `health` counted
+  over the window the row names now has that many sittings, and one
+  with another count was counted over another window or over a seat
+  with fewer sittings than its window. The second is rolled to the
+  same counts. A seat with no `health` yet waits for its first close."
+  [eng kind action-name res]
+  (cond
+    (and (= :sitting kind)
+         (= "closed" (some-> (get-in res [:row :state]) name)))
+    (roll-health! eng (get-in res [:row :data :seat]))
+
+    (and (= :seat kind)
+         (= "restate" (some-> action-name name)))
+    (let [data (get-in res [:row :data])
+          counted (get-in data [:health :sittings])]
+      (when (and (some? counted)
+                 (not= (long counted)
+                       (max 1 (long (or (:health_window data)
+                                        (:window health-thresholds))))))
+        (roll-health! eng (get-in res [:row :id])))))
   nil)
 
 (defn- a-persons-write?
