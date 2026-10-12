@@ -84,8 +84,10 @@ server must not answer 5xx for a condition the table names.
 The text is composed by the engine (R-12.35, R-12.37): the seat's
 instructions, a `Seat:` line, a `Key:` line minted for this firing, and
 the person's prose inside a `routine-fire-payload` block. The key is
-spent by one `waymark_sit`. The server carries the text to the session
-and reads nothing in it.
+spent by one `waymark_sit`, with the one exception of spec-seat.md
+R-12.37: the same harness session sits again in the sitting that key
+opened, while that sitting is open. The server carries the text to the
+session and reads nothing in it.
 
 ## 3. Definitions
 
@@ -308,7 +310,9 @@ is withheld in `fire.txt` (R-7.1), and the text is not written in any
 log line. The argument vector is not logged. The session's own
 transcript, under Claude Code's project directory on that machine,
 holds the prompt as it holds every prompt, and the key in it is spent
-by the first sit.
+by the first sit. After that sit the key answers the same harness
+session alone, and only while the sitting it opened is open
+(spec-seat.md R-12.37).
 
 **R-7.4** The token counts on the page are Claude Code's own report of
 the API's `usage`, the same figures the Stop hook sums from the
@@ -426,7 +430,8 @@ database, and `serve-localfire`.
   bearer is what the cloud uses, so parity says HTTP first.
 - **Closing the sitting from the result JSON.** The server sees the
   exact counts on stdout and could post the close itself. It holds no
-  key, because the firing's key is spent by the sit, so the hook's
+  key, because the firing's key is spent by the sit and answers after
+  that only the session that sat (spec-seat.md R-12.37), so the hook's
   second path stays the close.
 - **A hook trust prompt in headless mode.** Project hooks under the
   place's `.claude/settings.json` may need a one-time trust on that
