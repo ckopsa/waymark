@@ -804,8 +804,9 @@
        blocked or deferred ticket is out of it by construction, so the
        code seat walks this kind and never reads a ticket it cannot
        work")
-  (is (= "priority" (get-in ticket [:sortable :default]))
-      "lowest number first, which is the queue's own order")
+  (is (= ["priority" "created_at"] (get-in ticket [:sortable :default]))
+      "lowest number first, then the oldest first among one priority,
+       which is the queue's own order")
   (let [form (into #{} (map first) (rest (:create-schema ticket)))]
     (is (not (contains? form :blocked_by))
         "a ticket is born a draft; block is a door, not a birth")

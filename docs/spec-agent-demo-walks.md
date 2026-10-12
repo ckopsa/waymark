@@ -572,6 +572,14 @@ that moment.
   a principal-ref field becomes its cast alias. The format stays
   `waymark-walk/1`: `parseWalk` keeps any line with a `type`, and
   today's replay ignores a type it does not know.
+- **Hints.** A replay makes no read, so the export carries the
+  x-display hints its screens are drawn with: the header's `schemas`
+  maps each kind a crossed `doc` line shows to its published schema,
+  as `/api/schemas/{kind}` answers the exporter. A walk with no `doc`
+  line has no `schemas` key. They are in the header and not in lines
+  of their own, so the frame lines and their count stay as they were.
+  Replay draws a screen with the walk's schema of its kind, and with
+  the hints the page already holds when the walk has none.
 - **Replay.** `renderReplay` hands the screen's latest `doc` at or
   before the playhead to the code that draws a live row or collection,
   with every action disabled. A dialog is drawn from the document's

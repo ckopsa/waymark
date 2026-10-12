@@ -312,12 +312,18 @@
   ;; filterable by :eq with :absent-as factory. Re-pinned from the
   ;; bench's run 37167345732, where this assertion alone failed.
   ;;
+  ;; THE LAW MOVED AGAIN (ticket d4211f9a): scope-filters-are-filterable,
+  ;; a create wall here, lets several entries filter one kind when one
+  ;; of them names an action — read these, act on those — and its
+  ;; sentence says so. Re-pinned from the bench's run 38260956126, where
+  ;; this assertion alone failed.
+  ;;
   ;; THE LAW MOVED AGAIN (ticket c823dc49): create gained
   ;; scope-ends-are-stated, the wall the seat already carried — an
   ;; ask's scope entry with `until` states `because`, parses, and ends
-  ;; at most 30 days ahead. Re-pinned from CI run 38269877348 (PR
-  ;; #1188), which printed this hash.
-  "fbbafb5cd916bc117600cba5d4de8f3f15f205498d27d3a7e51863a55524cb61")
+  ;; at most 30 days ahead. Re-pinned from the bench's run, where this
+  ;; assertion alone failed.
+  "8b1d68e1a9792520887daab42956cd0a935a37a3b5bb266f99837158dc8082f4")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

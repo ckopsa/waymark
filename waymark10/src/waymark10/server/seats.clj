@@ -540,6 +540,20 @@
   (when walk
     (filterv #(= walk (str (:kind %))) scope)))
 
+(defn- walk-entry
+  "The one entry a walk runs under, or nil. A lone entry is it. Several
+  entries that ALL filter the kind read it as the union of their
+  filters, and the walk is the part the seat can act on: the one entry
+  among them that names a door (ticket d4211f9a — the others are sight
+  alone, and a walk over rows with no door could never empty). Any
+  other shape is no entry, as before."
+  [entries]
+  (if (next entries)
+    (when (every? #(seq (:filter %)) entries)
+      (let [doors (filter #(seq (:actions %)) entries)]
+        (when-not (next doors) (first doors))))
+    (first entries)))
+
 (defn- entry-filter
   "The filter those entries put on the walk, or nil.
 
@@ -550,8 +564,7 @@
   therefore walk the kind unfiltered, exactly as the grant reads
   them."
   [entries]
-  (when (= 1 (count entries))
-    (not-empty (:filter (first entries)))))
+  (not-empty (:filter (walk-entry entries))))
 
 (defn walk-filter
   "The filter a seat's walk runs under (R-1), or nil when the walk
@@ -684,7 +697,7 @@
     (let [rdef-of (:rdef-of ctx)
           rdef (when rdef-of (rdef-of walk))
           entries (walk-entries (:scope inp) walk)
-          entry (when (= 1 (count entries)) (first entries))
+          entry (walk-entry entries)
           fm (named-filter (entry-filter entries))
           state (get fm "state")
           problem
