@@ -288,6 +288,18 @@
                           :spelled-by-hand filter-spelled-by-hand
                           :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field is `state`, or one the kind declares filterable with eq; one filtered entry per kind."}}
      [:maybe filter-map-schema]]
+    ;; break glass (ticket b177a14b): an entry that carries `until` is
+    ;; judged absent from that instant on, and the seat's clock sweep
+    ;; takes it off the row. A string and not an instant: it sits
+    ;; inside a list of maps, and `scope-ends-are-stated` parses it.
+    [:until {:optional true
+             :x-display {:label "Ends at"
+                         :help "An RFC 3339 time with an offset, at most 30 days ahead. From that moment the entry is judged absent, and the sweep takes it off the seat."}}
+     [:maybe [:string {:min 1 :max 40}]]]
+    [:because {:optional true
+               :x-display {:label "Why it was added"
+                           :help "One sentence, required with an end: what this entry was added for."}}
+     [:maybe [:string {:min 1 :max 240}]]]
     [:args {:optional true
             :x-display {:label "Argument limits"
                         :help "Per-action limits on WHICH arguments may be sent — {action, allow|deny, names}. Omit it and an admitted action takes any argument its schema accepts."}}
@@ -799,24 +811,114 @@
   and each admits its own actions, so folding them would hand one
   entry's actions to the other's rows."
   [& scopes]
-  (let [entries (into [] (comp cat (filter map?)) scopes)
+  (let [all (into [] (comp cat (filter map?)) scopes)
+        ;; an entry with an end is never folded (ticket b177a14b): a
+        ;; fold would drop its `until`, and break glass would stand
+        ;; for good. It rides behind the folded entries as written.
+        ending (filterv #(some? (:until %)) all)
+        entries (into [] (remove #(some? (:until %))) all)
         by-kind (group-by #(scope-name (:kind %)) entries)
         split? (into #{}
                      (mapcat (fn [scope]
                                (for [[k es] (group-by #(scope-name (:kind %))
-                                                      (filter map? scope))
+                                                      (remove #(some? (:until %))
+                                                              (filter map? scope)))
                                      :when (next (distinct (map filter-key
                                                                 (keep :filter es))))]
                                  k)))
                      scopes)]
-    (into [] (comp (map #(scope-name (:kind %))) (distinct)
-                   (mapcat #(if (split? %)
-                              (split-scope-entries (by-kind %))
-                              [(merge-scope-entries (by-kind %))])))
-          entries)))
+    (into (into [] (comp (map #(scope-name (:kind %))) (distinct)
+                         (mapcat #(if (split? %)
+                                    (split-scope-entries (by-kind %))
+                                    [(merge-scope-entries (by-kind %))])))
+                entries)
+          ending)))
 
 (defn- ->instant ^java.time.Instant [v]
   (if (instance? java.time.Instant v) v (java.time.Instant/parse (str v))))
+
+;; ── break glass: a scope entry with an end (ticket b177a14b) ────────
+;;
+;; A seat collected powers that were added for one incident each and
+;; never taken back. An entry may now carry `until` and `because`. The
+;; resolve judges an entry past its `until` as absent, so the power
+;; stops at that instant with no write; the seat's clock sweep then
+;; takes the entry off the row (seats/lapse!), so the row says what the
+;; seat holds today.
+
+(defn entry-end
+  "The instant a scope entry's `until` names, or nil: for an entry that
+  carries none, and for one whose `until` does not parse, which
+  `scope-ends-are-stated` refuses at the door."
+  ^java.time.Instant [entry]
+  (when-some [u (nonblank (:until entry))]
+    (try (.toInstant (java.time.OffsetDateTime/parse u))
+         (catch Exception _ nil))))
+
+(defn lapsed?
+  "Has this entry's `until` passed at `now`? The instant itself is past:
+  an entry is held up to its end and not at it."
+  [^java.time.Instant now entry]
+  (boolean (when-some [end (entry-end entry)]
+             (not (.isBefore now end)))))
+
+(defn live-entries
+  "One scope without the entries whose `until` has passed at `now`."
+  [now scope]
+  (into [] (remove #(lapsed? now %)) scope))
+
+(defn lapsed-entries
+  "The entries of one scope whose `until` has passed at `now`."
+  [now scope]
+  (into [] (filter #(lapsed? now %)) scope))
+
+(defn lapsing-entries
+  "The entries of one scope that are held at `now` and end within
+  `seconds` of it, soonest first."
+  [^java.time.Instant now seconds scope]
+  (let [edge (.plusSeconds now (long seconds))]
+    (->> scope
+         (filter (fn [e]
+                   (when-some [end (entry-end e)]
+                     (and (.isBefore now end) (not (.isAfter end edge))))))
+         (sort-by entry-end)
+         vec)))
+
+(def ^:private longest-end-seconds
+  "How far ahead an entry's `until` may be: 30 days."
+  (* 30 86400))
+
+(defn- end-misstated
+  "Why one scope entry's end is not well stated at `now`, as the tail
+  of a sentence, or nil. An `until` already past is not refused: the
+  resolve judges it absent and the sweep takes it off, and a restate
+  that carries the row's own scope back must not fail on it."
+  [^java.time.Instant now entry]
+  (when-some [u (nonblank (:until entry))]
+    (let [end (entry-end entry)]
+      (cond
+        (nil? end)
+        (str "its until, " u ", is not an RFC 3339 time with an offset")
+
+        (.isAfter end (.plusSeconds now (long longest-end-seconds)))
+        (str "its until, " u ", is more than 30 days ahead")
+
+        (nil? (nonblank (:because entry)))
+        (str "it carries until " u " and no because")))))
+
+(g/defguard scope-ends-are-stated
+  {:judges [:scope]
+   :reads [:now]
+   :vars [:kind :detail]
+   :open "An end is a time the caller chooses and a reason the caller writes; no form can list either."
+   :explain "The scope entry for {kind} states its end badly: {detail}. An entry's until is an RFC 3339 time at most 30 days ahead, and it carries a because of one sentence."}
+  [_row inp ctx]
+  (let [now (or (some-> (:now ctx) ->instant) (java.time.Instant/now))]
+    (if-some [[e m] (some (fn [e]
+                            (when-some [m (end-misstated now e)] [e m]))
+                          (filter map? (:scope inp)))]
+      (t/deny {:vars {:kind (str (:kind e)) :detail m}})
+      (t/allow))))
 
 (defn later-expiry
   "The expiry a widen leaves on a grant: the later of the grant's
@@ -2414,7 +2516,7 @@
     (let [seat (load-decoded eng :seat seat-id)]
       {:id seat-id
        :name (nonblank (get-in seat [:data :name]))
-       :scope (cond-> (vec (get-in seat [:data :scope]))
+       :scope (cond-> (live-entries ((:now-fn eng)) (get-in seat [:data :scope]))
                 (true? (get-in row [:data :substitute]))
                 (without-entries (get-in seat [:data :substitute_drop]))
 
@@ -2491,6 +2593,11 @@
         seat (when (and live? (seat-cited row0))
                (resolve-seat eng row0 principal now sitting-id))
         row (if seat (assoc-in row0 [:data :scope] (:scope seat)) row0)
+        ;; an entry past its `until` is absent from this instant on, in
+        ;; a seat's scope and in a grant's own (ticket b177a14b)
+        row (cond-> row
+              (seq (get-in row [:data :scope]))
+              (update-in [:data :scope] #(live-entries now %)))
         surface (if live? (prune-unusable eng (surface-of row)) dead)
         ;; whole-kind sight is a PER-ENTRY question, judged on the
         ;; SCOPE, never on surface-of's output: surface-of absorbs
@@ -2878,7 +2985,7 @@
                     :when (and (not (contains? mine (str "seat:" (:id s))))
                                (scope-admits-door?
                                 eng
-                                (without-entries (get-in s [:data :scope])
+                                (without-entries (live-entries now (get-in s [:data :scope]))
                                                  (get-in s [:data :stale]))
                                 kind action id))]
                 (nonblank (get-in s [:data :name])))

@@ -1527,6 +1527,9 @@
 (defhandler write-stale [row inp _ctx]
   (assoc-in row [:data :stale] (:stale inp)))
 
+(defhandler drop-lapsed [row inp _ctx]
+  (assoc-in row [:data :scope] (:scope inp)))
+
 (defhandler write-halt [row inp ctx]
   (assoc-in row [:data :halt]
             (cond-> {:reason (:reason inp) :since (:now ctx)}
@@ -2557,6 +2560,21 @@
             (filter recent?
                     (find' :sitting {:seat (str (:id row))} {:limit 10000})))))
 
+(defn- lapsing-field
+  "The seat's :computed `lapsing`: the scope entries whose `until` falls
+  within seven days, soonest first, so a mayor asks to extend one
+  before it goes (ticket b177a14b)."
+  [row ctx]
+  (mapv (fn [e]
+          {:kind (str (:kind e))
+           :actions (mapv str (:actions e))
+           :until (str (:until e))
+           :because (str (:because e))})
+        (grants/lapsing-entries (or (some-> (:now ctx) ->instant)
+                                    (java.time.Instant/now))
+                                (* 7 86400)
+                                (get-in row [:data :scope]))))
+
 (defn- spend-by-domain-field
   "The seat's :computed `spend_by_domain_7d`: `spend-by-domain` over the
   read and the find the render ctx lends."
@@ -2711,7 +2729,18 @@
                ;; it reads the sittings and the rows they walked: with
                ;; no read lent it is absent, never an empty map
                :reads? true
-               :fn spend-by-domain-field}}
+               :fn spend-by-domain-field}
+              :lapsing
+              {:schema [:vector
+                        [:map
+                         [:kind [:string {:max 64}]]
+                         [:actions [:vector [:string {:max 64}]]]
+                         [:until [:string {:max 40}]]
+                         [:because [:string {:max 240}]]]]
+               :x-display
+               {:label "Ends within seven days"
+                :help "The scope entries whose until falls within seven days, soonest first, worked out at read time. Restate the seat with a later until to keep one."}
+               :fn lapsing-field}}
    ;; No :x-options on :name, and roles.clj's reason verbatim: the list
    ;; the engine could publish here is the list of names already TAKEN,
    ;; and a chip row of it would offer exactly the tokens the guard is
@@ -3310,6 +3339,7 @@
                    grants/scope-names-real-actions
                    grants/scope-filters-are-filterable
                    grants/scope-omits-private-kinds
+                   grants/scope-ends-are-stated
                    drop-inside-scope
                    ttl-within-standing
                    held-for-active-models
@@ -3534,6 +3564,7 @@
               grants/scope-names-real-actions
               grants/scope-filters-are-filterable
               grants/scope-omits-private-kinds
+              grants/scope-ends-are-stated
               drop-inside-scope
               ttl-within-standing
               held-for-active-models
@@ -3767,6 +3798,34 @@
      :safety {:idempotent true :reversible false :confirm false}
      :handler clear-halt-mark
      :display {:label "Clear halt" :order 12}}
+
+    ;; ── break glass runs out (ticket b177a14b) ──────────────────────
+    ;; The clock sweep restates the scope without the entries whose
+    ;; `until` has passed. The input names each one and its `because`,
+    ;; and the door records it, so the seat's history says what went
+    ;; and why. Concealed like the three above.
+    :lapse
+    {:from #{:active} :to :active
+     :input [:map
+             [:scope {:x-display
+                      {:label "The scope that stays"
+                       :spelled-by-hand "The seat's scope without the entries that ended, written by the clock sweep."}}
+              grants/scope-schema]
+             [:lapsed {:x-display
+                       {:label "The entries that ended"
+                        :spelled-by-hand "The scope entries whose until has passed, written by the clock sweep."}}
+              grants/scope-schema]
+             [:note {:x-display {:widget "prose"
+                                 :label "Why each was added"}}
+              [:string {:min 1 :max 2000}]]]
+     :record true
+     ;; :edit-shape — the scope is worked out from the clock, and there
+     ;; is no form to prefill.
+     :waives #{:edit-shape}
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler drop-lapsed
+     :display {:label "Lapse" :order 18}}
 
     ;; ── the merge's landing (§ 6) ───────────────────────────────────
     :absorb
@@ -5871,6 +5930,32 @@
                        {:principal seats-actor})
           true)
       false)))
+
+(defn lapse!
+  "Take the scope entries whose `until` has passed off one seat, through
+  the concealed `lapse`: system actor, logged, and the input names each
+  entry and its `because` (ticket b177a14b). The resolve judged them
+  absent from their instant; this makes the row say so. → how many
+  entries went: 0 when none has ended, or the seat is not active."
+  [eng seat-id]
+  (let [row (seat-row eng seat-id)
+        now ((:now-fn eng))
+        scope (vec (get-in row [:data :scope]))
+        gone (grants/lapsed-entries now scope)
+        note (str/join "; " (map (fn [e]
+                                   (str (:kind e) " ["
+                                        (str/join ", " (map str (:actions e)))
+                                        "] ended " (:until e) ": "
+                                        (or (:because e) "no reason given")))
+                                 gone))]
+    (if (and row (= :active (:state row)) (seq gone))
+      (do (inv/invoke! eng :seat (:id row) :lapse
+                       {:scope (grants/live-entries now scope)
+                        :lapsed gone
+                        :note (if (< 2000 (count note)) (subs note 0 2000) note)}
+                       {:principal seats-actor})
+          (count gone))
+      0)))
 
 ;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
 

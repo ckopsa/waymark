@@ -1159,6 +1159,32 @@ once for that head and not asked again until the head moves. A policy
 that says `merge_by: house` and `auto_merge: true` must name at least
 one required check: the house never merges what nothing tested.
 
+The policy's `queued_check_minutes` says how long a required check may
+stay queued on a `submitted` change (ticket bc3ff12c). It is a whole
+number from 1 to 1440, and an empty one reads as 30
+(`queued-check-minutes-of`). A check whose workflow asks for a runner
+that no runner serves stays `queued` and never concludes, so the
+change would wait at `submitted` with no end. The forge pass therefore
+reads the wait itself as a red (`queued-verdict`). When the newest
+runs of a required check are all `queued`, and not `in_progress`, for
+more minutes than the policy gives, the pass moves the change to
+`failing`. `failing_checks` carries one finding for each such check:
+"check <name> has been queued <n> minutes; no runner took it (check
+its runs-on)". A check that does not say when it was queued is not
+judged. The seat reads the finding in its `feedback` as it reads any
+red check.
+
+This red counts as a round like any other. The pass reads the
+change's `rounds` against the policy's ceiling at the red, so a check
+that is queued too long on the last round moves the change to `stuck`
+and not to `failing`.
+
+A check that starts afterwards recovers the change. When a change is
+`failing` only for queued findings, and none of its required checks
+is queued any more, the next pass moves it back to `submitted` and
+clears `failing_checks` (`queue-left?`). The seat submits nothing for
+this.
+
 **R-12.32** The sit must give a bench to a seat that walks a queue of
 asks. This rule is for a code seat, as R-12.29 and R-12.31 are. A
 person says what the house must build in a row of a queue: a `task` in

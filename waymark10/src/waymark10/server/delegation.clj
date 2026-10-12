@@ -257,6 +257,14 @@
              (str " (the ceiling names no entry for " (:kind bad) ")"))
            ". A ceiling entry " (entry-text bad) " would have admitted it"))))
 
+(defn- standing
+  "The ceiling entries that admit: the ones with no `until`. Break glass
+  is for the seat that holds it, so an entry with an end never widens
+  what its holder may author (ticket b177a14b). A CHILD's entry with
+  `until` is judged by `entry-fits?` like any other."
+  [ceiling]
+  (remove #(some? (:until %)) ceiling))
+
 (defn- over? [asked cap]
   (and (some? asked) (some? cap) (pos? (compare (bigdec asked) (bigdec cap)))))
 
@@ -289,7 +297,7 @@
     (or (when (some? (:delegates inp))
           (str "the body writes a ceiling of its own, and a ceiling is the"
                " person's to write. No ceiling entry admits it"))
-        (scope-misfit (:scope ceil) (:scope inp))
+        (scope-misfit (standing (:scope ceil)) (:scope inp))
         (when (and (not by-headroom?)
                    (over? budget (:budget_usd_per_week ceil)))
           (str "budget_usd_per_week " budget " is over the ceiling's "
