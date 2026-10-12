@@ -116,8 +116,18 @@ and name `draft`, `blocked` and `deferred` in neither.
 
 ## 4. Requirements: the doors
 
-**R-4.0** `groom` (draft → open) and `ungroom` (open → draft) take no
-input. `a-person-or-their-delegate-grooms` refuses a model alone and
+**R-4.0** `ungroom` (open → draft) takes no input. `groom` (draft →
+open) takes an optional `priority`, 0 to 3: given, the ticket lands
+open at that priority in the same transition; omitted, it keeps the
+one it has. Priority 4 is the backlog and never enters the queue (the
+owner's rule, 2026-09-30: only P0-P3 work is built).
+`a-groomed-ticket-lands-above-the-backlog` refuses the groom of a
+ticket that would land at 4, names that priority, and gives the remedy
+`groom` with `priority`; a groomer raises the ticket when it earns it,
+or leaves it in draft. The ceiling is fixed in the law, house-wide: the
+guard reads the row and the input alone, so its scenarios are
+check-tier, and `groom_floor_max_priority` stays the floor's own
+count. `a-person-or-their-delegate-grooms` refuses a model alone and
 is not grantable; its scenarios are check-tier.
 `an-epic-names-its-showcase` refuses the groom of a ticket whose title
 starts `[epic]` and that has no `showcase`, with the remedy `restate`;
@@ -152,7 +162,10 @@ is ungroomed first.
 part of grooming it. The guard
 `the-blockers-are-open-and-not-itself` refuses a blocker that is the
 ticket itself, that is not a ticket, or that has ended, and names
-which.
+which. `then: open` on a draft is the groom said ahead of time, so it
+holds groom's wall: `a-draft-queued-ahead-lands-above-the-backlog`
+refuses it on a draft at priority 4, with the remedy to block with
+`then: draft`, or to raise the ticket first.
 
 **R-4.4** `unblock` (blocked → open) clears the list.
 

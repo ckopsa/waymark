@@ -1178,3 +1178,86 @@
         (is (= 409 (:status warned)) (pr-str warned))
         (is (str/includes? (pr-str warned) draft-id)
             "the refusal names the draft that already names the failure")))))
+
+;; ── P4 is the backlog (ticket f7420404) ─────────────────────────────
+
+(defn- refused
+  "The problem a call was refused with, or nil when it ran."
+  [call]
+  (try (call) nil
+       (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(defn- a-backlog-world
+  "An engine with one policy, and the doors a person takes on a draft
+  filed at a priority."
+  []
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        opts {:principal (t/principal {:id "colton" :display "Colton"})}]
+    (inv/create! eng :repo_policy {:repository "ckopsa/waymark"} opts)
+    {:draft! (fn [priority]
+               (:row (inv/create! eng :ticket
+                                  {:title (str "A draft at " priority)
+                                   :type "task"
+                                   :priority priority
+                                   :repo "ckopsa/waymark"}
+                                  opts)))
+     :groom! (fn [row input]
+               (:row (inv/invoke! eng :ticket (str (:id row)) :groom input opts)))
+     :block! (fn [row input]
+               (:row (inv/invoke! eng :ticket (str (:id row)) :block input
+                                  (assoc opts :if-match
+                                         (inv/etag :ticket (str (:id row))
+                                                   (:version row))))))}))
+
+(deftest a-groom-never-lands-a-ticket-at-p4
+  (let [{:keys [draft! groom!]} (a-backlog-world)
+        wall "a-groomed-ticket-lands-above-the-backlog"]
+    (testing "a P4 draft groomed where it stands is refused, with the way out"
+      (let [p (refused #(groom! (draft! 4) {}))]
+        (is (= 409 (:status p)) (pr-str p))
+        (is (str/includes? (pr-str p) wall) (pr-str p))
+        (is (str/includes? (pr-str p) "at priority 4")
+            "the refusal names the priority the ticket stands at")
+        (is (str/includes? (pr-str p) "Groom it with a priority of 0 to 3")
+            "and says to raise it with the groom, or leave it in draft")))
+    (testing "groomed with a priority it lands open at that priority"
+      (let [after (groom! (draft! 4) {:priority 3})]
+        (is (= "open" (some-> (:state after) name)))
+        (is (= 3 (get-in after [:data :priority])))))
+    (testing "a groom that names 4 is refused by the input schema"
+      (let [p (refused #(groom! (draft! 4) {:priority 4}))]
+        (is (map? p) (pr-str p))
+        (is (contains? #{400 422} (:status p)) (pr-str p))
+        (is (not (str/includes? (pr-str p) wall))
+            "the schema answers before the guard is asked")))
+    (testing "a P2 draft groomed without a priority lands at 2"
+      (let [after (groom! (draft! 2) {})]
+        (is (= "open" (some-> (:state after) name)))
+        (is (= 2 (get-in after [:data :priority])))))))
+
+(deftest the-groom-door-stays-offered-on-a-p4-draft
+  (is (= :available
+         (:status (refusal (at :draft {:priority 4}) (ctx the-person) :groom)))
+      "the priority is the input's to give, so the probe does not shut the door")
+  (is (str/includes? (pr-str (:input (get (:actions ticket) :groom)))
+                     "never enters the queue")
+      "and the door's own input says that P4 is not groomed as it stands"))
+
+(deftest a-block-does-not-queue-a-p4-draft-ahead-of-time
+  (let [{:keys [draft! block!]} (a-backlog-world)
+        blocker (str (:id (draft! 2)))]
+    (testing "then: open on a P4 draft is refused, with the way out"
+      (let [p (refused #(block! (draft! 4) {:blocked_by [blocker] :then "open"}))]
+        (is (= 409 (:status p)) (pr-str p))
+        (is (str/includes? (pr-str p) "a-draft-queued-ahead-lands-above-the-backlog")
+            (pr-str p))
+        (is (str/includes? (pr-str p) "Block it with then: draft") (pr-str p))))
+    (testing "then: draft on a P4 draft blocks it"
+      (let [after (block! (draft! 4) {:blocked_by [blocker] :then "draft"})]
+        (is (= "blocked" (some-> (:state after) name)))
+        (is (= "draft" (get-in after [:data :blocked_from])))))
+    (testing "and a P3 draft is still queued ahead of time"
+      (let [after (block! (draft! 3) {:blocked_by [blocker] :then "open"})]
+        (is (= "blocked" (some-> (:state after) name)))
+        (is (= "open" (get-in after [:data :blocked_from])))))))
