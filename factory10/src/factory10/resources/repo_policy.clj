@@ -55,6 +55,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Duration Instant ZoneOffset)
            (java.time.format DateTimeFormatter)))
@@ -1014,7 +1015,7 @@
             (remove nil? parts))))
 
 (defn- summary-of-row [row]
-  (summary-line (:data row) (:state row) (Instant/now)))
+  (summary-line (:data row) (:state row) (summary/now)))
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 

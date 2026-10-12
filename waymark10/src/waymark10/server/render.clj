@@ -932,7 +932,10 @@
                (println (str "waymark10 summary line [" (name (:kind rdef))
                              "] failed on " (:id row) ": " (ex-message e))))
              nil)))
-       (project-summary rdef row redacted hashed ref-summary))))
+       ;; a :summary-fn reads the clock this render was lent, not the
+       ;; wall clock (ticket d10e6c45)
+       (binding [summary/*now* (or (:now ctx-opts) summary/*now*)]
+         (project-summary rdef row redacted hashed ref-summary)))))
 
 (defn target-summary
   "One row's summary line as THIS visibility may read it — the
@@ -1239,7 +1242,7 @@
   State, summary, links and meta stay — they cost nothing (and they
   project like the full envelope's: batch B's redaction holds at
   every depth)."
-  [rdef row {:keys [resources visibility link-doors summary-refs]}]
+  [rdef row {:keys [resources visibility link-doors summary-refs now]}]
   (let [secret (not-empty (schema/secret-fields (:schema rdef)))
         redacted (not-empty (into (set (redacted-fields rdef visibility))
                                   secret))
@@ -1252,7 +1255,8 @@
       :kind (name (:kind rdef))
       :self (str "/api/" (:plural rdef) "/" (:id row))
       :state (name (:state row))
-      :summary (project-summary rdef hrow redacted hashed summary-refs)
+      :summary (binding [summary/*now* (or now summary/*now*)]
+                 (project-summary rdef hrow redacted hashed summary-refs))
       :actions nil
       :unavailable nil
       :links (render-links rdef public-row resources link-doors)

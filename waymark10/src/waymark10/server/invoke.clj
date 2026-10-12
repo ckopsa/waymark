@@ -661,8 +661,10 @@
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
 
-(defn- summary-of [rdef row]
-  (summary/line rdef (assoc row :kind (:kind rdef))))
+(defn- summary-of
+  "The row's line, read on the engine's clock `now` (ticket d10e6c45)."
+  [rdef row now]
+  (summary/line rdef (assoc row :kind (:kind rdef)) now))
 
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
@@ -842,7 +844,7 @@
   conceals; anything else refuses with the guard's own sentence.
   Reasons render over the secret-concealed row (waymark-kyg); id,
   state and the gate-safe summary keep the full row."
-  [acc v d row inp acknowledged defn rdef]
+  [acc v d row inp acknowledged defn rdef now]
   (let [nrow (narration-row rdef row)]
     (cond
       (= :warning (:severity d))
@@ -867,7 +869,7 @@
                :open (:open d)
                :becomes-available (g/becomes-available d v nrow)}
               {:kind (:kind rdef) :id (:id row)
-               :summary (summary-of rdef row)})))))
+               :summary (summary-of rdef row now)})))))
 
 (defn- run-guards
   "→ {:warned [{:name :reason :remedies}] :overridden [names] :basis […]}
@@ -893,7 +895,7 @@
                                                  scope)))]
          (if-not deny?
            acc
-           (deny-outcome acc v d row inp acknowledged defn rdef))))
+           (deny-outcome acc v d row inp acknowledged defn rdef (:now ctx)))))
      ;; nil, not [] — "this kind retains nothing" and "this action
      ;; declares no guards" are different sentences and the column
      ;; must be able to tell them apart
@@ -945,7 +947,7 @@
              (let [[v d] (g/evaluate leaf row inp ctx)]
                (if-not (t/deny? v)
                  acc
-                 (deny-outcome acc v d row inp acknowledged defn rdef))))
+                 (deny-outcome acc v d row inp acknowledged defn rdef (:now ctx)))))
            {:warned [] :overridden []}
            judged)
           (catch clojure.lang.ExceptionInfo e
@@ -989,7 +991,7 @@
         advanced (-> materialized
                      (assoc :state (:to defn))
                      (update :version inc))
-        advanced (assoc advanced :summary (summary-of rdef advanced))
+        advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
         record (store/append-transition!
                 (:storage engine) tx
                 {:kind (:kind rdef)
@@ -1239,7 +1241,7 @@
                          :law-revision target
                          :input-digest (body-digest nil)
                          :correlation-id correlation-id
-                         :summary (summary-of rdef row)})
+                         :summary (summary-of rdef row ((:now-fn engine)))})
                 saved (store/save-row! (:storage engine) tx kind
                                        (encode-row rdef advanced)
                                        (:version row))]
@@ -1374,7 +1376,7 @@
                 (throw (p/not-found kind id)))
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
-                                     :summary (summary-of rdef row)}
+                                     :summary (summary-of rdef row ((:now-fn engine)))}
                                     (out-of-state-says defn row guard-ctx)
                                     (machine/roads rdef defn (:state row)))))
           (do
@@ -2463,7 +2465,7 @@
               row (update row :data
                           #(labels-and-groups engine tx rdef % nil))
               row (derived/materialize rdef row now)
-              row (assoc row :summary (summary-of rdef row))
+              row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
               record (store/append-transition!

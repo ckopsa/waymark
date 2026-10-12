@@ -3,7 +3,20 @@
   {id}/{kind}/{state}/{version}/{data.field}. Budget ≤140 chars —
   conformance enforces it; this namespace just renders honestly.
   Missing fields render as an em-dash, never crash."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str])
+  (:import (java.time Instant)))
+
+(def ^:dynamic *now*
+  "The clock a :summary-fn reads, bound where the line is rendered to
+  the engine's own (ticket d10e6c45): under a shifted clock a composed
+  line measures from the shifted now. Unbound, it is the wall clock."
+  nil)
+
+(defn now
+  "The instant a composer measures from: the engine's clock where a
+  render lent one (`*now*`), the wall clock otherwise."
+  ^Instant []
+  (or *now* (Instant/now)))
 
 (defn state-label
   "A state token as prose: :awaiting_payment → \"Awaiting payment\"."
@@ -36,11 +49,15 @@
   declares :summary-fn beside :summary: a pure fn of the row that
   answers the line (ticket b5a9b790). The template stays the fallback:
   a composer that throws or answers nothing renders the template,
-  never a crash."
-  [rdef row]
-  (or (when-some [f (:summary-fn rdef)]
-        (try
-          (let [s (f row)]
-            (when-not (str/blank? s) s))
-          (catch Exception _ nil)))
-      (render (:summary rdef) row)))
+  never a crash. `at` is the engine's clock, which the composer reads
+  through `now`; nil leaves the clock as the caller bound it."
+  ([rdef row]
+   (or (when-some [f (:summary-fn rdef)]
+         (try
+           (let [s (f row)]
+             (when-not (str/blank? s) s))
+           (catch Exception _ nil)))
+       (render (:summary rdef) row)))
+  ([rdef row at]
+   (binding [*now* (or at *now*)]
+     (line rdef row))))
