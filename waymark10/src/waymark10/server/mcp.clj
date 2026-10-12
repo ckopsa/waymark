@@ -1837,19 +1837,21 @@
   replay lights that field. A typing beat also carries `labels`: the
   summary line of the row each ref argument it shows names, as the
   session may read it (`presence/ref-labels`), so a replay names the
-  row and not its id. A row the session may not see has no label. An
-  action the kind does not declare opens no form, and only the gaze
-  moves."
+  row and not its id. A row the session may not see has no label. The
+  labels are read from the beat's own fields, so a `kind-from`
+  argument has its label from the beat that also shows its sibling,
+  and not before. An action the kind does not declare opens no form,
+  and only the gaze moves."
   [eng st self aname input]
   (let [dialog {:self self :action (name aname)}
         ks (presence/typed-keys eng self (name aname) input)
         given (into {} (map (fn [[k v]] [(keyword (name k)) v])) input)
-        labels (when ks
-                 (try (presence/ref-labels eng self (name aname)
-                                           (select-keys given ks) (:summary-of st))
-                      (catch Exception _ nil)))
+        ;; one read for each row, however many beats show it
+        summary-of (memoize (fn [kind id] ((:summary-of st) kind id)))
         typed (fn [fields]
-                (let [named (not-empty (select-keys labels (keys fields)))]
+                (let [named (try (presence/ref-labels eng self (name aname)
+                                                      fields summary-of)
+                                 (catch Exception _ nil))]
                   (cond-> {:dialog dialog :fields fields}
                     named (assoc :labels named))))
         shown? (and ks
