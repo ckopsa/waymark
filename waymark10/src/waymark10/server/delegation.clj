@@ -239,6 +239,7 @@
          (str ", fields " (:mode f) " [" (str/join ", " (map str (:names f))) "]"))
        (when (seq (:hashed e))
          (str ", hashed [" (str/join ", " (map str (:hashed e))) "]"))
+       (when-some [u (:until e)] (str ", until " u))
        "}"))
 
 (defn- nearest

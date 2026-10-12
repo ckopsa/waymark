@@ -774,6 +774,13 @@
 ;; stops at that instant with no write; the seat's clock sweep then
 ;; takes the entry off the row (seats/lapse!), so the row says what the
 ;; seat holds today.
+;;
+;; A grant's own scope is not swept (ticket c823dc49). The resolve
+;; judges its ended entry absent the same way, and the grant's stored
+;; scope is the record of what was approved: it stays as written until
+;; the grant's `expires_at` or a revoke ends the row. The doors that
+;; write a scope onto an ask or a grant carry `scope-ends-are-stated`,
+;; so an entry there ends at most 30 days ahead and says why.
 
 (defn entry-end
   "The instant a scope entry's `until` names, or nil: for an entry that
@@ -958,6 +965,7 @@
                    scope-names-real-kinds scope-names-real-actions
                    scope-filters-are-filterable
                    scope-omits-private-kinds
+                   scope-ends-are-stated
                    agents-mint-within-their-leash]
    :actions
    {:accept {:from #{:offered} :to :accepted
@@ -994,7 +1002,8 @@
              :guards [approval-route-only
                       scope-names-real-kinds scope-names-real-actions
                       scope-filters-are-filterable
-                      scope-omits-private-kinds]
+                      scope-omits-private-kinds
+                      scope-ends-are-stated]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -1648,7 +1657,8 @@
                    scope-names-real-kinds
                    scope-names-real-actions
                    scope-filters-are-filterable
-                   scope-omits-private-kinds]
+                   scope-omits-private-kinds
+                   scope-ends-are-stated]
    :scenarios [the-asker-does-not-decide another-principal-may-deny]
    :deviations
    ["`seat-has-one-sitter` (R-5.8) reads a PAGE of accepted grants rather than a query filtered by seat: `grant.seat` is optional, and a promoted column — the thing a filter would walk — is generated only for a non-`:maybe` entry (the sitting kind records the same wall). The door it runs at is a person's tap on an approval, not a sitter's request, so one page is the right price for a wall that must not be wrong."
