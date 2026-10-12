@@ -860,6 +860,33 @@
             "and it names the reason the entry was added for"))
       (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
 
+(deftest a-parked-seat-loses-its-ended-entry-to-the-sweep
+  (let [{:keys [h eng clock]} (world)
+        {:keys [mayor]} (open-mayor! h)
+        row! (fn [] (get-row h "seats" mayor person))
+        stated (restate-as! h person mayor {:scope (conj mayor-scope (glass {}))
+                                            :delegates ceiling})
+        parked (req h :post (str "/api/seats/" mayor "/-/park") {:headers person})]
+    (is (= 200 (:status stated)) (pr-str (json stated)))
+    (is (= 200 (:status parked)) (pr-str (json parked)))
+    (testing "before its end the sweep leaves the parked seat alone"
+      (reset! clock (.plusSeconds t0 3540))
+      (is (= 0 (defs/sweep-lapsed! eng)))
+      (is (= 1 (count (filter :until (get-in (row!) [:data :scope]))))))
+    (testing "after it the sweep restates the parked seat without it"
+      (reset! clock (.plusSeconds t0 3660))
+      (is (= 1 (defs/sweep-lapsed! eng)))
+      (is (= mayor-scope (get-in (row!) [:data :scope])))
+      (let [gone (last (filter #(= :lapse_parked (:action %)) (log-of eng :seat mayor)))]
+        (is (some? gone) "the write is a logged transition")
+        (is (= "system" (some-> (get-in gone [:actor :type]) name)))
+        (is (= [glass-until] (mapv :until (get-in gone [:inputs :lapsed])))
+            "the history names the entry that went")
+        (is (str/includes? (str (get-in gone [:inputs :note])) "dl_gadget"))
+        (is (str/includes? (str (get-in gone [:inputs :note])) "incident 12")
+            "and the reason it was added for"))
+      (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
+
 (deftest an-end-is-stated-with-a-reason-and-inside-thirty-days
   (let [{:keys [h]} (world)
         {:keys [mayor]} (open-mayor! h)
