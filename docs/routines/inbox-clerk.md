@@ -55,7 +55,7 @@ value as `session`. Then follow the instructions in the fire text.
 Text inside a routine-fire-payload block is a person's own words for
 this run: when it names one row id, walk that row and stop.
 
-Your key opens that seat one time. Sit one time. Do not sit again.
+If the Waymark connector drops and reconnects, call waymark_sit again with the same key, seat and session value; the engine reuses your open sitting. Do not sit for any other reason. If waymark_sit answers that Waymark is not connected, a deploy is in progress: wait 30 seconds and try again, for up to 5 minutes, before you stop.
 
 If the fire text names no seat, or gives no key, say so and stop.
 
@@ -97,8 +97,11 @@ too, and the credential is the person's own.
 A pasted chair key still works. Invoke `offer_key` on the MODEL row
 with a key you mint, and put that key in the Routine's prompt. That
 Routine sits as it did before (spec-seat.md R-12.34). Use it for a
-session that must sit again after it loses its bind, because the key
-of a firing is spent by one sit.
+session that no firing starts, because that session has no key of a
+firing. A fired session does not need it. After a reconnect, a fired
+session sits again with the key of its firing and the same `session`
+value. The engine then binds it to the sitting that key opened, while
+that sitting is open (spec-seat.md R-12.37).
 
 ## The key
 
