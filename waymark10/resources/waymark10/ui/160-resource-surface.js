@@ -56,10 +56,7 @@ async function renderResource(view, doc, hints) {
         suggested.add(t.slice(dot + 1));
     }
   const bar = el("div", {class:"actions"});
-  const entries = Object.entries(doc.actions || {})
-    .sort(([a, ea], [b, eb]) =>
-      ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
-      a.localeCompare(b));
+  const entries = Object.entries(doc.actions || {}).sort(doorOrder);
   for (const [name, entry] of entries) {
     const btn = actionButton({name, entry, doc, onDone: out => {
       /* approving an ask ANYWHERE follows its requester — the agent
@@ -83,7 +80,8 @@ async function renderResource(view, doc, hints) {
      reasons render just below, at the point of intent */
   const {blocked, grouped, gated} = splitRefusals(doc);
   /* one that names a way out is a tap away from a quest (shutDoor) */
-  for (const [name, entry] of blocked.concat(gated, reachGrouped(grouped, doc)))
+  for (const [name, entry] of
+       blocked.concat(gated, reachGrouped(grouped, doc)).sort(doorOrder))
     bar.append(shutDoor(name, entry, doc));
   /* the grant scope (wire 10): a grant row is a scope SELECTOR its
      audience presents via X-Waymark-Grant — this session can put it on */
@@ -318,7 +316,9 @@ async function renderSurface(view, doc) {
                   title: up ? "attention: the declared value holds"
                             : "quiet"}, f + (up ? " ⚑" : " ·")))));
   /* showcased actions first and prominent; the anchor's other actions
-     follow — order is the declaration's, not this client's */
+     follow, and then its shut doors — order is the declaration's
+     (doorOrder), not this client's, and the bar folds as the row
+     page's does (foldDoors) */
   const showcase = new Set(doc.showcase || []);
   const bar = el("div", {class:"actions"});
   for (const name of doc.showcase || []) {
@@ -330,15 +330,18 @@ async function renderSurface(view, doc) {
       title: "showcased by this surface's definition"}, "showcased"));
     bar.append(btn);
   }
-  for (const [name, entry] of Object.entries(anchor.actions || {}))
+  for (const [name, entry] of Object.entries(anchor.actions || {}).sort(doorOrder))
     if (!showcase.has(name))
       bar.append(actionButton({name, entry, doc: anchor, onDone: () => render()}));
   const {blocked, grouped, gated} = splitRefusals(anchor);
-  for (const [name, entry] of blocked.concat(reachGrouped(grouped, anchor)))
+  for (const [name, entry] of
+       blocked.concat(reachGrouped(grouped, anchor)).sort(doorOrder))
     bar.append(shutDoor(name, entry, anchor));
   panel.append(bar);
   const notes = blockedNotes(blocked, anchor);
-  if (notes) panel.append(notes);
+  const anchorMore = foldDoors(bar, notes, anchor);
+  if (anchorMore) panel.append(anchorMore);
+  else if (notes) panel.append(notes);
   wireNotYet(panel);
   if (anchor.self)
     panel.append(el("div", {class:"embed"},

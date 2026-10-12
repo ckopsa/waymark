@@ -98,17 +98,29 @@ function shutDoor(name, entry, doc) {
   btn.addEventListener("click", () => questFromDoor(btn, name, doc));
   return btn;
 }
+/* doors in the order the law declares: display.order, then the name. A
+   shut door's entry carries its display as an open one does (ticket
+   90540599), so the row page, the dashboard and the surface sort the
+   doors they draw the same way, open and shut */
+function doorOrder([a, ea], [b, eb]) {
+  return ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
+    a.localeCompare(b);
+}
 /* ── everyday doors (ticket f66dd175) ──────────────────────────────────
    A kind's law may mark some doors `everyday` in their display, and the
-   kind's entry in the well-known document lists them: a shut door's
-   entry carries no display. On such a kind the bar keeps every door the
-   viewer can use now, every shut door that is everyday, and the door the
-   pinned quest names as its goal or its next step. Every other shut door
-   moves under one closed 'More doors (n)' line, and the reasons move
-   with them. Each keeps its surface name. A kind that marks none keeps
-   its bar as it is. */
-function everydayDoors(kind) {
-  return (((wellKnownNow || {}).resources || {})[kind] || {}).everyday || [];
+   row's own entries carry the mark, under `actions` for an open door
+   and under `unavailable` for a shut one (ticket cf624ed4): the row is
+   the one source, and the well-known document lists none. On a row with
+   a marked door the bar keeps every door the viewer can use now, every
+   shut door that is everyday, and the door the pinned quest names as
+   its goal or its next step. Every other shut door moves under one
+   closed 'More doors (n)' line, and the reasons move with them. Each
+   keeps its surface name. A row with no marked door keeps its bar as it
+   is. */
+function everydayDoors(doc) {
+  return Object.entries({...(doc.actions || {}), ...(doc.unavailable || {})})
+    .filter(([, entry]) => (entry.display || {}).everyday)
+    .map(([name]) => name);
 }
 function questDoors(self) {
   const q = replay ? replay.quest : questDoc;
@@ -119,7 +131,7 @@ function questDoors(self) {
   return out;
 }
 function foldDoors(bar, notes, doc) {
-  const every = everydayDoors(doc.kind);
+  const every = everydayDoors(doc);
   if (!every.length) return null;
   /* the marks stay on the bar: sinkQuestDoors folds by them later */
   bar.setAttribute("data-everyday", every.join(" "));
