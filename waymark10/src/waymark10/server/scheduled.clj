@@ -797,16 +797,16 @@
 (defn- unmet-condition
   "R-2.3: the scheduler's conditions against the row as it is now, under
   the runner's grant as it is now: the sentence that skips the run, or
-  nil. The evaluator is the collection's. The store is asked for this
+  nil. `vis` is that grant's visibility, the one read of the run
+  (`leash-of`), and nil for a row scheduled under no grant. The
+  evaluator is the collection's. The store is asked for this
   row where `parse-query`'s conds hold, and answers one row or none.
   When it answers none the conditions are asked one at a time, in the
   order of their names, and the first that fails is named with the
   value it met. A condition on a field the grant no longer shows plain
   skips the row and shows no value."
-  [eng rdef row data principal]
+  [eng rdef row data vis]
   (let [st (:storage eng)
-        vis (when-some [grant (:grant data)]
-              (grants/visibility eng grant principal))
         this-row {:target :id :op := :value (str (:id row))}
         holds? (fn [conds]
                  (store/with-tx st
@@ -889,8 +889,10 @@
   it (R-2.2). `conditions` is `state`, and the scheduler's conditions
   read between the state and the door (R-2.3). A create has no row:
   `strict` pins the law a birth is stamped by (R-2.4). A row that is
-  gone and a row the runner cannot see are one sentence (R-2)."
-  [eng {:keys [rdef kind action id] defn' :defn} data principal]
+  gone and a row the runner cannot see are one sentence (R-2). `vis`
+  is the visibility of the grant read at the run, which the conditions
+  are judged under."
+  [eng {:keys [rdef kind action id] defn' :defn} data vis]
   (let [{:keys [version state law_revision]} (:snapshot data)
         strict? (= "strict" (:validity data))
         label (name kind)]
@@ -898,7 +900,7 @@
       (let [row (stored-row eng kind id)
             at (some-> (:state row) name)
             unmet (delay (when (= "conditions" (:validity data))
-                           (unmet-condition eng rdef row data principal)))]
+                           (unmet-condition eng rdef row data vis)))]
         (cond
           (nil? row)
           (str "The " label " is gone.")
@@ -1071,7 +1073,7 @@
                   (or why
                       (some->> (:problem door) (str "The door is gone: "))
                       (:why leash)
-                      (stale eng door data principal)))
+                      (stale eng door data (:sight leash))))
             {:keys [end why res]} (cond
                                     before {:end :land}
                                     why {:end :skip :why why}
