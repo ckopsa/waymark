@@ -3742,3 +3742,109 @@
       (is (true? (wakes/moved-under? *eng* :walkthrough id queue))))
 
     (seat-do! seat :retire)))
+
+;; The same seat can name `walkthrough` as its `walk`. The walk's filter
+;; is its scope entry's, and that filter names the seat's own id, so the
+;; `restate` that writes the wake entry writes the scope and the walk
+;; with it. Then the queue of the case above is the seat's walk: the
+;; count the sit's page is taken from holds the waiting row, and a
+;; release into an empty queue fires nothing.
+
+(defn- walking-leader!
+  "A leading seat whose `walk` is `walkthrough`, under the queue's own
+  filter in its scope entry. → {:seat id :token token}."
+  [nm fire-cursor]
+  (let [seat-id (seat! nm {})
+        token (str "rk-test-" nm "-0123456789abcdef")
+        author (str "seat:" seat-id)]
+    (restate! seat-id
+              {:walk "walkthrough"
+               :scope [{:kind "walkthrough"
+                        :actions ["create" "advance" "stop" "resume"
+                                  "withdraw"]
+                        :filter {:author author
+                                 :state "running"
+                                 :waiting_on "agent"}}]
+               :wake_on [{:kind "walkthrough"
+                          :actions ["start" "step" "resume" "stop" "finish"]
+                          :filter {:author author
+                                   :waiting_on "agent"}}]})
+    (drain-fires! fire-cursor)
+    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
+                 {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                 "/routines/trig_" nm "/fire")
+                  :token token}
+                 {:principal elena})
+    {:seat seat-id :token token}))
+
+(deftest a-leading-seat-that-walks-walkthrough-is-handed-its-waiting-row
+  (let [wn :wake-led-walk
+        fn' :wake-led-walk-fires
+        in :wake-led-walk-invitations
+        wt :wake-led-walk-walkthroughs
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        _ (settle-led! in wt)]
+
+    (testing "a damped wake leaves the row in the seat's walk"
+      (let [{:keys [seat token]} (walking-leader! "leadwalkclerk" fn')
+            seat-row #(raw :seat seat)
+            open-one (sitting! seat)
+            id (lead! seat [an-agent-step])]
+        (is (= "walkthrough" (str (get-in (seat-row) [:data :walk])))
+            "the restate wrote the walk")
+        (is (= {"author" (str "seat:" seat)
+                "state" "running"
+                "waiting_on" "agent"}
+               (into {} (map (fn [[k v]] [(name k) (str v)]))
+                     (seats/walk-filter (seat-row))))
+            "and the walk's filter is the scope entry's")
+        (is (= 0 (#'wakes/walk-count *eng* (seat-row)))
+            "a walkthrough nobody started is not in the walk")
+
+        (led-do! id elena :start)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat)))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+
+        (close-sitting! open-one)
+        (drain-wakes! wn)
+        (let [ts (seat-fires seat)]
+          (is (= 1 (count ts)) "the close releases one fire")
+          (is (nil? (get-in (first ts) [:inputs :text]))
+              "and it names no row"))
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of token))))
+
+        (is (= 1 (#'wakes/walk-count *eng* (seat-row)))
+            "the sit's page is counted from this: the waiting row is on it")
+        (is (false? (#'wakes/empty-walk? *eng* (seat-row))))
+        (seat-do! seat :retire)))
+
+    (testing "a release into an empty walk fires nothing"
+      (let [{:keys [seat token]} (walking-leader! "leadwalkemptyclerk" fn')
+            seat-row #(raw :seat seat)
+            open-one (sitting! seat)
+            id (lead! seat [an-agent-step])]
+        (led-do! id elena :start)
+        (drain-wakes! wn)
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+            "the start was damped by the open sitting")
+
+        ;; the sitting does the agent step, and the row leaves the walk
+        (led-do! id (leader-of seat) :advance)
+        (settle-led! in wt)
+        (drain-wakes! wn)
+        (is (not= "agent" (waiting-on id)))
+        (is (= 0 (#'wakes/walk-count *eng* (seat-row))))
+        (is (true? (#'wakes/empty-walk? *eng* (seat-row))))
+
+        (close-sitting! open-one)
+        (drain-wakes! wn)
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (empty? (seat-fires seat)) "nor does the tick fire it later")
+        (is (empty? (fires-of token)))
+        (seat-do! seat :retire)))))
