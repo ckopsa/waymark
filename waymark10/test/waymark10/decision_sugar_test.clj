@@ -321,9 +321,9 @@
   ;; THE LAW MOVED AGAIN (ticket c823dc49): create gained
   ;; scope-ends-are-stated, the wall the seat already carried — an
   ;; ask's scope entry with `until` states `because`, parses, and ends
-  ;; at most 30 days ahead. Re-pinned from the bench's run, where this
-  ;; assertion alone failed.
-  "8b1d68e1a9792520887daab42956cd0a935a37a3b5bb266f99837158dc8082f4")
+  ;; at most 30 days ahead. Re-pinned from the bench's run 38276641700,
+  ;; where this assertion alone failed.
+  "c69e809d89eba1426a7b3770979bf0d966d9704a5dd21771975276228cfb811e")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
