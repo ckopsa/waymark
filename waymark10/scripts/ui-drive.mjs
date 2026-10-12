@@ -3338,6 +3338,59 @@ async function guidedStory() {
      await A.js(`replayHoldTime(replay.frames, 11) === 0 &&
                  replayHoldTime(replay.frames, 10) === REPLAY_MIN_STILL`) &&
      !!shown && !!last && last.from - shown.to < 1900 + 300);
+
+  console.log("· replay: the schedule's floors, computed");
+  /* walk 082fefa5's shape, recorded milliseconds apart, and the same
+     walk with the form closed and one move after it. The schedule is
+     computed as replayStep does it at 1x with every draw done at once:
+     `gap` is the wait before the frame, `lead` the part of it before
+     the gesture starts. The floors are numbers here and not the page's
+     constants, so a constant that is lowered fails. */
+  const floorDialog = {self: meals[1], action: "update_recipe"};
+  const floorWalk = [
+    {t: 0, type: "move", who: "a1", self: meals[1]},
+    {t: 5, type: "doc", who: "a1", self: meals[1], doc: {kind: "meal", id: "m"}},
+    {t: 10, type: "ui", who: "a1", self: meals[1], ui: {dialog: floorDialog, fields: {}}},
+    {t: 15, type: "ui", who: "a1", self: meals[1],
+     ui: {dialog: floorDialog, fields: {recipe: "Brown the roux."}}},
+    {t: 20, type: "transition", who: "a1", kind: "meal", self: meals[1],
+     action: "update_recipe", from: "on_list", to: "on_list"},
+    {t: 25, type: "doc", who: "a1", self: meals[1], doc: {kind: "meal", id: "m"}},
+  ];
+  const floorLanded = floorWalk.concat([
+    {t: 30, type: "ui", who: "a1", self: meals[1], ui: {dialog: null}},
+    {t: 35, type: "move", who: "a1", self: meals[0]},
+  ]);
+  const floorSchedule = async frames => {
+    const steps = JSON.parse(await A.js(`{ const frames = ${JSON.stringify(frames)};
+      JSON.stringify(frames.map((f, at) => {
+        const still = replayHoldTime(frames, at);
+        const gap = Math.max(replayGap({frames, at}),
+          still && still + REPLAY_GLIDE_MS + REPLAY_PRESS_MS);
+        return {shows: replayShows(frames, at), gap,
+                lead: Math.max(still, gap - REPLAY_GLIDE_MS - REPLAY_PRESS_MS)};
+      })) }`));
+    /* for each change of the screen after the first: how long the
+       screen was still before the gesture toward it started */
+    let now = 0, shown = null;
+    for (const s of steps) {
+      s.still = s.shows && shown !== null ? now + s.lead - shown : null;
+      now += s.gap;
+      if (s.shows) shown = now;
+    }
+    return steps;
+  };
+  const walked = await floorSchedule(floorWalk), landed = await floorSchedule(floorLanded);
+  console.log("  the stillness before each change (ms): " +
+              landed.map((s, i) => i + " " + (s.still === null ? "-" : s.still)).join(", "));
+  ok("computed at 1x, no change of the screen starts less than 1000 ms after the one before it",
+     walked.filter(s => s.still !== null).length === 3 &&
+     landed.filter(s => s.still !== null).length === 4 &&
+     walked.concat(landed).every(s => s.still === null || s.still >= 1000));
+  ok("computed at 1x, a doc of the screen already shown waits 0",
+     [walked[1], walked[5], landed[1], landed[5]].every(s => !s.shows && s.gap === 0));
+  ok("computed at 1x, the write that waited behind its form is still 1500 ms once the form is gone",
+     !landed[4].shows && landed[4].gap === 0 && landed[7].still >= 1500);
   await A.js(`document.querySelector("[data-replay-stop]").click(); true`);
 
   console.log("· replay: the floor counts from the draw");
