@@ -1018,6 +1018,8 @@
     (let [hooks (:evidence-reads ctx-opts)
           cctx {:read (or (:read ctx-opts) (:read hooks))
                 :find (or (:find ctx-opts) (:find hooks))
+                ;; the request's own clock, for a field that reads time
+                :now (:now ctx-opts)
                 :rdef-of (when-some [rs (:resources ctx-opts)]
                            (fn [token]
                              (let [t (name token)]

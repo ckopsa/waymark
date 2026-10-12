@@ -1014,6 +1014,27 @@
    (concat (rows-of eng :seat {:state :active})
            (rows-of eng :seat {:state :parked}))))
 
+(defn sweep-lapsed!
+  "Break glass runs out (ticket b177a14b): every active seat whose scope
+  carries an entry past its `until` is restated without it, through
+  the concealed `lapse`, which records each entry and its `because`.
+  The resolve judged the entry absent from that instant, so this pass
+  only makes the row say what the seat holds today. A seat with
+  nothing ended is not written. → how many entries went."
+  [eng]
+  (let [now ((:now-fn eng))]
+    (reduce
+     (fn [n row]
+       (if (seq (grants/lapsed-entries now (get-in row [:data :scope])))
+         (+ n (long (try (seats/lapse! eng (:id row))
+                         (catch Exception e
+                           (warn! "seat " (:id row) " kept its ended entries: "
+                                  (ex-message e))
+                           0))))
+         n))
+     0
+     (rows-of eng :seat {:state :active}))))
+
 (def ^:private default-idle-seconds
   "R-12.25's own default, for a seat row written before the field
   existed. An hour, which is the seat schema's default too."
@@ -1274,6 +1295,8 @@
                   ;; to miss (ticket cc2a7754)
                   (long (wakes/sweep-unsent! eng)))]
     {:missed missed
+     ;; break glass that ran out, taken off the seats that held it
+     :lapsed (sweep-lapsed! eng)
      :abandoned (:abandoned sittings)
      ;; R-12.25's half of the same pass: an interactive sitting
      ;; somebody walked away from is CLOSED with its last tally, not
@@ -1296,7 +1319,7 @@
   [eng]
   (let [stale (sweep-scopes! eng)
         clock (sweep-clock! eng)]
-    (assoc (select-keys clock [:abandoned :closed :sealed :purged])
+    (assoc (select-keys clock [:abandoned :closed :sealed :purged :lapsed])
            :stale stale
            ;; boot-only, with the scopes: drift moves only with the law
            :drifting (report-drift! eng))))
