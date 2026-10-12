@@ -405,6 +405,20 @@
   [fm]
   (into {} (map (fn [[k v]] [(name k) (str v)])) fm))
 
+(deftest two-filtered-entries-of-one-kind-are-a-scope-a-seat-may-state
+  ;; ticket d4211f9a: read these, act on those
+  (let [two [{:kind "model" :actions ["retire"] :filter {:state "active"}}
+             {:kind "model" :actions [] :filter {:state "retired"}}]
+        seat (open-seat! "reads-wide-acts-narrow"
+                         {:walk "model" :scope [(first two)]})]
+    (testing "the restate is accepted, and both entries are stored"
+      (is (nil? (refusal #(restate! (:id seat)
+                                    (restate-body {:walk "model" :scope two})))))
+      (is (= 2 (count (get-in (row-of :seat (:id seat)) [:data :scope])))))
+    (testing "the walk runs under the entry that names a door"
+      (is (= {"state" "active"}
+             (named-filter (seats/walk-filter (row-of :seat (:id seat)))))))))
+
 (deftest a-walk-filtered-by-its-scope-entry-must-name-the-door-out
   (testing "an entry that filters by state and names a door out of it is opened"
     (let [row (open-seat! "walks-the-active-models"

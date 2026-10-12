@@ -282,7 +282,7 @@
       (str/replace "%" "\\%")
       (str/replace "_" "\\_")))
 
-(defn- cond-sql
+(defn- leaf-cond-sql
   "One cond → [sql-fragment params]. Identifiers come from checked
   declarations; casts from a closed set — anything else is refused
   loudly, never spliced. Phase 7 adds :op :in-any (JSONB array
@@ -342,6 +342,23 @@
         (if absent?
           [(str "(" sql " OR " lval " IS NULL)") params]
           [sql params])))))
+
+(defn- cond-sql
+  "One cond → [sql-fragment params]. An :any-of cond is the OR of its
+  :of alternatives, each a conjunction of conds: the sight of a grant
+  whose scope filters one kind in several entries (grants/conds-of).
+  Every other cond is `leaf-cond-sql`'s."
+  [{:keys [op of] :as c}]
+  (if (= :any-of op)
+    (let [alts (for [conds of
+                     :let [parts (map cond-sql conds)]]
+                 [(if (seq parts)
+                    (str "(" (str/join " AND " (map first parts)) ")")
+                    "TRUE")
+                  (mapcat second parts)])]
+      [(str "(" (str/join " OR " (map first alts)) ")")
+       (vec (mapcat second alts))])
+    (leaf-cond-sql c)))
 
 ;; ── elected singletons (pg_advisory_lock) ───────────────────────────
 ;; Lived in server/coherence.clj until waymark-db9.4. It moved here
