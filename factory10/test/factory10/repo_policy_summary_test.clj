@@ -6,6 +6,7 @@
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
             [factory10.resources.repo-policy :as rp]
+            [waymark10.server.clock-shift :as clock-shift]
             [waymark10.summary :as summary])
   (:import (java.time Instant)))
 
@@ -78,3 +79,27 @@
                           :summary-fn (fn [_] (throw (ex-info "no" {})))}
                          {:state :active
                           :data {:repository "ckopsa/tgram"}})))))
+
+(deftest the-wait-is-measured-on-the-engines-clock
+  ;; ticket d10e6c45: the composer reads the clock the render lends it,
+  ;; so a shifted engine says the shifted wait and not the wall clock's
+  (let [row {:kind :repo_policy :state :active
+             :data {:repository "ckopsa/waymark" :base_state "green"
+                    :deploy_state "green"
+                    :deploy_waits_on ["a b 250"]
+                    :deploy_waiting_since (Instant/parse "2026-10-03T12:00:00Z")}}
+        clock (clock-shift/clock {:now-fn (constantly now)})
+        engine-now (clock-shift/now-fn clock)]
+    (testing "the engine's clock, unshifted"
+      (is (= "ckopsa/waymark · deploy waiting 12m · line empty"
+             (summary/line rp/repo-policy row (engine-now)))))
+    (testing "a clock shifted an hour on says an hour more"
+      (reset! (:offset clock) 3600)
+      (is (= (rp/summary-line (:data row) :active (.plusSeconds ^Instant now 3600))
+             (summary/line rp/repo-policy row (engine-now))))
+      (is (not= (summary/line rp/repo-policy row now)
+                (summary/line rp/repo-policy row (engine-now)))))
+    (testing "a render that binds the clock lends it to the composer"
+      (is (= "ckopsa/waymark · deploy waiting 12m · line empty"
+             (binding [summary/*now* now]
+               (summary/line rp/repo-policy row)))))))

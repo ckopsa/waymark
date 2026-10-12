@@ -32,6 +32,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -1285,3 +1286,30 @@
     (is (false? (:isError r)) (text-of r))
     (is (empty? (get-in answer [:walk :rows])))
     (is (= empty-queue-sentence why))))
+
+;; ── 11 · the count rides the queue's own read (ticket 7b308e02) ─────
+
+(deftest a-judging-sit-makes-no-read-for-the-count-alone
+  ;; the queue was read a second time, one row wide and without the
+  ;; anti-join, only to answer `total`. The page's own read counts both
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (promoted-judgment! eng {})
+        _ (open-judge-seat! eng judgment {})
+        judged (expense! eng "Vendor 0" "kitchen" "2026-09-18T07:00:00Z")
+        free (expense! eng "Flour mill" "kitchen" "2026-09-18T08:00:00Z")
+        _ (say! eng judgment judged "keep" "Nothing to do: the amount fits.")
+        reads (atom 0)
+        envelope collections/envelope]
+    (with-redefs [collections/envelope
+                  (fn [eng rdef & more]
+                    (when (= :expense (:kind rdef))
+                      (swap! reads inc))
+                    (apply envelope eng rdef more))]
+      (let [[r answer _] (empty-sit! eng h)]
+        (is (false? (:isError r)) (text-of r))
+        (is (= [(str (:id free))] (mapv :id (get-in answer [:walk :rows]))))
+        (is (= 2 (get-in answer [:walk :total]))
+            "the total is the whole queue, the judged expense too")
+        (is (= 1 @reads)
+            "one read of the queue answers the rows and the count")))))

@@ -609,7 +609,7 @@
     (is (str/includes? body "if (typeof ui.focus === \"string\" && !ui.focus.startsWith(\"/\")) return ui.focus;"))
     (is (str/includes? body "if (form && r.gesture && r.gesture.field) { form.guidedClick(r.gesture.field); return; }"))
     (is (str/includes? body "if (spot) spot.setAttribute(\"data-replay-click\", \"\");"))
-    (is (str/includes? body "[data-replay-click] { outline: 2px solid Highlight;"))
+    (is (str/includes? body "[data-replay-click] { outline: 2px solid var(--verdigris); outline-offset: 1px;"))
     (testing "the lit-field cue is a live follow's alone"
       (is (str/includes? body "if (!replay) g.guidedLight(guidedTyping);"))
       (is (str/includes? body "if (g && g.guidedLight && !replay) g.guidedLight(guidedTyping);")))
