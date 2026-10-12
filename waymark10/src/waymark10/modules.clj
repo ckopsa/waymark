@@ -630,6 +630,13 @@
              :elected :wakes
              :when schedules/serving?
              :start (fn [eng running]
+                      ;; seat health's boot pass (ticket bb3e1c1a): a
+                      ;; seat that has not closed a sitting since the
+                      ;; deploy carries a `health`. Here for `:elected`
+                      ;; — one process rolls — and off the boot's
+                      ;; thread, so a slow rollup holds no hook back.
+                      (future (try (seats/roll-all-health! eng)
+                                   (catch Exception _ nil)))
                       (wakes/start-wakes!
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)
