@@ -1267,9 +1267,15 @@ jobs:
   # outside actionlint's reach, so a second step shellchecks them at
   # shellcheck's default severity, style findings included; the diff
   # that touches one sets `workflows` too.
+  #
+  # Not on a dispatch narrowed by `only`: that run asks about one
+  # namespace, a dispatch has no diff so `workflows` is always true on
+  # it, and the push and the pull request still lint.
   actionlint:
     needs: [changes]
-    if: ${{ needs.changes.outputs.workflows == 'true' }}
+    if: >-
+      needs.changes.outputs.workflows == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1318,9 +1324,15 @@ jobs:
   # door author and door row render as names. On a GitHub-hosted VM,
   # for its chrome and its loopback: the drive reaches the engine and
   # the CDP port on localhost. batch-a's drive still runs by hand.
+  #
+  # Not on a dispatch narrowed by `only`: a drive is no test namespace,
+  # so no `only` can name it, and it is about ten minutes of a run that
+  # asked about one namespace.
   ui-access:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1504,9 +1516,13 @@ jobs:
   # focused row, then the guards. ui-test pins the page's strings; this
   # runs them, against the batch-a engine: the recipe door's shared
   # draft needs Postgres.
+  #
+  # Not on a dispatch narrowed by `only`, as ui-access.
   ui-guided:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true'
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1685,8 +1701,12 @@ jobs:
             exit 1
           fi
           # Before the code check: a diff touching only a workflow such as
-          # image.yml is no code path, and still must lint.
-          if [ "${WORKFLOWS:-}" = "true" ] && [ "$ACTIONLINT" != "success" ]; then
+          # image.yml is no code path, and still must lint. A dispatch
+          # narrowed by `only` skips actionlint on purpose, and only a
+          # dispatch carries `only`.
+          if [ -n "${ONLY:-}" ] && [ "$ACTIONLINT" = "skipped" ]; then
+            echo "gate: actionlint skipped on purpose — this dispatch is narrowed by only."
+          elif [ "${WORKFLOWS:-}" = "true" ] && [ "$ACTIONLINT" != "success" ]; then
             echo "gate: FAIL — a workflow changed and actionlint did not succeed ($ACTIONLINT)."
             exit 1
           fi
