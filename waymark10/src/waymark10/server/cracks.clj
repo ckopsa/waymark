@@ -207,6 +207,22 @@
              ": a refusal at " kind "/" (text door)
              " names it as the way out, and no seat can take it.")}))))
 
+(defn movers
+  "The names of the active seats whose scope holds an action that
+  leaves `state` of this kind: who this audit says can move a row that
+  sits there. The live audit (ticket 26e51658) names them for a row
+  that has stopped."
+  [rdef seat-rows state]
+  (let [kind (text (:kind rdef))
+        state (keyword (text state))
+        out (exits rdef state)]
+    (into []
+          (comp (filter (fn [seat]
+                          (some #(seq (holding-entries seat kind (:name %) state))
+                                out)))
+                (map seat-name))
+          seat-rows)))
+
 (defn- wait-doors
   "The doors a hand takes on a row that waits: the ones the wait says
   restate it, or every action open in a state it waits in."
