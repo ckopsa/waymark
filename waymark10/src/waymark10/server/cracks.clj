@@ -657,6 +657,64 @@
                                            (get (:rows world) (:kind rdef))))))
            (sort-by (comp text :kind) rdefs)))))
 
+;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
+
+(def ^:private depth
+  "How far a state has fallen, for the cracks that grade one state. A
+  seat change that moves a state up this list opened a crack, and one
+  that moves it down closed one."
+  {"cadence_only" 1 "person_only" 2 "unwoken" 3 "no_exit" 4})
+
+(defn- crack-key
+  "What makes a crack the same one before a change and after it."
+  [c]
+  (select-keys c [:kind :state :crack :door :remedy :on :outcome]))
+
+(defn added
+  "The cracks the seats in `after` leave and the seats in `before` did
+  not, in the audit's order and its words. Both are read by `audit`
+  over the same declarations and the same world.
+
+  A state that only changes its grade is judged by `depth`: one that
+  falls is a crack added, and one that rises is not. A state no seat
+  could leave before is at the bottom, and no change adds a crack to
+  it."
+  ([rdefs before after] (added rdefs before after nil))
+  ([rdefs before after world]
+   (let [was (audit rdefs before world)
+         had (into #{} (map crack-key) was)
+         at (juxt :kind :state)
+         fallen (reduce (fn [m c]
+                          (if-some [d (depth (:crack c))]
+                            (update m (at c) (fnil max 0) d)
+                            m))
+                        {} was)
+         bottom (depth "no_exit")]
+     (into []
+           (remove (fn [c]
+                     (let [d (get fallen (at c) 0)]
+                       (or (contains? had (crack-key c))
+                           (= bottom d)
+                           (some-> (depth (:crack c)) (<= d))))))
+           (audit rdefs after world)))))
+
+(def ^:private read-with-the-world
+  "The cracks `audit` grades by the notice rules, the subscriptions and
+  the rows. A seat door's guard reads none of them, so it does not
+  judge these."
+  #{"silent_person_exit" "unwalked_value"})
+
+(defn opened
+  "`added`, as a seat door's guard reads it: over the declarations and
+  the seat rows alone. With no rows read a narrowed wake covers
+  nothing, as `audit` says."
+  [rdefs before after]
+  (into []
+        (remove (comp read-with-the-world :crack))
+        (added rdefs before after)))
+
+(seats/staffing-rule! #'opened)
+
 (defn- active-of [eng kind]
   (if (contains? (inv/resources eng) kind)
     (store/with-tx (:storage eng)
