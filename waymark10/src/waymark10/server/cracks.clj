@@ -720,3 +720,28 @@
      :total (count cracks)
      :by_crack (into (sorted-map) (frequencies (map :crack cracks)))
      :cracks cracks}))
+
+(def ^:private export-fields
+  "What of a seat `audit` reads, and so all the export prints of one."
+  [:name :mode :walk :cadence_seconds :scope :wake_on])
+
+(defn seat-export
+  "The seats document (ticket 42259e4b): `seat-rows` narrowed to the
+  fields `audit` reads, in the order of their names, a field a seat
+  does not carry left out. It is the shape factory10's seat fixture is
+  read from, so the gate there can judge the law against the seats the
+  house runs with. Pure, as `audit` is."
+  [seat-rows]
+  {:waymark "cracks_seats"
+   :seats (mapv (fn [seat]
+                  (into {:name (seat-name seat)}
+                        (keep (fn [k]
+                                (when-some [v (get-in seat [:data k])]
+                                  [k v])))
+                        (rest export-fields)))
+                (sort-by seat-name seat-rows))})
+
+(defn seats-report
+  "GET /api/-/cracks/seats: the ACTIVE seats, as `report` reads them."
+  [eng]
+  (seat-export (active-of eng :seat)))
