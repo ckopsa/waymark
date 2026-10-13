@@ -17,8 +17,6 @@
   entry with no reason allows nothing."
   [{:kind "ticket" :state "draft" :crack "person_only"
     :reason "A person grooms a draft into the queue: that judgment is theirs."}
-   {:kind "ticket" :state "blocked" :crack "person_only"
-    :reason "No fixture seat holds unblock: a blocked ticket waits on its blocker or on a person."}
    {:kind "ticket" :state "deferred" :crack "person_only"
     :reason "A person deferred it, and a person resumes it."}
    {:kind "ticket" :state "done" :crack "person_only"
