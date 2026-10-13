@@ -21,8 +21,6 @@
     :reason "A person deferred it, and a person resumes it."}
    {:kind "ticket" :state "in_review" :crack "dead_wait" :on "merge_after" :outcome "dropped"
     :reason "The law does not yet say what a dropped ticket does to what merges after it; until it does, a person lifts that wait."}
-   {:kind "change" :state "submitted" :crack "cadence_only"
-    :reason "A submitted change waits on its checks, not on a seat; the code seat's stall there is a door, not its work."}
    {:kind "change" :state "stuck" :crack "person_only"
     :reason "A person reads every stall."}
    {:kind "ci_run" :state "classified" :crack "person_only"
@@ -108,6 +106,31 @@
                         (comp (filter #(and (= kind (:kind %)) (= state (:state %))))
                               (map told))
                         cracks)))))))
+
+;; ticket 4b0460cc: change declares its indirect exits and arrival.
+(deftest a-change-is-left-by-the-mirror-and-reached-by-its-tickets-groom
+  (let [rdefs (main/resources)
+        others (remove #{fixture/code-seat} (fixture/seats rdefs))
+        groomed (assoc-in fixture/code-seat [:data :wake_on]
+                          [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
+                           {:kind "change" :actions ["fail"]}])
+        deaf (update-in groomed [:data :wake_on] (comp vec rest))
+        undeclared (mapv #(cond-> % (= "change" (name (:kind %))) (dissoc :reached-by :left-by))
+                         rdefs)
+        at (fn [rdefs seat state]
+             (into []
+                   (comp (filter #(and (= "change" (:kind %)) (= state (:state %))))
+                         (map :crack))
+                   (cracks/audit rdefs (concat others [seat]))))]
+    (testing "the mirror leaves submitted, and no seat is owed a wake there"
+      (is (= [] (at rdefs groomed "submitted"))))
+    (testing "the wake on the ticket's groom is the wake to the change born open"
+      (is (= [] (at rdefs groomed "open"))))
+    (testing "with no groom wake, open waits for the cadence"
+      (is (= ["cadence_only"] (at rdefs deaf "open"))))
+    (testing "removing the declarations brings both back"
+      (is (= ["cadence_only"] (at undeclared groomed "open")))
+      (is (= ["cadence_only"] (at undeclared groomed "submitted"))))))
 
 (defn- repo-seat
   "The code seat, woken on its changes in one repository alone."

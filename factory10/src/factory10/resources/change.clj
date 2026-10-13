@@ -1129,6 +1129,17 @@
    ;; which sends its ticket back to the seat that built it.
    :waits [{:on :checks :in #{:submitted}
             :outcomes {:green :release :red :return}}]
+   ;; THE EXITS NO SEAT TAKES AT A CHANGE DOOR (ticket 4b0460cc), so the
+   ;; cracks audit does not report `submitted` as a state seats leave on
+   ;; a cadence. The forge's mirror walks all three: the gate's merge,
+   ;; a person's close on GitHub, and the red check that is `fail`.
+   :left-by [{:in #{:submitted} :by :mirror :via :merge :to :merged}
+             {:in #{:submitted} :by :mirror :via :close :to :closed}
+             {:in #{:submitted} :by :mirror :via :fail :to :failing}]
+   ;; AND THE ARRIVAL THAT IS NO CHANGE DOOR. A change is born open from
+   ;; a groomed ticket (`born_from`), so the seat that builds is brought
+   ;; to it by its wake on the ticket's groom, not by a change wake.
+   :reached-by [{:in #{:open} :by {:kind :ticket :action :groom}}]
    :summary "{data.repository}#{data.number} · {data.title}"
    ;; the pull request's own address, not the kind label
    :label-template "{data.repository}#{data.number}"

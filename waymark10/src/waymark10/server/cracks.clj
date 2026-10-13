@@ -44,6 +44,11 @@
   counts for nothing here; the wake_on a walk seat is given when it
   wrote none (`seats/effective-wake-on`) is a wake_on and counts.
 
+  A kind's `:reached-by` names its indirect arrivals (ticket 4b0460cc):
+  another kind's door that brings a row to the state, as the groom of
+  a ticket brings its seat to the change born from it. A wake_on entry
+  on that door wakes the seat for the state as one on a door here does.
+
   All but the last read what is DECLARED, never the rows of the
   audited kinds: a crack there is a state a row could sit in, not a
   row that does. `unwalked_value` alone reads rows, and only the ones
@@ -186,16 +191,36 @@
                            wake-filter)))
              scope-filters))))
 
+(defn- far-arrivals
+  "The doors of OTHER kinds the kind declares bring a row to `state`
+  (`:reached-by`), as #{[kind action]}."
+  [rdef state]
+  (into #{}
+        (comp (filter #(contains? (set (:in %)) state))
+              (map (fn [{:keys [by]}] [(text (:kind by)) (text (:action by))])))
+        (:reached-by rdef)))
+
 (defn- wake-entries
-  "The seat's wake_on entries on a transition into `state` of the kind."
+  "The seat's wake_on entries on a transition into `state` of the kind,
+  and the ones on another kind's door the kind declares brings a row
+  there (`:reached-by`). The filter of such an entry speaks of that
+  kind's fields and narrows no row of this one, so it is dropped."
   [seat rdef state walk-rdef]
   (let [kind (text (:kind rdef))
-        into-state (arrivals rdef state)]
-    (filterv (fn [e]
-               (and (= kind (text (:kind e)))
-                    (some into-state (map text (:actions e)))
-                    (admits-state? (:filter e) state)))
-             (seats/effective-wake-on seat walk-rdef))))
+        into-state (arrivals rdef state)
+        far (far-arrivals rdef state)]
+    (into []
+          (keep (fn [e]
+                  (let [acts (map text (:actions e))]
+                    (cond
+                      (and (= kind (text (:kind e)))
+                           (some into-state acts)
+                           (admits-state? (:filter e) state))
+                      e
+
+                      (some #(contains? far [(text (:kind e)) %]) acts)
+                      (dissoc e :filter)))))
+          (seats/effective-wake-on seat walk-rdef))))
 
 (defn- narrow-wakes
   "The filters of the seat's wake_on entries into `state` that ARE

@@ -1798,6 +1798,43 @@
                    (str in " is left :by :wait, and :waits declares no wait "
                         "in " (vec alone))))))))))
 
+(def ^:private reached-by-keys #{:in :by})
+
+(defn- check-reached-by
+  "A kind's indirect arrivals (ticket 4b0460cc) validate hard, for
+  check-left-by's reason: the cracks audit counts a wake on the door an
+  entry names as a wake to the states it names, so an entry naming a
+  state no row is in, or a door that is none, hides a crack.
+
+  Every entry is a map whose `:in` names declared states and whose
+  `:by` is `{:kind … :action …}` of ANOTHER kind: this kind's own doors
+  into a state are read off `:actions`. Whether the other kind serves
+  that door is not judged here, where one declaration is all there is."
+  [r]
+  (let [ls (:reached-by r)]
+    (when (some? ls)
+      (when-not (and (sequential? ls) (every? map? ls))
+        (err r :reached-by
+             ":reached-by is [{:in #{…} :by {:kind … :action …}}]"))
+      (let [states (set (:states r))]
+        (doseq [l ls
+                :let [by (:by l)
+                      in (pr-str (:in l))]]
+          (when-some [unknown (seq (sort (remove reached-by-keys (keys l))))]
+            (err r :reached-by
+                 (str in " declares unknown key(s) " (vec unknown)
+                      "; an indirect arrival speaks " (vec (sort reached-by-keys)))))
+          (when-not (and (seq (:in l)) (every? states (:in l)))
+            (err r :reached-by
+                 (str "an indirect arrival lands :in " in "; it names one or "
+                      "more states this kind declares")))
+          (when-not (and (map? by) (= #{:kind :action} (set (keys by)))
+                         (every? keyword? (vals by))
+                         (not= (:kind r) (:kind by)))
+            (err r :reached-by
+                 (str in " is reached :by " (pr-str by) "; a mover is "
+                      "{:kind <another kind> :action <its door>}"))))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -2186,5 +2223,6 @@
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
+          check-reached-by
           check-remedy-bindings
           check-owned-surface])})
