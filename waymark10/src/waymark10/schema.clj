@@ -290,6 +290,35 @@
         (second s)
         s))))
 
+(defn mark-free-form
+  "Apply `mark` to every free-form map in `value`, read off the schema
+  `form`: a value whose schema is a :map-of, and every map under an
+  :any. Their keys are data a person wrote, not field names, so the
+  wire carries them as written; a declared :map's keys stay field
+  names and are not marked."
+  [form value mark]
+  (letfn [(deep [v]
+            (cond (map? v) (mark (update-vals v deep))
+                  (vector? v) (mapv deep v)
+                  :else v))
+          (walk [s v]
+            (let [s (m/deref-all s)
+                  [c1 c2] (m/children s)]
+              (case (m/type s)
+                :maybe (walk c1 v)
+                :map (if (map? v)
+                       (reduce (fn [acc [k _ child]]
+                                 (if (contains? acc k)
+                                   (update acc k #(walk child %))
+                                   acc))
+                               v (m/children s))
+                       v)
+                :map-of (if (map? v) (mark (update-vals v #(walk c2 %))) v)
+                (:vector :sequential) (if (vector? v) (mapv #(walk c1 %) v) v)
+                :any (deep v)
+                v)))]
+    (walk (schema form) value)))
+
 (defn secret-fields
   "The {:secret true} entries of a :map schema — the fields whose
   VALUES never leave the engine in any projection, scoped or not.
