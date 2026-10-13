@@ -1732,6 +1732,72 @@
                         ", which is no state of " (name (:kind r))
                         " — the awaited row can never end there")))))))))
 
+(def ^:private left-by-keys #{:in :by :via :to})
+
+(def ^:private left-by-sources
+  "Who moves a row out with no seat at a door: the forge's mirror, the
+  engine's sweep, or the ending of what the row waits on (:wait)."
+  #{:mirror :sweep :wait})
+
+(defn- check-left-by
+  "A kind's indirect exits (ticket 071c563c) validate hard, for
+  check-waits' reason: the cracks audit reads this list off the
+  declaration and stops reporting the states it names, so an entry
+  naming a state no row is in, or a mover that is none, hides a crack.
+
+  Every entry is a map whose `:in` names declared states, whose `:by`
+  is one of `left-by-sources` or `{:kind … :action …}`, and whose `:to`
+  is a declared state outside `:in`. `:via`, when said, is an action of
+  this kind that leaves every `:in` state for `:to`. `:by :wait` needs
+  a `:waits` entry in each state. Whether the other kind serves the
+  door `:by` names is read by the audit, which has every declaration."
+  [r]
+  (let [ls (:left-by r)]
+    (when (some? ls)
+      (when-not (and (sequential? ls) (every? map? ls))
+        (err r :left-by
+             ":left-by is [{:in #{…} :by <source or {:kind … :action …}> :via … :to …}]"))
+      (let [states (set (:states r))]
+        (doseq [l ls
+                :let [by (:by l)
+                      in (pr-str (:in l))]]
+          (when-some [unknown (seq (sort (remove left-by-keys (keys l))))]
+            (err r :left-by
+                 (str in " declares unknown key(s) " (vec unknown)
+                      "; an indirect exit speaks " (vec (sort left-by-keys)))))
+          (when-not (and (seq (:in l)) (every? states (:in l)))
+            (err r :left-by
+                 (str "an indirect exit leaves :in " in "; it names one or "
+                      "more states this kind declares")))
+          (when-not (or (contains? left-by-sources by)
+                        (and (map? by) (= #{:kind :action} (set (keys by)))
+                             (every? keyword? (vals by))))
+            (err r :left-by
+                 (str in " is left :by " (pr-str by) "; a mover is one of "
+                      (vec (sort left-by-sources))
+                      " or {:kind <kind> :action <its door>}")))
+          (when-not (and (contains? states (:to l))
+                         (not (contains? (set (:in l)) (:to l))))
+            (err r :left-by
+                 (str in " lands :to " (pr-str (:to l)) "; an exit lands in "
+                      "a declared state it does not leave")))
+          (when-some [via (:via l)]
+            (let [a (get (:actions r) via)]
+              (when-not (and a (= (:to l) (:to a))
+                             (every? (set (:from a)) (:in l)))
+                (err r :left-by
+                     (str in " is left :via " (pr-str via) ", which is no "
+                          "action of this kind from those states to "
+                          (pr-str (:to l)))))))
+          (when (= :wait by)
+            (when-some [alone (seq (sort (remove (fn [s]
+                                                   (some #(contains? (set (:in %)) s)
+                                                         (:waits r)))
+                                                 (:in l))))]
+              (err r :left-by
+                   (str in " is left :by :wait, and :waits declares no wait "
+                        "in " (vec alone))))))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -2119,6 +2185,6 @@
           check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults check-answered-at-a-door check-waits
+          check-defaults check-answered-at-a-door check-waits check-left-by
           check-remedy-bindings
           check-owned-surface])})

@@ -227,6 +227,9 @@
    ;; accomplishments and a superseded run would count as a week's
    ;; work in the seasons panel.
    :over {:accomplished #{:reclassified} :let-go #{:superseded}}
+   ;; the source walks `supersede` when the change's head moves, and no
+   ;; seat does (ticket 071c563c): the cracks audit reads it here
+   :left-by [{:in #{:red} :by :mirror :via :supersede :to :superseded}]
    :summary "{data.check_name} · {data.conclusion} · {state}"
    ;; the check's own line, not the kind label
    :label-template "{data.check_name}"
