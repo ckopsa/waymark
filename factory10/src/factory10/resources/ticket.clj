@@ -1518,7 +1518,7 @@
    [:merge_after {:optional true :kind :ticket
                   :x-display
                   {:label "Merges after"
-                   :help "The tickets, in any repository, that must be done before this one's change merges. A seat builds it meanwhile; the house holds its green pull request until every one of them is done, and a dropped one holds it until a person restates this list."}}
+                   :help "The tickets, in any repository, that must be done before this one's change merges. A seat builds it meanwhile; the house holds its green pull request until every one of them is done or dropped."}}
     [:maybe [:vector {:max 50} :waymark/ref]]]])
 
 (def ^:private birth-fields
@@ -1942,14 +1942,14 @@
    ;; WHAT A TICKET WAITS ON, and what each ending of that ticket does
    ;; to the one waiting (ticket d9edac4e). A blocker's ending releases
    ;; whichever way it ends (`release-the-waiters!`). A `merge_after`
-   ;; ticket that is dropped does nothing: bench/merge-holds keeps the
-   ;; green change held until a person restates the list, and the
-   ;; cracks audit reports that as a dead wait while no seat is woken.
+   ;; ticket releases the same way (ticket 97697177): bench/merge-holds
+   ;; holds the green change for neither a done ticket nor a dropped
+   ;; one, so the next merge pass lets it go.
    :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
             :outcomes {:done :release :dropped :release}}
            {:on :merge_after :awaits :ticket :in #{:in_review}
             :restated-by [:merge_after_in_review]
-            :outcomes {:done :release :dropped :nothing}}]
+            :outcomes {:done :release :dropped :release}}]
    ;; THE EXITS NO SEAT TAKES AT A TICKET DOOR (ticket 071c563c), so
    ;; the cracks audit does not report a working state as one nobody
    ;; leaves. The seat that builds holds `change.submit`, and that

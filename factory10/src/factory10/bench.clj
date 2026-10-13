@@ -1558,15 +1558,17 @@
 ;; A ticket's `merge_after` names the tickets that must be done before
 ;; its change merges. The pass HOLDS such a change: no merge call, no
 ;; update and no place in its line, so the change behind it is the
-;; front. Only `done` releases it. A DROPPED dependency does not, as a
-;; dropped blocker does: the work it waited on will never land, and a
-;; person decides whether this one still should. The hold is written on
-;; the change (`line_why` held) and on its ticket (`merge_waits`).
+;; front. `done` releases it, and so does `dropped`, as a dropped
+;; blocker releases what it blocks (ticket 97697177): the work it waited
+;; on will never land, and a hold on it would wait until a person
+;; noticed. The hold is written on the change (`line_why` held) and on
+;; its ticket (`merge_waits`).
 
 (defn merge-holds
   "Ticket id → what it still waits on to merge, for the tickets these
   changes were born from: each ticket its `merge_after` names that is
-  not done, as {:id :state}, with `missing` for one that is gone. A
+  neither done nor dropped, as {:id :state}, with `missing` for one
+  that is gone. A
   ticket that waits on nothing is not in the map, and an engine that
   declares no ticket kind answers an empty one."
   [eng changes]
@@ -1586,6 +1588,10 @@
                                    (let [s (some-> (load-ticket (str dep)) :state name)
                                          undeployed-in (get undeployed (str dep))]
                                      (cond
+                                       ;; a dropped one releases the hold
+                                       ;; (ticket 97697177)
+                                       (= "dropped" s) nil
+
                                        (not= "done" s)
                                        {:id (str dep) :state (or s "missing")}
 
@@ -1603,13 +1609,11 @@
 
 (defn held-reason
   "The sentence a held change and its ticket carry: what it waits on,
-  each with its state, and that a dropped one waits on a person."
+  each with its state."
   [waits]
   (let [s (str "waits on "
                (str/join ", " (map #(str (:id %) " (" (:state %) ")") waits))
-               " to merge"
-               (when (some #(= "dropped" (:state %)) waits)
-                 "; a dropped ticket holds it until a person restates merge_after"))]
+               " to merge")]
     (subs s 0 (min reason-chars (count s)))))
 
 (defn- mark-held-tickets!

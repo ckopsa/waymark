@@ -19,8 +19,6 @@
     :reason "A person grooms a draft into the queue: that judgment is theirs."}
    {:kind "ticket" :state "deferred" :crack "person_only"
     :reason "A person deferred it, and a person resumes it."}
-   {:kind "ticket" :state "in_review" :crack "dead_wait" :on "merge_after" :outcome "dropped"
-    :reason "The law does not yet say what a dropped ticket does to what merges after it; until it does, a person lifts that wait."}
    {:kind "change" :state "stuck" :crack "person_only"
     :reason "A person reads every stall."}
    {:kind "ci_run" :state "classified" :crack "person_only"
