@@ -4089,13 +4089,16 @@
                  (get-in seat [:data :scope]))))
 
 (defn- code-seat?
-  "Does this seat BUILD, and not only read? Its scope names the `change`
-  kind (the doors a round ends with), or it holds a bench power that
-  writes its worktree (`bench-write-tokens`). A seat with neither reads
-  code with its own calls and has no change to work."
+  "Does this seat BUILD, and not only read? Its scope names a door of
+  the `change` kind (the doors a round ends with), or it holds a bench
+  power that writes its worktree (`bench-write-tokens`). A `change`
+  entry with no actions reads the row and ends no round (ticket
+  7a4a6f9e). A seat with neither reads code with its own calls and has
+  no change to work."
   [seat]
   (let [scope (get-in seat [:data :scope])]
-    (boolean (or (some #(= "change" (str (:kind %))) scope)
+    (boolean (or (some #(and (= "change" (str (:kind %))) (seq (:actions %)))
+                       scope)
                  (some #(contains? bench-write-tokens (str (:kind %))) scope)))))
 
 (defn- bench-tokens
@@ -4590,8 +4593,8 @@
     (not (bench-seat? seat)) [nil nil]
     ;; A SEAT THAT ONLY READS THE BENCH IS NOT A CODE SEAT. Triage and
     ;; prep read code across every repository with their own bench
-    ;; calls and change none; a seat whose scope names no `change` and
-    ;; holds no writing bench power is minted nothing and told nothing,
+    ;; calls and change none; a seat whose scope names no `change` door
+    ;; and holds no writing bench power is minted nothing and told nothing,
     ;; so no note tells it the bench "did not open" while its reads work
     (not (code-seat? seat)) [nil nil]
     (nil? (get (inv/resources eng) :change)) [nil nil]
