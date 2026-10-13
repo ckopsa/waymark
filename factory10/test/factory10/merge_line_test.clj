@@ -653,6 +653,24 @@
       (train-pass! r seen (rest (four)) (train-policy))
       (is (= [2 3 4] (:prs (last (args-of r "bench__train_build"))))))))
 
+(deftest a-train-red-on-a-head-that-moved-marks-nothing-red
+  ;; ticket e23f8842: the train was built on head-1, and change-1 was
+  ;; pushed again while it ran
+  (doseq [[now reds-want] [["head-1b" []] ["head-1" ["change-1"]]]]
+    (let [answers (atom {"train_status" {:state "failure" :head "train-head"}})
+          reds (atom [])
+          r (update (train-rig answers) :ctx assoc
+                    :train-red! (fn [id _why] (swap! reds conj id))
+                    :head-of (fn [id] (when (= "change-1" id) now)))
+          seen (atom {})
+          t1 (get (train-pass! r seen (four) (train-policy)) wm)
+          [t2] (finish-pass! r seen t1)
+          [t3] (finish-pass! r seen t2)
+          [t4] (finish-pass! r seen t3)]
+      (is (= reds-want @reds) (str "the change is at " now))
+      (is (nil? t4) "no train stands either way")
+      (is (not (get @seen [:train-done wm])) "and the next train takes it"))))
+
 (deftest a-cancelled-train-runs-once-more-then-the-line-goes-one-at-a-time
   (let [answers (atom {"train_status" {:state "cancelled" :head "train-head"}})
         r (train-rig answers)
