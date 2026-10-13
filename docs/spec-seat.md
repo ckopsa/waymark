@@ -3402,9 +3402,9 @@ done before its change merges. The pass must HOLD such a change
 (`merge-holds`): no merge call, no update, and no place in the line.
 The change behind it becomes the front.
 
-- Only `done` releases a hold. A `dropped` dependency does not release
-  it: the work it waited on will never land, so a person must restate
-  `merge_after`.
+- `done` releases a hold, and so does `dropped`, as a dropped blocker
+  releases what it blocks: the work it waited on will never land, and
+  the ticket declares that outcome in its `:waits`.
 - A `done` ticket whose merge is still in a policy's `deploy_waits_on`
   does not release a hold yet. Its state reads
   "done, not deployed in <repo>".
