@@ -863,7 +863,11 @@
         "means the value is BUILT from them (\"query\" = a "
         "field=value&… filter string). The options are advertisement, "
         "not law: the guard still judges the write, and may accept a "
-        "token no source lists.")
+        "token no source lists. "
+        "`cracks` is the cracks audit of this kind, as the cracks door "
+        "of waymark_discover answers you: the states no active seat "
+        "can leave, the ones no seat is woken to, and the remedies no "
+        "seat holds.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"
                                       :description "A kind name from waymark_discover."}}
@@ -1650,10 +1654,20 @@
   [eng call session {:keys [kind]}]
   (let [rdef (rdef-of eng kind)
         vis (:visibility session)
-        resp (call (request session :get (str "/api/schemas/" (name (:kind rdef))) {}))]
+        resp (call (request session :get (str "/api/schemas/" (name (:kind rdef))) {}))
+        ;; the kind's cracks as GET /api/-/cracks?kind= answers THIS
+        ;; caller (ticket 2ffa0f85). The door here mounts core's routes
+        ;; only, so this is the function that route answers with and
+        ;; not a call onto it. An engine with no seat kind has no such
+        ;; route, and the key is then absent rather than empty.
+        cracks (when (and (<= 200 (:status resp 500) 299)
+                          (contains? (inv/resources eng) :seat))
+                 (seat-routes/cracks-for eng (:principal session) vis
+                                         {:kind (name (:kind rdef))}))]
     (if-not (<= 200 (:status resp 500) 299)
       (pass-through resp)
       (value-result
+       (cond->
        {:kind (name (:kind rdef))
         :href (str "/api/" (:plural rdef))
         :states (mapv name (:states rdef))
@@ -1674,7 +1688,8 @@
                                        (assoc door :name (name dname))))
                                 (coll/collection-doors rdef))
         :note (str "Availability is per row and per state — waymark_get "
-                   "tells you what THIS row affords now.")}))))
+                   "tells you what THIS row affords now.")}
+         (map? cracks) (assoc :cracks (dissoc cracks :waymark)))))))
 
 ;; ── staging (docs/spec-agent-demo-walks.md § 2) ─────────────────────
 ;;
