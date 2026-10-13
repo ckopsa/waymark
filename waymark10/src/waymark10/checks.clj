@@ -1669,6 +1669,69 @@
                         "that does not name the address is a refusal that "
                         "sends the reader to read source")))))))))
 
+(def ^:private wait-keys #{:on :awaits :in :waiter :restated-by :outcomes})
+
+(def ^:private wait-effects
+  "What an awaited row's ending does to the row that waits: it goes on
+  (:release), it goes back to be worked or stated again (:return), or
+  it stays where it is (:nothing)."
+  #{:release :return :nothing})
+
+(defn- check-waits
+  "What a row of this kind waits on (ticket d9edac4e) validates hard,
+  for :answered-at-a-door's reason: the cracks audit reads this list
+  off the declaration, and a wait naming a state no row is in, a door
+  this kind does not serve or an effect outside the vocabulary is a
+  dead wait the audit quietly never reports.
+
+  Every entry is a map with a keyword `:on` and a non-empty `:outcomes`
+  whose effects are `wait-effects`; `:in` names declared states and
+  `:restated-by` declared actions. A wait on this same kind names its
+  outcomes among this kind's states. What `:awaits` names on ANOTHER
+  kind is read by the audit, which has every declaration."
+  [r]
+  (let [ws (:waits r)]
+    (when (some? ws)
+      (when-not (and (sequential? ws) (every? map? ws))
+        (err r :waits
+             ":waits is [{:on … :awaits … :in #{…} :outcomes {outcome effect}}]"))
+      (let [states (set (:states r))]
+        (doseq [w ws
+                :let [on (pr-str (:on w))]]
+          (when-not (keyword? (:on w))
+            (err r :waits
+                 (str "a wait names :on " on "; it is the keyword of the "
+                      "field or relation the row waits on")))
+          (when-some [unknown (seq (sort (remove wait-keys (keys w))))]
+            (err r :waits
+                 (str on " declares unknown key(s) " (vec unknown)
+                      "; a wait speaks " (vec (sort wait-keys)))))
+          (when-some [strange (seq (sort (remove states (:in w))))]
+            (err r :waits
+                 (str on " waits :in " (vec strange) ", which this kind "
+                      "does not declare — a wait in a state no row can be "
+                      "in is one the audit never reports")))
+          (when-some [strange (seq (sort (remove #(contains? (:actions r) %)
+                                                 (:restated-by w))))]
+            (err r :waits
+                 (str on " is :restated-by " (vec strange) ", which is no "
+                      "action of this kind")))
+          (when-not (and (map? (:outcomes w)) (seq (:outcomes w)))
+            (err r :waits
+                 (str on " declares no :outcomes — a wait says what each "
+                      "ending of the awaited row does to the one waiting")))
+          (doseq [[outcome does] (sort-by (comp str key) (:outcomes w))]
+            (when-not (contains? wait-effects does)
+              (err r :waits
+                   (str on " says " (pr-str outcome) " does " (pr-str does)
+                        "; an outcome does one of " (vec (sort wait-effects)))))
+            (when (and (= (:kind r) (:awaits w))
+                       (not (contains? states outcome)))
+              (err r :waits
+                   (str on " names the outcome " (pr-str outcome)
+                        ", which is no state of " (name (:kind r))
+                        " — the awaited row can never end there")))))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -2056,5 +2119,6 @@
           check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults check-answered-at-a-door check-remedy-bindings
+          check-defaults check-answered-at-a-door check-waits
+          check-remedy-bindings
           check-owned-surface])})

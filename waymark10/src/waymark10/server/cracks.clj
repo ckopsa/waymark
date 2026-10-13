@@ -1,10 +1,10 @@
 (ns waymark10.server.cracks
   "GET /api/-/cracks: will anything fall through? (ticket 8b52a6e6,
-  part 1 of epic 400609cf.)
+  part 1 of epic 400609cf; `dead_wait` is part 2, ticket d9edac4e.)
 
   A static read over the declarations and the ACTIVE seat rows. For
   every kind, and every state a row can reach from its initial state,
-  it names three ways work stops with nobody told:
+  it names four ways work stops with nobody told:
 
   no_exit        no active seat's scope holds an action that leaves
                  the state (terminal states excepted)
@@ -12,6 +12,11 @@
                  there: no wake_on entry on a transition into the
                  state, no walk whose filter admits it, no cadence
   remedy_unheld  a guard's remedy names a door no active seat holds
+  dead_wait      the kind declares a wait (`:waits`) one of whose
+                 outcomes does nothing to the row that waits, and no
+                 seat is woken to act on it: none that holds a door on
+                 the waiting row has a wake_on entry naming the action
+                 that ends the awaited row that way, or a cadence
 
   It reads what is DECLARED, never the rows of the audited kinds: a
   crack here is a state a row could sit in, not a row that does.
@@ -202,6 +207,80 @@
              ": a refusal at " kind "/" (text door)
              " names it as the way out, and no seat can take it.")}))))
 
+(defn- wait-doors
+  "The doors a hand takes on a row that waits: the ones the wait says
+  restate it, or every action open in a state it waits in."
+  [rdef wait states]
+  (or (seq (map text (:restated-by wait)))
+      (distinct
+       (for [state states
+             a (if (some? state)
+                 (machine/transitions-from rdef state)
+                 (machine/actions-seq rdef))]
+         (text (:name a))))))
+
+(defn- wait-cracks
+  "dead_wait, for one kind: one crack per declared wait, per outcome of
+  the awaited row that does `:nothing`, and per state the row waits in
+  (none when the wait names no state), where no active seat is woken to
+  act. A seat acts when it holds one of the wait's doors in a waiting
+  state and something brings it: a wake_on entry on the awaited kind
+  naming an action that lands in that outcome, or a cadence. A wait
+  whose `:waiter` is no row of this kind has no door to hold, and only
+  the wake_on entry counts. An awaited thing that is no kind here has
+  no action to name, and only a cadence does."
+  [rdef seat-rows by-kind]
+  (let [kind (text (:kind rdef))]
+    (for [wait (:waits rdef)
+          :let [awaited (:awaits wait)
+                awaited-rdef (get by-kind awaited)
+                row-waits? (nil? (:waiter wait))
+                states (or (seq (sort-by text (:in wait))) [nil])
+                doors (when row-waits? (wait-doors rdef wait states))]
+          [outcome does] (sort-by (comp text key) (:outcomes wait))
+          :when (= :nothing does)
+          :let [told (if awaited-rdef (arrivals awaited-rdef outcome) #{})
+                considered
+                (for [seat seat-rows
+                      :let [holds (filterv (fn [d]
+                                             (some #(seq (holding-entries seat kind d %))
+                                                   states))
+                                           doors)
+                            wakes (cond-> []
+                                    (and row-waits?
+                                         (some? (get-in seat [:data :cadence_seconds])))
+                                    (conj "cadence")
+                                    (some (fn [e]
+                                            (and (some? awaited)
+                                                 (= (text awaited) (text (:kind e)))
+                                                 (some told (map text (:actions e)))
+                                                 (admits-state? (:filter e) outcome)))
+                                          (seats/effective-wake-on
+                                           seat
+                                           (some->> (get-in seat [:data :walk]) str
+                                                    not-empty keyword (get by-kind))))
+                                    (conj "wake_on"))]
+                      :when (if row-waits? (seq holds) (seq wakes))]
+                  {:seat (seat-name seat) :holds holds :wakes wakes})]
+          :when (every? (comp empty? :wakes) considered)
+          state states]
+      {:kind kind :state (some-> state text) :crack "dead_wait"
+       :on (text (:on wait))
+       :awaits (some-> awaited text)
+       :outcome (text outcome)
+       :seats_considered (vec considered)
+       :what_would_close_it
+       (str "Declare what " (text outcome) " does to what waits on "
+            (text (:on wait)) " of " kind ", or give an active seat"
+            (when row-waits?
+              (str " that holds one of: " (str/join ", " doors) ","))
+            (if (seq told)
+              (str " a wake_on entry on " (text awaited) " naming one of: "
+                   (str/join ", " (sort told))
+                   (when row-waits? ", or a cadence"))
+              " a cadence")
+            ".")})))
+
 (defn audit
   "Every crack the declarations and the active seats leave, in a
   stable order. `rdefs` is every kind the engine serves; `seat-rows`
@@ -212,7 +291,8 @@
     (into []
           (mapcat (fn [rdef]
                     (concat (state-cracks rdef seat-rows by-kind)
-                            (remedy-cracks rdef seat-rows))))
+                            (remedy-cracks rdef seat-rows)
+                            (wait-cracks rdef seat-rows by-kind))))
           (sort-by (comp text :kind) rdefs))))
 
 (defn- active-seats [eng]

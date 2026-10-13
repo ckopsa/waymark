@@ -409,6 +409,14 @@
    :states [:held :allowed :done :refused :failed :expired]
    :initial :held
    :terminal #{:done :refused :failed :expired}
+   ;; THE CALLER WAITS ON THIS ROW (ticket d9edac4e). `done` carries the
+   ;; answer the caller asked for. The other three endings move nothing:
+   ;; the caller reads them on its own row when it next looks, and the
+   ;; cracks audit reports a dead wait while no seat is woken by one.
+   :waits [{:on :held_call :awaits :held_call
+            :waiter "the caller, and the row a held door would have moved"
+            :outcomes {:done :release :refused :nothing
+                       :failed :nothing :expired :nothing}}]
    :summary "{data.tool} · {data.caller} · {data.shown} · {state}"
    :label-template "{data.tool}"
    ;; THE CALLER READS ITS OWN ROW WITH NO GRANT (R-6). An agent that
