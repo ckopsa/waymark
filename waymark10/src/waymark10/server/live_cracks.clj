@@ -19,6 +19,16 @@
   crack whose marker a ticket still standing carries, so a second pass
   adds nothing and a crack that outlives its ticket is filed again.
 
+  AN AGED ROW'S NOTE GOES FIRST TO THE SEAT THAT HOLDS IT (ticket
+  fee9090f): when exactly one fired seat holds a door out of the row's
+  state and its walk admits the row (`holders`), the pass wakes that
+  seat on the row, by the seat's own `fire` door, and files nothing.
+  The fire's recorded text carries the crack's key, so the seat's log
+  is the note, written once. The draft for the mayor is filed when no
+  seat holds the row, when several do, when the seat would not fire,
+  or when the seat was woken and the row is still aged one expected
+  age later; then it says which seat was tried (`route`).
+
   AN EXPECTED AGE is declared per kind and state, in seconds, under the
   declaration's `:expected-age`. A state with none takes the default
   for its NAME (`default-ages`), and a state with neither has no
@@ -33,7 +43,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
@@ -161,6 +172,46 @@
                    (= (text v) (some-> (fget (:data row) f) text)))
                  (dissoc flt "state")))))
 
+(defn- holders
+  "The fired seats that hold a door out of this row's state and whose
+  walk admits the row: a seat that walks the row's kind with the row
+  under its walk's filter, or, for a change, a seat that walks tickets
+  with the ticket the change was born from under it, since the sit
+  hands a ticket's change beside it. `by-kind` is kind keyword → its
+  declaration and `tickets` is ticket id → row."
+  [by-kind seat-rows tickets rdef row]
+  (let [kind (text (:kind rdef))
+        state (text (:state row))
+        born (str (get-in row [:data :born_from]))
+        ticket (when (and (= "change" kind) (str/starts-with? born "ticket:"))
+                 (get tickets (subs born (count "ticket:"))))]
+    (filterv (fn [seat]
+               (let [walk (some-> (get-in seat [:data :walk]) text not-empty)
+                     flt (seats/walk-filter seat)]
+                 (boolean
+                  (and (not (seats/interactive-seat? seat))
+                       (seq (cracks/movers rdef [seat] state))
+                       (cond
+                         (= walk kind) (in-walk? rdef flt row)
+                         (and ticket (= "ticket" walk) (:ticket by-kind))
+                         (in-walk? (:ticket by-kind) flt ticket)
+                         :else false)))))
+             seat-rows)))
+
+(defn- to-its-holder
+  "An aged crack, naming under `:wake` the ONE seat that holds its row.
+  With no holder, or several, it names none and its note is the
+  mayor's."
+  [by-kind seat-rows rows tickets c]
+  (let [kind (keyword (:kind c))
+        rdef (get by-kind kind)
+        row (some #(when (= (:id c) (str (:id %))) %) (get rows kind))
+        held (when (and rdef row) (holders by-kind seat-rows tickets rdef row))]
+    (cond-> c
+      (= 1 (count held))
+      (assoc :wake {:seat (str (:id (first held)))
+                    :name (seat-name (first held))}))))
+
 (defn silent-seats
   "silent: a fired seat with rows in its walk whose schedule shows no
   fire within its cadence. A seat a person sits in, and one that walks
@@ -281,7 +332,8 @@
   [{:keys [rdefs seats rows schedules sittings shelvings tickets now]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
-          (concat (aged-rows rdefs seats rows now)
+          (concat (map #(to-its-holder by-kind seats rows tickets %)
+                       (aged-rows rdefs seats rows now))
                   (silent-seats rdefs seats rows schedules now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
@@ -306,6 +358,7 @@
                   (if (seq (:seats c))
                     (str/join ", " (:seats c))
                     "none; read /api/-/cracks for the state no seat can leave")
+                  (when (:tried c) (str "\nSeat tried: " (:tried c)))
                   "\n\n" (marker c))
      :type "bug"
      :priority 2}))
@@ -326,6 +379,38 @@
                  [(conj seen (:key c)) (conj out c)]))
              [#{} []]
              cracks))))
+
+(defn wake-text
+  "What the fire that wakes a seat on a crack's row carries: the row, as
+  a transition wake names one (`wakes/wake-text`), so the session walks
+  that row alone, and the crack's key, which a later pass looks for in
+  the seat's log."
+  [c]
+  (wire/write-json {:kind (:kind c)
+                    :id (:id c)
+                    :action "crack"
+                    :from (:state c)
+                    :to (:state c)
+                    :crack (:key c)}))
+
+(defn route
+  "Where one unfiled crack's note goes, as [door crack]. `woken` is when
+  the seat it names was last woken on it, or nil.
+
+      :file  no one seat holds the row, or the seat was woken and the
+             row is still aged one expected age later; the crack then
+             says which seat was tried
+      :wake  one seat holds the row and has not been woken on it
+      :wait  the seat was woken less than one expected age ago"
+  [c woken now]
+  (let [woken (inst woken)]
+    (cond
+      (nil? (:wake c)) [:file c]
+      (nil? woken) [:wake c]
+      (past? woken (or (:expected_seconds c) 0) now)
+      [:file (assoc c :tried (str (get-in c [:wake :name])
+                                  ", woken on the row at " woken))]
+      :else [:wait c])))
 
 ;; ── the pass ────────────────────────────────────────────────────────
 
@@ -440,18 +525,77 @@
       (warn! "the ticket for " (:key c) " would not file — " (ex-message e))
       nil)))
 
+(defn- woken-at
+  "When the seat this crack names was last woken on it, read from the
+  seat's own log: a recorded `fire` whose text carries the crack's key.
+  A fire older than the row's last write was for an earlier age of the
+  row and does not count."
+  [eng c]
+  (let [st (:storage eng)
+        since (inst (:since c))
+        mark (str "\"" (:key c) "\"")]
+    (some (fn [t]
+            (let [at (inst (:at t))]
+              (when (and at
+                         (= "fire" (text (:action t)))
+                         (str/includes? (str (fget (:inputs t) :text)) mark)
+                         (not (and since (.isBefore at since))))
+                at)))
+          (store/with-tx st
+            (fn [tx]
+              (store/transitions st tx
+                                 {:kind :seat :resource-id (get-in c [:wake :seat])}
+                                 {:limit row-page :newest-first true}))))))
+
+(defn- wake!
+  "Wake the seat this crack names on the crack's row, by the seat's own
+  `fire` door as the engine. The key carries the row's last write, so a
+  row is woken on at most once for each time it ages. → true when the
+  fire went out, nil when the door refused."
+  [eng c]
+  (try
+    (inv/invoke! eng :seat (get-in c [:wake :seat]) :fire
+                 {:text (wake-text c)}
+                 {:principal schedules/system-actor
+                  :idempotency-key (str "crack:" (:key c) ":" (:since c))})
+    true
+    (catch Exception e
+      (warn! "seat " (get-in c [:wake :name]) " would not be woken on "
+             (:key c) " — " (ex-message e))
+      nil)))
+
+(defn- send!
+  "One crack's note, by `route`: a wake for the seat that holds the row,
+  or the draft ticket. A seat whose door refuses the wake was tried all
+  the same, and the draft says so. → true when a note went out."
+  [eng c now]
+  (let [[door c] (route c (when (:wake c) (woken-at eng c)) now)]
+    (case door
+      :wait nil
+      :file (file! eng c now)
+      :wake (or (wake! eng c)
+                (file! eng
+                       (assoc c :tried (str (get-in c [:wake :name])
+                                            ", which would not be woken"))
+                       now)))))
+
 (defn pass!
-  "One pass: read the rows, find the cracks, and file a draft ticket for
-  each one no standing ticket names, at most `file-cap` of them. → how
-  many were filed."
+  "One pass: read the rows, find the cracks, and send a note for each
+  one no standing ticket names — a wake for the seat that holds the
+  row, or a draft ticket — at most `file-cap` of them. A crack that
+  waits on a woken seat sends nothing and takes none of the cap. → how
+  many notes went out."
   [eng]
   (if-not (and (serves? eng :ticket) (serves? eng :seat))
     0
     (let [w (world eng)
           fresh (unfiled (find-cracks w) (standing-tickets eng))]
-      (reduce (fn [n c] (if (file! eng c (:now w)) (inc (long n)) n))
+      (reduce (fn [n c]
+                (if (<= (long file-cap) (long n))
+                  (reduced n)
+                  (if (send! eng c (:now w)) (inc (long n)) n)))
               0
-              (take file-cap fresh)))))
+              fresh))))
 
 (defn start-sweeper!
   "Every `:interval-ms`, `pass!`. The first pass is one interval after

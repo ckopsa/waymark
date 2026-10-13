@@ -143,6 +143,53 @@
     (is (empty? (loops [(out "a") (out "a")])))
     (is (empty? (loops [(out "a") {:outcome "submitted"} (out "a")])))))
 
+(deftest an-aged-row-goes-to-the-seat-that-holds-it-and-to-the-mayor-when-none-does
+  (let [change {:kind :change
+                :states [:open :submitted :merged]
+                :initial :open
+                :terminal #{:merged}
+                :actions {:submit {:from #{:open} :to :submitted}
+                          :stall {:from #{:open} :to :open}}}
+        ticket {:kind :ticket
+                :states [:draft :open :done]
+                :initial :draft
+                :terminal #{:done}
+                :actions {:groom {:from #{:draft} :to :open}}}
+        coder (seat "coder" {:walk "ticket"
+                             :scope [{:kind "ticket" :actions ["groom"]}
+                                     {:kind "change" :actions ["stall" "submit"]}]})
+        world (fn [seats]
+                {:rdefs [change ticket]
+                 :seats seats
+                 :rows {:change [{:id "c1" :state :open :updated-at (ago 100000)
+                                  :data {:born_from "ticket:k1"}}]}
+                 :tickets {"k1" {:id "k1" :state :open :data {}}}
+                 :now now})
+        aged (fn [seats] (first (of (live/find-cracks (world seats)) "aged")))]
+    (testing "an aged change in open wakes the code seat that holds stall and submit"
+      (let [c (aged [coder])]
+        (is (= {:seat "coder" :name "coder"} (:wake c)))
+        (is (= :wake (first (live/route c nil now))))
+        (is (re-find #"\"id\":\s*\"c1\"" (live/wake-text c)))
+        (is (re-find #"aged:change:c1" (live/wake-text c)))
+        (testing "and waits on that seat for one expected age"
+          (is (= :wait (first (live/route c (ago 60) now)))))
+        (testing "and then reaches the mayor, saying which seat was tried"
+          (let [[door tried] (live/route c (ago 90000) now)]
+            (is (= :file door))
+            (is (re-find #"Seat tried: coder" (:detail (live/ticket-of tried))))))))
+    (testing "an aged row no seat holds still reaches the mayor"
+      (let [c (aged [])
+            [door filed] (live/route c nil now)]
+        (is (nil? (:wake c)))
+        (is (= :file door))
+        (is (not (re-find #"Seat tried" (:detail (live/ticket-of filed)))))))
+    (testing "a seat that holds the door and does not walk the row is not woken"
+      (is (nil? (:wake (aged [(seat "closer" {:scope [{:kind "change"
+                                                         :actions ["submit"]}]})])))))
+    (testing "two seats that hold the row name no one seat"
+      (is (nil? (:wake (aged [coder (assoc coder :id "coder2")])))))))
+
 (deftest a-change-whose-ticket-is-dropped-is-an-orphan
   (let [change {:kind :change
                 :states [:open :submitted :merged :closed]
