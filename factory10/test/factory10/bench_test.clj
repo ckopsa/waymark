@@ -3506,19 +3506,22 @@
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 700))))
       (is (= 1 (count (bench/merge-asks eng)))))))
 
-(deftest a-dropped-dependency-keeps-the-change-held
+;; ticket 97697177: a dropped dependency releases the hold, as a done
+;; one does.
+(deftest a-dropped-dependency-releases-the-hold
   (let [w (held-world)
         st (:state w)
         seen (atom {})]
     (answer! st "bench__merge" {:state "merged"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (is (= 0 (bench/merge-green! (:eng w) seen)))
+    (is (empty? (calls-of st "bench__merge")) "held while it is open")
     (end-ticket! w (:dep w) :drop)
-    (bench/merge-green! (:eng w) seen)
-    (bench/merge-green! (:eng w) seen)
-    (is (empty? (calls-of st "bench__merge"))
-        "the work it waited on will never land, so a person decides")
-    (is (= "held" (get-in (first (changes-of (:eng w))) [:data :line_why])))
-    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
-                       "(dropped)"))))
+    (is (= 1 (bench/merge-green! (:eng w) seen)))
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "the work it waited on will never land, so nothing holds the merge")
+    (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
+        "and the ticket no longer says it waits")))
 
 ;; ── one deploy at a time (ticket 47217098) ─────────────────────────────
 
