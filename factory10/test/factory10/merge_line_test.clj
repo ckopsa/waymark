@@ -207,6 +207,68 @@
   (is (= "merge" (bench/front-waits-on {:refused "merge_refused"
                                          :reason "GitHub has not merged it"}))))
 
+;; ── a front that holds its base is not held on update (ticket 5ba28a11)
+
+(deftest a-front-the-mirror-read-up-to-date-is-not-brought-forward
+  (testing "a red carried over on a green head that is 0 behind its base"
+    (let [r (rig (atom {1 {:state "red"}}))
+          seen (atom {})
+          a (a-change "ckopsa/waymark" 1 0 :green_head "head-1"
+                      :held_head "head-1" :behind_base false)
+          m (marks! r seen [a])]
+      (is (= [] (numbers-of r "bench__update_branch"))
+          "there is nothing to bring forward")
+      (is (= "merge" (get-in m [:policies "ckopsa/waymark" :line_front_waiting])))
+      (is (= {:line_place 1 :line_why "front"} (get-in m [:changes "change-1"])))
+      (marks! r seen [a])
+      (is (= [1 1] (numbers-of r "bench__merge"))
+          "it is offered for merge each pass")))
+  (testing "a rig that says behind itself, on a row the mirror read up to date"
+    (let [r (rig (atom {}))
+          m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0 :base_branch "master"
+                                           :held_head "head-1" :behind_base false)])]
+      (is (= [] (numbers-of r "bench__update_branch")))
+      (is (= "merge" (get-in m [:policies "ckopsa/waymark" :line_front_waiting])))))
+  (testing "a compare read at an older head is not trusted"
+    (let [r (rig (atom {}))
+          m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0
+                                           :held_head "head-0" :behind_base false)])]
+      (is (= [1] (numbers-of r "bench__update_branch")))
+      (is (= "update" (get-in m [:policies "ckopsa/waymark" :line_front_waiting]))))))
+
+(deftest an-update-with-nothing-to-bring-forward-asks-the-merge-again
+  (let [calls (atom [])
+        r {:calls calls
+           :ctx {:services
+                 {:bench-rpc
+                  (fn [_ {tool :name args :arguments}]
+                    (swap! calls conj [tool (:number args)])
+                    {:structuredContent
+                     {:result (if (= tool "bench__merge")
+                                {:state "behind"}
+                                {:refused "update_refused"
+                                 :reason "There are no new commits on the base branch."})}})}}}
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0)
+        m (marks! r seen [a])]
+    (is (= [1] (numbers-of r "bench__update_branch")))
+    (is (= [1 1] (numbers-of r "bench__merge"))
+        "the merge is asked again in the pass that learned it")
+    (is (= "merge" (get-in m [:policies "ckopsa/waymark" :line_front_waiting]))
+        "the front does not wait on an update that cannot come")
+    (let [m (marks! r seen [a])]
+      (is (= [1] (numbers-of r "bench__update_branch")) "not updated again")
+      (is (= [1 1 1] (numbers-of r "bench__merge")) "and offered again next pass")
+      (is (= "merge" (get-in m [:policies "ckopsa/waymark" :line_front_waiting]))))
+    (testing "a new head is a new question"
+      (marks! r seen [(a-change "ckopsa/waymark" 1 0 :head_sha "head-1b")])
+      (is (= [1 1] (numbers-of r "bench__update_branch")))))
+  (is (bench/nothing-forward? {:state "up_to_date"}))
+  (is (not (bench/nothing-forward? {:state "updated"})))
+  (is (not (bench/nothing-forward? {:refused "update_refused" :reason "merge conflict"})))
+  (is (= "merge" (bench/front-waits-on {:state "behind"} true)))
+  (is (= "update" (bench/front-waits-on {:state "behind"} false))))
+
 (deftest conflicted-draft-and-parked-changes-say-why
   (let [seen (atom {"change-3" "head-3" [:parked-why "change-3"] "not mergeable"})
         m (marks! (rig (atom {})) seen

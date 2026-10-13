@@ -591,6 +591,53 @@
       (and (= "merge_refused" (refused answer))
            (boolean (re-find behind-reason (str (:reason answer)))))))
 
+;; A FRONT THAT HOLDS ITS BASE (ticket 5ba28a11). A merge answer can
+;; read as behind for a branch that is not: a red carried over on a head
+;; read green (`head-answer`), or a refusal `behind-reason` matches. The
+;; update then has nothing to bring forward, no new head ever comes, and
+;; the front waited on `update` for good. So the line takes two words
+;; over that reading: the mirror's own compare at this head, and the
+;; rig's `update_branch` saying there was nothing to bring forward.
+
+(def ^:private nothing-forward-reason
+  "What GitHub says when it is asked to update a branch that already
+  holds its base's head."
+  #"(?i)no new commits|already up.to.date|^up.to.date|nothing to (update|bring forward)")
+
+(defn nothing-forward?
+  "Does the rig's `update_branch` answer say the branch already holds
+  its base, so there was nothing to bring forward?"
+  [answer]
+  (or (contains? #{"current" "up_to_date"} (some-> (:state answer) name))
+      (boolean (and (refused answer)
+                    (re-find nothing-forward-reason
+                             (str (refused answer) " " (:reason answer)))))))
+
+(defn holds-base?
+  "Does the line know this change's head holds its base? The rig's
+  `update_branch` said so for this head (`seen` keeps it under
+  `[:current id]`), or the mirror's compare did: `behind_base` false,
+  read at the head `held_head` names."
+  [change seen]
+  (let [id (str (:id change))
+        head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and head
+          (or (= head (get seen [:current id]))
+              (and (false? (get-in change [:data :behind_base]))
+                   (= head (some-> (get-in change [:data :held_head]) str))))))))
+
+(defn- answer-words
+  "A merge answer in one clause, for the log."
+  [answer]
+  (or (not-empty
+       (str/join ", "
+                 (keep (fn [k]
+                         (when-some [v (some-> (get answer k) str not-empty)]
+                           (str (name k) " " v)))
+                       [:state :rig_state :refused :reason :waits_on])))
+      "no answer"))
+
 (defn- conflicted-change? [change]
   (= "conflicted" (str (get-in change [:data :mergeable]))))
 
@@ -605,7 +652,9 @@
 (defn- update-behind!
   "Bring one behind change's branch up to date, once for this head.
   `seen` remembers the head under `[:updated id]`; a missing power or
-  no answer is not remembered, so the next pass asks again."
+  no answer is not remembered, so the next pass asks again. An answer
+  that there was nothing to bring forward (`nothing-forward?`) is
+  remembered under `[:current id]` as well."
   [ctx seen change id head]
   (cond
     (conflicted-change? change)
@@ -630,7 +679,13 @@
 
         :else
         (do (swap! seen assoc [:updated id] head)
-            (when why
+            (cond
+              (nothing-forward? answer)
+              (do (swap! seen assoc [:current id] head)
+                  (warn! id " at " head " already holds its base ("
+                         (reason-of answer) "); the merge is asked again"))
+
+              why
               (warn! "the rig refused to update " id " at " head " ("
                      (reason-of answer) ")")))))))
 
@@ -712,7 +767,7 @@
   A rig's `waiting` for that very head, when the mirror also read it
   behind its base (`behind_base`), waits on no check: it reads as
   `behind` too, so the front is brought up to date or rides a train
-  (ticket fc997a92)."
+  (ticket fc997a92). The rig's own word is kept as `rig_state`."
   [change answer]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
         state (answer-state answer)]
@@ -721,7 +776,7 @@
              (or (= "red" state)
                  (and (= "waiting" state)
                       (true? (get-in change [:data :behind_base])))))
-      (assoc answer :state "behind")
+      (assoc answer :state "behind" :rig_state state)
       answer)))
 
 (defn out-of-line
@@ -1136,7 +1191,11 @@
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
   behind, or when it waits on a required check its head never ran
-  while its base moved (`stale-waiting?`). The front is chosen after the answers, so a change that went
+  while its base moved (`stale-waiting?`). A front that reads behind
+  and holds its base (`holds-base?`) is not brought up to date: the pass
+  logs the answer it read, and when the update itself said there was
+  nothing to bring forward the merge is asked once more.
+  The front is chosen after the answers, so a change that went
   red or was parked this pass does not hold the line. `answers`, when
   given, is an atom the pass fills with change id → the rig's answer.
   A repository whose policy says `merge_strategy: train` sends its
@@ -1183,8 +1242,19 @@
            built (swap! trains assoc repo built)
            (and front (or (behind? (get @answers id))
                           (stale-waiting? front (get @answers id))))
-           (update-behind! ctx seen front id
-                           (str (get-in front [:data :head_sha]))))))
+           (let [head (str (get-in front [:data :head_sha]))]
+             (if (holds-base? front @seen)
+               (warn! id " at " head " reads behind ("
+                      (answer-words (get @answers id))
+                      ") and holds its base; it is not brought up to date,"
+                      " and the next pass asks the merge again")
+               (do (update-behind! ctx seen front id head)
+                   (when (holds-base? front @seen)
+                     (vswap! asked inc)
+                     (let [again (head-answer front (offer-merge! ctx seen front policy))]
+                       (swap! answers assoc id again)
+                       (warn! id " at " head " was offered again: "
+                              (answer-words again))))))))))
      ;; a standing train is read whatever its line: a repository with
      ;; no line this pass would otherwise keep it on the policy for good
      (doseq [[repo policy] by-repo
@@ -1227,12 +1297,14 @@
   judged it mergeable yet, `merge` when it was offered and GitHub has
   not merged it yet. A `waiting` answer says which of the two in its
   `waits_on`; one that carries none (a rig not yet deployed) reads as
-  `checks`."
-  [answer]
-  (cond (behind? answer) "update"
-        (= "waiting" (answer-state answer))
-        (if (= "github" (some-> (:waits_on answer) name)) "github" "checks")
-        :else "merge"))
+  `checks`. A front that reads behind and holds its base (`current?`,
+  from `holds-base?`) has nothing to bring forward: it waits on `merge`."
+  ([answer] (front-waits-on answer false))
+  ([answer current?]
+   (cond (behind? answer) (if current? "merge" "update")
+         (= "waiting" (answer-state answer))
+         (if (= "github" (some-> (:waits_on answer) name)) "github" "checks")
+         :else "merge")))
 
 (defn- parked-reason [seen id]
   (some-> (get seen [:parked-why id]) str not-empty
@@ -1273,7 +1345,8 @@
                              :line_front_pr (get-in front [:data :number])
                              :line_front_waiting (if (get trains repo)
                                                    "train"
-                                                   (front-waits-on (answer-of front)))
+                                                   (front-waits-on (answer-of front)
+                                                                   (holds-base? front seen)))
                              :line_waiting (dec (count in))}
                             {})])))
            lines)
