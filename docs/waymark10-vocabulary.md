@@ -308,6 +308,28 @@ seat is woken to act. Each entry validates at the def site
 (`checks/check-waits`). Advertisement-class — no fingerprint facet names
 it.
 
+`:left-by` names a kind's **indirect exits**: the ways a row leaves a
+state that are no door of this kind a seat takes (ticket 071c563c):
+
+```clojure
+:left-by [{:in #{:open} :by {:kind :change :action :submit}
+           :via :review :to :in_review}
+          {:in #{:in_review} :by :mirror :via :land :to :done}
+          {:in #{:blocked} :by :wait :via :unblock :to :open}]
+```
+
+`:in` is the states left and `:to` the state the row lands in. `:by` is
+the mover: another kind's door (`{:kind … :action …}`), or a source that
+needs no seat — `:mirror` (the forge's mirror), `:sweep` (the engine's
+sweep) or `:wait` (the ending of what the row waits on, which needs a
+`:waits` entry in that state). `:via` is this kind's own action the
+mover walks, when there is one. It moves no row. `GET /api/-/cracks`
+reads it: a seat that holds the other kind's door counts as leaving the
+state, for `no_exit` and for `unwoken`, and a state a source leaves is
+reported as neither. Each entry validates at the def site
+(`checks/check-left-by`). Advertisement-class — no fingerprint facet
+names it.
+
 An action's `:display {:marks "<rel>"}` says that this verb is answered
 about the row's PARTS before it is answered about the row (waymark-wxk),
 and names the **link rel** whose rows those parts are:

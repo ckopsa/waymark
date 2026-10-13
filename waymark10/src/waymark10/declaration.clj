@@ -115,6 +115,15 @@
    ;; waiter are the kind's own, and this says what they do. Never in
    ;; the fingerprint — :answered-at-a-door's precedent
    :waits
+   ;; the ways OUT of a state that are no door of this kind a seat
+   ;; takes (ticket 071c563c): [{:in #{states} :by <:mirror | :sweep |
+   ;; :wait, or {:kind <another kind> :action <its door>}> :via <this
+   ;; kind's action the mover walks> :to <the state it lands in>}]. The
+   ;; cracks audit reads it beside :waits: a seat that holds the other
+   ;; kind's door leaves the state as if it held one here, and a source
+   ;; leaves it with no seat at all. It moves no row. Never in the
+   ;; fingerprint — :waits' precedent
+   :left-by
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema
