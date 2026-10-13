@@ -45,6 +45,7 @@
                 :refs {:type "object"}
                 :actions {:type "object"}
                 :unavailable {:type "object"}
+                :waiting_on {:type "object"}
                 :links {:type "object"}
                 :meta {:type "object"}}
    :required ["kind" "self" "state" "summary"]})

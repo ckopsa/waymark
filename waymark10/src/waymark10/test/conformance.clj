@@ -290,10 +290,12 @@
         etag (:etag m)
         summary (:summary env)]
     (cond-> []
-      (not= envelope-keys (disj (set (keys env)) :parts :display :refs))
+      ;; :waiting_on (ticket 86af9d88) rides a row read in an engine
+      ;; that serves seats, and no collection item
+      (not= envelope-keys (disj (set (keys env)) :parts :display :refs :waiting_on))
       (conj (str where ": envelope keys " (vec (sort (keys env)))
                  " are not exactly the reserved " (vec (sort envelope-keys))
-                 " (+ optional :parts/:display/:refs)"))
+                 " (+ optional :parts/:display/:refs/:waiting_on)"))
 
       (not= "10" (:waymark env))
       (conj (str where ": waymark is " (pr-str (:waymark env)) ", not \"10\""))

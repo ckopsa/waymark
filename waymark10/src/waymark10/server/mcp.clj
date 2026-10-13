@@ -742,7 +742,10 @@
            "summary" (get env "summary")}
     (contains? env "data") (assoc "data" (get env "data"))
     (and (not (contains? env "data")) (contains? env "fields"))
-    (assoc "fields" (get env "fields"))))
+    (assoc "fields" (get env "fields"))
+    ;; what the row waits on (ticket 86af9d88): a row read carries it,
+    ;; a collection item does not
+    (contains? env "waiting_on") (assoc "waiting_on" (get env "waiting_on"))))
 
 (defn- facets-of
   "The collection's facet counts, lifted out of the query action's

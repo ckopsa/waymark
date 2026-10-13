@@ -138,6 +138,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -431,13 +432,27 @@
            :link-doors (:link-doors eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
 
+(defn- with-waiting-on
+  "A row's envelope with its `waiting_on` block (ticket 86af9d88): the
+  next doors, the seats that hold them for this row, what wakes them
+  and how long the row has sat. It reads the data the envelope already
+  projected for this caller, so it names no field the grant hides. An
+  engine with no seat kind, and a read that fails, leave the envelope
+  as it was."
+  [eng rdef row env]
+  (if-some [w (waiting-on/for-row eng rdef row
+                                  (or (get env "data") (get env "fields")))]
+    (assoc env "waiting_on" (p/wire-value w))
+    env))
+
 (defn envelope-response
   "The one envelope answer: rendered through the shared ctx-opts, sent
   as waymark+json with its ETag. A module's route that answers with a
   row answers with THIS — the envelope is the wire's promise, not each
   handler's."
   [eng rdef row req status extra-headers]
-  (let [env (render/envelope rdef row (render-opts eng req))]
+  (let [env (with-waiting-on eng rdef row
+              (render/envelope rdef row (render-opts eng req)))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -1165,7 +1180,8 @@
                               (assoc opts :ref-summary
                                      (ref-summary-hook eng req)))
                              opts
-                             (embed-overrides req)))]
+                             (embed-overrides req)))
+        env (with-waiting-on eng rdef row env)]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
                    {"ETag" (get-in env ["meta" "etag"])})))
