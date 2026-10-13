@@ -428,6 +428,46 @@
       (is (empty? (filter #(= "unwalked_value" (:crack %))
                           (cracks/audit [ticket] [builder])))))))
 
+;; ticket 5cb126ab: a seat that walks the drafts of every repo hid the
+;; open row no builder is handed. The kind is said here: `ticket` is
+;; defined a second time below, and a var holds the last one.
+(deftest a-walk-shut-to-the-state-hides-no-value
+  (let [ticket {:kind :ticket
+                :states [:draft :open :done]
+                :initial :draft
+                :terminal #{:done}
+                :actions {:groom {:from #{:draft} :to :open}
+                          :complete {:from #{:open} :to :done}}}
+        builder (seat "builder" {:scope [{:kind "ticket" :actions ["complete"]
+                                          :filter {:repo "ckopsa/waymark" :state "open"}}]
+                                 :walk "ticket"})
+        groomer (seat "groomer" {:scope [{:kind "ticket" :actions ["groom"]
+                                          :filter {:state "draft"}}]
+                                 :walk "ticket"})
+        rows {:ticket [{:id "1" :state :open :data {:repo "ckopsa/waymark"}}
+                       {:id "2" :state :open :data {:repo "ckopsa/messa"}}
+                       {:id "3" :state :draft :data {:repo "ckopsa/messa"}}]}
+        unwalked (fn [seats]
+                   (filterv #(= "unwalked_value" (:crack %))
+                            (cracks/audit [ticket] seats {:rows rows})))]
+    (testing "an open ticket in a repo no seat that walks open admits"
+      (let [[c & more] (unwalked [builder groomer])]
+        (is (nil? more) "the draft is walked by the groomer, whatever its repo")
+        (is (= "repo" (:field c)))
+        (is (= "ckopsa/messa" (:value c)))
+        (is (= 1 (:rows c)))
+        (is (= ["open"] (:states c)))
+        (is (= [{:seat "builder" :admits ["ckopsa/waymark"]}] (:seats_considered c)))))
+    (testing "a seat woken for the row, that can move it, clears it"
+      (is (empty? (unwalked [builder groomer
+                             (seat "any" {:scope [{:kind "ticket" :actions ["complete"]}]
+                                          :wake_on [{:kind "ticket" :actions ["groom"]}]})]))))
+    (testing "a wake whose filter shuts the repo out does not"
+      (is (seq (unwalked [builder groomer
+                          (seat "b" {:scope [{:kind "ticket" :actions ["complete"]}]
+                                     :wake_on [{:kind "ticket" :actions ["groom"]
+                                                :filter {:repo "ckopsa/b"}}]})]))))))
+
 ;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
 ;; two ways a ticket does: a blocker's ending releases it whichever way
 ;; it ends, and a merge_after job that is dropped does nothing.
