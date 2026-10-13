@@ -4261,6 +4261,35 @@
     (is (= "closed" (change-state w))
         "GitHub closed it, and the groom does not put it back")))
 
+;; A CHANGE CLOSED WITH NO PULL REQUEST HOLDS ITS TICKET'S `change_id`
+;; (ticket ab6af67f): the sit found the closed row, which offers no
+;; submit, and could mint no second one under the same id.
+
+(deftest a-ticket-groomed-after-its-change-closed-with-no-pull-request-is-buildable
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        _ (mirror-moves-change! w :supersede
+                                {:superseded_by "Closed: a seat that only reads was minted it."})
+        closed (change-state w)
+        _ (force-ticket-state! w :draft)
+        _ (person-moves-ticket! w :groom)
+        answer (sit-again! w)
+        rows (changes-of (:eng w))
+        row (first rows)]
+    (is (= "closed" closed))
+    (is (= 1 (count rows))
+        "the same change is opened again, and no second one is born")
+    (is (= (str change-id) (str (get-in answer [:change :id]))))
+    (is (= "open" (name (:state row))))
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (nil? (get-in row [:data :superseded_by]))
+        "the row no longer says what closed it")
+    (is (= "open" (get-in answer [:change :state])))
+    (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                   "submit")
+        "and the seat is offered submit on the change beside its walk")
+    (is (nil? (:change_note answer)))))
+
 (deftest the-ticket-door-is-refused-to-every-hand
   (let [w (ticket-world)
         _ (stalled-with-a-pull-request! w 95)
