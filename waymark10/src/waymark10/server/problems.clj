@@ -172,13 +172,31 @@
   (let [s (if (keyword? k) (name k) (str k))]
     (if (str/starts-with? s "x-") s (str/replace s "-" "_"))))
 
+(defn verbatim
+  "Mark a free-form map — a value whose schema is a map-of or :any, a
+  map a person keyed by hand — so wire-value carries its keys as
+  written: a test_env service \"client-portal\" is not answered as
+  client_portal. The mark is metadata, and wire-value keeps it on
+  what it writes, so a second pass over a rendered envelope (the
+  router's, the collection's) leaves the keys alone too."
+  [m]
+  (if (map? m) (vary-meta m assoc ::verbatim true) m))
+
+(defn- verbatim-key
+  ^String [k]
+  (if (keyword? k) (subs (str k) 1) (str k)))
+
 (defn wire-value
   "The one kebab→snake boundary: keyword map keys become snake
   strings, keyword values render as names (:plan/assign_meal →
   \"plan.assign_meal\"). Values are otherwise untouched — nils are
-  data (an envelope's null fields), pruning is the caller's call."
+  data (an envelope's null fields), pruning is the caller's call. A
+  map marked `verbatim` keeps its keys as written."
   [v]
   (cond
+    (and (map? v) (::verbatim (meta v)))
+    (with-meta (into {} (map (fn [[k x]] [(verbatim-key k) (wire-value x)])) v)
+      {::verbatim true})
     (map? v) (into {} (map (fn [[k x]] [(wire-key k) (wire-value x)])) v)
     (sequential? v) (mapv wire-value v)
     (keyword? v) (if-some [ns' (namespace v)]

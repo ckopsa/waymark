@@ -1180,7 +1180,12 @@
         ;; the :computed fields join the stored ones here — after
         ;; decode, before the projection — so redaction and the grid
         ;; treat them by name like any data field
-        enc-data (cond-> (merge (schema/encode (:schema rdef) (:data row))
+        ;; a map-of / :any value's keys are a person's, not field
+        ;; names: marked here, they cross the wire as written
+        enc-data (cond-> (merge (schema/mark-free-form
+                                 (:schema rdef)
+                                 (schema/encode (:schema rdef) (:data row))
+                                 p/verbatim)
                                 (computed-data rdef row ctx-opts redacted))
                    (seq redacted) (as-> d (apply dissoc d redacted))
                    (seq hashed)
