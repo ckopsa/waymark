@@ -299,6 +299,21 @@
            #"collection door :close shares its name with the action close"
            (load-quietly (assoc base :collection-doors {:close door})))))))
 
+(deftest expected-age
+  (testing "an age on a declared state is green"
+    (is (some? (load-quietly (assoc base :expected-age {:open 3600})))))
+  (testing "a state the kind does not declare is refused, by name"
+    (breaks :expected-age (assoc base :expected-age {:opne 3600}))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #":expected-age names :opne, which is no state of this kind"
+         (load-quietly (assoc base :expected-age {:opne 3600})))))
+  (testing "an age is a positive integer of seconds"
+    (doseq [seconds [0 -60 1.5 "3600" nil]]
+      (breaks :expected-age (assoc base :expected-age {:open seconds}))))
+  (testing "the key is a map"
+    (breaks :expected-age (assoc base :expected-age [:open 3600]))))
+
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
 
