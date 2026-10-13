@@ -7,7 +7,12 @@
   it names the ways work stops with nobody told:
 
   no_exit        no active seat's scope holds an action that leaves
-                 the state (terminal states excepted)
+                 the state (terminal states excepted). A kind's
+                 `:left-by` names its indirect exits (ticket 071c563c):
+                 a seat that holds the other kind's door named there
+                 leaves the state as one that holds a door here does,
+                 and a state a source leaves (the mirror, the sweep, a
+                 wait's ending) needs no seat and is no crack
   unwoken        seats can leave it, and nothing brings one of them
                  there: no wake_on entry on a transition into the
                  state, no walk whose filter admits it, no cadence
@@ -120,15 +125,27 @@
                 (machine/actions-seq rdef))
     (= state (:initial rdef)) (conj "create")))
 
+(defn- indirect-exits
+  "The kind's declared ways out of `state` that are no door of its own
+  a seat takes (`:left-by`)."
+  [rdef state]
+  (filterv #(contains? (set (:in %)) state) (:left-by rdef)))
+
+(defn- door-name [{:keys [kind action]}]
+  (str (text kind) "/" (text action)))
+
 (defn- no-narrower?
   "Is the wake filter no narrower than one of the filters the seat
-  acts under? Every field it names, that scope filter names the same."
+  acts under? Every field it names, that scope filter names the same.
+  `::any` stands for a door held on ANOTHER kind: its filter speaks of
+  that kind's fields, and narrows no row of this one."
   [wake-filter scope-filters]
   (or (empty? wake-filter)
       (boolean
        (some (fn [sf]
-               (every? (fn [[k v]] (= (text v) (some-> (fval sf k) text)))
-                       wake-filter))
+               (or (= ::any sf)
+                   (every? (fn [[k v]] (= (text v) (some-> (fval sf k) text)))
+                           wake-filter)))
              scope-filters))))
 
 (defn- wakes-of
@@ -162,16 +179,23 @@
                              keyword (get by-kind)))]
     (for [state (sort-by text (machine/reachable-states rdef))
           :when (not (contains? terminal state))
+          :let [indirect (indirect-exits rdef state)]
+          ;; a source leaves it, and no seat is needed
+          :when (not-any? (comp keyword? :by) indirect)
           :let [out (exits rdef state)
+                far-doors (into [] (comp (map :by) (filter map?) (distinct)) indirect)
                 leavers (for [seat seat-rows
                               :let [held (for [a out
                                                :let [es (holding-entries seat kind (:name a) state)]
                                                :when (seq es)]
-                                           {:action (text (:name a)) :entries es})]
-                              :when (seq held)]
+                                           {:action (text (:name a)) :entries es})
+                                    far (filterv #(seq (holding-entries seat (:kind %) (:action %) nil))
+                                                 far-doors)]
+                              :when (or (seq held) (seq far))]
                           {:seat seat
-                           :holds (mapv :action held)
-                           :filters (into [] (comp (mapcat :entries) (map :filter)) held)})
+                           :holds (into (mapv :action held) (map door-name) far)
+                           :filters (cond-> (into [] (comp (mapcat :entries) (map :filter)) held)
+                                      (seq far) (conj ::any))})
                 considered (for [l leavers]
                              {:seat (seat-name (:seat l))
                               :holds (:holds l)
@@ -185,13 +209,19 @@
                                                   (map (fn [s] {:seat (seat-name s) :holds []})))
                                             seat-rows)
                     :what_would_close_it
-                    (if (seq out)
-                      (str "Give an active seat a scope entry on " kind
-                           " that holds one of: "
-                           (str/join ", " (map (comp text :name) out))
-                           ", under a filter that admits the state " (text state) ".")
-                      (str "No action of " kind " leaves " (text state)
-                           ": declare one, or declare the state terminal."))}]
+                    (str
+                     (if (seq out)
+                       (str "Give an active seat a scope entry on " kind
+                            " that holds one of: "
+                            (str/join ", " (map (comp text :name) out))
+                            ", under a filter that admits the state " (text state) ".")
+                       (str "No action of " kind " leaves " (text state)
+                            ": declare one, or declare the state terminal."))
+                     (when (seq far-doors)
+                       (str " Or give one a scope entry that holds one of: "
+                            (str/join ", " (map door-name far-doors))
+                            ", which " kind " declares moves its rows out of "
+                            (text state) ".")))}]
 
                   (every? (comp empty? :wakes) considered)
                   [{:kind kind :state (text state) :crack "unwoken"
