@@ -70,6 +70,16 @@
                                 (not= "dead_wait" (:crack %)))
                           cracks))))))
 
+;; ticket 42259e4b: the house's export is the fixture's shape.
+(deftest the-fixture-reads-back-from-the-seat-export
+  (let [rdefs (main/resources)
+        seats (fixture/seats rdefs)
+        back (fixture/from-export (cracks/seat-export seats))]
+    (testing "each seat comes back as it was written"
+      (is (= (sort-by :id seats) back)))
+    (testing "and the audit over them finds the same cracks"
+      (is (= (cracks/audit rdefs seats) (cracks/audit rdefs back))))))
+
 (deftest removing-the-groom-wake-fails-the-gate
   (let [rdefs (main/resources)
         deaf (update-in fixture/code-seat [:data :wake_on]

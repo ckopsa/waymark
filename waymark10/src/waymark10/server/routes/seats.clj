@@ -1201,10 +1201,30 @@
       (throw (p/problem :not-found 404 "Not found"
                         {:detail "No such route."})))))
 
+(defn- cracks-seats-doc
+  "GET /api/-/cracks/seats — the active seats as the cracks audit reads
+  them (ticket 42259e4b): name, mode, walk, cadence_seconds, scope and
+  wake_on. It writes nothing. A person reads it, and a scoped caller
+  whose grant sees the `seat` kind whole; every other caller gets the
+  concealment 404, since a scope says what a seat may do."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)
+          vis (router/visibility-of req)
+          whole-kind? (:whole-kind? vis)]
+      (if (and (some? principal)
+               (not= (:id principal) (:id t/anonymous))
+               (or (nil? vis)
+                   (and whole-kind? (boolean (whole-kind? :seat)))))
+        (router/json-response 200 (cracks/seats-report eng))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."}))))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
             ["/api/-/cracks" {:get (cracks-doc eng)}]
+            ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
             [transcript-path {:post (sitting-transcript eng)}]
