@@ -1168,30 +1168,37 @@
                  renewed (assoc :next_token (:token renewed)
                                 :next_expires_at (:expires_at renewed)))))))))
 
+(defn cracks-for
+  "The cracks document as ONE caller reads it, or nil for a caller who
+  reads none. A person reads every kind; a scoped caller reads the
+  kinds its grant sees whole, as the seasons door projects; anonymous
+  reads nothing. The route below and waymark_schema's `cracks` both
+  answer with this, so the two cannot project differently."
+  [eng principal vis opts]
+  (when-not (or (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+    (let [whole-kind? (:whole-kind? vis)]
+      (cracks/report eng
+                     (cond
+                       (nil? vis) (constantly true)
+                       whole-kind? (comp boolean whole-kind?)
+                       :else (constantly false))
+                     opts))))
+
 (defn- cracks-doc
   "GET /api/-/cracks?kind=ticket — the states no active seat can
   leave, the ones no seat is woken to, and the remedies no seat holds
-  (waymark10.server.cracks). A person reads every kind; a scoped
-  caller reads the kinds its grant sees whole, as the seasons door
-  projects; anonymous gets the concealment 404."
+  (waymark10.server.cracks), projected by `cracks-for`; anonymous gets
+  the concealment 404."
   [eng]
   (fn [req]
-    (let [principal (router/principal-of req)]
-      (when (or (nil? principal)
-                (= (:id principal) (:id t/anonymous)))
-        (throw (p/problem :not-found 404 "Not found"
-                          {:detail "No such route."})))
-      (let [vis (router/visibility-of req)
-            whole-kind? (:whole-kind? vis)]
-        (router/json-response
-         200
-         (cracks/report eng
-                        (cond
-                          (nil? vis) (constantly true)
-                          whole-kind? (comp boolean whole-kind?)
-                          :else (constantly false))
-                        {:kind (some-> (get (router/query-params req) "kind")
-                                       str not-empty)}))))))
+    (if-let [doc (cracks-for eng (router/principal-of req)
+                             (router/visibility-of req)
+                             {:kind (some-> (get (router/query-params req) "kind")
+                                            str not-empty)})]
+      (router/json-response 200 doc)
+      (throw (p/problem :not-found 404 "Not found"
+                        {:detail "No such route."})))))
 
 (defn routes [eng]
   {:module :seats
