@@ -4088,7 +4088,7 @@
   (boolean (some #(str/starts-with? (str (:kind %)) bench-power-prefix)
                  (get-in seat [:data :scope]))))
 
-(defn- code-seat?
+(defn code-seat?
   "Does this seat BUILD, and not only read? Its scope names a door of
   the `change` kind (the doors a round ends with), or it holds a bench
   power that writes its worktree (`bench-write-tokens`). A `change`
