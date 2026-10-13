@@ -1835,6 +1835,31 @@
                  (str in " is reached :by " (pr-str by) "; a mover is "
                       "{:kind <another kind> :action <its door>}"))))))))
 
+(defn- check-expected-age
+  "`:expected-age` says how long a row may rest in a state with no
+  write (ticket 21b49b28). The live cracks pass reads it by state name
+  and falls back to a default where the name is absent, so an entry
+  naming a state the kind does not have ages nothing and says so
+  nowhere.
+
+  The key is a map, each state it names is a state this kind declares,
+  and each value is a positive integer of seconds."
+  [r]
+  (let [ages (:expected-age r)
+        states (set (:states r))]
+    (when (some? ages)
+      (when-not (map? ages)
+        (err r :expected-age ":expected-age is {<state> <seconds>}"))
+      (doseq [[state seconds] (sort-by (comp str key) ages)]
+        (when-not (contains? states state)
+          (err r :expected-age
+               (str ":expected-age names " (pr-str state) ", which is no state "
+                    "of this kind; it names " (vec (:states r)))))
+        (when-not (pos-int? seconds)
+          (err r :expected-age
+               (str ":expected-age gives " (pr-str state) " " (pr-str seconds)
+                    "; an age is a positive integer of seconds")))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -2223,6 +2248,6 @@
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
-          check-reached-by
+          check-reached-by check-expected-age
           check-remedy-bindings
           check-owned-surface])})

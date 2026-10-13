@@ -10,7 +10,9 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [factory10.seat-fixture :as fixture]
-            [waymark10.server.cracks :as cracks]))
+            [waymark10.server.cracks :as cracks]
+            [waymark10.server.live-cracks :as live])
+  (:import (java.time Instant)))
 
 (def allowlist
   "The cracks this factory keeps on purpose. Each names its reason; an
@@ -129,6 +131,34 @@
     (testing "removing the declarations brings both back"
       (is (= ["cadence_only"] (at undeclared groomed "open")))
       (is (= ["cadence_only"] (at undeclared groomed "submitted"))))))
+
+;; ticket 21b49b28: ticket and change declare their expected ages.
+(deftest a-row-past-its-declared-age-is-aged
+  (let [rdefs (main/resources)
+        now (Instant/parse "2026-10-13T12:00:00Z")
+        row (fn [id state hours]
+              {:id id :state state :data {}
+               :updated-at (.minusSeconds ^Instant now (long (* 3600 hours)))})
+        aged (live/aged-rows
+              rdefs (fixture/seats rdefs)
+              {:ticket [(row "t-open" :open 13)
+                        (row "t-fresh" :open 11)
+                        (row "t-review" :in_review 7)
+                        (row "t-blocked" :blocked 25)
+                        (row "t-deferred" :deferred 9999)]
+               :change [(row "c-open" :open 7)
+                        (row "c-submitted" :submitted 7)
+                        (row "c-failing" :failing 5)
+                        (row "c-stuck" :stuck 23)
+                        (row "c-stuck-old" :stuck 25)]}
+              now)]
+    (is (= #{["ticket" "t-open" 43200]
+             ["ticket" "t-review" 21600]
+             ["change" "c-open" 21600]
+             ["change" "c-submitted" 21600]
+             ["change" "c-failing" 14400]
+             ["change" "c-stuck-old" 86400]}
+           (into #{} (map (juxt :kind :id :expected_seconds)) aged)))))
 
 (defn- repo-seat
   "The code seat, woken on its changes in one repository alone."
