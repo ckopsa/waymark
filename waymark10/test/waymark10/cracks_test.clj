@@ -1,8 +1,10 @@
 (ns waymark10.cracks-test
   "The cracks audit (ticket 8b52a6e6): a state no active seat can
   leave, a state seats can leave and nothing wakes them to, and a
-  remedy no seat holds. `audit` is pure over declarations and seat
-  rows, so the world there is two maps and no engine. The wire tests
+  remedy no seat holds; then (ticket 53e55720) a state only a person
+  can leave with nothing telling them, and a row value no seat's walk
+  admits. `audit` is pure over declarations, seat rows and the rows it
+  is handed, so the world there is maps and no engine. The wire tests
   (ticket 2ffa0f85) read GET /api/-/cracks through the real
   handler, and the same document on waymark_schema's `cracks`."
   (:require [clojure.string :as str]
@@ -234,6 +236,100 @@
     (is (= 1 (get-in doc [:cracks :total])))
     (is (= (dissoc route :waymark) (:cracks doc))
         "the tool's field is the route's answer for this kind")))
+
+(def ^:private order
+  {:kind :order
+   :states [:cart :placed :void]
+   :initial :cart
+   :terminal #{:void}
+   :actions {:place {:from #{:cart} :to :placed}
+             :void {:from #{:placed} :to :void :safety {:confirm true}}}})
+
+(deftest an-exit-only-a-person-takes-with-nothing-telling-them
+  (let [clerk (seat "clerk" {:scope [{:kind "order" :actions ["place" "void"]}]
+                             :cadence_seconds 3600})
+        silent (fn [seats world]
+                 (of (cracks/audit [order] seats world) "silent_person_exit" "placed"))]
+    (testing "placed has one exit, a confirm door, and no cue"
+      (let [cracks (cracks/audit [order] [clerk])
+            [c & more] (of cracks "silent_person_exit" "placed")]
+        (is (nil? more))
+        (is (= "order" (:kind c)))
+        (is (= [{:action "void" :held_by ["confirm"]}] (:exits c)))
+        (is (re-find #"place" (:what_would_close_it c)))
+        (is (empty? (of cracks "silent_person_exit" "cart"))
+            "cart is left by a door a seat takes alone")))
+    (testing "a guard declared :hold true holds the exit the same way"
+      (let [held (assoc-in order [:actions :void]
+                           {:from #{:placed} :to :void
+                            :guards [{:name :order/over-ceiling
+                                      :explain "It is past the ceiling."
+                                      :hold true}]})
+            [c] (of (cracks/audit [held] [clerk]) "silent_person_exit" "placed")]
+        (is (= [{:action "void" :held_by ["hold"]}] (:exits c)))))
+    (testing "one exit a seat takes alone clears it"
+      (let [open (assoc-in order [:actions :ship] {:from #{:placed} :to :void})]
+        (is (empty? (of (cracks/audit [open] [clerk]) "silent_person_exit" "placed")))))
+    (testing "a notice rule on the arrival clears it"
+      (is (empty? (silent [clerk] {:notice-rules [{:data {:kind "order"
+                                                          :when {:to_state "placed"}}}]})))
+      (is (empty? (silent [clerk] {:notice-rules [{:data {:kind "order"
+                                                          :when {:action "place"}}}]}))))
+    (testing "a rule on another state, another kind, or a time does not"
+      (is (seq (silent [clerk] {:notice-rules [{:data {:kind "order"
+                                                       :when {:to_state "void"}}}
+                                               {:data {:kind "task"
+                                                       :when {:to_state "placed"}}}
+                                               {:data {:kind "order"
+                                                       :at {:field "due"}}}]}))))
+    (testing "a subscription that names the kind, or none, clears it"
+      (is (empty? (silent [clerk] {:subscriptions [{:data {:kinds ["order"]}}]})))
+      (is (empty? (silent [clerk] {:subscriptions [{:data {}}]})))
+      (is (seq (silent [clerk] {:subscriptions [{:data {:kinds ["task"]}}]}))))
+    (testing "a cue in the inbox of a seat a person sits in clears it"
+      (let [inbox {:cues [{:kind "order" :actions ["place"] :note "An order came."}]}
+            desk (seat "desk" {:mode "interactive" :inbox inbox})
+            fired (seat "fired" {:inbox inbox})]
+        (is (empty? (silent [clerk desk] nil)))
+        (is (seq (silent [clerk fired] nil))
+            "a fired seat's inbox tells a model, not the person")))))
+
+(def ^:private ticket
+  {:kind :ticket
+   :states [:draft :open :done]
+   :initial :draft
+   :terminal #{:done}
+   :actions {:groom {:from #{:draft} :to :open}
+             :complete {:from #{:open} :to :done}}})
+
+(deftest a-value-no-walk-admits-is-unwalked
+  (let [walker (fn [name fm]
+                 (seat name {:scope [{:kind "ticket" :actions ["complete"] :filter fm}]
+                             :walk "ticket"}))
+        builder (walker "builder" {:repo "ckopsa/waymark" :state "open"})
+        rows {:ticket [{:id "1" :state :open :data {:repo "ckopsa/waymark"}}
+                       {:id "2" :state :open :data {:repo "ckopsa/waymark-bench"}}
+                       {:id "3" :state :done :data {:repo "ckopsa/gone"}}]}
+        unwalked (fn [seats]
+                   (filterv #(= "unwalked_value" (:crack %))
+                            (cracks/audit [ticket] seats {:rows rows})))]
+    (testing "an open ticket in a repo no seat's filter admits"
+      (let [[c & more] (unwalked [builder])]
+        (is (nil? more) "the admitted repo and the terminal row are no crack")
+        (is (= "ticket" (:kind c)))
+        (is (= "repo" (:field c)))
+        (is (= "ckopsa/waymark-bench" (:value c)))
+        (is (= 1 (:rows c)))
+        (is (= ["open"] (:states c)))
+        (is (= [{:seat "builder" :admits ["ckopsa/waymark"]}] (:seats_considered c)))
+        (is (re-find #"ckopsa/waymark-bench" (:what_would_close_it c)))))
+    (testing "a second seat whose walk admits the repo clears it"
+      (is (empty? (unwalked [builder (walker "bench" {:repo "ckopsa/waymark-bench"})]))))
+    (testing "a walk that does not filter on the field admits every value"
+      (is (empty? (unwalked [builder (walker "any" {:state "open"})]))))
+    (testing "with no rows read there is nothing to report"
+      (is (empty? (filter #(= "unwalked_value" (:crack %))
+                          (cracks/audit [ticket] [builder])))))))
 
 ;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
 ;; two ways a ticket does: a blocker's ending releases it whichever way

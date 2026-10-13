@@ -1187,9 +1187,10 @@
 
 (defn- cracks-doc
   "GET /api/-/cracks?kind=ticket — the states no active seat can
-  leave, the ones no seat is woken to, and the remedies no seat holds
-  (waymark10.server.cracks), projected by `cracks-for`; anonymous gets
-  the concealment 404."
+  leave, the ones no seat is woken to, the remedies no seat holds, the
+  ones only a person can leave with nothing telling them, and the row
+  values no seat's walk admits (waymark10.server.cracks), projected by
+  `cracks-for`; anonymous gets the concealment 404."
   [eng]
   (fn [req]
     (if-let [doc (cracks-for eng (router/principal-of req)
