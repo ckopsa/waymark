@@ -2099,28 +2099,76 @@
                 "a change, so no round could end it and it never opened "
                 "a pull request (ticket 2db85f7b)")})))))
 
+;; ── a code seat's abandoned change is closed (ticket f1deff20) ───────
+;;
+;; A code seat begins a change, then its ticket goes back to draft and
+;; the change stands open: no pull request, no round, nothing in the
+;; worktree. The same sweep closes it once its ticket has stood out of
+;; the queue for a day, so an ungroom that is restated and groomed again
+;; keeps its change. A change born from a task, or from no row, has no
+;; queue to come back to and is closed at once. The ticket is not moved.
+
+(def ^:private abandoned-window-ms
+  "How long a ticket stands in draft, done or dropped before its
+  unbuilt change is closed: one day."
+  (* 24 60 60 1000))
+
+(defn- abandoned-reason
+  "Why this unbuilt change is abandoned, or nil when it is not."
+  [eng row ^Instant now]
+  (let [born (some-> (get-in row [:data :born_from]) str not-empty)]
+    (if-some [tid (ticket-of row)]
+      (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
+        (let [state (#{:draft :done :dropped} (state-of t))
+              at (:updated-at t)]
+          (when (and state
+                     (instance? Instant at)
+                     (> (- (.toEpochMilli now) (.toEpochMilli ^Instant at))
+                        (long abandoned-window-ms)))
+            (str "its ticket " tid " has stood " (name state)
+                 " for more than a day"))))
+      (cond
+        (nil? born) "it was born from no row"
+        (str/starts-with? born "task:") "it was born from a task"))))
+
+(defn- abandoned-change-close
+  "The `supersede` input closing an open change with no pull request,
+  no round and nothing in its worktree that is abandoned, else nil."
+  [eng row ^Instant now]
+  (when (and (= :open (state-of row))
+             (nil? (get-in row [:data :number]))
+             (zero? (long (or (get-in row [:data :rounds]) 0)))
+             (zero? (long (or (get-in row [:data :worktree_dirty]) 0))))
+    (when-some [reason (abandoned-reason eng row now)]
+      {:superseded_by
+       (str "closed: " reason ", and this change has no pull request, "
+            "no round and nothing in its worktree (ticket f1deff20)")})))
+
 (defn sweep-reader-changes!
   "Closes every open change with no pull request that a seat which is
-  not a code seat was minted (ticket 2db85f7b), and moves no ticket.
-  The boot runs it and so does every pass. → how many it closed."
-  [eng log-fn]
-  (let [closed (reduce
-                (fn [n row]
-                  (if-some [input (reader-change-close eng row)]
-                    (try
-                      (inv/invoke! eng :change (str (:id row)) :supersede input
-                                   (as-opts))
-                      (inc (long n))
-                      (catch Exception e
-                        (log-fn "the reader's change " (:id row)
-                                " was not closed (" (ex-message e) ")")
-                        n))
-                    n))
-                0
-                (rows-by eng :change {:state "open"} failing-scan-limit))]
-    (when (pos? (long closed))
-      (log-fn closed " changes of seats that only read were closed"))
-    closed))
+  not a code seat was minted (ticket 2db85f7b), and every abandoned one
+  as of `now` (ticket f1deff20), and moves no ticket. The boot runs it
+  and so does every pass. → how many it closed."
+  ([eng log-fn] (sweep-reader-changes! eng log-fn (Instant/now)))
+  ([eng log-fn ^Instant now]
+   (let [closed (reduce
+                 (fn [n row]
+                   (if-some [input (or (reader-change-close eng row)
+                                       (abandoned-change-close eng row now))]
+                     (try
+                       (inv/invoke! eng :change (str (:id row)) :supersede input
+                                    (as-opts))
+                       (inc (long n))
+                       (catch Exception e
+                         (log-fn "the change " (:id row)
+                                 " was not closed (" (ex-message e) ")")
+                         n))
+                     n))
+                 0
+                 (rows-by eng :change {:state "open"} failing-scan-limit))]
+     (when (pos? (long closed))
+       (log-fn closed " changes no seat could end were closed"))
+     closed)))
 
 (defn- sweep-at-boot!
   "The sweep, on the first beat that has an engine. → true once it has
