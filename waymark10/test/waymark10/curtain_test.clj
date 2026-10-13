@@ -367,6 +367,51 @@
         (intents/stop! reg)
         (curtain/stop! cur)))))
 
+;; ── an intent frame names the member, not the credential ────────────
+
+(deftest an-intent-frame-names-the-member
+  ;; gate! carries a member row's roles onto the principal and nothing
+  ;; else, so a principal that arrives with no display (the dev
+  ;; headers, a token that names none) must still be named on the card
+  ;; by the row it resolves to — as actor and as answerer.
+  (let [eng (eng!)
+        _ (member! eng "ada" "Maya Okafor" "human")
+        _ (member! eng "elena" "Elena" "human")
+        cur (curtain/start! eng {:ttl-ms 0})
+        reg (intents/start! eng {:hb-ms 60000 :curtain cur})
+        sub (intents/subscribe reg nil)
+        ada (t/principal {:id "ada"})
+        ask {:self "/api/members/elena" :action "set_display"
+             :question "Rename Elena?"}]
+    (try
+      (testing "an unnamed principal's card carries its member's display"
+        (intents/report! reg ada ask)
+        (let [f (next-intent sub #(and (= "open" (:event %))
+                                       (= "ada" (get-in % [:principal :id]))))]
+          (is (some? f))
+          (is (= "Maya Okafor" (get-in f [:principal :display])))))
+
+      (testing "and so does the answer's :by"
+        (intents/answer! reg (t/principal {:id "elena"})
+                         {:id (intents/intent-id ada (:self ask) (:action ask))}
+                         nil)
+        (let [f (next-intent sub #(= "answered" (:status %)))]
+          (is (some? f))
+          (is (= "elena" (get-in f [:answer :by :id])))
+          (is (= "Elena" (get-in f [:answer :by :display])))))
+
+      (testing "a principal no member row answers to keeps its id"
+        (intents/report! reg (t/principal {:id "ghost"})
+                         {:self "/api/members/elena" :action "set_display"})
+        (let [f (next-intent sub #(and (= "open" (:event %))
+                                       (= "ghost" (get-in % [:principal :id]))))]
+          (is (some? f))
+          (is (= "ghost" (get-in f [:principal :display])))))
+      (finally
+        (intents/unsubscribe reg sub)
+        (intents/stop! reg)
+        (curtain/stop! cur)))))
+
 ;; ── the invalidation wire: no TTL sleep anywhere in this test ───────
 
 (deftest a-committed-draw-invalidates-at-once
