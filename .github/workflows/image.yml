@@ -149,11 +149,33 @@ jobs:
           tags: |
             type=raw,value=${{ steps.tag.outputs.sha }}-${{ matrix.arch }}
 
+      # The base image comes from Google's mirror of Docker Hub, for the
+      # builder's reason: the Dockerfile's default, public.ecr.aws, also
+      # limits anonymous pulls by runner IP, and its 429 reddened these
+      # legs before any build step ran. The house registry is out of a
+      # hosted runner's reach, and an ECR login would need an AWS secret
+      # in a public repo. The mirror caches what is asked of it and may
+      # not hold this tag yet, so the step asks first and falls back to
+      # the Dockerfile's default with a warning, never to a red leg.
+      - name: Base image
+        id: base
+        env:
+          TAG: clojure:temurin-21-tools-deps-bookworm-slim
+        run: |
+          base="mirror.gcr.io/library/$TAG"
+          if ! docker buildx imagetools inspect "$base" >/dev/null; then
+            echo "::warning::$base did not answer; the base image comes from public.ecr.aws"
+            base="public.ecr.aws/docker/library/$TAG"
+          fi
+          echo "image=$base" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.workqueue10
+          build-args: |
+            BASE=${{ steps.base.outputs.image }}
           platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

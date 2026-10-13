@@ -2,7 +2,11 @@
 # Build:  make image-queue   (buildx arm64 → docker.kopsa.info/workqueue10:<tag>)
 # The base is Docker Hub's library image, from the ECR Public mirror:
 # an anonymous pull from Docker Hub is rate limited, and CI has none.
-FROM public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
+# BASE is an argument because ECR Public limits anonymous pulls by IP
+# too, and a hosted runner shares its IP: image.yml names the same
+# image on another mirror. A laptop build keeps this default.
+ARG BASE=public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
+FROM ${BASE}
 
 WORKDIR /app
 
