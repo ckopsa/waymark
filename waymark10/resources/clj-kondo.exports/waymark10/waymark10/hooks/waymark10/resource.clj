@@ -24,6 +24,7 @@
     :on-create :mirror :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
+    :waits
     :scenarios})
 
 (def action-keys
