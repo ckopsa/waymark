@@ -1950,6 +1950,17 @@
            {:on :merge_after :awaits :ticket :in #{:in_review}
             :restated-by [:merge_after_in_review]
             :outcomes {:done :release :dropped :nothing}}]
+   ;; THE EXITS NO SEAT TAKES AT A TICKET DOOR (ticket 071c563c), so
+   ;; the cracks audit does not report a working state as one nobody
+   ;; leaves. The seat that builds holds `change.submit`, and that
+   ;; door walks `review` here. The merge walks `land`, and the forge's
+   ;; mirror makes that transition. The last blocker's ending walks
+   ;; `unblock` or `return_to_draft` (`release-the-waiters!`).
+   :left-by [{:in #{:open} :by {:kind :change :action :submit}
+              :via :review :to :in_review}
+             {:in #{:in_review} :by :mirror :via :land :to :done}
+             {:in #{:blocked} :by :wait :via :unblock :to :open}
+             {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}
