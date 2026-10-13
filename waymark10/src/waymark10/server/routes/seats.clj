@@ -70,6 +70,7 @@
     to read, and the honest fix is a shorter `since`, not a longer
     page."
   (:require [clojure.string :as str]
+            [waymark10.server.cracks :as cracks]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -1167,9 +1168,35 @@
                  renewed (assoc :next_token (:token renewed)
                                 :next_expires_at (:expires_at renewed)))))))))
 
+(defn- cracks-doc
+  "GET /api/-/cracks?kind=ticket — the states no active seat can
+  leave, the ones no seat is woken to, and the remedies no seat holds
+  (waymark10.server.cracks). A person reads every kind; a scoped
+  caller reads the kinds its grant sees whole, as the seasons door
+  projects; anonymous gets the concealment 404."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (let [vis (router/visibility-of req)
+            whole-kind? (:whole-kind? vis)]
+        (router/json-response
+         200
+         (cracks/report eng
+                        (cond
+                          (nil? vis) (constantly true)
+                          whole-kind? (comp boolean whole-kind?)
+                          :else (constantly false))
+                        {:kind (some-> (get (router/query-params req) "kind")
+                                       str not-empty)}))))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
+            ["/api/-/cracks" {:get (cracks-doc eng)}]
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
             [transcript-path {:post (sitting-transcript eng)}]
