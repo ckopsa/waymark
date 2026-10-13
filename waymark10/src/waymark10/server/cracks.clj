@@ -13,9 +13,14 @@
                  leaves the state as one that holds a door here does,
                  and a state a source leaves (the mirror, the sweep, a
                  wait's ending) needs no seat and is no crack
+  cadence_only   seats can leave it, and none of them has a wake_on
+                 entry on a transition into the state: a row waits
+                 for the shortest cadence among them
+  person_only    no wake_on and no cadence: the only seats that can
+                 leave it are interactive, so a row waits for a
+                 person to sit
   unwoken        seats can leave it, and nothing brings one of them
-                 there: no wake_on entry on a transition into the
-                 state, no walk whose filter admits it, no cadence
+                 there: no wake_on entry, no cadence, no person
   remedy_unheld  a guard's remedy names a door no active seat holds
   dead_wait      the kind declares a wait (`:waits`) one of whose
                  outcomes does nothing to the row that waits, and no
@@ -34,12 +39,17 @@
                  kind filters on, and no active seat's walk filter
                  admits (ticket 53e55720, part 4)
 
-  The first five read what is DECLARED, never the rows of the audited
-  kinds: a crack there is a state a row could sit in, not a row that
-  does. `unwalked_value` alone reads rows, and only the ones `report`
-  hands it. `audit` is pure over (declarations, seat rows, world) so a
-  test, and the gate a later ticket adds, judge it with no engine at
-  all.
+  Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
+  which rows a seat is handed, not what brings it, so a walk alone
+  counts for nothing here; the wake_on a walk seat is given when it
+  wrote none (`seats/effective-wake-on`) is a wake_on and counts.
+
+  All but the last read what is DECLARED, never the rows of the
+  audited kinds: a crack there is a state a row could sit in, not a
+  row that does. `unwalked_value` alone reads rows, and only the ones
+  `report` hands it. `audit` is pure over (declarations, seat rows,
+  world) so a test, and the gate in factory10's cracks_gate_test,
+  judge it with no engine at all.
 
   A filter is read for ONE thing, its `state` entry: an entry that
   names states admits those and no other, and an entry that names
@@ -151,11 +161,11 @@
 (defn- wakes-of
   "What brings this seat to a row in `state` of the kind, as the words
   the answer prints: interactive (a person sits in it), cadence,
-  wake_on, walk. Empty is a seat nothing wakes for this state."
+  wake_on. Empty is a seat nothing brings to this state. Of the three
+  only wake_on is a wake; `state-cracks` grades the other two."
   [seat rdef state scope-filters walk-rdef]
   (let [kind (text (:kind rdef))
-        into-state (arrivals rdef state)
-        walk (some-> (get-in seat [:data :walk]) str not-empty)]
+        into-state (arrivals rdef state)]
     (cond-> []
       (seats/interactive-seat? seat) (conj "interactive")
       (some? (get-in seat [:data :cadence_seconds])) (conj "cadence")
@@ -165,12 +175,12 @@
                    (admits-state? (:filter e) state)
                    (no-narrower? (:filter e) scope-filters)))
             (seats/effective-wake-on seat walk-rdef))
-      (conj "wake_on")
-      (and (= kind walk) (admits-state? (seats/walk-filter seat) state))
-      (conj "walk"))))
+      (conj "wake_on"))))
 
 (defn- state-cracks
-  "no_exit and unwoken, for one kind."
+  "no_exit, cadence_only, person_only and unwoken, for one kind. A
+  state one of its leavers has a wake_on entry for is clean; what is
+  left is graded by the best thing that still brings a seat there."
   [rdef seat-rows by-kind]
   (let [kind (text (:kind rdef))
         terminal (set (:terminal rdef))
@@ -200,7 +210,17 @@
                              {:seat (seat-name (:seat l))
                               :holds (:holds l)
                               :wakes (wakes-of (:seat l) rdef state (:filters l)
-                                               (walk-rdef (:seat l)))})]
+                                               (walk-rdef (:seat l)))})
+                wakes (into #{} (mapcat :wakes) considered)
+                cadences (for [l leavers
+                               :let [c (get-in (:seat l) [:data :cadence_seconds])]
+                               :when (number? c)]
+                           c)
+                shortest (when (seq cadences) (apply min cadences))
+                wake-it (str "Give one of these seats a wake_on entry on " kind
+                             " naming one of: "
+                             (str/join ", " (sort (arrivals rdef state)))
+                             " (with a filter no narrower than its scope filter).")]
           crack (cond
                   (empty? leavers)
                   [{:kind kind :state (text state) :crack "no_exit"
@@ -223,16 +243,34 @@
                             ", which " kind " declares moves its rows out of "
                             (text state) ".")))}]
 
-                  (every? (comp empty? :wakes) considered)
-                  [{:kind kind :state (text state) :crack "unwoken"
+                  (contains? wakes "wake_on")
+                  nil
+
+                  (contains? wakes "cadence")
+                  [(cond-> {:kind kind :state (text state) :crack "cadence_only"
+                            :seats_considered (vec considered)
+                            :what_would_close_it
+                            (str "A row here waits for a cadence"
+                                 (when shortest
+                                   (str ", the shortest every " shortest " seconds"))
+                                 ". " wake-it)}
+                     shortest (assoc :shortest_cadence_seconds shortest))]
+
+                  (contains? wakes "interactive")
+                  [{:kind kind :state (text state) :crack "person_only"
                     :seats_considered (vec considered)
                     :what_would_close_it
-                    (str "Give one of these seats a wake_on entry on " kind
-                         " naming one of: "
-                         (str/join ", " (sort (arrivals rdef state)))
-                         " (with a filter no narrower than its scope filter)"
-                         ", a walk over " kind " whose filter admits "
-                         (text state) ", or a cadence.")}])]
+                    (str "A row here waits for a person to sit. Give a seat that"
+                         " is not interactive a scope entry on " kind
+                         " that holds one of: "
+                         (str/join ", " (map (comp text :name) out))
+                         ", and a wake_on entry naming one of: "
+                         (str/join ", " (sort (arrivals rdef state))) ".")}]
+
+                  :else
+                  [{:kind kind :state (text state) :crack "unwoken"
+                    :seats_considered (vec considered)
+                    :what_would_close_it wake-it}])]
       crack)))
 
 (defn- remedy-cracks
