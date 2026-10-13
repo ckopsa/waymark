@@ -179,7 +179,7 @@
              :scheduled-actions
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
-             :schedules-mirror :schedules-drift :wakes :judgments
+             :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
              :curtain :presence :intents}
            (runtime/surfaces *eng*)))
     (is (nil? (runtime/surface *eng* :discovery))

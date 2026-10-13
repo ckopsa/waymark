@@ -422,7 +422,8 @@
             ;; the wake consumer (R-12.22) on :dispatcher again
             ;; …and the fourth (waymark-fp62.11): the consequence
             ;; consumer, on :dispatcher like the wake's
-            :schedules-mirror :schedules-drift :wakes :judgments
+            ;; …and the fifth (ticket 26e51658): the live cracks pass
+            :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
             :curtain :presence :intents
             :discovery
             ;; the belief module's one surface: :belief-sweeper
