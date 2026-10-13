@@ -399,3 +399,65 @@
         (is (= "refused" (:outcome c)))))
     (testing "a seat woken by the refusal clears it"
       (is (empty? (dead [(seat "caller" {:wake_on [{:kind "hold" :actions ["refuse"]}]})]))))))
+
+;; ticket 071c563c: a kind says which of its states another kind's door,
+;; or a source with no seat, moves a row out of.
+(def ^:private ticket
+  {:kind :ticket
+   :states [:open :in_review :blocked :done]
+   :initial :open
+   :terminal #{:done}
+   :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
+            :outcomes {:done :release}}]
+   :left-by [{:in #{:open} :by {:kind :change :action :submit}
+              :via :review :to :in_review}
+             {:in #{:in_review} :by :mirror :via :land :to :done}
+             {:in #{:blocked} :by :wait :via :unblock :to :open}]
+   :actions {:block {:from #{:open} :to :blocked}
+             :unblock {:from #{:blocked} :to :open}
+             :review {:from #{:open} :to :in_review}
+             :land {:from #{:in_review} :to :done}}})
+
+(def ^:private change
+  {:kind :change
+   :states [:open :submitted]
+   :initial :open
+   :terminal #{:submitted}
+   :actions {:submit {:from #{:open} :to :submitted}}})
+
+(defn- ticket-cracks [ticket seats]
+  (filterv #(= "ticket" (:kind %)) (cracks/audit [ticket change] seats)))
+
+(deftest a-state-another-kinds-door-leaves-is-no-crack
+  (let [scope [{:kind "change" :actions ["submit"]}]
+        code (seat "code" {:scope scope :cadence_seconds 3600})]
+    (testing "the code seat holds change.submit and no ticket door"
+      (let [cracks (ticket-cracks ticket [code])]
+        (is (empty? (of cracks "no_exit" "open")))
+        (is (empty? (of cracks "unwoken" "open")))))
+    (testing "with nothing to wake it, it is unwoken as a direct holder is"
+      (let [[c] (of (ticket-cracks ticket [(seat "code" {:scope scope})])
+                    "unwoken" "open")]
+        (is (= [{:seat "code" :holds ["change/submit"] :wakes []}]
+               (:seats_considered c)))))
+    (testing "a wake_on entry on the ticket wakes it, whatever its filter"
+      (let [woken (seat "code" {:scope scope
+                                :wake_on [{:kind "ticket" :actions ["create"]
+                                           :filter {:repo "a"}}]})]
+        (is (empty? (of (ticket-cracks ticket [woken]) "unwoken" "open")))))
+    (testing "no seat holds either door, and the crack names both"
+      (let [[c] (of (ticket-cracks ticket []) "no_exit" "open")]
+        (is (re-find #"review" (:what_would_close_it c)))
+        (is (re-find #"change/submit" (:what_would_close_it c)))))
+    (testing "removing the declaration brings the crack back"
+      (is (seq (of (ticket-cracks (dissoc ticket :left-by) [code])
+                   "no_exit" "open"))))))
+
+(deftest a-state-a-source-leaves-needs-no-seat
+  (testing "the mirror's land leaves in_review, and a wait's ending blocked"
+    (is (= #{"open"}
+           (into #{} (map :state) (ticket-cracks ticket [])))))
+  (testing "removing the declaration brings both back"
+    (is (= #{"open" "in_review" "blocked"}
+           (into #{} (comp (filter #(= "no_exit" (:crack %))) (map :state))
+                 (ticket-cracks (dissoc ticket :left-by) []))))))
