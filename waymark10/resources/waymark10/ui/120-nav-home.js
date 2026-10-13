@@ -294,6 +294,30 @@ async function renderHome(view, seq) {
         }
       }).catch(() => {}));
 
+  /* a walkthrough's offer (docs/spec-walkthrough.md §5): an open one
+     addressed to the viewer is a line here, with the row's own start
+     door. One read, and only where the kind is served; `steps` is asked
+     for by name, since a vector is not on a collection row otherwise.
+     The started row is taken in hand off the firehose (ledFrame,
+     200-events-follow.js). */
+  const walkHref = collectionHref(w, "walkthrough");
+  if (walkHref && viewerId())
+    settling.push(api(mergeParams(walkHref,
+        {state: "open", subject: viewerId(), fields: "author,title,steps"}))
+      .then(({ok, body}) => {
+        if (!ok) return;
+        for (const it of (body.data?.items || [])) {
+          const f = it.fields || {}, n = (f.steps || []).length;
+          const start = (it.actions || {}).start;
+          attention.push(el("div", {class:"item", "data-walk-offer": ""},
+            principalRef(f.author || ""), " wants to walk you through: ",
+            el("a", {href: "#" + it.self}, f.title || "a walkthrough"),
+            ` (${n} ${n === 1 ? "step" : "steps"}) `,
+            start ? actionButton({name: "start", entry: start, doc: it,
+              label: "Start", small: true, onDone: () => render()}) : null));
+        }
+      }).catch(() => {}));
+
   /* seasons (waymark-tti.2): the last weeks as a shape — the rhythm
      door's weekly buckets as one compact line per moving kind (tiny
      text bars scaled off completed counts, no chart machinery), and
