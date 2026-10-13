@@ -25,6 +25,8 @@
     :reason "Done is where a ticket rests; reopen is a person's door."}
    {:kind "ticket" :state "dropped" :crack "person_only"
     :reason "Dropped is where a ticket rests; reopen is a person's door."}
+   {:kind "ticket" :state "in_review" :crack "dead_wait" :on "merge_after" :outcome "dropped"
+    :reason "The law does not yet say what a dropped ticket does to what merges after it; until it does, a person lifts that wait."}
    {:kind "change" :state "submitted" :crack "cadence_only"
     :reason "A submitted change waits on its checks, not on a seat; the code seat's stall there is a door, not its work."}
    {:kind "change" :state "stuck" :crack "person_only"
@@ -41,7 +43,7 @@
 (defn- crack-key
   "What makes a crack the one an entry names."
   [c]
-  (select-keys c [:kind :state :crack :door :remedy]))
+  (select-keys c [:kind :state :crack :door :remedy :on :outcome]))
 
 (defn- unlisted
   "The cracks no entry of `allow` names with a reason."
@@ -55,7 +57,7 @@
 (defn- told
   "A crack as a failure prints it."
   [c]
-  (select-keys c [:kind :state :crack :door :remedy :what_would_close_it]))
+  (select-keys c [:kind :state :crack :door :remedy :on :outcome :what_would_close_it]))
 
 (deftest the-law-and-the-fixture-leave-no-unlisted-crack
   (let [rdefs (main/resources)
@@ -68,7 +70,8 @@
                       allowlist))))
     (testing "a ticket a seat is woken to is clean"
       (is (empty? (filter #(and (= "ticket" (:kind %))
-                                (contains? #{"open" "in_review"} (:state %)))
+                                (contains? #{"open" "in_review"} (:state %))
+                                (not= "dead_wait" (:crack %)))
                           cracks))))))
 
 (deftest removing-the-groom-wake-fails-the-gate
