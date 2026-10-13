@@ -1001,7 +1001,12 @@
   "A red train looks for its red: the front half of its changes (at
   least one) rides again, and the rest go back to the line for the next
   train. A change red alone on a train goes back to its seat as a red
-  head does (`:train-red!` in `ctx`, change id and why). At most
+  head does (`:train-red!` in `ctx`, change id and why) — unless its
+  head moved since the train was built (`seen` keeps the riders' heads
+  under `[:train-heads repo]`, and `:head-of` in `ctx` reads the head
+  now): the train judged a head the change no longer has, so the change
+  stays in the line and its new head rides the next train (ticket
+  e23f8842). At most
   log2(n)+1 trains per train of n, then the line goes one at a time.
   → the train that stands after it."
   [ctx seen repo policy train]
@@ -1010,12 +1015,21 @@
         tries (inc (long (or (:tries train) 1)))]
     (cond
       (= 1 (count riders))
-      (let [id (str (:id (first riders)))]
+      (let [id (str (:id (first riders)))
+            judged (some-> (get-in @seen [[:train-heads repo] id]) str not-empty)
+            now (when-some [head-of (:head-of ctx)]
+                  (some-> (head-of id) str not-empty))]
         (warn! repo ": " id " is red alone on the train " (:branch train))
-        (if-some [red! (:train-red! ctx)]
-          (red! id (str "The merge train " (:branch train)
-                        " went red with this change alone on it."))
-          (warn! "no hand marks " id " red this pass"))
+        (cond
+          (and judged now (not= judged now))
+          (warn! repo ": the train " (:branch train) " judged " judged
+                 " and " id " is at " now " now; its new head rides again")
+
+          (:train-red! ctx)
+          ((:train-red! ctx) id (str "The merge train " (:branch train)
+                                     " went red with this change alone on it."))
+
+          :else (warn! "no hand marks " id " red this pass"))
         (ask ctx :train_delete {:repo repo :branch (:branch train)})
         nil)
 
@@ -1159,7 +1173,15 @@
            train (swap! trains assoc repo
                         (advance-train! (assoc ctx :answers answers)
                                         seen repo policy train))
-           built (swap! trains assoc repo built)
+           ;; the heads the riders had when the train was built, so its
+           ;; red is not written on a head it did not test (e23f8842)
+           built (do (swap! seen assoc [:train-heads repo]
+                            (into {}
+                                  (map (fn [c]
+                                         [(str (:id c))
+                                          (str (get-in c [:data :head_sha]))]))
+                                  riders))
+                     (swap! trains assoc repo built))
            (and front (or (behind? (get @answers id))
                           (stale-waiting? front (get @answers id))))
            (update-behind! ctx seen front id
@@ -1777,7 +1799,11 @@
         answers (atom {})
         trains (atom {})
         asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
-                            :train-red! #(train-red! eng changes by-repo %1 %2)}
+                            :train-red! #(train-red! eng changes by-repo %1 %2)
+                            :head-of (fn [id]
+                                       (some #(when (= id (str (:id %)))
+                                                (get-in % [:data :head_sha]))
+                                             changes))}
                            seen
                            (apply dissoc lines (keys deploy-holds)) by-repo
                            answers trains)

@@ -6,9 +6,19 @@
   own crack. Then (ticket 53e55720) a state only a person can leave
   with nothing telling them, and a row value no seat's walk admits.
   `audit` is pure over declarations, seat rows and the rows it is
-  handed, so the world here is maps and no engine."
-  (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.cracks :as cracks]))
+  handed, so the world there is maps and no engine. The wire tests
+  (ticket 2ffa0f85) read GET /api/-/cracks through the real
+  handler, and the same document on waymark_schema's `cracks`."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
+            [waymark10.server.cracks :as cracks]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:private task
   {:kind :task
@@ -152,6 +162,125 @@
       (let [reopener (seat "reopener" {:scope [{:kind "task" :actions ["reopen"]}]})]
         (is (empty? (filter #(= "remedy_unheld" (:crack %))
                             (cracks/audit [task] [finisher reopener]))))))))
+
+;; ── the wire: anonymity, projection, ?kind= ─────────────────────────
+
+(def ^:private quiet
+  {:idempotent true :reversible false :confirm false
+   :one-way "History keeps the record."})
+
+(def ^:private crack-task
+  ;; granted whole to the agent
+  (r/resource
+   {:kind :crack_task
+    :plural "crack_tasks"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions {:finish {:from #{:open} :to :closed :safety quiet}}}))
+
+(def ^:private crack-chore
+  ;; granted by ids only: not seen whole, so absent
+  (r/resource
+   {:kind :crack_chore
+    :plural "crack_chores"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions {:archive {:from #{:open} :to :done :safety quiet}}}))
+
+(def ^:private crack-memo
+  ;; never granted to the agent
+  (r/resource
+   {:kind :crack_memo
+    :plural "crack_memos"
+    :states [:open :filed]
+    :initial :open
+    :terminal #{:filed}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions {:file {:from #{:open} :to :filed :safety quiet}}}))
+
+(def ^:private elena (t/principal {:id "elena" :display "Elena"}))
+(def ^:private spy (t/principal {:id "spy" :type :agent :display "Spy"}))
+
+(defn- fresh-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [crack-task crack-chore crack-memo]}))
+
+(defn- get-cracks [h headers query-string]
+  (let [resp (h (cond-> {:request-method :get :uri "/api/-/cracks"
+                         :headers headers}
+                  query-string (assoc :query-string query-string)))]
+    (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+
+(defn- kinds-of [parsed]
+  (into #{} (map :kind) (:cracks parsed)))
+
+(deftest the-cracks-route-on-the-wire
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        c1 (get-in (inv/create! eng :crack_chore {:title "ids-narrowed"}
+                                {:principal elena})
+                   [:row :id])
+        gid (get-in (inv/create!
+                     eng :grant
+                     {:audience "spy"
+                      :scope [{:kind "crack_task" :actions []}
+                              {:kind "crack_chore" :ids [c1] :actions []}]}
+                     {:principal elena})
+                    [:row :id])
+        as-spy {"x-waymark-principal" "spy"
+                "x-waymark-actor-type" "agent"
+                "x-waymark-grant" gid}]
+    (inv/invoke! eng :grant gid :accept nil {:principal spy})
+    (testing "anonymous is the concealment 404"
+      (is (= 404 (:status (get-cracks h {} nil)))))
+    (testing "a person reads every kind; with no seat, each open state is a crack"
+      (let [{:keys [status parsed]} (get-cracks
+                                     h {"x-waymark-principal" "elena"} nil)]
+        (is (= 200 status))
+        (is (= "cracks" (:waymark parsed)))
+        (is (= (:total parsed) (count (:cracks parsed))))
+        (is (every? (kinds-of parsed) ["crack_task" "crack_chore" "crack_memo"]))))
+    (testing "a scoped caller: the whole-granted kind present; the
+              ids-narrowed and the ungranted byte-level absent"
+      (let [{:keys [status body parsed]} (get-cracks h as-spy nil)]
+        (is (= 200 status))
+        (is (contains? (kinds-of parsed) "crack_task"))
+        (is (not (str/includes? body "crack_chore")))
+        (is (not (str/includes? body "crack_memo")))))
+    (testing "?kind= narrows the answer to one kind"
+      (let [{:keys [status parsed]} (get-cracks
+                                     h {"x-waymark-principal" "elena"}
+                                     "kind=crack_task")]
+        (is (= 200 status))
+        (is (= 1 (:total parsed)))
+        (is (= {:no_exit 1} (:by_crack parsed)))
+        (is (= [["crack_task" "open" "no_exit"]]
+               (mapv (juxt :kind :state :crack) (:cracks parsed))))))
+    (testing "?kind= does not widen a scoped caller's projection"
+      (let [{:keys [status parsed]} (get-cracks h as-spy "kind=crack_memo")]
+        (is (= 200 status))
+        (is (= 0 (:total parsed)))
+        (is (= [] (:cracks parsed)))))))
+
+(deftest waymark-schema-carries-the-kinds-cracks
+  (let [eng (fresh-engine)
+        out (mcp/call-tool eng (mcp/door eng) {:principal elena}
+                           "waymark_schema" {:kind "crack_task"})
+        doc (wire/read-json (get-in out [:content 0 :text]))
+        route (:parsed (get-cracks (engine/handler eng)
+                                   {"x-waymark-principal" "elena"}
+                                   "kind=crack_task"))]
+    (is (not (:isError out)))
+    (is (= 1 (get-in doc [:cracks :total])))
+    (is (= (dissoc route :waymark) (:cracks doc))
+        "the tool's field is the route's answer for this kind")))
 
 (def ^:private order
   {:kind :order
