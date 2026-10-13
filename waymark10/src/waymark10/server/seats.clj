@@ -2709,12 +2709,14 @@
 
 ;; ── the crack a staffing change opens (ticket 5f3c276c) ─────────────
 ;;
-;; A seat is data: a restate that narrows a scope or drops a wake, and
-;; a park, can leave a state with no seat to move it. The cracks audit
+;; A seat is data: a restate that narrows a scope or drops a wake can
+;; leave a state with no seat to move it. The cracks audit
 ;; (waymark10.server.cracks) is read at the door, over the active seats
 ;; as they stand and as they would stand. A write that adds a crack
-;; stops: a person's own write on a warning the person acknowledges by
-;; its name, and an authoring seat's as a held call for its person.
+;; stops: an authoring seat's restate as a held call for its person,
+;; and a person's create on a warning the person acknowledges by its
+;; name. A person's own restate and the park are not judged here: the
+;; park is the cheap lever, one tap and no confirm.
 
 (defonce ^:private staffing-rule (atom nil))
 
@@ -2767,9 +2769,10 @@
    :open "The cracks are the audit's, read at the write from the law and the active seats; GET /api/-/cracks is the same reading. Acknowledge the warning by its name to accept them."
    :explain "This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} Change the seats so that the state is still left and woken, or acknowledge this warning to accept the crack on purpose."}
   [row inp ctx]
-  ;; a person's own write, and the write of a tool the person is signed
-  ;; in to. An authoring seat's write is held by the guard below, and
-  ;; the replay of that held call is the person's yes.
+  ;; the create door's: a person's own write, and the write of a tool
+  ;; the person is signed in to. An authoring seat's restate is held by
+  ;; the guard below, and the replay of that held call is the person's
+  ;; yes.
   (if (or (delegation/author-seat ctx)
           (delegation/approved-hold? ctx :seat (:id row)))
     (t/allow)
@@ -2784,9 +2787,9 @@
    :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could open a crack alone would leave work with no seat and nobody told."
    :explain "Held for the person's tap. This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
   [row inp ctx]
-  ;; restate and park, from an authoring seat. A seat an author creates
-  ;; is born parked and changes no staffing, so the create door does not
-  ;; carry this guard.
+  ;; the restate door's, from an authoring seat. A seat an author
+  ;; creates is born parked and changes no staffing, so the create door
+  ;; does not carry this guard, and only a person parks.
   (cond
     (nil? (delegation/author-seat ctx)) (t/allow)
     (delegation/approved-hold? ctx :seat (:id row)) (t/allow)
@@ -3675,7 +3678,6 @@
               step-carries-a-note
               budget-fits-the-domain
               delegation/authors-within-the-ceiling
-              opens-no-crack
               a-crack-waits-on-the-person]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
@@ -3687,11 +3689,10 @@
     ;; serves nothing until somebody unparks it.
     :park
     {:from #{:active} :to :parked
-     ;; no delegation guard: a park only takes authority away. The two
-     ;; crack guards read the seat rows (ticket 5f3c276c), since a park
-     ;; can leave a state with no seat, so the two scenarios below are
-     ;; judged by the suite and not by the check tier
-     :guards [a-person opens-no-crack a-crack-waits-on-the-person]
+     ;; no delegation guard: a park only takes authority away, and a
+     ;; wall that read rows here would move the two scenarios below
+     ;; out of the check tier (law_scenarios_test) for nothing
+     :guards [a-person]
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Park" :order 2
                :description "The seat serves nothing and costs nothing; its grants stay, and unpark is one tap"}}

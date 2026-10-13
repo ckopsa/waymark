@@ -236,7 +236,7 @@
         narrowed (vec (replace {fixture/code-seat narrow} seats))
         person {:id "colton" :type :human}
         named #"ticket/open cadence_only: \S"]
-    (testing "a person's narrowing restate is warned, with the crack named"
+    (testing "the warning names the crack a person's narrowing opens"
       (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat
                                   (:data narrow) (door-ctx rdefs seats person))]
         (is denied?)
@@ -244,15 +244,10 @@
       (is (= :warning (:severity seats/opens-no-crack)))
       (is (= [false nil] (judged seats/a-crack-waits-on-the-person fixture/code-seat
                                  (:data narrow) (door-ctx rdefs seats person)))))
-    (testing "a person's widening restate passes"
+    (testing "and a person's widening passes it"
       (is (= [false nil] (judged seats/opens-no-crack narrow
                                  (:data fixture/code-seat)
                                  (door-ctx rdefs narrowed person)))))
-    (testing "a person's park of the seat is warned"
-      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat {}
-                                  (door-ctx rdefs seats person))]
-        (is denied?)
-        (is (re-find #"ticket/open " (str why)) why)))
     (testing "an authoring seat's narrowing restate is held, with the crack named"
       (with-redefs [delegation/author-seat (fn [& _] {:id "mayor" :data {:name "mayor"}})]
         (let [agent (door-ctx rdefs seats {:id "mayor-model" :type :agent :acts-for "colton"})
