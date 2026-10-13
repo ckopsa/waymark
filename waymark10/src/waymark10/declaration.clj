@@ -124,6 +124,13 @@
    ;; leaves it with no seat at all. It moves no row. Never in the
    ;; fingerprint — :waits' precedent
    :left-by
+   ;; the ways INTO a state that are no door of this kind (ticket
+   ;; 4b0460cc): [{:in #{states} :by {:kind <another kind> :action <its
+   ;; door>}}]. The cracks audit reads it beside :left-by: a seat woken
+   ;; on the other kind's door is woken for the state as if it woke on a
+   ;; door here. It moves no row. Never in the fingerprint — :waits'
+   ;; precedent
+   :reached-by
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema

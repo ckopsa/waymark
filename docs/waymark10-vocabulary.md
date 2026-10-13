@@ -330,6 +330,20 @@ reported as neither. Each entry validates at the def site
 (`checks/check-left-by`). Advertisement-class — no fingerprint facet
 names it.
 
+`:reached-by` names a kind's **indirect arrivals**: the ways a row comes
+to a state that are no door of this kind (ticket 4b0460cc):
+
+```clojure
+:reached-by [{:in #{:open} :by {:kind :ticket :action :groom}}]
+```
+
+`:in` is the states reached and `:by` another kind's door. It moves no
+row. `GET /api/-/cracks` reads it: a seat with a wake_on entry on that
+door counts as woken for the state, whatever the entry's filter, which
+speaks of the other kind's fields. Each entry validates at the def site
+(`checks/check-reached-by`). Advertisement-class — no fingerprint facet
+names it.
+
 An action's `:display {:marks "<rel>"}` says that this verb is answered
 about the row's PARTS before it is answered about the row (waymark-wxk),
 and names the **link rel** whose rows those parts are:

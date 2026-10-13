@@ -550,6 +550,30 @@
       (is (seq (of (ticket-cracks (dissoc ticket :left-by) [code])
                    "no_exit" "open"))))))
 
+;; ticket 4b0460cc: a kind says which of its states another kind's door
+;; brings a row to, and a wake on that door is a wake to the state.
+(def ^:private born
+  (assoc change :reached-by [{:in #{:open} :by {:kind :ticket :action :land}}]))
+
+(deftest a-wake-on-the-door-that-brings-a-row-wakes-its-seat
+  (let [code (fn [wake]
+               (seat "code" {:scope [{:kind "change" :actions ["submit"]
+                                      :filter {:repository "a"}}]
+                             :cadence_seconds 3600
+                             :wake_on wake}))
+        open (fn [rdef wake]
+               (into []
+                     (comp (filter #(and (= "change" (:kind %)) (= "open" (:state %))))
+                           (map :crack))
+                     (cracks/audit [ticket rdef] [(code wake)])))]
+    (testing "a wake on the ticket's door wakes it, whatever its filter"
+      (is (= [] (open born [{:kind "ticket" :actions ["land"]
+                             :filter {:state "done" :repo "a"}}]))))
+    (testing "a wake on another door of the ticket does not"
+      (is (= ["cadence_only"] (open born [{:kind "ticket" :actions ["block"]}]))))
+    (testing "removing the declaration brings the crack back"
+      (is (= ["cadence_only"] (open change [{:kind "ticket" :actions ["land"]}]))))))
+
 (deftest a-state-a-source-leaves-needs-no-seat
   (testing "the mirror's land leaves in_review, and a wait's ending blocked"
     (is (= #{"open"}
