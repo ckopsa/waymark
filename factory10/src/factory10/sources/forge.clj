@@ -98,6 +98,7 @@
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store])
   (:import (java.time Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
@@ -2068,6 +2069,59 @@
     (log-fn closed " changes of ended tickets swept")
     closed))
 
+;; ── a reader's change is closed (ticket 2db85f7b) ───────────────────
+;;
+;; Before ticket 7a4a6f9e a sit minted a change for every seat whose
+;; scope named the `change` kind, a seat that only reads it too. Such a
+;; change has no pull request and no seat holds a door that ends it:
+;; `discard` leaves it open, and `close` is GitHub's word. The engine
+;; closes it with its own hand through `supersede`, which moves no
+;; ticket: the ticket is a live draft and stays where it is.
+
+(defn- seat-named
+  "The seat row of this name, decoded, or nil."
+  [eng seat-name]
+  (when-some [rd (get (inv/resources eng) :seat)]
+    (some->> (row-by eng :seat {:name seat-name}) (inv/decode-row rd))))
+
+(defn- reader-change-close
+  "The `supersede` input closing an open change with no pull request
+  whose `author` names a seat that is not a code seat, else nil. An
+  author that names no seat is left: it may be a GitHub login."
+  [eng row]
+  (when (and (= :open (state-of row))
+             (nil? (get-in row [:data :number])))
+    (when-some [author (some-> (get-in row [:data :author]) str not-empty)]
+      (when-some [seat (seat-named eng author)]
+        (when-not (mcp/code-seat? seat)
+          {:superseded_by
+           (str "closed: its author " author " is a seat that only reads "
+                "a change, so no round could end it and it never opened "
+                "a pull request (ticket 2db85f7b)")})))))
+
+(defn sweep-reader-changes!
+  "Closes every open change with no pull request that a seat which is
+  not a code seat was minted (ticket 2db85f7b), and moves no ticket.
+  The boot runs it and so does every pass. → how many it closed."
+  [eng log-fn]
+  (let [closed (reduce
+                (fn [n row]
+                  (if-some [input (reader-change-close eng row)]
+                    (try
+                      (inv/invoke! eng :change (str (:id row)) :supersede input
+                                   (as-opts))
+                      (inc (long n))
+                      (catch Exception e
+                        (log-fn "the reader's change " (:id row)
+                                " was not closed (" (ex-message e) ")")
+                        n))
+                    n))
+                0
+                (rows-by eng :change {:state "open"} failing-scan-limit))]
+    (when (pos? (long closed))
+      (log-fn closed " changes of seats that only read were closed"))
+    closed))
+
 (defn- sweep-at-boot!
   "The sweep, on the first beat that has an engine. → true once it has
   run, whatever it closed or refused."
@@ -2076,6 +2130,10 @@
     (do (try (sweep-ended-tickets! eng (or log-fn warn!))
              (catch Exception e
                (warn! "the sweep of ended tickets failed (" (ex-message e) ")")))
+        (try (sweep-reader-changes! eng (or log-fn warn!))
+             (catch Exception e
+               (warn! "the sweep of readers' changes failed (" (ex-message e)
+                      ")")))
         true)
     false))
 
@@ -2996,7 +3054,8 @@
                                           log-fn)
                     census (staleness-pass! eng source read-checks census
                                             log-fn)
-                    census (adoption-note-pass! eng source census log-fn)]
+                    census (adoption-note-pass! eng source census log-fn)
+                    _ (sweep-reader-changes! eng log-fn)]
                 [census nil])
               (catch Exception e [census e])))
           ;; a pass that was held or threw before its rows were written

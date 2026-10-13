@@ -3851,6 +3851,51 @@
     (is (= 0 (forge/sweep-ended-tickets! eng (fn [& _])))
         "a second sweep finds nothing")))
 
+(deftest the-sweep-closes-a-readers-change-and-leaves-its-draft-ticket
+  (testing "a seat that only reads the change kind"
+    (let [st (state)
+          eng (fresh-engine st)
+          w {:eng eng}
+          _ (a-policy! eng {})
+          ticket (:row (inv/create! eng :ticket
+                                    {:title "Judge this draft"
+                                     :type "feature"
+                                     :repo a-repository}
+                                    {:principal person}))
+          _ (open-seat! eng {:name "draft-judge"
+                             :scope [{:kind "ticket" :actions ["groom"]}
+                                     {:kind "change" :actions []}]
+                             :walk "ticket"})
+          minted (fn [author branch]
+                   (:row (inv/create! eng :change
+                                      (cond-> {:change_id (str "ticket:" branch)
+                                               :repository a-repository
+                                               :head_branch (str "bench/" branch)
+                                               :born_from (str "ticket:" (:id ticket))}
+                                        author (assoc :author author))
+                                      {:principal mirror/source-principal})))
+          readers (minted "draft-judge" (str (:id ticket)))
+          unknown (minted "ckopsa" "a-login")
+          unsigned (minted nil "no-author")]
+      (is (= 1 (forge/sweep-reader-changes! eng (fn [& _]))))
+      (is (= "closed" (name (:state (change-by-id w (:id readers))))))
+      (is (str/includes? (str (get-in (change-by-id w (:id readers))
+                                      [:data :superseded_by]))
+                         "draft-judge")
+          "the reason names the seat and the rule")
+      (is (= "draft" (name (:state (ticket-by-id w (str (:id ticket))))))
+          "its ticket is a live draft and is not moved")
+      (is (= "open" (name (:state (change-by-id w (:id unknown)))))
+          "an author that names no seat is left")
+      (is (= "open" (name (:state (change-by-id w (:id unsigned))))))
+      (is (= 0 (forge/sweep-reader-changes! eng (fn [& _])))
+          "a second sweep finds nothing")))
+  (testing "a code seat's change is left"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])]
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "open" (name (:state (change-by-id w change-id))))))))
+
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
