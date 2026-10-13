@@ -272,6 +272,21 @@
     (is (str/includes? body "function walkthroughSteps(doc)"))
     (is (str/includes? body "data-walk-steps"))))
 
+(deftest ui-home-offers-an-open-walkthrough
+  ;; docs/spec-walkthrough.md §5, the offer: Home reads the viewer's open
+  ;; walkthroughs one time, only where the kind is served, and draws one
+  ;; line per offer with the author, the title, the step count and the
+  ;; row's own start door
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "const walkHref = collectionHref(w, \"walkthrough\");"))
+    (is (str/includes? body "if (walkHref && viewerId())"))
+    (is (str/includes? body "{state: \"open\", subject: viewerId(), fields: \"author,title,steps\"}"))
+    (is (str/includes? body "data-walk-offer"))
+    (is (str/includes? body "principalRef(f.author || \"\"), \" wants to walk you through: \""))
+    (is (str/includes? body "` (${n} ${n === 1 ? \"step\" : \"steps\"}) `"))
+    (is (str/includes? body "const start = (it.actions || {}).start;"))
+    (is (str/includes? body "start ? actionButton({name: \"start\", entry: start, doc: it,"))))
+
 (deftest ui-start-follows-the-author-in-guided-mode
   ;; docs/spec-walkthrough.md §5, watching an agent step: the person's own
   ;; Start or Resume, heard on the firehose, follows the author in guided

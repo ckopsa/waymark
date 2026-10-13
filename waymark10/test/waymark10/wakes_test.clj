@@ -3949,3 +3949,62 @@
         (is (empty? (seat-fires seat)) "nor does the tick fire it later")
         (is (empty? (fires-of token)))
         (seat-do! seat :retire)))))
+
+;; ── a row another seat's open sitting moved into the walk ───────────
+;;
+;; Ticket 2885ad6e. A seat that grooms drafts and a seat that works the
+;; groomed rows walk ONE kind under two filters. The groomer's sitting
+;; was handed the draft, and its door moved the row into the worker's
+;; walk while that sitting was still open. The hold of another seat's
+;; open sitting (ticket 40d8f04c) outlived the move, so the worker's
+;; walk was counted without the row, and the wake the move earned read
+;; `empty_walk` and was dropped.
+
+(deftest a-row-another-seats-open-sitting-moved-into-the-walk-fires
+  (let [wn :wake-groomed-in
+        fn' :wake-groomed-in-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        groomer (seat! "memogroomer"
+                       {:walk "wake_memo"
+                        :scope [{:kind "wake_memo" :actions ["send"]
+                                 :filter {:state "draft"}}]})
+        {:keys [seat token]}
+        (linked-seat! "memoworker"
+                      {:walk "wake_memo"
+                       :scope [{:kind "wake_memo" :actions ["recall"]
+                                :filter {:state "sent"}}]}
+                      fn')
+        seat-row #(raw :seat seat)
+        held? #(contains? (seats/unwalkable-rows *eng* (seat-row) nil) (str %))
+        memo-id (memo! "a memo the groomer sends")
+        grooming (sitting! groomer)
+        _ (seats/claim-rows! *eng* grooming [(str memo-id)])]
+
+    (testing "a draft in the groomer's hands is held from the worker"
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (held? memo-id)))
+
+    (testing "the send ends the hold, though the groomer's sitting is open"
+      (memo-do! memo-id :send)
+      (is (not (held? memo-id)))
+      (is (pos? (long (#'wakes/walk-count *eng* (seat-row)))))
+      (is (false? (#'wakes/empty-walk? *eng* (seat-row)))))
+
+    (testing "and the wake the send earned fires, naming the row"
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (drain-fires! fn')
+      (is (= 1 (count (fires-of token))))
+      (is (str/includes? (str (:text (last (fires-of token)))) (str memo-id))))
+
+    (testing "the worker's sit takes the row the count counted"
+      (let [working (sitting! seat)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat working [(str memo-id)]))))
+        (close-sitting! working)))
+
+    (close-sitting! grooming)
+    (seat-do! seat :retire)
+    (seat-do! groomer :retire)))
