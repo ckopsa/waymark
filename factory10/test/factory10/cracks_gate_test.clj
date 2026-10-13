@@ -19,28 +19,18 @@
     :reason "A person grooms a draft into the queue: that judgment is theirs."}
    {:kind "ticket" :state "deferred" :crack "person_only"
     :reason "A person deferred it, and a person resumes it."}
-   {:kind "ticket" :state "done" :crack "person_only"
-    :reason "Done is where a ticket rests; reopen is a person's door."}
-   {:kind "ticket" :state "dropped" :crack "person_only"
-    :reason "Dropped is where a ticket rests; reopen is a person's door."}
    {:kind "ticket" :state "in_review" :crack "dead_wait" :on "merge_after" :outcome "dropped"
     :reason "The law does not yet say what a dropped ticket does to what merges after it; until it does, a person lifts that wait."}
    {:kind "change" :state "submitted" :crack "cadence_only"
     :reason "A submitted change waits on its checks, not on a seat; the code seat's stall there is a door, not its work."}
    {:kind "change" :state "stuck" :crack "person_only"
     :reason "A person reads every stall."}
-   {:kind "change" :state "closed" :crack "person_only"
-    :reason "Closed is where a change rests; reopen is a person's door."}
    {:kind "ci_run" :state "classified" :crack "person_only"
     :reason "Classified is where a run rests; reclassify is a person overruling the label."}
    {:kind "repo_policy" :state "active" :crack "person_only"
     :reason "The policy is a person's form: only a person retires it."}
    {:kind "repo_policy" :state "retired" :crack "person_only"
     :reason "The policy is a person's form: only a person restores it."}
-   {:kind "ticket" :state "done" :crack "silent_person_exit"
-    :reason "Done is where a ticket rests: nobody is owed a telling that reopen is there."}
-   {:kind "ticket" :state "dropped" :crack "silent_person_exit"
-    :reason "Dropped is where a ticket rests: nobody is owed a telling that reopen is there."}
    {:kind "ci_run" :state "classified" :crack "silent_person_exit"
     :reason "Classified is where a run rests: reclassify is for the person who already doubts the label."}
    {:kind "repo_policy" :state "active" :crack "silent_person_exit"
@@ -108,3 +98,47 @@
     (is (nil? more))
     (is (= [["mayor" ["interactive"]]]
            (map (juxt :seat :wakes) (:seats_considered draft))))))
+
+(deftest an-ending-left-by-reopen-alone-is-no-crack
+  (let [rdefs (main/resources)
+        cracks (cracks/audit rdefs (fixture/seats rdefs))]
+    (doseq [[kind state] [["ticket" "done"] ["ticket" "dropped"] ["change" "closed"]]]
+      (testing (str kind "/" state " is where a row rests")
+        (is (= [] (into []
+                        (comp (filter #(and (= kind (:kind %)) (= state (:state %))))
+                              (map told))
+                        cracks)))))))
+
+(defn- repo-seat
+  "The code seat, woken on its changes in one repository alone."
+  [name repo]
+  (-> fixture/code-seat
+      (assoc :id name)
+      (assoc-in [:data :name] name)
+      (assoc-in [:data :wake_on]
+                [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
+                 {:kind "change" :actions ["fail" "rework" "unstick"]
+                  :filter {:repository repo}}])))
+
+(deftest seats-that-each-wake-on-one-repository-cover-a-state-together
+  (let [rdefs (main/resources)
+        others (remove #{fixture/code-seat} (fixture/seats rdefs))
+        a (repo-seat "a-seat" "ckopsa/a")
+        b (repo-seat "b-seat" "ckopsa/b")
+        deaf (update-in b [:data :wake_on] (comp vec butlast))
+        world {:rows {:change [{:id "1" :state :failing :data {:repository "ckopsa/a"}}
+                               {:id "2" :state :open :data {:repository "ckopsa/b"}}
+                               {:id "3" :state :closed :data {:repository "ckopsa/gone"}}]}}
+        failing (fn [seats world]
+                  (filterv #(and (= "change" (:kind %)) (= "failing" (:state %)))
+                           (cracks/audit rdefs (concat others seats) world)))]
+    (testing "rows in A and B alone, and a wake for each: change/failing is clean"
+      (is (= [] (mapv told (failing [a b] world)))))
+    (testing "drop B's wake, and the crack names the repository nobody wakes for"
+      (let [[c & more] (failing [a deaf] world)]
+        (is (nil? more))
+        (is (= "cadence_only" (:crack c)))
+        (is (= [{:field "repository" :value "ckopsa/b" :rows 1}] (:unwoken_values c)))
+        (is (re-find #"repository ckopsa/b" (:what_would_close_it c)))))
+    (testing "with no rows read, a narrowed wake covers nothing"
+      (is (= ["cadence_only"] (mapv :crack (failing [a b] nil)))))))
