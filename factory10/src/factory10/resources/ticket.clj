@@ -1939,6 +1939,17 @@
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
    ;; waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
+   ;; WHAT A TICKET WAITS ON, and what each ending of that ticket does
+   ;; to the one waiting (ticket d9edac4e). A blocker's ending releases
+   ;; whichever way it ends (`release-the-waiters!`). A `merge_after`
+   ;; ticket that is dropped does nothing: bench/merge-holds keeps the
+   ;; green change held until a person restates the list, and the
+   ;; cracks audit reports that as a dead wait while no seat is woken.
+   :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
+            :outcomes {:done :release :dropped :release}}
+           {:on :merge_after :awaits :ticket :in #{:in_review}
+            :restated-by [:merge_after_in_review]
+            :outcomes {:done :release :dropped :nothing}}]
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}

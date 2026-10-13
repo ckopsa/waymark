@@ -104,6 +104,17 @@
    ;; thread kind: the framework owns the predicate, the kind owns
    ;; the sentence
    :answered-at-a-door
+   ;; what a row of this kind WAITS ON, and what each ending of the
+   ;; awaited row does to the one waiting (ticket d9edac4e): [{:on
+   ;; <field or relation> :awaits <kind> :in #{waiting states}
+   ;; :restated-by [doors] :waiter "who, when it is no row of this
+   ;; kind" :outcomes {<awaited outcome> :release | :return |
+   ;; :nothing}}]. The cracks audit (waymark10.server.cracks) reads it
+   ;; and reports `dead_wait` where an outcome does nothing and no seat
+   ;; is woken to act. It moves no row: the handlers that release a
+   ;; waiter are the kind's own, and this says what they do. Never in
+   ;; the fingerprint — :answered-at-a-door's precedent
+   :waits
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema
