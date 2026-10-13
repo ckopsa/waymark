@@ -54,7 +54,21 @@
   A filter is read for ONE thing, its `state` entry: an entry that
   names states admits those and no other, and an entry that names
   none admits every state. What a filter says about any other field
-  narrows rows, not states, and this audit does not judge rows."
+  narrows rows, not states, and this audit does not judge rows.
+
+  ONE EXCEPTION, where rows were read (ticket d71d2805). A wake_on
+  entry narrower than the scope the seat acts under wakes it for the
+  rows its filter admits and no other, so alone it covers no state.
+  Seats that each wake on one repository cover a state TOGETHER: with
+  the kind's rows in hand, the state is woken when every live row
+  meets a narrowed wake of a seat that can leave it. A row none meets
+  keeps the crack, which names what that row carries in
+  `unwoken_values`. With no rows read a narrowed wake counts for
+  nothing, as before.
+
+  A STATE A ROW RESTS IN is no crack (same ticket): a terminal state,
+  and an ending the kind declares in `:over` whose every exit is a way
+  back (`machine/ways-back`), which is a correction and nobody's work."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.guards :as g]
@@ -126,6 +140,20 @@
   (filterv #(and (some? (:to %)) (not= state (:to %)))
            (machine/transitions-from rdef state)))
 
+(defn- resting
+  "The states a row RESTS in: the terminal ones, and an ending the kind
+  declares (`:over`, spelled in states) whose every exit is a way back
+  (`machine/ways-back`: reopen, a person's correction or the forge's).
+  No seat is owed a wake to such a state and no person a telling."
+  [rdef]
+  (let [{:keys [field accomplished let-go]} (machine/over-vocabulary rdef)
+        back (machine/ways-back rdef)]
+    (into (set (:terminal rdef))
+          (when-not field
+            (filter (fn [state]
+                      (every? #(contains? back (:name %)) (exits rdef state)))
+                    (into accomplished let-go))))))
+
 (defn- arrivals
   "The action names that put a row INTO `state`. `create` is a door
   every kind serves and no kind lists in `:actions`."
@@ -158,32 +186,89 @@
                            wake-filter)))
              scope-filters))))
 
+(defn- wake-entries
+  "The seat's wake_on entries on a transition into `state` of the kind."
+  [seat rdef state walk-rdef]
+  (let [kind (text (:kind rdef))
+        into-state (arrivals rdef state)]
+    (filterv (fn [e]
+               (and (= kind (text (:kind e)))
+                    (some into-state (map text (:actions e)))
+                    (admits-state? (:filter e) state)))
+             (seats/effective-wake-on seat walk-rdef))))
+
+(defn- narrow-wakes
+  "The filters of the seat's wake_on entries into `state` that ARE
+  narrower than every filter it acts under: each wakes the seat for the
+  rows it admits, and for no other."
+  [seat rdef state scope-filters walk-rdef]
+  (into []
+        (comp (map :filter) (remove #(no-narrower? % scope-filters)))
+        (wake-entries seat rdef state walk-rdef)))
+
+(defn- named-values
+  "A filter's entries on fields other than `state`, as {field [values]}."
+  [fm]
+  (into (sorted-map)
+        (for [[k v] (when (map? fm) fm)
+              :when (not= "state" (text k))]
+          [(text k) (vec (sort (fvals v)))])))
+
+(defn- row-meets?
+  "Does this row pass the filter's entries on fields other than
+  `state`? A filter that names none admits every row."
+  [fm row]
+  (every? (fn [[field said]]
+            (let [have (fval (:data row) field)]
+              (some (set said) (map text (if (coll? have) have [have])))))
+          (named-values fm)))
+
+(defn- unnamed-values
+  "What the rows no wake meets carry in the fields the narrowed wakes
+  name, and none of them names: [{:field :value :rows}]."
+  [narrowed unmet]
+  (let [named (apply merge-with into {}
+                     (for [l narrowed
+                           fm (:narrow l)
+                           [field said] (named-values fm)]
+                       {field (set said)}))]
+    (vec (for [[field said] (sort-by key named)
+               [value n] (sort-by key
+                                  (frequencies
+                                   (for [row unmet
+                                         :let [have (fval (:data row) field)]
+                                         one (if (coll? have) have [have])
+                                         :let [s (text one)]
+                                         :when (and (seq s) (not (contains? said s)))]
+                                     s)))]
+           {:field field :value value :rows n}))))
+
 (defn- wakes-of
   "What brings this seat to a row in `state` of the kind, as the words
   the answer prints: interactive (a person sits in it), cadence,
   wake_on. Empty is a seat nothing brings to this state. Of the three
   only wake_on is a wake; `state-cracks` grades the other two."
   [seat rdef state scope-filters walk-rdef]
-  (let [kind (text (:kind rdef))
-        into-state (arrivals rdef state)]
-    (cond-> []
-      (seats/interactive-seat? seat) (conj "interactive")
-      (some? (get-in seat [:data :cadence_seconds])) (conj "cadence")
-      (some (fn [e]
-              (and (= kind (text (:kind e)))
-                   (some into-state (map text (:actions e)))
-                   (admits-state? (:filter e) state)
-                   (no-narrower? (:filter e) scope-filters)))
-            (seats/effective-wake-on seat walk-rdef))
-      (conj "wake_on"))))
+  (cond-> []
+    (seats/interactive-seat? seat) (conj "interactive")
+    (some? (get-in seat [:data :cadence_seconds])) (conj "cadence")
+    (some #(no-narrower? (:filter %) scope-filters)
+          (wake-entries seat rdef state walk-rdef))
+    (conj "wake_on")))
 
 (defn- state-cracks
   "no_exit, cadence_only, person_only and unwoken, for one kind. A
   state one of its leavers has a wake_on entry for is clean; what is
-  left is graded by the best thing that still brings a seat there."
-  [rdef seat-rows by-kind]
+  left is graded by the best thing that still brings a seat there.
+  `rows` is the rows of the kind that were read, nil when none were:
+  with them, wakes narrower than their seats' scopes are judged
+  together, and the state is woken when every live row meets one."
+  [rdef seat-rows by-kind rows]
   (let [kind (text (:kind rdef))
-        terminal (set (:terminal rdef))
+        terminal (resting rdef)
+        live (when (some? rows)
+               (let [rests (into #{} (map text) terminal)]
+                 (remove #(contains? rests (text (:state %))) rows)))
         walk-rdef (fn [seat]
                     (some->> (get-in seat [:data :walk]) str not-empty
                              keyword (get by-kind)))]
@@ -201,17 +286,33 @@
                                            {:action (text (:name a)) :entries es})
                                     far (filterv #(seq (holding-entries seat (:kind %) (:action %) nil))
                                                  far-doors)]
-                              :when (or (seq held) (seq far))]
+                              :when (or (seq held) (seq far))
+                              :let [filters (cond-> (into [] (comp (mapcat :entries) (map :filter)) held)
+                                              (seq far) (conj ::any))]]
                           {:seat seat
                            :holds (into (mapv :action held) (map door-name) far)
-                           :filters (cond-> (into [] (comp (mapcat :entries) (map :filter)) held)
-                                      (seq far) (conj ::any))})
+                           :filters filters
+                           :narrow (narrow-wakes seat rdef state filters (walk-rdef seat))})
                 considered (for [l leavers]
-                             {:seat (seat-name (:seat l))
-                              :holds (:holds l)
-                              :wakes (wakes-of (:seat l) rdef state (:filters l)
-                                               (walk-rdef (:seat l)))})
-                wakes (into #{} (mapcat :wakes) considered)
+                             (cond-> {:seat (seat-name (:seat l))
+                                      :holds (:holds l)
+                                      :wakes (wakes-of (:seat l) rdef state (:filters l)
+                                                       (walk-rdef (:seat l)))}
+                               (seq (:narrow l))
+                               (assoc :wakes_for (mapv named-values (:narrow l)))))
+                ;; the seats woken for SOME rows here, and the live rows
+                ;; none of them is both woken for and able to move
+                narrowed (filterv (comp seq :narrow) leavers)
+                unmet (when (and live (seq narrowed))
+                        (remove (fn [row]
+                                  (some (fn [l]
+                                          (and (some #(row-meets? % row) (:filters l))
+                                               (some #(row-meets? % row) (:narrow l))))
+                                        narrowed))
+                                live))
+                missing (unnamed-values narrowed unmet)
+                wakes (cond-> (into #{} (mapcat :wakes) considered)
+                        (and live (seq narrowed) (empty? unmet)) (conj "wake_on"))
                 cadences (for [l leavers
                                :let [c (get-in (:seat l) [:data :cadence_seconds])]
                                :when (number? c)]
@@ -220,7 +321,12 @@
                 wake-it (str "Give one of these seats a wake_on entry on " kind
                              " naming one of: "
                              (str/join ", " (sort (arrivals rdef state)))
-                             " (with a filter no narrower than its scope filter).")]
+                             " (with a filter no narrower than its scope filter"
+                             (when (seq missing)
+                               (str ", or one that admits "
+                                    (str/join ", " (map #(str (:field %) " " (:value %))
+                                                        missing))))
+                             ").")]
           crack (cond
                   (empty? leavers)
                   [{:kind kind :state (text state) :crack "no_exit"
@@ -271,7 +377,7 @@
                   [{:kind kind :state (text state) :crack "unwoken"
                     :seats_considered (vec considered)
                     :what_would_close_it wake-it}])]
-      crack)))
+      (cond-> crack (seq missing) (assoc :unwoken_values missing)))))
 
 (defn- remedy-cracks
   "remedy_unheld, for one kind: one crack per state the refusing door
@@ -356,7 +462,7 @@
   waits on a person, with nothing that tells the person."
   [rdef seat-rows world]
   (let [kind (text (:kind rdef))
-        terminal (set (:terminal rdef))]
+        terminal (resting rdef)]
     (for [state (sort-by text (machine/reachable-states rdef))
           :when (not (contains? terminal state))
           :let [out (mapv (fn [a] {:action (text (:name a))
@@ -382,7 +488,7 @@
   of its values. `state` is left to the cracks above."
   [rdef seat-rows rows]
   (let [kind (text (:kind rdef))
-        terminal (into #{} (map text) (:terminal rdef))
+        terminal (into #{} (map text) (resting rdef))
         walkers (filterv #(= kind (some-> (get-in % [:data :walk]) str)) seat-rows)
         filters (mapv seats/walk-filter walkers)
         fields (into (sorted-set)
@@ -517,7 +623,8 @@
          seat-rows (vec seat-rows)]
      (into []
            (mapcat (fn [rdef]
-                     (concat (state-cracks rdef seat-rows by-kind)
+                     (concat (state-cracks rdef seat-rows by-kind
+                                           (get (:rows world) (:kind rdef)))
                              (person-cracks rdef seat-rows world)
                              (remedy-cracks rdef seat-rows)
                              (wait-cracks rdef seat-rows by-kind)
@@ -543,16 +650,23 @@
           {:data (assoc r :kind (name k))})))
 
 (defn- live-rows
-  "{kind [row …]} for every kind an active seat walks under a filter:
-  its rows in each state that is not terminal, the newest `row-page`
-  of each state."
+  "{kind [row …]} for every kind an active seat walks under a filter,
+  and every kind one is woken on under a filter that names a field
+  other than `state`: its rows in each state no row rests in, the
+  newest `row-page` of each state."
   [eng seat-rows]
   (let [st (:storage eng)
-        resources (inv/resources eng)]
+        resources (inv/resources eng)
+        walk-of (fn [seat]
+                  (some-> (get-in seat [:data :walk]) str not-empty keyword))]
     (into {}
-          (for [k (distinct (keep #(when (seats/walk-filter %)
-                                     (some-> (get-in % [:data :walk]) str not-empty keyword))
-                                  seat-rows))
+          (for [k (distinct
+                   (concat (keep #(when (seats/walk-filter %) (walk-of %)) seat-rows)
+                           (for [seat seat-rows
+                                 e (seats/effective-wake-on
+                                    seat (get resources (walk-of seat)))
+                                 :when (seq (named-values (:filter e)))]
+                             (keyword (text (:kind e))))))
                 :let [rdef (get resources k)]
                 :when rdef]
             [k (store/with-tx st
@@ -560,7 +674,7 @@
                    (into []
                          (mapcat #(store/query-rows st tx k {:state %}
                                                     {:limit row-page :newest-first true}))
-                         (remove (set (:terminal rdef))
+                         (remove (resting rdef)
                                  (sort-by text (machine/reachable-states rdef))))))]))))
 
 (defn report

@@ -148,6 +148,58 @@
     (testing "one leaver with a wake_on makes the state clean"
       (is (= [] (at-open [daily mayor idle woken]))))))
 
+;; ticket d71d2805: `patch` ends two ways, and the one that is no tomb
+;; is left by `reopen` alone.
+(def ^:private patch
+  {:kind :patch
+   :states [:open :failing :merged :closed]
+   :initial :open
+   :terminal #{:merged}
+   :over {:accomplished #{:merged} :let-go #{:closed}}
+   :actions {:fail {:from #{:open} :to :failing}
+             :rework {:from #{:failing} :to :open}
+             :land {:from #{:open} :to :merged}
+             :close {:from #{:open :failing} :to :closed}
+             :reopen {:from #{:closed} :to :open}}})
+
+(deftest wakes-that-each-name-one-value-cover-a-state-together
+  (let [builder (fn [name repo]
+                  (seat name (cond-> {:scope [{:kind "patch" :actions ["rework" "close"]}]
+                                      :cadence_seconds 3600}
+                               repo (assoc :wake_on [{:kind "patch" :actions ["fail"]
+                                                      :filter {:repository repo}}]))))
+        a (builder "a" "ckopsa/a")
+        b (builder "b" "ckopsa/b")
+        world {:rows {:patch [{:id "1" :state :open :data {:repository "ckopsa/a"}}
+                              {:id "2" :state :failing :data {:repository "ckopsa/b"}}
+                              {:id "3" :state :closed :data {:repository "ckopsa/gone"}}]}}
+        failing (fn [seats world]
+                  (filterv #(= "failing" (:state %)) (cracks/audit [patch] seats world)))]
+    (testing "a wake for each repository a live row carries: failing is clean"
+      (is (= [] (failing [a b] world))
+          "the closed row rests, and its repository asks for no wake"))
+    (testing "drop one wake, and the crack names the repository nobody wakes for"
+      (let [[c & more] (failing [a (builder "b" nil)] world)]
+        (is (nil? more))
+        (is (= "cadence_only" (:crack c)))
+        (is (= [{:field "repository" :value "ckopsa/b" :rows 1}] (:unwoken_values c)))
+        (is (= [["a" [{"repository" ["ckopsa/a"]}]] ["b" nil]]
+               (map (juxt :seat :wakes_for) (:seats_considered c))))
+        (is (re-find #"repository ckopsa/b" (:what_would_close_it c)))))
+    (testing "with no rows read, a narrowed wake covers nothing"
+      (let [[c & more] (failing [a b] nil)]
+        (is (nil? more))
+        (is (= "cadence_only" (:crack c)))
+        (is (nil? (:unwoken_values c)))))))
+
+(deftest an-ending-only-a-way-back-leaves-rests
+  (testing "closed is declared over and left by reopen alone: no crack, with no seat at all"
+    (is (= #{"open" "failing"}
+           (into #{} (map :state) (cracks/audit [patch] [])))))
+  (testing "an ending with another way out is still judged"
+    (let [leaky (assoc-in patch [:actions :archive] {:from #{:closed} :to :merged})]
+      (is (seq (of (cracks/audit [leaky] []) "no_exit" "closed"))))))
+
 (deftest a-remedy-no-seat-holds-is-remedy-unheld
   (let [finisher (seat "finisher" {:scope [{:kind "task" :actions ["groom" "finish"]}]
                                    :cadence_seconds 3600})
