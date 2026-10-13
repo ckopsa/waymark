@@ -194,6 +194,21 @@
     "Offer these change documents again at the next `forge-poll`,
     read afresh by `:repository` and `:number`."))
 
+(defprotocol ForgeCommit
+  "A source that keeps its place across boots, told what became of the
+  poll it answered (ticket fc3a5a40). A process that stops between the
+  poll and the row writes must not have stored a cursor past pull
+  requests whose rows were never written, so the place is stored only
+  when the pass says the rows are. A protocol of its own, so a source
+  that does not implement it stores nothing and the pass goes on as
+  before."
+  (forge-commit! [s repositories]
+    "The rows of these repositories are written: store each one's
+    cursor and the pull requests it still has to read again.")
+  (forge-forget! [s]
+    "The rows of the last `forge-poll` were not written: go back to
+    the place of the last commit, so the next poll answers them again."))
+
 (defprotocol ForgeDeploy
   "Whether a merged pull request is in a commit of its base, for the
   line that waits on a deploy (ticket 47217098). A protocol of its own:
@@ -563,6 +578,26 @@
     (try (forge-retry! source docs)
          (catch Exception e
            (log-fn "the refused pull requests could not be offered again ("
+                   (ex-message e) ")")))))
+
+(defn- commit-poll!
+  "Tell a source that keeps its place that the rows of these
+  repositories are written (ticket fc3a5a40)."
+  [source repositories log-fn]
+  (when (satisfies? ForgeCommit source)
+    (try (forge-commit! source repositories)
+         (catch Exception e
+           (log-fn "the source's place could not be stored ("
+                   (ex-message e) ")")))))
+
+(defn- forget-poll!
+  "Tell a source that keeps its place that the poll's rows were not
+  written, so it answers them again (ticket fc3a5a40)."
+  [source log-fn]
+  (when (satisfies? ForgeCommit source)
+    (try (forge-forget! source)
+         (catch Exception e
+           (log-fn "the source could not go back to its stored place ("
                    (ex-message e) ")")))))
 
 ;; ── the red runs ────────────────────────────────────────────────────
@@ -2278,10 +2313,18 @@
                                                  :newest-first true}))))
             :updated-at str not-empty)))
 
+(def ^:private retry-numbers-kept
+  "How many pull request numbers one `forge_retry` holds: what its
+  string has room for."
+  150)
+
 (defn cursor-store
   "Where the GitHub source keeps each repository's cursor across boots:
   → {:load (fn [repo]) :save! (fn [repo cursor])}, over the active
-  `repo_policy` rows of this engine."
+  `repo_policy` rows of this engine. Beside the cursor it keeps the
+  pull requests the source still has to read again by number (ticket
+  fc3a5a40): `:load-retry` (repo → a set of numbers) and `:save-retry!`
+  (repo and the numbers), on the row's `forge_retry`."
   [eng]
   (let [save! (fn [repo cursor]
                 (when-some [policy (active-policy-of eng repo)]
@@ -2293,7 +2336,21 @@
                  (when-some [seed (newest-change-stamp eng repo)]
                    (save! repo seed)
                    seed)))
-     :save! save!}))
+     :save! save!
+     :load-retry (fn [repo]
+                   (into #{}
+                         (map #(Long/parseLong %))
+                         (re-seq #"\d+"
+                                 (str (some-> (active-policy-of eng repo)
+                                              (get-in [:data :forge_retry]))))))
+     :save-retry! (fn [repo numbers]
+                    (when-some [policy (active-policy-of eng repo)]
+                      (bench/mark-row!
+                       eng :repo_policy (str (:id policy))
+                       {:forge_retry (not-empty
+                                      (str/join "," (take retry-numbers-kept
+                                                          (sort numbers))))}
+                       #{})))}))
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
@@ -2906,6 +2963,7 @@
           ;; nothing below may ask the forge, and a row whose forge was
           ;; not read is not moved, noted or failed
           held (:held-until (budget-of source))
+          committed (volatile! false)
           ;; the base pass runs whatever a pass before it did (ticket
           ;; c4bac627): a throw above it is thrown again only after
           ;; every base was read
@@ -2918,6 +2976,12 @@
                     refused (volatile! [])
                     census (change-pass! eng changes census log-fn refused)
                     _ (retry-refused! source @refused log-fn)
+                    ;; the change rows are written and the refused ones
+                    ;; handed back, so the source may store its place
+                    ;; (ticket fc3a5a40)
+                    _ (do (commit-poll! source (or answered repositories)
+                                        log-fn)
+                          (vreset! committed true))
                     census (unknown-pass! eng source changes census log-fn)
                     read-checks (head-reader source)
                     census (run-pass! eng source
@@ -2935,6 +2999,9 @@
                     census (adoption-note-pass! eng source census log-fn)]
                 [census nil])
               (catch Exception e [census e])))
+          ;; a pass that was held or threw before its rows were written
+          ;; sends the source back, so the next poll answers them again
+          _ (when-not @committed (forget-poll! source log-fn))
           ;; the stamp is written whatever the two passes above it did
           ;; (ticket b53f78ac): a pass that threw there still beat
           census (try
