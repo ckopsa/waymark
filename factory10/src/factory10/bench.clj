@@ -899,7 +899,10 @@
   (`open-train!`), or dispatch its checks when the rig opens none →
   the train as `line_train` records it, or nil when the rig built none
   and the line goes one at a time this pass. A rider whose pull request
-  did not merge cleanly stays in the line untouched."
+  did not merge cleanly stays in the line untouched. The train carries
+  the heads its riders had (`heads`, beside `changes`), so its red is
+  not written on a head it did not test (e23f8842), and a restart
+  still knows them (ffd36c98)."
   [ctx repo policy riders]
   (let [branch (train-branch repo (first riders))
         answer (ask ctx :train_build {:repo repo :base (base-of policy)
@@ -925,6 +928,7 @@
                           (cond-> {:branch branch
                                    :changes (mapv #(str (:id %)) rode)
                                    :prs (mapv number-of rode)
+                                   :heads (mapv #(str (get-in % [:data :head_sha])) rode)
                                    :head (some-> (:head answer) str)
                                    :base_head (some-> (:base_head answer) str)
                                    :started_at (pass-now ctx)}
@@ -993,17 +997,20 @@
                            (Math/log 2.0))))))
 
 (defn- riders-of
-  "The riders a standing train carries, as `build-train!` takes them."
+  "The riders a standing train carries, as `build-train!` takes them,
+  each with the head the train judged when the train carries one."
   [train]
-  (mapv (fn [id n] {:id id :data {:number n}}) (:changes train) (:prs train)))
+  (mapv (fn [id n head] {:id id :data {:number n :head_sha head}})
+        (:changes train) (:prs train)
+        (concat (:heads train) (repeat nil))))
 
 (defn- bisect-train!
   "A red train looks for its red: the front half of its changes (at
   least one) rides again, and the rest go back to the line for the next
   train. A change red alone on a train goes back to its seat as a red
   head does (`:train-red!` in `ctx`, change id and why) — unless its
-  head moved since the train was built (`seen` keeps the riders' heads
-  under `[:train-heads repo]`, and `:head-of` in `ctx` reads the head
+  head moved since the train was built (the train keeps the riders'
+  heads as `heads`, and `:head-of` in `ctx` reads the head
   now): the train judged a head the change no longer has, so the change
   stays in the line and its new head rides the next train (ticket
   e23f8842). At most
@@ -1016,7 +1023,7 @@
     (cond
       (= 1 (count riders))
       (let [id (str (:id (first riders)))
-            judged (some-> (get-in @seen [[:train-heads repo] id]) str not-empty)
+            judged (some-> (first (:heads train)) str not-empty)
             now (when-some [head-of (:head-of ctx)]
                   (some-> (head-of id) str not-empty))]
         (warn! repo ": " id " is red alone on the train " (:branch train))
@@ -1173,15 +1180,7 @@
            train (swap! trains assoc repo
                         (advance-train! (assoc ctx :answers answers)
                                         seen repo policy train))
-           ;; the heads the riders had when the train was built, so its
-           ;; red is not written on a head it did not test (e23f8842)
-           built (do (swap! seen assoc [:train-heads repo]
-                            (into {}
-                                  (map (fn [c]
-                                         [(str (:id c))
-                                          (str (get-in c [:data :head_sha]))]))
-                                  riders))
-                     (swap! trains assoc repo built))
+           built (swap! trains assoc repo built)
            (and front (or (behind? (get @answers id))
                           (stale-waiting? front (get @answers id))))
            (update-behind! ctx seen front id

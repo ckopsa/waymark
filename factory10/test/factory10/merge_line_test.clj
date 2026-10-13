@@ -434,7 +434,8 @@
         "no change is brought up to date on its own")
     (is (= {:branch "train/ckopsa/waymark/1"
             :changes ["change-1" "change-2" "change-3" "change-4"]
-            :prs [1 2 3 4] :head "train-head" :base_head "base-0"
+            :prs [1 2 3 4] :heads ["head-1" "head-2" "head-3" "head-4"]
+            :head "train-head" :base_head "base-0"
             :run_id "77" :started_at t0}
            (get trains wm)))
     (testing "the policy says the front waits on the train"

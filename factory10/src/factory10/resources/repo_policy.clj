@@ -917,6 +917,7 @@
                  :examples [{:branch "train/ckopsa/waymark/1"
                              :changes ["2847912e-7783-4651-bead-61eab0492776"]
                              :prs [250]
+                             :heads ["9a8b7c6d5e4f30211203f4e5d6c7b8a998765432"]
                              :head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
                              :base_head "0e1d2c3b4a5968778695a4b3c2d1e0f912345678"
                              :run_id "123456789"
@@ -925,12 +926,16 @@
                  :x-display
                  {:raw true
                   :label "The train"
-                  :help "The changes that ride one train together: its branch, their changes and pull requests, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
+                  :help "The changes that ride one train together: its branch, their changes and pull requests, the head each change had when the train was built, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
     [:maybe
      [:map
       [:branch [:string {:max 200}]]
       [:changes [:vector [:string {:max 64}]]]
       [:prs [:vector [:int {:min 1}]]]
+      ;; the head each change had when the train was built, in the
+      ;; order of `changes`, so a restart still knows what the train
+      ;; judged (ffd36c98)
+      [:heads {:optional true} [:maybe [:vector [:string {:max 64}]]]]
       [:head {:optional true} [:maybe [:string {:max 64}]]]
       [:base_head {:optional true} [:maybe [:string {:max 64}]]]
       [:run_id {:optional true} [:maybe [:string {:max 64}]]]
