@@ -1123,6 +1123,12 @@
    ;; a stuck change is work waiting for a person, not work that is
    ;; over, and an ending would shut the very doors it needs.
    :over {:accomplished #{:merged} :let-go #{:closed}}
+   ;; A SUBMITTED CHANGE WAITS ON ITS REQUIRED CHECKS (ticket d9edac4e).
+   ;; They are GitHub's and no row here, so the wait names no kind:
+   ;; green lets the gate merge it, and red moves it to `failing`,
+   ;; which sends its ticket back to the seat that built it.
+   :waits [{:on :checks :in #{:submitted}
+            :outcomes {:green :release :red :return}}]
    :summary "{data.repository}#{data.number} · {data.title}"
    ;; the pull request's own address, not the kind label
    :label-template "{data.repository}#{data.number}"
