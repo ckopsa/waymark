@@ -38,7 +38,15 @@
    {:kind "repo_policy" :state "active" :crack "person_only"
     :reason "The policy is a person's form: only a person retires it."}
    {:kind "repo_policy" :state "retired" :crack "person_only"
-    :reason "The policy is a person's form: only a person restores it."}])
+    :reason "The policy is a person's form: only a person restores it."}
+   {:kind "ticket" :state "done" :crack "silent_person_exit"
+    :reason "Done is where a ticket rests: nobody is owed a telling that reopen is there."}
+   {:kind "ticket" :state "dropped" :crack "silent_person_exit"
+    :reason "Dropped is where a ticket rests: nobody is owed a telling that reopen is there."}
+   {:kind "ci_run" :state "classified" :crack "silent_person_exit"
+    :reason "Classified is where a run rests: reclassify is for the person who already doubts the label."}
+   {:kind "repo_policy" :state "active" :crack "silent_person_exit"
+    :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}])
 
 (defn- crack-key
   "What makes a crack the one an entry names."
