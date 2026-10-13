@@ -2295,6 +2295,9 @@
     {:from #{:draft :open :blocked} :to :draft
      :guards [only-a-decline-turns-the-asker-back]
      :handler note-the-decline
+     ;; the log keeps the reason, so the live cracks pass can read two
+     ;; shelvings for one reason (ticket 26e51658)
+     :record true
      :input [:map
              [:shelved_because {:x-display {:hidden true
                                             :label "Why it was declined"}}
@@ -2391,6 +2394,9 @@
     {:from #{:open :in_review} :to :draft
      :guards [only-its-change-moves-it]
      :handler note-the-shelving
+     ;; the log keeps the reason, so the live cracks pass can read two
+     ;; shelvings for one reason (ticket 26e51658)
+     :record true
      :input [:map
              [:shelved_because {:optional true
                                 :x-display {:hidden true

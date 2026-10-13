@@ -151,6 +151,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
@@ -661,7 +662,21 @@
                       (judgments/start-judgments!
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
-             :stop judgments/stop-judgments!}]}
+             :stop judgments/stop-judgments!}
+            ;; the live cracks audit (ticket 26e51658): the rows that
+            ;; stopped and the seats gone silent, each filed one time as
+            ;; a draft ticket. Here because it reads seats and their
+            ;; schedules. `:elected` because two passes at once would
+            ;; file one crack twice.
+            {:hook :live-cracks
+             :elected :live-cracks
+             :when schedules/serving?
+             :start (fn [eng _]
+                      (live-cracks/start-sweeper!
+                       eng {:interval-ms
+                            (get-in eng [:services :cracks :sweep-ms]
+                                    900000)}))
+             :stop live-cracks/stop-sweeper!}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never
