@@ -987,38 +987,45 @@
 (defn- cursor-of!
   "One repository's cursor: the one this source holds, else the stored
   one, read once for each repository in a boot (ticket c07b581f). nil
-  is a repository nobody has read yet."
-  [{:keys [cursor store]} repo]
+  is a repository nobody has read yet. The stored retries come back
+  with that one read, so a boot offers them again (ticket fc3a5a40)."
+  [{:keys [cursor store retry kept]} repo]
   (let [held @cursor]
     (if (contains? held repo)
       (get held repo)
-      (let [stored (when-some [load (:load store)] (word (load repo)))]
+      (let [stored (when-some [load (:load store)] (word (load repo)))
+            again (when-some [load (:load-retry store)] (set (load repo)))]
+        (when (seq again)
+          (swap! kept assoc-in [:retry repo] again)
+          (swap! retry update repo (fnil into #{}) again))
         (swap! cursor assoc repo stored)
         stored))))
 
 (defn- move-cursor!
-  "The repository's cursor after its own read, held here and written to
-  the store when it moved. A store that will not take the write costs
-  the next boot a wider window, never this pass."
-  [{:keys [cursor store]} repo stood updates]
+  "The repository's cursor after its own read, held here. It is NOT
+  written to the store here (ticket fc3a5a40): the cursor it stood at
+  is kept as the one the store still holds, and `forge-commit!` writes
+  the new one when the pass wrote the rows this read answered."
+  [{:keys [cursor kept]} repo stood updates]
   (let [moved (high-water stood updates)]
     (when (not= moved stood)
       (swap! cursor assoc repo moved)
-      (when-some [save! (:save! store)]
-        (try (save! repo moved)
-             (catch Exception e
-               (warn! "the cursor of " repo " was not stored ("
-                      (ex-message e) ")")))))))
+      (swap! kept update :cursor
+             #(if (contains? % repo) % (assoc % repo stood))))))
 
 (defrecord GitHubSource [call repos-fn cursor calls said actions-only retry
-                         store]
+                         store kept]
   forge/ForgeSource
   (forge-poll [this]
     (reset! calls 0)
     (reset! actions-only #{})
     (some-> (:budget this) (swap! assoc :unchanged 0))
-    (let [pending (first (reset-vals! retry {}))
-          repos (repos-now this)
+    (let [repos (repos-now this)
+          ;; a boot's first read brings the stored retries back, before
+          ;; the pending ones are taken; a store that throws here throws
+          ;; again in the repository's own read below
+          _ (run! #(try (cursor-of! this %) (catch Exception _ nil)) repos)
+          pending (first (reset-vals! retry {}))
           answers (mapv (fn [repo]
                           ;; each repository reads from its OWN cursor
                           ;; and moves it when it answered, so one that
@@ -1179,6 +1186,32 @@
                      m docs)))
     nil)
 
+  forge/ForgeCommit
+  (forge-commit! [_ repositories]
+    (doseq [repo repositories]
+      ;; a store that will not take the write costs the next boot a
+      ;; wider window, never this pass; the retries go first, so a stop
+      ;; between the two writes loses neither
+      (try
+        (let [now (get @retry repo #{})
+              was (get-in @kept [:retry repo] #{})]
+          (when (not= now was)
+            (when-some [save! (:save-retry! store)] (save! repo now))
+            (swap! kept assoc-in [:retry repo] now)))
+        (when (contains? (:cursor @kept) repo)
+          (when-some [save! (:save! store)] (save! repo (get @cursor repo)))
+          (swap! kept update :cursor dissoc repo))
+        (catch Exception e
+          (warn! "the cursor of " repo " was not stored ("
+                 (ex-message e) ")"))))
+    nil)
+  (forge-forget! [_]
+    (let [{stood :cursor again :retry} (first (swap-vals! kept assoc
+                                                          :cursor {}))]
+      (swap! cursor merge stood)
+      (swap! retry #(merge-with into % again)))
+    nil)
+
   forge/ForgeBudget
   (forge-budget [this]
     (let [{:keys [remaining limit reset unchanged]} (some-> (:budget this)
@@ -1224,7 +1257,9 @@
   asked at every pass) or :repos (a static comma-separated string or
   seq), :base (the API base, for a test that wants a local server),
   :store (where each repository's cursor is kept across boots: `:load`,
-  repository → cursor or nil, and `:save!`, repository and cursor)."
+  repository → cursor or nil, and `:save!`, repository and cursor; and
+  beside it the pull requests to read again, `:load-retry`, repository
+  → numbers, and `:save-retry!`, repository and a set of numbers)."
   [{:keys [token token-fn base store] :as config}]
   (with-budget
     (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
@@ -1235,7 +1270,8 @@
                     (atom false)
                     (atom #{})
                     (atom {})
-                    store)
+                    store
+                    (atom {}))
     nil))
 
 (defn from-env
@@ -1605,5 +1641,6 @@
                      (atom #{})
                      (atom {})
                      (or store
-                         (when cursor {:load (constantly cursor)})))
+                         (when cursor {:load (constantly cursor)}))
+                     (atom {}))
      now-fn)))

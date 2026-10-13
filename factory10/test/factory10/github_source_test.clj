@@ -878,10 +878,15 @@
 (defn- a-cursor-store
   "A cursor store as the wiring's, over a map a second source reads."
   []
-  (let [kept (atom {})]
+  (let [kept (atom {})
+        retries (atom {})]
     {:kept kept
+     :retries retries
      :load (fn [repository] (get @kept repository))
-     :save! (fn [repository cursor] (swap! kept assoc repository cursor))}))
+     :save! (fn [repository cursor] (swap! kept assoc repository cursor))
+     :load-retry (fn [repository] (get @retries repository))
+     :save-retry! (fn [repository numbers]
+                    (swap! retries assoc repository numbers))}))
 
 (def ^:private the-bench-repo "ckopsa/bench")
 
@@ -892,10 +897,14 @@
     (gh/seed-pull! state repo (pull-at 1 "2026-09-18T10:00:00Z"))
     (gh/seed-pull! state repo (pull-at 2 "2026-09-18T12:00:00Z"))
     (gh/seed-pull! state the-bench-repo (pull-at 3 "2026-09-18T11:00:00Z"))
-    (forge/forge-poll (gh/fake-source state opts))
+    (let [source (gh/fake-source state opts)
+          answer (forge/forge-poll source)]
+      (is (= {} @(:kept store))
+          "a poll alone stores nothing (ticket fc3a5a40)")
+      (forge/forge-commit! source (:answered answer)))
     (is (= {repo "2026-09-18T12:00:00Z" the-bench-repo "2026-09-18T11:00:00Z"}
            @(:kept store))
-        "each repository's cursor is written after its own read")
+        "each repository's cursor is written when its rows are")
     (let [before (count (gh/requests state))
           answer (forge/forge-poll (gh/fake-source state opts))
           asked (drop before (gh/requests state))
@@ -928,6 +937,7 @@
           "the repository that answered moves its cursor")
       (is (nil? (gh/cursor source the-bench-repo))
           "the one that did not keeps its own")
+      (forge/forge-commit! source (:answered answer))
       (is (= {repo "2026-09-18T10:00:00Z"} @(:kept store))))
     (gh/refuse! state the-bench-repo nil)
     (let [before (count (gh/requests state))
@@ -937,6 +947,64 @@
       (is (= "2026-09-18T09:00:00Z" (gh/cursor source the-bench-repo)))
       (is (= "all" (:state (:params (first asked))))
           "and the first one is read from its window, not from nothing"))))
+
+(def ^:private a-merged-pull-request
+  (assoc a-pull-request
+         :state "closed"
+         :merged_at "2026-09-18T15:00:00Z"
+         :updated_at "2026-09-18T15:00:00Z"))
+
+(deftest a-pass-that-throws-before-its-rows-leaves-the-stored-cursor
+  ;; ticket fc3a5a40
+  (let [{:keys [state engine]} (rig)
+        store (a-cursor-store)
+        source (gh/fake-source state {:store store})
+        r {:source source :engine engine}]
+    (pass! r)
+    (let [stood (get @(:kept store) repo)]
+      (is (some? stood) "a pass that wrote its rows stores the cursor")
+      (gh/seed-pull! state repo a-merged-pull-request
+                     {:files the-files :reviews the-reviews})
+      (with-redefs [forge/change-pass!
+                    (fn [& _] (throw (ex-info "thrown by the test" {})))]
+        (is (thrown? Exception (pass! r))))
+      (is (= {repo stood} @(:kept store))
+          "the stored cursor stands where it was")
+      (is (= stood (gh/cursor source repo))
+          "and the source goes back to it, so the next poll answers again")
+      (pass! r)
+      (is (= :merged (:state (the-change engine))))
+      (is (= {repo "2026-09-18T15:00:00Z"} @(:kept store))))))
+
+(deftest a-source-built-again-reads-a-pending-retry-by-number
+  ;; ticket fc3a5a40
+  (let [{:keys [state engine]} (rig)
+        store (a-cursor-store)
+        opts {:store store}
+        r {:source (gh/fake-source state opts) :engine engine}
+        move @#'forge/move-change!
+        refused? (atom false)
+        pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
+                             (gh/requests state))]
+    (pass! r)
+    (gh/seed-pull! state repo a-merged-pull-request
+                   {:files the-files :reviews the-reviews})
+    (with-redefs [forge/move-change!
+                  (fn [& args]
+                    (if (compare-and-set! refused? false true)
+                      (throw (ex-info "refused by the test" {}))
+                      (apply move args)))]
+      (pass! r))
+    (is (= #{31} (get @(:retries store) repo))
+        "the pending retry is kept beside the cursor")
+    ;; the stored cursor is past the pull request, so no listing answers it
+    (swap! (:kept store) assoc repo "2026-09-18T16:00:00Z")
+    (swap! state assoc :requests [])
+    (pass! {:source (gh/fake-source state opts) :engine engine})
+    (is (seq (pull-reads)) "the new source reads the pull request by its number")
+    (is (= :merged (:state (the-change engine))))
+    (is (empty? (get @(:retries store) repo))
+        "and a retry that was read is spent in the store")))
 
 (deftest a-new-repository-is-first-read-for-its-open-pull-requests
   (let [state (gh/fake-state)
