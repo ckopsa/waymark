@@ -284,6 +284,30 @@ site: the state is declared, `:door` is an action of this kind, `:whose`
 is a schema field, and `:explain` says `{door}`. Advertisement-class — no
 fingerprint facet names it.
 
+`:waits` names what a row of this kind **waits on**, and what each ending
+of the awaited row does to the one waiting (ticket d9edac4e):
+
+```clojure
+:waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
+         :outcomes {:done :release :dropped :release}}
+        {:on :merge_after :awaits :ticket :in #{:in_review}
+         :restated-by [:merge_after_in_review]
+         :outcomes {:done :release :dropped :nothing}}]
+```
+
+`:on` is the field or relation. `:awaits` is the awaited kind, left out
+when the awaited thing is no row here (GitHub's checks). `:in` is the
+states the row waits in, and `:restated-by` the doors a hand takes to
+state the wait again. `:waiter` is one sentence naming who waits when it
+is no row of this kind (a held call's caller). Each outcome does
+`:release` (the waiter goes on), `:return` (it goes back to be worked or
+stated again) or `:nothing`. It moves no row: the kind's own handlers
+release a waiter, and this says what they do. `GET /api/-/cracks` reads
+it and reports `dead_wait` where an outcome does `:nothing` and no active
+seat is woken to act. Each entry validates at the def site
+(`checks/check-waits`). Advertisement-class — no fingerprint facet names
+it.
+
 An action's `:display {:marks "<rel>"}` says that this verb is answered
 about the row's PARTS before it is answered about the row (waymark-wxk),
 and names the **link rel** whose rows those parts are:

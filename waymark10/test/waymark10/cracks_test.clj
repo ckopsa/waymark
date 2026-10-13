@@ -3,7 +3,7 @@
   leave, a state seats can leave and nothing wakes them to, and a
   remedy no seat holds. `audit` is pure over declarations and seat
   rows, so the world there is two maps and no engine. The wire tests
-  at the end (ticket 2ffa0f85) read GET /api/-/cracks through the real
+  (ticket 2ffa0f85) read GET /api/-/cracks through the real
   handler, and the same document on waymark_schema's `cracks`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -234,3 +234,72 @@
     (is (= 1 (get-in doc [:cracks :total])))
     (is (= (dissoc route :waymark) (:cracks doc))
         "the tool's field is the route's answer for this kind")))
+
+;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
+;; two ways a ticket does: a blocker's ending releases it whichever way
+;; it ends, and a merge_after job that is dropped does nothing.
+(def ^:private job
+  {:kind :job
+   :states [:open :blocked :in_review :done :dropped]
+   :initial :open
+   :terminal #{:done :dropped}
+   :waits [{:on :blocked_by :awaits :job :in #{:blocked}
+            :outcomes {:done :release :dropped :release}}
+           {:on :merge_after :awaits :job :in #{:in_review}
+            :restated-by [:merge_after_in_review]
+            :outcomes {:done :release :dropped :nothing}}]
+   :actions {:block {:from #{:open} :to :blocked}
+             :unblock {:from #{:blocked} :to :open}
+             :submit {:from #{:open} :to :in_review}
+             :merge_after_in_review {:from #{:in_review} :to :in_review}
+             :land {:from #{:in_review} :to :done}
+             :drop {:from #{:open :blocked :in_review} :to :dropped}}})
+
+(defn- dead-waits [seats]
+  (filterv #(= "dead_wait" (:crack %)) (cracks/audit [job] seats)))
+
+(deftest an-outcome-that-does-nothing-with-no-seat-woken-is-a-dead-wait
+  (testing "merge_after on a dropped job is a dead wait"
+    (let [[c & more] (dead-waits [])]
+      (is (nil? more) "done releases, and so it is no crack")
+      (is (= {:kind "job" :state "in_review" :on "merge_after"
+              :awaits "job" :outcome "dropped" :seats_considered []}
+             (select-keys c [:kind :state :on :awaits :outcome :seats_considered])))
+      (is (re-find #"merge_after_in_review" (:what_would_close_it c)))
+      (is (re-find #"naming one of: drop" (:what_would_close_it c)))))
+  (testing "blocked_by on a dropped job is none: the drop releases it"
+    (is (empty? (filter #(= "blocked_by" (:on %)) (dead-waits [])))))
+  (let [scope [{:kind "job" :actions ["merge_after_in_review"]}]]
+    (testing "a seat that holds the door and is not woken leaves it dead"
+      (let [[c] (dead-waits [(seat "mayor" {:scope scope})])]
+        (is (= [{:seat "mayor" :holds ["merge_after_in_review"] :wakes []}]
+               (:seats_considered c)))))
+    (testing "a wake on the drop, or a cadence, brings it to act"
+      (is (empty? (dead-waits [(seat "mayor" {:scope scope
+                                              :wake_on [{:kind "job" :actions ["drop"]}]})])))
+      (is (empty? (dead-waits [(seat "mayor" {:scope scope :cadence_seconds 3600})]))))
+    (testing "a wake on another ending does not"
+      (is (seq (dead-waits [(seat "mayor" {:scope scope
+                                           :wake_on [{:kind "job" :actions ["land"]}]})]))))
+    (testing "a seat woken by the drop that holds no door on the waiter does not"
+      (is (seq (dead-waits [(seat "watcher" {:scope [{:kind "job" :actions ["unblock"]}]
+                                             :wake_on [{:kind "job" :actions ["drop"]}]})]))))))
+
+(deftest a-wait-of-no-row-is-cleared-by-the-wake-alone
+  (let [hold {:kind :hold
+              :states [:held :done :refused]
+              :initial :held
+              :terminal #{:done :refused}
+              :waits [{:on :hold :awaits :hold :waiter "the caller"
+                       :outcomes {:done :release :refused :nothing}}]
+              :actions {:allow {:from #{:held} :to :done}
+                        :refuse {:from #{:held} :to :refused}}}
+        dead (fn [seats]
+               (filterv #(= "dead_wait" (:crack %)) (cracks/audit [hold] seats)))]
+    (testing "the caller holds no door, so the crack names no state"
+      (let [[c & more] (dead (vector (seat "timed" {:cadence_seconds 60})))]
+        (is (nil? more))
+        (is (nil? (:state c)))
+        (is (= "refused" (:outcome c)))))
+    (testing "a seat woken by the refusal clears it"
+      (is (empty? (dead [(seat "caller" {:wake_on [{:kind "hold" :actions ["refuse"]}]})]))))))
