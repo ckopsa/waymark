@@ -4758,3 +4758,20 @@
         "no sentence says the bench did not open to a seat that never builds")
     (is (empty? (changes-of (:eng w))))
     (is (empty? (calls-of (:state w) "bench__prepare")))))
+
+(deftest a-seat-that-only-reads-change-is-minted-nothing-and-told-nothing
+  ;; the draft judge (ticket 7a4a6f9e): it reads code in several
+  ;; repositories and reads the change row, and no door of `change` is its
+  (let [repos (str a-repository "," another-repository)
+        w (ask-world [{:kind "ask" :actions ["complete"]}
+                      {:kind "bench.find" :actions [] :filter {:repo repos}}
+                      {:kind "bench.read" :actions [] :filter {:repo repos}}
+                      {:kind "change" :actions []}])
+        answer (:answer w)]
+    (is (false? (:isError (:sat w))) (text-of (:sat w)))
+    (is (nil? (:bench answer)))
+    (is (nil? (:bench_note answer))
+        "the same answer a seat without the change entry gets")
+    (is (nil? (:change answer)))
+    (is (empty? (changes-of (:eng w))) "a change entry with no actions reads")
+    (is (empty? (calls-of (:state w) "bench__prepare")))))
