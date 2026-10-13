@@ -3463,7 +3463,7 @@ merges (`merge-strategy-of`, `train-size-of`).
 |---|---|
 | `merge_strategy` | `line` or `train`. Empty reads as `line`. |
 | `train_size` | 2 to 10. Empty reads as 4. The pass reads it only when the strategy is `train`. |
-| `line_train` | the train that stands now: `branch`, `changes`, `prs`, `head`, `base_head`, `started_at`, `run_id`. Empty when no train stands. The pass writes it; a person does not. |
+| `line_train` | the train that stands now: `branch`, `changes`, `prs`, `heads` (the head each change had when the train was built), `head`, `base_head`, `started_at`, `run_id`. Empty when no train stands. The pass writes it; a person does not. |
 
 - `line` is the default and the line of R-15.4 to R-15.8: one change at
   a time. The pass brings the front up to date, its checks run again,
