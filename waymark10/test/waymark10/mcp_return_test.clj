@@ -133,8 +133,9 @@
         out (tool eng "waymark_get" {:kind "rs_dish" :id id :return "summary"})
         s (doc out)]
     (is (not (:isError out)))
-    (is (= #{:id :kind :state :summary :data} (set (keys s)))
-        "exactly the row: no actions, unavailable, links, parts or meta")
+    (is (= #{:id :kind :state :summary :data :waiting_on} (set (keys s)))
+        "exactly the row and what it waits on (ticket 86af9d88): no
+        actions, unavailable, links, parts or meta")
     (is (= id (:id s)))
     (is (= "rs_dish" (:kind s)))
     (is (= "suggested" (:state s)))

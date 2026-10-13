@@ -49,7 +49,7 @@
       (is (= [{:seat "code-seat" :woken_by ["groom"] :cadence_seconds 3600}]
              (:seats submit))))
     (testing "it says how long the row has sat against its expected age"
-      (is (= {:at "2026-10-13T09:00:00Z" :seconds 10800 :expected_seconds 86400}
+      (is (= {:at "2026-10-13T09:00:00Z" :expected_seconds 86400}
              (:since w)))
       (is (str/ends-with? (:verdict w) ", 3 h of 24 h") (:verdict w)))
     (testing "a row that is not held carries no hold"

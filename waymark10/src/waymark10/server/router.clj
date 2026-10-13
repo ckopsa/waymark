@@ -438,10 +438,11 @@
   and how long the row has sat. It reads the data the envelope already
   projected for this caller, so it names no field the grant hides. An
   engine with no seat kind, and a read that fails, leave the envelope
-  as it was."
+  as it was. It rides the full row READ alone: the block tells an age,
+  so an action's answer, which a replay must give back byte for byte,
+  does not carry it, and neither does the lean depth=summary read."
   [eng rdef row env]
-  (if-some [w (waiting-on/for-row eng rdef row
-                                  (or (get env "data") (get env "fields")))]
+  (if-some [w (waiting-on/for-row eng rdef row (get env "data"))]
     (assoc env "waiting_on" (p/wire-value w))
     env))
 
@@ -451,8 +452,7 @@
   row answers with THIS — the envelope is the wire's promise, not each
   handler's."
   [eng rdef row req status extra-headers]
-  (let [env (with-waiting-on eng rdef row
-              (render/envelope rdef row (render-opts eng req)))]
+  (let [env (render/envelope rdef row (render-opts eng req))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -1181,7 +1181,8 @@
                                      (ref-summary-hook eng req)))
                              opts
                              (embed-overrides req)))
-        env (with-waiting-on eng rdef row env)]
+        env (cond->> env
+              (not= :summary depth) (with-waiting-on eng rdef row))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
                    {"ETag" (get-in env ["meta" "etag"])})))

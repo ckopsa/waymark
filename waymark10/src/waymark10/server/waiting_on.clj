@@ -4,8 +4,8 @@
   stop in; this says, for the row in hand, who moves it next.
 
   since     when the row entered its state and by which door, read from
-            its log (the last write when the log does not say), how many
-            seconds ago that is, and the state's expected age
+            its log (the last write when the log does not say), and the
+            state's expected age
             (`live-cracks/expected-age`) when it has one
   next      every way out of the state (`cracks/row-doors`): the door,
             the active seats that hold it for THIS row, what wakes each
@@ -72,11 +72,12 @@
     :else nil))
 
 (defn- span
-  "Seconds as a person says them: 45 s, 12 min, 3 h, 2 d."
+  "Seconds as a person says them: under 2 min, 12 min, 3 h, 2 d. No
+  finer: two reads of one row a moment apart answer the same words."
   [seconds]
   (let [s (long seconds)]
     (cond
-      (< s 120) (str s " s")
+      (< s 120) "under 2 min"
       (< s 7200) (str (quot s 60) " min")
       (< s 172800) (str (quot s 3600) " h")
       :else (str (quot s 86400) " d"))))
@@ -194,7 +195,6 @@
              :since (cond-> {}
                       at (assoc :at (str at))
                       (:action entered) (assoc :by (text (:action entered)))
-                      secs (assoc :seconds secs)
                       expected (assoc :expected_seconds expected))
              :next (or doors [])
              :verdict (verdict kind state doors for-words age-words held)}
