@@ -148,6 +148,10 @@
             [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            ;; the walked kind's query grammar: whether a row another
+            ;; seat's sitting was handed is still in that seat's walk
+            ;; (`still-in-its-walk`, ticket 2885ad6e)
+            [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -6746,29 +6750,70 @@
                    sort
                    first))))))))
 
+(defn- still-in-its-walk
+  "Of `ids`, the rows still in the walk of the seat `other`: under its
+  judgment's `queue` for a seat that says one, and its walk's scope
+  entry filter otherwise, both under the kind's defaults
+  (`wakes/walk-query`'s choice, read through `collections/parse-query`
+  as the sit's page is). A row that seat's own door moved out of its
+  walk is no longer its work (ticket 2885ad6e). A filter that cannot
+  be read leaves every id in. → a set of ids."
+  [eng st tx other ids]
+  (let [rdef (walked-rdef eng other)
+        jid (some-> (get-in other [:data :judgment]) str not-empty)
+        judgment (when (and jid (get (inv/resources eng) :judgment))
+                   (store/load-row st tx :judgment jid {}))
+        f (if judgment
+            (get-in judgment [:data :queue])
+            (walk-filter other))]
+    (if-not (and rdef (seq ids))
+      (set ids)
+      (try
+        (let [params (into {} (map (fn [[k v]] [(name k) (str v)])) f)
+              conds (vec (:conds (collections/parse-query rdef params)))]
+          (into #{}
+                (filter (fn [id]
+                          (seq (store/ids-matching
+                                st tx (:kind rdef)
+                                (conj conds
+                                      {:target :id :op :>= :value id}
+                                      {:target :id :op :<= :value id})
+                                1))))
+                ids))
+        (catch Exception _ (set ids))))))
+
 (defn- other-seats-rows
   "The walk row ids the open sittings of OTHER seats that walk this
   seat's kind were handed (ticket 40d8f04c). Two seats over one queue
   are two offices on one row: without this each sit hands the row the
   other already works, and both runs edit one branch. The hold is the
   open sitting's alone - a closed or swept sitting of another seat
-  holds nothing, and the grace stays the seat's own. → a set of ids."
-  [st tx seat-row]
+  holds nothing, and the grace stays the seat's own.
+
+  The hold lasts while the row is in that other seat's walk
+  (`still-in-its-walk`). A seat that grooms drafts walks the kind the
+  seat that builds them walks: its sitting was handed the draft, and
+  its groom moved the row into the builder's walk while that sitting
+  was still open. Held past that move, the row was counted out of the
+  builder's walk, and the groom's wake read the walk as empty and was
+  dropped (ticket 2885ad6e). → a set of ids."
+  [eng st tx seat-row]
   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
         seat-id (str (:id seat-row))
-        walks-it? (memoize
-                   (fn [id]
-                     (= walk (some-> (store/load-row st tx :seat id {})
-                                     (get-in [:data :walk])
-                                     str))))]
+        seat-of (memoize (fn [id] (store/load-row st tx :seat id {})))]
     (if-not walk
       #{}
       (into #{}
             (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
-                  (filter #(some-> (get-in % [:data :seat]) str not-empty
-                                   walks-it?))
-                  (mapcat #(get-in % [:data :walked_rows]))
-                  (keep #(some-> % str not-empty)))
+                  (mapcat
+                   (fn [s]
+                     (when-some [other (some-> (get-in s [:data :seat])
+                                               str not-empty seat-of)]
+                       (when (= walk (some-> (get-in other [:data :walk]) str))
+                         (still-in-its-walk
+                          eng st tx other
+                          (into [] (keep #(some-> % str not-empty))
+                                (get-in s [:data :walked_rows]))))))))
             (store/query-rows st tx :sitting
                               {:state :open}
                               {:limit open-sitting-page
@@ -6783,7 +6828,8 @@
     (let [st (:storage eng)]
       (store/with-tx st
         (fn [tx]
-          (other-seats-rows st tx (store/load-row st tx :seat (str seat-id) {})))))
+          (other-seats-rows eng st tx
+                            (store/load-row st tx :seat (str seat-id) {})))))
     #{}))
 
 (defn claimed-rows
@@ -6806,7 +6852,7 @@
           (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
                   (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
                                      sitting-id ((:now-fn eng)))
-                        (other-seats-rows st tx seat-row)))
+                        (other-seats-rows eng st tx seat-row)))
                 (comp (remove #(= (str sitting-id) (str (:id %))))
                       (mapcat #(get-in % [:data :walked_rows]))
                       (keep #(some-> % str not-empty)))
@@ -7192,7 +7238,7 @@
                                         :newest-first true})
                 taken (into (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
                                                sitting-id ((:now-fn eng)))
-                                  (other-seats-rows st tx seat-row))
+                                  (other-seats-rows eng st tx seat-row))
                             (comp (remove #(= (str sitting-id) (str (:id %))))
                                   (mapcat #(get-in % [:data :walked_rows]))
                                   (keep #(some-> % str not-empty)))
