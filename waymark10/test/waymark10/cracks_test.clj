@@ -515,6 +515,62 @@
                                      :wake_on [{:kind "ticket" :actions ["groom"]
                                                 :filter {:repo "ckopsa/b"}}]})]))))))
 
+;; ticket 8186d41a: the mayor holds doors out of open in every repo, and
+;; a person's sitting is no wake. It hid the open row no builder is
+;; handed, by its walk and by the wake_on a walk seat is given.
+(deftest a-seat-a-person-sits-in-hides-no-value
+  (let [ticket {:kind :ticket
+                :states [:draft :open :in_review :done]
+                :initial :draft
+                :terminal #{:done}
+                :left-by [{:in #{:open} :by {:kind :change :action :submit}
+                           :via :review :to :in_review}]
+                :actions {:groom {:from #{:draft} :to :open}
+                          :ungroom {:from #{:open} :to :draft}
+                          :review {:from #{:open} :to :in_review}
+                          :land {:from #{:in_review} :to :done}}}
+        change {:kind :change
+                :states [:open :submitted]
+                :initial :open
+                :terminal #{:submitted}
+                :actions {:submit {:from #{:open} :to :submitted}}}
+        builder (seat "builder" {:scope [{:kind "ticket" :actions ["ungroom"]
+                                          :filter {:repo "ckopsa/waymark" :state "open"}}
+                                         {:kind "change" :actions ["submit"]}]
+                                 :walk "ticket"})
+        mayor (fn [fm]
+                (seat "mayor" {:mode "interactive" :cadence_seconds 86400
+                               :scope [(cond-> {:kind "ticket" :actions ["groom" "ungroom"]}
+                                         fm (assoc :filter fm))
+                                       {:kind "change" :actions ["submit"]}]
+                               :walk "ticket"}))
+        rows {:ticket [{:id "1" :state :open :data {:repo "ckopsa/waymark"}}
+                       {:id "2" :state :open :data {:repo "ckopsa/messa"}}]}
+        unwalked (fn [seats]
+                   (filterv #(= "unwalked_value" (:crack %))
+                            (cracks/audit [ticket change] seats {:rows rows})))]
+    (testing "an interactive mayor with every repo in scope clears nothing"
+      (doseq [fm [nil {:state "draft,open"}]]
+        (let [[c & more] (unwalked [builder (mayor fm)])]
+          (is (nil? more))
+          (is (= "repo" (:field c)))
+          (is (= "ckopsa/messa" (:value c)))
+          (is (= 1 (:rows c)))
+          (is (= ["open"] (:states c)))
+          (is (= [{:seat "builder" :admits ["ckopsa/waymark"]}] (:seats_considered c))))))
+    (testing "a wake_on entry the mayor wrote is a wake"
+      (is (empty? (unwalked [builder
+                             (assoc-in (mayor nil) [:data :wake_on]
+                                       [{:kind "ticket" :actions ["groom"]}])]))))
+    (testing "a woken seat that holds only an administrative exit moves no work"
+      (is (seq (unwalked [builder
+                          (seat "clerk" {:scope [{:kind "ticket" :actions ["ungroom"]}]
+                                         :wake_on [{:kind "ticket" :actions ["groom"]}]})]))))
+    (testing "a woken seat that holds the door the kind declares clears it"
+      (is (empty? (unwalked [builder
+                             (seat "any" {:scope [{:kind "change" :actions ["submit"]}]
+                                          :wake_on [{:kind "ticket" :actions ["groom"]}]})]))))))
+
 ;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
 ;; two ways a ticket does: a blocker's ending releases it whichever way
 ;; it ends, and a merge_after job that is dropped does nothing.
