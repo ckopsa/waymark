@@ -26,9 +26,15 @@
   becomes a `ci_run` row at red, and a red row no seat can answer walks
   `supersede`. The factory hands it the `ci_run` kind's doors.
 
+  THE FAILING PASS is `failing-pass!` (ticket 58c51a5d): every live
+  change's head, read by the factory's own hand, walks at most one of
+  `fail`, `recover` and `stick`, after the pull request is read again
+  by number (`ForgePull`).
+
   THE PASS is `pass!` (ticket 75db2ef8): the poll, the rate-limit hold,
-  the change pass, the source's place and the red runs, with the
-  factory's own steps handed in as functions."
+  the change pass, the source's place, the red runs, the failing pass
+  and the census line, with the factory's own steps handed in as
+  functions."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -122,6 +128,15 @@
     count against the limit. `:held-until` stands while the source
     holds every call for a spent limit, and no read of the forge
     answers before that instant. Never throws."))
+
+(defprotocol ForgePull
+  "One pull request read by its number, outside the window (ticket
+  949d18c5). A protocol of its own: a source that does not implement
+  it adopts only what the window shows, and the pass notes the rest."
+  (forge-pull [s repository number]
+    "→ the change document of pull request `number`, in the shape
+    `forge-poll` answers, or nil. Throws when the forge does not
+    answer or has no such pull request."))
 
 ;; ── the build-state table ───────────────────────────────────────────
 
@@ -686,6 +701,128 @@
       (stale-pass! runs changes census log-fn)
       (settled-pass! runs census log-fn))))
 
+;; ── the failing pass ────────────────────────────────────────────────
+
+(def ^:private why-chars 480)
+
+(defn failing-move
+  "The one door the verdict opens on this row, as [door input], or nil.
+  A red head under the round ceiling (`rounds`) goes to `failing`; a
+  red head on the last round goes to `stuck` with the names as its why;
+  a green head brings a failing change back to `submitted`, unless a
+  merge train found that same head red (`train_red_head`, ticket
+  6566d32f): its own green does not clear the train's red, and a new
+  head does. `conflicts` is the list of conflicting paths, written
+  beside the names when there is one; a failed landing's output rides
+  as the verdict's `:error`."
+  [row verdict rounds conflicts]
+  (let [names (:names verdict)
+        error (:error verdict)]
+    (case [(state-of row) (:verdict verdict)]
+      [:submitted :red]
+      (if (>= (long (or (get-in row [:data :rounds]) 0)) (long rounds))
+        (let [why (str "The checks went red on the last round the policy "
+                       "gives: " (str/join ", " names) ".")]
+          [:stick (cond-> {:why (subs why 0 (min (count why) why-chars))
+                           :failing_checks names}
+                    (seq conflicts) (assoc :conflicts conflicts)
+                    error (assoc :landing_error error))])
+        [:fail (cond-> {:failing_checks names}
+                 (seq conflicts) (assoc :conflicts conflicts)
+                 error (assoc :landing_error error))])
+      [:failing :green]
+      (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
+        (when-not (and train-head
+                       (= train-head (str (get-in row [:data :head_sha]))))
+          [:recover {}]))
+      ;; a queued check a runner took at last (ticket bc3ff12c)
+      [:failing :started] [:recover {}]
+      nil)))
+
+(def moved-counts
+  "The census count each failing door adds one to."
+  {:fail :failing :recover :recovered :stick :stuck})
+
+(defn forge-moved!
+  "The row moved to what its pull request says NOW, read by number just
+  before the failing pass would move it (ticket a24a1e01): the poll's
+  window can miss a merge or a new round, and a verdict on the stored
+  head then judges a head that is no longer the pull request's — 1610db25
+  went back to `open` on its first round's red after #562 merged green.
+  A merged or closed pull request walks its own door through the hand's
+  `:move!`, and a new head is observed and judged on the next pass.
+  → true when the row moved; nil when the forge says what the row says,
+  or has nothing to say."
+  [failing source row log-fn]
+  (let [repo (str (get-in row [:data :repository]))
+        number (get-in row [:data :number])
+        doc (when (and (some? number) (satisfies? ForgePull source))
+              (try (forge-pull source repo number)
+                   (catch Exception e
+                     (log-fn "the pull request #" number " of " repo
+                             " could not be read again (" (ex-message e) ")")
+                     nil)))
+        head (some-> (:head_sha doc) str not-empty)]
+    (when (and (map? doc)
+               (or (contains? #{"merged" "closed"} (str (:forge_state doc)))
+                   (and head
+                        (not= head (str (get-in row [:data :head_sha]))))))
+      ((:move! failing) row doc))))
+
+(defn failing-pass!
+  "Every live change of a repository with an active policy → its head's
+  verdict, read by the factory's hand, and at most one door. A change
+  with no head, or of a repository with no policy, is left where it is.
+  A forge that does not answer, or a door the engine refuses, costs that
+  change one pass and nothing else. The failing hand:
+
+  :changes    (fn []) → the live `change` rows
+  :policies   (fn []) → the active policy rows, each naming `:repository`
+  :rounds-of  (fn [policy]) → the rounds the policy gives a change
+  :read       (fn [row policy head census]) → {:verdict verdict
+              :census census :conflicts [path …] :re-ran? bool}: the
+              factory's own reading of one head (its landing, its held
+              log); a re-run is that head's move for this pass
+  :move!      (fn [row doc]) → truthy when the row moved to `doc`
+  :invoke!    (fn [row-id door input]) → the row after the door
+
+  → the census, with `:failing`, `:recovered`, `:stuck`, `:moved` and
+  `:refused` counted."
+  [failing source census log-fn]
+  (let [by-repo (into {}
+                      (keep (fn [p]
+                              (when-some [r (some-> (get-in p [:data :repository])
+                                                    str not-empty)]
+                                [r p])))
+                      ((:policies failing)))]
+    (reduce
+     (fn [census row]
+       (let [repo (str (get-in row [:data :repository]))
+             head (some-> (get-in row [:data :head_sha]) str not-empty)
+             policy (get by-repo repo)]
+         (if-not (and head policy)
+           census
+           (try
+             (let [{:keys [verdict conflicts re-ran?] :as read}
+                   ((:read failing) row policy head census)
+                   census (:census read census)]
+               (if-some [[door input] (when (and verdict (not re-ran?))
+                                        (failing-move
+                                         row verdict
+                                         ((:rounds-of failing) policy)
+                                         conflicts))]
+                 (if (forge-moved! failing source row log-fn)
+                   (counted census :moved)
+                   (do ((:invoke! failing) (str (:id row)) door input)
+                       (counted census (moved-counts door))))
+                 census))
+             (catch Exception e
+               (log-fn "the checks of " (get-in row [:data :change_id])
+                       " did not move the change (" (ex-message e) ")")
+               (counted census :refused))))))
+     census
+     ((:changes failing)))))
+
 ;; ── the pass ────────────────────────────────────────────────────────
 
 (defn budget-of
@@ -727,6 +864,69 @@
 (defn- warn-line [& parts]
   (binding [*out* *err*] (println (apply str parts))))
 
+(def fresh-census
+  "The census a factory's pass starts from: every count the census line
+  prints, at zero."
+  {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
+   :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
+   :unopened-closed 0
+   :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
+   :base-kept 0
+   :stale-noted 0 :floor-filed 0 :refused 0})
+
+(defn census-line
+  "The one line a pass prints of its census, so every factory prints
+  the same line (ticket 58c51a5d). A count the census does not carry
+  reads as zero."
+  [census {:keys [changes]}]
+  (let [n #(long (or (get census %) 0))]
+    (str
+     (n :calls) " calls, " (count changes) " pull requests, "
+     (n :minted) " changes minted, " (n :adopted)
+     " changes adopted, " (n :moved)
+     " changes moved, " (n :runs-minted) " red runs minted, "
+     (n :labelled) " labels pushed"
+     (when (pos? (n :runs-superseded))
+       (str ", " (n :runs-superseded) " red runs superseded "
+            "on a head that moved or a change that ended"))
+     (when (pos? (+ (n :failing) (n :recovered) (n :stuck)))
+       (str ", " (n :failing) " changes failing, "
+            (n :recovered) " green again, "
+            (n :stuck) " stuck on red"))
+     (when (pos? (n :noted))
+       (str ", " (n :noted) " policy source notes written"))
+     (when (pos? (n :adoption-noted))
+       (str ", " (n :adoption-noted)
+            " landed pull requests noted unadopted"))
+     (when (pos? (+ (n :rerun) (n :rerun-noted)))
+       (str ", " (n :rerun) " interrupted heads re-run, "
+            (n :rerun-noted) " interrupted again and left"))
+     (when (pos? (+ (n :base-opened) (n :base-noted)
+                    (n :base-closed) (n :base-kept)))
+       (str ", " (n :base-opened) " red-base tickets opened, "
+            (n :base-noted) " red heads noted, "
+            (n :base-closed) " closed on green, "
+            (n :base-kept) " kept on green"))
+     (when (pos? (n :floor-filed))
+       (str ", " (n :floor-filed) " groom-floor tickets filed"))
+     (when (pos? (n :refused))
+       (str ", " (n :refused) " refused"))
+     (when-some [left (:remaining census)]
+       (str ", " left
+            (when-some [limit (:limit census)] (str " of " limit))
+            " calls left"
+            (when-some [reset (:reset census)]
+              (str " until " reset))))
+     (when (:unchanged census)
+       (str ", " (:unchanged census)
+            " answers unchanged and not counted"))
+     (when-some [until (:held-until census)]
+       (str ", every call held until " until
+            ": the forge's rate limit is spent"))
+     (when-not (or (:complete? census) (:held-until census))
+       ", and a repository did not answer — the cursor stands"))))
+
 (defn pass!
   "One pass of a forge (ticket 75db2ef8): poll, run the change pass,
   store the source's place or send it back, and call the factory's own
@@ -749,19 +949,28 @@
                    takes them; the red runs run after `:after-changes`
   :after-runs      optional (fn [census poll]) → census, after the red
                    runs
+  :failing         optional: the failing hand, as `failing-pass!` takes
+                   it; the failing pass runs after `:after-runs`
+  :after-failing   optional (fn [census poll]) → census, after the
+                   failing pass
   :always          optional (fn [census poll held-until]) → census, run
                    whether the steps above ran, were held or threw
-  :report          optional (fn [census poll]), given the census last
+  :report          optional (fn [census poll]), given the census last,
+                   in place of the census line
+  :note            optional (fn [line]) → line, given the census line
+                   before it is logged
 
   `poll` is what `forge-poll` answered. A spent rate limit (ticket
   cdba1f6a) holds every step from `:before-changes` to
-  `:after-runs`, so nothing there asks the forge. A pass that was
+  `:after-failing`, so nothing there asks the forge. A pass that was
   held or threw before its rows were written sends the source back
   (ticket fc3a5a40), and a throw is thrown again only after `:always`
-  ran (ticket c4bac627). → the census, with `:repositories`,
-  `:complete?`, `:calls` and the source's budget."
+  ran (ticket c4bac627). Without `:report` the pass logs its
+  `census-line`. → the census, with `:repositories`, `:complete?`,
+  `:calls` and the source's budget."
   [{:keys [source hand census log-fn poll-failed before-changes
-           after-changes runs after-runs always report]
+           after-changes runs after-runs failing after-failing always
+           report note]
     run-changes :change-pass!}]
   (let [log-fn (or log-fn warn-line)
         run-changes (or run-changes
@@ -797,7 +1006,12 @@
                            (runs-pass! runs source poll census log-fn)
                            census)
                   census (cond-> census
-                           after-runs (after-runs poll))]
+                           after-runs (after-runs poll))
+                  census (if failing
+                           (failing-pass! failing source census log-fn)
+                           census)
+                  census (cond-> census
+                           after-failing (after-failing poll))]
               [census nil])
             (catch Exception e [census e])))
         _ (when-not @committed (forget-poll! source log-fn))
@@ -805,7 +1019,9 @@
         _ (when thrown (throw thrown))
         census (merge (assoc census :calls (forge-calls source))
                       (budget-of source))]
-    (when report (report census poll))
+    (if report
+      (report census poll)
+      (log-fn ((or note identity) (census-line census poll))))
     census))
 
 ;; ── the conformance suite ───────────────────────────────────────────
