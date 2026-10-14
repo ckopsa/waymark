@@ -1241,6 +1241,9 @@
     ;; the seventh fixed tool (waymark-pywy.3): generic, still no
     ;; route of its own
     "waymark_resolve"
+    ;; the in-flight read (ticket 524a4705): a call onto
+    ;; GET /api/-/in-flight, fixed for every caller
+    "waymark_in_flight"
     ;; the eighth fixed tool (spec-seat.md R-12.14): how ONE session of
     ;; a person's connector becomes a seat's sitter, by the key in its
     ;; instructions — fixed for every caller, because a list that only
