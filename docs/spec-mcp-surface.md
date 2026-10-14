@@ -46,6 +46,7 @@ on every law change. Instead, a **fixed small toolset over a dynamic surface**:
 | `waymark_pursue` | one goal action, walked through its refusals' remedies (GRAIL) |
 | `waymark_history` | the row's transitions (pairs with [time travel](spec-time-travel.md)) |
 | `waymark_resolve` | batch lookup: which rows of a kind carry these values in a key field |
+| `waymark_in_flight` | every open row the grant admits, grouped by who holds it (GET /api/-/in-flight) |
 | `waymark_sit` | sit in a seat with its key — this session becomes the seat's sitter ([seat](spec-seat.md) R-12.14) |
 | `waymark_powers` | the external powers (Gate's live tools) this grant admits right now |
 | `waymark_power` | invoke one of those powers by name, judged by the grant first |
