@@ -16,8 +16,25 @@
   and what a groom wakes are the factory's own.
 
   AN ASK THAT ENDS RELEASES WHAT IT BLOCKS (`release-the-waiters!`):
-  a factory's handler on each ending door calls it."
-  (:require [waymark10.server.invoke :as inv]))
+  a factory's handler on each ending door calls it.
+
+  THE CHANGE LINK IS THE CORE'S (step 3b, ticket b220009b). The kit
+  holds WHEN an ask follows its change — submitted, back to work or
+  closed unmerged, merged, and the ask's own ending — and the factory's
+  extension names WHICH door each moment walks, under `:link`
+  (`link-defaults` for a factory that names none). The review and
+  return doors' machine and their wall, `only-its-change-moves-it`,
+  are the core's.
+
+  THE LAW IS THE CORE'S (step 3c, ticket 2b85a37e): what an ask waits
+  on, the exits no seat takes at an ask door, and how long an ask may
+  rest in each working state (`law`), so a factory built on the kit
+  reads real cracks from its first read. A factory's extension adds to
+  it or overrides it under the same keys."
+  (:require [clojure.string :as str]
+            [waymark10.guards :as g]
+            [waymark10.server.invoke :as inv]
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
@@ -115,6 +132,209 @@
               (println "factorykit.ask ending: the" (name kind) (:id waiter)
                        "was not released -" (ex-message e)))))))))
 
+;; ── the change link (step 3b) ───────────────────────────────────────
+
+(def link-defaults
+  "The link of a factory that names none of its own: the change kind,
+  the door each moment walks, the input the ending's close takes, and
+  the words of the wall."
+  {:change-kind :change
+   :review-door :review
+   :return-door :return
+   :merged-door :complete
+   :close-change-door :close_without_pr
+   :close-change-input (fn [sentence] {:why sentence})
+   :words {:open "No door clears this one. An ask goes out for review when its change is submitted, and comes back to the queue when that change goes back to work or closes unmerged. A person who wants it sooner works the change."
+           :explain "An ask under review is moved by the change it was built in and by no hand: the change's submit sends it out, its return sends it back, and its merge ends it."}})
+
+(defn link
+  "The change link of an ask of `ask-kind`: `link-defaults` with what
+  the factory `named` over them."
+  [ask-kind named]
+  (merge link-defaults named {:ask-kind ask-kind}))
+
+(defn only-its-change-moves-it
+  "The wall on the link's doors: the door opens inside a door of the
+  link's change kind, and for nobody's hand. The wire, the render probe
+  and every rehearsal carry no `:within`, so it renders refused, which
+  is true. Its form names the change kind, so a factory's wall is the
+  one it wrote by hand."
+  [link]
+  (let [kind (:change-kind link)]
+    (g/guard
+     (merge {:name :only-its-change-moves-it :reads [:within]}
+            (:words link)
+            {:check (with-meta
+                      (fn [_row _inp ctx]
+                        (if (= kind (:kind (:within ctx)))
+                          (t/allow)
+                          (t/deny)))
+                      {:waymark10/form
+                       (list 'fn '[_row _inp ctx]
+                             (list 'if (list '= kind '(:kind (:within ctx)))
+                                   '(t/allow)
+                                   '(t/deny)))})}))))
+
+(defn- link-doors
+  "The core's part of the link's doors, under the names the link gives."
+  [link]
+  (let [wall [(only-its-change-moves-it link)]]
+    {(:review-door link) {:from #{:open} :to :in_review :guards wall}
+     (:return-door link) {:from #{:in_review} :to :open :guards wall}}))
+
+;; ── the law (step 3c) ───────────────────────────────────────────────
+
+(def expected-age
+  "HOW LONG AN ASK MAY REST, in seconds: open twelve hours, in review
+  six, blocked seven days. The live cracks pass files an aged note for
+  an ask past its state's age."
+  {:open 43200 :in_review 21600 :blocked 604800})
+
+(def unaged
+  "The states the core gives no age: `draft` waits on a groom,
+  `deferred` on its `defer_until`, and `done` and `dropped` are over."
+  #{:draft :deferred :done :dropped})
+
+(defn law
+  "The core's law for an ask whose link is `link`.
+
+  - `:waits`: a blocked ask waits on the asks its `blocked_by` names,
+    and either ending releases it (`release-the-waiters!`).
+  - `:left-by`: the exits no seat takes at an ask door, so the cracks
+    audit does not report a working state as one nobody leaves. The
+    change's submit walks the review door, the forge's mirror walks the
+    merged door, and the last blocker's ending walks `unblock` or
+    `return_to_draft`.
+  - `:expected-age`: `expected-age`."
+  [link]
+  {:waits [{:on :blocked_by :awaits (:ask-kind link) :in #{:blocked}
+            :outcomes {:done :release :dropped :release}}]
+   :left-by [{:in #{:open} :by {:kind (:change-kind link) :action :submit}
+              :via (:review-door link) :to :in_review}
+             {:in #{:in_review} :by :mirror :via (:merged-door link) :to :done}
+             {:in #{:blocked} :by :wait :via :unblock :to :open}
+             {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
+   :expected-age expected-age})
+
+(defn- entries-over
+  "The core's `entries` with the factory's `own` over them: an own entry
+  whose `k` a core entry has takes its place, and the rest follow."
+  [k entries own]
+  (let [own-by (into {} (map (juxt k identity)) own)
+        cores (set (map k entries))]
+    (into (mapv #(get own-by (k %) %) entries)
+          (remove #(contains? cores (k %)) own))))
+
+(defn- law-over
+  "The core's `law` with the extension's over it: a wait by its field
+  (`:on`), an exit by its door (`:via`), an age by its state."
+  [law extension]
+  {:waits (entries-over :on (:waits law) (:waits extension))
+   :left-by (entries-over :via (:left-by law) (:left-by extension))
+   :expected-age (merge (:expected-age law) (:expected-age extension))})
+
+(defn its-changes
+  "Every change born from `ask` that stands in one of `states`. The
+  adoption writes the forge's id over `change_id`, so a change with a
+  pull request is found by its repository and read by its `born_from`."
+  [link ask states find']
+  (let [kind (:change-kind link)
+        born (str (name (:ask-kind link)) ":" (:id ask))
+        repo (some-> (get-in ask [:data :repo]) str not-empty)]
+    (vals (into {}
+                (comp (filter #(= born (str (get-in % [:data :born_from]))))
+                      (map (juxt :id identity)))
+                (mapcat (fn [state]
+                          (concat
+                           (find' kind {:state state :change_id born}
+                                  {:limit 50})
+                           (when repo
+                             (find' kind {:state state :repository repo}
+                                    {:limit 200}))))
+                        states)))))
+
+(defn- its-ask
+  "[id row] of the ask `change` was born from, or nil: a change born
+  from another kind, or from nothing, has no ask here."
+  [link change ctx]
+  (let [born (str (get-in change [:data :born_from]))
+        prefix (str (name (:ask-kind link)) ":")]
+    (when (str/starts-with? born prefix)
+      (when-some [id (not-empty (subs born (count prefix)))]
+        (when-some [read' (:read ctx)]
+          (when-some [ask (read' (:ask-kind link) id)]
+            [id ask]))))))
+
+(defn move-its-ask!
+  "Walk `door` on the ask `change` was born from, when the ask stands in
+  one of `from`.
+
+  BEST-EFFORT, as the merge's completion is: a change born from no ask
+  moves nothing, an ask that stands elsewhere is left where it is, and
+  a door that refuses is said in the log — the change's own move
+  stands. A rehearsal carries no pen, and moves nothing."
+  [link change from door input ctx]
+  (let [[id ask] (its-ask link change ctx)]
+    (when (and ask
+               (contains? from (some-> (:state ask) name keyword))
+               (:invoke ctx))
+      (try
+        ((:invoke ctx) (:ask-kind link) id door input)
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "factorykit.ask link: the" (name (:ask-kind link)) id
+                     "did not" (name door) "-" (ex-message e))))))))
+
+(defn submitted!
+  "The change is submitted: its ask, in the queue, goes out for review."
+  [link change ctx]
+  (move-its-ask! link change #{:open} (:review-door link) nil ctx))
+
+(defn returned!
+  "The change went back to work, or closed unmerged: its ask, under
+  review, comes back to the queue."
+  [link change ctx]
+  (move-its-ask! link change #{:in_review} (:return-door link) nil ctx))
+
+(def ^:private unended
+  #{:draft :open :in_review :blocked :deferred})
+
+(defn merged!
+  "The change merged: its ask, wherever it stands short of an ending,
+  ends with `input`."
+  [link change input ctx]
+  (move-its-ask! link change unended (:merged-door link) input ctx))
+
+(def ^:private unmerged
+  "The states of a change its ask's ending closes. `submitted` is not
+  one: its pull request is the forge's to end."
+  ["open" "stuck" "failing"])
+
+(defn close-its-changes!
+  "THE ASK THAT ENDS TAKES ITS PR-LESS CHANGES WITH IT, in the same
+  transaction: each change born from `ask`, open, stuck or failing with
+  no pull request, walks the link's close door with `sentence`. A
+  change `leave?` answers true for is left — the one whose merge IS
+  this ending.
+
+  BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
+  said in the log, and the ending stands."
+  [link ask sentence leave? ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (when (and find' invoke')
+      (doseq [change (its-changes link ask unmerged find')
+              :when (and (nil? (get-in change [:data :number]))
+                         (not (leave? change)))]
+        (try
+          (invoke' (:change-kind link) (str (:id change))
+                   (:close-change-door link)
+                   ((:close-change-input link) sentence))
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factorykit.ask ending: the change" (:id change)
+                       "was not closed -" (ex-message e)))))))))
+
 ;; ── the builder ─────────────────────────────────────────────────────
 
 (def ^:private machine
@@ -123,6 +343,8 @@
 
 (defn- refuse! [why data]
   (throw (ex-info (str "factorykit.ask/build: " why) data)))
+
+(declare ^:private build*)
 
 (defn build
   "The defresource map of a factory's ask: `core` and the factory's own
@@ -135,8 +357,20 @@
     it: the guards, the handler, the safety and the words. An
     extension that names a part of a core door the core wrote — its
     machine, or groom's input — is refused.
+  - The link's review and return doors are core doors too, under the
+    names the extension's `:link` gives them (`link`): their machine
+    and their wall are the kit's. `:link` itself leaves the map.
+  - The law (`law`) is the core's, and the extension's `:waits`,
+    `:left-by` and `:expected-age` over it (`law-over`).
   - Every other key is the extension's."
   [core extension]
+  (let [link (link (:kind extension) (:link extension))
+        core (update core :actions merge (link-doors link))
+        extension (-> (dissoc extension :link)
+                      (merge (law-over (law link) extension)))]
+    (build* core extension)))
+
+(defn- build* [core extension]
   (when-some [named (seq (filter #(contains? extension %) machine))]
     (refuse! (str "the extension names " (pr-str (vec named))
                   ", and the machine is the core's.")

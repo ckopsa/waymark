@@ -21,7 +21,7 @@ Three layers, each depending only on the one below it:
 | Layer | Where | What it holds |
 | --- | --- | --- |
 | Engine | `waymark10/` | the machine every kind runs on: declarations, doors, guards, the store, the sit and the bench |
-| Kit | `factorykit/` | what every factory's kinds share: the change core, the repository policy core, the forge |
+| Kit | `factorykit/` | what every factory's kinds share: the ask core, the change core, the repository policy core, the forge |
 | Factory | `factory10/`, or a repository of its own | its tickets, its own fields and doors, and the hands that close its engine into the kit's functions |
 
 The kit names no factory. A factory names the kit and the engine, and
@@ -119,6 +119,42 @@ The steps colton-tools' mayor follows:
 6. Run the contract: a test that builds a hand on a fresh engine and
    expects `(failures new-hand)` to be `[]`. Take
    `factory10.change-contract-test` as the pattern.
+
+## The ask (`factorykit.ask`)
+
+An ask is the ticket a factory's queue holds: groomed, built in a
+change, reviewed and landed. factory10's `ticket` is
+`(ask/build ask/core factory10s-own)`.
+
+### What the core holds
+
+| Part | What |
+| --- | --- |
+| Machine | the seven states `draft open in_review blocked deferred done dropped`, `draft` initial, no tomb |
+| Queue doors | `groom` (with its priority input, 0 to 3), `ungroom`, `return_to_draft`, `prioritize`, `block`, `unblock`, `defer`, `resume`, `shelve`, `drop`, `reopen`: their `:from` and `:to` |
+| Link doors | the review and return doors, under the names the extension's `:link` gives, with their wall `only-its-change-moves-it` |
+| Law | `:waits` on `blocked_by`; `:left-by` for the review door (the change's submit), the merged door (the forge's mirror), `unblock` and `return_to_draft` (a blocker's ending); `:expected-age` open 12 h, in review 6 h, blocked 7 d |
+| Functions | `release-the-waiters!`, the link's `submitted!`, `returned!`, `merged!` and `close-its-changes!` |
+
+`draft`, `deferred`, `done` and `dropped` have no age (`unaged`):
+a draft waits on a groom, a deferred ask on its `defer_until`, and the
+endings are over.
+
+### What the extension gives
+
+- `:kind`, `:plural`, the schema and every other door of its own;
+- the guards, handlers, safety and words of the core doors (their
+  machine and groom's input are the kit's, and naming them is refused);
+- `:link`: which door each moment of the change link walks, over
+  `link-defaults`;
+- the law it adds or overrides: a `:waits` entry by its `:on`, a
+  `:left-by` entry by its `:via`, an `:expected-age` by its state. An
+  entry the core has is replaced; a new one follows the core's.
+  `:reached-by` is the extension's own.
+
+factory10 adds one wait, `merge_after`, and takes the rest of the law
+from the core. The kit's `factorykit.ask-test` checks that a built ask
+gives every state outside `unaged` an expected age and an exit.
 
 ## The repository policy (`factorykit.repo-policy`)
 

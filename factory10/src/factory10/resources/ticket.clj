@@ -114,6 +114,26 @@
 (defn- state-of [row]
   (some-> (:state row) name keyword))
 
+;; ── its change link (step 3b, ticket b220009b) ──────────────────────
+
+(def ^:private named-link
+  "The doors this ticket names for the kit's change link: the kit says
+  when the ticket follows its change, this says which door. The merge
+  ends it through `land`, this kind's own door, and its ending closes a
+  PR-less change through change `supersede`, which writes
+  `superseded_by`."
+  {:review-door :review
+   :return-door :return
+   :merged-door :land
+   :close-change-door :supersede
+   :close-change-input (fn [sentence] {:superseded_by sentence})
+   :words {:open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back to the queue when that change goes red, closes or is unstuck; a stall sends it to draft instead, to be groomed again. The change moves it then, and a person who wants it sooner works the change."
+           :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close or unstick sends it back to the queue, its stall sends it to draft, and its merge ends it."}})
+
+(def link
+  "The ticket's change link, which the change kind walks."
+  (ask/link :ticket named-link))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defhandler restate-the-ticket [row inp _ctx]
@@ -167,19 +187,7 @@
   The adoption writes GitHub's id over `change_id`, so a change with a
   pull request is found by its repository and read by its `born_from`."
   [row states find']
-  (let [born (str "ticket:" (:id row))
-        repo (some-> (get-in row [:data :repo]) str not-empty)]
-    (vals (into {}
-                (comp (filter #(= born (str (get-in % [:data :born_from]))))
-                      (map (juxt :id identity)))
-                (mapcat (fn [state]
-                          (concat
-                           (find' :change {:state state :change_id born}
-                                  {:limit 50})
-                           (when repo
-                             (find' :change {:state state :repository repo}
-                                    {:limit 200}))))
-                        states)))))
+  (ask/its-changes link row states find'))
 
 (defn- put-its-change-back-to-work!
   "A TICKET BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK
@@ -293,11 +301,6 @@
                   (println "factory10 ticket ending: the parent" parent
                            "was not finished -" (ex-message e)))))))))))
 
-(def ^:private unmerged
-  "The states of a change its ticket's ending closes. `submitted` is
-  not one: its pull request is GitHub's to end."
-  ["open" "stuck" "failing"])
-
 (defn- clip
   "`s`, cut to the 500 characters the change's doors take."
   [s]
@@ -333,7 +336,8 @@
   ticket was a queue nobody would clear, and one of them was picked up
   and merged after its ticket was dropped. So every such change born
   from the ticket with no pull request walks, in the same transaction,
-  `supersede` to `closed`, naming the ending. A change with a pull
+  the link's close door — `supersede` to `closed` — naming the ending
+  (`factorykit.ask/close-its-changes!`). A change with a pull
   request is GitHub's to end (`no-pull-request-to-close`): it is left,
   and a submitted one's `adoption_note` says its ticket ended. The
   change whose merge IS this ending is the one the sentence names, and
@@ -348,26 +352,23 @@
         merged (merged-address reason)
         sentence (ending-sentence ending reason)]
     (when (and find' invoke')
-      (doseq [change (changes-born-from row (conj unmerged "submitted") find')
-              :let [submitted? (= :submitted (state-of change))
-                    pull-request? (some? (get-in change [:data :number]))]
+      (doseq [change (changes-born-from row ["submitted"] find')
               :when (and (not= merged (address-of change))
-                         (if submitted? pull-request? (not pull-request?)))]
+                         (some? (get-in change [:data :number])))]
         (try
-          (if submitted?
-            (invoke' :change (str (:id change)) :note_adoption
-                     (cond-> {:adoption_note
-                              (clip (str "Its ticket ended (" sentence
-                                         "); close this pull request at GitHub."))}
-                       (get-in change [:data :unadopted_since])
-                       (assoc :unadopted_since
-                              (str (get-in change [:data :unadopted_since])))))
-            (invoke' :change (str (:id change)) :supersede
-                     {:superseded_by sentence}))
+          (invoke' :change (str (:id change)) :note_adoption
+                   (cond-> {:adoption_note
+                            (clip (str "Its ticket ended (" sentence
+                                       "); close this pull request at GitHub."))}
+                     (get-in change [:data :unadopted_since])
+                     (assoc :unadopted_since
+                            (str (get-in change [:data :unadopted_since])))))
           (catch Exception e
             (binding [*out* *err*]
               (println "factory10 ticket ending: the change" (:id change)
-                       "was not closed -" (ex-message e)))))))))
+                       "was not noted -" (ex-message e)))))))
+    (ask/close-its-changes! link row sentence
+                            #(= merged (address-of %)) ctx)))
 
 ;; ── a drop is the decline (ticket 775b6427) ─────────────────────────
 
@@ -1054,18 +1055,12 @@
   ;; requester of a service's ticket (epic aff24e84, piece 5)
   (answer-an-ask row ctx false))
 
-(defguardfn only-its-change-moves-it
-  {:reads [:within]
-   :open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back to the queue when that change goes red, closes or is unstuck; a stall sends it to draft instead, to be groomed again. The change moves it then, and a person who wants it sooner works the change."
-   :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close or unstick sends it back to the queue, its stall sends it to draft, and its merge ends it."}
-  [_row _inp ctx]
-  ;; `only-an-ending-returns-a-ticket-to-draft`'s shape, one kind over:
-  ;; the door opens inside a `change` door's own transaction and for
-  ;; nobody's hand. The wire, the render probe and every rehearsal
-  ;; answer nil, so it renders refused, which is true.
-  (if (= :change (:kind (:within ctx)))
-    (t/allow)
-    (t/deny)))
+(def only-its-change-moves-it
+  "The kit's wall on the link's doors (`factorykit.ask`), in this
+  ticket's words: the door opens inside a `change` door's own
+  transaction and for nobody's hand. `shelve`, `land` and `note_merge`
+  wear it as well as `review` and `return`."
+  (ask/only-its-change-moves-it link))
 
 (defguardfn its-change-is-under-review
   {:reads [:change]
@@ -1885,6 +1880,8 @@
   guards, handler, safety and words."
   {:kind :ticket
    :plural "tickets"
+   ;; the doors the kit's change link walks (`named-link`)
+   :link named-link
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
    ;; `:over` names the two endings apart: a done ticket is the deed
@@ -1892,33 +1889,17 @@
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
    ;; waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
-   ;; WHAT A TICKET WAITS ON, and what each ending of that ticket does
-   ;; to the one waiting (ticket d9edac4e). A blocker's ending releases
-   ;; whichever way it ends (`release-the-waiters!`). A `merge_after`
-   ;; ticket releases the same way (ticket 97697177): bench/merge-holds
-   ;; holds the green change for neither a done ticket nor a dropped
-   ;; one, so the next merge pass lets it go.
-   :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
-            :outcomes {:done :release :dropped :release}}
-           {:on :merge_after :awaits :ticket :in #{:in_review}
+   ;; THE LAW IS THE KIT'S (`factorykit.ask/law`, ticket 2b85a37e):
+   ;; the `blocked_by` wait, the exits no seat takes at a ticket door
+   ;; (`review` and `land` by the link's names, `unblock` and
+   ;; `return_to_draft` by a blocker's ending) and the expected ages.
+   ;; This ticket adds its own wait: a `merge_after` ticket releases
+   ;; as a blocker does (ticket 97697177): bench/merge-holds holds the
+   ;; green change for neither a done ticket nor a dropped one, so the
+   ;; next merge pass lets it go.
+   :waits [{:on :merge_after :awaits :ticket :in #{:in_review}
             :restated-by [:merge_after_in_review]
             :outcomes {:done :release :dropped :release}}]
-   ;; THE EXITS NO SEAT TAKES AT A TICKET DOOR (ticket 071c563c), so
-   ;; the cracks audit does not report a working state as one nobody
-   ;; leaves. The seat that builds holds `change.submit`, and that
-   ;; door walks `review` here. The merge walks `land`, and the forge's
-   ;; mirror makes that transition. The last blocker's ending walks
-   ;; `unblock` or `return_to_draft` (`release-the-waiters!`).
-   :left-by [{:in #{:open} :by {:kind :change :action :submit}
-              :via :review :to :in_review}
-             {:in #{:in_review} :by :mirror :via :land :to :done}
-             {:in #{:blocked} :by :wait :via :unblock :to :open}
-             {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
-   ;; HOW LONG A TICKET MAY REST (ticket 21b49b28), in seconds: open
-   ;; twelve hours, in review six, blocked seven days. `deferred` names
-   ;; none: it waits on `defer_until`. The live cracks pass files an
-   ;; aged note for a ticket past its state's age.
-   :expected-age {:open 43200 :in_review 21600 :blocked 604800}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}
@@ -2329,11 +2310,11 @@
     ;; ── THE CHANGE'S THREE DOORS (ticket 2e869934) ───────────────────
     ;; Walked by the change born from this ticket, inside its own
     ;; door, and by no hand: see `only-its-change-moves-it`. None is
-    ;; fenced, because the change names no version it read.
+    ;; fenced, because the change names no version it read. `review`
+    ;; and `return` are the kit's link doors (ticket b220009b): their
+    ;; machine and their wall are the core's, the rest is this kind's.
     :review
-    {:from #{:open} :to :in_review
-     :guards [only-its-change-moves-it]
-     :safety {:idempotent true :reversible false :confirm false
+    {:safety {:idempotent true :reversible false :confirm false
               :one-way "The change built for this ticket was submitted, so the ticket leaves the queue while its pull request is reviewed. Its change sends it back if the checks go red, and its merge ends it."}
      :display {:label "Out for review" :order 11
                :description "Its change was submitted — out of the queue while the pull request is reviewed"}}
@@ -2343,9 +2324,7 @@
     ;; `resume` is a person's door out of `deferred`, and a wake on it
     ;; would read a person's not-now as the checks' red
     :return
-    {:from #{:in_review} :to :open
-     :guards [only-its-change-moves-it]
-     :safety {:idempotent true :reversible false :confirm false
+    {:safety {:idempotent true :reversible false :confirm false
               :one-way "Its change went red, closed without a merge or was put back to work, so the ticket is in the queue again and the seat that wrote the change walks it next. The change's next submit sends it out for review again."}
      :display {:label "Back from review" :order 12
                :description "Its change went red, closed or was put back to work — into the queue again"}}
