@@ -127,6 +127,8 @@
    :merged-door :land
    :close-change-door :supersede
    :close-change-input (fn [sentence] {:superseded_by sentence})
+   :rework-door :rework
+   :rework-submitted-door :rework_submitted
    :words {:open "No door clears this one. A ticket goes out for review when its change is submitted, and comes back to the queue when that change goes red, closes or is unstuck; a stall sends it to draft instead, to be groomed again. The change moves it then, and a person who wants it sooner works the change."
            :explain "A ticket under review is moved by the change it was built in and by no hand: the change's submit sends it out, its red head, close or unstick sends it back to the queue, its stall sends it to draft, and its merge ends it."}})
 
@@ -190,53 +192,21 @@
   (ask/its-changes link row states find'))
 
 (defn- put-its-change-back-to-work!
-  "A TICKET BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK
-  (ticket 9ace68fb). The sit hands no ticket whose change is stuck, so
-  a groom, unblock or resume that left the change stuck left the
-  ticket idle until a person unstuck the change by hand. Every stuck
-  change born from this ticket walks, in the same transaction, the
-  change's `rework` door when it has no pull request, and its
-  `rework_submitted` door when it has one (ticket 4363c63b), so the
-  forge pass reads that pull request's head again. The adoption writes
-  GitHub's id over `change_id`, so a change with a pull request is
-  found by its repository and read by its `born_from`. A pull request
-  that closed or merged took its change out of `stuck` with it.
-
-  BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
-  said in the log, and the ticket's move stands. A probe or a
-  rehearsal carries no pen, and moves nothing.
-
-  THE TICKET FOLLOWS A PULL REQUEST BACK UNDER REVIEW (ticket
-  7e01dbe5). The ticket's own move lands it in `open`, which is beside
-  a submitted change once `rework_submitted` ran, so one
-  `rejoin_review` is queued through ctx :follow-up and the engine
-  walks it after this write commits. A follow-up that refuses is said
-  in the log and the ticket stays open, where the sit leaves it out
-  (ticket 6ca380da). A move that itself runs as a follow-up queues
-  one the engine drops, and its ticket stays open the same way."
-  [row ctx]
-  (let [find' (:find ctx)
-        invoke' (:invoke ctx)
-        follow' (:follow-up ctx)
-        under-review? (volatile! false)]
-    (when (and find' invoke')
-      (doseq [change (changes-born-from row ["stuck"] find')]
-        (try
-          (if (nil? (get-in change [:data :number]))
-            (invoke' :change (:id change) :rework nil)
-            (do (invoke' :change (:id change) :rework_submitted nil)
-                (vreset! under-review? true)))
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "factory10 ticket: the change" (:id change)
-                       "was not put back to work -" (ex-message e))))))
-      (when (and follow' @under-review?)
-        (follow' {:kind :ticket :id (:id row) :action :rejoin_review})))))
+  "The kit's (`factorykit.ask/back-to-work!`, ticket 4b2740db): every
+  stuck change born from this ticket walks `rework`, or
+  `rework_submitted` with a pull request (tickets 9ace68fb, 4363c63b),
+  and the ticket follows a pull request back under review through
+  `rejoin_review` (ticket 7e01dbe5). A change that refuses refuses the
+  ticket's `action`, naming the change's unstick door. A follow-up
+  that refuses leaves the ticket open, where the sit leaves it out
+  (ticket 6ca380da)."
+  [row action ctx]
+  (ask/back-to-work! link row action ctx))
 
 (defhandler groom-the-ticket [row inp ctx]
   ;; a priority given lands with the groom, in the one transition; none
   ;; given keeps the stored one (ticket f7420404)
-  (put-its-change-back-to-work! row ctx)
+  (put-its-change-back-to-work! row :groom ctx)
   (cond-> row
     (some? (:priority inp)) (assoc-in [:data :priority] (:priority inp))))
 
@@ -250,14 +220,14 @@
 
 (defhandler unblock-the-ticket [row inp ctx]
   ;; `clear-the-blockers`, and the ticket is in the queue again
-  (put-its-change-back-to-work! row ctx)
+  (put-its-change-back-to-work! row :unblock ctx)
   (clear-the-blockers row inp ctx))
 
 (defhandler defer-the-ticket [row inp _ctx]
   (assoc-in row [:data :defer_until] (:defer_until inp)))
 
 (defhandler resume-the-ticket [row _inp ctx]
-  (put-its-change-back-to-work! row ctx)
+  (put-its-change-back-to-work! row :resume ctx)
   (assoc-in row [:data :defer_until] nil))
 
 (defn- release-the-waiters!

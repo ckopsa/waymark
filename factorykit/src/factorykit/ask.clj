@@ -30,10 +30,15 @@
   on, the exits no seat takes at an ask door, and how long an ask may
   rest in each working state (`law`), so a factory built on the kit
   reads real cracks from its first read. A factory's extension adds to
-  it or overrides it under the same keys."
+  it or overrides it under the same keys.
+
+  AN ASK BACK IN THE QUEUE PUTS ITS STUCK CHANGE BACK TO WORK, or does
+  not go (`back-to-work!`, ticket 4b2740db): a factory's handler on
+  groom, unblock and resume calls it."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.problems :as p]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -144,6 +149,13 @@
    :merged-door :complete
    :close-change-door :close_without_pr
    :close-change-input (fn [sentence] {:why sentence})
+   ;; back to work (ticket 4b2740db): the doors a groom, unblock or
+   ;; resume walks on a stuck change, and the ones a refusal names
+   :rework-door :unstick
+   :rework-submitted-door :unstick_submitted
+   :unstick-door :unstick
+   :unstick-submitted-door :unstick_submitted
+   :rejoin-door :rejoin_review
    :words {:open "No door clears this one. An ask goes out for review when its change is submitted, and comes back to the queue when that change goes back to work or closes unmerged. A person who wants it sooner works the change."
            :explain "An ask under review is moved by the change it was built in and by no hand: the change's submit sends it out, its return sends it back, and its merge ends it."}})
 
@@ -298,6 +310,68 @@
 
 (def ^:private unended
   #{:draft :open :in_review :blocked :deferred})
+
+(defn- refuse-the-move!
+  "The ask's own `action` refused, because the change's door refused to
+  put `change` back to work. The remedy is the change's `unstick`, on
+  that change."
+  [link ask action change unstick e]
+  (let [door (keyword (name (:change-kind link)) (name unstick))]
+    (throw (p/guard-refused
+            action (:state ask)
+            (str "Its " (name (:change-kind link)) " " (:id change)
+                 " is stuck, and this " (name action)
+                 " could not put it back to work: " (ex-message e))
+            {:guard :its-change-stays-stuck
+             :remedies [door]
+             :resolved-remedies [{:door door :id (str (:id change))}]
+             :open (str "Unstick the " (name (:change-kind link))
+                        " first, or ask a person who may, then "
+                        (name action) " again.")}
+            {:kind (:ask-kind link) :id (str (:id ask))}))))
+
+(defn back-to-work!
+  "A GROOM, UNBLOCK OR RESUME PUTS THE ASK'S STUCK CHANGE BACK TO WORK
+  (tickets 9ace68fb, 4363c63b, 4b2740db). The sit hands no ask whose
+  change is stuck, so a move that left the change stuck would leave the
+  ask idle in the queue. Every stuck change born from `ask` walks, in
+  the same transaction, the link's `:rework-door` when it has no pull
+  request and its `:rework-submitted-door` when it has one.
+
+  NOT BEST-EFFORT: a change that refuses refuses the ask's own `action`,
+  naming the change's unstick door (`:unstick-door`, or
+  `:unstick-submitted-door` with a pull request) on that change. An ask
+  never reaches the queue beside a change that is still stuck. A probe
+  or a rehearsal carries no pen, and moves nothing.
+
+  THE ASK FOLLOWS A PULL REQUEST BACK UNDER REVIEW (ticket 7e01dbe5):
+  the move lands the ask in `open`, beside a change back under review,
+  so one `:rejoin-door` is queued through ctx :follow-up and the engine
+  walks it after this write commits. A follow-up that refuses is said in
+  the log, and the ask stays open."
+  [link ask action ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)
+        follow' (:follow-up ctx)]
+    (when (and find' invoke')
+      (let [under-review?
+            (reduce
+             (fn [under change]
+               (let [pr? (some? (get-in change [:data :number]))
+                     [door unstick] (if pr?
+                                      [(:rework-submitted-door link)
+                                       (:unstick-submitted-door link)]
+                                      [(:rework-door link) (:unstick-door link)])]
+                 (try
+                   (invoke' (:change-kind link) (:id change) door nil)
+                   (catch Exception e
+                     (refuse-the-move! link ask action change unstick e)))
+                 (or under pr?)))
+             false
+             (its-changes link ask ["stuck"] find'))]
+        (when (and follow' under-review?)
+          (follow' {:kind (:ask-kind link) :id (:id ask)
+                    :action (:rejoin-door link)}))))))
 
 (defn merged!
   "The change merged: its ask, wherever it stands short of an ending,
