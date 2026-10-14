@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "resources"]
  :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
          waymark10/waymark10  {:local/root "../waymark10"}}
  :aliases
