@@ -671,6 +671,12 @@
    :initial :pending
    :terminal #{:ended}
    :nav :system
+   ;; no seat leaves a live schedule: the engine pauses, breaks and
+   ;; ends its copy as the seat moves, and a person unlinks it
+   :left-by [{:in #{:live} :by :engine :via :pause :to :paused}
+             {:in #{:live} :by :engine :via :fail :to :broken}
+             {:in #{:live} :by :engine :via :end :to :ended}
+             {:in #{:live} :by :person :via :unlink :to :broken}]
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} schedule"
    :computed {:fires_through

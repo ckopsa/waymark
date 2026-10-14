@@ -1736,8 +1736,10 @@
 
 (def ^:private left-by-sources
   "Who moves a row out with no seat at a door: the forge's mirror, the
-  engine's sweep, or the ending of what the row waits on (:wait)."
-  #{:mirror :sweep :wait})
+  engine's sweep, the ending of what the row waits on (:wait), a
+  person's tap (:person) or the engine's own actor (:engine: a held
+  call's landing, a sitting's hooks, a server's probe)."
+  #{:mirror :sweep :wait :person :engine})
 
 (defn- check-left-by
   "A kind's indirect exits (ticket 071c563c) validate hard, for
