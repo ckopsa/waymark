@@ -159,6 +159,15 @@
     (is (= 0 (get-in (in-flight/answer es {:domain "home"}) [:counts :total])))
     (is (= {:repo "r2"} (:filters (in-flight/answer es {:repo "r2"}))))))
 
+(deftest the-facets-are-taken-before-the-filters
+  (let [es (entries house)
+        facets (:facets (in-flight/answer es {}))]
+    (is (= (vec (sort (distinct (keep :repo es)))) (:repo facets)))
+    (is (some #{"r2"} (:repo facets)))
+    (is (= (vec (sort (distinct (keep :holder es)))) (:holder facets)))
+    (is (= facets (:facets (in-flight/answer es {:repo "r2"}))))
+    (is (= facets (:facets (in-flight/answer es {:domain "home"}))))))
+
 (deftest a-kind-with-no-expected-age-is-not-in-flight
   (is (nil? (in-flight/open-states {:kind :memo :states [:jotted :filed]
                                     :terminal #{:filed}})))
