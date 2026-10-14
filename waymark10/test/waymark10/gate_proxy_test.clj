@@ -458,6 +458,8 @@
    "waymark_history"
    ;; the seventh fixed tool (waymark-pywy.3)
    "waymark_resolve"
+   ;; the in-flight read (ticket 524a4705)
+   "waymark_in_flight"
    ;; the eighth (spec-seat.md R-12.14): the keyed sitter session's
    ;; door, present for every caller and called only by a session that
    ;; was handed a key

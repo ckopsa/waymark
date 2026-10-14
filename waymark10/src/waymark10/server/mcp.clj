@@ -1231,6 +1231,31 @@
     :required ["kind" "by" "values"]
     :additionalProperties false}})
 
+;; ── waymark_in_flight (ticket 524a4705): the in-flight read ─────────
+;;
+;; GET /api/-/in-flight (ticket d0407b84) answered over MCP: an agent
+;; cannot GET an href, so the discover door alone left it unread. No
+;; new reading — a call onto the route, with its four filters.
+
+(def ^:private in-flight-tool
+  {:name "waymark_in_flight"
+   :title "Every open row and who holds it"
+   :description
+   (str "Every open row your grant admits, with its waiting_on, grouped "
+        "by who holds its next move — the in-flight read, the same "
+        "document as GET /api/-/in-flight (discover's `in_flight` door). "
+        "`domain`, `repo`, `kind` and `holder` narrow it; each is matched "
+        "exactly. A kind or row outside your grant is absent, not refused.")
+   :input-schema
+   {:type "object"
+    :properties
+    {:domain {:type "string" :description "A domain name from waymark_discover."}
+     :repo {:type "string" :description "Only rows whose repo is this."}
+     :kind {:type "string" :description "A kind name from waymark_discover."}
+     :holder {:type "string"
+              :description "Only the group held by this holder (person, seat, nobody ...)."}}
+    :additionalProperties false}})
+
 (def sit-description
   "The tool's own sentence, named because the door's tests and the
   connect-time instructions both read it rather than repeating it."
@@ -1497,7 +1522,8 @@
   sentence), a held call and an ungranted door — then
   waymark_resolve (waymark-pywy.3), the batch lookup — an eighth
   generic tool rather than a per-kind one, still a call onto a route
-  that already exists — waymark_sit, the ninth (spec-seat.md
+  that already exists — waymark_in_flight (ticket 524a4705), the
+  in-flight read, a call onto GET /api/-/in-flight — waymark_sit, the ninth (spec-seat.md
   R-12.14), which is how ONE session of a person's connector becomes a
   seat's sitter, and the two power tools (waymark-912p), the MCP
   surface of the Gate door. The list is the same for every caller and
@@ -1506,7 +1532,7 @@
   advertised the key would be a tool list that leaked which seats
   exist."
   [discover-tool schema-tool query-tool get-tool invoke-tool pursue-tool
-   history-tool resolve-tool sit-tool powers-tool power-tool])
+   history-tool resolve-tool in-flight-tool sit-tool powers-tool power-tool])
 
 (defn listing
   "The `tools/list` payload — the MCP spelling of the fixed tools,
@@ -2820,6 +2846,21 @@
      (call (request session :get
                     (str "/api/" (:plural rdef) "/" id "/-/history")
                     (when limit {:query (str "limit=" (long limit))}))))))
+
+;; ── waymark_in_flight: the body ─────────────────────────────────────
+
+(defn- in-flight-read
+  "The in-flight document, through the route: the session's grant is
+  the route's visibility, and the four filters cross as its query
+  params, blank ones left out."
+  [_eng call session args]
+  (let [params (keep (fn [k]
+                       (when-some [v (some-> (get args k) str str/trim not-empty)]
+                         [(name k) v]))
+                     [:domain :repo :kind :holder])]
+    (pass-through
+     (call (request session :get "/api/-/in-flight"
+                    {:query (query-string params)})))))
 
 ;; ── waymark_resolve: the body ───────────────────────────────────────
 
@@ -5405,7 +5446,8 @@
    "waymark_invoke" invoke
    "waymark_pursue" pursue
    "waymark_history" history
-   "waymark_resolve" resolve-rows})
+   "waymark_resolve" resolve-rows
+   "waymark_in_flight" in-flight-read})
 
 (defn- attempt
   "One tool body, run behind the refusal boundary: a tagged problem —
