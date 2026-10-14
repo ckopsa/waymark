@@ -334,11 +334,36 @@ factory's own steps go in as functions:
 | `:poll-failed` | optional `(fn [e])`: the poll threw |
 | `:before-changes` | optional `(fn [census poll])` → census, before the change pass |
 | `:after-changes` | optional `(fn [census poll])` → census, after the place is stored |
+| `:runs` | optional: the `ci_run` kind's doors, as `runs-pass!` takes them; the red runs run after `:after-changes` |
+| `:after-runs` | optional `(fn [census poll])` → census, after the red runs |
 | `:always` | optional `(fn [census poll held-until])` → census, run whether the pass ran, was held or threw |
 | `:report` | optional `(fn [census poll])`, given the census last |
 
 factory10's `pass!` is a call to it, with factory10's hand and its own
 steps.
+
+### The red runs
+
+`(runs-pass! runs source poll census log-fn)` is the red runs of one
+pass (ticket efff5d2e): every failed check the poll carried, and every
+one the hand's `:live-reds` adds, becomes a `ci_run` row at red, once;
+the red runs of a head that moved walk `supersede`, and so does every
+red run whose change is merged or closed. `pass!` runs it when the
+config names `:runs`. The `ci_run` hand:
+
+| key | what it is |
+|---|---|
+| `:find-run` | `(fn [run-id])` → the `ci_run` row with that run id, or nil |
+| `:find-change` | `(fn [change-id])` → the `change` row with that `change_id`, or nil |
+| `:change-by-id` | `(fn [row-id])` → the `change` row with that id, or nil |
+| `:reds` | `(fn [where limit])` → up to `limit` red `ci_run` rows matching `where`, oldest first |
+| `:create!` | `(fn [fields])` → the row the create door minted |
+| `:invoke!` | `(fn [row-id door input])` → the row after the door |
+| `:red-conclusions` | the conclusions that mint a red run (GitHub's reds when absent) |
+| `:live-reds` | optional `(fn [checks])` → the red check documents the poll did not carry |
+
+factory10 hands it `run-hand`, whose `:live-reds` reads the heads of the
+live changes of its active policies.
 
 ### What is not in the kit yet
 
@@ -348,7 +373,6 @@ kind. factory10 keeps what reads its own policy, tickets or bench.
 Still in `factory10.sources.forge`, and the kit's to take in later
 changes:
 
-- the red runs (`ci_run`: mint, supersede, settle);
 - fail, recover and stick on a head's verdict, with the re-read by
   number before a move;
 - the census line.

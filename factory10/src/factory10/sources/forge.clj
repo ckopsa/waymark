@@ -120,10 +120,9 @@
   50)
 
 (def red-scan-limit
-  "How many red runs one pass reads for the runs whose change ended,
-  oldest first. A ceiling above the queue as it stood when the sweep
-  was written (135 rows, ticket ebe54a72), so one pass clears it."
-  200)
+  "How many red runs one pass reads for the runs whose change ended.
+  The kit's (`factorykit.forge/red-scan-limit`, ticket efff5d2e)."
+  kit/red-scan-limit)
 
 ;; ── the seam ────────────────────────────────────────────────────────
 
@@ -229,11 +228,9 @@
   kit/observe-doors)
 
 (def ci-run-create-fields
-  "The `ci_run` create door's whole vocabulary. `verdict`, `remedy`,
-  `pushed_label` and `labelled_at` are absent on purpose: a row born
-  with a verdict is a row that skipped the walk."
-  [:run_id :change :head_sha :check_name :conclusion :log_excerpt
-   :log_note :started_at :finished_at :url])
+  "The `ci_run` create door's whole vocabulary. The kit's
+  (`factorykit.forge/ci-run-create-fields`, ticket efff5d2e)."
+  kit/ci-run-create-fields)
 
 (def red-conclusions
   "The two conclusions that mint a red run. `cancelled` is not one of
@@ -330,148 +327,28 @@
 ;; ── the red runs ────────────────────────────────────────────────────
 
 (def log-note-chars
-  "How long `log_note` may be. One sentence about why there is no
-  log, at the same ceiling a remedy sentence has: a plain text field
-  wider than that reads as prose and the usability battery says so.
-  A forge's error message can run past it, so the note is cut here
-  rather than refused a row."
-  240)
+  "How long `log_note` may be. The kit's
+  (`factorykit.forge/log-note-chars`, ticket efff5d2e)."
+  kit/log-note-chars)
 
-(defn- mint-run!
-  "One failed check run → one `ci_run` row at red, with the log tail
-  on it and a ref to the change it ran on."
-  [eng source check change-row census log-fn]
-  (let [{:keys [excerpt note]} (try (forge-log-tail source check)
-                                    (catch Exception e
-                                      {:excerpt nil
-                                       :note (str "the log could not be read ("
-                                                  (ex-message e) ")")}))
-        ;; THE NOTE HAS A FIELD OF ITS OWN (bead waymark-fp62.6.9). A
-        ;; sentence written inside `log_excerpt` reads as the end of a
-        ;; build log to the next reader, and the classifier reasons
-        ;; about it as one. So the excerpt stays empty and `log_note`
-        ;; says why it is empty. `present` drops a nil, which is what
-        ;; makes each of the two absent when the other answers.
-        blank? (str/blank? (str excerpt))
-        body (present (assoc check
-                             :change (str (:id change-row))
-                             :log_excerpt (when-not blank? excerpt)
-                             :log_note (when (and blank? note)
-                                         (subs (str note) 0
-                                               (min (count (str note))
-                                                    log-note-chars))))
-                      ci-run-create-fields)]
-    (try
-      (inv/create! eng :ci_run body (as-opts))
-      (update census :runs-minted inc)
-      (catch Exception e
-        (log-fn "the check run " (:run_id check) " was refused a row ("
-                (ex-message e) ")")
-        (update census :refused inc)))))
+(declare live-reds)
 
-(defn- run-pass!
-  "Every finished failure the forge answered → a red row, once. A run
-  on a head the change no longer carries mints NOTHING and is counted
-  as skipped: the head moved under it while the pass was reading."
-  [eng source checks census log-fn]
-  (reduce
-   (fn [census check]
-     (cond
-       (not (contains? red-conclusions (str (:conclusion check))))
-       census
-
-       (some? (row-by eng :ci_run {:run_id (:run_id check)}))
-       (update census :runs-known inc)
-
-       :else
-       (if-some [change-row (row-by eng :change {:change_id (:change_id check)})]
-         (if (= (str (:head_sha check))
-                (str (get-in change-row [:data :head_sha])))
-           (mint-run! eng source check change-row census log-fn)
-           (update census :runs-skipped inc))
-         (update census :runs-orphan inc))))
-   census
-   checks))
-
-(defn- stale-reds
-  "The red rows of this change that ran on a head it no longer
-  carries. A run of a dead commit is a run nobody can answer, so
-  these are the rows the `supersede` door is for."
-  [eng change-row]
-  (let [st (:storage eng)
-        head (str (get-in change-row [:data :head_sha]))
-        rows (store/with-tx st
-               (fn [tx] (store/query-rows st tx :ci_run
-                                          {:state "red"
-                                           :change (str (:id change-row))}
-                                          {:limit label-scan-limit})))]
-    (filterv #(not= head (str (get-in % [:data :head_sha]))) rows)))
-
-(defn- stale-pass!
-  "Every red run of a head its change no longer carries → the
-  `supersede` door. The row leaves the classifier's queue and the
-  transition says it left with no verdict. A row the engine refuses is
-  counted and skipped: the next pass offers it again."
-  [eng changes census log-fn]
-  (reduce
-   (fn [census doc]
-     (if-some [change-row (row-by eng :change {:change_id (:change_id doc)})]
-       (reduce
-        (fn [census row]
-          (try
-            (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
-            (update census :runs-superseded inc)
-            (catch Exception e
-              (log-fn "the red run " (get-in row [:data :run_id])
-                      " was refused the supersede door (" (ex-message e) ")")
-              (update census :refused inc))))
-        census
-        (stale-reds eng change-row))
-       census))
-   census
-   changes))
-
-(defn- settled-reds
-  "The red rows no seat can answer, whatever the forge listed this
-  pass (ticket ebe54a72): a run whose change is merged or closed, and
-  a run on a head its change no longer carries. `stale-reds` reads only
-  the changes one pass was answered, so a change that ended before its
-  runs were revisited kept them red for good. Oldest first, so the
-  legacy rows go before the new ones. A run that names no change this
-  house holds is left where it is."
-  [eng]
-  (let [st (:storage eng)
-        rows (store/with-tx st
-               (fn [tx] (store/query-rows st tx :ci_run {:state "red"}
-                                          {:limit red-scan-limit})))]
-    (filterv
-     (fn [row]
-       (when-some [change-row (row-by-id eng :change
-                                         (get-in row [:data :change]))]
-         (let [head (str (get-in change-row [:data :head_sha]))]
-           (or (contains? #{:merged :closed} (keyword (:state change-row)))
-               (and (not (str/blank? head))
-                    (not= head (str (get-in row [:data :head_sha]))))))))
-     rows)))
-
-(defn- settled-pass!
-  "Every red run of a change that is merged or closed, or of a head
-  its change no longer carries → the `supersede` door. The door stays
-  the engine's hand alone; this pass is what walks it for the rows
-  `stale-pass!` never meets. A row the engine refuses is counted and
-  skipped: the next pass offers it again."
-  [eng census log-fn]
-  (reduce
-   (fn [census row]
-     (try
-       (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
-       (update census :runs-superseded inc)
-       (catch Exception e
-         (log-fn "the red run " (get-in row [:data :run_id])
-                 " was refused the supersede door (" (ex-message e) ")")
-         (update census :refused inc))))
-   census
-   (settled-reds eng)))
+(defn- run-hand
+  "This engine's doors on the `ci_run` kind, as the kit's red runs take
+  them (`factorykit.forge/runs-pass!`, ticket efff5d2e), under the
+  source's own principal. `:live-reds` reads the heads through
+  `read-checks`, the one per-head reader of the pass."
+  [eng read-checks log-fn]
+  {:find-run (fn [run-id] (row-by eng :ci_run {:run_id run-id}))
+   :find-change (fn [change-id] (row-by eng :change {:change_id change-id}))
+   :change-by-id (fn [id] (row-by-id eng :change id))
+   :reds (fn [where limit]
+           (rows-by eng :ci_run (assoc where :state "red") limit))
+   :create! (fn [fields] (:row (inv/create! eng :ci_run fields (as-opts))))
+   :invoke! (fn [id door input]
+              (:row (inv/invoke! eng :ci_run id door input (as-opts))))
+   :red-conclusions red-conclusions
+   :live-reds (fn [checks] (live-reds eng read-checks checks log-fn))})
 
 ;; ── the checks' verdict on a submitted change (ticket d1742908) ───────
 
@@ -1549,13 +1426,22 @@
   (boolean (or (#{:done :dropped} (state-of t))
                (merged-beside? eng row repo tid))))
 
+(defn- close-as-engine!
+  "The engine's hand the kit's sweep closes with (ticket 028a5f6f): an
+  edit door is fenced, so it names the version of the row it read, and
+  a row that moved since waits a sweep."
+  [eng]
+  (fn [row door input]
+    (inv/invoke! eng :change (str (:id row)) door input
+                 (assoc (as-opts) :if-match (str (:version row))))))
+
 (defn- unopened-close
-  "The `supersede` door and input closing a change with no pull request
-  whose ticket `tid` ended."
+  "The `close_without_pr` door and input closing a change with no pull
+  request whose ticket `tid` ended (ticket 028a5f6f: the kit's sweep
+  walks it, and the handler writes the sentence to `superseded_by`)."
   [tid]
-  [:supersede {:superseded_by
-               (str "closed: ticket " tid " ended; this change "
-                    "never opened a pull request")}])
+  [:close_without_pr {:why (str "closed: ticket " tid " ended; this change "
+                                "never opened a pull request")}])
 
 (defn- unopened-move
   "The door and input for a submitted change with no number whose bench
@@ -1711,14 +1597,26 @@
                                                   (vector :note_adoption))
                                       :else (unopened-move eng row repo branch
                                                            now))]
-                   (if (nil? input)
-                     census
+                   (cond
+                     (nil? input) census
+
+                     ;; the PR-less close is the kit's sweep (ticket
+                     ;; 028a5f6f), which tells `log-fn` of a refusal
+                     (= :close_without_pr door)
+                     (if (pos? (long (change-kit/sweep!
+                                      {:rows [row]
+                                       :ended (constantly (:why input))
+                                       :close! (close-as-engine! eng)
+                                       :log-fn log-fn})))
+                       (update census :unopened-closed inc)
+                       (update census :refused inc))
+
+                     :else
                      (do (inv/invoke! eng :change (str (:id row)) door input
                                       (as-opts))
                          (cond-> census
                            (:adoption_note input) (update :adoption-noted inc)
-                           (= :stick door) (update :stuck inc)
-                           (= :supersede door) (update :unopened-closed inc)))))))
+                           (= :stick door) (update :stuck inc)))))))
              (catch Exception e
                (log-fn "the change " (get-in row [:data :change_id])
                        " was refused its adoption note (" (ex-message e) ")")
@@ -1749,12 +1647,7 @@
                 {:rows (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
                                ["open" "stuck" "failing"])
                  :ended #(ended-ticket-sentence eng %)
-                 ;; an edit door is fenced: the sweep names the version
-                 ;; it read, and a row that moved since waits a sweep
-                 :close! (fn [row door input]
-                           (inv/invoke! eng :change (str (:id row)) door input
-                                        (assoc (as-opts)
-                                               :if-match (str (:version row)))))
+                 :close! (close-as-engine! eng)
                  :log-fn log-fn})]
     (log-fn closed " changes of ended tickets swept")
     closed))
@@ -1766,7 +1659,8 @@
 ;; change has no pull request and no seat holds a door that ends it:
 ;; `discard` leaves it open, and `close` is GitHub's word. The engine
 ;; closes it with its own hand through `supersede`, which moves no
-;; ticket: the ticket is a live draft and stays where it is.
+;; ticket: the ticket is a live draft and stays where it is. Since
+;; ticket 028a5f6f it walks the kit's sweep and `close_without_pr`.
 
 (defn- seat-named
   "The seat row of this name, decoded, or nil."
@@ -1775,19 +1669,18 @@
     (some->> (row-by eng :seat {:name seat-name}) (inv/decode-row rd))))
 
 (defn- reader-change-close
-  "The `supersede` input closing an open change with no pull request
-  whose `author` names a seat that is not a code seat, else nil. An
-  author that names no seat is left: it may be a GitHub login."
+  "The sentence closing an open change with no pull request whose
+  `author` names a seat that is not a code seat, else nil. An author
+  that names no seat is left: it may be a GitHub login."
   [eng row]
   (when (and (= :open (state-of row))
              (nil? (get-in row [:data :number])))
     (when-some [author (some-> (get-in row [:data :author]) str not-empty)]
       (when-some [seat (seat-named eng author)]
         (when-not (mcp/code-seat? seat)
-          {:superseded_by
-           (str "closed: its author " author " is a seat that only reads "
-                "a change, so no round could end it and it never opened "
-                "a pull request (ticket 2db85f7b)")})))))
+          (str "closed: its author " author " is a seat that only reads "
+               "a change, so no round could end it and it never opened "
+               "a pull request (ticket 2db85f7b)"))))))
 
 ;; ── a code seat's abandoned change is closed (ticket f1deff20) ───────
 ;;
@@ -1822,17 +1715,16 @@
         (str/starts-with? born "task:") "it was born from a task"))))
 
 (defn- abandoned-change-close
-  "The `supersede` input closing an open change with no pull request,
-  no round and nothing in its worktree that is abandoned, else nil."
+  "The sentence closing an open change with no pull request, no round
+  and nothing in its worktree that is abandoned, else nil."
   [eng row ^Instant now]
   (when (and (= :open (state-of row))
              (nil? (get-in row [:data :number]))
              (zero? (long (or (get-in row [:data :rounds]) 0)))
              (zero? (long (or (get-in row [:data :worktree_dirty]) 0))))
     (when-some [reason (abandoned-reason eng row now)]
-      {:superseded_by
-       (str "closed: " reason ", and this change has no pull request, "
-            "no round and nothing in its worktree (ticket f1deff20)")})))
+      (str "closed: " reason ", and this change has no pull request, "
+           "no round and nothing in its worktree (ticket f1deff20)"))))
 
 (defn sweep-reader-changes!
   "Closes every open change with no pull request that a seat which is
@@ -1841,21 +1733,12 @@
   and so does every pass. → how many it closed."
   ([eng log-fn] (sweep-reader-changes! eng log-fn (Instant/now)))
   ([eng log-fn ^Instant now]
-   (let [closed (reduce
-                 (fn [n row]
-                   (if-some [input (or (reader-change-close eng row)
-                                       (abandoned-change-close eng row now))]
-                     (try
-                       (inv/invoke! eng :change (str (:id row)) :supersede input
-                                    (as-opts))
-                       (inc (long n))
-                       (catch Exception e
-                         (log-fn "the change " (:id row)
-                                 " was not closed (" (ex-message e) ")")
-                         n))
-                     n))
-                 0
-                 (rows-by eng :change {:state "open"} failing-scan-limit))]
+   (let [closed (change-kit/sweep!
+                 {:rows (rows-by eng :change {:state "open"} failing-scan-limit)
+                  :ended #(or (reader-change-close eng %)
+                              (abandoned-change-close eng % now))
+                  :close! (close-as-engine! eng)
+                  :log-fn log-fn})]
      (when (pos? (long closed))
        (log-fn closed " changes no seat could end were closed"))
      closed)))
@@ -2733,12 +2616,14 @@
   write to, which is a wiring fault and not a bad beat."
   [{:keys [source engine engine-ref log-fn]}]
   (let [eng (or engine (some-> engine-ref deref))
-        log-fn (or log-fn warn!)]
+        log-fn (or log-fn warn!)
+        read-checks (head-reader source)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    ;; the poll, the rate-limit hold, the change pass and the source's
-    ;; place are the kit's (`factorykit.forge/pass!`, ticket 75db2ef8);
-    ;; this factory's own steps are handed to it as functions
+    ;; the poll, the rate-limit hold, the change pass, the source's
+    ;; place and the red runs are the kit's (`factorykit.forge/pass!`,
+    ;; tickets 75db2ef8 and efff5d2e); this factory's own steps are
+    ;; handed to it as functions
     (kit/pass!
      {:source source
       :census fresh-census
@@ -2754,18 +2639,12 @@
       :before-changes (fn [census {:keys [refusals answered]}]
                         (source-note-pass! eng refusals answered census
                                            log-fn))
-      :after-changes
-      (fn [census {:keys [changes checks]}]
-        (let [census (unknown-pass! eng source changes census log-fn)
-              read-checks (head-reader source)
-              census (run-pass! eng source
-                                (into (vec checks)
-                                      (live-reds eng read-checks checks
-                                                 log-fn))
-                                census log-fn)
-              census (stale-pass! eng changes census log-fn)
-              census (settled-pass! eng census log-fn)
-              census (label-pass! eng source census log-fn)
+      :after-changes (fn [census {:keys [changes]}]
+                       (unknown-pass! eng source changes census log-fn))
+      :runs (run-hand eng read-checks log-fn)
+      :after-runs
+      (fn [census _]
+        (let [census (label-pass! eng source census log-fn)
               census (failing-pass! eng source read-checks census log-fn)
               census (staleness-pass! eng source read-checks census
                                       log-fn)
