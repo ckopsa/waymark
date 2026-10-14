@@ -3272,11 +3272,24 @@
   — accepted first, then a still-offered one, unexpired by the live
   clock — and a grant citing a different seat is not this seat's, so
   a sitter moved between offices mints again rather than sitting in
-  the old one."
-  [eng sitter-id seat-id]
+  the old one.
+
+  A GRANT NEAR ITS END IS NOT STANDING (ticket acc89add): one whose
+  `expires_at` is less than half the seat's `standing_ttl_seconds`
+  away would expire mid-run and take every power with it, so the sit
+  mints afresh. The old grant is left to expire on its own clock: an
+  open sitting of another run may still wear it. A seat with no ttl
+  reuses as before."
+  [eng sitter-id seat ^Instant now]
   (when-some [g (grants/standing-grant-for eng sitter-id)]
-    (when (= (str seat-id) (str (get-in g [:data :seat])))
-      g)))
+    (when (= (str (:id seat)) (str (get-in g [:data :seat])))
+      (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
+            exp (some-> (get-in g [:data :expires_at]) str not-empty
+                        Instant/parse)]
+        (when (or (not (pos? ttl)) (nil? exp)
+                  (>= (.getSeconds (java.time.Duration/between now exp))
+                      (quot ttl 2)))
+          g)))))
 
 (defn- mint-seat-grant!
   "The seat grant, minted the way an approved seat ask mints one
@@ -5291,7 +5304,7 @@
             ;; a re-sit wears the grant its sitting was opened under
             grant (or (when resit
                         (row-of eng :grant (get-in (second resit) [:data :grant])))
-                      (standing-seat-grant eng sitter-id seat-id)
+                      (standing-seat-grant eng sitter-id seat now)
                       (mint-seat-grant! eng sitter-id seat now))
             ;; f · the model claim, when the schedule makes one
             model-row (seat-model eng seat)
