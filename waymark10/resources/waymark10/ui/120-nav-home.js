@@ -84,6 +84,12 @@ async function renderNav(current) {
   if (w.resources && w.resources.member && askKind(w))
     nav.append(el("a", {href: "#access", "data-surface": "nav-access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
+  /* every open row by who it waits on — present when the engine
+     serves the read (discover door `in_flight`) */
+  const flight = ((w.doors || {}).in_flight || {}).href;
+  if (flight) nav.append(el("a", {href: "#" + flight, "data-surface": "nav-in-flight",
+    style: location.hash.slice(1).split("?")[0] === flight ? "font-weight:700" : ""},
+    "In flight"));
   /* every other decision kind is a queue with a tab of its own (the
      ask kind's queue is the Access panel) */
   for (const kind of decisionKinds(w)) {

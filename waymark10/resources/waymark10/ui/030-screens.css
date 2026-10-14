@@ -1,3 +1,30 @@
+  /* ── the In flight screen (137-in-flight.js) ────────────────────── */
+  .flight-counts { display: grid; gap: 8px; margin: 8px 0 12px;
+                   grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .flight-count { background: var(--panel); border: 1px solid var(--line);
+                  border-radius: var(--radius); padding: 8px 10px; }
+  .flight-count b { display: block; font-size: 1.5em; }
+  .flight-count span { color: var(--muted); font-size: .85em; }
+  .flight-count.you b { color: var(--verdigris); }
+  .flight-count.nobody b { color: var(--refusal); }
+  .flight-count.late b { color: var(--warn); }
+  .flight-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .flight-group { margin-bottom: 16px; }
+  .flight-group h3 { margin: 0 0 6px; }
+  .flight-group.you { border-left: 3px solid var(--verdigris); padding-left: 8px; }
+  .flight-row { background: var(--panel); border: 1px solid var(--line);
+                border-radius: var(--radius); padding: 8px 10px; margin-bottom: 6px; }
+  .flight-head { display: flex; gap: 8px; align-items: baseline;
+                 justify-content: space-between; }
+  .flight-verdict { color: var(--muted); font-size: .9em; margin: 2px 0 4px; }
+  .flight-age { display: flex; gap: 8px; align-items: center; font-size: .8em; }
+  .flight-bar { flex: 0 0 120px; height: 6px; background: var(--chipbg);
+                border-radius: 3px; overflow: hidden; }
+  .flight-fill { display: block; height: 100%; background: var(--verdigris); }
+  .flight-bar.late .flight-fill { background: var(--warn); }
+  .flight-doors { display: flex; flex-wrap: wrap; gap: 6px; }
+  .flight-doors:not(:empty) { margin-top: 6px; }
+
   /* ── the home dashboard ─────────────────────────────────────────── */
   .dash-grid { display: grid; gap: 12px; margin-bottom: 16px;
                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
