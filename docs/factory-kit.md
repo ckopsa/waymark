@@ -336,8 +336,15 @@ factory's own steps go in as functions:
 | `:after-changes` | optional `(fn [census poll])` → census, after the place is stored |
 | `:runs` | optional: the `ci_run` kind's doors, as `runs-pass!` takes them; the red runs run after `:after-changes` |
 | `:after-runs` | optional `(fn [census poll])` → census, after the red runs |
+| `:failing` | optional: the failing hand, as `failing-pass!` takes it; the failing pass runs after `:after-runs` |
+| `:after-failing` | optional `(fn [census poll])` → census, after the failing pass |
 | `:always` | optional `(fn [census poll held-until])` → census, run whether the pass ran, was held or threw |
-| `:report` | optional `(fn [census poll])`, given the census last |
+| `:report` | optional `(fn [census poll])`, given the census last, in place of the census line |
+| `:note` | optional `(fn [line])` → line, given the census line before it is logged |
+
+Without `:report`, the pass logs `(census-line census poll)`: one line
+of counts, the same for every factory. `fresh-census` is the census a
+factory starts from, every count at zero.
 
 factory10's `pass!` is a call to it, with factory10's hand and its own
 steps.
@@ -365,17 +372,35 @@ config names `:runs`. The `ci_run` hand:
 factory10 hands it `run-hand`, whose `:live-reds` reads the heads of the
 live changes of its active policies.
 
+### The failing pass
+
+`(failing-pass! failing source census log-fn)` is fail, recover and
+stick on a head's verdict (ticket 58c51a5d): every live change of a
+repository with an active policy has its head read by the hand, and
+`failing-move` names at most one door. Before the door, the pull
+request is read again by number (`ForgePull`, `forge-moved!`): a merge
+or a new head the poll's window missed moves the row instead. `pass!`
+runs it when the config names `:failing`. The failing hand:
+
+| key | what it is |
+|---|---|
+| `:changes` | `(fn [])` → the live `change` rows |
+| `:policies` | `(fn [])` → the active policy rows, each naming `:repository` |
+| `:rounds-of` | `(fn [policy])` → the rounds the policy gives a change |
+| `:read` | `(fn [row policy head census])` → `{:verdict :census :conflicts :re-ran?}`, the factory's own reading of one head |
+| `:move!` | `(fn [row doc])` → truthy when the row moved to what the forge says now |
+| `:invoke!` | `(fn [row-id door input])` → the row after the door |
+
+factory10 hands it `failing-hand`, whose `:read` is its landing
+verdict, its held log and its re-run of an interrupted head.
+
 ### What is not in the kit yet
 
 The seam is: the kit takes what reads only the forge and the `change`
 kind. factory10 keeps what reads its own policy, tickets or bench.
 
-Still in `factory10.sources.forge`, and the kit's to take in later
-changes:
-
-- fail, recover and stick on a head's verdict, with the re-read by
-  number before a move;
-- the census line.
+The pass, the red runs, the failing pass and the census line are all
+the kit's now.
 
 factory10's own, and not for the kit: the landing verdict, the red base
 and its tickets, the held log, the groom floor, the beat, the policy
