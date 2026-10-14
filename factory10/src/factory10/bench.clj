@@ -768,31 +768,48 @@
   A rig's `waiting` for that very head, when the mirror also read it
   behind its base (`behind_base`), waits on no check: it reads as
   `behind` too, so the front is brought up to date or rides a train
-  (ticket fc997a92). The rig's own word is kept as `rig_state`."
+  (ticket fc997a92). The rig's own word is kept as `rig_state`.
+  A rig's `interrupted` for that very head is carried over the same way
+  as its `red` (ticket 68423628)."
   [change answer]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
         state (answer-state answer)]
     (if (and head
              (= head (some-> (get-in change [:data :green_head]) str))
-             (or (= "red" state)
+             (or (contains? #{"red" "interrupted"} state)
                  (and (= "waiting" state)
                       (true? (get-in change [:data :behind_base])))))
       (assoc answer :state "behind" :rig_state state)
       answer)))
 
+(defn rerun-spent?
+  "Were this head's interrupted checks already run again (ticket
+  68423628)? The line asked the rig for it (`seen` keeps the head under
+  `[:rerun id]`), or the forge mirror did and wrote `rerun_head`."
+  [change seen]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and head
+          (or (= head (get seen [:rerun (str (:id change))]))
+              (= head (some-> (get-in change [:data :rerun_head]) str)))))))
+
 (defn out-of-line
   "Why a change of a line does not stand in it this pass, or nil when it
   does. A conflicted branch is the failing path's, a draft is not
   brought forward, a red head waits on its seat, and a head the rig
-  refused for good (`seen`) is parked. A change the rig just merged has
-  left, and says `merged`. `answer` is what the rig's merge said of it
-  this pass, or nil."
+  refused for good (`seen`) is parked. A head whose checks were
+  interrupted stands in the line until they were run again once
+  (`rerun-spent?`), and is `interrupted` after. A change the rig just
+  merged has left, and says `merged`. `answer` is what the rig's merge
+  said of it this pass, or nil."
   [change answer seen]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
     (cond
       (conflicted-change? change) "conflicted"
       (true? (get-in change [:data :draft])) "draft"
       (= "red" (answer-state answer)) "red"
+      (and (= "interrupted" (answer-state answer))
+           (rerun-spent? change seen)) "interrupted"
       (and head (= head (get seen (str (:id change))))) "parked"
       (= "merged" (answer-state answer)) "merged")))
 
@@ -842,6 +859,42 @@
         (warn! "the merge of " id " failed (" (ex-message e)
                "); the next pass asks again")
         nil))))
+
+(defn rerun-args
+  "What the rig's `rerun` is told: the repository and the branch whose
+  head's failed jobs start again."
+  [change]
+  {:repo (str (get-in change [:data :repository]))
+   :branch (str (get-in change [:data :head_branch]))})
+
+(defn- rerun-interrupted!
+  "Ask the rig to run an interrupted front's checks again, once for this
+  head (ticket 68423628). `seen` remembers the head under `[:rerun id]`;
+  a missing power or no answer is not remembered, so the next pass asks
+  again. → true when the checks run again and the front waits on them; a
+  rerun the rig refused is spent all the same, and the change leaves the
+  line."
+  [ctx seen change id head answer]
+  (let [res (ask ctx :rerun (rerun-args change))
+        why (refused res)]
+    (cond
+      (nil? res)
+      (do (warn! "the rerun of " id " had no answer; the next pass asks again")
+          false)
+
+      (contains? missing-power-refusals why)
+      (do (warn! "the rig has no rerun yet (" why "); the next pass asks again")
+          false)
+
+      :else
+      (do (swap! seen assoc [:rerun id] head)
+          (if why
+            (warn! "the rig refused to rerun " id " at " head " ("
+                   (reason-of res) "); it leaves the line as interrupted")
+            (warn! id " at " head " was interrupted ("
+                   (str/join ", " (map str (:interrupted answer)))
+                   "); its checks run again, once for this head"))
+          (nil? why)))))
 
 (defn stale-waiting?
   "Does a front wait on a required check its head will never run while
@@ -1241,6 +1294,14 @@
                         (advance-train! (assoc ctx :answers answers)
                                         seen repo policy train))
            built (swap! trains assoc repo built)
+           ;; an interrupted front that stands in the line was not run
+           ;; again yet: it is, and it waits on its checks (ticket 68423628)
+           (and front (= "interrupted" (answer-state (get @answers id))))
+           (when (rerun-interrupted! ctx seen front id
+                                     (str (get-in front [:data :head_sha]))
+                                     (get @answers id))
+             (swap! answers update id assoc :state "waiting" :waits_on "checks"
+                    :rig_state "interrupted"))
            (and front (or (behind? (get @answers id))
                           (stale-waiting? front (get @answers id))))
            (let [head (str (get-in front [:data :head_sha]))]
@@ -1287,7 +1348,8 @@
 
 (def line-whys
   "Every word `line_why` may carry."
-  ["front" "behind" "red" "conflicted" "draft" "parked" "held" "person"])
+  ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
+   "person"])
 
 (def ^:private reason-chars 500)
 
@@ -1299,13 +1361,21 @@
   not merged it yet. A `waiting` answer says which of the two in its
   `waits_on`; one that carries none (a rig not yet deployed) reads as
   `checks`. A front that reads behind and holds its base (`current?`,
-  from `holds-base?`) has nothing to bring forward: it waits on `merge`."
+  from `holds-base?`) has nothing to bring forward: it waits on `merge`.
+  An `interrupted` front waits on `checks`: they are run again."
   ([answer] (front-waits-on answer false))
   ([answer current?]
    (cond (behind? answer) (if current? "merge" "update")
          (= "waiting" (answer-state answer))
          (if (= "github" (some-> (:waits_on answer) name)) "github" "checks")
+         (= "interrupted" (answer-state answer)) "checks"
          :else "merge")))
+
+(defn- interrupted-reason
+  "The checks an `interrupted` answer names, in one clause."
+  [answer]
+  (some-> (not-empty (str/join ", " (map str (:interrupted answer))))
+          (as-> s (subs s 0 (min reason-chars (count s))))))
 
 (defn- parked-reason [seen id]
   (some-> (get seen [:parked-why id]) str not-empty
@@ -1372,6 +1442,9 @@
                                        (= "merged" out) {}
                                        (= "parked" out) {:line_why out
                                                          :line_reason (parked-reason seen id)}
+                                       (= "interrupted" out) {:line_why out
+                                                              :line_reason (interrupted-reason
+                                                                            (answer-of change))}
                                        out {:line_why out}
                                        :else {:line_place (place id)
                                               :line_why (if (= 1 (place id))
