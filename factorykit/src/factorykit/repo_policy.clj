@@ -22,6 +22,7 @@
   The guards, the handler, the safety and the words are the factory's,
   because the rig a handler tells is the factory's own."
   (:require [clojure.string :as str]
+            [malli.core :as m]
             [waymark10.dsl :refer [defguardfn]]
             [waymark10.types :as t]))
 
@@ -64,15 +65,17 @@
    [[:repository {:x-display
                   {:raw true
                    :label "The repository"
-                   :help "The repository as GitHub spells it, as owner/repo. It is also the name the bench rig holds the clone under."}}
+                   :help "The name the forge and the bench rig hold this repository under, as the forge spells it."}}
      [:string {:min 1 :max 140}]]
     [:branch_pattern {:default "waymark/*"
                       :examples ["waymark/*"]
                       :x-display
                       {:raw true
                        :label "The branch pattern"
-                       :help "The shape of a work branch, with one * for the change's own id — waymark/* makes waymark/01HZQ7… . A submit on a branch outside this pattern is refused. The text before the * must not be the name of a branch this repository already has: git holds refs/heads/seat and refs/heads/seat/01HZQ7… never at the same time, so seat/* refuses every worktree in a repository with a branch named seat."}}
-     [:string {:min 1 :max 120}]]
+                       :help "The shape of a work branch, with one * for the change's own id — waymark/* makes waymark/01HZQ7… . A submit on a branch outside this pattern is refused. The text before the * must not be the name of a branch this repository already has: git holds refs/heads/seat and refs/heads/seat/01HZQ7… never at the same time, so seat/* refuses every worktree in a repository with a branch named seat. It has exactly one * and no space."}}
+     ;; EXACTLY ONE *, as colton-tools enforces it; the lookahead keeps
+     ;; the length the :string spelled, in the one pattern.
+     [:re #"^(?=.{1,120}$)[^*\s]*\*[^*\s]*$"]]
     [:base {:default "main"
             :examples ["main"]
             :x-display
@@ -88,7 +91,7 @@
                        :x-display
                        {:raw true
                         :label "The checks that must be green"
-                        :help "The check names the house waits for before it merges, one for each row. The house merges nothing when this list is empty."}}
+                        :help "The check names that must finish green before the work merges, one for each row. A factory that merges the work itself merges nothing on an empty list; where a person merges, the list may stay empty."}}
      [:vector [:string {:min 1 :max 200}]]]
     [:rounds_per_change {:default 3
                          :examples [3]
@@ -97,7 +100,8 @@
                           :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
      [:int {:min 1 :max 20}]]]
    ;; A factory whose forge is not GitHub alone takes these. All are
-   ;; OPTIONAL, so a factory that takes one later restates no row.
+   ;; OPTIONAL, so a factory that takes one later restates no row. A
+   ;; factory may tighten one it takes (`taken`), never widen it.
    :offered
    [[:forge {:optional true
              :examples ["github"]
@@ -126,7 +130,7 @@
                        :x-display
                        {:raw true
                         :label "The checks that only advise"
-                        :help "The check names the house reads and reports, one for each row. A red one holds no merge."}}
+                        :help "The check names read beside the required ones, one for each row. A red one makes the head's verdict red, as a red required one does; one that is pending, interrupted or absent holds nothing."}}
      [:vector [:string {:min 1 :max 200}]]]]
    ;; THE MACHINE'S PART OF THE FOUR DOORS. The extension's door of the
    ;; same name gives the rest.
@@ -148,7 +152,7 @@
 
 (def ^:private spent
   "The extension's keys the builder reads and no declaration carries."
-  [:takes :policy :policy-order :engine])
+  [:takes :fixed :policy :policy-order :engine])
 
 (def ^:private law
   "The cracks law: what a policy waits on, who moves it at no policy
@@ -179,6 +183,68 @@
                {:unknown (vec unknown)}))
     (into (mapv by-name (distinct order)) (remove (comp said first)) fields)))
 
+(defn- parts
+  "A schema form as its type, its properties and its children."
+  [form]
+  (if (vector? form)
+    (let [[t & more] form
+          props (when (map? (first more)) (first more))]
+      [t (or props {}) (vec (if props (rest more) more))])
+    [form {} []]))
+
+(defn- narrower?
+  "Whether `tight` admits only what `offered` admits, as far as the forms
+  say: the same form; under a `:maybe`, a narrower child with or without
+  the `:maybe`; an `:enum` whose every value `offered` admits; or the
+  same type, a `:min` no lower, a `:max` no higher and each child
+  narrower. Anything else the kit cannot judge, and calls wider."
+  [offered tight]
+  (let [[ot op oc] (parts offered)
+        [tt tp tc] (parts tight)]
+    (cond
+      (= offered tight) true
+      (= :maybe ot) (narrower? (first oc) (if (= :maybe tt) (first tc) tight))
+      (= :enum tt) (every? #(m/validate offered %) tc)
+      (not= ot tt) false
+      :else (and (or (nil? (:min op)) (>= (:min tp ##-Inf) (:min op)))
+                 (or (nil? (:max op)) (<= (:max tp ##Inf) (:max op)))
+                 (= (count oc) (count tc))
+                 (every? true? (map narrower? oc tc))))))
+
+(defn- take-name [entry] (if (vector? entry) (first entry) entry))
+
+(defn- taken
+  "The schema entry one `:takes` entry makes of an offered field. A name
+  takes it as offered. `[name {:required :schema :x-display}]` tightens
+  it: `:required` drops `:optional` (and, with no `:schema`, an outer
+  `:maybe`), `:schema` stands in for the offered schema when it admits
+  nothing the offered one refuses, and `:x-display` merges over the
+  offered words."
+  [offered entry]
+  (let [[field how] (if (vector? entry) entry [entry nil])
+        {:keys [required schema x-display]} how
+        [_ props given :as as-offered] (get offered field)
+        [gt _ [child]] (parts given)
+        tight (cond
+                (some? schema) schema
+                (and required (= :maybe gt)) child
+                :else given)]
+    (when-some [unknown (seq (remove #{:required :schema :x-display} (keys how)))]
+      (refuse! (str ":takes tightens " (pr-str field) " with " (pr-str (vec unknown))
+                    ". A taken field takes :required, :schema and :x-display.")
+               {:field field :unknown (vec unknown)}))
+    (when-not (narrower? given tight)
+      (refuse! (str ":takes widens " (pr-str field) ": " (pr-str tight)
+                    " admits what the offered " (pr-str given) " refuses.")
+               {:field field :offered given :schema tight}))
+    (if (nil? how)
+      as-offered
+      [field
+       (cond-> props
+         required (dissoc :optional)
+         x-display (update :x-display merge x-display))
+       tight])))
+
 (defn- with-the-law
   "Each law key: the core's, with the extension's over it. Two maps
   merge and the extension's entries win; any other value of the
@@ -198,12 +264,18 @@
 (defn statement
   "The fields a person states, as schema entries in the form's order:
   the core's `:fields`, the offered fields the extension's `:takes`
-  names, then the extension's own `:policy`. `:policy-order`, a vector
-  of field names, says another order."
+  names, each as taken (`taken`), then the extension's own `:policy`.
+  `:policy-order`, a vector of field names, says another order."
   [core extension]
-  (let [{:keys [takes policy policy-order]} extension
-        offered (into {} (map (juxt first identity)) (:offered core))]
-    (when-some [unknown (seq (remove offered takes))]
+  (let [{:keys [policy policy-order]} extension
+        offered (into {} (map (juxt first identity)) (:offered core))
+        takes (reduce (fn [kept entry]
+                        (cond-> kept
+                          (not-any? #(= (take-name entry) (take-name %)) kept)
+                          (conj entry)))
+                      []
+                      (:takes extension))]
+    (when-some [unknown (seq (remove offered (map take-name takes)))]
       (refuse! (str ":takes names " (pr-str (vec unknown))
                     ", and the core offers no such field.")
                {:unknown (vec unknown)}))
@@ -211,7 +283,7 @@
                 (map first (concat (:fields core) (:offered core)))
                 (map first policy))
     (in-order (-> (vec (:fields core))
-                  (into (map offered) (distinct takes))
+                  (into (map #(taken offered %)) takes)
                   (into policy))
               policy-order)))
 
@@ -231,14 +303,21 @@
     door is the core's machine and the extension's door of that name
     over it. An extension that names a core door's machine is refused.
   - `restate` takes the stated fields as its `:input` and its
-    `:edit` prefill. An extension that names either is refused.
+    `:edit` prefill, but for the extension's `:fixed` ones: those are
+    stated once, at create. An extension that names either is refused.
   - The cracks law (`:waits`, `:left-by`, `:reached-by`,
     `:expected-age`) is the core's, with the extension's over it.
   - Every other key is the extension's."
   [core extension]
   (let [policy (statement core extension)
+        fixed (set (:fixed extension))
         engine (vec (:engine extension))
-        whole (into [:map] policy)]
+        whole (into [:map] policy)
+        restated (into [:map] (remove (comp fixed first)) policy)]
+    (when-some [unknown (seq (remove (set (map first policy)) (:fixed extension)))]
+      (refuse! (str ":fixed names " (pr-str (vec unknown))
+                    ", and the policy has no such stated field.")
+               {:unknown (vec unknown)}))
     (when-some [named (seq (filter #(contains? extension %)
                                    (concat machine written)))]
       (refuse! (str "the extension names " (pr-str (vec named))
@@ -262,6 +341,6 @@
                :actions (cond-> (merge-with merge (:actions core) (:actions extension))
                           (contains? (:actions core) :restate)
                           (update :restate assoc
-                                  :input whole
-                                  :edit {:prefill (mapv first policy)})))
+                                  :input restated
+                                  :edit {:prefill (mapv first (rest restated))})))
         (with-the-law core extension))))
