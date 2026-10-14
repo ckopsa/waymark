@@ -115,6 +115,25 @@ the table does not name has no verdict, so it is never green either.
 To change a reading, change the EDN file and the JSON file together.
 `factorykit.forge-test` fails when the two differ.
 
+The table reads a check on a head. factory10 reads it in
+`check-verdict`, `red-conclusions`, `green-conclusions` and
+`held-checks`: a check is held when the table gives it no verdict, so a
+`stale` or `action_required` check is interrupted and not held. Two
+readers leave the table on purpose:
+
+- `factory10.sources.forge/interrupted-conclusions` judges a JOB inside
+  a run, not a check. The table reads a timed out check as red, and that
+  red is what sends the pass to the run's jobs. There the question is
+  whose fault the red is. A job the forge timed out is a runner that
+  froze, so `job-verdict` reads it as interrupted and the pass reruns
+  it one time.
+- `factory10.bench/red-deploys` is the table's red states and its
+  interrupted states together, and `startup_failure` beside them. The
+  house reruns no deploy, so a deploy check that was cancelled did not
+  land and holds the line as a red one does. `startup_failure` is a
+  workflow run's conclusion. No check run carries it, so the table does
+  not name it.
+
 ### The verdict
 
 `(verdict {:forge :required :advisory} checks)` reads the checks on one
@@ -132,8 +151,10 @@ names no required check requires every check on the head.
 that may fail a change but must not hold one). A red advisory check is
 named beside the required reds. A pending, interrupted or absent one
 holds nothing. The policy declares the names; the kit builds none in.
-factory10's policy has no advisory field yet, so its `check-verdict`
-passes none.
+factory10's `check-verdict` passes none. Its policy takes none of the
+kit's offered fields, and `advisory_checks` would be a new field on the
+form a person states every policy with. A person decides that, so it is
+a ticket of its own and not a change to the reading.
 
 ### The conformance suite
 
