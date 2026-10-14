@@ -44,3 +44,122 @@
   (is (nil? (kit/build-state :bitbucket {:state "PAUSED"})))
   (is (nil? (kit/verdict {:forge :bitbucket :required ["build"]}
                          [{:check_name "build" :state "PAUSED"}]))))
+
+;; ── the change pass (ticket 97bd7937) ───────────────────────────────
+
+(def ^:private door-states
+  {:merge :merged :close :closed :reopen :open :fold :closed})
+
+(defn- a-hand
+  "A factory's hand over an atom of rows, with no engine behind it. Each
+  write is kept in `calls` as [door row-id]."
+  [rows calls]
+  (let [write! (fn [id f] (get (swap! rows update id f) id))]
+    {:forge-id-prefix "bitbucket:"
+     :find-change (fn [change-id]
+                    (first (filter #(= change-id (get-in % [:data :change_id]))
+                                   (vals @rows))))
+     :branch-changes (fn [repository head limit]
+                       (take limit
+                             (filter #(and (= repository (get-in % [:data :repository]))
+                                           (= head (get-in % [:data :head_branch])))
+                                     (vals @rows))))
+     :create! (fn [fields]
+                (let [id (str "row-" (inc (count @rows)))]
+                  (swap! calls conj [:create id])
+                  (write! id (constantly {:id id :state :open :data fields}))))
+     :invoke! (fn [id door input]
+                (swap! calls conj [door id])
+                (write! id #(-> %
+                                (update :data merge input)
+                                (update :state (fn [s] (get door-states door s))))))}))
+
+(def ^:private a-pull-request
+  {:change_id "bitbucket:acme/shop#7" :repository "acme/shop" :number 7
+   :title "Add the till" :author "sam" :base_branch "main"
+   :head_branch "till" :head_sha "aaa" :draft false
+   :url "https://bitbucket.example/acme/shop/pull-requests/7"
+   :mergeable "clean" :files_changed 2 :forge_state "open"})
+
+(def ^:private a-house-row
+  {:id "row-9" :state :submitted
+   :data {:change_id "ticket:abc" :born_from "ticket:abc"
+          :repository "acme/shop" :head_branch "till"}})
+
+(defn- pass! [hand changes]
+  (kit/change-pass! hand changes {} (fn [& _])))
+
+(deftest a-new-pull-request-is-minted-and-then-moves-with-the-forge
+  (let [rows (atom {})
+        calls (atom [])
+        hand (a-hand rows calls)]
+    (is (= {:minted 1} (pass! hand [a-pull-request])))
+    (is (= [[:create "row-1"] [:observe "row-1"]] @calls))
+    (is (= "clean" (get-in @rows ["row-1" :data :mergeable])))
+    (is (not (contains? (get-in @rows ["row-1" :data]) :forge_state))
+        "the forge's state is no field of the row")
+    (is (= {} (pass! hand [a-pull-request])) "nothing new moves nothing")
+    (reset! calls [])
+    (is (= {:moved 1}
+           (pass! hand [(assoc a-pull-request :forge_state "merged"
+                               :head_sha "bbb")])))
+    (is (= [[:observe "row-1"] [:merge "row-1"]] @calls))
+    (is (= :merged (get-in @rows ["row-1" :state])))
+    (is (= "bbb" (get-in @rows ["row-1" :data :head_sha])))))
+
+(deftest a-pull-request-on-a-house-row's-branch-is-adopted
+  (let [rows (atom {"row-9" a-house-row})
+        calls (atom [])]
+    (is (= {:adopted 1} (pass! (a-hand rows calls) [a-pull-request])))
+    (is (= [[:adopt_submitted "row-9"] [:observe_submitted "row-9"]] @calls))
+    (is (= 1 (count @rows)) "no second row is minted beside it")
+    (is (= "bitbucket:acme/shop#7" (get-in @rows ["row-9" :data :change_id])))
+    (is (= :submitted (get-in @rows ["row-9" :state])))))
+
+(deftest a-duplicate-the-forge-minted-is-folded-into-the-house-row
+  (let [minted {:id "row-1" :state :open
+                :data (select-keys a-pull-request
+                                   [:change_id :repository :head_branch])}
+        rows (atom {"row-1" minted
+                    "row-9" (assoc a-house-row :state :stuck)})
+        calls (atom [])]
+    (is (= {:folded 1} (pass! (a-hand rows calls) [a-pull-request])))
+    (is (= [[:fold "row-1"] [:adopt_stuck "row-9"]] @calls))
+    (is (= "row-9" (get-in @rows ["row-1" :data :folded_into])))
+    (is (= :closed (get-in @rows ["row-1" :state])))))
+
+(deftest a-refused-row-is-counted-and-kept-for-the-source
+  (let [hand (assoc (a-hand (atom {}) (atom []))
+                    :create! (fn [_] (throw (ex-info "refused by the test" {}))))
+        said (atom [])
+        refused (volatile! [])]
+    (is (= {:refused 1}
+           (kit/change-pass! hand [a-pull-request] {}
+                             (fn [& parts] (swap! said conj (apply str parts)))
+                             refused)))
+    (is (= [a-pull-request] @refused))
+    (is (= [(str "the pull request bitbucket:acme/shop#7 was refused a row "
+                 "(refused by the test)")]
+           @said))))
+
+(deftest the-pass-moves-through-the-factory's-own-move
+  (let [seen (atom [])
+        hand (assoc (a-hand (atom {}) (atom []))
+                    :move! (fn [row _] (swap! seen conj (:id row)) [row false]))]
+    (is (= {:minted 1} (pass! hand [a-pull-request])))
+    (is (= ["row-1"] @seen))))
+
+(deftest a-held-conflict-is-not-written-over
+  (let [row {:data {:mergeable "conflicted" :head_sha "aaa"}}]
+    (is (= {} (kit/changed-facts row {:mergeable "unknown" :head_sha "aaa"})))
+    (is (= {:mergeable "unknown" :head_sha "bbb"}
+           (kit/changed-facts row {:mergeable "unknown" :head_sha "bbb"})))
+    (is (= {:mergeable "clean"}
+           (kit/changed-facts row {:mergeable "clean" :head_sha "aaa"})))))
+
+(deftest the-state-door-table
+  (is (= :merge (kit/state-door :stuck "merged")))
+  (is (= :close (kit/state-door :failing "closed")))
+  (is (= :reopen (kit/state-door :closed "open")))
+  (is (nil? (kit/state-door :open "open")))
+  (is (nil? (kit/state-door :merged "closed"))))

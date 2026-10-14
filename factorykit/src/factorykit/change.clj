@@ -24,7 +24,9 @@
   stall, unstick and unstick_submitted move the ask as well as the
   row, so they have no handler here either: the extension's
   `:handlers` gives each one its own, and `stalled` and `unstalled`
-  are the row's part of it.
+  are the row's part of it. A factory with no ask to move names none,
+  and `build` gives the three doors `row-handlers`, the row's part
+  alone (ticket d42cf49c).
 
   A factory in this repository depends on the kit by `:local/root`. A
   factory outside it depends on it by `:git/url` with
@@ -121,6 +123,25 @@
   sentence was for the person who put it back, and the log keeps it."
   [row]
   (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
+
+;; THE ROW'S PART ALONE (ticket d42cf49c). A factory that has no ask to
+;; move names no handler for the stall or the way back, and a door with
+;; no handler writes nothing: the stall kept no reason. `build` puts
+;; these on the three doors an extension's `:handlers` leaves out.
+
+(defhandler write-the-stall [row inp ctx]
+  (stalled row inp ctx))
+
+(defhandler clear-the-stall [row _inp _ctx]
+  ;; a person looked at it, so the rounds start again
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
+
+(def row-handlers
+  "The handler `build` gives a core door the extension's `:handlers`
+  does not name: the row's part of the stall and of the way back."
+  {:stall write-the-stall
+   :unstick clear-the-stall
+   :unstick_submitted clear-the-stall})
 
 (def core
   "What every factory's change has. `:fields` is the entries of the
@@ -704,7 +725,9 @@
 
 (defn- with-the-handlers
   "The core's doors, each with the handler the extension's `:handlers`
-  names for it. A core door that has its own handler keeps it."
+  names for it. A core door that has its own handler keeps it. The
+  stall and the way back take the kit's `row-handlers` when the
+  extension names none, so a stall always says why on the row."
   [doors handlers]
   (when-some [unknown (seq (remove (set (keys doors)) (keys handlers)))]
     (refuse! (str ":handlers names " (pr-str (vec unknown))
@@ -716,7 +739,12 @@
              {:taken (vec taken)}))
   (reduce-kv (fn [doors door handler] (assoc-in doors [door :handler] handler))
              doors
-             handlers))
+             (merge (into {}
+                          (filter (fn [[door _]]
+                                    (and (contains? doors door)
+                                         (not (contains? (get doors door) :handler)))))
+                          row-handlers)
+                    handlers)))
 
 (defn build
   "The defresource map of a factory's change: `core` and the factory's
@@ -733,6 +761,8 @@
   - `:handlers`, a map of a core door's name to a handler, gives a
     core door that has no handler the extension's own. A door the
     core does not have, and one with the core's handler, is refused.
+    `stall`, `unstick` and `unstick_submitted` take the kit's
+    `row-handlers` when `:handlers` names none.
   - An extension may not redefine a core field or a core door.
   - The cracks law (`:waits`, `:left-by`, `:reached-by`,
     `:expected-age`) is the core's, with the extension's over it.
