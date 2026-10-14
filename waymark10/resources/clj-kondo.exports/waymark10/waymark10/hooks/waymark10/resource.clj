@@ -24,7 +24,7 @@
     :on-create :mirror :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
-    :waits :left-by :reached-by
+    :waits :left-by :reached-by :expected-age
     :scenarios})
 
 (def action-keys

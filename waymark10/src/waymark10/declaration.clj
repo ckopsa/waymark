@@ -131,6 +131,13 @@
    ;; door here. It moves no row. Never in the fingerprint — :waits'
    ;; precedent
    :reached-by
+   ;; how long a row may REST in a state with no write (ticket
+   ;; 21b49b28): {<state> <seconds>}. The live cracks pass
+   ;; (waymark10.server.live-cracks) reads it and files an `aged` note
+   ;; for a row past it; a state it does not name takes the default for
+   ;; its name, or no age. It moves no row. Never in the fingerprint —
+   ;; :waits' precedent
+   :expected-age
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema

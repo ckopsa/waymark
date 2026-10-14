@@ -1152,6 +1152,11 @@
    ;; a groomed ticket (`born_from`), so the seat that builds is brought
    ;; to it by its wake on the ticket's groom, not by a change wake.
    :reached-by [{:in #{:open} :by {:kind :ticket :action :groom}}]
+   ;; HOW LONG A CHANGE MAY REST (ticket 21b49b28), in seconds: open and
+   ;; submitted six hours, failing four, stuck a day. The one-day
+   ;; default let a change sit thirty hours at the front of its merge
+   ;; line before anyone was told.
+   :expected-age {:open 21600 :submitted 21600 :failing 14400 :stuck 86400}
    :summary "{data.repository}#{data.number} · {data.title}"
    ;; the pull request's own address, not the kind label
    :label-template "{data.repository}#{data.number}"
