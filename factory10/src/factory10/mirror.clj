@@ -38,7 +38,7 @@
   namespace holds the verdict-to-label table both sides read, so the
   two halves cannot drift. The push itself is bead
   waymark-fp62.6.4's."
-  (:require [waymark10.dsl :refer [defguardfn]]
+  (:require [factorykit.change :as kit]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -52,16 +52,11 @@
                 :type :system
                 :display "GitHub mirror"}))
 
-(defguardfn the-mirror-writes-this-row
-  {:reads [:principal]
-   :hide true
-   :explain "The mirror writes this row. A person and a model read it."}
-  [_row _inp ctx]
-  ;; The Mirror weave's own test (waymark10.server.mirror/system-only),
-  ;; written out here because these kinds keep their own machines.
-  (if (= :system (:type (:principal ctx)))
-    (t/allow)
-    (t/deny)))
+(def the-mirror-writes-this-row
+  "The wall. It is the kit's (`factorykit.change`, ticket 47e2c880),
+  because every factory's change stands behind it; ci_run stands
+  behind the same one."
+  kit/the-mirror-writes-this-row)
 
 ;; ── the label the mirror pushes ─────────────────────────────────────
 
