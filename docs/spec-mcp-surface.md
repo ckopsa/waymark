@@ -51,8 +51,8 @@ on every law change. Instead, a **fixed small toolset over a dynamic surface**:
 | `waymark_powers` | the external powers (Gate's live tools) this grant admits right now |
 | `waymark_power` | invoke one of those powers by name, judged by the grant first |
 
-Eleven tools: the spec's six, `waymark_pursue` beside invoke, the batch
-lookup, the seat door and the two power tools that are the MCP surface of the
+Twelve tools: the spec's six, `waymark_pursue` beside invoke, the batch
+lookup, the in-flight read, the seat door and the two power tools that are the MCP surface of the
 Gate door. The list is the same for every caller and never moves with a grant
 or a law change. The *interesting*
 surface — which kinds, which actions, which fields — arrives as data through

@@ -143,6 +143,7 @@
             [waymark10.server.collections :as coll]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp-client :as mcp-client]
@@ -1235,7 +1236,8 @@
 ;;
 ;; GET /api/-/in-flight (ticket d0407b84) answered over MCP: an agent
 ;; cannot GET an href, so the discover door alone left it unread. No
-;; new reading — a call onto the route, with its four filters.
+;; new reading — the function the route answers with, with its four
+;; filters (the door mounts core's routes only, as for cracks).
 
 (def ^:private in-flight-tool
   {:name "waymark_in_flight"
@@ -2850,17 +2852,18 @@
 ;; ── waymark_in_flight: the body ─────────────────────────────────────
 
 (defn- in-flight-read
-  "The in-flight document, through the route: the session's grant is
-  the route's visibility, and the four filters cross as its query
-  params, blank ones left out."
-  [_eng call session args]
-  (let [params (keep (fn [k]
-                       (when-some [v (some-> (get args k) str str/trim not-empty)]
-                         [(name k) v]))
-                     [:domain :repo :kind :holder])]
-    (pass-through
-     (call (request session :get "/api/-/in-flight"
-                    {:query (query-string params)})))))
+  "The in-flight document as GET /api/-/in-flight answers it. That
+  route is the seats module's, and `door` mounts core's routes only —
+  a call onto it read as collection \"-\" (ticket 334e4dac) — so this
+  is `in-flight/read-all`, the function the route answers with: the
+  session's grant is its visibility, blank filters left out."
+  [eng _call session args]
+  (let [filters (into {}
+                      (keep (fn [k]
+                              (when-some [v (some-> (get args k) str str/trim not-empty)]
+                                [k v])))
+                      in-flight/filter-keys)]
+    (value-result (in-flight/read-all eng (:visibility session) filters))))
 
 ;; ── waymark_resolve: the body ───────────────────────────────────────
 
