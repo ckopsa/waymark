@@ -571,6 +571,62 @@
                              (seat "any" {:scope [{:kind "change" :actions ["submit"]}]
                                           :wake_on [{:kind "ticket" :actions ["groom"]}]})]))))))
 
+;; ticket af58f25f: a seat that walks the open tickets of every repo and
+;; holds only drop hid the open row no builder is handed. The seats are
+;; written in the export's shape after the house's, by hand: the
+;; generated fixture is not in the repository yet.
+(deftest a-walk-that-cannot-take-the-declared-exit-hides-no-value
+  (let [ticket {:kind :ticket
+                :states [:draft :open :in_review :done :dropped]
+                :initial :draft
+                :terminal #{:done :dropped}
+                :left-by [{:in #{:open} :by {:kind :change :action :submit}
+                           :via :review :to :in_review}]
+                :actions {:groom {:from #{:draft} :to :open}
+                          :ungroom {:from #{:open} :to :draft}
+                          :drop {:from #{:draft :open} :to :dropped}
+                          :review {:from #{:open} :to :in_review}
+                          :land {:from #{:in_review} :to :done}}}
+        change {:kind :change
+                :states [:open :submitted]
+                :initial :open
+                :terminal #{:submitted}
+                :actions {:submit {:from #{:open} :to :submitted}}}
+        builder (seat "code-seat" {:scope [{:kind "ticket" :actions ["ungroom"]
+                                            :filter {:repo "ckopsa/waymark" :state "open"}}
+                                           {:kind "change" :actions ["submit"]}]
+                                   :walk "ticket"
+                                   :wake_on [{:kind "ticket" :actions ["groom"]
+                                              :filter {:repo "ckopsa/waymark"}}]})
+        judge (seat "draft-judge" {:scope [{:kind "ticket" :actions ["drop"]}]
+                                   :walk "ticket"
+                                   :wake_on [{:kind "ticket" :actions ["create" "ungroom"]
+                                              :filter {:state "draft"}}]})
+        director (seat "director" {:scope [{:kind "ticket" :actions ["drop"]
+                                            :filter {:state "draft,open"}}]
+                                   :walk "ticket"})
+        rows {:ticket [{:id "1" :state :open :data {:repo "ckopsa/waymark"}}
+                       {:id "2" :state :open :data {:repo "ckopsa/messa"}}
+                       {:id "3" :state :draft :data {:repo "ckopsa/messa"}}]}
+        unwalked (fn [seats]
+                   (filterv #(= "unwalked_value" (:crack %))
+                            (cracks/audit [ticket change] seats {:rows rows})))]
+    (testing "the open ticket of a repo no builder walks is reported"
+      (doseq [seats [[builder judge] [builder director] [builder judge director]]]
+        (let [[c & more] (unwalked seats)]
+          (is (nil? more) "the draft is walked, whatever its repo")
+          (is (= "repo" (:field c)))
+          (is (= "ckopsa/messa" (:value c)))
+          (is (= 1 (:rows c)))
+          (is (= ["open"] (:states c)))
+          (is (= [{:seat "code-seat" :admits ["ckopsa/waymark"]}] (:seats_considered c))))))
+    (testing "a walk of every repo by a seat that holds the declared door clears it"
+      (is (empty? (unwalked [builder judge
+                             (seat "any" {:scope [{:kind "ticket" :actions ["ungroom"]
+                                                   :filter {:state "open"}}
+                                                  {:kind "change" :actions ["submit"]}]
+                                          :walk "ticket"})]))))))
+
 ;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
 ;; two ways a ticket does: a blocker's ending releases it whichever way
 ;; it ends, and a merge_after job that is dropped does nothing.

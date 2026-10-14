@@ -528,6 +528,13 @@
   wake_on entry into the state the row meets too. `state` is left to
   the cracks above.
 
+  Where the kind declares another kind's door out of the state, a walk
+  is judged there only when its seat holds that door (ticket
+  af58f25f): a seat that walks the open rows of every repository and
+  can only drop or block one builds none of them, and hid the row no
+  builder is handed. Where no walk's seat holds it, every walk of the
+  state is judged, as before.
+
   A seat a person sits in covers no value by sitting (ticket
   8186d41a): its walk is left out of the walks judged here, and the
   wake_on a walk seat is given when it wrote none is not counted for
@@ -550,15 +557,19 @@
                   (if (seats/interactive-seat? seat)
                     (get-in seat [:data :wake_on])
                     (seats/effective-wake-on seat (walk-rdef seat))))
+        far-of (fn [state]
+                 (into [] (comp (map :by) (filter map?))
+                       (indirect-exits rdef (keyword state))))
+        takes? (fn [seat far]
+                 (some #(seq (holding-entries seat (:kind %) (:action %) nil)) far))
         woken? (fn [row state]
                  (let [state (keyword state)
                        out (exits rdef state)
-                       far (into [] (comp (map :by) (filter map?)) (indirect-exits rdef state))
+                       far (far-of state)
                        into-state (arrivals rdef state)]
                    (some (fn [seat]
                            (and (if (seq far)
-                                  (some #(seq (holding-entries seat (:kind %) (:action %) nil))
-                                        far)
+                                  (takes? seat far)
                                   (some (fn [a]
                                           (some #(row-meets? (:filter %) row)
                                                 (holding-entries seat kind (:name a) state)))
@@ -572,7 +583,10 @@
                          seat-rows)))
         live (remove #(contains? terminal (text (:state %))) rows)
         carried (for [[state at] (sort-by key (group-by (comp text :state) live))
-                      :let [here (filterv #(admits-state? (:fm %) state) walks)
+                      :let [far (far-of state)
+                            open-to (filterv #(admits-state? (:fm %) state) walks)
+                            here (or (not-empty (filterv #(takes? (:seat %) far) open-to))
+                                     open-to)
                             filters (mapv :fm here)]
                       field (into (sorted-set)
                                   (comp (mapcat keys) (map text) (remove #{"state"}))
