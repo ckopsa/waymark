@@ -259,6 +259,7 @@ jobs:
           #   localfire/**      localfire
           #   calendar10/**     calendar10, workqueue10
           #   factory10/**      factory10, workqueue10
+          #   factorykit/**     factory10, workqueue10
           #   workqueue10/**    workqueue10
           #   waymark10/**      waymark10, calendar10, factory10, workqueue10
           #   anything else     all of them: .github/, Makefile, Dockerfile.*,
@@ -284,7 +285,8 @@ jobs:
               docs/*|*.md)    ;;
               localfire/*)    reach[localfire]=1 ;;
               calendar10/*)   reach[calendar10]=1; reach[workqueue10]=1 ;;
-              factory10/*)    reach[factory10]=1; reach[workqueue10]=1 ;;
+              factory10/*|factorykit/*)
+                              reach[factory10]=1; reach[workqueue10]=1 ;;
               workqueue10/*)  reach[workqueue10]=1 ;;
               waymark10/*)    reach[waymark10]=1; reach[calendar10]=1
                               reach[factory10]=1; reach[workqueue10]=1 ;;
@@ -333,7 +335,7 @@ jobs:
               .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|factory10/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
                 code=true ;;
             esac
@@ -417,7 +419,8 @@ jobs:
                       for p in base.rglob("*_test.clj")} if base.is_dir() else set()
 
           suites = {r: namespaces(r) for r in
-                    ("waymark10", "workqueue10", "calendar10", "localfire", "factory10")}
+                    ("waymark10", "workqueue10", "calendar10", "localfire", "factory10",
+                     "factorykit")}
 
           # An ordered run: whole namespaces of ONE sharded suite, since
           # that suite's shard is the fixture it reproduces. The prefix
@@ -465,7 +468,7 @@ jobs:
               refuse(f"only: no test namespace for {', '.join(missing)} in any suite"
                      " (name a test namespace or ns/test-name, not a suite or make target)")
           print(f"quick={str(bool({'calendar10', 'localfire'} & homes)).lower()}")
-          print(f"factory={str('factory10' in homes).lower()}")
+          print(f"factory={str(bool({'factory10', 'factorykit'} & homes)).lower()}")
           PY
 
   # The cheap signal, first: neither of these needs a database, and a
@@ -562,6 +565,14 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory check-factory" factory10 "$RUNNER_TEMP/check-factory.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:check
+      # factorykit is the deps root factory10's change kind is composed
+      # through (ticket ce3dd7b1): its own suite, in this job, since a
+      # factorykit path reaches factory10 in the table above.
+      - name: factorykit — the change builder, no database or network
+        id: factorykit
+        run: >-
+          bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
@@ -573,6 +584,7 @@ jobs:
         if: >-
           steps.checkout.outcome == 'success' &&
           (failure() || steps.check-factory.outputs.retried == 'true' ||
+           steps.factorykit.outputs.retried == 'true' ||
            steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:

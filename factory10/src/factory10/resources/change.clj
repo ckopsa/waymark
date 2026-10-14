@@ -116,6 +116,7 @@
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :refer [the-mirror-writes-this-row]]
+            [factorykit.change :as kit]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -1112,20 +1113,16 @@
       domain (assoc-in [:data :domain] domain)
       asker (assoc-in [:data :requested_by] asker))))
 
-(defresource change
+(def ^:private factory10s-own
+  "What factory10 adds to the kit's core (ticket ce3dd7b1): every door,
+  with its guards and its handler, and the fields that are not shared.
+  The states, the tomb, the one-row index, the shared fields and the
+  cracks law are `factorykit.change/core`."
   {:kind :change
    :plural "changes"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   ;; GitHub's own three, and the bench's two (waymark-fp62.6.3.2):
-   ;; `submitted` is a change a seat has pushed at least one round of,
-   ;; and `stuck` is one the house stopped working. `failing` is a
-   ;; submitted change whose required checks went red (d1742908).
-   :states [:open :submitted :failing :stuck :merged :closed]
    :initial :open
-   ;; ONE TOMB. A merged pull request is finished. A closed one is
-   ;; not: GitHub reopens it, so `reopen` is a real door.
-   :terminal #{:merged}
    ;; what each ending MEANS, in the factory's own words. A merged
    ;; change is what the work accomplished; a closed one is what it
    ;; let go. The engine shuts the household's doors on a row whose
@@ -1135,28 +1132,6 @@
    ;; a stuck change is work waiting for a person, not work that is
    ;; over, and an ending would shut the very doors it needs.
    :over {:accomplished #{:merged} :let-go #{:closed}}
-   ;; A SUBMITTED CHANGE WAITS ON ITS REQUIRED CHECKS (ticket d9edac4e).
-   ;; They are GitHub's and no row here, so the wait names no kind:
-   ;; green lets the gate merge it, and red moves it to `failing`,
-   ;; which sends its ticket back to the seat that built it.
-   :waits [{:on :checks :in #{:submitted}
-            :outcomes {:green :release :red :return}}]
-   ;; THE EXITS NO SEAT TAKES AT A CHANGE DOOR (ticket 4b0460cc), so the
-   ;; cracks audit does not report `submitted` as a state seats leave on
-   ;; a cadence. The forge's mirror walks all three: the gate's merge,
-   ;; a person's close on GitHub, and the red check that is `fail`.
-   :left-by [{:in #{:submitted} :by :mirror :via :merge :to :merged}
-             {:in #{:submitted} :by :mirror :via :close :to :closed}
-             {:in #{:submitted} :by :mirror :via :fail :to :failing}]
-   ;; AND THE ARRIVAL THAT IS NO CHANGE DOOR. A change is born open from
-   ;; a groomed ticket (`born_from`), so the seat that builds is brought
-   ;; to it by its wake on the ticket's groom, not by a change wake.
-   :reached-by [{:in #{:open} :by {:kind :ticket :action :groom}}]
-   ;; HOW LONG A CHANGE MAY REST (ticket 21b49b28), in seconds: open and
-   ;; submitted six hours, failing four, stuck a day. The one-day
-   ;; default let a change sit thirty hours at the front of its merge
-   ;; line before anyone was told.
-   :expected-age {:open 21600 :submitted 21600 :failing 14400 :stuck 86400}
    :summary "{data.repository}#{data.number} · {data.title}"
    ;; the pull request's own address, not the kind label
    :label-template "{data.repository}#{data.number}"
@@ -1178,62 +1153,24 @@
    ;; again the change the house stopped.
    :default-filters {:state "open,submitted"}
    :sortable {:fields [:updated_at] :default "updated_at"}
-   ;; ONE ROW PER PULL REQUEST, enforced by an index
-   :unique [[:change_id]]
+   ;; WHERE THE KIT'S FIELDS STAND AMONG THESE. The builder puts the
+   ;; core's fields first; this is the order the kind had as one map.
+   :field-order [:change_id :repository :number :title :author :base_branch
+                 :head_branch :head_sha :draft :mergeable :files_changed
+                 :lines_added :lines_removed :touched_paths :labels
+                 :review_state :missing_checks :behind_base :base_compared_at
+                 :missing_checks_head :green_head :held_head :held_since
+                 :held_again :held_threw :held_reason :branch :worktree_dirty
+                 :rounds :failing_checks :conflicts :rerun_head :rerun_note
+                 :landing_error :train_red_head :train_red :unadopted_since
+                 :adoption_note :stall_reason :stalled_at :stalled_by
+                 :line_place :line_why :line_reason :url :born_from
+                 :superseded_by :domain :requested_by]
+   ;; the fields that are factory10's own; change_id to head_branch,
+   ;; worktree_dirty, rounds, the stall's three and born_from are the
+   ;; kit's
    :schema
    [:map
-    ;; :raw because it is a LABEL and not prose — an opaque address is
-    ;; shown exactly as it arrived. It also tells the assembly's ref
-    ;; lint the truth: a field named <kind>_id for a kind this engine
-    ;; serves reads as a reference by convention (checks-assembly's
-    ;; id-target), and this one is not a reference to another change —
-    ;; it is THIS row's own address at GitHub.
-    [:change_id {:x-ref {:address true}
-                 :x-display
-                 {:raw true
-                  :label "The pull request's own id"
-                  :help "The address GitHub knows this pull request by, as github:owner/repo#number. The source reads it back to see whether this pull request is already a row here. A change a seat built from an ask carries the ask's own address instead — the walk kind, a colon and the row id — until the push opens the pull request and the source adopts the row."}}
-     [:string {:min 1 :max 250}]]
-    [:repository {:x-display
-                  {:label "The repository"
-                   :help "The repository as GitHub spells it, as owner/repo. Every policy about this change reads this field first."}}
-     [:string {:min 1 :max 140}]]
-    ;; OPTIONAL, because a change is not always born at GitHub (bead
-    ;; waymark-fp62.6.3.10). A seat that walks a queue of asks gets a
-    ;; change row minted for the ask BEFORE any pull request exists,
-    ;; and a number nobody has been given is a number this row must
-    ;; not invent. The source writes it at the adoption, with `adopt`
-    ;; below. Until then the summary line renders it as an em-dash,
-    ;; which is the framework's own word for "not said yet".
-    [:number {:optional true
-              :x-display
-              {:label "The pull request number"
-               :help "The number GitHub shows on the pull request. It is unique inside the repository, not across repositories. A change a seat is still building has none until the push opens the pull request."}}
-     [:maybe [:int {:min 1}]]]
-    ;; :raw because it is a LABEL and not prose (inbox_item's subject,
-    ;; one domain over): a long title must not refuse the mint
-    [:title {:optional true
-             :x-display
-             {:raw true
-              :label "Title"
-              :help "The pull request title, exactly as it stands on GitHub. This is what the card reads."}}
-     [:maybe [:string {:max 400}]]]
-    [:author {:optional true
-              :not-a-ref "A GitHub login, or the name of the seat that opened it: a handle, not a row id or a principal here."
-              :x-display
-              {:label "Who opened it"
-               :help "The GitHub login of the person or the seat that opened the pull request."}}
-     [:maybe [:string {:max 120}]]]
-    [:base_branch {:optional true
-                   :x-display
-                   {:label "The base branch"
-                    :help "The branch this change merges into. It is main in most repositories."}}
-     [:maybe [:string {:max 200}]]]
-    [:head_branch {:optional true
-                   :x-display
-                   {:label "The head branch"
-                    :help "The branch that holds the change. A bench seat pushes to this branch."}}
-     [:maybe [:string {:max 200}]]]
     [:head_sha {:optional true
                 :x-display
                 {:label "The head commit"
@@ -1343,16 +1280,6 @@
                :label "The branch on the bench"
                :help "The branch the worktree sits on. It is the head branch when GitHub already named one, and the policy's pattern with this row's own id when it did not. One branch for each change, so the next sitting finds the last one's work."}}
      [:maybe [:string {:max 200}]]]
-    [:worktree_dirty {:default 0
-                      :x-display
-                      {:label "Edits waiting in the worktree"
-                       :help "How many paths of the worktree were different from the branch head when a door last looked. The bench itself holds the live count, and the sit answers it; this is what the doors wrote down."}}
-     [:int {:min 0}]]
-    [:rounds {:default 0
-              :x-display
-              {:label "Rounds spent"
-               :help "How many times a seat has submitted this change. At the repository policy's ceiling the change stops and waits for a person."}}
-     [:int {:min 0}]]
     ;; written by the engine's `fail` and `stick`, cleared by
     ;; `recover` and by the next submit (ticket d1742908)
     [:failing_checks {:optional true
@@ -1413,26 +1340,6 @@
                       :label "A pull request nobody adopted"
                       :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
      [:maybe [:string {:max 500}]]]
-    ;; the stall's own sentence (ticket b6c8ea04): written by `stall`,
-    ;; cleared by every door that takes the change out of `stuck`
-    [:stall_reason {:optional true
-                    :examples ["The same test fails on the base commit, so this change is not the cause and I cannot fix it here."]
-                    :x-display
-                    {:widget "prose"
-                     :label "Why it was stalled"
-                     :help "The sentence the stall door was given: what the seat tried, and what stopped it. Empty unless the change is stuck by a stall."}}
-     [:maybe [:string {:max 480}]]]
-    [:stalled_at {:optional true
-                  :x-display
-                  {:label "When it was stalled"
-                   :help "The moment the stall door moved this change to stuck. Empty unless the change is stuck by a stall."}}
-     [:maybe :waymark/instant]]
-    [:stalled_by {:optional true
-                  :x-ref {:principal true}
-                  :x-display
-                  {:label "Who stalled it"
-                   :help "The principal, usually a seat, that walked the stall door. Empty unless the change is stuck by a stall."}}
-     [:maybe [:string {:max 200}]]]
     ;; hidden: the origin LINK below is the affordance, and a raw URL
     ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
@@ -1465,15 +1372,6 @@
      [:maybe [:string {:max 500}]]]
     [:url {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
-    ;; ── where a seat-born change CAME FROM (waymark-fp62.6.3.14) ──
-    ;; The walk kind, a colon and the walk row's own id — the words
-    ;; `change_id` carries at the mint. The adoption overwrites
-    ;; `change_id` with GitHub's identity, so the origin needs a field
-    ;; the adoption does not touch: the merge reads it to finish the
-    ;; task this change was built for. Hidden, like every other fact
-    ;; the engine writes and nobody types.
-    [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
-     [:maybe [:string {:max 250}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
     [:superseded_by {:optional true :not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
@@ -2179,3 +2077,5 @@
                a-model-does-not-close-a-change-alone
                the-person-closes-a-change-with-no-pull-request
                a-change-with-a-pull-request-is-closed-at-github]})
+
+(defresource change (kit/build kit/core factory10s-own))

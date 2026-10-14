@@ -24,6 +24,7 @@ WORKDIR /app
 COPY waymark10/deps.edn waymark10/deps.edn
 COPY calendar10/deps.edn calendar10/deps.edn
 COPY factory10/deps.edn factory10/deps.edn
+COPY factorykit/deps.edn factorykit/deps.edn
 COPY workqueue10/deps.edn workqueue10/deps.edn
 RUN cd workqueue10 && clojure -P -M:dev
 
@@ -32,6 +33,7 @@ RUN cd workqueue10 && clojure -P -M:dev
 COPY waymark10/ waymark10/
 COPY calendar10/ calendar10/
 COPY factory10/ factory10/
+COPY factorykit/ factorykit/
 COPY workqueue10/ workqueue10/
 
 WORKDIR /app/workqueue10
