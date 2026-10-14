@@ -563,6 +563,8 @@
              :note "the last weeks as a shape — what moved, what ages"}
    :cracks {:href "/api/-/cracks"
             :note "the states no active seat can leave, the ones no seat is woken to, the remedies no seat holds, the ones only a person can leave with nothing telling them, and the row values no seat's walk admits; ?kind= narrows it, and waymark_schema carries one kind's as `cracks`"}
+   :in_flight {:href "/api/-/in-flight"
+               :note "every open row you can see, with its waiting_on, grouped by who holds it (person, nobody, each seat, each source), most overdue first; ?domain= ?repo= ?kind= ?holder= narrow it"}
    :render_markdown {:href "/api/-/render/markdown" :method "POST"
                      :note "prose fields' markdown as safe HTML — {texts: [...]} in, {html: [...]} out, in order"}})
 
