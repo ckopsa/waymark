@@ -41,7 +41,12 @@
                  part 4). Each state is judged by its own walks
                  (ticket 5cb126ab): a walk shut to the state says
                  nothing of the rows there. A row a seat is woken for
-                 and can move is no crack
+                 and can move is no crack. A seat a person sits in
+                 is woken by what it wrote in wake_on and by nothing
+                 else, and its walk hands out no row (ticket
+                 8186d41a); where the kind declares another kind's
+                 door out of the state, that door is the one that
+                 moves the work
 
   Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
   which rows a seat is handed, not what brings it, so a walk alone
@@ -521,35 +526,49 @@
   no crack: the seat holds an exit under a filter the row meets (or a
   door of another kind the kind declares leaves the state), and a
   wake_on entry into the state the row meets too. `state` is left to
-  the cracks above."
+  the cracks above.
+
+  A seat a person sits in covers no value by sitting (ticket
+  8186d41a): its walk is left out of the walks judged here, and the
+  wake_on a walk seat is given when it wrote none is not counted for
+  it, since nothing fires a person. What it WROTE in wake_on counts.
+  Where the kind declares another kind's door out of the state, only
+  a seat that holds that door moves the row: the mayor's ungroom and
+  drop leave the state and do not build the work."
   [rdef seat-rows by-kind rows]
   (let [kind (text (:kind rdef))
         terminal (into #{} (map text) (resting rdef))
         walks (into []
                     (comp (filter #(= kind (some-> (get-in % [:data :walk]) str)))
+                          (remove seats/interactive-seat?)
                           (map (fn [s] {:seat s :fm (seats/walk-filter s)})))
                     seat-rows)
         walk-rdef (fn [seat]
                     (some->> (get-in seat [:data :walk]) str not-empty
                              keyword (get by-kind)))
+        wake-on (fn [seat]
+                  (if (seats/interactive-seat? seat)
+                    (get-in seat [:data :wake_on])
+                    (seats/effective-wake-on seat (walk-rdef seat))))
         woken? (fn [row state]
                  (let [state (keyword state)
                        out (exits rdef state)
                        far (into [] (comp (map :by) (filter map?)) (indirect-exits rdef state))
                        into-state (arrivals rdef state)]
                    (some (fn [seat]
-                           (and (or (some (fn [a]
-                                            (some #(row-meets? (:filter %) row)
-                                                  (holding-entries seat kind (:name a) state)))
-                                          out)
-                                    (some #(seq (holding-entries seat (:kind %) (:action %) nil))
-                                          far))
+                           (and (if (seq far)
+                                  (some #(seq (holding-entries seat (:kind %) (:action %) nil))
+                                        far)
+                                  (some (fn [a]
+                                          (some #(row-meets? (:filter %) row)
+                                                (holding-entries seat kind (:name a) state)))
+                                        out))
                                 (some (fn [e]
                                         (and (= kind (text (:kind e)))
                                              (some into-state (map text (:actions e)))
                                              (admits-state? (:filter e) state)
                                              (row-meets? (:filter e) row)))
-                                      (seats/effective-wake-on seat (walk-rdef seat)))))
+                                      (wake-on seat))))
                          seat-rows)))
         live (remove #(contains? terminal (text (:state %))) rows)
         carried (for [[state at] (sort-by key (group-by (comp text :state) live))
