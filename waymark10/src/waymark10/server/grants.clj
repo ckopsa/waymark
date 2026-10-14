@@ -1551,6 +1551,9 @@
    :plural "approval_requests"
    :nav :system
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
+   ;; an offered ask is left by a person's verdict, and by no seat
+   :left-by [{:in #{:offered} :by :person :via :approve :to :approved}
+             {:in #{:offered} :by :person :via :deny :to :denied}]
    ;; THE FIRST INSTANCE OF THE DECISION PATTERN (spec-decision-kind).
    ;; Everything below the :decision key used to be spelled by hand
    ;; here: the three states, the initial and the terminal pair, the

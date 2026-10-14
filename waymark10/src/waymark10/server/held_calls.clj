@@ -410,13 +410,20 @@
    :initial :held
    :terminal #{:done :refused :failed :expired}
    ;; THE CALLER WAITS ON THIS ROW (ticket d9edac4e). `done` carries the
-   ;; answer the caller asked for. The other three endings move nothing:
-   ;; the caller reads them on its own row when it next looks, and the
-   ;; cracks audit reports a dead wait while no seat is woken by one.
+   ;; answer the caller asked for. The other three endings hand the call
+   ;; back: it does not happen, the caller reads why on its own row, and
+   ;; asking again is a new call. Nothing else waits on it.
    :waits [{:on :held_call :awaits :held_call
             :waiter "the caller, and the row a held door would have moved"
-            :outcomes {:done :release :refused :nothing
-                       :failed :nothing :expired :nothing}}]
+            :outcomes {:done :release :refused :return
+                       :failed :return :expired :return}}]
+   ;; nobody's seat leaves a held call: a person allows or refuses it,
+   ;; and the engine lands, fails or expires it
+   :left-by [{:in #{:held} :by :person :via :allow :to :allowed}
+             {:in #{:held} :by :person :via :refuse :to :refused}
+             {:in #{:allowed} :by :engine :via :land :to :done}
+             {:in #{:allowed} :by :engine :via :fail :to :failed}
+             {:in #{:held :allowed} :by :engine :via :expire :to :expired}]
    :summary "{data.tool} · {data.caller} · {data.shown} · {state}"
    :label-template "{data.tool}"
    ;; THE CALLER READS ITS OWN ROW WITH NO GRANT (R-6). An agent that

@@ -4052,6 +4052,9 @@
    :initial :active
    :terminal #{}                       ; retirement is reversible, deliberately
    :nav :system
+   ;; a person retires a model and brings it back; no seat does
+   :left-by [{:in #{:active} :by :person :via :retire :to :retired}
+             {:in #{:retired} :by :person :via :reactivate :to :active}]
    :summary "{data.name} · {data.tier} · {state}"
    :label-template "{data.display}"
    :schema
@@ -4536,6 +4539,10 @@
    :initial :open
    :terminal #{:closed :abandoned}
    :nav :system
+   ;; no seat leaves an open sitting: the session's hook closes it and
+   ;; the engine's sweep abandons it
+   :left-by [{:in #{:open} :by :engine :via :close :to :closed}
+             {:in #{:open} :by :engine :via :abandon :to :abandoned}]
    ;; the template is what a render with no clock and no reads says (a
    ;; transition's log line, another row's ref label); the envelope asks
    ;; `sitting-line`, which reads the seat for its name and its idle bar

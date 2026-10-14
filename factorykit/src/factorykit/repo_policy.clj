@@ -59,6 +59,9 @@
    ;; tap, because a repository the house stops working is a
    ;; repository it may work again.
    :terminal #{}
+   ;; a person retires a policy and restores it; no seat does
+   :left-by [{:in #{:active} :by :person :via :retire :to :retired}
+             {:in #{:retired} :by :person :via :restore :to :active}]
    ;; ONE POLICY FOR EACH REPOSITORY, enforced by an index
    :unique [[:repository]]
    :fields
@@ -156,8 +159,8 @@
 
 (def ^:private law
   "The cracks law: what a policy waits on, who moves it at no policy
-  door, and how long it may rest. The core states none, so a factory's
-  expected ages are its own."
+  door, and how long it may rest. The core states only who leaves its
+  two states (a person), so a factory's expected ages are its own."
   [:waits :left-by :reached-by :expected-age])
 
 (defn- refuse! [why data]

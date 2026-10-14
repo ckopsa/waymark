@@ -12,7 +12,9 @@
                  a seat that holds the other kind's door named there
                  leaves the state as one that holds a door here does,
                  and a state a source leaves (the mirror, the sweep, a
-                 wait's ending) needs no seat and is no crack
+                 wait's ending, a person's tap, the engine's own
+                 actor) needs no seat and is no crack. A state a
+                 person leaves is judged by silent_person_exit
   cadence_only   seats can leave it, and none of them has a wake_on
                  entry on a transition into the state: a row waits
                  for the shortest cadence among them
@@ -493,7 +495,8 @@
 
 (defn- person-cracks
   "silent_person_exit, for one kind: a state every exit from which
-  waits on a person, with nothing that tells the person."
+  waits on a person, with nothing that tells the person. A state the
+  kind declares `:left-by :person` is one, whatever its doors say."
   [rdef seat-rows world]
   (let [kind (text (:kind rdef))
         terminal (resting rdef)]
@@ -501,8 +504,9 @@
           :when (not (contains? terminal state))
           :let [out (mapv (fn [a] {:action (text (:name a))
                                    :held_by (held-by rdef a)})
-                          (exits rdef state))]
-          :when (and (seq out) (every? (comp seq :held_by) out))
+                          (exits rdef state))
+                tapped (some #(= :person (:by %)) (indirect-exits rdef state))]
+          :when (or tapped (and (seq out) (every? (comp seq :held_by) out)))
           :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))]
       {:kind kind :state (text state) :crack "silent_person_exit"
        :exits out
@@ -669,7 +673,9 @@
         state (keyword (text (:state row)))
         into-state (arrivals rdef state)
         far-in (far-arrivals rdef state)
-        indirect (indirect-exits rdef state)
+        ;; a person's tap is a door of this kind, listed with the seats
+        ;; that hold it, and no source
+        indirect (filterv #(not= :person (:by %)) (indirect-exits rdef state))
         vias (into #{} (keep #(some-> (:via %) text)) indirect)
         walk-of (fn [seat] (some-> (get-in seat [:data :walk]) str not-empty))
         handed? (fn [seat]

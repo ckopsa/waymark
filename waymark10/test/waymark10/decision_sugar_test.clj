@@ -58,6 +58,8 @@
    :terminal #{:approved :denied}
    :nav :system
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
+   :left-by [{:in #{:offered} :by :person :via :approve :to :approved}
+             {:in #{:offered} :by :person :via :deny :to :denied}]
    ;; the prose is the sugar's too, on the same argument the :note
    ;; comment below records (waymark-0ee, widened to :asks and :expires
    ;; by waymark-7rw): the hand spelling carries the very words the

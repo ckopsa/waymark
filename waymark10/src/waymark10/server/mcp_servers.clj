@@ -1306,6 +1306,12 @@
    :initial :live
    :terminal #{}
    :nav :system
+   ;; no seat leaves a server's state: a person retires and restores
+   ;; it, and the engine's own call and probe mark it dark and live
+   :left-by [{:in #{:live} :by :engine :via :mark_dark :to :dark}
+             {:in #{:dark} :by :engine :via :mark_live :to :live}
+             {:in #{:live :dark} :by :person :via :retire :to :retired}
+             {:in #{:retired} :by :person :via :restore :to :dark}]
    :summary "{data.name} · {data.transport} · {state}"
    :label-template "{data.name}"
    :schema (into [:map] (concat person-fields engine-fields))
