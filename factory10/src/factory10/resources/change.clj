@@ -115,7 +115,11 @@
   household's feed must not card the day job's queue."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
-            [factorykit.change :as kit :refer [the-mirror-writes-this-row]]
+            [factorykit.change :as kit :refer [has-a-pull-request?
+                                               the-change-has-a-pull-request
+                                               the-change-has-no-pull-request
+                                               the-mirror-writes-this-row
+                                               unstalled]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -128,7 +132,7 @@
 ;; The two the source's own doors write with are the kit's
 ;; (`factorykit.change`, ticket 47e2c880). They keep their names here
 ;; for the doors of this factory that share them: `observe_failing`,
-;; `rebranch`, `adopt_failing` and `adopt_stuck`.
+;; `adopt_failing` and `adopt_stuck`.
 
 (def observe-the-pull-request kit/observe-the-pull-request)
 
@@ -360,16 +364,8 @@
   (let [why (some-> (:why inp) str not-empty)]
     (move-the-ticket! row ctx #{:open :in_review} :shelve
                       (if why {:shelved_because why} {}))
-    (update row :data assoc
-            :stall_reason why
-            :stalled_at (:now ctx)
-            :stalled_by (some-> (:id (:principal ctx)) str not-empty))))
-
-(defn- unstalled
-  "A change back out of `stuck` no longer says why it stopped: the
-  sentence was for the person who put it back, and the log keeps it."
-  [row]
-  (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
+    ;; the row's own part is the kit's (`kit/stalled`, ticket eb500c47)
+    (kit/stalled row inp ctx)))
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
 ;;
@@ -806,18 +802,9 @@
     (holds/approved-hold? ctx :change (:id row)) (t/allow)
     :else (t/deny)))
 
-(defguardfn a-person-or-their-delegate-unsticks
-  {:reads [:principal]
-   :open "No door here changes this verdict. A stuck change is the house asking a person to look at it, and a model alone that could put itself back to work would be answering its own question. A person taps unstick, or unstick_submitted for a change with a pull request, or a delegate acting for one does. After a seat's stall, which sends the ticket to draft, grooming the ticket again puts a change with no pull request back to work at the groom itself, and one with a pull request back under review at the groom too; a change stuck at the round ceiling leaves its ticket in review, where grooming does not serve."
-   :explain "This change is stuck: it reached the round ceiling, or a seat said it could not finish. A person, or a delegate acting for one under a grant the person approved, reads it and puts it back to work."}
-  [_row _inp ctx]
-  ;; ticket's `a-person-or-their-delegate-grooms`, one kind over: the
-  ;; wall is against a model ALONE, and a delegate that names whom it
-  ;; acts for is the person's hand.
-  (let [{:keys [type acts-for]} (:principal ctx)]
-    (if (and (= :agent type) (str/blank? (str acts-for)))
-      (t/deny)
-      (t/allow))))
+;; `a-person-or-their-delegate-unsticks`, ticket's
+;; `a-person-or-their-delegate-grooms` one kind over, is the kit's with
+;; the two unstick doors it guards (ticket eb500c47).
 
 (defguardfn only-its-ticket-reworks-it
   {:reads [:within]
@@ -833,22 +820,9 @@
       (t/allow)
       (t/deny))))
 
-(defn- has-a-pull-request? [row]
-  (some? (get-in row [:data :number])))
-
-(defguardfn the-change-has-no-pull-request
-  {:reads []
-   :open "No door here changes this verdict. A change with a pull request goes back to work through unstick_submitted, which lands it where its pull request is, under review."
-   :explain "This change has a pull request, so putting it back to work lands it in submitted, where the house reads its checks and merges it green: unstick_submitted is that door."}
-  [row _inp _ctx]
-  (if (has-a-pull-request? row) (t/deny) (t/allow)))
-
-(defguardfn the-change-has-a-pull-request
-  {:reads []
-   :open "No door here changes this verdict. A change with no pull request yet goes back to work through unstick, which lands it in open for its next round."
-   :explain "This change has no pull request yet, so there is nothing under review to go back to: unstick puts it in open, and the seat's next submit opens the pull request."}
-  [row _inp _ctx]
-  (if (has-a-pull-request? row) (t/allow) (t/deny)))
+;; `the-change-has-no-pull-request` and `the-change-has-a-pull-request`
+;; are the kit's (ticket eb500c47); `rework` and `rework_submitted`
+;; here carry them as the kit's two unstick doors do.
 
 (defguardfn no-pull-request-to-close
   {:reads []
@@ -1102,11 +1076,13 @@
 
 (def ^:private factory10s-own
   "What factory10 adds to the kit's core (ticket ce3dd7b1): every door
-  that is not one of the core's eight, with its guards and its
-  handler, the ticket's part of the four core doors that read it
+  that is not one of the core's twelve, with its guards and its
+  handler, the ticket's part of the seven core doors that read it
   (`:handlers`), and the fields that are not shared. The states, the
-  tomb, the one-row index, the shared fields, the source's eight doors
-  and the cracks law are `factorykit.change/core`."
+  tomb, the one-row index, the shared fields, the source's eight
+  doors, the stall's four (stall, unstick, unstick_submitted and
+  rebranch, ticket eb500c47) and the cracks law are
+  `factorykit.change/core`."
   {:kind :change
    :plural "changes"
    ;; the day job's work, not the family's — see the ns docstring
@@ -1438,10 +1414,18 @@
    ;; what each one does to the ask the change was built for is this
    ;; factory's: the merge ends the ticket, a close and a red send it
    ;; back, and a green sends it out for review again.
+   ;;
+   ;; AND OF THREE MORE (ticket eb500c47). The kit's `stall`, `unstick`
+   ;; and `unstick_submitted` carry none either: a stall sends the
+   ;; ticket to draft with the seat's sentence, and each unstick moves
+   ;; the ticket with its change.
    :handlers {:merge complete-the-task-it-was-born-from
               :close send-the-ticket-back
               :fail fail-the-change
-              :recover clear-the-failing-checks}
+              :recover clear-the-failing-checks
+              :stall shelve-the-ticket
+              :unstick unstick-the-change
+              :unstick_submitted unstick-the-pull-request}
    :actions
    {;; THE MIRROR'S REFRESH, for `failing` (ticket d1742908). `observe`
     ;; and `observe_submitted` are the kit's; a v10 action declares one
@@ -1670,45 +1654,8 @@
      :display {:label "Moved with its ticket" :order 26
                :description take-domain-description}}
 
-    ;; ── THE BRANCH, MINTED AGAIN (bead waymark-fp62.6.3.11) ───────
-    ;; A seat-born row writes its head branch at BIRTH, from the
-    ;; policy's pattern. A person who restates the pattern — because
-    ;; the old one shadowed a branch the repository already has, and
-    ;; git holds neither — does not reach a row that is already here,
-    ;; and the next sitting opens the same bad branch. So the sit
-    ;; mints the branch again and writes it through this door. It is
-    ;; the mirror's, hidden like the adoptions: a change that was
-    ;; pushed once keeps its branch, because the forge holds it, and
-    ;; the sit is what judges that — no round, no number, and a
-    ;; `change_id` that is still the walk row's.
-    :rebranch
-    {:from #{:open :stuck} :to :open
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:head_branch {:x-display {:raw true}}
-              [:string {:min 1 :max 200}]]
-             ;; THE REPOSITORY MOVES WITH IT (ticket 1ebcd19f). A walk
-             ;; row restated to another repository keeps its
-             ;; `change_id`, so the sit writes the new repository and
-             ;; its policy's base here too, on a change that never
-             ;; opened: the old repository holds nothing of it.
-             [:repository {:optional true :x-display {:raw true}}
-              [:string {:min 1 :max 140}]]
-             [:base_branch {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 200}]]]]
-     ;; :edit-shape — the input restates a field of the document, as
-     ;; the adoptions do; a prefill for a hidden door is scaffolding
-     ;; for nobody.
-     :waives #{:edit-shape}
-     ;; :one-way, and not a confirm: nobody taps this door. The old
-     ;; branch was never pushed, so there is nothing on the forge to
-     ;; lose — and a change that HAS been pushed never reaches this
-     ;; door at all.
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house works this change on the new branch from now. The old branch was never pushed, so nothing is lost."}
-     :display {:label "Rebranch" :order 13
-               :description "The house mints this change's branch again from the repository policy's pattern"}}
+    ;; `rebranch`, the sit's door that mints the branch again, is the
+    ;; kit's (ticket eb500c47).
 
     ;; ── THE CHECKS' VERDICT (ticket d1742908) ──────────────────────────
     ;; The forge pass reads the checks on a submitted change's head
@@ -1817,37 +1764,10 @@
      :display {:label "Discard" :style :danger :order 7
                :description "Put the worktree back to the branch head and lose every edit in it"}}
 
-    :stall
-    {:from #{:open :submitted :failing} :to :stuck
-     :input [:map
-             [:why {:examples ["The same test fails on the base commit, so this change is not the cause and I cannot fix it here."]
-                    :x-display
-                    {:widget "prose"
-                     :label "What is wrong"
-                     :help "One sentence for the person who reads this next: what you tried, and what stopped you. It rides the log beside this move. It is at most 480 characters."}}
-              [:string {:min 1 :max 480}]]]
-     :edit {:draft {:shared true :live true}}
-     ;; a stalled change is not under review, and its ticket could not
-     ;; be built as written: it goes back to draft (ticket 6bdaf6fe)
-     :handler shelve-the-ticket
-     ;; NOT :reversible — `unstick` brings a stuck change back to
-     ;; `open` and to no other state, so a stall from `submitted` has
-     ;; no transition back to where it started (checks/check-reversible
-     ;; asks for one for each :from). The way back is real and it is a
-     ;; PERSON'S (or their delegate's), which is what the sentence says.
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The house stops working this change and waits, and the ticket it was built for goes to draft. The way back is a person's groom of that ticket, or their delegate's, which puts the change back to work at the groom itself with its rounds at zero, or back under review there when it has a pull request; unstick, or unstick_submitted for a change with a pull request, puts the change alone back to work."}
-     :display {:label "Stuck" :order 8
-               :description "Say what stopped you and stop working this change — a person reads it next"}}
-
-    :unstick
-    {:from #{:stuck} :to :open
-     :guards [a-person-or-their-delegate-unsticks
-              the-change-has-no-pull-request]
-     :handler unstick-the-change
-     :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Back to work" :style :primary :order 1
-               :description "Put this change back in the queue — the rounds start again"}}
+    ;; `stall`, `unstick` and `unstick_submitted` are the kit's (ticket
+    ;; eb500c47), with the handlers `:handlers` names: a stalled change
+    ;; is not under review, and its ticket could not be built as
+    ;; written, so it goes back to draft (ticket 6bdaf6fe).
 
     ;; THE TICKET'S WAY BACK FOR ITS CHANGE (ticket 9ace68fb). A stall
     ;; sends the ticket to draft, and a block takes it out of the queue;
@@ -1877,20 +1797,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Its ticket was groomed, unblocked or resumed, so the change is under review again and the house reads its checks on the next pass: green merges it, red or conflicted sends it back to the seat. The rounds start from zero."}
      :display {:label "Reworked under review" :order 22
-               :description "Its ticket was groomed, unblocked or resumed — the pull request goes back under review"}}
-
-    ;; the same door for a change with a pull request (ticket 6bdaf6fe):
-    ;; it lands where the pull request is, so the forge pass reads its
-    ;; head and the merge pass merges it green — see `:deviations`
-    :unstick_submitted
-    {:from #{:stuck} :to :submitted
-     :guards [a-person-or-their-delegate-unsticks
-              the-change-has-a-pull-request]
-     :handler unstick-the-pull-request
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change is under review again, and the house reads its checks on the next pass: green merges it, red sends it back to the seat. The rounds start from zero."}
-     :display {:label "Back to review" :style :primary :order 2
-               :description "Put this pull request back under review — the house merges it green"}}}
+               :description "Its ticket was groomed, unblocked or resumed — the pull request goes back under review"}}}
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The pull request, at GitHub"}]
    :deviations
