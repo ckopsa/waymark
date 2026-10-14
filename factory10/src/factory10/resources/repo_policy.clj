@@ -52,6 +52,8 @@
   card the day job's configuration."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
+            [factorykit.repo-policy :as kit
+             :refer [a-person-or-their-delegate-states-the-policy]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -64,22 +66,9 @@
 
 ;; ── the one wall ────────────────────────────────────────────────────
 
-(defguardfn a-person-or-their-delegate-states-the-policy
-  {:reads [:principal]
-   :open "No door here changes this verdict. What submit means is a person's statement about a repository. A person states it in person, or through a delegate that acts for them under a grant the person approved. A model in a seat writes a finding that says which number is wrong and why, and a person taps."
-   :explain "The repository policy is the house's own sentence about this repository — the branches, the base, the size ceiling, the rounds and the formatter rule. A model that could restate its own policy could raise its own ceiling. A delegate acting for a person is the person's hand, and the grant it wears is the person's decision."}
-  [_row _inp ctx]
-  ;; The owner's ruling, 2026-09-19: a person works with a model to
-  ;; add a repository, so the wall is against a model ALONE — a seat's
-  ;; sitter, an agent that acts for nobody — and not against every
-  ;; agent. The shape is mcp_server's `a-person-or-the-engine`: a
-  ;; person, the engine's own system actor, or an agent whose
-  ;; principal names whom it acts for. The grant is the leash; this
-  ;; guard only keeps a seat from restating the policy it works under.
-  (let [{:keys [type acts-for]} (:principal ctx)]
-    (if (and (= :agent type) (str/blank? (str acts-for)))
-      (t/deny)
-      (t/allow))))
+;; `a-person-or-their-delegate-states-the-policy` is the kit's
+;; (`factorykit.repo-policy`): every factory's policy is a person's
+;; statement. The doors below name it as they did.
 
 (defguardfn the-house-merges-only-what-a-check-tested
   {:reads []
@@ -490,37 +479,17 @@
   {"line" "The line: one change at a time, each brought up to date and re-checked before it merges"
    "train" "The merge train: the front and up to train_size-1 green changes behind it are tested together and land together"})
 
-(def ^:private policy-fields
-  "The whole policy, as schema entries. The create door and the
-  restate door collect the same fields, because a restatement is the
-  whole statement again — two spellings of one policy would be two
-  policies."
-  [[:repository {:x-display
-                 {:raw true
-                  :label "The repository"
-                  :help "The repository as GitHub spells it, as owner/repo. It is also the name the bench rig holds the clone under."}}
-    [:string {:min 1 :max 140}]]
-   [:clone_url {:optional true
+(def ^:private own-policy-fields
+  "factory10's own part of the policy, as schema entries. The base —
+  repository, branch_pattern, base, required_checks and
+  rounds_per_change — is the kit's (`factorykit.repo-policy/core`)."
+  [[:clone_url {:optional true
                 :examples ["https://github.com/ckopsa/waymark"]
                 :x-display
                 {:raw true
                  :label "Where the bench clones it from"
                  :help "The URL the rig clones this repository from. Leave it empty for https://github.com/<the repository>, which is what a GitHub repository needs."}}
     [:maybe [:string {:max 300}]]]
-   [:branch_pattern {:default "waymark/*"
-                     :examples ["waymark/*"]
-                     :x-display
-                     {:raw true
-                      :label "The branch pattern"
-                      :help "The shape of a work branch, with one * for the change's own id — waymark/* makes waymark/01HZQ7… . A submit on a branch outside this pattern is refused. The text before the * must not be the name of a branch this repository already has: git holds refs/heads/seat and refs/heads/seat/01HZQ7… never at the same time, so seat/* refuses every worktree in a repository with a branch named seat."}}
-    [:string {:min 1 :max 120}]]
-   [:base {:default "main"
-           :examples ["main"]
-           :x-display
-           {:raw true
-            :label "The base branch"
-            :help "The branch the work merges into. The worktree starts from it, and a submit on it is refused whatever the grant says."}}
-    [:string {:min 1 :max 120}]]
    [:max_lines {:default 400
                 :examples [400]
                 :x-display
@@ -538,8 +507,9 @@
                   :help "True when auto-merge merges the pull request as soon as the checks are green. False when a person merges it."}}
     :boolean]
    ;; the house's merge (ticket 4dfb00f6). OPTIONAL, because a policy
-   ;; stated before these three existed is restated whole without them,
-   ;; and every reader spells the default itself.
+   ;; stated before these two and the kit's required_checks existed is
+   ;; restated whole without them, and every reader spells the default
+   ;; itself.
    [:merge_by {:optional true
                :default "github"
                :x-display
@@ -547,14 +517,6 @@
                 :choices merge-by-choices
                 :help "github turns on GitHub's own auto-merge. house is for a repository where GitHub cannot: its auto-merge needs a public repository or a paid plan. With house, the engine asks the bench rig to merge each green change every five minutes. Read only when auto-merge is true."}}
     (into [:enum] (sort (keys merge-by-choices)))]
-   [:required_checks {:optional true
-                      :default []
-                      :examples [["gate"]]
-                      :x-display
-                      {:raw true
-                       :label "The checks that must be green"
-                       :help "The check names the house waits for before it merges, one for each row. The house merges nothing when this list is empty."}}
-    [:vector [:string {:min 1 :max 200}]]]
    [:merge_method {:optional true
                    :default "merge"
                    :x-display
@@ -588,12 +550,6 @@
                           {:label "How long the line waits on a deploy"
                            :help "The longest the house waits for the deploy check to report on a merge before it notes that and merges the next change. A red deploy holds the line past it."}}
     [:int {:min 60 :max 86400}]]
-   [:rounds_per_change {:default 3
-                        :examples [3]
-                        :x-display
-                        {:label "Rounds for one change"
-                         :help "How many times a seat may submit one change before the house stops. At the ceiling the change moves to stuck and waits for a person."}}
-    [:int {:min 1 :max 20}]]
    ;; a required check nobody runs (ticket bc3ff12c). OPTIONAL for the
    ;; reason merge_wait_seconds is: a row that predates it reads as 30
    ;; (bench's `queued-check-minutes-of`)
@@ -716,6 +672,23 @@
                    :label "The orientation document"
                    :help "The path a seat reads first in this repository: what the house expects of a change here. The sit answers this path with the bench."}}
     [:string {:min 1 :max 200}]]])
+
+(def ^:private policy-order
+  "Where the kit's base fields stand among factory10's own on the
+  form. A field this does not name follows, in its own place."
+  [:repository :clone_url :branch_pattern :base :max_lines :opens_pr
+   :auto_merge :merge_by :required_checks :merge_method
+   :merge_wait_seconds :deploy_check :deploy_wait_seconds
+   :rounds_per_change])
+
+(def ^:private policy-fields
+  "The whole policy, as schema entries: the kit's base and factory10's
+  own, in the form's order. The create door and the restate door
+  collect the same fields, because a restatement is the whole
+  statement again — two spellings of one policy would be two
+  policies."
+  (kit/statement kit/core {:policy own-policy-fields
+                           :policy-order policy-order}))
 
 (def ^:private engine-fields
   "What the ENGINE writes about this row, and a person never does: when
@@ -1034,18 +1007,16 @@
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
-(defresource repo-policy
+(def ^:private factory10s-own
+  "Everything of factory10's repo_policy that is not the kit's base.
+  The machine, the index, the base fields, the schemas and the machine
+  of restate, retire, restore and note_source are
+  `factorykit.repo-policy/core`'s and its `build`'s."
   {:kind :repo_policy
    :plural "repo_policies"
    ;; the day job's configuration, not the family's — see the ns
    ;; docstring
    :nav :secondary
-   :states [:active :retired]
-   :initial :active
-   ;; NEITHER STATE IS A TOMB. A retired policy comes back with one
-   ;; tap, because a repository the house stops working is a
-   ;; repository it may work again.
-   :terminal #{}
    ;; the template is the fallback, and what a redacted read answers;
    ;; the line a reader sees is the composed one (waymark10.summary/line)
    :summary "{data.repository} · {state}"
@@ -1056,14 +1027,14 @@
    ;; the collection a reader opens IS the policies the bench obeys
    :default-filters {:state "active"}
    :sortable {:fields [:repository] :default "repository"}
-   ;; ONE POLICY FOR EACH REPOSITORY, enforced by an index
-   :unique [[:repository]]
-   :schema (into [:map] (concat policy-fields engine-fields))
    ;; THE CREATE FORM IS THE WHOLE POLICY AND NOTHING ELSE. A person
    ;; states every number the first time, and the defaults above are
-   ;; what the form offers; the two engine fields are on the schema so
+   ;; what the form offers; the engine's fields are on the schema so
    ;; a reader sees them and on no form so a person never writes them.
-   :create-schema (into [:map] policy-fields)
+   ;; The kit writes both schemas from these three.
+   :policy own-policy-fields
+   :policy-order policy-order
+   :engine engine-fields
    :create-guards [a-person-or-their-delegate-states-the-policy
                    the-house-merges-only-what-a-check-tested
                    the-test-selection-pattern-compiles
@@ -1073,9 +1044,7 @@
    :on-create enrol-at-birth
    :actions
    {:restate
-    {:from #{:active} :to :active
-     :input (into [:map] policy-fields)
-     :guards [a-person-or-their-delegate-states-the-policy
+    {:guards [a-person-or-their-delegate-states-the-policy
               the-house-merges-only-what-a-check-tested
               the-test-selection-pattern-compiles
               the-hosted-workflows-are-workflow-paths
@@ -1091,15 +1060,14 @@
      ;; the create form: a person does not state them. The prefill IS
      ;; the input's fields, read from them, so a field added to the
      ;; policy is never left out of it (ticket e3423674: a patch that
-     ;; named `check` reset groom_floor to its default)
-     :edit {:prefill (mapv first policy-fields)}
+     ;; named `check` reset groom_floor to its default). The kit writes
+     ;; the input and the prefill, both from the stated fields
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :style :primary :order 1
                :description "State what submit means in this repository again, whole"}}
 
     :retire
-    {:from #{:active} :to :retired :undo :restore
-     :guards [a-person-or-their-delegate-states-the-policy]
+    {:guards [a-person-or-their-delegate-states-the-policy]
      :handler unenrol-the-repository
      :safety {:idempotent true :reversible true :confirm true
               :consequence "The bench stops working this repository: a submit reads no policy and refuses. Nothing is deleted, and one tap brings it back."}
@@ -1107,8 +1075,7 @@
                :description "Put this policy away — the house does not work this repository now"}}
 
     :restore
-    {:from #{:retired} :to :active :undo :retire
-     :guards [a-person-or-their-delegate-states-the-policy]
+    {:guards [a-person-or-their-delegate-states-the-policy]
      :handler enrol-the-repository-again
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 2
@@ -1140,8 +1107,7 @@
     ;; hand alone, for mark_enrolled's reasons. A status and a route
     ;; write the note; an input with neither clears it.
     :note_source
-    {:from #{:active} :to :active
-     :guards [the-engine-notes-the-source]
+    {:guards [the-engine-notes-the-source]
      :handler note-the-source
      :input [:map
              [:answered {:optional true
@@ -1191,3 +1157,5 @@
                the-person-states-what-submit-means
                the-house-never-merges-what-nothing-tested
                the-house-merges-behind-a-named-check]})
+
+(defresource repo-policy (kit/build kit/core factory10s-own))
