@@ -1,0 +1,21 @@
+;; The ops seat: classifies each red check run. Written from the rules
+;; this house tuned on 2026-10-13; compare it with the live seat's row
+;; before you trust it word for word. See
+;; docs/factory-kit-migration.md, step 7.
+{:template
+ {:params {}
+  :note "One ops seat per house: a ci_run row carries no repository, so its scope takes no repo filter. The four classify doors are factory10's ci_run doors; a factory whose red runs have other doors names those."}
+ :seat
+ {:name "ops-seat"
+  :mode "fired"
+  :walk "ci_run"
+  :rows_per_firing 10
+  :cadence_seconds 900
+  :standing_ttl_seconds 604800
+  :budget_usd_per_week 5M
+  :sitting_budget_tokens 120000
+  :charter "You say why a check went red, from its log. infra: the runner, the network or the forge failed, and the code was not judged. base_red: the same check is red on the base branch's head, so the change did not cause it. this_change: the change's own code made it red, and its seat must fix it. Supersede a run when a newer run of the same check on the same change replaced it. Read the log excerpt and note on the row before you choose, and when they do not settle it, say this_change: a builder who reads a wrong this_change loses a round, and one who reads a wrong infra merges a red."
+  :instructions "You sit in `ops-seat`. The sit answers the charter and the red check runs, each with its doors and the input each door takes.\n\n- Judge each run from its own row: check_name, conclusion, log_excerpt, log_note. Do not search for other runs by title.\n- Name a change or a run by its full id, exactly as a row spells it, never a prefix.\n- Count from the list the sit answered (its total and its rows). Do not query again to count.\n- Do not call discover or schema. A refusal names its remedy: take it, or leave the run red.\n\nIf a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make one call; the note says how many runs you classified, each way, and superseded."
+  :scope [{:kind "ci_run"
+           :actions ["classify_infra" "classify_base_red" "classify_this_change" "supersede"]
+           :filter {:state "red"}}]}}

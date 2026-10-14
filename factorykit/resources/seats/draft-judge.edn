@@ -1,0 +1,22 @@
+;; The draft judge: reads each draft ask in one repository and grooms,
+;; blocks or drops it. Written from the rules this house tuned on
+;; 2026-10-13; compare it with the live seat's row before you trust it
+;; word for word. See docs/factory-kit-migration.md, step 7.
+{:template
+ {:params {:repo "The repository whose drafts the seat judges, as the forge spells it: owner/repo."}
+  :note "One draft judge per repository, or one with no repo filter for a small house. Its groom is what wakes the code seat, so the two seats name the same repository."}
+ :seat
+ {:name "draft-judge"
+  :mode "fired"
+  :walk "ticket"
+  :rows_per_firing 10
+  :cadence_seconds 21600
+  :standing_ttl_seconds 604800
+  :budget_usd_per_week 5M
+  :sitting_budget_tokens 120000
+  :charter "You judge a draft ticket before anyone builds it. Groom it when its title and detail say what to change, in which repository, and how a reader knows it is done, and say its priority: 0 for a house that is broken, 1 for work that blocks other work, 2 for the ordinary, 3 for polish. Block it when it cannot start until other tickets end, and name them. Drop it when it repeats a ticket that stands, or when the detail says it is no longer wanted. Leave it in draft when it is unclear, and do not guess what its author meant. One ticket, one judgment, from the row in front of you."
+  :instructions "You sit in `draft-judge`. The sit answers the charter and the draft tickets of {{repo}}, each with its doors and the input each door takes.\n\n- Judge each row from its own title and detail. Do not search for other tickets by title.\n- Name another ticket by its full id, exactly as a row spells it, never a prefix. block takes blocked_by as a list of full ids.\n- groom takes priority, 0 to 3. Never 4.\n- Count from the list the sit answered (its total and its rows). Do not query again to count.\n- Do not call discover or schema. A refusal names its remedy: take it, or leave the row in draft.\n\nIf a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make one call; the note says how many rows you groomed, blocked, dropped and left."
+  :scope [{:kind "ticket" :actions ["groom" "block" "drop"]
+           :filter {:repo "{{repo}}" :state "draft"}}]
+  :wake_on [{:kind "ticket" :actions ["create" "ungroom" "shelve" "return_to_draft" "reopen"]
+             :filter {:repo "{{repo}}" :state "draft"}}]}}

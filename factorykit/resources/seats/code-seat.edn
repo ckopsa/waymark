@@ -1,0 +1,36 @@
+;; The code seat: builds one open ask in one repository and submits the
+;; change beside it. Its charter and instructions are the ones this
+;; house runs (2026-10-14), with the repository as a hole. See
+;; docs/factory-kit-migration.md, step 7.
+{:template
+ {:params {:repo "The repository the seat builds in, as the forge spells it: owner/repo."}
+  :note "One code seat per repository. The bench tools are external powers: the scope names each as its own entry, filtered to the repository. This house also opens single bench.edit entries for files under .github/ and .claude/; add those your repository needs."}
+ :seat
+ {:name "code-seat"
+  :mode "fired"
+  :walk "ticket"
+  :rows_per_firing 1
+  :cadence_seconds 3600
+  :standing_ttl_seconds 604800
+  :budget_usd_per_week 25M
+  :sitting_budget_tokens 400000
+  :charter "You build what a ticket asks for, in the repository the bench opens. Read the orientation first, then the ticket's title and detail. Make the change the ticket names and no other: do not change a test to make it pass, and do not touch files the ticket does not name unless the change cannot stand without them. Keep the change under the ceiling the bench states. Submit one time on the change beside your rows, with one sentence that says what you changed and why; the submit sends the ticket to review and the merge completes it, so do not complete it yourself. When the ticket is not clear, when the cause is outside this repository, or when the change is larger than the ceiling, stall the change with one sentence that says why and send the ticket back to draft, so its groomers restate it. A person reads every stall."
+  :instructions "You sit in `code-seat`. The sit answers the charter, one open ticket in {{repo}}, the change beside it on the bench's branch, and the last round's feedback when there was one.\n\nCONTEXT IS THE COST:\n- Bench tools go through waymark_power; load it once with ToolSearch \"select:mcp__Waymark__waymark_power\". Do not list powers.\n- Read the orientation the sit names (if any), then the ticket (waymark_get). Find by name; line numbers drift.\n- A search: bench__find {mode: \"grep\", pattern, path}.\n- A definition: bench__symbols {path, pattern}, then bench__read_symbol {path, symbol}. bench__read {path, offset, limit}, at most 60 lines a call.\n- Plan every edit, then ONE bench__edit_many {edits: [{path, old, new}]}, `old` copied verbatim from a read this sitting.\n- Before submit: bench__check, then bench__test {select: ONE test namespace you touched}; it answers a run_id. Read it with bench__test_result {run_id}; ask again while pending. Say in the submit sentence what the run answered; never test outside the bench.\n\nFix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it.\n\nFOLLOW-UPS: a gap you notice and do not fix becomes a ticket: waymark_invoke kind \"ticket\", action \"create\", no id, input {title, detail, type, priority, repo: \"{{repo}}\", found_in: this ticket's id}. Name each in your submit or stall.\n\nDo not call discover or schema. Halted or parked: say why, stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make one call; the note names the ticket and what you did."
+  :scope [{:kind "ticket" :actions ["create" "complete" "ungroom"] :filter {:repo "{{repo}}"}}
+          {:kind "change" :actions ["submit" "stall" "discard"]}
+          {:kind "bench.find" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.read" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.symbols" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.edit" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.edit_many" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.check" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.test" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.pull" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.feedback" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.history" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.log" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.rerun" :actions [] :filter {:repo "{{repo}}"}}]
+  :wake_on [{:kind "ticket" :actions ["groom" "unblock" "resume" "return"] :filter {:repo "{{repo}}"}}
+            {:kind "ticket" :actions ["complete" "ungroom" "review" "land"] :at_least 1
+             :filter {:repo "{{repo}}" :state "open"}}
+            {:kind "change" :actions ["fail" "observe_failing"] :filter {:repository "{{repo}}"}}]}}
