@@ -78,6 +78,61 @@
     (testing "repo reads `repository` too"
       (is (= "r1" (:repo (by-id "sync-1")))))))
 
+(def ^:private ticket
+  "The shapes of ticket ca68c559: a row whose `next` opens with doors
+  nobody holds is held by the later door the verdict names."
+  {:kind :ticket
+   :states [:draft :open :in_review :blocked :stuck :done]
+   :initial :draft
+   :terminal #{:done}
+   :expected-age {:draft 3600 :open 3600 :in_review 3600 :blocked 3600
+                  :stuck 3600}
+   :left-by [{:in #{:in_review} :by :mirror :via :land :to :done}
+             {:in #{:blocked} :by :wait :via :unblock :to :open}]
+   :actions {:groom {:from #{:draft} :to :open}
+             :defer {:from #{:open} :to :draft}
+             :finish {:from #{:in_review} :to :done}
+             :mend {:from #{:in_review :blocked} :to :done}
+             :shelve {:from #{:in_review} :to :draft}
+             :turn_back {:from #{:blocked} :to :draft}
+             :land {:from #{:in_review} :to :done}
+             :unblock {:from #{:blocked} :to :open}
+             :retry {:from #{:stuck} :to :open}}})
+
+(def ^:private ticket-seats
+  [(seat "draft-judge" {:scope [{:kind "ticket" :actions ["groom"]}]
+                        :cadence_seconds 21600})
+   (seat "mayor" {:mode "interactive"
+                  :scope [{:kind "ticket" :actions ["groom" "defer"]}]})])
+
+(deftest each-state-shape-is-held-by-its-verdicts-holder
+  (let [es (keep #(in-flight/entry ticket ticket-seats {:ticket ticket} %
+                                   {:now now :data {} :summary (:id %)})
+                 [(row "review" :in_review 1 {})
+                  (row "blocked" :blocked 1 {})
+                  (row "draft" :draft 1 {})
+                  (row "open" :open 1 {})
+                  (row "stuck" :stuck 1 {})])
+        by-id (into {} (map (juxt :id identity)) es)]
+    (testing "next opens with doors nobody holds, the source is named"
+      (is (= "nobody" (get-in (by-id "review") [:waiting_on :next 0 :held_by])))
+      (is (= "source:mirror" (:holder (by-id "review"))))
+      (is (= "source:wait" (:holder (by-id "blocked")))))
+    (is (= "seat:draft-judge" (:holder (by-id "draft"))))
+    (is (= "person" (:holder (by-id "open"))) "only the mayor defers")
+    (is (= "nobody" (:holder (by-id "stuck"))) "no seat retries: an orphan")
+    (testing "the holder is the verdict's own choice"
+      (is (= {:type "source" :name "mirror"}
+             (get-in (by-id "review") [:waiting_on :holder])))
+      (is (= {:type "seat" :name "draft-judge"}
+             (get-in (by-id "draft") [:waiting_on :holder])))
+      (is (= {:type "person" :name "mayor"}
+             (get-in (by-id "open") [:waiting_on :holder])))
+      (is (= {:type "nobody"} (get-in (by-id "stuck") [:waiting_on :holder]))))
+    (testing "the screen's counts follow"
+      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 0 :total 5}
+             (:counts (in-flight/answer es {})))))))
+
 (deftest the-answer-groups-and-sorts
   (let [doc (in-flight/answer (entries house) {})]
     (testing "person, nobody, then the seats, then the sources"
