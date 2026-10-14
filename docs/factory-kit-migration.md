@@ -156,14 +156,13 @@ should be no new crack on `change`.
 6. Declare it: `(defresource ticket (ask/build ask/core
    extension))`.
 
-**Check.** No contract suite for the ask exists yet. These checks
-stand in for one:
-- The builder loads, which means it refused nothing.
-- A test in the style of `factorykit.ask-test` shows that each
-  working state has an expected age and an exit.
-- `GET /api/-/cracks` shows no new crack on the ticket kind.
-- One ask walked by hand: groom, submit its change, merge it. The
-  ask ends `done`, and an ask it blocked is back in `open`.
+**Check.** Write a test that builds a hand for
+`factorykit.ask-contract` on a fresh engine and expects
+`(failures new-hand)` to be `[]`. The namespace docstring names each
+key of the hand, and `factory10.ask-contract-test` shows one built on
+a memory engine. Then read `GET /api/-/cracks`. There should be no
+new crack on the ticket kind. Last, walk one ask by hand: groom,
+submit its change, merge it. The ask ends `done`.
 
 ## 5. The forge: Bitbucket behind `ForgeSource`
 
@@ -210,9 +209,12 @@ case to both conformance files in this repository, and bump the pin.
 4. Declare it: `(defresource repo-policy (kit/build kit/core
    extension))`.
 
-**Check.** The builder loads, and each live policy row reads back
-with the same values under the new schema. `GET /api/-/cracks`
-shows no new crack on `repo_policy`.
+**Check.** Write a test that builds a hand for
+`factorykit.repo-policy-contract` on a fresh engine, with the
+extension's `:fixed` under `:fixed`, and expects `(failures new-hand)`
+to be `[]`. `factory10.repo-policy-contract-test` shows one. Then
+each live policy row reads back with the same values under the new
+schema, and `GET /api/-/cracks` shows no new crack on `repo_policy`.
 
 ## 7. The seats
 
