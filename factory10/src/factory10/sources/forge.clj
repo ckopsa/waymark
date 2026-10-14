@@ -1590,13 +1590,22 @@
   (boolean (or (#{:done :dropped} (state-of t))
                (merged-beside? eng row repo tid))))
 
+(defn- close-as-engine!
+  "The engine's hand the kit's sweep closes with (ticket 028a5f6f): an
+  edit door is fenced, so it names the version of the row it read, and
+  a row that moved since waits a sweep."
+  [eng]
+  (fn [row door input]
+    (inv/invoke! eng :change (str (:id row)) door input
+                 (assoc (as-opts) :if-match (str (:version row))))))
+
 (defn- unopened-close
-  "The `supersede` door and input closing a change with no pull request
-  whose ticket `tid` ended."
+  "The `close_without_pr` door and input closing a change with no pull
+  request whose ticket `tid` ended (ticket 028a5f6f: the kit's sweep
+  walks it, and the handler writes the sentence to `superseded_by`)."
   [tid]
-  [:supersede {:superseded_by
-               (str "closed: ticket " tid " ended; this change "
-                    "never opened a pull request")}])
+  [:close_without_pr {:why (str "closed: ticket " tid " ended; this change "
+                                "never opened a pull request")}])
 
 (defn- unopened-move
   "The door and input for a submitted change with no number whose bench
@@ -1752,14 +1761,26 @@
                                                   (vector :note_adoption))
                                       :else (unopened-move eng row repo branch
                                                            now))]
-                   (if (nil? input)
-                     census
+                   (cond
+                     (nil? input) census
+
+                     ;; the PR-less close is the kit's sweep (ticket
+                     ;; 028a5f6f), which tells `log-fn` of a refusal
+                     (= :close_without_pr door)
+                     (if (pos? (long (change-kit/sweep!
+                                      {:rows [row]
+                                       :ended (constantly (:why input))
+                                       :close! (close-as-engine! eng)
+                                       :log-fn log-fn})))
+                       (update census :unopened-closed inc)
+                       (update census :refused inc))
+
+                     :else
                      (do (inv/invoke! eng :change (str (:id row)) door input
                                       (as-opts))
                          (cond-> census
                            (:adoption_note input) (update :adoption-noted inc)
-                           (= :stick door) (update :stuck inc)
-                           (= :supersede door) (update :unopened-closed inc)))))))
+                           (= :stick door) (update :stuck inc)))))))
              (catch Exception e
                (log-fn "the change " (get-in row [:data :change_id])
                        " was refused its adoption note (" (ex-message e) ")")
@@ -1790,12 +1811,7 @@
                 {:rows (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
                                ["open" "stuck" "failing"])
                  :ended #(ended-ticket-sentence eng %)
-                 ;; an edit door is fenced: the sweep names the version
-                 ;; it read, and a row that moved since waits a sweep
-                 :close! (fn [row door input]
-                           (inv/invoke! eng :change (str (:id row)) door input
-                                        (assoc (as-opts)
-                                               :if-match (str (:version row)))))
+                 :close! (close-as-engine! eng)
                  :log-fn log-fn})]
     (log-fn closed " changes of ended tickets swept")
     closed))
@@ -1807,7 +1823,8 @@
 ;; change has no pull request and no seat holds a door that ends it:
 ;; `discard` leaves it open, and `close` is GitHub's word. The engine
 ;; closes it with its own hand through `supersede`, which moves no
-;; ticket: the ticket is a live draft and stays where it is.
+;; ticket: the ticket is a live draft and stays where it is. Since
+;; ticket 028a5f6f it walks the kit's sweep and `close_without_pr`.
 
 (defn- seat-named
   "The seat row of this name, decoded, or nil."
@@ -1816,19 +1833,18 @@
     (some->> (row-by eng :seat {:name seat-name}) (inv/decode-row rd))))
 
 (defn- reader-change-close
-  "The `supersede` input closing an open change with no pull request
-  whose `author` names a seat that is not a code seat, else nil. An
-  author that names no seat is left: it may be a GitHub login."
+  "The sentence closing an open change with no pull request whose
+  `author` names a seat that is not a code seat, else nil. An author
+  that names no seat is left: it may be a GitHub login."
   [eng row]
   (when (and (= :open (state-of row))
              (nil? (get-in row [:data :number])))
     (when-some [author (some-> (get-in row [:data :author]) str not-empty)]
       (when-some [seat (seat-named eng author)]
         (when-not (mcp/code-seat? seat)
-          {:superseded_by
-           (str "closed: its author " author " is a seat that only reads "
-                "a change, so no round could end it and it never opened "
-                "a pull request (ticket 2db85f7b)")})))))
+          (str "closed: its author " author " is a seat that only reads "
+               "a change, so no round could end it and it never opened "
+               "a pull request (ticket 2db85f7b)"))))))
 
 ;; ── a code seat's abandoned change is closed (ticket f1deff20) ───────
 ;;
@@ -1863,17 +1879,16 @@
         (str/starts-with? born "task:") "it was born from a task"))))
 
 (defn- abandoned-change-close
-  "The `supersede` input closing an open change with no pull request,
-  no round and nothing in its worktree that is abandoned, else nil."
+  "The sentence closing an open change with no pull request, no round
+  and nothing in its worktree that is abandoned, else nil."
   [eng row ^Instant now]
   (when (and (= :open (state-of row))
              (nil? (get-in row [:data :number]))
              (zero? (long (or (get-in row [:data :rounds]) 0)))
              (zero? (long (or (get-in row [:data :worktree_dirty]) 0))))
     (when-some [reason (abandoned-reason eng row now)]
-      {:superseded_by
-       (str "closed: " reason ", and this change has no pull request, "
-            "no round and nothing in its worktree (ticket f1deff20)")})))
+      (str "closed: " reason ", and this change has no pull request, "
+           "no round and nothing in its worktree (ticket f1deff20)"))))
 
 (defn sweep-reader-changes!
   "Closes every open change with no pull request that a seat which is
@@ -1882,21 +1897,12 @@
   and so does every pass. → how many it closed."
   ([eng log-fn] (sweep-reader-changes! eng log-fn (Instant/now)))
   ([eng log-fn ^Instant now]
-   (let [closed (reduce
-                 (fn [n row]
-                   (if-some [input (or (reader-change-close eng row)
-                                       (abandoned-change-close eng row now))]
-                     (try
-                       (inv/invoke! eng :change (str (:id row)) :supersede input
-                                    (as-opts))
-                       (inc (long n))
-                       (catch Exception e
-                         (log-fn "the change " (:id row)
-                                 " was not closed (" (ex-message e) ")")
-                         n))
-                     n))
-                 0
-                 (rows-by eng :change {:state "open"} failing-scan-limit))]
+   (let [closed (change-kit/sweep!
+                 {:rows (rows-by eng :change {:state "open"} failing-scan-limit)
+                  :ended #(or (reader-change-close eng %)
+                              (abandoned-change-close eng % now))
+                  :close! (close-as-engine! eng)
+                  :log-fn log-fn})]
      (when (pos? (long closed))
        (log-fn closed " changes no seat could end were closed"))
      closed)))
