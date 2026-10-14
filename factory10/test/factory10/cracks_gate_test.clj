@@ -29,14 +29,12 @@
     :reason "A person reads every stall."}
    {:kind "ci_run" :state "classified" :crack "person_only"
     :reason "Classified is where a run rests; reclassify is a person overruling the label."}
-   {:kind "repo_policy" :state "active" :crack "person_only"
-    :reason "The policy is a person's form: only a person retires it."}
-   {:kind "repo_policy" :state "retired" :crack "person_only"
-    :reason "The policy is a person's form: only a person restores it."}
    {:kind "ci_run" :state "classified" :crack "silent_person_exit"
     :reason "Classified is where a run rests: reclassify is for the person who already doubts the label."}
    {:kind "repo_policy" :state "active" :crack "silent_person_exit"
-    :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}])
+    :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}
+   {:kind "repo_policy" :state "retired" :crack "silent_person_exit"
+    :reason "Retired is where a policy rests: restore is the choice of the person who retired it."}])
 
 (defn- crack-key
   "What makes a crack the one an entry names."
