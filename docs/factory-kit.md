@@ -186,9 +186,44 @@ them in `factory10.forge-conformance-test`.
 4. When Bitbucket has a state the table lacks, add it to both table
    files and add a case for it to both conformance files.
 
+### The change pass
+
+`(change-pass! hand changes census log-fn refused)` turns every pull
+request a poll answered into a row minted, a row adopted by its head
+branch, a duplicate folded, or a row moved: observed, merged, closed or
+reopened. It requires no engine and no factory10 namespace. The factory
+gives it a hand, which is a map of the `change` kind's doors with the
+factory's engine and system principal closed into them:
+
+| key | what it is |
+|---|---|
+| `:find-change` | `(fn [change-id])` → the row with that id, or nil |
+| `:branch-changes` | `(fn [repository head-branch limit])` → the rows on that branch |
+| `:create!` | `(fn [fields])` → the row the create door minted |
+| `:invoke!` | `(fn [row-id door input])` → the row after the door |
+| `:forge-id-prefix` | what a `change_id` of this forge starts with (`"github:"` when absent) |
+| `:move!` | optional `(fn [row doc])` → `[row moved?]`, for a factory that wraps `move-change!` |
+
+The field lists and the door tables the pass reads (`change-create-fields`,
+`change-observe-fields`, `observe-doors`, `adopt-doors`, `fold-states`,
+`state-door`) are in the kit beside it. factory10's `change-pass!` and
+`move-change!` call the kit with factory10's hand.
+
 ### What is not in the kit yet
 
-The polling pass (the system principal, the source-writes guard, and
-adopt, observe, fail, recover, merge and close) is still in
-`factory10.sources.forge`. It writes factory10's own kinds and reads
-factory10's policy, so lifting it is its own change.
+The seam is: the kit takes what reads only the forge and the `change`
+kind. factory10 keeps what reads its own policy, tickets or bench.
+
+Still in `factory10.sources.forge`, and the kit's to take in later
+changes:
+
+- the poll itself, with the source's retry, commit and forget
+  (`ForgeRetry`, `ForgeCommit`) and the rate-limit hold (`ForgeBudget`);
+- the red runs (`ci_run`: mint, supersede, settle);
+- fail, recover and stick on a head's verdict, with the re-read by
+  number before a move;
+- the census line.
+
+factory10's own, and not for the kit: the landing verdict, the red base
+and its tickets, the held log, the groom floor, the beat, the policy
+source notes and the sweeps.
