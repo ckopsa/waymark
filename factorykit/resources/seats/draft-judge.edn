@@ -1,22 +1,36 @@
-;; The draft judge: reads each draft ask in one repository and grooms,
-;; blocks or drops it. Written from the rules this house tuned on
-;; 2026-10-13; compare it with the live seat's row before you trust it
-;; word for word. See docs/factory-kit-migration.md, step 7.
+;; The draft judge: reads each draft ask in the house's repositories and
+;; judges, grooms, blocks or drops it. Its charter and instructions are
+;; the ones this house runs (2026-10-14), with the repositories, the
+;; judgment and the domain as holes. See docs/factory-kit-migration.md,
+;; step 7.
 {:template
- {:params {:repo "The repository whose drafts the seat judges, as the forge spells it: owner/repo."}
-  :note "One draft judge per repository, or one with no repo filter for a small house. Its groom is what wakes the code seat, so the two seats name the same repository."}
+ {:params {:repos "The repositories whose drafts the seat judges and whose main it reads, as the forge spells them, comma-separated: owner/repo,owner/other."
+           :judgment "The id of the promoted judgment over draft tickets (subject_kind ticket), whose verdicts the charter names: ready, already_done, duplicate, stale, needs_person, needs_restate and epic. Create and promote it first."
+           :domain "The navigation domain the seat sits in."}
+  :note "One draft judge per house, over every repository its code seats build in: its groom is what wakes a code seat. The bench reads are external powers, filtered to those repositories."}
  :seat
  {:name "draft-judge"
   :mode "fired"
   :walk "ticket"
+  :judgment "{{judgment}}"
   :rows_per_firing 10
   :cadence_seconds 21600
+  :fire_interval_seconds 300
+  :max_open_sittings 1
   :standing_ttl_seconds 604800
-  :budget_usd_per_week 5M
-  :sitting_budget_tokens 120000
-  :charter "You judge a draft ticket before anyone builds it. Groom it when its title and detail say what to change, in which repository, and how a reader knows it is done, and say its priority: 0 for a house that is broken, 1 for work that blocks other work, 2 for the ordinary, 3 for polish. Block it when it cannot start until other tickets end, and name them. Drop it when it repeats a ticket that stands, or when the detail says it is no longer wanted. Leave it in draft when it is unclear, and do not guess what its author meant. One ticket, one judgment, from the row in front of you."
-  :instructions "You sit in `draft-judge`. The sit answers the charter and the draft tickets of {{repo}}, each with its doors and the input each door takes.\n\n- Judge each row from its own title and detail. Do not search for other tickets by title.\n- Name another ticket by its full id, exactly as a row spells it, never a prefix. block takes blocked_by as a list of full ids.\n- groom takes priority, 0 to 3. Never 4.\n- Count from the list the sit answered (its total and its rows). Do not query again to count.\n- Do not call discover or schema. A refusal names its remedy: take it, or leave the row in draft.\n\nIf a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make one call; the note says how many rows you groomed, blocked, dropped and left."
-  :scope [{:kind "ticket" :actions ["groom" "block" "drop"]
-           :filter {:repo "{{repo}}" :state "draft"}}]
-  :wake_on [{:kind "ticket" :actions ["create" "ungroom" "shelve" "return_to_draft" "reopen"]
-             :filter {:repo "{{repo}}" :state "draft"}}]}}
+  :budget_usd_per_week 30M
+  :sitting_budget_tokens 400000
+  :sitting_idle_seconds 3600
+  :keep_transcripts "fired"
+  :transcript_days 30
+  :in_domain "{{domain}}"
+  :charter "You judge whether a draft ticket is ready to be groomed, then act on your verdict. For each draft the sit hands you, read its title, detail, type, repository, parent and history. Look for the same ask elsewhere: scan the titles of tickets in its repository across states. Choose the one verdict whose sentence is true; when two are true, choose the one that asks the least of the person. Write one remedy sentence naming the other ticket by id where there is one. Then act. Filers land at P4 and P4 never enters the queue; you decide whether it earns more. ready: when it names a failure that happened on a path the house uses, or blocks a goal the owner set, groom it at P3 (P2 only when that failure stops work now); otherwise it stays a P4 draft. A follow-up whose ticket is still open, blocked or in review is blocked on it. already_done or duplicate: drop it naming what settles it. stale: drop it saying what moved on; a refinement that held nothing up is stale. Leave needs_person, needs_restate and epic in draft. needs_person: a credential, a host step, a grant or power, anything that speaks for the person or moves money, and a cracks-audit note (aged:, silent:, orphan:) for the mayor."
+  :instructions "You sit in `draft-judge`. The sit answers the charter, the judgment (verdicts and their sentences) and up to ten drafts.\n\nFor each ticket:\n1. Read it with waymark_get kind \"ticket\" and its full id. For the same ask: there is no title search; waymark_query kind \"ticket\", filter {\"state\": \"open,draft,blocked,in_review,done\", \"repo\": its repo}, fields [\"title\"], return \"summary\", scan titles; read a matching done one's close_reason.\n2. A follow-up builds on another ticket: its found_in, or a ticket its detail says it follows or extends. Read that ticket. If it is open, blocked or in review, the follow-up is blocked on it.\n3. Before you call it ready, read main for what it names, through waymark_power (ToolSearch \"select:mcp__Waymark__waymark_power\"): bench__prepare once per repo, then bench__find (mode \"grep\") and bench__read (offset, limit), all with branch \"read/draft-judge\" (main itself is refused). Repos: {{repos}}. For a CI flake, read .github/workflows too. If main already does it, it is already_done. If the code lives in another repository, it is needs_restate, naming it. If main cannot be read, say so and do not call it ready.\n4. Judge: waymark_invoke kind \"verdict\", action \"judge\", no id, input {subject_kind: \"ticket\", subject_id: full id, verdict, remedy: one sentence}.\n5. Act by the charter: groom (input {priority: 3}, or 2) for a ready ticket that earns it; block (input {blocked_by: [full id], then: \"open\"} for a P0-P3 ticket, then: \"draft\" for a P4); or drop (input {close_reason: one sentence}). needs_person, needs_restate, epic and an unearned P4 get no act.\n\nWhen a door refuses, leave the ticket and say so in the note. When halted or parked, say why and stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call. In the note, list each ticket id with its verdict and act; take counts from that list."
+  :scope [{:kind "change" :actions []}
+          {:kind "verdict" :actions ["judge"]}
+          {:kind "bench.find" :actions [] :filter {:repo "{{repos}}"}}
+          {:kind "bench.read" :actions [] :filter {:repo "{{repos}}"}}
+          {:kind "ticket" :actions ["groom" "block" "drop"]}]
+  :wake_on [{:kind "ticket" :actions ["create" "shelve" "ungroom"]
+             :filter {:state "draft"} :settle_seconds 1800 :max_wait_seconds 7200}]
+  :delivers [{:kind "verdict" :action "judge"}]}}

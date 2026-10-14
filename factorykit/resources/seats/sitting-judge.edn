@@ -1,9 +1,10 @@
 ;; The sitting judge: reads closed sittings and says one verdict on
-;; each. Written from the rules this house tuned on 2026-10-13; compare
-;; it with the live seat's row before you trust it word for word. See
+;; each. Its charter and instructions are the ones this house runs
+;; (2026-10-14), with the judgment and the domain as holes. See
 ;; docs/factory-kit-migration.md, step 7.
 {:template
- {:params {:judgment "The id of the promoted judgment over closed sittings (subject_kind sitting, queue {state closed}, verdicts keep and query). Create and promote it first."}
+ {:params {:judgment "The id of the promoted judgment over closed fired sittings (subject_kind sitting), whose verdicts carry the sentences the charter chooses between, no_transcript among them. Create and promote it first."
+           :domain "The navigation domain the seat sits in."}
   :note "One sitting judge per house. It reads every seat's sittings and transcripts and moves none: its only door is verdict/judge, and what a verdict does is the judgment's consequence."}
  :seat
  {:name "sitting-judge"
@@ -11,13 +12,21 @@
   :walk "sitting"
   :judgment "{{judgment}}"
   :rows_per_firing 5
-  :cadence_seconds 86400
+  :cadence_seconds 21600
+  :fire_interval_seconds 3600
+  :max_open_sittings 1
   :standing_ttl_seconds 604800
-  :budget_usd_per_week 5M
-  :sitting_budget_tokens 150000
-  :charter "You read one closed sitting of another seat, with its transcript, and say whether it did its work at a fair cost. keep: the sitting moved its rows or stalled with a sentence a person can act on, and spent what that work needed. query: it spent turns or tokens on reads the work did not need, ended on a refusal it did not answer, or left its row where it found it with no sentence. A query names the one change to the seat's instructions, scope or law that would have saved it, in the remedy."
-  :instructions "You sit in `sitting-judge`. The sit answers the charter and the closed sittings to judge, each with its seat, its token counts and its transcript.\n\n- Judge each sitting from its own row and transcript. Do not search for others by title.\n- Say a verdict with waymark_invoke kind \"verdict\", action \"judge\", input {judgment: \"{{judgment}}\", subject_kind: \"sitting\", subject_id: the sitting's full id, verdict: \"keep\" or \"query\", remedy: one sentence}.\n- Name every row by its full id, exactly as a row spells it, never a prefix.\n- Count from the list the sit answered (its total and its rows). Do not query again to count.\n- Do not call discover or schema.\n\nIf a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make one call; the note says how many sittings you kept and queried."
+  :budget_usd_per_week 60M
+  :sitting_budget_tokens 400000
+  :sitting_idle_seconds 3600
+  :keep_transcripts "fired"
+  :transcript_days 30
+  :in_domain "{{domain}}"
+  :charter "You judge how a fired seat sat, from what it left behind. For each sitting the sit hands you, read the sitting row (its seat, note, counts, refusals and served calls), then its transcript: the transcript row for that sitting, then its entries in order, the assistant's words and every entry marked is_error first. Read what the sitting was asked to do from the row it walked, named in the transcript. Choose the one verdict whose sentence is true of this sitting; when two are true, choose the one a person must act on first. Write one remedy sentence: the fix, or the ticket that already carries it, by id. Judge only what the transcript shows. Do not guess at what a run meant."
+  :instructions "You sit in `sitting-judge`. The sit answers the charter, the judgment (its verdicts, each with its sentence, and the remedy ceiling) and up to five closed fired sittings to judge.\n\nFor each sitting: read it with waymark_get kind \"sitting\". Find its transcript with waymark_query kind \"transcript\" filter {\"sitting\": <id>}. Read its entries with waymark_query kind \"transcript_entry\" filter {\"transcript\": <id>}, sort \"seq\", with fields seq, type, tool, is_error and text; page through them, and read the entries with is_error true and the last assistant entries first. When there is no transcript, the verdict is no_transcript.\n\nThen take the verdict's judge door on that sitting, with the verdict word and one remedy sentence. One verdict per sitting.\n\nDo not call discover or schema; a refusal names its own remedy. When the seat says halted or parked, say why and stop. If a routine-fire-payload block names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call with the numbers it gives. In the note, say how many sittings you judged and the count of each verdict."
   :scope [{:kind "sitting" :actions []}
           {:kind "transcript" :actions []}
+          {:kind "transcript_entry" :actions []}
           {:kind "verdict" :actions ["judge"]}]
-  :wake_on [{:kind "transcript" :actions ["seal"] :at_least 5}]}}
+  :wake_on [{:kind "transcript" :actions ["seal"] :at_least 5 :settle_seconds 600}]
+  :delivers [{:kind "verdict" :action "judge"}]}}
