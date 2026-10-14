@@ -2707,6 +2707,97 @@
 
 (delegation/mayors-own-domain! #'mayor-moves-only-the-budget?)
 
+;; ── the crack a staffing change opens (ticket 5f3c276c) ─────────────
+;;
+;; A seat is data: a restate that narrows a scope or drops a wake can
+;; leave a state with no seat to move it. The cracks audit
+;; (waymark10.server.cracks) is read at the door, over the active seats
+;; as they stand and as they would stand. A write that adds a crack
+;; stops: an authoring seat's restate as a held call for its person,
+;; and a person's create on a warning the person acknowledges by its
+;; name. A person's own restate and the park are not judged here: the
+;; park is the cheap lever, one tap and no confirm.
+
+(defonce ^:private staffing-rule (atom nil))
+
+(defn staffing-rule!
+  "Cracks names what a staffing change opens: `f` takes the kinds, the
+  active seats as they stand and the active seats as they would stand,
+  and answers the cracks the change adds. Cracks requires this
+  namespace, so the rule is handed over here and not required."
+  [f]
+  (reset! staffing-rule f))
+
+(defn- as-it-would-stand
+  "The active seats after this write. A body with no row is a seat
+  born. A body that states nothing is the park door's, and the seat
+  leaves. Any other body is a restate, read as `restate-seat` writes
+  it."
+  [active row inp]
+  (let [others (into [] (remove #(= (str (:id %)) (str (:id row)))) active)]
+    (cond
+      (nil? (:id row)) (conj others {:state :active :data inp})
+      (empty? inp) others
+      :else (conj others (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                                 row restatable)))))
+
+(defn- cracks-opened
+  "The cracks this write would add, or nil. nil too where nothing can
+  be read (the pure render probe carries no registry and no store), and
+  for a seat that is not active, whose restate changes no staffing."
+  [row inp ctx]
+  (let [rule @staffing-rule
+        find' (:find ctx)
+        rdefs (:rdefs ctx)]
+    (when (and rule find' rdefs
+               (or (nil? (:id row)) (= "active" (name (:state row)))))
+      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))]
+        (seq (rule (rdefs) active (as-it-would-stand active row inp)))))))
+
+(defn- cracks-told
+  "The new cracks in the audit's own words, one sentence each."
+  [cracks]
+  (str/join " " (map (fn [c]
+                       (str (:kind c) "/" (:state c) " " (:crack c) ": "
+                            (:what_would_close_it c)))
+                     cracks)))
+
+(g/defguard opens-no-crack
+  {:severity :warning
+   :reads [:principal :now :grant :seat :held_call :within :services]
+   :vars [:count :cracks]
+   :open "The cracks are the audit's, read at the write from the law and the active seats; GET /api/-/cracks is the same reading. Acknowledge the warning by its name to accept them."
+   :explain "This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} Change the seats so that the state is still left and woken, or acknowledge this warning to accept the crack on purpose."}
+  [row inp ctx]
+  ;; the create door's: a person's own write, and the write of a tool
+  ;; the person is signed in to. An authoring seat's restate is held by
+  ;; the guard below, and the replay of that held call is the person's
+  ;; yes.
+  (if (or (delegation/author-seat ctx)
+          (delegation/approved-hold? ctx :seat (:id row)))
+    (t/allow)
+    (if-some [cracks (cracks-opened row inp ctx)]
+      (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
+      (t/allow))))
+
+(g/defguard a-crack-waits-on-the-person
+  {:hold true
+   :reads [:principal :now :grant :seat :held_call :within :services]
+   :vars [:count :cracks]
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could open a crack alone would leave work with no seat and nobody told."
+   :explain "Held for the person's tap. This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row inp ctx]
+  ;; the restate door's, from an authoring seat. A seat an author
+  ;; creates is born parked and changes no staffing, so the create door
+  ;; does not carry this guard, and only a person parks.
+  (cond
+    (nil? (delegation/author-seat ctx)) (t/allow)
+    (delegation/approved-hold? ctx :seat (:id row)) (t/allow)
+    :else
+    (if-some [cracks (cracks-opened row inp ctx)]
+      (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
+      (t/allow))))
+
 (defresource seat
   {:kind :seat
    :plural "seats"
@@ -3360,7 +3451,8 @@
                    inbox-cues-filter-declared-fields
                    budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
-                   delegation/authors-within-the-ceiling]
+                   delegation/authors-within-the-ceiling
+                   opens-no-crack]
    :on-create seat-born
    :actions
    {:restate
@@ -3585,7 +3677,8 @@
               inbox-cues-filter-declared-fields
               step-carries-a-note
               budget-fits-the-domain
-              delegation/authors-within-the-ceiling]
+              delegation/authors-within-the-ceiling
+              a-crack-waits-on-the-person]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1

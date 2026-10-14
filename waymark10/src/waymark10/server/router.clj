@@ -138,6 +138,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -430,6 +431,20 @@
            ;; (seams/Linking), gathered once at boot
            :link-doors (:link-doors eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
+
+(defn- with-waiting-on
+  "A row's envelope with its `waiting_on` block (ticket 86af9d88): the
+  next doors, the seats that hold them for this row, what wakes them
+  and how long the row has sat. It reads the data the envelope already
+  projected for this caller, so it names no field the grant hides. An
+  engine with no seat kind, and a read that fails, leave the envelope
+  as it was. It rides the full row READ alone: the block tells an age,
+  so an action's answer, which a replay must give back byte for byte,
+  does not carry it, and neither does the lean depth=summary read."
+  [eng rdef row env]
+  (if-some [w (waiting-on/for-row eng rdef row (get env "data"))]
+    (assoc env "waiting_on" (p/wire-value w))
+    env))
 
 (defn envelope-response
   "The one envelope answer: rendered through the shared ctx-opts, sent
@@ -1165,7 +1180,9 @@
                               (assoc opts :ref-summary
                                      (ref-summary-hook eng req)))
                              opts
-                             (embed-overrides req)))]
+                             (embed-overrides req)))
+        env (cond->> env
+              (not= :summary depth) (with-waiting-on eng rdef row))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
                    {"ETag" (get-in env ["meta" "etag"])})))

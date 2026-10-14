@@ -36,8 +36,12 @@
                  the inbox of a seat a person sits in (ticket
                  53e55720, part 4)
   unwalked_value a value live rows carry in a field every walk of the
-                 kind filters on, and no active seat's walk filter
-                 admits (ticket 53e55720, part 4)
+                 kind that hands out their state filters on, and no
+                 active seat's walk filter admits (ticket 53e55720,
+                 part 4). Each state is judged by its own walks
+                 (ticket 5cb126ab): a walk shut to the state says
+                 nothing of the rows there. A row a seat is woken for
+                 and can move is no crack
 
   Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
   which rows a seat is handed, not what brings it, so a walk alone
@@ -508,41 +512,80 @@
 
 (defn- value-cracks
   "unwalked_value, for one kind: `rows` is the rows of it that were
-  read. A field counts when EVERY active seat that walks the kind
-  filters on it, since a walk with no entry for the field admits each
-  of its values. `state` is left to the cracks above."
-  [rdef seat-rows rows]
+  read. Each state is judged by the walks that hand its rows out
+  (ticket 5cb126ab): a walk its `state` entry shuts to the state says
+  nothing of the rows there, so a seat that walks the drafts of every
+  repository hides no open row. In a state a field counts when EVERY
+  such walk filters on it, since a walk with no entry for the field
+  admits each of its values. A row a seat is woken for and can move is
+  no crack: the seat holds an exit under a filter the row meets (or a
+  door of another kind the kind declares leaves the state), and a
+  wake_on entry into the state the row meets too. `state` is left to
+  the cracks above."
+  [rdef seat-rows by-kind rows]
   (let [kind (text (:kind rdef))
         terminal (into #{} (map text) (resting rdef))
-        walkers (filterv #(= kind (some-> (get-in % [:data :walk]) str)) seat-rows)
-        filters (mapv seats/walk-filter walkers)
-        fields (into (sorted-set)
-                     (comp (mapcat keys) (map text) (remove #{"state"}))
-                     filters)
-        live (remove #(contains? terminal (text (:state %))) rows)]
-    (for [field fields
-          :when (every? #(some? (fval % field)) filters)
-          :let [admitted (into #{} (mapcat #(fvals (fval % field))) filters)
-                carried (for [row live
-                              :let [v (fval (:data row) field)]
-                              :when (some? v)
-                              one (if (coll? v) v [v])
-                              :let [s (text one)]
-                              :when (and (seq s) (not (contains? admitted s)))]
-                          {:value s :state (text (:state row))})]
-          [value hits] (sort-by key (group-by :value carried))]
+        walks (into []
+                    (comp (filter #(= kind (some-> (get-in % [:data :walk]) str)))
+                          (map (fn [s] {:seat s :fm (seats/walk-filter s)})))
+                    seat-rows)
+        walk-rdef (fn [seat]
+                    (some->> (get-in seat [:data :walk]) str not-empty
+                             keyword (get by-kind)))
+        woken? (fn [row state]
+                 (let [state (keyword state)
+                       out (exits rdef state)
+                       far (into [] (comp (map :by) (filter map?)) (indirect-exits rdef state))
+                       into-state (arrivals rdef state)]
+                   (some (fn [seat]
+                           (and (or (some (fn [a]
+                                            (some #(row-meets? (:filter %) row)
+                                                  (holding-entries seat kind (:name a) state)))
+                                          out)
+                                    (some #(seq (holding-entries seat (:kind %) (:action %) nil))
+                                          far))
+                                (some (fn [e]
+                                        (and (= kind (text (:kind e)))
+                                             (some into-state (map text (:actions e)))
+                                             (admits-state? (:filter e) state)
+                                             (row-meets? (:filter e) row)))
+                                      (seats/effective-wake-on seat (walk-rdef seat)))))
+                         seat-rows)))
+        live (remove #(contains? terminal (text (:state %))) rows)
+        carried (for [[state at] (sort-by key (group-by (comp text :state) live))
+                      :let [here (filterv #(admits-state? (:fm %) state) walks)
+                            filters (mapv :fm here)]
+                      field (into (sorted-set)
+                                  (comp (mapcat keys) (map text) (remove #{"state"}))
+                                  filters)
+                      :when (every? #(some? (fval % field)) filters)
+                      :let [admitted (into #{} (mapcat #(fvals (fval % field))) filters)]
+                      row at
+                      :let [v (fval (:data row) field)]
+                      :when (some? v)
+                      one (if (coll? v) v [v])
+                      :let [s (text one)]
+                      :when (and (seq s)
+                                 (not (contains? admitted s))
+                                 (not (woken? row state)))]
+                  {:field field :value s :state state :walks here :admitted admitted})]
+    (for [[[field value] hits] (sort-by key (group-by (juxt :field :value) carried))
+          :let [admitted (into (sorted-set) (mapcat :admitted) hits)]]
       {:kind kind :state nil :crack "unwalked_value"
        :field field :value value
        :rows (count hits)
-       :states (vec (sort (distinct (map :state hits))))
-       :seats_considered (mapv (fn [s f]
-                                 {:seat (seat-name s)
-                                  :admits (vec (sort (fvals (fval f field))))})
-                               walkers filters)
+       :states (vec (distinct (map :state hits)))
+       :seats_considered (into []
+                               (comp (mapcat :walks)
+                                     (distinct)
+                                     (map (fn [{:keys [seat fm]}]
+                                            {:seat (seat-name seat)
+                                             :admits (vec (sort (fvals (fval fm field))))})))
+                               hits)
        :what_would_close_it
        (str "Give an active seat a walk over " kind " whose filter admits "
             field " " value ", or restate these rows under a " field
-            " a seat walks: " (str/join ", " (sort admitted)) ".")})))
+            " a seat walks: " (str/join ", " admitted) ".")})))
 
 (defn movers
   "The names of the active seats whose scope holds an action that
@@ -559,6 +602,93 @@
                                 out)))
                 (map seat-name))
           seat-rows)))
+
+(defn walked-fields
+  "The fields, other than `state`, that an active seat's scope filter on
+  this kind names: what decides which seat a row of the kind belongs to."
+  [rdef seat-rows]
+  (into (sorted-set)
+        (for [seat seat-rows
+              e (entries-for seat (:kind rdef))
+              [field _] (named-values (:filter e))]
+          field)))
+
+(defn row-doors
+  "For ONE row (ticket 86af9d88): every way out of the state it is in,
+  each with the active seats that hold it FOR THIS ROW and what brings
+  each of them. nil for a row in a state a row rests in.
+
+  Where the audit reads a filter for its `state` entry alone, this reads
+  all of it against the row: a seat holds a door here when a scope entry
+  that names the door admits the row. A door of another kind
+  (`:left-by`) is held for this row by a seat that holds it and, when
+  the seat walks this kind, is handed the row by its walk. An exit a
+  source takes (the mirror, a wait's ending) needs no seat and says so.
+  A door named as the `:via` of such an exit is walked by that exit and
+  is not listed again.
+
+  Each seat says `woken_by`: the doors into this state its wake_on
+  names under a filter that admits the row. `held_by` is `seat` when a
+  seat a model sits in holds the door, `person` when only interactive
+  seats do, `source`, or `nobody`."
+  [rdef seat-rows by-kind row]
+  (let [kind (text (:kind rdef))
+        state (keyword (text (:state row)))
+        into-state (arrivals rdef state)
+        far-in (far-arrivals rdef state)
+        indirect (indirect-exits rdef state)
+        vias (into #{} (keep #(some-> (:via %) text)) indirect)
+        walk-of (fn [seat] (some-> (get-in seat [:data :walk]) str not-empty))
+        handed? (fn [seat]
+                  (or (not= kind (walk-of seat))
+                      (some #(and (admits-state? (:filter %) state)
+                                  (row-meets? (:filter %) row))
+                            (entries-for seat kind))))
+        woken-by (fn [seat]
+                   (into []
+                         (comp (filter #(row-meets? (:filter %) row))
+                               (mapcat (fn [e]
+                                         (let [k (text (:kind e))]
+                                           (for [a (map text (:actions e))
+                                                 :when (if (= kind k)
+                                                         (contains? into-state a)
+                                                         (contains? far-in [k a]))]
+                                             (if (= kind k) a (str k "/" a))))))
+                               (distinct))
+                         (wake-entries seat rdef state
+                                       (some->> (walk-of seat) keyword (get by-kind)))))
+        holder (fn [seat]
+                 (let [by (woken-by seat)
+                       cadence (get-in seat [:data :cadence_seconds])]
+                   (cond-> {:seat (seat-name seat)}
+                     (seats/interactive-seat? seat) (assoc :person true)
+                     (seq by) (assoc :woken_by by)
+                     (number? cadence) (assoc :cadence_seconds cadence))))
+        door (fn [m held?]
+               (let [hs (into [] (comp (filter held?) (map holder)) seat-rows)]
+                 (assoc m
+                        :seats hs
+                        :held_by (cond (empty? hs) "nobody"
+                                       (every? :person hs) "person"
+                                       :else "seat"))))]
+    (when-not (contains? (resting rdef) state)
+      (concat
+       (for [a (exits rdef state)
+             :when (not (contains? vias (text (:name a))))]
+         (door {:door (text (:name a)) :to (text (:to a))}
+               (fn [seat]
+                 (some #(row-meets? (:filter %) row)
+                       (holding-entries seat kind (:name a) state)))))
+       (for [{:keys [by via to]} indirect]
+         (if (map? by)
+           (door (cond-> {:door (door-name by)}
+                   via (assoc :via (text via))
+                   to (assoc :to (text to)))
+                 (fn [seat]
+                   (and (seq (holding-entries seat (:kind by) (:action by) nil))
+                        (handed? seat))))
+           (cond-> {:door (text via) :held_by "source" :source (text by)}
+             to (assoc :to (text to)))))))))
 
 (defn- wait-doors
   "The doors a hand takes on a row that waits: the ones the wait says
@@ -653,9 +783,67 @@
                              (person-cracks rdef seat-rows world)
                              (remedy-cracks rdef seat-rows)
                              (wait-cracks rdef seat-rows by-kind)
-                             (value-cracks rdef seat-rows
+                             (value-cracks rdef seat-rows by-kind
                                            (get (:rows world) (:kind rdef))))))
            (sort-by (comp text :kind) rdefs)))))
+
+;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
+
+(def ^:private depth
+  "How far a state has fallen, for the cracks that grade one state. A
+  seat change that moves a state up this list opened a crack, and one
+  that moves it down closed one."
+  {"cadence_only" 1 "person_only" 2 "unwoken" 3 "no_exit" 4})
+
+(defn- crack-key
+  "What makes a crack the same one before a change and after it."
+  [c]
+  (select-keys c [:kind :state :crack :door :remedy :on :outcome]))
+
+(defn added
+  "The cracks the seats in `after` leave and the seats in `before` did
+  not, in the audit's order and its words. Both are read by `audit`
+  over the same declarations and the same world.
+
+  A state that only changes its grade is judged by `depth`: one that
+  falls is a crack added, and one that rises is not. A state no seat
+  could leave before is at the bottom, and no change adds a crack to
+  it."
+  ([rdefs before after] (added rdefs before after nil))
+  ([rdefs before after world]
+   (let [was (audit rdefs before world)
+         had (into #{} (map crack-key) was)
+         at (juxt :kind :state)
+         fallen (reduce (fn [m c]
+                          (if-some [d (depth (:crack c))]
+                            (update m (at c) (fnil max 0) d)
+                            m))
+                        {} was)
+         bottom (depth "no_exit")]
+     (into []
+           (remove (fn [c]
+                     (let [d (get fallen (at c) 0)]
+                       (or (contains? had (crack-key c))
+                           (= bottom d)
+                           (some-> (depth (:crack c)) (<= d))))))
+           (audit rdefs after world)))))
+
+(def ^:private read-with-the-world
+  "The cracks `audit` grades by the notice rules, the subscriptions and
+  the rows. A seat door's guard reads none of them, so it does not
+  judge these."
+  #{"silent_person_exit" "unwalked_value"})
+
+(defn opened
+  "`added`, as a seat door's guard reads it: over the declarations and
+  the seat rows alone. With no rows read a narrowed wake covers
+  nothing, as `audit` says."
+  [rdefs before after]
+  (into []
+        (remove (comp read-with-the-world :crack))
+        (added rdefs before after)))
+
+(seats/staffing-rule! #'opened)
 
 (defn- active-of [eng kind]
   (if (contains? (inv/resources eng) kind)
@@ -720,3 +908,28 @@
      :total (count cracks)
      :by_crack (into (sorted-map) (frequencies (map :crack cracks)))
      :cracks cracks}))
+
+(def ^:private export-fields
+  "What of a seat `audit` reads, and so all the export prints of one."
+  [:name :mode :walk :cadence_seconds :scope :wake_on])
+
+(defn seat-export
+  "The seats document (ticket 42259e4b): `seat-rows` narrowed to the
+  fields `audit` reads, in the order of their names, a field a seat
+  does not carry left out. It is the shape factory10's seat fixture is
+  read from, so the gate there can judge the law against the seats the
+  house runs with. Pure, as `audit` is."
+  [seat-rows]
+  {:waymark "cracks_seats"
+   :seats (mapv (fn [seat]
+                  (into {:name (seat-name seat)}
+                        (keep (fn [k]
+                                (when-some [v (get-in seat [:data k])]
+                                  [k v])))
+                        (rest export-fields)))
+                (sort-by seat-name seat-rows))})
+
+(defn seats-report
+  "GET /api/-/cracks/seats: the ACTIVE seats, as `report` reads them."
+  [eng]
+  (seat-export (active-of eng :seat)))

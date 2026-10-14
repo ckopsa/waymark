@@ -8,7 +8,18 @@
   them. `factory10.cracks-gate-test` runs the cracks audit over the
   factory's kinds and these seats, and fails on a crack its allowlist
   does not name. They are not the live rows: a seat that changes on
-  the house changes here by hand."
+  the house changes here by hand.
+
+  NOT YET GENERATED (ticket 42259e4b). The house now prints its active
+  seats in this shape, and `from-export` reads that document into the
+  rows the audit takes:
+
+    curl -H \"Authorization: Bearer $TOKEN\" \\
+      https://work.kopsa.info/api/-/cracks/seats
+
+  A person's bearer reads it, or a grant that sees the `seat` kind
+  whole. Until the four below are replaced by that answer, they are
+  still written by hand."
   (:require [waymark10.machine :as machine]))
 
 (defn- seat [name data]
@@ -63,6 +74,12 @@
                         :actions (into ["create"]
                                        (sort (map (comp name :name)
                                                   (machine/actions-seq r))))}))}))
+
+(defn from-export
+  "The seat rows of a seats document, as `GET /api/-/cracks/seats`
+  answers it and `waymark10.server.cracks/seat-export` builds it."
+  [doc]
+  (mapv #(seat (:name %) (dissoc % :name)) (:seats doc)))
 
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."

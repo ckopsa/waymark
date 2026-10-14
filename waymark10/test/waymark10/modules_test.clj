@@ -260,6 +260,8 @@
                ;; …and the cracks audit (ticket 8b52a6e6), which reads
                ;; the seat rows the ledger sits beside
                "/api/-/cracks"
+               ;; …and the seats that audit read (ticket 42259e4b)
+               "/api/-/cracks/seats"
                ;; …and the door a session's end reports its bill
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer

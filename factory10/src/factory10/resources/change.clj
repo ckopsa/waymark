@@ -648,6 +648,18 @@
   ;; so nothing here moves it.
   (-> row unstalled (assoc-in [:data :rounds] 0)))
 
+(defhandler reopen-the-change [row _inp _ctx]
+  ;; A CHANGE GITHUB NEVER SAW STARTS AGAIN (ticket ab6af67f). The sit
+  ;; walks this door for a closed change with no pull request whose
+  ;; ticket is in the queue again: the rounds start from zero and the
+  ;; row no longer says what closed it, as the log does. A change WITH
+  ;; a pull request is GitHub's reopen, and the row stands as it was.
+  (if (some? (get-in row [:data :number]))
+    row
+    (-> row
+        unstalled
+        (update :data assoc :rounds 0 :superseded_by nil))))
+
 (defn- back-under-review
   "A stuck change put back under review: the rounds start from zero,
   and the forge computes the red names again for the head it reads next."
@@ -1686,7 +1698,7 @@
               only-a-person-closes-a-change]
      :handler drop-what-the-wait-said
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open."}
+              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open; the house opens it again only when its ticket is in the queue and a code seat sits down to it."}
      :display {:label "Close" :style :danger :order 30
                :description "Let go of a change that never opened a pull request — its ticket stays where it is"}}
 
@@ -1712,6 +1724,7 @@
     :reopen
     {:from #{:closed} :to :open
      :guards [the-mirror-writes-this-row]
+     :handler reopen-the-change
      :safety {:idempotent true :reversible false :confirm false
               :one-way "GitHub reopened this pull request. The row moves with it, and the record of the close stands beside it."}
      :display {:label "Reopened" :order 4

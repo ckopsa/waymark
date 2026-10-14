@@ -742,7 +742,10 @@
            "summary" (get env "summary")}
     (contains? env "data") (assoc "data" (get env "data"))
     (and (not (contains? env "data")) (contains? env "fields"))
-    (assoc "fields" (get env "fields"))))
+    (assoc "fields" (get env "fields"))
+    ;; what the row waits on (ticket 86af9d88): a full row read carries
+    ;; it; a collection item and an action's answer do not
+    (contains? env "waiting_on") (assoc "waiting_on" (get env "waiting_on"))))
 
 (defn- facets-of
   "The collection's facet counts, lifted out of the query action's
@@ -4512,6 +4515,41 @@
   ticket's `groom` is the person's reading that the ask is ready."
   "ticket:")
 
+(defn- reopened-change
+  "The change this firing works, opened again when it was closed and
+  GitHub never saw it (ticket ab6af67f) — else the row as it stands.
+
+  A CLOSED CHANGE HOLDS ITS TICKET'S `change_id`. The id is
+  `ticket:<id>` and unique, so the sit that finds a closed change can
+  mint no second one, and a closed change offers no submit: the ticket
+  could not be built again. The sit reads a row that is in the queue,
+  so the ask stands, and a change with no pull request number and a
+  `change_id` that is still the walk row's has nothing on the forge to
+  disagree. It goes back to `open` through `reopen` with the same
+  system hand the mint uses, its rounds at zero, and `rebranched-change`
+  mints its branch from the policy's pattern after this.
+
+  A CLOSED CHANGE WITH A PULL REQUEST IS LEFT ALONE: GitHub owns it,
+  and the mirror follows GitHub's own reopen. A refusal costs the
+  reopen and never the sit: the row stands as it was."
+  [eng change]
+  (or (when (and change
+                 (= :closed (some-> (:state change) name keyword))
+                 (nil? (get-in change [:data :number]))
+                 (not (forge-owned? (get-in change [:data :change_id]))))
+        (try
+          (let [moved (:row (inv/invoke! eng :change (str (:id change))
+                                         :reopen {}
+                                         {:principal seat-change-principal}))]
+            (println "waymark10 seat change reopened -" (str (:id change)))
+            moved)
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "waymark10 seat change reopen failed -"
+                       (ex-message e)))
+            nil)))
+      change))
+
 (defn- regroomed-change
   "The change this firing works, put back to work when a person groomed
   its ticket again after the change was stalled — else the row as it
@@ -4604,6 +4642,7 @@
     :else (let [row (get-in walk ["rows" 0])
                 [change note] (minted-change eng seat walk)
                 change (some->> change
+                                (reopened-change eng)
                                 (regroomed-change eng)
                                 (rehomed-change eng seat row)
                                 (rebranched-change eng row))

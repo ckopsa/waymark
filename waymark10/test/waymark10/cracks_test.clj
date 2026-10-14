@@ -321,6 +321,53 @@
         (is (= 0 (:total parsed)))
         (is (= [] (:cracks parsed)))))))
 
+;; ticket 42259e4b: the seats the audit read, in the fixture's shape.
+(deftest the-seat-export-prints-what-the-audit-reads
+  (let [b (seat "b-seat" {:walk "task" :cadence_seconds 3600 :charter "Not this."
+                          :scope [{:kind "task" :actions ["finish"]
+                                   :filter {:state "open"}}]
+                          :wake_on [{:kind "task" :actions ["groom"]}]})
+        a (seat "a-seat" {:mode "interactive" :sitter_key "secret"
+                          :scope [{:kind "task" :actions ["groom"]}]})
+        doc (cracks/seat-export [b a])]
+    (is (= "cracks_seats" (:waymark doc)))
+    (testing "in the order of their names, each with the fields it carries"
+      (is (= [{:name "a-seat" :mode "interactive"
+               :scope [{:kind "task" :actions ["groom"]}]}
+              {:name "b-seat" :walk "task" :cadence_seconds 3600
+               :scope [{:kind "task" :actions ["finish"] :filter {:state "open"}}]
+               :wake_on [{:kind "task" :actions ["groom"]}]}]
+             (:seats doc))))
+    (testing "the audit over the exported seats is the audit over the rows"
+      (is (= (cracks/audit [task] [a b])
+             (cracks/audit [task] (mapv #(seat (:name %) (dissoc % :name))
+                                        (:seats doc))))))))
+
+(deftest the-seat-export-route-on-the-wire
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        gid (get-in (inv/create!
+                     eng :grant
+                     {:audience "spy"
+                      :scope [{:kind "crack_task" :actions []}]}
+                     {:principal elena})
+                    [:row :id])
+        get-seats (fn [headers]
+                    (let [resp (h {:request-method :get :uri "/api/-/cracks/seats"
+                                   :headers headers})]
+                      (assoc resp :parsed (some-> (:body resp) wire/read-json))))]
+    (inv/invoke! eng :grant gid :accept nil {:principal spy})
+    (testing "anonymous is the concealment 404"
+      (is (= 404 (:status (get-seats {})))))
+    (testing "a caller whose grant does not see the seat kind whole is too"
+      (is (= 404 (:status (get-seats {"x-waymark-principal" "spy"
+                                      "x-waymark-actor-type" "agent"
+                                      "x-waymark-grant" gid})))))
+    (testing "a person reads the active seats; this house has none"
+      (let [{:keys [status parsed]} (get-seats {"x-waymark-principal" "elena"})]
+        (is (= 200 status))
+        (is (= {:waymark "cracks_seats" :seats []} parsed))))))
+
 (deftest waymark-schema-carries-the-kinds-cracks
   (let [eng (fresh-engine)
         out (mcp/call-tool eng (mcp/door eng) {:principal elena}
@@ -427,6 +474,46 @@
     (testing "with no rows read there is nothing to report"
       (is (empty? (filter #(= "unwalked_value" (:crack %))
                           (cracks/audit [ticket] [builder])))))))
+
+;; ticket 5cb126ab: a seat that walks the drafts of every repo hid the
+;; open row no builder is handed. The kind is said here: `ticket` is
+;; defined a second time below, and a var holds the last one.
+(deftest a-walk-shut-to-the-state-hides-no-value
+  (let [ticket {:kind :ticket
+                :states [:draft :open :done]
+                :initial :draft
+                :terminal #{:done}
+                :actions {:groom {:from #{:draft} :to :open}
+                          :complete {:from #{:open} :to :done}}}
+        builder (seat "builder" {:scope [{:kind "ticket" :actions ["complete"]
+                                          :filter {:repo "ckopsa/waymark" :state "open"}}]
+                                 :walk "ticket"})
+        groomer (seat "groomer" {:scope [{:kind "ticket" :actions ["groom"]
+                                          :filter {:state "draft"}}]
+                                 :walk "ticket"})
+        rows {:ticket [{:id "1" :state :open :data {:repo "ckopsa/waymark"}}
+                       {:id "2" :state :open :data {:repo "ckopsa/messa"}}
+                       {:id "3" :state :draft :data {:repo "ckopsa/messa"}}]}
+        unwalked (fn [seats]
+                   (filterv #(= "unwalked_value" (:crack %))
+                            (cracks/audit [ticket] seats {:rows rows})))]
+    (testing "an open ticket in a repo no seat that walks open admits"
+      (let [[c & more] (unwalked [builder groomer])]
+        (is (nil? more) "the draft is walked by the groomer, whatever its repo")
+        (is (= "repo" (:field c)))
+        (is (= "ckopsa/messa" (:value c)))
+        (is (= 1 (:rows c)))
+        (is (= ["open"] (:states c)))
+        (is (= [{:seat "builder" :admits ["ckopsa/waymark"]}] (:seats_considered c)))))
+    (testing "a seat woken for the row, that can move it, clears it"
+      (is (empty? (unwalked [builder groomer
+                             (seat "any" {:scope [{:kind "ticket" :actions ["complete"]}]
+                                          :wake_on [{:kind "ticket" :actions ["groom"]}]})]))))
+    (testing "a wake whose filter shuts the repo out does not"
+      (is (seq (unwalked [builder groomer
+                          (seat "b" {:scope [{:kind "ticket" :actions ["complete"]}]
+                                     :wake_on [{:kind "ticket" :actions ["groom"]
+                                                :filter {:repo "ckopsa/b"}}]})]))))))
 
 ;; ticket d9edac4e: a kind says what its rows wait on. `job` waits the
 ;; two ways a ticket does: a blocker's ending releases it whichever way

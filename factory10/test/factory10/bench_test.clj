@@ -3896,6 +3896,56 @@
       (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
       (is (= "open" (name (:state (change-by-id w change-id))))))))
 
+(deftest the-sweep-closes-an-abandoned-change-and-keeps-a-live-one
+  (let [later (.plusSeconds (java.time.Instant/now) (* 2 24 60 60))]
+    (testing "a draft ticket's change, a task's and one born from no row"
+      (let [st (state)
+            eng (fresh-engine st)
+            w {:eng eng}
+            _ (a-policy! eng {})
+            ticket (:row (inv/create! eng :ticket
+                                      {:title "Restate this one"
+                                       :type "feature"
+                                       :repo a-repository}
+                                      {:principal person}))
+            born (str "ticket:" (:id ticket))
+            minted (fn [change-id branch born-from]
+                     (:row (inv/create! eng :change
+                                        (cond-> {:change_id change-id
+                                                 :repository a-repository
+                                                 :head_branch (str "bench/" branch)}
+                                          born-from (assoc :born_from born-from))
+                                        {:principal mirror/source-principal})))
+            abandoned (minted born "abandoned" born)
+            dirty (minted "ticket:dirty" "dirty" born)
+            _ (bench/mark-row! eng :change (str (:id dirty))
+                               {:worktree_dirty 2} #{})
+            tasked (minted "task:01HZQ7NOSUCHR0W4V5X6Y7Z8" "tasked"
+                           "task:01HZQ7NOSUCHR0W4V5X6Y7Z8")
+            orphan (minted "task:01HZQ7NOSUCHR0W4V5X6Y7Z9" "orphan" nil)]
+        (is (= 2 (forge/sweep-reader-changes! eng (fn [& _]))))
+        (is (= "closed" (name (:state (change-by-id w (:id tasked))))))
+        (is (= "closed" (name (:state (change-by-id w (:id orphan))))))
+        (is (= "open" (name (:state (change-by-id w (:id abandoned)))))
+            "a ticket in draft for less than a day keeps its change")
+        (is (= 1 (forge/sweep-reader-changes! eng (fn [& _]) later)))
+        (is (= "closed" (name (:state (change-by-id w (:id abandoned))))))
+        (is (str/includes? (str (get-in (change-by-id w (:id abandoned))
+                                        [:data :superseded_by]))
+                           "for more than a day")
+            "the reason names the rule")
+        (is (= "open" (name (:state (change-by-id w (:id dirty)))))
+            "a change with edits in its worktree is kept")
+        (is (= "draft" (name (:state (ticket-by-id w (str (:id ticket))))))
+            "the ticket is not moved")
+        (is (= 0 (forge/sweep-reader-changes! eng (fn [& _]) later))
+            "a second sweep finds nothing")))
+    (testing "an open ticket's change is kept however old"
+      (let [w (ticket-world)
+            change-id (get-in (:answer w) [:change :id])]
+        (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]) later)))
+        (is (= "open" (name (:state (change-by-id w change-id)))))))))
+
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})
@@ -4260,6 +4310,35 @@
     (person-moves-ticket! w :groom)
     (is (= "closed" (change-state w))
         "GitHub closed it, and the groom does not put it back")))
+
+;; A CHANGE CLOSED WITH NO PULL REQUEST HOLDS ITS TICKET'S `change_id`
+;; (ticket ab6af67f): the sit found the closed row, which offers no
+;; submit, and could mint no second one under the same id.
+
+(deftest a-ticket-groomed-after-its-change-closed-with-no-pull-request-is-buildable
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        _ (mirror-moves-change! w :supersede
+                                {:superseded_by "Closed: a seat that only reads was minted it."})
+        closed (change-state w)
+        _ (force-ticket-state! w :draft)
+        _ (person-moves-ticket! w :groom)
+        answer (sit-again! w)
+        rows (changes-of (:eng w))
+        row (first rows)]
+    (is (= "closed" closed))
+    (is (= 1 (count rows))
+        "the same change is opened again, and no second one is born")
+    (is (= (str change-id) (str (get-in answer [:change :id]))))
+    (is (= "open" (name (:state row))))
+    (is (zero? (long (get-in row [:data :rounds]))))
+    (is (nil? (get-in row [:data :superseded_by]))
+        "the row no longer says what closed it")
+    (is (= "open" (get-in answer [:change :state])))
+    (is (contains? (into #{} (map :action) (get-in answer [:change :doors]))
+                   "submit")
+        "and the seat is offered submit on the change beside its walk")
+    (is (nil? (:change_note answer)))))
 
 (deftest the-ticket-door-is-refused-to-every-hand
   (let [w (ticket-world)
