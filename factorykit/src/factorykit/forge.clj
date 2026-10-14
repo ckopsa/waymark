@@ -20,7 +20,11 @@
   THE CHANGE PASS is `change-pass!` (ticket 97bd7937): every pull
   request a poll answered becomes a row minted, adopted, folded or
   moved. It requires no engine. The factory hands it the `change`
-  kind's doors as functions, with its own principal closed into them."
+  kind's doors as functions, with its own principal closed into them.
+
+  THE PASS is `pass!` (ticket 75db2ef8): the poll, the rate-limit hold,
+  the change pass and the source's place, with the factory's own steps
+  handed in as functions."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -76,6 +80,44 @@
     carries `:check_name`, `:status` and `:conclusion`, which
     `verdict` reads, and whatever `forge-log-tail` needs to find
     its log. Throws when the forge does not answer."))
+
+(defprotocol ForgeRetry
+  "The pull requests whose rows the change pass refused, handed back
+  to the source (ticket 365043a6). The poll's cursor has already moved
+  past their stamps, so a merged pull request that never moves again
+  would never be offered again, and its row would keep a head it no
+  longer has. A protocol of its own, so a source that does not
+  implement it retries nothing and the pass goes on as before."
+  (forge-retry! [s docs]
+    "Offer these change documents again at the next `forge-poll`,
+    read afresh by `:repository` and `:number`."))
+
+(defprotocol ForgeCommit
+  "A source that keeps its place across boots, told what became of the
+  poll it answered (ticket fc3a5a40). A process that stops between the
+  poll and the row writes must not have stored a cursor past pull
+  requests whose rows were never written, so the place is stored only
+  when the pass says the rows are. A protocol of its own, so a source
+  that does not implement it stores nothing and the pass goes on as
+  before."
+  (forge-commit! [s repositories]
+    "The rows of these repositories are written: store each one's
+    cursor and the pull requests it still has to read again.")
+  (forge-forget! [s]
+    "The rows of the last `forge-poll` were not written: go back to
+    the place of the last commit, so the next poll answers them again."))
+
+(defprotocol ForgeBudget
+  "The forge's rate limit as the source last heard it (ticket
+  cdba1f6a). A protocol of its own: a source that does not implement it
+  has no budget to print and is never held."
+  (forge-budget [s]
+    "Answers {:remaining n :limit n :reset instant :unchanged n
+    :held-until instant}, each absent when the forge has not said it.
+    `:unchanged` counts the answers of this pass the forge did not
+    count against the limit. `:held-until` stands while the source
+    holds every call for a spent limit, and no read of the forge
+    answers before that instant. Never throws."))
 
 ;; ── the build-state table ───────────────────────────────────────────
 
@@ -457,6 +499,119 @@
           (counted census :refused))))
     census
     changes)))
+
+;; ── the pass ────────────────────────────────────────────────────────
+
+(defn budget-of
+  "What the source last heard of the forge's rate limit, or nothing
+  from a source that keeps no budget (ticket cdba1f6a)."
+  [source]
+  (when (satisfies? ForgeBudget source)
+    (forge-budget source)))
+
+(defn retry-refused!
+  "Hand the refused documents back to a source that retries them."
+  [source docs log-fn]
+  (when (and (seq docs) (satisfies? ForgeRetry source))
+    (try (forge-retry! source docs)
+         (catch Exception e
+           (log-fn "the refused pull requests could not be offered again ("
+                   (ex-message e) ")")))))
+
+(defn commit-poll!
+  "Tell a source that keeps its place that the rows of these
+  repositories are written (ticket fc3a5a40)."
+  [source repositories log-fn]
+  (when (satisfies? ForgeCommit source)
+    (try (forge-commit! source repositories)
+         (catch Exception e
+           (log-fn "the source's place could not be stored ("
+                   (ex-message e) ")")))))
+
+(defn forget-poll!
+  "Tell a source that keeps its place that the poll's rows were not
+  written, so it answers them again (ticket fc3a5a40)."
+  [source log-fn]
+  (when (satisfies? ForgeCommit source)
+    (try (forge-forget! source)
+         (catch Exception e
+           (log-fn "the source could not go back to its stored place ("
+                   (ex-message e) ")")))))
+
+(defn- warn-line [& parts]
+  (binding [*out* *err*] (println (apply str parts))))
+
+(defn pass!
+  "One pass of a forge (ticket 75db2ef8): poll, run the change pass,
+  store the source's place or send it back, and call the factory's own
+  steps between. It requires no engine and no factory namespace.
+
+  config:
+  :source          the ForgeSource
+  :hand            the `change` kind's doors, as `change-pass!` takes them
+  :change-pass!    optional (fn [changes census refused]) → census, run
+                   in place of `change-pass!` over `:hand`
+  :census          the census the pass starts from (default {})
+  :log-fn          takes the parts of one line (default *err*)
+  :poll-failed     optional (fn [e]): the poll threw, and the throw
+                   goes on after it
+  :before-changes  optional (fn [census poll]) → census, before the
+                   change pass
+  :after-changes   optional (fn [census poll]) → census, after the
+                   source's place is stored
+  :always          optional (fn [census poll held-until]) → census, run
+                   whether the steps above ran, were held or threw
+  :report          optional (fn [census poll]), given the census last
+
+  `poll` is what `forge-poll` answered. A spent rate limit (ticket
+  cdba1f6a) holds every step from `:before-changes` to
+  `:after-changes`, so nothing there asks the forge. A pass that was
+  held or threw before its rows were written sends the source back
+  (ticket fc3a5a40), and a throw is thrown again only after `:always`
+  ran (ticket c4bac627). → the census, with `:repositories`,
+  `:complete?`, `:calls` and the source's budget."
+  [{:keys [source hand census log-fn poll-failed before-changes
+           after-changes always report]
+    run-changes :change-pass!}]
+  (let [log-fn (or log-fn warn-line)
+        run-changes (or run-changes
+                        (fn [changes census refused]
+                          (change-pass! hand changes census log-fn refused)))
+        poll (try (forge-poll source)
+                  (catch Exception e
+                    (when poll-failed (poll-failed e))
+                    (throw e)))
+        {:keys [changes repositories complete? answered]} poll
+        census (assoc (or census {})
+                      :repositories (count repositories)
+                      :complete? (boolean complete?))
+        held (:held-until (budget-of source))
+        committed (volatile! false)
+        [census thrown]
+        (if held
+          [census nil]
+          (try
+            (let [census (cond-> census
+                           before-changes (before-changes poll))
+                  refused (volatile! [])
+                  census (run-changes changes census refused)
+                  _ (retry-refused! source @refused log-fn)
+                  ;; the change rows are written and the refused ones
+                  ;; handed back, so the source may store its place
+                  _ (do (commit-poll! source (or answered repositories)
+                                      log-fn)
+                        (vreset! committed true))
+                  census (cond-> census
+                           after-changes (after-changes poll))]
+              [census nil])
+            (catch Exception e [census e])))
+        _ (when-not @committed (forget-poll! source log-fn))
+        census (cond-> census always (always poll held))
+        _ (when thrown (throw thrown))
+        census (merge (assoc census :calls (forge-calls source))
+                      (budget-of source))]
+    (when report (report census poll))
+    census))
 
 ;; ── the conformance suite ───────────────────────────────────────────
 

@@ -154,31 +154,23 @@
   (forge-rerun! [s repository run-id]
     "Re-run the failed jobs of one run. Throws when the forge refuses."))
 
-(defprotocol ForgeRetry
+(def ForgeRetry
   "The pull requests whose rows the change pass refused, handed back
-  to the source (ticket 365043a6). The poll's cursor has already moved
-  past their stamps, so a merged pull request that never moves again
-  would never be offered again, and its row would keep a head it no
-  longer has. A protocol of its own, so a source that does not
-  implement it retries nothing and the pass goes on as before."
-  (forge-retry! [s docs]
-    "Offer these change documents again at the next `forge-poll`,
-    read afresh by `:repository` and `:number`."))
+  to the source (ticket 365043a6). The protocol is the kit's
+  (`factorykit.forge/ForgeRetry`, ticket 75db2ef8), under the name this
+  namespace always gave it."
+  kit/ForgeRetry)
 
-(defprotocol ForgeCommit
+(def forge-retry! kit/forge-retry!)
+
+(def ForgeCommit
   "A source that keeps its place across boots, told what became of the
-  poll it answered (ticket fc3a5a40). A process that stops between the
-  poll and the row writes must not have stored a cursor past pull
-  requests whose rows were never written, so the place is stored only
-  when the pass says the rows are. A protocol of its own, so a source
-  that does not implement it stores nothing and the pass goes on as
-  before."
-  (forge-commit! [s repositories]
-    "The rows of these repositories are written: store each one's
-    cursor and the pull requests it still has to read again.")
-  (forge-forget! [s]
-    "The rows of the last `forge-poll` were not written: go back to
-    the place of the last commit, so the next poll answers them again."))
+  poll it answered (ticket fc3a5a40). The protocol is the kit's
+  (`factorykit.forge/ForgeCommit`, ticket 75db2ef8)."
+  kit/ForgeCommit)
+
+(def forge-commit! kit/forge-commit!)
+(def forge-forget! kit/forge-forget!)
 
 (defprotocol ForgeDeploy
   "Whether a merged pull request is in a commit of its base, for the
@@ -217,17 +209,13 @@
     when the check names no job. Throws when the forge does not
     answer."))
 
-(defprotocol ForgeBudget
+(def ForgeBudget
   "The forge's rate limit as the source last heard it (ticket
-  cdba1f6a). A protocol of its own: a source that does not implement it
-  has no budget to print and is never held."
-  (forge-budget [s]
-    "Answers {:remaining n :limit n :reset instant :unchanged n
-    :held-until instant}, each absent when the forge has not said it.
-    `:unchanged` counts the answers of this pass the forge did not
-    count against the limit. `:held-until` stands while the source
-    holds every call for a spent limit, and no read of the forge
-    answers before that instant. Never throws."))
+  cdba1f6a). The protocol is the kit's (`factorykit.forge/ForgeBudget`,
+  ticket 75db2ef8)."
+  kit/ForgeBudget)
+
+(def forge-budget kit/forge-budget)
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
@@ -337,35 +325,6 @@
    (change-pass! eng changes census log-fn (volatile! [])))
   ([eng changes census log-fn refused]
    (kit/change-pass! (hand eng) changes census log-fn refused)))
-
-(defn- retry-refused!
-  "Hand the refused documents back to a source that retries them."
-  [source docs log-fn]
-  (when (and (seq docs) (satisfies? ForgeRetry source))
-    (try (forge-retry! source docs)
-         (catch Exception e
-           (log-fn "the refused pull requests could not be offered again ("
-                   (ex-message e) ")")))))
-
-(defn- commit-poll!
-  "Tell a source that keeps its place that the rows of these
-  repositories are written (ticket fc3a5a40)."
-  [source repositories log-fn]
-  (when (satisfies? ForgeCommit source)
-    (try (forge-commit! source repositories)
-         (catch Exception e
-           (log-fn "the source's place could not be stored ("
-                   (ex-message e) ")")))))
-
-(defn- forget-poll!
-  "Tell a source that keeps its place that the poll's rows were not
-  written, so it answers them again (ticket fc3a5a40)."
-  [source log-fn]
-  (when (satisfies? ForgeCommit source)
-    (try (forge-forget! source)
-         (catch Exception e
-           (log-fn "the source could not go back to its stored place ("
-                   (ex-message e) ")")))))
 
 ;; ── the red runs ────────────────────────────────────────────────────
 
@@ -2612,13 +2571,6 @@
 ;; alone, so the log carries one transition when a repository goes dark
 ;; and one when it comes back.
 
-(defn- budget-of
-  "What the source last heard of the forge's rate limit, or nothing
-  from a source that keeps no budget (ticket cdba1f6a)."
-  [source]
-  (when (satisfies? ForgeBudget source)
-    (forge-budget source)))
-
 (defn- source-note-pass!
   [eng refusals answered census log-fn]
   (let [answered (set answered)]
@@ -2788,75 +2740,57 @@
         log-fn (or log-fn warn!)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    (let [{:keys [changes checks repositories complete? answered refusals]}
-          ;; a poll that throws is a pass that ran (ticket b53f78ac): the
-          ;; stamp says the loop beats, and the warning says what failed
-          (try (forge-poll source)
-               (catch Exception e
-                 (stamp-pass! eng (map #(get-in % [:data :repository])
-                                       (bench/policies eng :active))
-                              log-fn)
-                 (throw e)))
-          census (assoc fresh-census
-                        :repositories (count repositories)
-                        :complete? (boolean complete?))
-          ;; a spent rate limit holds the whole pass (ticket cdba1f6a):
-          ;; nothing below may ask the forge, and a row whose forge was
-          ;; not read is not moved, noted or failed
-          held (:held-until (budget-of source))
-          committed (volatile! false)
-          ;; the base pass runs whatever a pass before it did (ticket
-          ;; c4bac627): a throw above it is thrown again only after
-          ;; every base was read
-          [census thrown]
-          (if held
-            [census nil]
-            (try
-              (let [census (source-note-pass! eng refusals answered census
-                                              log-fn)
-                    refused (volatile! [])
-                    census (change-pass! eng changes census log-fn refused)
-                    _ (retry-refused! source @refused log-fn)
-                    ;; the change rows are written and the refused ones
-                    ;; handed back, so the source may store its place
-                    ;; (ticket fc3a5a40)
-                    _ (do (commit-poll! source (or answered repositories)
-                                        log-fn)
-                          (vreset! committed true))
-                    census (unknown-pass! eng source changes census log-fn)
-                    read-checks (head-reader source)
-                    census (run-pass! eng source
-                                      (into (vec checks)
-                                            (live-reds eng read-checks checks
-                                                       log-fn))
-                                      census log-fn)
-                    census (stale-pass! eng changes census log-fn)
-                    census (settled-pass! eng census log-fn)
-                    census (label-pass! eng source census log-fn)
-                    census (failing-pass! eng source read-checks census
-                                          log-fn)
-                    census (staleness-pass! eng source read-checks census
-                                            log-fn)
-                    census (adoption-note-pass! eng source census log-fn)
-                    _ (sweep-reader-changes! eng log-fn)]
-                [census nil])
-              (catch Exception e [census e])))
-          ;; a pass that was held or threw before its rows were written
-          ;; sends the source back, so the next poll answers them again
-          _ (when-not @committed (forget-poll! source log-fn))
-          ;; the stamp is written whatever the two passes above it did
-          ;; (ticket b53f78ac): a pass that threw there still beat
-          census (try
-                   (floor-pass! eng
-                                (if held
-                                  census
-                                  (base-pass! eng source census log-fn))
-                                log-fn)
-                   (finally (stamp-pass! eng repositories log-fn)))
-          _ (when thrown (throw thrown))
-          census (merge (assoc census :calls (forge-calls source))
-                        (budget-of source))]
-      (log-fn
+    ;; the poll, the rate-limit hold, the change pass and the source's
+    ;; place are the kit's (`factorykit.forge/pass!`, ticket 75db2ef8);
+    ;; this factory's own steps are handed to it as functions
+    (kit/pass!
+     {:source source
+      :census fresh-census
+      :log-fn log-fn
+      :change-pass! (fn [changes census refused]
+                      (change-pass! eng changes census log-fn refused))
+      ;; a poll that throws is a pass that ran (ticket b53f78ac): the
+      ;; stamp says the loop beats, and the warning says what failed
+      :poll-failed (fn [_]
+                     (stamp-pass! eng (map #(get-in % [:data :repository])
+                                           (bench/policies eng :active))
+                                  log-fn))
+      :before-changes (fn [census {:keys [refusals answered]}]
+                        (source-note-pass! eng refusals answered census
+                                           log-fn))
+      :after-changes
+      (fn [census {:keys [changes checks]}]
+        (let [census (unknown-pass! eng source changes census log-fn)
+              read-checks (head-reader source)
+              census (run-pass! eng source
+                                (into (vec checks)
+                                      (live-reds eng read-checks checks
+                                                 log-fn))
+                                census log-fn)
+              census (stale-pass! eng changes census log-fn)
+              census (settled-pass! eng census log-fn)
+              census (label-pass! eng source census log-fn)
+              census (failing-pass! eng source read-checks census log-fn)
+              census (staleness-pass! eng source read-checks census
+                                      log-fn)
+              census (adoption-note-pass! eng source census log-fn)]
+          (sweep-reader-changes! eng log-fn)
+          census))
+      ;; the base pass runs whatever a pass before it did (ticket
+      ;; c4bac627), and the stamp is written whatever the two passes
+      ;; above it did (ticket b53f78ac): a pass that threw there still
+      ;; beat
+      :always (fn [census {:keys [repositories]} held]
+                (try
+                  (floor-pass! eng
+                               (if held
+                                 census
+                                 (base-pass! eng source census log-fn))
+                               log-fn)
+                  (finally (stamp-pass! eng repositories log-fn))))
+      :report
+      (fn [census {:keys [changes]}]
+       (log-fn
        (note-census!
         eng
         (str
@@ -2908,8 +2842,7 @@
                 (str ", every call held until " until
                      ": the forge's rate limit is spent"))
               (when-not (or (:complete? census) (:held-until census))
-                ", and a repository did not answer — the cursor stands"))))
-      census)))
+                ", and a repository did not answer — the cursor stands")))))})))
 
 ;; ── the cadence ─────────────────────────────────────────────────────
 
