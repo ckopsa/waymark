@@ -2064,7 +2064,52 @@
       (testing "a run that finds every row held is handed none, and told to stop"
         (is (false? (:isError r3)) (text-of r3))
         (is (empty? (get-in third [:walk :rows])))
-        (is (str/includes? (str (:note third)) "nothing for you to walk"))))))
+        (is (nil? (:sitting third)) "no sitting is opened for it (ticket 471d69dd)")
+        (is (str/includes? (str (:note third)) "no row was free"))
+        (is (not (str/includes? (str (:note third)) "Walk the row below"))
+            "the every-row-held note only, not the named-row one")))))
+
+(deftest a-fire-whose-every-row-is-held-opens-no-sitting
+  ;; Ticket 471d69dd: two qa fires 26 s apart opened two sittings on one
+  ;; change, and the second walked nothing. The second fire is told no
+  ;; row was free, names the sitting that holds it, and opens none.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        text (wire/write-json {:kind "post" :id (str (:id gas))
+                               :action "file" :from "queued" :to "queued"})
+        sit-fired! (fn [run]
+                     (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                                   ((:now-fn eng)) text)
+                           [sid _] (initialize! h)
+                           r (tool h (with-session sid) "waymark_sit"
+                                   {:key k :seat "post-clerk" :session run})]
+                       [r (doc-of r)]))
+        open-sittings (fn []
+                        (let [st (:storage eng)]
+                          (store/with-tx st
+                            (fn [tx]
+                              (store/query-rows st tx :sitting {:state :open}
+                                                {:limit 50})))))
+        [r1 first-run] (sit-fired! "run-first")
+        [r2 second-run] (sit-fired! "run-second")]
+    (testing "the first fire sits and is handed the row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (some? (:sitting first-run)))
+      (is (= [(str (:id gas))] (mapv :id (get-in first-run [:walk :rows])))))
+    (testing "the second fire opens no sitting, and says no row was free"
+      (is (false? (:isError r2)) (text-of r2))
+      (is (nil? (:sitting second-run)))
+      (is (nil? (:walk second-run)))
+      (is (str/includes? (str (:note second-run)) "no row was free"))
+      (is (str/includes? (str (:note second-run)) (str (:sitting first-run)))
+          "the note names the sitting that holds the row")
+      (is (not (str/includes? (str (:note second-run)) "Walk the row below"))))
+    (testing "exactly one sitting is open"
+      (is (= [(str (:sitting first-run))]
+             (mapv #(str (:id %)) (open-sittings)))))))
 
 (deftest a-fire-that-names-a-row-past-the-first-page-walks-that-row
   ;; Ticket 59582777: the named row was looked for on the queue's first

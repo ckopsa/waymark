@@ -3372,6 +3372,11 @@
   claimed or stuck rows has its free rows on a later one."
   10)
 
+(def ^:private own-held-reason
+  "Why a walk withholds a row another open sitting of the SAME seat
+  holds: the one reason a sit that finds no row free defers on."
+  "another open sitting of this seat holds it")
+
 (defn- walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
@@ -3572,7 +3577,7 @@
 
                                            (contains? claimed? id)
                                            {"id" id
-                                            "reason" "another open sitting of this seat holds it"}))))
+                                            "reason" own-held-reason}))))
                                queue)]
             (cond-> {"kind" walk
                      "charter" (str (get-in seat [:data :charter]))
@@ -3838,6 +3843,37 @@
           (:claimed? claim) (said walk)
           (< n (long claim-tries)) (recur (inc n) seen)
           :else (said (some-> walk (assoc "rows" []))))))))
+
+(defn- held-by-own-sittings
+  "The ids of the open sittings of this seat that hold every row the
+  sit would walk, or nil while any row is free. Read BEFORE the
+  sitting opens (ticket 471d69dd): a fire whose every row another run
+  of the seat holds opens no sitting, so it spends no wake and leaves
+  no empty sitting behind. A walk a closed sitting's grace or another
+  seat's sitting emptied is not this, and sits as it always did."
+  [eng call sitter seat named]
+  (let [{:keys [walk all-held?]}
+        (claimed-walk! eng call (sitter-session eng sitter nil) seat nil named)
+        withheld (get walk "withheld")
+        reasons (into #{} (map #(get % "reason")) withheld)]
+    (when (and all-held?
+               (contains? reasons own-held-reason)
+               (not (contains? reasons graced-reason))
+               (not (contains? reasons other-seat-reason)))
+      (not-empty
+       (seats/holding-sittings
+        eng (str (:id seat))
+        (into [] (comp (filter #(= own-held-reason (get % "reason")))
+                       (map #(get % "id")))
+              withheld))))))
+
+(defn- held-by-note
+  "What a fire that opened no sitting is told: every row is held, by
+  the sittings named, and the run stops at once."
+  [holders]
+  (str "Every open row of your walk is held by another open sitting ("
+       (str/join ", " holders) "), so no row was free and no sitting "
+       "was opened for you. Say so and stop; there is no sitting to close."))
 
 
 ;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
@@ -5225,8 +5261,15 @@
                           :acts-for person)
             ;; g' · the sitting the router counts against, opened here
             ;; because nobody else opens one for a keyed session
-            sitting (or (second resit)
-                        (open-sitting! eng sid sitter grant seat model-row harness))
+            ;; g' · … unless every row is held: a fire whose rows another
+            ;; open sitting of the seat holds opens none (ticket 471d69dd).
+            ;; A standing key and a re-sit sit as they always did
+            held-by (when (and fired? (not resit)
+                               (not (halted-of eng seat named now)))
+                      (held-by-own-sittings eng call sitter seat named-row))
+            sitting (when-not held-by
+                      (or (second resit)
+                          (open-sitting! eng sid sitter grant seat model-row harness)))
             ;; … and the spent firing's key leaves its trace on the
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
@@ -5263,8 +5306,9 @@
                    (seats/issue-feed-token! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
-            _ (bind-session! eng sid {:seat seat-id :sitter sitter
-                                      :bound-at now :sitting (:id sitting)})
+            _ (when-not held-by
+                (bind-session! eng sid {:seat seat-id :sitter sitter
+                                        :bound-at now :sitting (:id sitting)}))
             ;; h' · the fuel wall. A seat whose week is spent walks
             ;; nothing (the router scopes its grant to nothing), so the
             ;; sit says so in words and hands no walk, no change and no
@@ -5285,7 +5329,7 @@
             ;; closes, claimed in the transaction that found them free
             {walk :walk named-held? :named-held? named-withheld? :named-withheld?
              all-held? :all-held?}
-            (when-not halted
+            (when-not (or halted held-by)
               (claimed-walk! eng call sitter-sees seat sitting named-row))
             ;; … and a sitting the walk handed nothing is stamped as
             ;; such — no rows free, or an empty queue — so seat health
@@ -5315,11 +5359,12 @@
             ;; engine finds or mints for a seat that walks a queue of
             ;; asks (R-12.32). The sentence is what the seat is told
             ;; when there is no change and therefore no bench.
-            [change change-note] (when-not halted
+            [change change-note] (when-not (or halted held-by)
                                    (change-of-sitting eng seat walk))
             ;; i'' · the bench, for a seat whose work is the code: the
             ;; worktree is made before this answer leaves (R-12.29)
-            bench (when-not halted (bench-of eng gate-rpc seat change))
+            bench (when-not (or halted held-by)
+                    (bench-of eng gate-rpc seat change))
             ;; … and the worktree it made, on the binding: every
             ;; bench call after this one carries its repository and
             ;; its branch without the seat copying them (`bench-stamped`)
@@ -5334,7 +5379,7 @@
                    (change-said eng call sitter-sees change))
             ;; i'''' · the app's own sections, after the walk is chosen
             ;; (`sit-sections-key`): nothing for a seat at a wall
-            sections (when-not halted (app-sections eng seat walk))]
+            sections (when-not (or halted held-by) (app-sections eng seat walk))]
         ;; j · what the firing reads next. The walk rides as the wire
         ;; wrote it — a route's own document, string keys and all —
         ;; so the kebab→snake boundary cannot rewrite a key inside a
@@ -5356,10 +5401,11 @@
                               seats/default-mode)
                     :note (str "You sit in `" named "`. "
                                (cond halted halted-note
+                                     held-by (held-by-note held-by)
                                      all-held? every-row-held-note
                                      walk walk-note
                                      :else no-walk-note)
-                               (when named-held?
+                               (when (and named-held? (not all-held?))
                                  (named-row-held-note named-row))
                                (when named-withheld?
                                  (named-row-withheld-note named-row))
