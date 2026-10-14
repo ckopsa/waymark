@@ -130,17 +130,36 @@
       (assoc (some (fn [[_ s]] (when (= n (:seat s)) s)) pairs)
              :holds (get holds n)))))
 
-(defn- verdict
-  "The one line. A seat a model sits in comes first, a woken one before
-  one on a cadence; then a source; then a person; then nobody."
-  [kind state doors for-words age-words held]
+(defn- choose
+  "Who holds the row, as the verdict names it (ticket ca68c559): a seat
+  a model sits in first, a woken one before one on a cadence; then a
+  source; then a person; then nobody. Not the first door of `next`:
+  many of those are held by nobody while a later one is held."
+  [doors]
   (let [hs (holders doors)
-        models (remove :person hs)
-        pick (or (first (filter (comp seq :woken_by) models))
-                 (first (filter :cadence_seconds models))
-                 (first models))
-        person (first (filter :person hs))
-        source (first (filter #(= "source" (:held_by %)) doors))]
+        models (remove :person hs)]
+    {:pick (or (first (filter (comp seq :woken_by) models))
+               (first (filter :cadence_seconds models))
+               (first models))
+     :person (first (filter :person hs))
+     :source (first (filter #(= "source" (:held_by %)) doors))}))
+
+(defn- holder-of
+  "The choice as the block carries it: {type name}, type one of seat,
+  source, person or nobody; nil for a state a row rests in."
+  [doors]
+  (when doors
+    (let [{:keys [pick person source]} (choose doors)]
+      (cond
+        pick {:type "seat" :name (:seat pick)}
+        source {:type "source" :name (:source source)}
+        person {:type "person" :name (:seat person)}
+        :else {:type "nobody"}))))
+
+(defn- verdict
+  "The one line, naming the holder `choose` picks."
+  [kind state doors for-words age-words held]
+  (let [{:keys [pick person source]} (choose doors)]
     (str
      (cond
        (nil? doors)
@@ -190,7 +209,8 @@
         age-words (when secs
                     (str ", " (span secs)
                          (when expected (str " of " (span expected)))))
-        held (held-by data)]
+        held (held-by data)
+        holder (holder-of doors)]
     (cond-> {:state state
              :since (cond-> {}
                       at (assoc :at (str at))
@@ -198,6 +218,7 @@
                       expected (assoc :expected_seconds expected))
              :next (or doors [])
              :verdict (verdict kind state doors for-words age-words held)}
+      holder (assoc :holder holder)
       (seq held) (assoc :held_by held))))
 
 (defn for-row

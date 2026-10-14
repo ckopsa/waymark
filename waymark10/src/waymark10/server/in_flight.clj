@@ -14,9 +14,8 @@
   gives it, and
 
   holder            `seat:<name>`, `source:<name>`, `person` or
-                    `nobody`, read from `waiting_on.next` in the order
-                    the verdict reads it: a seat a model sits in, then
-                    a source, then a person
+                    `nobody`: the holder the verdict names, as
+                    `waiting_on.holder` carries it (ticket ca68c559)
   age_seconds       since the row's last write, as the live cracks pass
                     reads it, so what this calls overdue is what that
                     pass calls aged
@@ -64,21 +63,16 @@
     :else nil))
 
 (defn holder
-  "Who holds a row, from its `waiting_on.next`: the seat a model sits in
-  that the verdict names (a woken one before one on a cadence), else a
-  source, else a person when only a person holds a door, else nobody."
-  [doors]
-  (let [seats (for [d doors, s (:seats d)] s)
-        models (remove :person seats)
-        pick (or (first (filter (comp seq :woken_by) models))
-                 (first (filter :cadence_seconds models))
-                 (first models))
-        source (first (filter #(= "source" (:held_by %)) doors))]
-    (cond
-      pick (str "seat:" (:seat pick))
-      source (str "source:" (:source source))
-      (seq seats) "person"
-      :else "nobody")))
+  "Who holds a row: the holder its `waiting_on` block's verdict names
+  (`waiting_on.holder`), as a group token. nobody only when the verdict
+  finds no seat, source or person, as the cracks audit does."
+  [w]
+  (let [{:keys [type name]} (:holder w)]
+    (case type
+      "seat" (str "seat:" name)
+      "source" (str "source:" name)
+      "person" "person"
+      "nobody")))
 
 (defn open-states
   "The states of a kind whose rows are in flight: every state that is
@@ -109,7 +103,7 @@
                  :id (str (:id row))
                  :summary summary
                  :state (text (:state row))
-                 :holder (holder (:next w))
+                 :holder (holder w)
                  :age_seconds age
                  :expected_seconds expected
                  :overdue ratio
