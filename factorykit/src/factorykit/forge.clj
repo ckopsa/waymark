@@ -22,9 +22,13 @@
   moved. It requires no engine. The factory hands it the `change`
   kind's doors as functions, with its own principal closed into them.
 
+  THE RED RUNS are `runs-pass!` (ticket efff5d2e): every failed check
+  becomes a `ci_run` row at red, and a red row no seat can answer walks
+  `supersede`. The factory hands it the `ci_run` kind's doors.
+
   THE PASS is `pass!` (ticket 75db2ef8): the poll, the rate-limit hold,
-  the change pass and the source's place, with the factory's own steps
-  handed in as functions."
+  the change pass, the source's place and the red runs, with the
+  factory's own steps handed in as functions."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -500,6 +504,188 @@
     census
     changes)))
 
+;; ── the red runs ────────────────────────────────────────────────────
+;;
+;; Lifted from factory10's `sources/forge.clj` (ticket efff5d2e). The
+;; factory hands the `ci_run` kind's doors as functions, as it hands
+;; the `change` kind's to the change pass:
+;;
+;;   :find-run        (fn [run-id]) → the `ci_run` row with that run
+;;                    id, or nil
+;;   :find-change     (fn [change-id]) → the `change` row with that
+;;                    `change_id`, or nil
+;;   :change-by-id    (fn [row-id]) → the `change` row with that id, or nil
+;;   :reds            (fn [where limit]) → up to `limit` `ci_run` rows at
+;;                    red that match `where`, oldest first
+;;   :create!         (fn [fields]) → the row the create door minted
+;;   :invoke!         (fn [row-id door input]) → the row after the door
+;;   :red-conclusions the conclusions that mint a red run; GitHub's reds
+;;                    when the hand names none
+;;   :live-reds       optional (fn [checks]) → the red check documents
+;;                    the poll did not carry
+;;
+;; A door that refuses throws.
+
+(def ci-run-create-fields
+  "The `ci_run` create door's whole vocabulary. `verdict`, `remedy`,
+  `pushed_label` and `labelled_at` are absent on purpose: a row born
+  with a verdict is a row that skipped the walk."
+  [:run_id :change :head_sha :check_name :conclusion :log_excerpt
+   :log_note :started_at :finished_at :url])
+
+(def log-note-chars
+  "How long `log_note` may be. One sentence about why there is no
+  log, at the same ceiling a remedy sentence has: a plain text field
+  wider than that reads as prose and the usability battery says so.
+  A forge's error message can run past it, so the note is cut here
+  rather than refused a row."
+  240)
+
+(def stale-scan-limit
+  "How many red runs of one change one pass reads for the runs of a
+  head that moved."
+  50)
+
+(def red-scan-limit
+  "How many red runs one pass reads for the runs whose change ended,
+  oldest first. A ceiling above the queue as it stood when the sweep
+  was written (135 rows, ticket ebe54a72), so one pass clears it."
+  200)
+
+(defn mint-run!
+  "One failed check run → one `ci_run` row at red, with the log tail
+  on it and a ref to the change it ran on."
+  [runs source check change-row census log-fn]
+  (let [{:keys [excerpt note]} (try (forge-log-tail source check)
+                                    (catch Exception e
+                                      {:excerpt nil
+                                       :note (str "the log could not be read ("
+                                                  (ex-message e) ")")}))
+        ;; THE NOTE HAS A FIELD OF ITS OWN (bead waymark-fp62.6.9). A
+        ;; sentence written inside `log_excerpt` reads as the end of a
+        ;; build log to the next reader, and the classifier reasons
+        ;; about it as one. So the excerpt stays empty and `log_note`
+        ;; says why it is empty. `present` drops a nil, which is what
+        ;; makes each of the two absent when the other answers.
+        blank? (str/blank? (str excerpt))
+        body (present (assoc check
+                             :change (str (:id change-row))
+                             :log_excerpt (when-not blank? excerpt)
+                             :log_note (when (and blank? note)
+                                         (subs (str note) 0
+                                               (min (count (str note))
+                                                    log-note-chars))))
+                      ci-run-create-fields)]
+    (try
+      ((:create! runs) body)
+      (counted census :runs-minted)
+      (catch Exception e
+        (log-fn "the check run " (:run_id check) " was refused a row ("
+                (ex-message e) ")")
+        (counted census :refused)))))
+
+(defn run-pass!
+  "Every finished failure the forge answered → a red row, once. A run
+  on a head the change no longer carries mints NOTHING and is counted
+  as skipped: the head moved under it while the pass was reading."
+  [runs source checks census log-fn]
+  (let [reds (or (:red-conclusions runs) (raw-states :github :red))]
+    (reduce
+     (fn [census check]
+       (cond
+         (not (contains? reds (str (:conclusion check))))
+         census
+
+         (some? ((:find-run runs) (:run_id check)))
+         (counted census :runs-known)
+
+         :else
+         (if-some [change-row ((:find-change runs) (:change_id check))]
+           (if (= (str (:head_sha check))
+                  (str (get-in change-row [:data :head_sha])))
+             (mint-run! runs source check change-row census log-fn)
+             (counted census :runs-skipped))
+           (counted census :runs-orphan))))
+     census
+     checks)))
+
+(defn- supersede-run!
+  "One red row → the `supersede` door. A row the engine refuses is
+  counted and skipped: the next pass offers it again."
+  [runs census row log-fn]
+  (try
+    ((:invoke! runs) (str (:id row)) :supersede {})
+    (counted census :runs-superseded)
+    (catch Exception e
+      (log-fn "the red run " (get-in row [:data :run_id])
+              " was refused the supersede door (" (ex-message e) ")")
+      (counted census :refused))))
+
+(defn stale-reds
+  "The red rows of this change that ran on a head it no longer
+  carries. A run of a dead commit is a run nobody can answer, so
+  these are the rows the `supersede` door is for."
+  [runs change-row]
+  (let [head (str (get-in change-row [:data :head_sha]))]
+    (filterv #(not= head (str (get-in % [:data :head_sha])))
+             ((:reds runs) {:change (str (:id change-row))}
+                           stale-scan-limit))))
+
+(defn stale-pass!
+  "Every red run of a head its change no longer carries → the
+  `supersede` door. The row leaves the classifier's queue and the
+  transition says it left with no verdict."
+  [runs changes census log-fn]
+  (reduce
+   (fn [census doc]
+     (if-some [change-row ((:find-change runs) (:change_id doc))]
+       (reduce #(supersede-run! runs %1 %2 log-fn)
+               census
+               (stale-reds runs change-row))
+       census))
+   census
+   changes))
+
+(defn settled-reds
+  "The red rows no seat can answer, whatever the forge listed this
+  pass (ticket ebe54a72): a run whose change is merged or closed, and
+  a run on a head its change no longer carries. `stale-reds` reads only
+  the changes one pass was answered, so a change that ended before its
+  runs were revisited kept them red for good. Oldest first, so the
+  legacy rows go before the new ones. A run that names no change this
+  house holds is left where it is."
+  [runs]
+  (filterv
+   (fn [row]
+     (when-some [change-row ((:change-by-id runs)
+                             (get-in row [:data :change]))]
+       (let [head (str (get-in change-row [:data :head_sha]))]
+         (or (contains? #{:merged :closed} (keyword (:state change-row)))
+             (and (not (str/blank? head))
+                  (not= head (str (get-in row [:data :head_sha]))))))))
+   ((:reds runs) {} red-scan-limit)))
+
+(defn settled-pass!
+  "Every red run of a change that is merged or closed, or of a head
+  its change no longer carries → the `supersede` door, for the rows
+  `stale-pass!` never meets."
+  [runs census log-fn]
+  (reduce #(supersede-run! runs %1 %2 log-fn) census (settled-reds runs)))
+
+(defn runs-pass!
+  "The red runs of one pass, through the factory's `ci_run` hand: the
+  checks the poll carried and the hand's `:live-reds` minted, the runs
+  of a head that moved superseded, then every run no seat can answer.
+  → the census, with `:runs-minted`, `:runs-known`, `:runs-skipped`,
+  `:runs-orphan`, `:runs-superseded` and `:refused` counted."
+  [runs source {:keys [changes checks]} census log-fn]
+  (let [checks (into (vec checks)
+                     (when-some [live (:live-reds runs)] (live checks)))]
+    (as-> census census
+      (run-pass! runs source checks census log-fn)
+      (stale-pass! runs changes census log-fn)
+      (settled-pass! runs census log-fn))))
+
 ;; ── the pass ────────────────────────────────────────────────────────
 
 (defn budget-of
@@ -559,19 +745,23 @@
                    change pass
   :after-changes   optional (fn [census poll]) → census, after the
                    source's place is stored
+  :runs            optional: the `ci_run` kind's doors, as `runs-pass!`
+                   takes them; the red runs run after `:after-changes`
+  :after-runs      optional (fn [census poll]) → census, after the red
+                   runs
   :always          optional (fn [census poll held-until]) → census, run
                    whether the steps above ran, were held or threw
   :report          optional (fn [census poll]), given the census last
 
   `poll` is what `forge-poll` answered. A spent rate limit (ticket
   cdba1f6a) holds every step from `:before-changes` to
-  `:after-changes`, so nothing there asks the forge. A pass that was
+  `:after-runs`, so nothing there asks the forge. A pass that was
   held or threw before its rows were written sends the source back
   (ticket fc3a5a40), and a throw is thrown again only after `:always`
   ran (ticket c4bac627). → the census, with `:repositories`,
   `:complete?`, `:calls` and the source's budget."
   [{:keys [source hand census log-fn poll-failed before-changes
-           after-changes always report]
+           after-changes runs after-runs always report]
     run-changes :change-pass!}]
   (let [log-fn (or log-fn warn-line)
         run-changes (or run-changes
@@ -602,7 +792,12 @@
                                       log-fn)
                         (vreset! committed true))
                   census (cond-> census
-                           after-changes (after-changes poll))]
+                           after-changes (after-changes poll))
+                  census (if runs
+                           (runs-pass! runs source poll census log-fn)
+                           census)
+                  census (cond-> census
+                           after-runs (after-runs poll))]
               [census nil])
             (catch Exception e [census e])))
         _ (when-not @committed (forget-poll! source log-fn))
