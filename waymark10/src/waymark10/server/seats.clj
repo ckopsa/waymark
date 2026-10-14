@@ -197,13 +197,15 @@
   "What a closed sitting came to (seat health 1, ticket fad586b7): ONE
   value, the first of these that holds, in this order. `sitting-health`
   is the judge, and nothing else writes the field."
-  ["submitted" "stalled" "never_sat" "refused_out" "cut_short" "idle"])
+  ["submitted" "stalled" "never_sat" "refused_out" "completed" "cut_short"
+   "idle"])
 
 (def ^:private outcome-choices
   {"submitted" "Submitted — it submitted a change"
    "stalled" "Stalled — it stalled a change"
    "never_sat" "Never sat — a missed fire, or a run that took no turn"
    "refused_out" "Refused out — its last write was a refusal"
+   "completed" "Completed — it wrote a verdict and closed"
    "cut_short" "Cut short — the hook closed it after a few turns"
    "idle" "Idle — it walked rows and moved nothing"})
 
@@ -1837,6 +1839,9 @@
                   (or (= "missed" closed) (true? (:missed data))
                       (and (zero? turns) (empty? served))) "never_sat"
                   (and refused-last (not recovered)) "refused_out"
+                  ;; a judge's work is its verdict, however few its turns
+                  ;; and whatever its seat declares it delivers (e2a379e0)
+                  (moved? transitions "verdict" "judge") "completed"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
@@ -1862,7 +1867,8 @@
               ;; which law refused it out, beside the outcome; a sitting
               ;; that recovered keeps the record of what refused it
               (or (= "refused_out" outcome)
-                  (and recovered (contains? #{"cut_short" "idle"} outcome)))
+                  (and recovered
+                       (contains? #{"completed" "cut_short" "idle"} outcome)))
               (into (keep (fn [[label v]]
                             (when-some [s (some-> v str not-empty)]
                               (str label ":" s))))
