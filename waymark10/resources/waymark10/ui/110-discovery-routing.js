@@ -156,6 +156,11 @@ async function render() {
     lawStamp(null);
     return renderAccess(view, seq);
   }
+  /* the In flight screen (137): the read's own address, filters and all */
+  if (/^\/api\/-\/in-flight(\?|$)/.test(href)) {
+    lawStamp(null);
+    return renderInFlight(view, href, seq);
+  }
   if (/^\/api\/surfaces\//.test(href)) {
     const {ok, body} = await api(href);
     if (seq !== renderSeq) return;

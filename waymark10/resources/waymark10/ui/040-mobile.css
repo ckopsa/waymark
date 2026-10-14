@@ -3,6 +3,11 @@
   }
   @media (max-width: 900px) { main { margin: 12px auto; padding: 0 10px; } }
   @media (max-width: 600px) {
+    .flight-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .flight-head { flex-direction: column; gap: 2px; }
+    .flight-filters select { flex: 1 1 45%; }
+  }
+  @media (max-width: 600px) {
     header { padding: 8px 10px; gap: 10px; }
     .panel { padding: 12px; }
     h2 { font-size: 17px; }
