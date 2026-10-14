@@ -18,7 +18,9 @@
   | `:mint!` | `(fn [])` → a new ask in draft, at a priority the queue takes, by a person's hand |
   | `:row` | `(fn [id])` → the row as it stands |
   | `:walk!` | `(fn [hand id door input])` → the row after the door; `hand` is `:person` or `:model` (a model acting for nobody), and a refusal throws |
-  | `:end!` | `(fn [id])` ends the ask through one of the factory's ending doors, as a person ends it |"
+  | `:end!` | `(fn [id])` ends the ask through one of the factory's ending doors, as a person ends it |
+  | `:stick!` | `(fn [id])` → the id of a new change born from the ask, standing `stuck` with no pull request |
+  | `:change` | `(fn [id])` → that change as it stands |"
   (:require [clojure.string :as str]))
 
 (set! *warn-on-reflection* true)
@@ -122,13 +124,42 @@
       (not= :open (state-of (row id)))
       (str "the refused " (name review-door) " moved the ask"))))
 
+(defn- a-stuck-change-keeps-its-ask-out-of-the-queue
+  "An ask with a stuck change cannot reach the queue while that change
+  stays stuck (ticket 4b2740db): a groom puts the change back to work,
+  or is refused and leaves the ask in draft. A person's groom is not
+  refused."
+  [{:keys [walk! row mint! stick! change]}]
+  (if-not (and stick! change)
+    "the hand names no :stick! and :change, so no stuck change was made"
+    (first
+     (for [who [:model :person]
+           :let [id (:id (mint!))
+                 cid (stick! id)
+                 refused (refused? #(walk! who id :groom {}))
+                 ask (state-of (row id))
+                 left (state-of (change cid))]
+           :let [says (cond
+                        (and (= :open ask) (= :stuck left))
+                        (str "a " (name who) "'s groom put the ask in the"
+                             " queue beside its stuck change")
+                        (and refused (not= :draft ask))
+                        (str "the refused groom left the ask "
+                             (some-> ask name))
+                        (and refused (= :person who))
+                        "a person's groom of an ask with a stuck change was refused")]
+           :when says]
+       says))))
+
 (def clauses
   "The contract, clause by clause: each judge takes a hand and answers
   nil when the ask keeps the clause, or a sentence when it does not."
   [[:the-machine the-machine]
    [:groom-lands-in-the-queue groom-lands-in-the-queue]
    [:an-ending-releases-what-it-blocked an-ending-releases-what-it-blocked]
-   [:the-link-doors-open-only-in-the-change the-link-doors-open-only-in-the-change]])
+   [:the-link-doors-open-only-in-the-change the-link-doors-open-only-in-the-change]
+   [:a-stuck-change-keeps-its-ask-out-of-the-queue
+    a-stuck-change-keeps-its-ask-out-of-the-queue]])
 
 (defn failures
   "Every clause, each on a fresh hand from `new-hand`. → the clauses the
