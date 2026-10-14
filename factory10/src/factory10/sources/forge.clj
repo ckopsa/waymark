@@ -97,6 +97,7 @@
             [factory10.mirror :as mirror]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
+            [factorykit.forge :as kit]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store])
@@ -125,52 +126,21 @@
 
 ;; ── the seam ────────────────────────────────────────────────────────
 
-(defprotocol ForgeSource
-  "One forge, already speaking the factory's own documents. Six
-  verbs: what moved, one log tail, one label, the call count the
-  census prints, the checks on one head, and the head of a base
-  branch with its checks."
-  (forge-poll [s]
-    "→ {:changes [change-doc …] :checks [check-doc …]
-        :repositories [name …] :complete? bool}.
+(def ForgeSource
+  "One forge, already speaking the factory's own documents. The
+  protocol is the kit's (`factorykit.forge/ForgeSource`, ticket
+  6b716e98), under the name this namespace always gave it, and its six
+  verbs below are the kit's own functions: what moved, one log tail,
+  one label, the call count the census prints, the checks on one head,
+  and the head of a base branch with its checks."
+  kit/ForgeSource)
 
-    A change document carries the `change` kind's own fields plus
-    `:forge_state` (\"open\", \"merged\" or \"closed\"). A check
-    document carries the `ci_run` kind's own fields plus
-    `:change_id` (the change it ran on) and whatever the forge needs
-    to find the log later. `:complete?` is false when a repository
-    did not answer; the source holds that repository's cursor where it
-    was, and moves the cursor of each one that answered. A source
-    may also answer `:answered` (the repositories that did answer) and
-    `:refusals` ({repository {:status :route}} for each whose pulls
-    listing refused the token), which the pass writes on the policy
-    rows (ticket 116dfb0d).")
-  (forge-log-tail [s check]
-    "→ {:excerpt \"…\" :note \"…\" } for one check document: the tail
-    of the failed job's log. A log the forge will not hand over in
-    plain text answers an empty excerpt and a note that says why.
-    Never throws — a missing log costs the excerpt, never the row.")
-  (forge-label! [s change label]
-    "Push ONE label to the pull request the change document names.
-    The only write this source makes. Throws when the forge refuses.")
-  (forge-calls [s]
-    "→ how many calls this source made since the last `forge-poll`
-    started. The census line's first number.")
-  (forge-checks [s repository head-sha]
-    "→ [{:check_name :status :conclusion} …] for every check run on
-    one head, the latest of each (ticket d1742908). The poll reads
-    checks only on pull requests that moved, and a check that finishes
-    moves no pull request, so the failing pass asks head by head.
-    Commit statuses count as checks. A check may carry its `ci_run`
-    document on its metadata (`:doc`), from which the run pass mints a
-    red that finished after the push (ticket 3aca3ae8).
-    Throws when the forge does not answer.")
-  (forge-base [s repository branch]
-    "→ {:head_sha sha :checks [check-doc …]} for the head of one branch,
-    or nil when the branch has none (ticket ade81ae9). Each check
-    carries `:check_name`, `:status` and `:conclusion`, which
-    `check-verdict` reads, and whatever `forge-log-tail` needs to find
-    its log. Throws when the forge does not answer."))
+(def forge-poll kit/forge-poll)
+(def forge-log-tail kit/forge-log-tail)
+(def forge-label! kit/forge-label!)
+(def forge-calls kit/forge-calls)
+(def forge-checks kit/forge-checks)
+(def forge-base kit/forge-base)
 
 (defprotocol ForgeRerun
   "A run that died without a verdict, asked to run again (ticket
@@ -337,8 +307,9 @@
 
 (def red-conclusions
   "The two conclusions that mint a red run. `cancelled` is not one of
-  them: somebody stopped that job, so there is nothing to classify."
-  #{"failure" "timed_out"})
+  them: somebody stopped that job, so there is nothing to classify.
+  They are the kit's table's reds for GitHub (ticket 6b716e98)."
+  (kit/raw-states :github :red))
 
 ;; ── the engine's own hand ───────────────────────────────────────────
 
@@ -751,64 +722,29 @@
 
 (def green-conclusions
   "The conclusions a required check may finish with and still let the
-  change merge. `neutral` and `skipped` are GitHub's own passes."
-  #{"success" "neutral" "skipped"})
+  change merge. `neutral` and `skipped` are GitHub's own passes. They
+  are the kit's table's greens for GitHub (ticket 6b716e98)."
+  (kit/raw-states :github :green))
 
-(defn- run-order
-  "Where one run of a check stands among the runs of the same name:
-  its forge id first, which grows with every run the forge starts, and
-  its start time beside it. A run that carries neither sorts first."
-  [check]
-  (let [id (str (:id check))]
-    [(if (re-matches #"\d{1,18}" id) (Long/parseLong id) -1)
-     (str (:started_at check))]))
-
-(defn- newest-runs
-  "The runs of one check name that speak for it: the newest alone when
-  every run says where it stands (ticket 6bdaf6fe) — a re-run that went
-  green on the same head answers for the red run before it — and every
-  run as it came when one of them does not, because then there is no
-  telling which is newer."
-  [runs]
-  (if (and (next runs) (every? #(or (some? (:id %)) (some? (:started_at %))) runs))
-    [(last (sort-by run-order runs))]
-    runs))
+(def ^:private newest-runs
+  "The runs of one check name that speak for it: the kit's rule, the
+  newest alone when every run says where it stands (ticket 6bdaf6fe)."
+  kit/newest-runs)
 
 (defn check-verdict
   "What the checks on one head say, read against the policy's required
   checks: {:verdict :red :names […]} when every required check
   finished and at least one went red, {:verdict :green} when every one
   finished green, {:verdict :interrupted :names […]} when none went red
-  and at least one was cancelled — it died without a verdict, and it is
-  never green (ticket 22f91244) — and nil while one is still running,
-  has not started, or ended some other way. A policy that names no
-  required check requires every check on the head. Of several runs of
-  one name, the newest speaks for it (`newest-runs`)."
+  and at least one was interrupted (cancelled, stale or waiting on a
+  person) — it died without a verdict, and it is never green (ticket
+  22f91244) — and nil while one is still running, has not started, or
+  ended some other way. A policy that names no required check requires
+  every check on the head. Of several runs of one name, the newest
+  speaks for it (`newest-runs`). The reading is the kit's, over the
+  kit's one build-state table (ticket 6b716e98)."
   [required checks]
-  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
-                             newest-runs)
-        names (if (seq required)
-                (vec (distinct required))
-                (vec (sort (remove str/blank? (keys by-name)))))
-        runs (mapv #(get by-name %) names)
-        all? (fn [pred] (every? (fn [rs] (and (seq rs) (every? pred rs))) runs))]
-    (when (and (seq names) (all? #(= "completed" (str (:status %)))))
-      (let [red (filterv (fn [n] (some #(contains? red-conclusions
-                                                   (str (:conclusion %)))
-                                       (get by-name n)))
-                         names)]
-        (cond
-          (seq red) {:verdict :red :names red}
-          (all? #(contains? green-conclusions (str (:conclusion %))))
-          {:verdict :green}
-          ;; a cancelled required check died without a verdict about
-          ;; the code (ticket 22f91244): never green, and named, so the
-          ;; pass can re-run it
-          :else
-          (let [cut (filterv (fn [n] (some #(= "cancelled" (str (:conclusion %)))
-                                           (get by-name n)))
-                             names)]
-            (when (seq cut) {:verdict :interrupted :names cut})))))))
+  (kit/verdict {:forge :github :required required} checks))
 
 (def failing-scan-limit
   "How many rows of each of the two live states one pass reads."
