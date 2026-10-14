@@ -207,6 +207,93 @@
   (is (= "merge" (bench/front-waits-on {:refused "merge_refused"
                                          :reason "GitHub has not merged it"}))))
 
+;; ── a front whose check was interrupted (ticket 68423628) ───────────
+
+(defn- reruns-of [{:keys [calls]}]
+  (count (filter #(= "bench__rerun" (first %)) @calls)))
+
+(deftest an-interrupted-front-is-rerun-once-and-stays-the-front
+  (let [answers (atom {1 {:state "interrupted" :interrupted ["gate"]}})
+        r (rig answers)
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0 :head_branch "bench/one")
+        b (a-change "ckopsa/waymark" 2 1)
+        m (marks! r seen [a b])]
+    (is (= 1 (reruns-of r)) "the rig is asked to run the front's checks again")
+    (is (= {:repo "ckopsa/waymark" :branch "bench/one"} (bench/rerun-args a)))
+    (is (= {:line_front "change-1" :line_front_pr 1
+            :line_front_waiting "checks" :line_waiting 1}
+           (get-in m [:policies "ckopsa/waymark"]))
+        "it stays the front and waits on its checks, not on merge")
+    (is (= {:line_place 1 :line_why "front"} (get-in m [:changes "change-1"])))
+    (is (= [] (numbers-of r "bench__update_branch"))
+        "nothing behind it is brought forward meanwhile")
+    (testing "the rerun is green: the front merges and the line moves on"
+      (swap! answers assoc 1 {:state "merged"})
+      (let [m (marks! r seen [a b])]
+        (is (= 1 (reruns-of r)))
+        (is (= "change-2" (get-in m [:policies "ckopsa/waymark" :line_front])))))))
+
+(deftest a-second-interruption-takes-the-change-out-of-the-line
+  (let [r (rig (atom {1 {:state "interrupted" :interrupted ["gate" "lint"]}}))
+        seen (atom {})
+        a (a-change "ckopsa/waymark" 1 0 :head_branch "bench/one")
+        b (a-change "ckopsa/waymark" 2 1)]
+    (marks! r seen [a b])
+    (let [m (marks! r seen [a b])]
+      (is (= 1 (reruns-of r)) "one rerun per head")
+      (is (= {:line_why "interrupted" :line_reason "gate, lint"}
+             (get-in m [:changes "change-1"]))
+          "it has no place, and names the checks")
+      (is (= "change-2" (get-in m [:policies "ckopsa/waymark" :line_front])))
+      (is (= [2] (numbers-of r "bench__update_branch"))
+          "the line moves on to the change behind it"))
+    (testing "a new head gets its own rerun"
+      (let [m (marks! r seen [(assoc-in a [:data :head_sha] "head-1b") b])]
+        (is (= 2 (reruns-of r)))
+        (is (= "change-1" (get-in m [:policies "ckopsa/waymark" :line_front]))))))
+  (testing "a head the forge mirror already ran again is not run a second time"
+    (let [r (rig (atom {1 {:state "interrupted" :interrupted ["gate"]}}))
+          m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0 :rerun_head "head-1")
+                                 (a-change "ckopsa/waymark" 2 1)])]
+      (is (= 0 (reruns-of r)))
+      (is (= {:line_why "interrupted" :line_reason "gate"}
+             (get-in m [:changes "change-1"])))))
+  (testing "an interrupted change behind the front keeps its place until it is the front"
+    (let [r (rig (atom {2 {:state "interrupted" :interrupted ["gate"]}}))
+          m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0)
+                                 (a-change "ckopsa/waymark" 2 1)])]
+      (is (= 0 (reruns-of r)))
+      (is (= {:line_place 2 :line_why "behind"} (get-in m [:changes "change-2"]))))))
+
+(deftest an-interrupted-answer-on-a-head-read-green-reads-behind
+  (let [interrupted {:state "interrupted" :interrupted ["gate"]}]
+    (is (= {:state "behind" :rig_state "interrupted" :interrupted ["gate"]}
+           (bench/head-answer (a-change "ckopsa/waymark" 2 1 :green_head "head-2")
+                              interrupted))
+        "like a red carried over: the mirror read this very head green")
+    (is (= interrupted
+           (bench/head-answer (a-change "ckopsa/waymark" 2 1 :green_head "head-old")
+                              interrupted))
+        "a head that moved since the green read keeps the rig's word")))
+
+(deftest an-interrupted-front-waits-on-checks
+  (is (= "checks" (bench/front-waits-on {:state "interrupted"
+                                          :interrupted ["gate"]}))))
+
+(deftest a-waiting-answer-that-names-a-failed-check-is-waiting
+  (let [r (rig (atom {1 {:state "waiting" :waits_on "checks"
+                         :pending ["gate"] :failed ["lint"]}}))
+        m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0)
+                               (a-change "ckopsa/waymark" 2 1)])]
+    (is (= {:line_front "change-1" :line_front_pr 1
+            :line_front_waiting "checks" :line_waiting 1}
+           (get-in m [:policies "ckopsa/waymark"]))
+        "a pending required check keeps the front, whatever is already red")
+    (is (= {:line_place 1 :line_why "front"} (get-in m [:changes "change-1"])))
+    (is (= 0 (reruns-of r)))
+    (is (= [] (numbers-of r "bench__update_branch")))))
+
 ;; ── a front that holds its base is not held on update (ticket 5ba28a11)
 
 (deftest a-front-the-mirror-read-up-to-date-is-not-brought-forward
