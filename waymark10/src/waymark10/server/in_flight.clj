@@ -130,7 +130,9 @@
 
 (defn answer
   "The document over the entries: filtered, grouped by holder, each
-  group most overdue first, with totals per group and four counts."
+  group most overdue first, with totals per group and four counts,
+  and the facets: each filter's values over the entries before any
+  filter, so a filtered screen still offers every choice."
   [entries filters]
   (let [want (fn [k e]
                (let [v (get filters k)]
@@ -148,6 +150,9 @@
     {:waymark "in_flight"
      :filters (into {} (keep (fn [k] (when-some [v (get filters k)] [k v])))
                     filter-keys)
+     :facets (into {} (map (fn [k] [k (vec (sort (into #{} (comp (keep k) (map text))
+                                                       entries)))]))
+                   filter-keys)
      :counts {:waiting_on_person (held "person")
               :held_by_nobody (held "nobody")
               :overdue (count (filter overdue? shown))
