@@ -24,7 +24,13 @@
   extension names WHICH door each moment walks, under `:link`
   (`link-defaults` for a factory that names none). The review and
   return doors' machine and their wall, `only-its-change-moves-it`,
-  are the core's."
+  are the core's.
+
+  THE LAW IS THE CORE'S (step 3c, ticket 2b85a37e): what an ask waits
+  on, the exits no seat takes at an ask door, and how long an ask may
+  rest in each working state (`law`), so a factory built on the kit
+  reads real cracks from its first read. A factory's extension adds to
+  it or overrides it under the same keys."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.server.invoke :as inv]
@@ -176,6 +182,57 @@
     {(:review-door link) {:from #{:open} :to :in_review :guards wall}
      (:return-door link) {:from #{:in_review} :to :open :guards wall}}))
 
+;; ── the law (step 3c) ───────────────────────────────────────────────
+
+(def expected-age
+  "HOW LONG AN ASK MAY REST, in seconds: open twelve hours, in review
+  six, blocked seven days. The live cracks pass files an aged note for
+  an ask past its state's age."
+  {:open 43200 :in_review 21600 :blocked 604800})
+
+(def unaged
+  "The states the core gives no age: `draft` waits on a groom,
+  `deferred` on its `defer_until`, and `done` and `dropped` are over."
+  #{:draft :deferred :done :dropped})
+
+(defn law
+  "The core's law for an ask whose link is `link`.
+
+  - `:waits`: a blocked ask waits on the asks its `blocked_by` names,
+    and either ending releases it (`release-the-waiters!`).
+  - `:left-by`: the exits no seat takes at an ask door, so the cracks
+    audit does not report a working state as one nobody leaves. The
+    change's submit walks the review door, the forge's mirror walks the
+    merged door, and the last blocker's ending walks `unblock` or
+    `return_to_draft`.
+  - `:expected-age`: `expected-age`."
+  [link]
+  {:waits [{:on :blocked_by :awaits (:ask-kind link) :in #{:blocked}
+            :outcomes {:done :release :dropped :release}}]
+   :left-by [{:in #{:open} :by {:kind (:change-kind link) :action :submit}
+              :via (:review-door link) :to :in_review}
+             {:in #{:in_review} :by :mirror :via (:merged-door link) :to :done}
+             {:in #{:blocked} :by :wait :via :unblock :to :open}
+             {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
+   :expected-age expected-age})
+
+(defn- entries-over
+  "The core's `entries` with the factory's `own` over them: an own entry
+  whose `k` a core entry has takes its place, and the rest follow."
+  [k entries own]
+  (let [own-by (into {} (map (juxt k identity)) own)
+        cores (set (map k entries))]
+    (into (mapv #(get own-by (k %) %) entries)
+          (remove #(contains? cores (k %)) own))))
+
+(defn- law-over
+  "The core's `law` with the extension's over it: a wait by its field
+  (`:on`), an exit by its door (`:via`), an age by its state."
+  [law extension]
+  {:waits (entries-over :on (:waits law) (:waits extension))
+   :left-by (entries-over :via (:left-by law) (:left-by extension))
+   :expected-age (merge (:expected-age law) (:expected-age extension))})
+
 (defn its-changes
   "Every change born from `ask` that stands in one of `states`. The
   adoption writes the forge's id over `change_id`, so a change with a
@@ -303,11 +360,14 @@
   - The link's review and return doors are core doors too, under the
     names the extension's `:link` gives them (`link`): their machine
     and their wall are the kit's. `:link` itself leaves the map.
+  - The law (`law`) is the core's, and the extension's `:waits`,
+    `:left-by` and `:expected-age` over it (`law-over`).
   - Every other key is the extension's."
   [core extension]
-  (let [core (update core :actions merge
-                     (link-doors (link (:kind extension) (:link extension))))
-        extension (dissoc extension :link)]
+  (let [link (link (:kind extension) (:link extension))
+        core (update core :actions merge (link-doors link))
+        extension (-> (dissoc extension :link)
+                      (merge (law-over (law link) extension)))]
     (build* core extension)))
 
 (defn- build* [core extension]

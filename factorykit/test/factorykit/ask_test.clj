@@ -69,6 +69,38 @@
       (is (= :ticket (:kind built)))
       (is (= "tickets" (:plural built))))))
 
+(deftest a-built-ask-has-the-law
+  (let [built (kit/build kit/core an-extension)]
+    (testing "every state that is not unaged has an age and an exit"
+      (doseq [state (:states built)
+              :when (not (contains? kit/unaged state))]
+        (is (pos-int? (get-in built [:expected-age state])) (str state))
+        (is (some #(contains? (:in %) state) (:left-by built)) (str state))))
+    (testing "a blocked ask waits on its blockers"
+      (is (= [{:on :blocked_by :awaits :ticket :in #{:blocked}
+               :outcomes {:done :release :dropped :release}}]
+             (:waits built))))
+    (testing "the exits walk the link's doors"
+      (is (= #{:review :complete :unblock :return_to_draft}
+             (set (map :via (:left-by built))))))))
+
+(deftest an-extension-adds-to-the-law-and-overrides-it
+  (let [own-wait {:on :merge_after :awaits :ticket :in #{:in_review}
+                  :outcomes {:done :release :dropped :release}}
+        own-exit {:in #{:blocked} :by :wait :via :unblock :to :draft}
+        built (kit/build kit/core
+                         (assoc an-extension
+                                :link {:merged-door :land}
+                                :waits [own-wait]
+                                :left-by [own-exit]
+                                :expected-age {:open 3600}))]
+    (is (= [:blocked_by :merge_after] (mapv :on (:waits built))))
+    (is (= own-exit (some #(when (= :unblock (:via %)) %) (:left-by built))))
+    (is (= #{:review :land :unblock :return_to_draft}
+           (set (map :via (:left-by built)))))
+    (is (= {:open 3600 :in_review 21600 :blocked 604800}
+           (:expected-age built)))))
+
 (deftest what-is-the-kits-is-refused-an-extension
   (testing "the machine"
     (doseq [k [:states :initial :terminal]]

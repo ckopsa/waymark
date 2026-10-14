@@ -1889,33 +1889,17 @@
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
    ;; waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
-   ;; WHAT A TICKET WAITS ON, and what each ending of that ticket does
-   ;; to the one waiting (ticket d9edac4e). A blocker's ending releases
-   ;; whichever way it ends (`release-the-waiters!`). A `merge_after`
-   ;; ticket releases the same way (ticket 97697177): bench/merge-holds
-   ;; holds the green change for neither a done ticket nor a dropped
-   ;; one, so the next merge pass lets it go.
-   :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
-            :outcomes {:done :release :dropped :release}}
-           {:on :merge_after :awaits :ticket :in #{:in_review}
+   ;; THE LAW IS THE KIT'S (`factorykit.ask/law`, ticket 2b85a37e):
+   ;; the `blocked_by` wait, the exits no seat takes at a ticket door
+   ;; (`review` and `land` by the link's names, `unblock` and
+   ;; `return_to_draft` by a blocker's ending) and the expected ages.
+   ;; This ticket adds its own wait: a `merge_after` ticket releases
+   ;; as a blocker does (ticket 97697177): bench/merge-holds holds the
+   ;; green change for neither a done ticket nor a dropped one, so the
+   ;; next merge pass lets it go.
+   :waits [{:on :merge_after :awaits :ticket :in #{:in_review}
             :restated-by [:merge_after_in_review]
             :outcomes {:done :release :dropped :release}}]
-   ;; THE EXITS NO SEAT TAKES AT A TICKET DOOR (ticket 071c563c), so
-   ;; the cracks audit does not report a working state as one nobody
-   ;; leaves. The seat that builds holds `change.submit`, and that
-   ;; door walks `review` here. The merge walks `land`, and the forge's
-   ;; mirror makes that transition. The last blocker's ending walks
-   ;; `unblock` or `return_to_draft` (`release-the-waiters!`).
-   :left-by [{:in #{:open} :by {:kind :change :action :submit}
-              :via :review :to :in_review}
-             {:in #{:in_review} :by :mirror :via :land :to :done}
-             {:in #{:blocked} :by :wait :via :unblock :to :open}
-             {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
-   ;; HOW LONG A TICKET MAY REST (ticket 21b49b28), in seconds: open
-   ;; twelve hours, in review six, blocked seven days. `deferred` names
-   ;; none: it waits on `defer_until`. The live cracks pass files an
-   ;; aged note for a ticket past its state's age.
-   :expected-age {:open 43200 :in_review 21600 :blocked 604800}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}
