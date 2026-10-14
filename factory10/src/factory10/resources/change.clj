@@ -115,6 +115,8 @@
   household's feed must not card the day job's queue."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
+            [factory10.resources.ticket :as ticket]
+            [factorykit.ask :as ask]
             [factorykit.change :as kit :refer [has-a-pull-request?
                                                the-change-has-a-pull-request
                                                the-change-has-no-pull-request
@@ -163,17 +165,17 @@
 
   A `task` (workqueue10) keeps its lifecycle in `status`, and its
   `complete` takes nothing. A `ticket` (this module) keeps its
-  lifecycle in the machine, and the merge ends it through `land` —
-  the change's own door, open from every state that has not ended
-  (tickets 2e869934 and 3ec37f66) — with the pull request's own
-  address as the sentence the record keeps. A ticket already `done`
-  or `dropped` is left as it is."
+  lifecycle in the machine, and the merge ends it through the kit's
+  link (`factorykit.ask/merged!`), whose door is `land` — the change's
+  own door, open from every state that has not ended (tickets 2e869934
+  and 3ec37f66) — with the pull request's own address as the sentence
+  the record keeps. A ticket already `done` or `dropped` is left as it
+  is."
   {"task" {:kind :task
            :action :complete
            :finished? (fn [row] (= "done" (str (get-in row [:data :status]))))
            :input (fn [_change] nil)}
    "ticket" {:kind :ticket
-             :action :land
              :finished? (fn [row] (contains? #{:done :dropped}
                                              (some-> (:state row) name keyword)))
              :input (fn [change]
@@ -295,7 +297,9 @@
         (if (waits-on-its-children? entry id walk-row ctx)
           ((:invoke ctx) :ticket id :note_merge
                          {:merged_change (pull-request-of row)})
-          ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row)))
+          (if (= :ticket (:kind entry))
+            (ask/merged! ticket/link row ((:input entry) row) ctx)
+            ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row))))
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change merge: the" (name (:kind entry)) id
@@ -307,29 +311,13 @@
 
 (defn- move-the-ticket!
   "Walk `action` on the ticket this change was born from, when that
-  ticket stands in one of `from`: `review` when a round goes out,
-  `return` when a review ends without a merge. The ticket's door opens
-  for this kind's own doors and for no hand
-  (`ticket/only-its-change-moves-it`).
-
-  BEST-EFFORT, as the merge's completion is: a change born from a
-  task or from nothing moves nothing, a ticket that stands elsewhere
-  is left where it is, and a door that refuses is said in the log —
-  the change's own move stands. A rehearsal carries no pen, and moves
-  nothing."
-  ([row ctx from action] (move-the-ticket! row ctx from action nil))
-  ([row ctx from action input]
-  (let [[entry id walk-row] (born-of row ctx)]
-    (when (and walk-row
-               (= :ticket (:kind entry))
-               (contains? from (some-> (:state walk-row) name keyword))
-               (:invoke ctx))
-      (try
-        ((:invoke ctx) :ticket id action input)
-        (catch Exception e
-          (binding [*out* *err*]
-            (println "factory10 change: the ticket" id "did not" (name action)
-                     "-" (ex-message e)))))))))
+  ticket stands in one of `from` — a stall's `shelve`. The review and
+  its end are the kit's link moments (`factorykit.ask/submitted!` and
+  `returned!`), with the ticket's doors. The ticket's door opens for
+  this kind's own doors and for no hand
+  (`ticket/only-its-change-moves-it`), best-effort, as the kit's."
+  [row ctx from action input]
+  (ask/move-its-ask! ticket/link row from action input ctx))
 
 (defhandler write-what-superseded-it [row inp _ctx]
   ;; The pull request that merged in this one's place rides on the row,
@@ -353,7 +341,7 @@
   ;; A review that ended without a merge — a close — puts the ticket in
   ;; the queue again, where the seat that wrote the change wakes on its
   ;; `return`, and a person can ungroom it.
-  (move-the-ticket! row ctx #{:in_review} :return)
+  (ask/returned! ticket/link row ctx)
   (without-the-wait row))
 
 (defhandler shelve-the-ticket [row inp ctx]
@@ -578,7 +566,7 @@
           (do
             ;; the round is out: the ticket leaves the walk until its
             ;; change comes back red or merges (ticket 2e869934)
-            (move-the-ticket! row ctx #{:open} :review)
+            (ask/submitted! ticket/link row ctx)
             (update row :data merge
                     (cond-> {:branch branch
                              :worktree_dirty 0
@@ -627,7 +615,7 @@
   ;; has read and put back to work starts its count again. A ticket
   ;; the round ceiling left in review goes back to the queue with it,
   ;; which is how a person releases a stuck change (ticket 2e869934).
-  (move-the-ticket! row ctx #{:in_review} :return)
+  (ask/returned! ticket/link row ctx)
   (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defhandler rework-the-change [row _inp _ctx]
@@ -669,7 +657,7 @@
   ;; its head, red or green. Its ticket goes out for review with it,
   ;; when the ticket is in the queue; a draft stays a draft for a
   ;; person to groom, and the merge ends it wherever it stands.
-  (move-the-ticket! row ctx #{:open} :review)
+  (ask/submitted! ticket/link row ctx)
   (back-under-review row))
 
 (defhandler rework-the-pull-request [row _inp _ctx]
@@ -709,14 +697,14 @@
   ;; A red or conflicted head sends the ticket back to the queue, and
   ;; the seat that wrote the change wakes on its `return` and walks it
   ;; with this change and its feedback (ticket 2e869934).
-  (move-the-ticket! row ctx #{:in_review} :return)
+  (ask/returned! ticket/link row ctx)
   (with-the-failing-checks row inp))
 
 (defhandler clear-the-failing-checks [row _inp ctx]
   ;; A green head, or a new round: the names of the last red are not
   ;; this head's, and a stale list would read as a live one. A ticket
   ;; the red sent back goes out for review again (ticket 2e869934).
-  (move-the-ticket! row ctx #{:open} :review)
+  (ask/submitted! ticket/link row ctx)
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil :train_red_head nil :train_red nil))
 
