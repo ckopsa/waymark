@@ -126,7 +126,7 @@
         as (initialize! h colton {})
         listed (tools-of h as)
         error-of #(:error (json (rpc h as %1 %2)))]
-    (is (= the-fixed (mapv :name listed)) "the eleven")
+    (is (= the-fixed (mapv :name listed)) "the twelve")
     (is (not-any? :_meta listed))
     (is (= -32601 (:code (error-of "resources/read" {:uri mcp/app-resource-uri}))))
     (is (some? (error-of "tools/call" {:name "waymark_app_read"}))
