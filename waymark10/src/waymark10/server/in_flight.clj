@@ -4,11 +4,13 @@
   answer to \"where are we at with X?\" in one read, and the opening
   page of every house: it names no kind.
 
-  A row is IN FLIGHT when its kind has an expected age for some state
-  (`live-cracks/expected-age`: the kind's own `:expected-age` or the
-  default for the state's name) and the row is in a state that is not
-  terminal. A state a row rests in (`waiting-on/block` says `nothing`)
-  is left out: no one owes it a move.
+  A row is IN FLIGHT when it is in a state that is not terminal and has
+  an expected age (`live-cracks/expected-age`: the kind's own
+  `:expected-age` or the default for the state's name). A state with
+  none is one a record rests in — a verdict `said`, a journal
+  `written` — and is left out, as the cracks audit leaves it out: no
+  one owes it a move (ticket 4d7badd8). A row whose verdict says it
+  rests (`waiting-on/block` says `nothing`) is left out too.
 
   Per row: kind, id, summary, state, its `waiting_on` as the row read
   gives it, and
@@ -24,6 +26,11 @@
 
   Groups run `person`, `nobody`, then each seat, then each source;
   inside a group the most overdue first.
+
+  THE CAP. One read takes at most `*row-page*` rows of a state. When a
+  state holds more, the answer says `truncated: true` and names that
+  state under `capped` with its true count, so a capped number is never
+  read as the total.
 
   ONE PASS. The active seats and the rows of every open state are read
   in one transaction, and each row's block is `waiting-on/block`, which
@@ -45,8 +52,9 @@
   "The most active seats one read takes, as `waiting-on` takes them."
   500)
 
-(def ^:private row-page
-  "The most rows of one state one read takes."
+(def ^:dynamic *row-page*
+  "The most rows of one state one read takes. Dynamic so a test reaches
+  the cap with a few rows."
   1000)
 
 (def filter-keys
@@ -76,12 +84,14 @@
 
 (defn open-states
   "The states of a kind whose rows are in flight: every state that is
-  not terminal, when some such state has an expected age; else none."
+  not terminal and has an expected age; nil when there is none. A
+  state with no expected age is one its rows rest in."
   [rdef]
   (let [terminal (into #{} (map text) (:terminal rdef))
-        states (remove #(contains? terminal (text %)) (:states rdef))]
-    (when (some #(live-cracks/expected-age rdef %) states)
-      (vec states))))
+        states (filterv #(and (not (contains? terminal (text %)))
+                              (live-cracks/expected-age rdef %))
+                        (:states rdef))]
+    (when (seq states) states)))
 
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
@@ -183,30 +193,44 @@
                     :let [states (open-states rdef)]
                     :when (seq states)]
                 [k rdef states])
-        [seat-rows rows]
+        page *row-page*
+        [seat-rows pages]
         (store/with-tx st
           (fn [tx]
             [(if (contains? resources :seat)
                (vec (store/query-rows st tx :seat {:state :active}
                                       {:limit seat-page}))
                [])
+             ;; one row past the page tells a capped state from a full one
              (vec (for [[k rdef states] kinds
                         s states
-                        raw (store/query-rows st tx k {:state (keyword (text s))}
-                                              {:limit row-page})]
-                    [rdef raw]))]))
+                        :let [state (text s)
+                              raws (vec (store/query-rows st tx k {:state (keyword state)}
+                                                          {:limit (inc page)}))
+                              over? (> (count raws) page)]]
+                    {:rdef rdef
+                     :raws (if over? (subvec raws 0 page) raws)
+                     :capped (when over?
+                               {:kind (text k) :state state :read page
+                                :total (store/count-matching
+                                        st tx k [{:target :state :op := :value state}])})}))]))
         admits? (fn [rdef row]
                   (or (nil? vis)
                       (boolean (some-> (:whole-kind? vis) (apply [(:kind rdef)])))
                       (boolean ((:row? vis) (:kind rdef) (str (:id row))))))
-        entries (keep (fn [[rdef raw]]
-                        (let [row (inv/decode-row rdef raw)]
-                          (when (admits? rdef row)
-                            (entry rdef seat-rows resources row
-                                   {:now now
-                                    :data (shown-data rdef row vis)
-                                    :summary (render/target-summary rdef row vis)}))))
-                      rows)]
-    (assoc (answer entries filters)
-           :at (str (inst now))
-           :took_ms (quot (- (System/nanoTime) started) 1000000))))
+        entries (for [{:keys [rdef raws]} pages
+                      raw raws
+                      :let [row (inv/decode-row rdef raw)]
+                      :when (admits? rdef row)
+                      :let [e (entry rdef seat-rows resources row
+                                     {:now now
+                                      :data (shown-data rdef row vis)
+                                      :summary (render/target-summary rdef row vis)})]
+                      :when e]
+                  e)
+        capped (into [] (keep :capped) pages)]
+    (cond-> (assoc (answer entries filters)
+                   :truncated (boolean (seq capped))
+                   :at (str (inst now))
+                   :took_ms (quot (- (System/nanoTime) started) 1000000))
+      (seq capped) (assoc :capped capped))))

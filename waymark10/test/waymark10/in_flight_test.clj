@@ -9,6 +9,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -164,6 +165,14 @@
                                     :terminal #{:filed}})))
   (is (= [:draft :open :parked :syncing] (in-flight/open-states job))))
 
+(deftest a-resting-state-is-not-in-flight
+  ;; a record kind (ticket 4d7badd8): a said verdict waits on nothing,
+  ;; only the state with an expected age is owed a move
+  (is (= [:open] (in-flight/open-states {:kind :verdict
+                                          :states [:open :said :void]
+                                          :terminal #{:void}
+                                          :expected-age {:open 3600}}))))
+
 ;; ── the wire: anonymity, grant scope, ?kind= ─────────────────────────────
 
 (def ^:private quiet
@@ -259,3 +268,46 @@
     (testing "?holder= narrows the answer to one group"
       (let [{:keys [parsed]} (get-in-flight h as-elena "holder=person")]
         (is (= #{} (flight-ids parsed)))))))
+
+;; ── the cap and the MCP tool (ticket 4d7badd8) ────────────────────────────
+
+(defn- flight-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [flight-task flight-chore flight-memo]}))
+
+(defn- mk-flight [eng k title]
+  (str (get-in (inv/create! eng k {:title title} {:principal elena}) [:row :id])))
+
+(deftest a-capped-answer-says-so
+  (let [eng (flight-engine)
+        h (engine/handler eng)
+        as-elena {"x-waymark-principal" "elena"}
+        tasks (fn [parsed]
+                (filter #(= "flight_task" (:kind %)) (mapcat :rows (:groups parsed))))]
+    (doseq [n (range 3)] (mk-flight eng :flight_task (str "t" n)))
+    (testing "under the page the answer is whole"
+      (let [{:keys [parsed]} (get-in-flight h as-elena "kind=flight_task")]
+        (is (false? (:truncated parsed)))
+        (is (nil? (:capped parsed)))
+        (is (= 3 (count (tasks parsed))))))
+    (testing "past the page it says it truncated, with the true count"
+      (binding [in-flight/*row-page* 2]
+        (let [{:keys [parsed]} (get-in-flight h as-elena "kind=flight_task")]
+          (is (true? (:truncated parsed)))
+          (is (= [{:kind "flight_task" :state "open" :read 2 :total 3}]
+                 (:capped parsed)))
+          (is (= 2 (count (tasks parsed)))))))))
+
+(deftest the-mcp-tool-reads-in-flight-with-filters
+  ;; `mcp/door` mounts core's routes only: a call onto the seats
+  ;; module's route answered 404 No collection "-"
+  (let [eng (flight-engine)
+        c1 (mk-flight eng :flight_chore "c1")
+        _t1 (mk-flight eng :flight_task "t1")
+        out (mcp/call-tool eng (mcp/door eng) {:principal elena}
+                           "waymark_in_flight" {:kind "flight_chore" :holder "nobody"})
+        doc (wire/read-json (get-in out [:content 0 :text]))]
+    (is (not (:isError out)) (get-in out [:content 0 :text]))
+    (is (= "in_flight" (:waymark doc)))
+    (is (= {:kind "flight_chore" :holder "nobody"} (:filters doc)))
+    (is (= #{c1} (flight-ids doc)))))
