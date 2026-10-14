@@ -2551,18 +2551,24 @@
 (deftest a-change-waiting-on-checks-names-the-ones-without-a-verdict
   (let [checks [{:check_name "gate" :status "in_progress"}
                 {:check_name "lint" :status "completed" :conclusion "success"}
-                {:check_name "scan" :status "completed" :conclusion "stale"}]]
+                {:check_name "scan" :status "completed" :conclusion "startup_failure"}]]
     (is (= [{:name "gate" :status "in_progress" :conclusion nil}
-            {:name "scan" :status "completed" :conclusion "stale"}
+            {:name "scan" :status "completed" :conclusion "startup_failure"}
             {:name "tests" :status nil :conclusion nil}]
            (forge/held-checks ["gate" "lint" "scan" "tests"] checks)))
     (is (= (str "the checks of change-1 at abc have no verdict: "
                 "gate (status in_progress, conclusion none), "
-                "scan (status completed, conclusion stale), tests (no run)")
+                "scan (status completed, conclusion startup_failure), tests (no run)")
            (forge/held-why "change-1" "abc" ["gate" "lint" "scan" "tests"]
                            checks nil)))
     (is (= [] (forge/held-checks ["lint"] checks))
-        "a check with a verdict is not named")))
+        "a check with a verdict is not named")
+    (is (= [] (forge/held-checks
+               ["old" "wait"]
+               [{:check_name "old" :status "completed" :conclusion "stale"}
+                {:check_name "wait" :status "completed"
+                 :conclusion "action_required"}]))
+        "the kit's table reads these two as interrupted, which is a verdict")))
 
 (deftest a-change-held-only-because-it-is-behind-its-base-says-so
   (let [green [{:check_name "gate" :status "completed" :conclusion "success"}]]

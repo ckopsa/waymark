@@ -937,7 +937,12 @@
 ;; tells a person the runner is broken.
 
 (def interrupted-conclusions
-  "The job conclusions that end a job without a verdict."
+  "The job conclusions that end a job without a verdict. A JOB is not a
+  CHECK, so this set is not the kit's table's (ticket 4a7b5ebc): the
+  table reads a timed out check as red, which is what sends the pass
+  here, and here the question is whose fault the red run is. A job the
+  forge timed out is a runner that froze, so it is a rerun. `stale` and
+  `action_required` are a check's conclusions and no job's."
   #{"cancelled" "timed_out"})
 
 (def ^:private setup-step
@@ -1295,7 +1300,8 @@
   "The required checks without a verdict among `checks`, as
   [{:name :status :conclusion} …]: a check with no run at all (no
   status), a run that has not completed, and a run that completed with
-  a conclusion `check-verdict` does not judge."
+  a conclusion `check-verdict` does not judge: one the kit's build-state
+  table does not name (ticket 4a7b5ebc)."
   [required checks]
   (into []
         (mapcat
@@ -1305,10 +1311,8 @@
              (keep (fn [run]
                      (let [status (some-> (:status run) str not-empty)
                            conclusion (some-> (:conclusion run) str not-empty)]
-                       (when-not (and (= "completed" status)
-                                      (or (contains? red-conclusions conclusion)
-                                          (contains? green-conclusions conclusion)
-                                          (= "cancelled" conclusion)))
+                       (when (contains? #{nil :pending}
+                                        (kit/build-state :github run))
                          {:name n :status status :conclusion conclusion})))
                    runs))))
         (required-runs required checks)))
