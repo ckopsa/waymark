@@ -122,6 +122,14 @@
     :is "The active application's name in the navigation bar, a link to its home."}
    {:name "nav-access"
     :is "The Access tab in the navigation bar."}
+   {:name "nav-in-flight"
+    :is "The In flight tab in the navigation bar: every open row by who it waits on."}
+   {:name "in-flight.filter"
+    :is "One filter of the In flight screen; data-row names it: domain, repo, kind or holder."}
+   {:name "in-flight.row"
+    :is "One row of the In flight screen; data-row carries the row's address."}
+   {:name "in-flight.door"
+    :is "A one-tap door on a 'Waiting on you' row of the In flight screen; data-row carries the row's address."}
    {:name "nav-more"
     :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
    {:name "nav-jump"
