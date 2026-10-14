@@ -120,10 +120,9 @@
   50)
 
 (def red-scan-limit
-  "How many red runs one pass reads for the runs whose change ended,
-  oldest first. A ceiling above the queue as it stood when the sweep
-  was written (135 rows, ticket ebe54a72), so one pass clears it."
-  200)
+  "How many red runs one pass reads for the runs whose change ended.
+  The kit's (`factorykit.forge/red-scan-limit`, ticket efff5d2e)."
+  kit/red-scan-limit)
 
 ;; ── the seam ────────────────────────────────────────────────────────
 
@@ -229,11 +228,9 @@
   kit/observe-doors)
 
 (def ci-run-create-fields
-  "The `ci_run` create door's whole vocabulary. `verdict`, `remedy`,
-  `pushed_label` and `labelled_at` are absent on purpose: a row born
-  with a verdict is a row that skipped the walk."
-  [:run_id :change :head_sha :check_name :conclusion :log_excerpt
-   :log_note :started_at :finished_at :url])
+  "The `ci_run` create door's whole vocabulary. The kit's
+  (`factorykit.forge/ci-run-create-fields`, ticket efff5d2e)."
+  kit/ci-run-create-fields)
 
 (def red-conclusions
   "The two conclusions that mint a red run. `cancelled` is not one of
@@ -330,148 +327,28 @@
 ;; ── the red runs ────────────────────────────────────────────────────
 
 (def log-note-chars
-  "How long `log_note` may be. One sentence about why there is no
-  log, at the same ceiling a remedy sentence has: a plain text field
-  wider than that reads as prose and the usability battery says so.
-  A forge's error message can run past it, so the note is cut here
-  rather than refused a row."
-  240)
+  "How long `log_note` may be. The kit's
+  (`factorykit.forge/log-note-chars`, ticket efff5d2e)."
+  kit/log-note-chars)
 
-(defn- mint-run!
-  "One failed check run → one `ci_run` row at red, with the log tail
-  on it and a ref to the change it ran on."
-  [eng source check change-row census log-fn]
-  (let [{:keys [excerpt note]} (try (forge-log-tail source check)
-                                    (catch Exception e
-                                      {:excerpt nil
-                                       :note (str "the log could not be read ("
-                                                  (ex-message e) ")")}))
-        ;; THE NOTE HAS A FIELD OF ITS OWN (bead waymark-fp62.6.9). A
-        ;; sentence written inside `log_excerpt` reads as the end of a
-        ;; build log to the next reader, and the classifier reasons
-        ;; about it as one. So the excerpt stays empty and `log_note`
-        ;; says why it is empty. `present` drops a nil, which is what
-        ;; makes each of the two absent when the other answers.
-        blank? (str/blank? (str excerpt))
-        body (present (assoc check
-                             :change (str (:id change-row))
-                             :log_excerpt (when-not blank? excerpt)
-                             :log_note (when (and blank? note)
-                                         (subs (str note) 0
-                                               (min (count (str note))
-                                                    log-note-chars))))
-                      ci-run-create-fields)]
-    (try
-      (inv/create! eng :ci_run body (as-opts))
-      (update census :runs-minted inc)
-      (catch Exception e
-        (log-fn "the check run " (:run_id check) " was refused a row ("
-                (ex-message e) ")")
-        (update census :refused inc)))))
+(declare live-reds)
 
-(defn- run-pass!
-  "Every finished failure the forge answered → a red row, once. A run
-  on a head the change no longer carries mints NOTHING and is counted
-  as skipped: the head moved under it while the pass was reading."
-  [eng source checks census log-fn]
-  (reduce
-   (fn [census check]
-     (cond
-       (not (contains? red-conclusions (str (:conclusion check))))
-       census
-
-       (some? (row-by eng :ci_run {:run_id (:run_id check)}))
-       (update census :runs-known inc)
-
-       :else
-       (if-some [change-row (row-by eng :change {:change_id (:change_id check)})]
-         (if (= (str (:head_sha check))
-                (str (get-in change-row [:data :head_sha])))
-           (mint-run! eng source check change-row census log-fn)
-           (update census :runs-skipped inc))
-         (update census :runs-orphan inc))))
-   census
-   checks))
-
-(defn- stale-reds
-  "The red rows of this change that ran on a head it no longer
-  carries. A run of a dead commit is a run nobody can answer, so
-  these are the rows the `supersede` door is for."
-  [eng change-row]
-  (let [st (:storage eng)
-        head (str (get-in change-row [:data :head_sha]))
-        rows (store/with-tx st
-               (fn [tx] (store/query-rows st tx :ci_run
-                                          {:state "red"
-                                           :change (str (:id change-row))}
-                                          {:limit label-scan-limit})))]
-    (filterv #(not= head (str (get-in % [:data :head_sha]))) rows)))
-
-(defn- stale-pass!
-  "Every red run of a head its change no longer carries → the
-  `supersede` door. The row leaves the classifier's queue and the
-  transition says it left with no verdict. A row the engine refuses is
-  counted and skipped: the next pass offers it again."
-  [eng changes census log-fn]
-  (reduce
-   (fn [census doc]
-     (if-some [change-row (row-by eng :change {:change_id (:change_id doc)})]
-       (reduce
-        (fn [census row]
-          (try
-            (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
-            (update census :runs-superseded inc)
-            (catch Exception e
-              (log-fn "the red run " (get-in row [:data :run_id])
-                      " was refused the supersede door (" (ex-message e) ")")
-              (update census :refused inc))))
-        census
-        (stale-reds eng change-row))
-       census))
-   census
-   changes))
-
-(defn- settled-reds
-  "The red rows no seat can answer, whatever the forge listed this
-  pass (ticket ebe54a72): a run whose change is merged or closed, and
-  a run on a head its change no longer carries. `stale-reds` reads only
-  the changes one pass was answered, so a change that ended before its
-  runs were revisited kept them red for good. Oldest first, so the
-  legacy rows go before the new ones. A run that names no change this
-  house holds is left where it is."
-  [eng]
-  (let [st (:storage eng)
-        rows (store/with-tx st
-               (fn [tx] (store/query-rows st tx :ci_run {:state "red"}
-                                          {:limit red-scan-limit})))]
-    (filterv
-     (fn [row]
-       (when-some [change-row (row-by-id eng :change
-                                         (get-in row [:data :change]))]
-         (let [head (str (get-in change-row [:data :head_sha]))]
-           (or (contains? #{:merged :closed} (keyword (:state change-row)))
-               (and (not (str/blank? head))
-                    (not= head (str (get-in row [:data :head_sha]))))))))
-     rows)))
-
-(defn- settled-pass!
-  "Every red run of a change that is merged or closed, or of a head
-  its change no longer carries → the `supersede` door. The door stays
-  the engine's hand alone; this pass is what walks it for the rows
-  `stale-pass!` never meets. A row the engine refuses is counted and
-  skipped: the next pass offers it again."
-  [eng census log-fn]
-  (reduce
-   (fn [census row]
-     (try
-       (inv/invoke! eng :ci_run (str (:id row)) :supersede {} (as-opts))
-       (update census :runs-superseded inc)
-       (catch Exception e
-         (log-fn "the red run " (get-in row [:data :run_id])
-                 " was refused the supersede door (" (ex-message e) ")")
-         (update census :refused inc))))
-   census
-   (settled-reds eng)))
+(defn- run-hand
+  "This engine's doors on the `ci_run` kind, as the kit's red runs take
+  them (`factorykit.forge/runs-pass!`, ticket efff5d2e), under the
+  source's own principal. `:live-reds` reads the heads through
+  `read-checks`, the one per-head reader of the pass."
+  [eng read-checks log-fn]
+  {:find-run (fn [run-id] (row-by eng :ci_run {:run_id run-id}))
+   :find-change (fn [change-id] (row-by eng :change {:change_id change-id}))
+   :change-by-id (fn [id] (row-by-id eng :change id))
+   :reds (fn [where limit]
+           (rows-by eng :ci_run (assoc where :state "red") limit))
+   :create! (fn [fields] (:row (inv/create! eng :ci_run fields (as-opts))))
+   :invoke! (fn [id door input]
+              (:row (inv/invoke! eng :ci_run id door input (as-opts))))
+   :red-conclusions red-conclusions
+   :live-reds (fn [checks] (live-reds eng read-checks checks log-fn))})
 
 ;; ── the checks' verdict on a submitted change (ticket d1742908) ───────
 
@@ -2733,12 +2610,14 @@
   write to, which is a wiring fault and not a bad beat."
   [{:keys [source engine engine-ref log-fn]}]
   (let [eng (or engine (some-> engine-ref deref))
-        log-fn (or log-fn warn!)]
+        log-fn (or log-fn warn!)
+        read-checks (head-reader source)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    ;; the poll, the rate-limit hold, the change pass and the source's
-    ;; place are the kit's (`factorykit.forge/pass!`, ticket 75db2ef8);
-    ;; this factory's own steps are handed to it as functions
+    ;; the poll, the rate-limit hold, the change pass, the source's
+    ;; place and the red runs are the kit's (`factorykit.forge/pass!`,
+    ;; tickets 75db2ef8 and efff5d2e); this factory's own steps are
+    ;; handed to it as functions
     (kit/pass!
      {:source source
       :census fresh-census
@@ -2754,18 +2633,12 @@
       :before-changes (fn [census {:keys [refusals answered]}]
                         (source-note-pass! eng refusals answered census
                                            log-fn))
-      :after-changes
-      (fn [census {:keys [changes checks]}]
-        (let [census (unknown-pass! eng source changes census log-fn)
-              read-checks (head-reader source)
-              census (run-pass! eng source
-                                (into (vec checks)
-                                      (live-reds eng read-checks checks
-                                                 log-fn))
-                                census log-fn)
-              census (stale-pass! eng changes census log-fn)
-              census (settled-pass! eng census log-fn)
-              census (label-pass! eng source census log-fn)
+      :after-changes (fn [census {:keys [changes]}]
+                       (unknown-pass! eng source changes census log-fn))
+      :runs (run-hand eng read-checks log-fn)
+      :after-runs
+      (fn [census _]
+        (let [census (label-pass! eng source census log-fn)
               census (failing-pass! eng source read-checks census log-fn)
               census (staleness-pass! eng source read-checks census
                                       log-fn)
