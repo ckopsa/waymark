@@ -1961,6 +1961,11 @@
              {:in #{:in_review} :by :mirror :via :land :to :done}
              {:in #{:blocked} :by :wait :via :unblock :to :open}
              {:in #{:blocked} :by :wait :via :return_to_draft :to :draft}]
+   ;; HOW LONG A TICKET MAY REST (ticket 21b49b28), in seconds: open
+   ;; twelve hours, in review six, blocked seven days. `deferred` names
+   ;; none: it waits on `defer_until`. The live cracks pass files an
+   ;; aged note for a ticket past its state's age.
+   :expected-age {:open 43200 :in_review 21600 :blocked 604800}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}

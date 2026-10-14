@@ -49,15 +49,15 @@
       (is (= [{:seat "code-seat" :woken_by ["groom"] :cadence_seconds 3600}]
              (:seats submit))))
     (testing "it says how long the row has sat against its expected age"
-      (is (= {:at "2026-10-13T09:00:00Z" :expected_seconds 86400}
+      (is (= {:at "2026-10-13T09:00:00Z" :expected_seconds 43200}
              (:since w)))
-      (is (str/ends-with? (:verdict w) ", 3 h of 24 h") (:verdict w)))
+      (is (str/ends-with? (:verdict w) ", 3 h of 12 h") (:verdict w)))
     (testing "a row that is not held carries no hold"
       (is (not (contains? w :held_by))))))
 
 (deftest a-ticket-for-a-repository-no-seat-admits-says-nobody
   (let [w (read-it models (ticket "ckopsa/messa" []))]
-    (is (= "nobody: no active seat holds a door out of open for repo ckopsa/messa, 3 h of 24 h"
+    (is (= "nobody: no active seat holds a door out of open for repo ckopsa/messa, 3 h of 12 h"
            (:verdict w)))
     (is (seq (:next w)))
     (is (every? #(= "nobody" (:held_by %)) (:next w)))))

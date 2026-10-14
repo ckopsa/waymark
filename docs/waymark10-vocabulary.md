@@ -344,6 +344,23 @@ speaks of the other kind's fields. Each entry validates at the def site
 (`checks/check-reached-by`). Advertisement-class — no fingerprint facet
 names it.
 
+`:expected-age` names how long a row may **rest in a state** with no
+write, in seconds (ticket 21b49b28):
+
+```clojure
+:expected-age {:open 43200 :in_review 21600 :blocked 604800}
+```
+
+It moves no row. The live cracks pass (`waymark10.server.live-cracks`)
+reads it: a row no write has touched for longer than its state's age is
+filed once as an `aged` draft ticket. A state the key does not name
+takes the default for its NAME (`live-cracks/default-ages`: open,
+submitted and in_review one day, blocked seven days), and a state with
+neither has no age, so a row may rest there as long as it likes. Each
+entry validates at the def site (`checks/check-expected-age`): the state
+is one the kind declares, and the value is a positive integer.
+Advertisement-class — no fingerprint facet names it.
+
 An action's `:display {:marks "<rel>"}` says that this verb is answered
 about the row's PARTS before it is answered about the row (waymark-wxk),
 and names the **link rel** whose rows those parts are:
