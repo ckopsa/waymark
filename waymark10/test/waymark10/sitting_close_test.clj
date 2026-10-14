@@ -506,6 +506,12 @@
         "a transition after the refusal means it was not refused out")
     (is (= "cut_short" (outcome (assoc a-sat :closed_by "hook" :turns 9) [])))
     (is (= "idle" (outcome (assoc a-sat :closed_by "hook" :turns 10) [])))
+    (is (= "completed" (outcome (assoc a-sat :closed_by "hook" :turns 4)
+                                [{:kind :verdict :action :judge :at t0}]))
+        "a verdict and a stop is a finished sitting, not a cut-short one")
+    (is (= "completed" (outcome a-sat [{:kind :verdict :action :judge :at t0}])))
+    (is (= "refused_out" (outcome refused [{:kind :verdict :action :judge :at t0}]))
+        "a verdict before a refusal that ended the sitting is refused out")
     (is (= "idle" (outcome a-sat [])))
     (is (= "idle" (outcome a-sat [{:kind :meal :action :submit :at t0}]))
         "only a change's submit counts")
@@ -552,9 +558,10 @@
         outcome #(:outcome (seats/sitting-health sat judged [] %))]
     (is (= "submitted" (outcome [{:kind "verdict" :action "judge"}]))
         "a judge that judged delivered, however few its turns")
-    (is (= "cut_short" (outcome nil))
-        "a seat that states no delivers delivers a change's submit")
-    (is (= "cut_short" (:outcome (seats/sitting-health sat judged [])))
+    (is (= "completed" (outcome nil))
+        "a seat that states no delivers delivers a change's submit, and its
+         verdict still completes the sitting")
+    (is (= "completed" (:outcome (seats/sitting-health sat judged [])))
         "…and so does a caller that passes none")
     (is (= "cut_short" (outcome [{:kind "verdict" :action "dismiss"}]))
         "the action is part of the delivery")
@@ -754,7 +761,7 @@
     (testing "six submits of ten is a rate of 0.6, and each outcome is counted"
       (is (= 10 (:sittings health)))
       (is (= {:submitted 6 :stalled 0 :never_sat 1 :refused_out 1
-              :cut_short 2 :idle 0}
+              :completed 0 :cut_short 2 :idle 0}
              (:outcomes health)))
       (is (== 0.6 (:submit_rate health))))
 
@@ -817,7 +824,7 @@
     (testing "ten sittings, six of them submitted, are a rate of 0.6"
       (is (= 10 (:sittings rolled)))
       (is (== 0.6 (bigdec (:submit_rate rolled))))
-      (is (= [6 0 1 1 2 0]
+      (is (= [6 0 1 1 0 2 0]
              (mapv #(get-in rolled [:outcomes (keyword %)]) seats/outcomes)))
       (is (== 5 (bigdec (:cost_usd rolled))))
       (is (= 0 (:merged_prs rolled)) "this engine serves no change kind")

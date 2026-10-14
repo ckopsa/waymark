@@ -1,0 +1,206 @@
+(ns waymark10.in-flight-test
+  "The in-flight read (ticket d0407b84): every open row, with its
+  waiting_on, grouped by who holds it. `entry` and `answer` are pure,
+  so the grouping is judged over maps with no engine; the wire tests
+  read GET /api/-/in-flight through the real handler for the grant
+  scope, the filters and anonymity."
+  (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.in-flight :as in-flight]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
+  (:import (java.time Instant)))
+
+;; ── pure: one row in each holder group ───────────────────────────────────
+
+(def ^:private job
+  {:kind :job
+   :domain :work
+   :states [:draft :open :parked :syncing :done]
+   :initial :draft
+   :terminal #{:done}
+   :expected-age {:draft 3600 :open 3600 :parked 3600 :syncing 3600}
+   ;; the mirror lands a syncing row; no seat takes that door
+   :left-by [{:in #{:syncing} :by :mirror :via :land :to :done}]
+   :actions {:groom {:from #{:draft} :to :open}
+             :finish {:from #{:open} :to :done}
+             :release {:from #{:parked} :to :open}
+             :land {:from #{:syncing} :to :done}}})
+
+(defn- seat [name data]
+  {:id name :state :active :data (assoc data :name name)})
+
+(def ^:private seats
+  [(seat "coder" {:scope [{:kind "job" :actions ["finish"]}]
+                  :cadence_seconds 3600})
+   (seat "mayor" {:mode "interactive"
+                  :scope [{:kind "job" :actions ["groom"]}]})])
+
+(def ^:private now (Instant/parse "2026-10-14T12:00:00Z"))
+
+(defn- row [id state hours-ago data]
+  {:id id :state state
+   :updated-at (.minusSeconds ^Instant now (long (* 3600 hours-ago)))
+   :data data})
+
+(defn- entries [rows]
+  (keep #(in-flight/entry job seats {:job job} %
+                          {:now now :data (:data %) :summary (str "job " (:id %))})
+        rows))
+
+(def ^:private house
+  [(row "draft-1" :draft 0.5 {:repo "r1"})
+   (row "open-young" :open 0.5 {:repo "r1"})
+   (row "open-old" :open 2 {:repo "r2"})
+   (row "parked-1" :parked 3 {:repo "r2"})
+   (row "sync-1" :syncing 1.5 {:repository "r1"})
+   (row "done-1" :done 9 {:repo "r1"})])
+
+(deftest each-row-is-held-by-who-its-doors-say
+  (let [by-id (into {} (map (juxt :id identity)) (entries house))]
+    (is (= "person" (:holder (by-id "draft-1"))) "only the mayor grooms")
+    (is (= "seat:coder" (:holder (by-id "open-old"))))
+    (is (= "nobody" (:holder (by-id "parked-1"))) "no seat releases")
+    (is (= "source:mirror" (:holder (by-id "sync-1"))))
+    (testing "a terminal row is not in flight"
+      (is (nil? (by-id "done-1"))))
+    (testing "age, expected age and overdue"
+      (let [e (by-id "open-old")]
+        (is (= 7200 (:age_seconds e)))
+        (is (= 3600 (:expected_seconds e)))
+        (is (= 2.0 (:overdue e)))
+        (is (= "job open-old" (:summary e)))
+        (is (= "work" (:domain e)))
+        (is (string? (get-in e [:waiting_on :verdict])))))
+    (testing "repo reads `repository` too"
+      (is (= "r1" (:repo (by-id "sync-1")))))))
+
+(deftest the-answer-groups-and-sorts
+  (let [doc (in-flight/answer (entries house) {})]
+    (testing "person, nobody, then the seats, then the sources"
+      (is (= ["person" "nobody" "seat:coder" "source:mirror"]
+             (mapv :holder (:groups doc)))))
+    (testing "inside a group, the most overdue first"
+      (let [coder (some #(when (= "seat:coder" (:holder %)) %) (:groups doc))]
+        (is (= ["open-old" "open-young"] (mapv :id (:rows coder))))
+        (is (= 2 (:total coder)))
+        (is (= 1 (:overdue coder)))))
+    (testing "the four counts"
+      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 3 :total 5}
+             (:counts doc))))))
+
+(deftest the-answer-filters
+  (let [es (entries house)]
+    (is (= ["person"]
+           (mapv :holder (:groups (in-flight/answer es {:holder "person"})))))
+    (is (= #{"open-old" "parked-1"}
+           (into #{} (comp (mapcat :rows) (map :id))
+                 (:groups (in-flight/answer es {:repo "r2"})))))
+    (is (= 5 (get-in (in-flight/answer es {:domain "work" :kind "job"})
+                     [:counts :total])))
+    (is (= 0 (get-in (in-flight/answer es {:domain "home"}) [:counts :total])))
+    (is (= {:repo "r2"} (:filters (in-flight/answer es {:repo "r2"}))))))
+
+(deftest a-kind-with-no-expected-age-is-not-in-flight
+  (is (nil? (in-flight/open-states {:kind :memo :states [:jotted :filed]
+                                    :terminal #{:filed}})))
+  (is (= [:draft :open :parked :syncing] (in-flight/open-states job))))
+
+;; ── the wire: anonymity, grant scope, ?kind= ─────────────────────────────
+
+(def ^:private quiet
+  {:idempotent true :reversible false :confirm false
+   :one-way "History keeps the record."})
+
+(defn- kind-of [k plural states terminal ages]
+  (r/resource
+   (cond-> {:kind k
+            :plural plural
+            :states states
+            :initial (first states)
+            :terminal terminal
+            :summary "{data.title} · {state}"
+            :schema [:map [:title [:string {:min 1 :max 80}]]]
+            :actions {:close {:from #{(first states)} :to (last states)
+                              :safety quiet}}}
+     ages (assoc :expected-age ages))))
+
+(def ^:private flight-task
+  (kind-of :flight_task "flight_tasks" [:open :closed] #{:closed} {:open 3600}))
+
+(def ^:private flight-chore
+  (kind-of :flight_chore "flight_chores" [:open :closed] #{:closed} {:open 3600}))
+
+(def ^:private flight-memo
+  ;; no expected age in any state: never in flight
+  (kind-of :flight_memo "flight_memos" [:jotted :filed] #{:filed} nil))
+
+(def ^:private elena (t/principal {:id "elena" :display "Elena"}))
+(def ^:private spy (t/principal {:id "spy" :type :agent :display "Spy"}))
+
+(defn- get-in-flight [h headers query-string]
+  (let [resp (h (cond-> {:request-method :get :uri "/api/-/in-flight"
+                         :headers headers}
+                  query-string (assoc :query-string query-string)))]
+    (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+
+(defn- flight-ids [parsed]
+  (into #{}
+        (comp (mapcat :rows)
+              (filter #(contains? #{"flight_task" "flight_chore" "flight_memo"}
+                                  (:kind %)))
+              (map :id))
+        (:groups parsed)))
+
+(deftest the-in-flight-route-on-the-wire
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [flight-task flight-chore flight-memo]})
+        h (engine/handler eng)
+        mk (fn [k title]
+             (str (get-in (inv/create! eng k {:title title} {:principal elena})
+                          [:row :id])))
+        t1 (mk :flight_task "t1")
+        c1 (mk :flight_chore "c1")
+        c2 (mk :flight_chore "c2")
+        _m1 (mk :flight_memo "m1")
+        gid (get-in (inv/create!
+                     eng :grant
+                     {:audience "spy"
+                      :scope [{:kind "flight_task" :actions []}
+                              {:kind "flight_chore" :ids [c1] :actions []}]}
+                     {:principal elena})
+                    [:row :id])
+        as-elena {"x-waymark-principal" "elena"}
+        as-spy {"x-waymark-principal" "spy"
+                "x-waymark-actor-type" "agent"
+                "x-waymark-grant" gid}]
+    (inv/invoke! eng :grant gid :accept nil {:principal spy})
+    (testing "anonymous is the concealment 404"
+      (is (= 404 (:status (get-in-flight h {} nil)))))
+    (testing "a person reads every open row; with no seat, nobody holds them"
+      (let [{:keys [status parsed]} (get-in-flight h as-elena nil)]
+        (is (= 200 status))
+        (is (= "in_flight" (:waymark parsed)))
+        (is (= #{t1 c1 c2} (flight-ids parsed)) "the memo has no expected age")
+        (is (every? #(= "nobody" (:holder %))
+                    (filter #(#{t1 c1 c2} (:id %))
+                            (mapcat :rows (:groups parsed)))))
+        (is (= (:total (:counts parsed))
+               (reduce + (map :total (:groups parsed)))))
+        (is (number? (:took_ms parsed)))))
+    (testing "a scoped caller sees only the rows its grant admits"
+      (let [{:keys [status parsed]} (get-in-flight h as-spy nil)]
+        (is (= 200 status))
+        (is (= #{t1 c1} (flight-ids parsed)))
+        (is (every? #{"flight_task" "flight_chore"}
+                    (map :kind (mapcat :rows (:groups parsed)))))))
+    (testing "?kind= narrows the answer to one kind"
+      (let [{:keys [parsed]} (get-in-flight h as-elena "kind=flight_chore")]
+        (is (= #{c1 c2} (flight-ids parsed)))
+        (is (= {:kind "flight_chore"} (:filters parsed)))))
+    (testing "?holder= narrows the answer to one group"
+      (let [{:keys [parsed]} (get-in-flight h as-elena "holder=person")]
+        (is (= #{} (flight-ids parsed)))))))
