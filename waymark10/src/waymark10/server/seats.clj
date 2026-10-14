@@ -1839,9 +1839,11 @@
                   (or (= "missed" closed) (true? (:missed data))
                       (and (zero? turns) (empty? served))) "never_sat"
                   (and refused-last (not recovered)) "refused_out"
-                  ;; a judge's work is its verdict, however few its turns
-                  ;; and whatever its seat declares it delivers (e2a379e0)
-                  (moved? transitions "verdict" "judge") "completed"
+                  ;; a judge's work is its verdict, however few its turns,
+                  ;; when its seat declares no delivers; a declared
+                  ;; delivery still decides (e2a379e0)
+                  (and (empty? delivers)
+                       (moved? transitions "verdict" "judge")) "completed"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
