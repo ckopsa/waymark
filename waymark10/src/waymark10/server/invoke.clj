@@ -628,6 +628,12 @@
                           (or (get rs (keyword t))
                               (some (fn [[_ r]] (when (= t (:plural r)) r))
                                     rs))))
+             ;; …and the whole registry (ticket 5f3c276c): every kind
+             ;; this engine serves, assembled. The seat doors read it
+             ;; to run the cracks audit over the seats as they would
+             ;; stand; the render probe carries none, and a guard that
+             ;; finds none declines to guess
+             :rdefs (fn [] (vals (resources engine)))
              ;; the log read by LEASH (seat health 1, ticket fad586b7):
              ;; the transitions an actor carrying this grant made in a
              ;; window, a nil bound open — how a sitting's close reads
