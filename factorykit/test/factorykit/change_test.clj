@@ -108,10 +108,23 @@
           :head_branch :worktree_dirty :rounds :stall_reason :stalled_at
           :stalled_by :born_from]
          (mapv first (:fields kit/core))))
-  (testing "and the source's eight doors (ticket 47e2c880)"
+  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47)"
     (is (= #{:adopt :adopt_submitted :observe :observe_submitted :fail
-             :recover :merge :close}
+             :recover :merge :close
+             :stall :unstick :unstick_submitted :rebranch}
            (set (keys (:actions kit/core)))))
-    (is (= #{:fail :recover :merge :close}
+    (is (= #{:fail :recover :merge :close :stall :unstick :unstick_submitted}
            (set (remove #(contains? (get-in kit/core [:actions %]) :handler)
                         (keys (:actions kit/core))))))))
+
+(deftest a-stall-is-written-on-the-row-and-the-way-back-clears-it
+  (let [row (kit/stalled {:data {:rounds 2}}
+                         {:why "It cannot be built as written."}
+                         {:now "2026-10-14T00:00:00Z" :principal {:id "seat-1"}})]
+    (is (= {:rounds 2
+            :stall_reason "It cannot be built as written."
+            :stalled_at "2026-10-14T00:00:00Z"
+            :stalled_by "seat-1"}
+           (:data row)))
+    (is (= {:rounds 2 :stall_reason nil :stalled_at nil :stalled_by nil}
+           (:data (kit/unstalled row))))))
