@@ -4,7 +4,10 @@
   declaration the engine serves is the one it served when the kind was
   one literal map. The pin below is the digest of that literal's
   declaration, taken on the commit before the kit; a change to the kind
-  that is meant moves the pin with it."
+  that is meant moves the pin with it. Ticket 48f9605b moved it:
+  `close_without_pr` leaves `failing` and `stuck` for the kit's sweep
+  behind `the-engine-closes-a-stopped-change`, and writes its sentence
+  to `superseded_by`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -33,7 +36,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "f460daaeb372358cfe0db2f781722fa6fa24f011bb78bc7a3d3ae55f77cb84ee")
+  "06cda34a3d640735f65e370e69926b538a17198ec4013f38c0627476c71b9040")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
