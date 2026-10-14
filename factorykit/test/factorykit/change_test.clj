@@ -105,8 +105,13 @@
   (is (= #{:merged} (:terminal kit/core)))
   (is (= [[:change_id]] (:unique kit/core)))
   (is (= [:change_id :repository :number :title :author :base_branch
-          :head_branch :worktree_dirty :rounds :stall_reason :stalled_at
-          :stalled_by :born_from]
+          :head_branch :head_sha :draft :mergeable :files_changed
+          :lines_added :lines_removed :touched_paths :labels :review_state
+          :missing_checks :behind_base :base_compared_at
+          :missing_checks_head :worktree_dirty :rounds :stall_reason
+          :stalled_at :stalled_by :failing_checks :conflicts :rerun_head
+          :rerun_note :landing_error :train_red_head :train_red
+          :unadopted_since :adoption_note :url :born_from]
          (mapv first (:fields kit/core))))
   (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47)"
     (is (= #{:adopt :adopt_submitted :observe :observe_submitted :fail
@@ -116,6 +121,26 @@
     (is (= #{:fail :recover :merge :close :stall :unstick :unstick_submitted}
            (set (remove #(contains? (get-in kit/core [:actions %]) :handler)
                         (keys (:actions kit/core))))))))
+
+(def ^:private not-a-field
+  "A door's input that is no field of the row: the stall's sentence,
+  which `stalled` writes as `stall_reason`."
+  {:stall #{:why}})
+
+(deftest the-core-alone-declares-every-field-its-doors-write
+  ;; ticket 354a7dc3: a factory that composes the core with nothing of
+  ;; its own gets no door that writes a field its schema does not have
+  (let [built (kit/build kit/core {})
+        declared (set (map first (rest (:schema built))))]
+    (is (= (set (map first (:fields kit/core))) declared))
+    (testing "every door's input field is a declared field"
+      (doseq [[door {:keys [input]}] (:actions built)
+              field (remove (get not-a-field door #{}) (map first (rest input)))]
+        (is (contains? declared field)
+            (str (name door) " takes " (name field) ", and the core declares no such field"))))
+    (testing "and so is every field a core handler names itself"
+      (is (every? declared [:head_sha :unadopted_since :adoption_note
+                            :stall_reason :stalled_at :stalled_by])))))
 
 (deftest a-stall-is-written-on-the-row-and-the-way-back-clears-it
   (let [row (kit/stalled {:data {:rounds 2}}

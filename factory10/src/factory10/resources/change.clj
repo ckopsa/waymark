@@ -1131,86 +1131,13 @@
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :url :born_from
                  :superseded_by :domain :requested_by]
-   ;; the fields that are factory10's own; change_id to head_branch,
-   ;; worktree_dirty, rounds, the stall's three and born_from are the
-   ;; kit's
+   ;; the fields that are factory10's own. The kit's are change_id to
+   ;; head_branch, worktree_dirty, rounds, the stall's three, born_from,
+   ;; and every field a source door of the kit writes (ticket 354a7dc3):
+   ;; head_sha to missing_checks_head, failing_checks to adoption_note,
+   ;; and url.
    :schema
    [:map
-    [:head_sha {:optional true
-                :x-display
-                {:label "The head commit"
-                 :help "The full sha of the commit at the head of the branch. A ci_run names the same sha, so a red run can be read against the commit that caused it."}}
-     [:maybe [:string {:max 64}]]]
-    [:draft {:optional true
-             :x-display
-             {:label "A draft"
-              :help "True while the pull request is a draft. A draft asks for no review yet."}}
-     [:maybe :boolean]]
-    [:mergeable {:optional true :filter #{:eq :in}
-                 :x-display
-                 {:label "Can it merge"
-                  :choices {"clean" "It merges — no conflict and no block"
-                            "conflicted" "It conflicts with the base branch"
-                            "blocked" "A required check or a review blocks it"
-                            "unknown" "GitHub has not answered yet"}}}
-     [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-    [:files_changed {:optional true
-                     :x-display
-                     {:label "Files changed"
-                      :help "How many files the change touches."}}
-     [:maybe [:int {:min 0}]]]
-    [:lines_added {:optional true
-                   :x-display
-                   {:label "Lines added"
-                    :help "How many lines the change adds. A repository policy may hold a ceiling against this number."}}
-     [:maybe [:int {:min 0}]]]
-    [:lines_removed {:optional true
-                     :x-display
-                     {:label "Lines removed"
-                      :help "How many lines the change removes."}}
-     [:maybe [:int {:min 0}]]]
-    ;; a list of scalars: every client draws it as rows.
-    ;; NOT filterable, deliberately: a containment filter over an
-    ;; array promotes an index of its own, and no reader of this bead
-    ;; asks "which changes touch this path" yet. The field is here so
-    ;; a policy can read it off the row.
-    [:touched_paths {:optional true
-                     :x-display
-                     {:label "The paths it touches"
-                      :help "Every path the change writes to, as GitHub lists them. A policy that fences a directory reads this list."}}
-     [:maybe [:vector [:string {:max 400}]]]]
-    [:labels {:optional true
-              :x-display
-              {:label "Labels"
-               :help "The labels that stand on the pull request now. The mirror pushes a ci label here; it does not invent one."}}
-     [:maybe [:vector [:string {:max 100}]]]]
-    [:review_state {:optional true :filter #{:eq :in}
-                    :x-display
-                    {:label "The review"
-                     :choices {"pending" "Nobody has reviewed it yet"
-                               "approved" "A reviewer approved it"
-                               "changes_requested" "A reviewer asked for changes"
-                               "commented" "A reviewer commented and asked for nothing"}}}
-     [:maybe [:enum "pending" "approved" "changes_requested" "commented"]]]
-    ;; ── a head that lacks a required check (ticket 498a089e) ──────
-    ;; the forge pass writes these; the merge line reads them to bring
-    ;; forward a front the rig would leave `waiting` forever
-    [:missing_checks {:optional true
-                      :x-display
-                      {:label "Required checks that never ran"
-                       :help "The policy's required checks with no run at all on the head — not merely pending. A branch cut before its base gained a workflow never runs that workflow's check."}}
-     [:maybe [:vector [:string {:max 200}]]]]
-    [:behind_base {:optional true
-                   :x-display
-                   {:label "Behind its base"
-                    :help "True when the head lacks the base branch's current head, as the forge's compare of base and head answered."}}
-     [:maybe :boolean]]
-    [:base_compared_at {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 40}]]]
-    ;; the head the two facts above were read at (ticket 716d12ba): the
-    ;; merge line trusts them only while it is still the row's head_sha
-    [:missing_checks_head {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 64}]]]
     ;; the head the forge pass last read green on every required check
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
@@ -1245,68 +1172,6 @@
                :label "The branch on the bench"
                :help "The branch the worktree sits on. It is the head branch when GitHub already named one, and the policy's pattern with this row's own id when it did not. One branch for each change, so the next sitting finds the last one's work."}}
      [:maybe [:string {:max 200}]]]
-    ;; written by the engine's `fail` and `stick`, cleared by
-    ;; `recover` and by the next submit (ticket d1742908)
-    [:failing_checks {:optional true
-                      :x-display
-                      {:label "The checks that went red"
-                       :help "The required checks that finished red on the head the seat last pushed. The house writes them when it moves the change to failing, and clears them when the head goes green or the seat submits again."}}
-     [:maybe [:vector [:string {:max 200}]]]]
-    ;; written beside `merge-conflict` in `failing_checks` when the
-    ;; bench can name the paths; cleared with it (ticket 5f12e772)
-    [:conflicts {:optional true
-                 :x-display
-                 {:label "The paths that conflict"
-                  :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
-     [:maybe [:vector [:string {:max 400}]]]]
-    ;; written by the forge pass through the observe doors (ticket
-    ;; 22f91244): the head whose interrupted run it re-ran, once, and
-    ;; a note when that same head died without a verdict again
-    [:rerun_head {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 64}]]]
-    [:rerun_note {:optional true
-                  :x-display
-                  {:label "A runner that keeps dying"
-                   :help "The house re-runs a head's checks once when they die without a verdict about the code. When the same head dies again, this says so, and a person looks at the runner."}}
-     [:maybe [:string {:max 240}]]]
-    ;; written beside `landing:<step>` in `failing_checks` when the
-    ;; rig's landing of a submit failed; cleared with it (ticket
-    ;; 92871afb)
-    [:landing_error {:optional true
-                     :x-display
-                     {:widget "prose"
-                      :label "Why the push did not land"
-                      :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
-     [:maybe [:string {:max 4000}]]]
-    ;; written by a merge train that found this change red though its
-    ;; own head is green (ticket 6566d32f): the head the train judged,
-    ;; and the train's branch and run url. While `head_sha` still is
-    ;; that head the forge pass does not recover the change; a new
-    ;; head, or the seat's next submit, clears both.
-    [:train_red_head {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 64}]]]
-    [:train_red {:optional true
-                 :x-display
-                 {:widget "prose"
-                  :label "Why a merge train found it red"
-                  :help "This change's own checks are green, and the merge train that carried it with others went red with it: the train's branch and the url of its run. `failing_checks` names the train's red checks. The change stays failing until its head moves."}}
-     [:maybe [:string {:max 1000}]]]
-    ;; a submit whose landing opened a pull request the forge never
-    ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
-    ;; and the note it writes once the window has passed. The adoption
-    ;; clears both. `unadopted_since` is the mirror's first-sight stamp,
-    ;; NOT a landing: no bench landing or merge writes it.
-    [:unadopted_since {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 64}]]]
-    [:adoption_note {:optional true
-                     :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
-                     :x-display
-                     {:widget "prose"
-                      :label "A pull request nobody adopted"
-                      :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
-     [:maybe [:string {:max 500}]]]
-    ;; hidden: the origin LINK below is the affordance, and a raw URL
-    ;; in the fields is noise (task_list's own spelling)
     ;; the house's merge line (ticket b85aded5): the merge pass writes
     ;; these as a maintenance write each time they move, and clears
     ;; them when the change leaves submitted
@@ -1334,8 +1199,6 @@
                    {:widget "prose"
                     :label "Why it is parked or held"
                     :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
-     [:maybe [:string {:max 500}]]]
-    [:url {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede` and by nothing else. Hidden, as the url is.
