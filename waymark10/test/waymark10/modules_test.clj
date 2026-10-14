@@ -262,6 +262,9 @@
                "/api/-/cracks"
                ;; …and the seats that audit read (ticket 42259e4b)
                "/api/-/cracks/seats"
+               ;; …and every open row with who holds it (ticket
+               ;; d0407b84), read from the same seats
+               "/api/-/in-flight"
                ;; …and the door a session's end reports its bill
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer

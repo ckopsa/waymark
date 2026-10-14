@@ -72,6 +72,7 @@
   (:require [clojure.string :as str]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.grants :as grants]
+            [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
@@ -1220,11 +1221,33 @@
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "No such route."}))))))
 
+(defn- in-flight-doc
+  "GET /api/-/in-flight?domain=&repo=&kind=&holder= — every open row
+  the caller's grant admits, with its waiting_on, grouped by who holds
+  it (ticket d0407b84, waymark10.server.in-flight). Anonymous gets the
+  concealment 404, as the cracks audit does."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal) (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (let [params (router/query-params req)
+            filters (into {}
+                          (keep (fn [k]
+                                  (when-some [v (some-> (get params (name k))
+                                                        str str/trim not-empty)]
+                                    [k v])))
+                          in-flight/filter-keys)]
+        (router/json-response 200 (in-flight/read-all
+                                   eng (router/visibility-of req) filters))))))
+
 (defn routes [eng]
   {:module :seats
    :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
             ["/api/-/cracks" {:get (cracks-doc eng)}]
             ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
+            ["/api/-/in-flight" {:get (in-flight-doc eng)}]
             [close-path {:post (sitting-close eng)}]
             [tally-path {:post (sitting-tally eng)}]
             [transcript-path {:post (sitting-transcript eng)}]
