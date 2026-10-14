@@ -3,7 +3,9 @@
   extension. That factory10's own repo_policy is the declaration it
   was is factory10's test, `factory10.repo-policy-kit-test`."
   (:require [clojure.test :refer [deftest is testing]]
-            [factorykit.repo-policy :as kit]))
+            [factorykit.repo-policy :as kit]
+            [malli.core :as m]
+            [malli.util :as mu]))
 
 (def ^:private a-core
   {:states [:active :retired]
@@ -109,3 +111,84 @@
     (is (= #{:restate :retire :restore :note_source} (set (keys (:actions built)))))
     (is (= :a-person-or-their-delegate-states-the-policy
            (:name kit/a-person-or-their-delegate-states-the-policy)))))
+
+(deftest the-branch-pattern-has-exactly-one-star
+  (let [create (:create-schema (kit/build kit/core {:kind :repo_policy}))
+        policy {:repository "ckopsa/waymark" :base "main" :rounds_per_change 3}]
+    (doseq [p ["waymark/*" "bench/*" "*" "pre-*-post"]]
+      (is (m/validate create (assoc policy :branch_pattern p)) p))
+    (doseq [p ["waymark" "a/*/*" "a b/*" "" (str (apply str (repeat 120 "a")) "*")]]
+      (is (not (m/validate create (assoc policy :branch_pattern p))) p))))
+
+;; ── a policy shaped like colton-tools' (ticket 39b0b3f7) ─────────────
+
+(def ^:private colton-tools-shaped
+  {:kind :repo_policy
+   :takes [[:forge {:required true
+                    :schema [:enum "bitbucket" "github"]
+                    :x-display {:choices [{:value "bitbucket" :label "Bitbucket Cloud"}
+                                          {:value "github" :label "GitHub (not polled; its landings open the pull request)"}]}}]
+           [:workspace {:required true :schema [:string {:min 1 :max 80}]}]
+           [:forge_repo {:required true :schema [:string {:min 1 :max 120}]}]]
+   :fixed [:forge :workspace :forge_repo]
+   :policy [[:opens_pr {:default true} :boolean]
+            [:orientation {:optional true} [:maybe [:string {:max 200}]]]]
+   :engine [[:source_note {:optional true} [:maybe :string]]
+            [:source_noted_at {:optional true} [:maybe :string]]]})
+
+(def ^:private a-statement
+  {:repository "nav" :branch_pattern "bench/*" :base "main"
+   :required_checks [] :rounds_per_change 3
+   :forge "bitbucket" :workspace "colton" :forge_repo "nav"
+   :opens_pr true})
+
+(deftest a-factory-tightens-the-offered-fields-it-takes
+  (let [built (kit/build kit/core colton-tools-shaped)
+        create (:create-schema built)
+        restate (get-in built [:actions :restate])]
+    (testing "create takes the statement, and refuses a missing forge or one outside the enum"
+      (is (m/validate create a-statement))
+      (is (not (m/validate create (dissoc a-statement :forge))))
+      (is (not (m/validate create (assoc a-statement :forge "gitlab"))))
+      (is (not (m/validate create (dissoc a-statement :workspace))))
+      (is (not (m/validate create (assoc a-statement :forge_repo "")))))
+    (testing "the factory's words merge over the offered ones"
+      (let [[_ props] (first (filter #(= :forge (first %)) (rest create)))]
+        (is (not (contains? props :optional)))
+        (is (= "The forge" (get-in props [:x-display :label])))
+        (is (= 2 (count (get-in props [:x-display :choices]))))))
+    (testing "restate does not take a fixed field"
+      (is (= [:repository :branch_pattern :base :required_checks :rounds_per_change
+              :opens_pr :orientation]
+             (get-in restate [:edit :prefill])
+             (mapv first (rest (:input restate)))))
+      (is (m/validate (mu/closed-schema (:input restate))
+                      (apply dissoc a-statement (:fixed colton-tools-shaped))))
+      (is (not (m/validate (mu/closed-schema (:input restate)) a-statement))))
+    (testing "the schema still holds the fixed fields, and :fixed is spent"
+      (is (= [:repository :branch_pattern :base :required_checks :rounds_per_change
+              :forge :workspace :forge_repo :opens_pr :orientation
+              :source_note :source_noted_at]
+             (mapv first (rest (:schema built)))))
+      (is (not (contains? built :fixed))))))
+
+(deftest a-tightening-that-widens-is-refused
+  (testing "a longer max, another type, an enum value the offer refuses, a looser child"
+    (doseq [entry [[:workspace {:schema [:string {:max 200}]}]
+                   [:forge {:schema :int}]
+                   [:forge {:schema [:enum "github" (apply str (repeat 61 "x"))]}]
+                   [:advisory_checks {:schema [:vector :string]}]]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"widens"
+                            (kit/build kit/core {:kind :repo_policy :takes [entry]}))
+          (pr-str entry))))
+  (testing "an option the kit does not know"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes :required, :schema and :x-display"
+                          (kit/build kit/core {:kind :repo_policy
+                                               :takes [[:forge {:default "github"}]]}))))
+  (testing "required alone drops :optional and the :maybe"
+    (is (= [:forge {} :string]
+           (last (kit/statement a-core {:takes [[:forge {:required true}]]}))))))
+
+(deftest a-fixed-field-is-a-stated-one
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no such stated field"
+                        (kit/build a-core (assoc an-extension :fixed [:note])))))

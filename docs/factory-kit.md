@@ -175,7 +175,10 @@ forge did with it.
 
 An offered field is on a factory's policy only when the extension's
 `:takes` names it. All four are optional, so a factory that takes one
-later restates no row.
+later restates no row. A factory may tighten one it takes, never widen
+it.
+
+`branch_pattern` has exactly one `*` and no space.
 
 The guard refuses a model that acts for nobody. A factory names it on
 its create door and on the three doors a person walks.
@@ -185,16 +188,18 @@ its create door and on the three doors a person walks.
 | Key | Meaning |
 | --- | --- |
 | `:policy` | the factory's own stated fields, as schema entries |
-| `:takes` | the names of the offered fields it has |
+| `:takes` | the offered fields it has: a name takes one as offered; `[name {:required true :schema … :x-display …}]` tightens it — `:required` drops `:optional`, `:schema` stands in for the offered schema, `:x-display` merges over the offered words — and `build` refuses a `:schema` that admits what the offered one refuses (a longer `:max`, another type) |
+| `:fixed` | stated fields `restate` does not take: a person states them once, at create |
 | `:policy-order` | the order of the stated fields on the form; a field it does not name follows |
 | `:engine` | the fields the engine writes and no form offers |
 | `:actions` | its own doors, and for a core door the guards, the handler, the safety and the words |
-| `:expected-age` and the other cracks law | its own; the core states none |
+| `:expected-age` and the other cracks law | its own; the core states none. Per-state expected ages are this law key, which the builder passes on, and no stated field |
 | every other key | passed through to `defresource` |
 
 `build` writes `:schema` (the stated fields, then the engine's),
 `:create-schema` (the stated fields), and the `restate` door's
-`:input` and `:edit` prefill (the stated fields again). An extension
+`:input` and `:edit` prefill (the stated fields again, but for the
+`:fixed` ones). An extension
 that names `:states`, `:initial`, `:terminal`, `:schema`,
 `:create-schema`, a core door's `:from`, `:to` or `:undo`, or
 `restate`'s `:input` or `:edit` is refused.
