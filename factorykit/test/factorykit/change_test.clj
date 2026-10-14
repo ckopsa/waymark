@@ -153,3 +153,31 @@
            (:data row)))
     (is (= {:rounds 2 :stall_reason nil :stalled_at nil :stalled_by nil}
            (:data (kit/unstalled row))))))
+
+(deftest a-factory-that-names-no-stall-handler-still-stalls-with-the-reason
+  (let [built (kit/build kit/core an-extension)
+        ctx {:now "2026-10-14T00:00:00Z" :principal {:id "seat-1"}}
+        stall (get-in built [:actions :stall :handler])
+        row (stall {:data {:rounds 2}} {:why "It cannot be built as written."} ctx)]
+    (testing "the stall writes the reason, the time and the hand on the row"
+      (is (= {:rounds 2
+              :stall_reason "It cannot be built as written."
+              :stalled_at "2026-10-14T00:00:00Z"
+              :stalled_by "seat-1"}
+             (:data row))))
+    (testing "each way back clears the sentence and starts the rounds again"
+      (doseq [door [:unstick :unstick_submitted]]
+        (is (= {:rounds 0 :stall_reason nil :stalled_at nil :stalled_by nil}
+               (:data ((get-in built [:actions door :handler]) row {} ctx)))
+            (str door))))
+    (testing "the doors that move the ask alone stay the factory's to give"
+      (is (= #{:merge :close :fail :recover}
+             (set (remove #(contains? (get-in built [:actions %]) :handler)
+                          (keys (:actions kit/core)))))))
+    (testing "a handler the extension names stands in place of the kit's"
+      (let [own (fn [row _inp _ctx] row)]
+        (is (= own (get-in (kit/build kit/core (assoc an-extension :handlers {:stall own}))
+                           [:actions :stall :handler])))
+        (is (= kit/clear-the-stall
+               (get-in (kit/build kit/core (assoc an-extension :handlers {:stall own}))
+                       [:actions :unstick :handler])))))))
