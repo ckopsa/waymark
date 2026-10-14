@@ -97,6 +97,7 @@
             [factory10.mirror :as mirror]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
+            [factorykit.change :as change-kit]
             [factorykit.forge :as kit]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -1766,41 +1767,36 @@
      census
      (live-changes eng))))
 
-(defn- ended-ticket-close
-  "The `supersede` input closing a change with no pull request whose
-  ticket has ended, else nil. A pull request is GitHub's to end."
+(defn- ended-ticket-sentence
+  "The ending of the ticket a change was built for, as the sentence the
+  kit's sweep closes it with, else nil while the ticket is live."
   [eng row]
-  (when-some [tid (when (nil? (get-in row [:data :number]))
-                    (ticket-of row))]
+  (when-some [tid (ticket-of row)]
     (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
       (when-some [ending (#{:done :dropped} (state-of t))]
-        {:superseded_by (ticket/ending-sentence
-                         ending (get-in t [:data :close_reason]))}))))
+        (ticket/ending-sentence ending (get-in t [:data :close_reason]))))))
 
 (defn sweep-ended-tickets!
   "THE LEFTOVERS, SWEPT ONCE A DEPLOY (ticket 458d65c5). A ticket's
   ending closes its unmerged changes now, but the changes left open,
   stuck or failing beside a ticket that ended before it did not move.
-  This closes each that has no pull request through `supersede`,
-  naming the ending, and leaves every change whose ticket is still
-  live. `start-passes!` runs it on
+  The kit's sweep (`factorykit.change/sweep!`, ticket 48f9605b) closes
+  each that has no pull request through `close_without_pr`, naming the
+  ending, and leaves every change whose ticket is still live. The door
+  moves no ticket. `start-passes!` runs it on
   its first beat. → how many it closed."
   [eng log-fn]
-  (let [closed (reduce
-                (fn [n row]
-                  (if-some [input (ended-ticket-close eng row)]
-                    (try
-                      (inv/invoke! eng :change (str (:id row)) :supersede input
-                                   (as-opts))
-                      (inc (long n))
-                      (catch Exception e
-                        (log-fn "the change " (:id row) " was not swept ("
-                                (ex-message e) ")")
-                        n))
-                    n))
-                0
-                (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
-                        ["open" "stuck" "failing"]))]
+  (let [closed (change-kit/sweep!
+                {:rows (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
+                               ["open" "stuck" "failing"])
+                 :ended #(ended-ticket-sentence eng %)
+                 ;; an edit door is fenced: the sweep names the version
+                 ;; it read, and a row that moved since waits a sweep
+                 :close! (fn [row door input]
+                           (inv/invoke! eng :change (str (:id row)) door input
+                                        (assoc (as-opts)
+                                               :if-match (str (:version row)))))
+                 :log-fn log-fn})]
     (log-fn closed " changes of ended tickets swept")
     closed))
 

@@ -260,8 +260,13 @@
               (some? (get-in row [:data k])) (assoc-in [:data k] nil)))
           row held-fields))
 
-(defhandler drop-what-the-wait-said [row _inp _ctx]
-  (without-the-wait row))
+(defhandler say-why-it-was-let-go [row inp _ctx]
+  ;; the kit's `close_without_pr` (ticket 48f9605b). The wait's fields
+  ;; go, and the row says what closed it: the kit's sweep closes through
+  ;; this door, and a swept change names its ticket's ending on the row
+  ;; as it did when the sweep walked `supersede`. `reopen` clears it.
+  (-> (without-the-wait row)
+      (assoc-in [:data :superseded_by] (some-> (:why inp) str not-empty))))
 
 (defhandler complete-the-task-it-was-born-from [row _inp ctx]
   ;; THE ASK IS DONE WHEN ITS PULL REQUEST MERGES (bead
@@ -638,11 +643,10 @@
   ;; ticket is in the queue again: the rounds start from zero and the
   ;; row no longer says what closed it, as the log does. A change WITH
   ;; a pull request is GitHub's reopen, and the row stands as it was.
-  (if (some? (get-in row [:data :number]))
-    row
-    (-> row
-        unstalled
-        (update :data assoc :rounds 0 :superseded_by nil))))
+  ;; The row's part is the kit's `reopened`; `superseded_by` is this
+  ;; factory's own field.
+  (cond-> (kit/reopened row)
+    (not (has-a-pull-request? row)) (assoc-in [:data :superseded_by] nil)))
 
 (defn- back-under-review
   "A stuck change put back under review: the rounds start from zero,
@@ -823,13 +827,9 @@
 ;; `the-change-has-no-pull-request` and `the-change-has-a-pull-request`
 ;; are the kit's (ticket eb500c47); `rework` and `rework_submitted`
 ;; here carry them as the kit's two unstick doors do.
-
-(defguardfn no-pull-request-to-close
-  {:reads []
-   :open "No door here changes this verdict. A change with a pull request ends at GitHub: close the pull request there, and the mirror closes the row with its own close."
-   :explain "This change has a pull request, so GitHub owns its ending. Close the pull request at GitHub and the mirror follows; this door is for a change GitHub never saw."}
-  [row _inp _ctx]
-  (if (has-a-pull-request? row) (t/deny) (t/allow)))
+;; `no-pull-request-to-close`, `the-engine-closes-a-stopped-change` and
+;; `only-a-person-closes-a-change` are the kit's too (ticket 48f9605b),
+;; on its `close_without_pr`.
 
 (defguardfn the-mirror-or-its-tickets-ending-closes-it
   {:reads [:principal :within]
@@ -872,24 +872,6 @@
 
 (def ^:private take-domain-description
   "Its ticket moved into another domain, and the change went with it")
-
-(defguardfn only-a-person-closes-a-change
-  {:reads [:principal :within]
-   :hold true
-   :vars [:title :branch]
-   :open "No door clears this one. The call waits as a held_call for the person's tap: ending a change a seat was building is the person's judgment, and the person's Allow runs it exactly as written."
-   :explain "Closing {title} on {branch} is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
-  [row _inp ctx]
-  ;; `only-a-person-drops-the-branch`, one door over: every hand but an
-  ;; agent's passes, a delegate's included in the hold (the mayor asks,
-  ;; the person taps), and the one agent close this admits is the
-  ;; engine's replay of the held call its person allowed.
-  (cond
-    (not= :agent (:type (:principal ctx))) (t/allow)
-    (holds/approved-hold? ctx :change :close_without_pr (:id row)) (t/allow)
-    :else (t/deny {:vars {:title (str (get-in row [:data :title]))
-                          :branch (str (or (get-in row [:data :branch])
-                                           (get-in row [:data :head_branch])))}})))
 
 ;; ── the law, written down as a scenario ─────────────────────────────
 ;;
@@ -1081,8 +1063,9 @@
   (`:handlers`), and the fields that are not shared. The states, the
   tomb, the one-row index, the shared fields, the source's eight
   doors, the stall's four (stall, unstick, unstick_submitted and
-  rebranch, ticket eb500c47) and the cracks law are
-  `factorykit.change/core`."
+  rebranch, ticket eb500c47), the PR-less ending's two
+  (close_without_pr and reopen, ticket 48f9605b) and the cracks law
+  are `factorykit.change/core`."
   {:kind :change
    :plural "changes"
    ;; the day job's work, not the family's — see the ns docstring
@@ -1201,7 +1184,8 @@
                     :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
      [:maybe [:string {:max 500}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
-    ;; written by `supersede` and by nothing else. Hidden, as the url is.
+    ;; written by `supersede`, and by `close_without_pr` with the
+    ;; sentence it was closed for (ticket 48f9605b). Hidden, as the url is.
     [:superseded_by {:optional true :not-a-ref "The web address (a URL) of the pull request that merged in this one's place, not a row id."
                      :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
@@ -1288,7 +1272,11 @@
               :recover clear-the-failing-checks
               :stall shelve-the-ticket
               :unstick unstick-the-change
-              :unstick_submitted unstick-the-pull-request}
+              :unstick_submitted unstick-the-pull-request
+              ;; AND OF TWO MORE (ticket 48f9605b): what the close drops
+              ;; and what the reopen clears are this factory's fields.
+              :close_without_pr say-why-it-was-let-go
+              :reopen reopen-the-change}
    :actions
    {;; THE MIRROR'S REFRESH, for `failing` (ticket d1742908). `observe`
     ;; and `observe_submitted` are the kit's; a v10 action declares one
@@ -1335,27 +1323,10 @@
     ;; because `:touches` cannot name a kind factory10 boots without
     ;; — see `complete-the-task-it-was-born-from`.
 
-    ;; the ending of a change GitHub never saw (ticket be2c2c16): the
-    ;; mirror's `close` follows a pull request, so a row with no number
-    ;; had no door to its end. A person's, held when a model asks, and it
-    ;; leaves the ticket where it stands — see `:deviations`.
-    :close_without_pr
-    {:from #{:open :submitted} :to :closed
-     :input [:map
-             [:why {:examples ["A duplicate: its ticket merged under another row."]
-                    :x-display
-                    {:widget "prose"
-                     :label "Why it ends"
-                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move. It is at most 480 characters."}}
-              [:string {:min 1 :max 480}]]]
-     :edit {:draft {:shared true :live true}}
-     :guards [no-pull-request-to-close
-              only-a-person-closes-a-change]
-     :handler drop-what-the-wait-said
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open; the house opens it again only when its ticket is in the queue and a code seat sits down to it."}
-     :display {:label "Close" :style :danger :order 30
-               :description "Let go of a change that never opened a pull request — its ticket stays where it is"}}
+    ;; `close_without_pr`, the ending of a change GitHub never saw
+    ;; (ticket be2c2c16), is the kit's (ticket 48f9605b), with the
+    ;; handler `:handlers` names. It leaves the ticket where it stands —
+    ;; see `:deviations`.
 
     ;; the merge's close of a DUPLICATE (ticket 3ec37f66): another
     ;; change born from the same ask on the same branch merged, so this
@@ -1376,14 +1347,7 @@
      :display {:label "Superseded" :order 18
                :description "Another change for the same ask merged, and this one is closed"}}
 
-    :reopen
-    {:from #{:closed} :to :open
-     :guards [the-mirror-writes-this-row]
-     :handler reopen-the-change
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub reopened this pull request. The row moves with it, and the record of the close stands beside it."}
-     :display {:label "Reopened" :order 4
-               :description "GitHub reopened the pull request"}}
+    ;; `reopen` is the kit's too, with the handler `:handlers` names.
 
     ;; ── THE ADOPTION (bead waymark-fp62.6.3.10) ────────────────────
     ;; A row a seat's sit minted for an ask carries the ask's own id

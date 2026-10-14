@@ -28,11 +28,20 @@
   and `build` gives the three doors `row-handlers`, the row's part
   alone (ticket d42cf49c).
 
+  A CLOSED CHANGE WITH NO PULL REQUEST IS NO TOMB IN ANY FACTORY (step
+  2c, ticket 48f9605b): close_without_pr and reopen are the core's,
+  with the guards that say which change the first door is for and
+  whose hand closes it. Each takes its handler from the extension's
+  `:handlers`, and `reopened` is the row's part of the second. `sweep!`
+  closes the changes with no pull request whose work is over, through
+  close_without_pr, which moves no ask.
+
   A factory in this repository depends on the kit by `:local/root`. A
   factory outside it depends on it by `:git/url` with
   `:deps/root \"factorykit\"`."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler]]
+            [waymark10.holds :as holds]
             [waymark10.types :as t]
             [waymark10.verdict :as verdict]))
 
@@ -82,6 +91,46 @@
   [row _inp _ctx]
   (if (has-a-pull-request? row) (t/allow) (t/deny)))
 
+;; ── the ending of a change the forge never saw ──────────────────────
+
+(defguardfn no-pull-request-to-close
+  {:reads []
+   :open "No door here changes this verdict. A change with a pull request ends at GitHub: close the pull request there, and the mirror closes the row with its own close."
+   :explain "This change has a pull request, so GitHub owns its ending. Close the pull request at GitHub and the mirror follows; this door is for a change GitHub never saw."}
+  [row _inp _ctx]
+  (if (has-a-pull-request? row) (t/deny) (t/allow)))
+
+(defguardfn the-engine-closes-a-stopped-change
+  {:reads [:principal]
+   :hide true
+   :explain "A failing change and a stuck one are ended by the engine's sweep when their work is over. A person puts a stuck change back to work, and closes one that is open or submitted."}
+  [row _inp ctx]
+  ;; `close_without_pr` leaves `failing` and `stuck` for `sweep!` and
+  ;; for no other hand: a stuck change is the house asking a person to
+  ;; look at it, and the doors it offers that person stay the way back.
+  (if (and (contains? #{:failing :stuck} (some-> (:state row) name keyword))
+           (not= :system (:type (:principal ctx))))
+    (t/deny)
+    (t/allow)))
+
+(defguardfn only-a-person-closes-a-change
+  {:reads [:principal :within]
+   :hold true
+   :vars [:title :branch]
+   :open "No door clears this one. The call waits as a held_call for the person's tap: ending a change a seat was building is the person's judgment, and the person's Allow runs it exactly as written."
+   :explain "Closing {title} on {branch} is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row _inp ctx]
+  ;; every hand but an agent's passes, a delegate's included in the
+  ;; hold (the mayor asks, the person taps), and the one agent close
+  ;; this admits is the engine's replay of the held call its person
+  ;; allowed. The engine's own hand passes, so `sweep!` closes here.
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :change :close_without_pr (:id row)) (t/allow)
+    :else (t/deny {:vars {:title (str (get-in row [:data :title]))
+                          :branch (str (or (get-in row [:data :branch])
+                                           (get-in row [:data :head_branch])))}})))
+
 ;; ── what a pull request writes back onto the row ────────────────────
 
 (defhandler observe-the-pull-request [row inp ctx]
@@ -124,6 +173,18 @@
   [row]
   (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
 
+(defn reopened
+  "A closed change with no pull request starts again (ticket ab6af67f):
+  the rounds start from zero and the row no longer says why it stopped.
+  A change WITH a pull request is the forge's reopen, and the row
+  stands as it was. This is the row's part of a factory's `reopen`
+  handler; a field of the factory's own that says what closed the
+  change is the factory's to clear."
+  [row]
+  (if (has-a-pull-request? row)
+    row
+    (-> row unstalled (assoc-in [:data :rounds] 0))))
+
 ;; THE ROW'S PART ALONE (ticket d42cf49c). A factory that has no ask to
 ;; move names no handler for the stall or the way back, and a door with
 ;; no handler writes nothing: the stall kept no reason. `build` puts
@@ -136,12 +197,63 @@
   ;; a person looked at it, so the rounds start again
   (-> row unstalled (assoc-in [:data :rounds] 0)))
 
+;; AND OF THE PR-LESS ENDING (ticket 48f9605b): the close's sentence
+;; rides the log, and the core has no field of its own for it.
+
+(defhandler let-the-change-go [row _inp _ctx]
+  row)
+
+(defhandler start-the-change-again [row _inp _ctx]
+  (reopened row))
+
 (def row-handlers
   "The handler `build` gives a core door the extension's `:handlers`
-  does not name: the row's part of the stall and of the way back."
+  does not name: the row's part of the stall and of the way back, and
+  of the PR-less ending and its reopen."
   {:stall write-the-stall
    :unstick clear-the-stall
-   :unstick_submitted clear-the-stall})
+   :unstick_submitted clear-the-stall
+   :close_without_pr let-the-change-go
+   :reopen start-the-change-again})
+
+;; ── the changes with no pull request whose work is over ─────────────
+
+(def why-chars
+  "The most characters `close_without_pr` takes as its sentence."
+  480)
+
+(defn sweep!
+  "THE PR-LESS SWEEP (step 2c, ticket 48f9605b). A factory's pass calls
+  it with the changes it read. Each of `rows` that has no pull request
+  and for which `ended` answers a sentence is closed through
+  `close_without_pr` with that sentence as its `why`; a row `ended`
+  answers nil for is left, and so is every change with a pull request,
+  which is the forge's to end. The door moves no ask, so the sweep
+  never does.
+
+  `close!` is the factory's own hand: it takes the row, the door and
+  the input, and walks the door as the engine. The door is an edit
+  door, so that hand names the version of the row it read. A close it
+  throws from
+  costs that row this sweep and nothing else, and `log-fn` is told.
+  → how many it closed."
+  [{:keys [rows ended close! log-fn]}]
+  (reduce
+   (fn [n row]
+     (if-some [why (when-not (has-a-pull-request? row)
+                     (some-> (ended row) str not-empty))]
+       (try
+         (close! row :close_without_pr
+                 {:why (subs why 0 (min (count why) (long why-chars)))})
+         (inc (long n))
+         (catch Exception e
+           (when log-fn
+             (log-fn "the change " (:id row) " was not swept ("
+                     (ex-message e) ")"))
+           n))
+       n))
+   0
+   rows))
 
 (def core
   "What every factory's change has. `:fields` is the entries of the
@@ -508,6 +620,42 @@
               :one-way "GitHub closed this pull request without merging it, and a ticket this change was built for goes back to the queue. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
      :display {:label "Closed" :order 3
                :description "GitHub closed the pull request and merged nothing"}}
+
+    ;; THE ENDING OF A CHANGE GITHUB NEVER SAW (ticket be2c2c16), and
+    ;; the core's since step 2c: the mirror's `close` follows a pull
+    ;; request, so a row with no number had no door to its end. A
+    ;; person's, held when a model asks, and the engine's own in
+    ;; `sweep!`, which alone takes it out of `failing` and `stuck`. It
+    ;; leaves the ask where it stands. NO HANDLER HERE: what the row
+    ;; drops and what it says of its ending are the factory's fields.
+    :close_without_pr
+    {:from #{:open :submitted :failing :stuck} :to :closed
+     :input [:map
+             [:why {:examples ["A duplicate: its ticket merged under another row."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it ends"
+                     :help "One sentence for the next reader: why this change is let go. It rides the log beside this move. It is at most 480 characters."}}
+              [:string {:min 1 :max 480}]]]
+     :edit {:draft {:shared true :live true}}
+     :guards [no-pull-request-to-close
+              the-engine-closes-a-stopped-change
+              only-a-person-closes-a-change]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open; the house opens it again only when its ticket is in the queue and a code seat sits down to it."}
+     :display {:label "Close" :style :danger :order 30
+               :description "Let go of a change that never opened a pull request — its ticket stays where it is"}}
+
+    ;; THE WAY BACK FROM `closed`, which is why `closed` is no tomb. NO
+    ;; HANDLER HERE: `reopened` is the row's part, and the factory's
+    ;; own handler clears what its own fields say of the close.
+    :reopen
+    {:from #{:closed} :to :open
+     :guards [the-mirror-writes-this-row]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "GitHub reopened this pull request. The row moves with it, and the record of the close stands beside it."}
+     :display {:label "Reopened" :order 4
+               :description "GitHub reopened the pull request"}}
 
     ;; ── THE ADOPTION (bead waymark-fp62.6.3.10) ────────────────────
     ;; A row a seat's sit minted for an ask carries the ask's own id

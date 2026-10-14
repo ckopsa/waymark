@@ -113,19 +113,23 @@
           :rerun_note :landing_error :train_red_head :train_red
           :unadopted_since :adoption_note :url :born_from]
          (mapv first (:fields kit/core))))
-  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47)"
+  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47) and the PR-less ending's two (ticket 48f9605b)"
     (is (= #{:adopt :adopt_submitted :observe :observe_submitted :fail
              :recover :merge :close
-             :stall :unstick :unstick_submitted :rebranch}
+             :stall :unstick :unstick_submitted :rebranch
+             :close_without_pr :reopen}
            (set (keys (:actions kit/core)))))
-    (is (= #{:fail :recover :merge :close :stall :unstick :unstick_submitted}
+    (is (= #{:fail :recover :merge :close :stall :unstick :unstick_submitted
+             :close_without_pr :reopen}
            (set (remove #(contains? (get-in kit/core [:actions %]) :handler)
                         (keys (:actions kit/core))))))))
 
 (def ^:private not-a-field
   "A door's input that is no field of the row: the stall's sentence,
-  which `stalled` writes as `stall_reason`."
-  {:stall #{:why}})
+  which `stalled` writes as `stall_reason`, and the PR-less close's,
+  which rides the log."
+  {:stall #{:why}
+   :close_without_pr #{:why}})
 
 (deftest the-core-alone-declares-every-field-its-doors-write
   ;; ticket 354a7dc3: a factory that composes the core with nothing of
@@ -181,3 +185,40 @@
         (is (= kit/clear-the-stall
                (get-in (kit/build kit/core (assoc an-extension :handlers {:stall own}))
                        [:actions :unstick :handler])))))))
+
+(deftest a-closed-change-is-no-tomb-in-the-core
+  (is (not (contains? (:terminal kit/core) :closed)))
+  (is (= #{:closed} (get-in kit/core [:actions :reopen :from])))
+  (is (= :closed (get-in kit/core [:actions :close_without_pr :to])))
+  (testing "a change with no pull request starts again, and one with a pull request stands"
+    (is (= {:rounds 0 :stall_reason nil :stalled_at nil :stalled_by nil}
+           (:data (kit/reopened {:data {:rounds 3 :stall_reason "It stopped."}}))))
+    (is (= {:number 7 :rounds 3}
+           (:data (kit/reopened {:data {:number 7 :rounds 3}}))))))
+
+(deftest the-sweep-closes-through-close-without-pr-and-moves-nothing-else
+  (let [walked (atom [])
+        told (atom [])
+        rows [{:id "ended" :data {}}
+              {:id "live" :data {}}
+              {:id "a-pull-request" :data {:number 7}}
+              {:id "refused" :data {}}
+              {:id "long" :data {}}]
+        closed (kit/sweep!
+                {:rows rows
+                 :ended (fn [row]
+                          (case (:id row)
+                            "live" nil
+                            "long" (apply str (repeat 600 "a"))
+                            "its ticket ended"))
+                 :close! (fn [row door input]
+                           (when (= "refused" (:id row))
+                             (throw (ex-info "the door refused" {})))
+                           (swap! walked conj [(:id row) door input]))
+                 :log-fn (fn [& parts] (swap! told conj (apply str parts)))})]
+    (is (= 2 closed))
+    (is (= ["ended" :close_without_pr {:why "its ticket ended"}] (first @walked)))
+    (is (= ["long" :close_without_pr] (take 2 (second @walked))))
+    (is (= kit/why-chars (count (:why (last (second @walked))))))
+    (is (= ["the change refused was not swept (the door refused)"] @told)
+        "a refused close costs that row this sweep and nothing else")))
