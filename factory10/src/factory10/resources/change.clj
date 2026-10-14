@@ -115,37 +115,24 @@
   household's feed must not card the day job's queue."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
-            [factory10.mirror :refer [the-mirror-writes-this-row]]
-            [factorykit.change :as kit]
+            [factorykit.change :as kit :refer [the-mirror-writes-this-row]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
-            [waymark10.types :as t]
-            [waymark10.verdict :as verdict]))
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
 ;; ── what a pull request writes back onto the row ────────────────────
 
-(defhandler observe-the-pull-request [row inp ctx]
-  ;; The source hands the facts it read. A fact it did not read is
-  ;; absent, and absent means silent: the stored value stands. The
-  ;; machine advances the state, never this handler.
-  ;;
-  ;; A HEAD THAT MOVES takes back what judged the old one (ticket
-  ;; 35600491): see `waymark10.verdict/reopen-stale-verdicts!`.
-  (let [head (some-> (:head_sha inp) str not-empty)]
-    (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
-      (verdict/reopen-stale-verdicts! ctx :change (:id row) head)))
-  (update row :data merge (into {} (remove (comp nil? val)) inp)))
+;; The two the source's own doors write with are the kit's
+;; (`factorykit.change`, ticket 47e2c880). They keep their names here
+;; for the doors of this factory that share them: `observe_failing`,
+;; `rebranch`, `adopt_failing` and `adopt_stuck`.
 
-(defhandler adopt-the-pull-request [row inp _ctx]
-  ;; The identity lands as `observe` writes the facts, and the forge
-  ;; pass's note that nobody had adopted the landed pull request goes
-  ;; with the wait it described (ticket 58e706d6).
-  (-> row
-      (update :data merge (into {} (remove (comp nil? val)) inp))
-      (update :data assoc :unadopted_since nil :adoption_note nil)))
+(def observe-the-pull-request kit/observe-the-pull-request)
+
+(def adopt-the-pull-request kit/adopt-the-pull-request)
 
 (defhandler note-the-adoption [row inp _ctx]
   ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
@@ -1114,10 +1101,12 @@
       asker (assoc-in [:data :requested_by] asker))))
 
 (def ^:private factory10s-own
-  "What factory10 adds to the kit's core (ticket ce3dd7b1): every door,
-  with its guards and its handler, and the fields that are not shared.
-  The states, the tomb, the one-row index, the shared fields and the
-  cracks law are `factorykit.change/core`."
+  "What factory10 adds to the kit's core (ticket ce3dd7b1): every door
+  that is not one of the core's eight, with its guards and its
+  handler, the ticket's part of the four core doors that read it
+  (`:handlers`), and the fields that are not shared. The states, the
+  tomb, the one-row index, the shared fields, the source's eight doors
+  and the cracks law are `factorykit.change/core`."
   {:kind :change
    :plural "changes"
    ;; the day job's work, not the family's — see the ns docstring
@@ -1444,85 +1433,22 @@
     ;; by the merge (`close-the-duplicates!`) and by the ticket's ending.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
+   ;; THE TICKET'S PART OF FOUR CORE DOORS (ticket 47e2c880). The kit's
+   ;; `merge`, `close`, `fail` and `recover` carry no handler, because
+   ;; what each one does to the ask the change was built for is this
+   ;; factory's: the merge ends the ticket, a close and a red send it
+   ;; back, and a green sends it out for review again.
+   :handlers {:merge complete-the-task-it-was-born-from
+              :close send-the-ticket-back
+              :fail fail-the-change
+              :recover clear-the-failing-checks}
    :actions
-   {;; THE MIRROR'S REFRESH. A self-loop on `open`: the pull request
-    ;; moved under the row, and these are the facts that moved.
-    :observe
-    {:from #{:open} :to :open
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:title {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 400}]]]
-             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
-             [:draft {:optional true} [:maybe :boolean]]
-             [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
-             [:touched_paths {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
-             [:review_state {:optional true}
-              [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]]
-     ;; :edit-shape — the input MIRRORS the document on purpose. This
-     ;; is not a person editing a row; it is the authority restating
-     ;; what it holds, and a prefill for a hidden door is scaffolding
-     ;; for nobody.
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 1
-               :description "The mirror writes what GitHub says about this pull request now"}}
-
-    ;; THE THREE MOVES GITHUB MAKES. Each one is the mirror's, and
-    ;; each one is hidden from every hand but the engine's.
-    ;; THE SAME REFRESH, one state over. A v10 action declares one
-    ;; `:to`, so a self-loop that serves two states is spelled twice
-    ;; (server/definitions.clj's `measure`/`measure_pilot`) — see
-    ;; `:deviations`. A change a seat has pushed goes on moving under
-    ;; the row: the checks run, a reviewer answers, the head moves.
-    :observe_submitted
-    {:from #{:submitted} :to :submitted
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:title {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 400}]]]
-             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
-             [:draft {:optional true} [:maybe :boolean]]
-             [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
-             [:touched_paths {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
-             [:review_state {:optional true}
-              [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]
-             ;; the forge pass's re-run of an interrupted head (ticket
-             ;; 22f91244)
-             [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]
-             ;; the forge pass's read of a head that lacks a required
-             ;; check (ticket 498a089e)
-             [:missing_checks {:optional true}
-              [:maybe [:vector [:string {:max 200}]]]]
-             [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
-             [:missing_checks_head {:optional true}
-              [:maybe [:string {:max 64}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 10
-               :description "The mirror writes what GitHub says about this pull request now"}}
-
-    ;; and once more for `failing` (ticket d1742908): a red change's
-    ;; head moves when a person pushes to it, and the next green head
-    ;; is read against the head the row names.
+   {;; THE MIRROR'S REFRESH, for `failing` (ticket d1742908). `observe`
+    ;; and `observe_submitted` are the kit's; a v10 action declares one
+    ;; `:to`, so the self-loop is spelled once more here (see
+    ;; `:deviations`). A red change's head moves when a person pushes
+    ;; to it, and the next green head is read against the head the row
+    ;; names.
     :observe_failing
     {:from #{:failing} :to :failing
      :guards [the-mirror-writes-this-row]
@@ -1556,27 +1482,11 @@
      :display {:label "Observe" :order 14
                :description "The mirror writes what GitHub says about this pull request now"}}
 
-    :merge
-    {:from #{:open :submitted :failing :stuck} :to :merged
-     :guards [the-mirror-writes-this-row]
-     ;; the merge COMPLETES the task this change was born from
-     ;; (waymark-fp62.6.3.14). The handler carries the blast radius,
-     ;; because `:touches` cannot name a kind factory10 boots without
-     ;; — see `complete-the-task-it-was-born-from`.
-     :handler complete-the-task-it-was-born-from
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub merged this pull request. The row follows GitHub, so there is no way back: a merged pull request is not reopened. The ask this change was born from — a task, or a ticket that has not ended — is completed with it, and another change built for that ask on the same branch is closed."}
-     :display {:label "Merged" :order 2
-               :description "GitHub merged the pull request"}}
-
-    :close
-    {:from #{:open :submitted :failing :stuck} :to :closed
-     :guards [the-mirror-writes-this-row]
-     :handler send-the-ticket-back
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "GitHub closed this pull request without merging it, and a ticket this change was built for goes back to the queue. The way back is GitHub's own reopen, which the mirror follows with its reopen door."}
-     :display {:label "Closed" :order 3
-               :description "GitHub closed the pull request and merged nothing"}}
+    ;; `merge` and `close` are the kit's, with the handlers `:handlers`
+    ;; names. The merge COMPLETES the task this change was born from
+    ;; (waymark-fp62.6.3.14), and its handler carries the blast radius,
+    ;; because `:touches` cannot name a kind factory10 boots without
+    ;; — see `complete-the-task-it-was-born-from`.
 
     ;; the ending of a change GitHub never saw (ticket be2c2c16): the
     ;; mirror's `close` follows a pull request, so a row with no number
@@ -1638,52 +1548,9 @@
     ;; same wall, and `change_id` is `:unique` — the write lands or
     ;; the whole transaction does, and a second pull request can
     ;; never take a row that is already spoken for.
-    :adopt
-    {:from #{:open} :to :open
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             ;; :hidden, as the field is on the document — a url has
-             ;; no shape a form could draw, and the origin LINK is the
-             ;; affordance (the long-text battery asks for one of the
-             ;; three)
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 11
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
-
-    ;; the same write, one state over — a change a seat has SUBMITTED
-    ;; is exactly the change whose push opened the pull request, so
-    ;; this is the state the adoption lands in almost every time. A
-    ;; v10 action declares one `:to`, so the self-loop is spelled
-    ;; twice (the `observe`/`observe_submitted` precedent, recorded
-    ;; in `:deviations`).
-    :adopt_submitted
-    {:from #{:submitted} :to :submitted
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             ;; :hidden, as the field is on the document — a url has
-             ;; no shape a form could draw, and the origin LINK is the
-             ;; affordance (the long-text battery asks for one of the
-             ;; three)
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 12
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
-
+    ;; `adopt` and `adopt_submitted`, on `open` and on `submitted`, are
+    ;; the kit's (`factorykit.change/core`).
+    ;;
     ;; the same write on a `failing` or `stuck` row (ticket 3c59c688).
     ;; A pull request the house itself opened is the house row's
     ;; whatever state that row stands in, so it is adopted and never
@@ -1849,40 +1716,9 @@
     ;; They are the mirror's and hidden: no seat and no person says a
     ;; change is red. A seat's way out of `failing` is its next
     ;; `submit`, or `stall`.
-    :fail
-    {:from #{:submitted} :to :failing
-     :guards [the-mirror-writes-this-row]
-     :handler fail-the-change
-     :input [:map
-             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
-             [:conflicts {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:landing_error {:optional true
-                              :x-display {:widget "prose"
-                                          :label "Why the push did not land"}}
-              [:maybe [:string {:max 4000}]]]
-             ;; a merge train's red (ticket 6566d32f): the head it
-             ;; judged, and its branch and run url
-             [:train_red_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:train_red {:optional true
-                          :x-display {:widget "prose"
-                                      :label "Why a merge train found it red"}}
-              [:maybe [:string {:max 1000}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The required checks finished red on this head, and the ticket this change was built for goes back to the queue, so the seat that wrote it walks it again. The way back is a green head, which the house reads on its next pass, or the seat's next submit."}
-     :display {:label "Failing" :order 15
-               :description "The required checks went red on the head the seat pushed"}}
-
-    :recover
-    {:from #{:failing} :to :submitted
-     :guards [the-mirror-writes-this-row]
-     :handler clear-the-failing-checks
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The required checks are green on the head the row names now, so the change is submitted again and the house merges it as it would any other."}
-     :display {:label "Green again" :order 16
-               :description "The required checks went green on a later head"}}
-
+    ;; `fail` and `recover` are the kit's, with the handlers `:handlers`
+    ;; names; `stick`, the third, is this factory's.
+    ;;
     ;; the ROUND CEILING, read by the engine. A red head on the last
     ;; round the policy gives is not sent back to the seat, whose next
     ;; submit `under-the-round-ceiling` would refuse: it stops here,
