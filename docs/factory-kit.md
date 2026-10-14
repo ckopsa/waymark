@@ -209,6 +209,31 @@ The field lists and the door tables the pass reads (`change-create-fields`,
 `state-door`) are in the kit beside it. factory10's `change-pass!` and
 `move-change!` call the kit with factory10's hand.
 
+### The pass
+
+`(pass! config)` is one pass of a forge (ticket 75db2ef8). It polls the
+source, holds the pass when the source's rate limit is spent
+(`ForgeBudget`), runs the change pass, hands the refused documents back
+(`ForgeRetry`), and stores the source's place or sends it back
+(`ForgeCommit`). It requires no engine and no factory10 namespace. The
+factory's own steps go in as functions:
+
+| key | what it is |
+|---|---|
+| `:source` | the `ForgeSource` |
+| `:hand` | the `change` kind's doors, as `change-pass!` takes them |
+| `:change-pass!` | optional `(fn [changes census refused])`, run in place of `change-pass!` over `:hand` |
+| `:census` | the census the pass starts from |
+| `:log-fn` | takes the parts of one line |
+| `:poll-failed` | optional `(fn [e])`: the poll threw |
+| `:before-changes` | optional `(fn [census poll])` → census, before the change pass |
+| `:after-changes` | optional `(fn [census poll])` → census, after the place is stored |
+| `:always` | optional `(fn [census poll held-until])` → census, run whether the pass ran, was held or threw |
+| `:report` | optional `(fn [census poll])`, given the census last |
+
+factory10's `pass!` is a call to it, with factory10's hand and its own
+steps.
+
 ### What is not in the kit yet
 
 The seam is: the kit takes what reads only the forge and the `change`
@@ -217,8 +242,6 @@ kind. factory10 keeps what reads its own policy, tickets or bench.
 Still in `factory10.sources.forge`, and the kit's to take in later
 changes:
 
-- the poll itself, with the source's retry, commit and forget
-  (`ForgeRetry`, `ForgeCommit`) and the rate-limit hold (`ForgeBudget`);
 - the red runs (`ci_run`: mint, supersede, settle);
 - fail, recover and stick on a head's verdict, with the re-read by
   number before a move;

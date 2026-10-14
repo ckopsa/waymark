@@ -157,6 +157,84 @@
     (is (= {:mergeable "clean"}
            (kit/changed-facts row {:mergeable "clean" :head_sha "aaa"})))))
 
+(defn- a-source
+  "A forge that answers one poll and keeps its place. Each retry, commit
+  and forget is kept in `said`."
+  [answer said budget]
+  (reify
+    kit/ForgeSource
+    (forge-poll [_] answer)
+    (forge-log-tail [_ _] {:excerpt "" :note ""})
+    (forge-label! [_ _ _] nil)
+    (forge-calls [_] 1)
+    (forge-checks [_ _ _] [])
+    (forge-base [_ _ _] nil)
+    kit/ForgeRetry
+    (forge-retry! [_ docs] (swap! said conj [:retry (count docs)]))
+    kit/ForgeCommit
+    (forge-commit! [_ repositories] (swap! said conj [:commit repositories]))
+    (forge-forget! [_] (swap! said conj [:forget]))
+    kit/ForgeBudget
+    (forge-budget [_] budget)))
+
+(def ^:private an-answer
+  {:changes [a-pull-request] :checks [] :repositories ["acme/shop"]
+   :complete? true})
+
+(deftest the-kit-polls-a-forge-and-stores-its-place
+  (let [said (atom [])
+        steps (atom [])
+        census (kit/pass!
+                {:source (a-source an-answer said {:remaining 10})
+                 :hand (a-hand (atom {}) (atom []))
+                 :log-fn (fn [& _])
+                 :before-changes (fn [c _] (swap! steps conj :before) c)
+                 :after-changes (fn [c _] (swap! steps conj :after) c)
+                 :always (fn [c _ held] (swap! steps conj [:always held]) c)
+                 :report (fn [c _] (swap! steps conj [:report (:minted c)]))})]
+    (is (= {:repositories 1 :complete? true :minted 1 :calls 1
+            :remaining 10}
+           census))
+    (is (= [[:commit ["acme/shop"]]] @said))
+    (is (= [:before :after [:always nil] [:report 1]] @steps))))
+
+(deftest a-refused-row-is-offered-again
+  (let [said (atom [])
+        hand (assoc (a-hand (atom {}) (atom []))
+                    :create! (fn [_] (throw (ex-info "refused by the test" {}))))]
+    (is (= 1 (:refused (kit/pass! {:source (a-source an-answer said {})
+                                   :hand hand :log-fn (fn [& _])}))))
+    (is (= [[:retry 1] [:commit ["acme/shop"]]] @said))))
+
+(deftest a-spent-limit-holds-the-pass-and-sends-the-source-back
+  (let [rows (atom {})
+        said (atom [])
+        steps (atom [])
+        census (kit/pass!
+                {:source (a-source an-answer said
+                                   {:held-until "2026-10-14T04:00:00Z"})
+                 :hand (a-hand rows (atom []))
+                 :log-fn (fn [& _])
+                 :before-changes (fn [c _] (swap! steps conj :before) c)
+                 :always (fn [c _ held] (swap! steps conj [:always held]) c)})]
+    (is (= {} @rows) "no row is written while the limit is spent")
+    (is (= [[:forget]] @said))
+    (is (= [[:always "2026-10-14T04:00:00Z"]] @steps))
+    (is (= "2026-10-14T04:00:00Z" (:held-until census)))))
+
+(deftest a-throw-sends-the-source-back-after-the-always-step
+  (let [said (atom [])
+        steps (atom [])]
+    (is (thrown? Exception
+                 (kit/pass!
+                  {:source (a-source an-answer said {})
+                   :hand (a-hand (atom {}) (atom []))
+                   :log-fn (fn [& _])
+                   :change-pass! (fn [& _] (throw (ex-info "thrown" {})))
+                   :always (fn [c _ _] (swap! steps conj :always) c)})))
+    (is (= [[:forget]] @said))
+    (is (= [:always] @steps))))
+
 (deftest the-state-door-table
   (is (= :merge (kit/state-door :stuck "merged")))
   (is (= :close (kit/state-door :failing "closed")))
