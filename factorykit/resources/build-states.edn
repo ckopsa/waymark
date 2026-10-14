@@ -1,0 +1,19 @@
+;; ONE build-state table for every forge adapter (ticket 6b716e98).
+;; build-states.json beside this file carries the same content for a
+;; reader that is not Clojure; factorykit.forge-test holds the two equal.
+;;
+;; green        the build passed, or the forge passed it over
+;; red          the build ran and failed
+;; pending      the build has no verdict yet
+;; interrupted  the build died without a verdict: a rerun, never green
+;;              and never a recovery
+{:verdicts ["green" "red" "pending" "interrupted"]
+ :forges
+ {:github    {:green       ["success" "neutral" "skipped"]
+              :red         ["failure" "timed_out"]
+              :pending     ["queued" "in_progress"]
+              :interrupted ["cancelled" "stale" "action_required"]}
+  :bitbucket {:green       ["SUCCESSFUL"]
+              :red         ["FAILED"]
+              :pending     ["INPROGRESS"]
+              :interrupted ["STOPPED"]}}}

@@ -114,6 +114,7 @@
   (:require [clojure.string :as str]
             [factory10.resources.ci-run :as ci]
             [factory10.sources.forge :as forge]
+            [factorykit.forge :as kit]
             [waymark10.wire :as wire])
   (:import (java.net URI URLEncoder)
            (java.net.http HttpClient HttpClient$Redirect HttpRequest
@@ -1159,7 +1160,7 @@
     (let [answer (call! this "GET"
                         (str "/repos/" repository "/compare/" base "..." head-sha)
                         {})]
-      (or (pos? (long (or (:behind_by answer) 0)))
+      (or (kit/behind? (:behind_by answer))
           (contains? #{"behind" "diverged"} (word (:status answer))))))
 
   forge/ForgeRerun
