@@ -603,6 +603,93 @@
                 (map seat-name))
           seat-rows)))
 
+(defn walked-fields
+  "The fields, other than `state`, that an active seat's scope filter on
+  this kind names: what decides which seat a row of the kind belongs to."
+  [rdef seat-rows]
+  (into (sorted-set)
+        (for [seat seat-rows
+              e (entries-for seat (:kind rdef))
+              [field _] (named-values (:filter e))]
+          field)))
+
+(defn row-doors
+  "For ONE row (ticket 86af9d88): every way out of the state it is in,
+  each with the active seats that hold it FOR THIS ROW and what brings
+  each of them. nil for a row in a state a row rests in.
+
+  Where the audit reads a filter for its `state` entry alone, this reads
+  all of it against the row: a seat holds a door here when a scope entry
+  that names the door admits the row. A door of another kind
+  (`:left-by`) is held for this row by a seat that holds it and, when
+  the seat walks this kind, is handed the row by its walk. An exit a
+  source takes (the mirror, a wait's ending) needs no seat and says so.
+  A door named as the `:via` of such an exit is walked by that exit and
+  is not listed again.
+
+  Each seat says `woken_by`: the doors into this state its wake_on
+  names under a filter that admits the row. `held_by` is `seat` when a
+  seat a model sits in holds the door, `person` when only interactive
+  seats do, `source`, or `nobody`."
+  [rdef seat-rows by-kind row]
+  (let [kind (text (:kind rdef))
+        state (keyword (text (:state row)))
+        into-state (arrivals rdef state)
+        far-in (far-arrivals rdef state)
+        indirect (indirect-exits rdef state)
+        vias (into #{} (keep #(some-> (:via %) text)) indirect)
+        walk-of (fn [seat] (some-> (get-in seat [:data :walk]) str not-empty))
+        handed? (fn [seat]
+                  (or (not= kind (walk-of seat))
+                      (some #(and (admits-state? (:filter %) state)
+                                  (row-meets? (:filter %) row))
+                            (entries-for seat kind))))
+        woken-by (fn [seat]
+                   (into []
+                         (comp (filter #(row-meets? (:filter %) row))
+                               (mapcat (fn [e]
+                                         (let [k (text (:kind e))]
+                                           (for [a (map text (:actions e))
+                                                 :when (if (= kind k)
+                                                         (contains? into-state a)
+                                                         (contains? far-in [k a]))]
+                                             (if (= kind k) a (str k "/" a))))))
+                               (distinct))
+                         (wake-entries seat rdef state
+                                       (some->> (walk-of seat) keyword (get by-kind)))))
+        holder (fn [seat]
+                 (let [by (woken-by seat)
+                       cadence (get-in seat [:data :cadence_seconds])]
+                   (cond-> {:seat (seat-name seat)}
+                     (seats/interactive-seat? seat) (assoc :person true)
+                     (seq by) (assoc :woken_by by)
+                     (number? cadence) (assoc :cadence_seconds cadence))))
+        door (fn [m held?]
+               (let [hs (into [] (comp (filter held?) (map holder)) seat-rows)]
+                 (assoc m
+                        :seats hs
+                        :held_by (cond (empty? hs) "nobody"
+                                       (every? :person hs) "person"
+                                       :else "seat"))))]
+    (when-not (contains? (resting rdef) state)
+      (concat
+       (for [a (exits rdef state)
+             :when (not (contains? vias (text (:name a))))]
+         (door {:door (text (:name a)) :to (text (:to a))}
+               (fn [seat]
+                 (some #(row-meets? (:filter %) row)
+                       (holding-entries seat kind (:name a) state)))))
+       (for [{:keys [by via to]} indirect]
+         (if (map? by)
+           (door (cond-> {:door (door-name by)}
+                   via (assoc :via (text via))
+                   to (assoc :to (text to)))
+                 (fn [seat]
+                   (and (seq (holding-entries seat (:kind by) (:action by) nil))
+                        (handed? seat))))
+           (cond-> {:door (text via) :held_by "source" :source (text by)}
+             to (assoc :to (text to)))))))))
+
 (defn- wait-doors
   "The doors a hand takes on a row that waits: the ones the wait says
   restate it, or every action open in a state it waits in."
