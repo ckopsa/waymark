@@ -84,12 +84,10 @@ async function renderInFlight(view, href, seq) {
     strip.append(el("div", {class: "flight-count " + cls},
       el("b", {}, String(n ?? 0)), el("span", {}, label)));
   view.append(strip);
-  /* the filters' choices are what this answer holds, and the one in
-     force even when it narrowed the answer to nothing */
-  const seen = {domain: new Set(), repo: new Set(), kind: new Set(),
-                holder: new Set(groups.map(g => g.holder))};
-  for (const e of groups.flatMap(g => g.rows || []))
-    for (const k of ["domain", "repo", "kind"]) if (e[k]) seen[k].add(e[k]);
+  /* the filters' choices are the answer's facets, taken over the rows
+     before any filter, and the one in force even when no row holds it */
+  const facets = doc.facets || {};
+  const seen = Object.fromEntries(IN_FLIGHT_FILTERS.map(k => [k, new Set(facets[k] || [])]));
   const bar = el("div", {class: "flight-filters"});
   for (const k of IN_FLIGHT_FILTERS) {
     if (filters[k]) seen[k].add(filters[k]);

@@ -1236,7 +1236,8 @@
 ;;
 ;; GET /api/-/in-flight (ticket d0407b84) answered over MCP: an agent
 ;; cannot GET an href, so the discover door alone left it unread. No
-;; new reading — the route's own read, with its four filters.
+;; new reading — the function the route answers with, with its four
+;; filters (the door mounts core's routes only, as for cracks).
 
 (def ^:private in-flight-tool
   {:name "waymark_in_flight"
@@ -2851,11 +2852,11 @@
 ;; ── waymark_in_flight: the body ─────────────────────────────────────
 
 (defn- in-flight-read
-  "The in-flight document, read as the route reads it: the session's
-  grant is the visibility, and the four filters are the route's, blank
-  ones left out. Not a call onto GET /api/-/in-flight: that route is
-  the seats module's, `door` mounts core's routes only, and the call
-  answered 404 \"No collection \\\"-\\\"\" (ticket 4d7badd8)."
+  "The in-flight document as GET /api/-/in-flight answers it. That
+  route is the seats module's, and `door` mounts core's routes only —
+  a call onto it read as collection \"-\" (ticket 334e4dac) — so this
+  is `in-flight/read-all`, the function the route answers with: the
+  session's grant is its visibility, blank filters left out."
   [eng _call session args]
   (let [filters (into {}
                       (keep (fn [k]

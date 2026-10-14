@@ -160,6 +160,15 @@
     (is (= 0 (get-in (in-flight/answer es {:domain "home"}) [:counts :total])))
     (is (= {:repo "r2"} (:filters (in-flight/answer es {:repo "r2"}))))))
 
+(deftest the-facets-are-taken-before-the-filters
+  (let [es (entries house)
+        facets (:facets (in-flight/answer es {}))]
+    (is (= (vec (sort (distinct (keep :repo es)))) (:repo facets)))
+    (is (some #{"r2"} (:repo facets)))
+    (is (= (vec (sort (distinct (keep :holder es)))) (:holder facets)))
+    (is (= facets (:facets (in-flight/answer es {:repo "r2"}))))
+    (is (= facets (:facets (in-flight/answer es {:domain "home"}))))))
+
 (deftest a-kind-with-no-expected-age-is-not-in-flight
   (is (nil? (in-flight/open-states {:kind :memo :states [:jotted :filed]
                                     :terminal #{:filed}})))
@@ -269,7 +278,7 @@
       (let [{:keys [parsed]} (get-in-flight h as-elena "holder=person")]
         (is (= #{} (flight-ids parsed)))))))
 
-;; ── the cap and the MCP tool (ticket 4d7badd8) ────────────────────────────
+;; ── the cap (ticket 4d7badd8) ────────────────────────────
 
 (defn- flight-engine []
   (engine/engine {:storage (memory/storage)
@@ -298,16 +307,94 @@
                  (:capped parsed)))
           (is (= 2 (count (tasks parsed)))))))))
 
-(deftest the-mcp-tool-reads-in-flight-with-filters
-  ;; `mcp/door` mounts core's routes only: a call onto the seats
-  ;; module's route answered 404 No collection "-"
-  (let [eng (flight-engine)
-        c1 (mk-flight eng :flight_chore "c1")
-        _t1 (mk-flight eng :flight_task "t1")
-        out (mcp/call-tool eng (mcp/door eng) {:principal elena}
-                           "waymark_in_flight" {:kind "flight_chore" :holder "nobody"})
-        doc (wire/read-json (get-in out [:content 0 :text]))]
-    (is (not (:isError out)) (get-in out [:content 0 :text]))
-    (is (= "in_flight" (:waymark doc)))
-    (is (= {:kind "flight_chore" :holder "nobody"} (:filters doc)))
-    (is (= #{c1} (flight-ids doc)))))
+;; ── over MCP: waymark_in_flight (ticket 334e4dac) ────────────────────────
+
+(defn- flight-kind [k plural domain]
+  (r/resource
+   {:kind k
+    :plural plural
+    :domain domain
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :expected-age {:open 3600}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 80}]]
+             [:repo {:optional true} [:string {:min 1 :max 80}]]]
+    :actions {:close {:from #{:open} :to :closed :safety quiet}}}))
+
+(def ^:private flight-job (flight-kind :flight_job "flight_jobs" :work))
+(def ^:private flight-errand (flight-kind :flight_errand "flight_errands" :home))
+
+(defn- in-flight-tool
+  "One tools/call of waymark_in_flight → {:status :error? :parsed}, the
+  tool's JSON text parsed."
+  [h headers args]
+  (let [resp (h {:request-method :post :uri "/api/-/mcp" :headers headers
+                 :body (wire/write-json
+                        {:jsonrpc "2.0" :id 1 :method "tools/call"
+                         :params {:name "waymark_in_flight" :arguments args}})})
+        result (:result (wire/read-json (:body resp)))]
+    {:status (:status resp)
+     :error? (:isError result)
+     :parsed (some-> (get-in result [:content 0 :text]) wire/read-json)}))
+
+(defn- job-ids [parsed]
+  (into #{}
+        (comp (mapcat :rows)
+              (filter #(contains? #{"flight_job" "flight_errand"} (:kind %)))
+              (map :id))
+        (:groups parsed)))
+
+(deftest waymark-in-flight-over-mcp
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [flight-job flight-errand]})
+        h (engine/handler eng)
+        mk (fn [k data]
+             (str (get-in (inv/create! eng k data {:principal elena})
+                          [:row :id])))
+        j1 (mk :flight_job {:title "j1" :repo "r1"})
+        j2 (mk :flight_job {:title "j2" :repo "r2"})
+        e1 (mk :flight_errand {:title "e1"})
+        gid (get-in (inv/create!
+                     eng :grant
+                     {:audience "spy"
+                      :scope [{:kind "flight_job" :ids [j1] :actions []}
+                              {:kind "flight_errand" :actions []}]}
+                     {:principal elena})
+                    [:row :id])
+        as-elena {"x-waymark-principal" "elena"}
+        as-spy {"x-waymark-principal" "spy"
+                "x-waymark-actor-type" "agent"
+                "x-waymark-grant" gid}
+        ids (fn [headers args]
+              (let [{:keys [status error? parsed]} (in-flight-tool h headers args)]
+                (is (= 200 status))
+                (is (false? error?) (pr-str parsed))
+                (job-ids parsed)))]
+    (inv/invoke! eng :grant gid :accept nil {:principal spy})
+    (testing "the tool answers the route's document"
+      (let [{:keys [error? parsed]} (in-flight-tool h as-elena {})]
+        (is (false? error?))
+        (is (= "in_flight" (:waymark parsed)))
+        (is (= #{j1 j2 e1} (job-ids parsed)))))
+    (testing "a scoped grant sees only the rows it admits"
+      (is (= #{j1 e1} (ids as-spy {}))))
+    (testing "kind narrows"
+      (is (= #{e1} (ids as-spy {:kind "flight_errand"})))
+      (is (= #{j1 j2} (ids as-elena {:kind "flight_job"}))))
+    (testing "domain narrows"
+      (is (= #{j1} (ids as-spy {:domain "work"})))
+      (is (= #{e1} (ids as-spy {:domain "home"})))
+      (is (= {:domain "work"}
+             (:filters (:parsed (in-flight-tool h as-spy {:domain "work"}))))))
+    (testing "repo narrows, and a concealed row stays concealed under it"
+      (is (= #{j2} (ids as-elena {:repo "r2"})))
+      (is (= #{} (ids as-spy {:repo "r2"})))
+      (is (= #{j1} (ids as-spy {:repo "r1"}))))
+    (testing "holder narrows to one group"
+      (is (= #{j1 e1} (ids as-spy {:holder "nobody"})))
+      (is (= #{} (ids as-spy {:holder "person"}))))
+    (testing "a blank filter is left out"
+      (is (= #{j1 e1} (ids as-spy {:kind "  " :repo ""}))))))
