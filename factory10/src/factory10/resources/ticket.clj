@@ -84,6 +84,7 @@
   :nav :secondary, for change's reason: an ask of the software
   factory is the day job's work, not the family's."
   (:require [clojure.string :as str]
+            [factorykit.ask :as ask]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -251,58 +252,11 @@
   (put-its-change-back-to-work! row ctx)
   (assoc-in row [:data :defer_until] nil))
 
-(defn- still-waits-on
-  "The blockers `waiter` still waits on once `ending` ends: the ending
-  ticket leaves the list, and so does any other blocker that has ended
-  or is gone — a list that named one would keep the ticket blocked by
-  nothing, and the `block` door refuses to restate it."
-  [waiter ending read']
-  (into []
-        (remove (fn [id]
-                  (or (= ending (str id))
-                      (let [b (read' :ticket (str id))]
-                        (or (nil? b) (contains? ended (state-of b)))))))
-        (get-in waiter [:data :blocked_by])))
-
 (defn- release-the-waiters!
-  "THE LAST BLOCKER'S ENDING UNBLOCKS (the loop that needs no person).
-  Every blocked ticket whose `blocked_by` names the ticket that is
-  ending is re-judged in the same transaction: with blockers left, the
-  `block` door restates the shorter list; with none, the ticket goes
-  back where it was blocked from — `unblock` into the queue, the same
-  transition a person's tap makes, so a seat's wake on `unblock` fires
-  as it always has, or `return_to_draft` for a draft nobody groomed.
-
-  BEST-EFFORT, as the change's merge is: a waiter that refuses is said
-  in the log, and the ending stands. A probe or a rehearsal carries no
-  pen, and releases nothing."
+  "The kit's (`factorykit.ask/release-the-waiters!`, ticket 718f997f),
+  for this kind."
   [row ctx]
-  (let [find' (:find ctx)
-        read' (:read ctx)
-        invoke' (:invoke ctx)
-        ending (str (:id row))]
-    (when (and find' read' invoke')
-      (doseq [waiter (find' :ticket {:state "blocked"} {:limit 500})
-              :when (some #(= ending (str %))
-                          (get-in waiter [:data :blocked_by]))
-              :let [left (still-waits-on waiter ending read')
-                    ;; `block` is fenced (its :edit implies it), so the
-                    ;; version read here is named as an honest client
-                    ;; would name it (worksheet/apply-invocations!)
-                    fence {:if-match (inv/etag :ticket (:id waiter)
-                                               (:version waiter))}]]
-        (try
-          (cond
-            (seq left)
-            (invoke' :ticket (:id waiter) :block {:blocked_by left} fence)
-            (= "draft" (get-in waiter [:data :blocked_from]))
-            (invoke' :ticket (:id waiter) :return_to_draft nil fence)
-            :else
-            (invoke' :ticket (:id waiter) :unblock nil fence))
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "factory10 ticket ending: the ticket" (:id waiter)
-                       "was not released -" (ex-message e)))))))))
+  (ask/release-the-waiters! :ticket row ctx))
 
 (defn- finish-the-parent!
   "THE LAST CHILD'S ENDING ENDS A PARENT ALREADY MERGED (ticket
@@ -778,7 +732,7 @@
 ;; the input alone, so groom's scenarios stay check-tier. repo_policy's
 ;; `groom_floor_max_priority` is the floor's own count and is not read.
 
-(def ^:private queue-max-priority 3)
+(def ^:private queue-max-priority ask/queue-max-priority)
 
 (defn- backlog? [priority]
   (and (some? priority) (> (long priority) queue-max-priority)))
@@ -1924,16 +1878,15 @@
 
 ;; ── :ticket — one ask of the factory ────────────────────────────────
 
-(defresource ticket
+(def ^:private factory10s-own
+  "Everything of the ticket kind that is not `factorykit.ask/core`: the
+  core holds the seven states, no tomb, and the queue doors' machine
+  and groom's input (ticket 718f997f). Every door here names its own
+  guards, handler, safety and words."
   {:kind :ticket
    :plural "tickets"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:draft :open :in_review :blocked :deferred :done :dropped]
-   :initial :draft
-   ;; NO TOMB. Both endings come back through `reopen`, a person's
-   ;; door, to `draft`: a ticket ended wrongly is groomed again.
-   :terminal #{}
    ;; `:over` names the two endings apart: a done ticket is the deed
    ;; this kind is graded by, a dropped one is work the house let go.
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
@@ -2074,15 +2027,7 @@
     ;; before it changes. The groom may say the priority the ticket
     ;; lands at, and it never lands at 4 (ticket f7420404).
     :groom
-    {:from #{:draft} :to :open
-     :input [:map
-             [:priority {:optional true
-                         :examples [2]
-                         :x-display
-                         {:label "Priority (0 first, 3 last)"
-                          :help "The priority this ticket enters the queue at. Leave it empty to keep the one it has. Priority 4 is the backlog and never enters the queue: a ticket that stands at 4 is groomed with a priority of 0 to 3, or stays in draft."}}
-              [:maybe [:int {:min 0 :max queue-max-priority}]]]]
-     :guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
+    {:guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
               a-groomed-ticket-lands-above-the-backlog
               the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
@@ -2094,15 +2039,13 @@
                :description "It is stated well enough to build as written — into the queue"}}
 
     :ungroom
-    {:from #{:open} :to :draft
-     :guards [a-person-or-their-delegate-grooms]
+    {:guards [a-person-or-their-delegate-grooms]
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to draft" :order 9
                :description "Out of the queue — the statement needs work before a seat builds it"}}
 
     :prioritize
-    {:from #{:open} :to :open
-     :input [:map
+    {:input [:map
              [:priority {:examples [1]
                          :x-display
                          {:label "Priority (0 first, 4 last)"
@@ -2125,8 +2068,7 @@
     ;; and not reversible. `then: open` on a draft is the groom said
     ;; ahead of time (ticket cca6b000): the ending queues it.
     :block
-    {:from #{:draft :open :blocked} :to :blocked
-     :input [:map
+    {:input [:map
              [:blocked_by {:kind :ticket
                            :x-display
                            {:label "Waits on"
@@ -2296,8 +2238,7 @@
                :description carried-domain-description}}
 
     :unblock
-    {:from #{:blocked} :to :open
-     :handler unblock-the-ticket
+    {:handler unblock-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Unblock" :style :primary :order 1 :everyday true
                :description "Back into the queue — nothing holds this one now"}}
@@ -2307,8 +2248,7 @@
     ;; a draft was never groomed, so its blockers ending does not put
     ;; it in the queue.
     :return_to_draft
-    {:from #{:blocked} :to :draft
-     :guards [only-an-ending-returns-a-ticket-to-draft]
+    {:guards [only-an-ending-returns-a-ticket-to-draft]
      :handler clear-the-blockers
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Return to draft" :order 10
@@ -2337,8 +2277,7 @@
                :description "The domain it asked said no — back to draft, to be planned again"}}
 
     :defer
-    {:from #{:open} :to :deferred
-     :input [:map
+    {:input [:map
              [:defer_until {:examples ["2026-11-19"]
                             :x-display
                             {:label "Until"
@@ -2351,8 +2290,7 @@
                :description "Not now — take it out of the queue until a day"}}
 
     :resume
-    {:from #{:deferred} :to :open
-     :handler resume-the-ticket
+    {:handler resume-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Resume" :style :primary :order 1 :everyday true
                :description "Back into the queue now"}}
@@ -2377,8 +2315,7 @@
                :description "The work is done — say what was done"}}
 
     :drop
-    {:from #{:draft :open} :to :dropped
-     :input close-input
+    {:input close-input
      ;; a drop of a ticket another domain asked for is the decline
      :guards [children-are-finished the-receiving-mayor-answers-an-ask
               only-the-receiving-mayor-declines]
@@ -2418,8 +2355,7 @@
     ;; where a person reads the stall and grooms it again — and a queue
     ;; of tickets beside stuck changes no longer wakes the seat
     :shelve
-    {:from #{:open :in_review} :to :draft
-     :guards [only-its-change-moves-it]
+    {:guards [only-its-change-moves-it]
      :handler note-the-shelving
      ;; the log keeps the reason, so the live cracks pass can read two
      ;; shelvings for one reason (ticket 26e51658)
@@ -2624,8 +2560,7 @@
                :description "Its pull request merged before its children ended, and the last one has"}}
 
     :reopen
-    {:from #{:done :dropped} :to :draft
-     :guards [only-a-person-reopens]
+    {:guards [only-a-person-reopens]
      :handler reopen-the-ticket
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Reopen" :order 8
@@ -2657,3 +2592,5 @@
                a-finished-ticket-is-not-put-back-by-a-side-door
                a-person-does-not-return-a-blocked-ticket-to-draft
                a-person-does-not-take-a-ticket-out-of-review]})
+
+(defresource ticket (ask/build ask/core factory10s-own))
