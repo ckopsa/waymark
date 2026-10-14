@@ -14,6 +14,112 @@ factory's own defresource map without the core's part. An extension
 that names what the core already named is refused when the namespace
 loads.
 
+## The engine, the kit and the factories
+
+Three layers, each depending only on the one below it:
+
+| Layer | Where | What it holds |
+| --- | --- | --- |
+| Engine | `waymark10/` | the machine every kind runs on: declarations, doors, guards, the store, the sit and the bench |
+| Kit | `factorykit/` | what every factory's kinds share: the change core, the repository policy core, the forge |
+| Factory | `factory10/`, or a repository of its own | its tickets, its own fields and doors, and the hands that close its engine into the kit's functions |
+
+The kit names no factory. A factory names the kit and the engine, and
+nothing in the engine names either.
+
+## The change (`factorykit.change`)
+
+A change row is one piece of work on its way to a merged pull
+request: a seat's sit mints it beside an ask, the bench submits it,
+and the forge's source moves it.
+
+### What the core holds
+
+| Part | The core's |
+| --- | --- |
+| Machine | `open`, `submitted`, `failing`, `stuck`, `merged` and `closed` |
+| Tomb | `merged` alone: a closed change comes back through `reopen` |
+| Index | one row for each `change_id` |
+| Fields | the fields the bench, the stall and the source write, and `born_from`, the address of the ask the change was built for |
+| Source doors | `adopt`, `adopt_submitted`, `observe`, `observe_submitted`, `fail`, `recover`, `merge`, `close` and `reopen`, behind `the-mirror-writes-this-row` |
+| Stall doors | `stall`, `unstick`, `unstick_submitted` and `rebranch` |
+| PR-less doors | `close_without_pr`, and `reopen` back from `closed` |
+| Cracks law | the wait on the checks in `submitted`, and the rest of `:waits`, `:left-by`, `:reached-by` and `:expected-age` |
+| Sweep | `sweep!`, which closes through `close_without_pr` each change with no pull request whose work is over |
+
+### What the extension gives
+
+`(build core extension)` answers the map `defresource` takes.
+
+| Key | Meaning |
+| --- | --- |
+| `:schema` | the factory's own fields, as a `[:map ...]` of entries with no properties |
+| `:field-order` | another order for the fields; a field it does not name follows |
+| `:unique` | its own indexes, after the core's |
+| `:handlers` | a handler for a core door that has none: `merge`, `close`, `fail` and `recover` read what the change was built for, so a factory gives its own |
+| `:actions` | its own doors, its create door among them |
+| `:waits`, `:left-by`, `:reached-by`, `:expected-age` | its own law over the core's; two maps merge and its entries win |
+| every other key | passed through to `defresource` |
+
+`stall`, `unstick` and `unstick_submitted` take the kit's
+`row-handlers` when `:handlers` names none, so a stall always says why
+on the row. `close_without_pr` and `reopen` do as well. A factory
+whose stall moves its ask gives its own handler, and calls `stalled`,
+`unstalled` or `reopened` inside it for the row's part. An extension
+that names `:states` or `:terminal`, a core field, a core door, or a
+handler for a door that has the core's own is refused.
+
+### The contract
+
+`factorykit.change-contract` is the suite a factory runs against its
+own change. `(failures new-hand)` runs each clause on a fresh hand and
+answers the clauses the change broke; `[]` conforms. The clauses:
+
+- the machine is the six states, and `merged` is the tomb;
+- one row for each `change_id`: the index is declared, and a second
+  mint of an id is refused where the store holds the index (the hand's
+  `:indexes?`; a memory store holds none);
+- `born_from` stands: a minted change keeps it, and the source's
+  adoption, which writes the pull request's id, keeps it too;
+- the wall: a person and a model acting for nobody are refused the
+  source's doors, and the source walks them;
+- a change with no pull request whose ask has left the queue for a day
+  is swept to `closed`, and the ask keeps its state; an hour is not a
+  day;
+- `close_without_pr` lands in `closed` and `reopen` leaves it, a
+  person cannot walk `reopen`, and a closed change with no pull
+  request is `open` again, its rounds at zero, when its ask is groomed
+  again.
+
+The hand is the factory's engine closed into plain functions; the
+namespace's docstring names each key. factory10 builds it on a memory
+engine in `factory10.change-contract-test`, where the ask is a
+ticket and the regroom is the person's `groom` and then the sit's
+own reopen.
+
+### How another factory adopts the change core
+
+The steps colton-tools' mayor follows:
+
+1. Depend on the kit: `factorykit/factorykit {:git/url
+   "https://github.com/ckopsa/waymark" :git/sha "..." :deps/root
+   "factorykit"}` in `deps.edn`, beside the engine.
+2. Write the extension: `:kind :change`, `:initial :open`, the create
+   door, the factory's own fields in `:schema`, and in `:handlers` its
+   `merge`, `close`, `fail` and `recover`. A factory with an ask to
+   move names `stall`, `unstick` and `unstick_submitted` too.
+3. Declare the kind: `(defresource change (kit/build kit/core
+   extension))`. A refusal at load says what the extension named
+   twice.
+4. Give the forge pass its hand (`change-pass!`, above) and call
+   `sweep!` with an `ended` that says when an ask's work is over.
+5. Sit code seats through the engine's sit, which mints the change
+   beside the ask with `born_from` and reopens a closed one with no
+   pull request when the ask is back in the queue.
+6. Run the contract: a test that builds a hand on a fresh engine and
+   expects `(failures new-hand)` to be `[]`. Take
+   `factory10.change-contract-test` as the pattern.
+
 ## The repository policy (`factorykit.repo-policy`)
 
 A repo_policy row says what submit means in one repository. A person
