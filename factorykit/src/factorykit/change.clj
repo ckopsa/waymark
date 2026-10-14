@@ -24,7 +24,9 @@
   stall, unstick and unstick_submitted move the ask as well as the
   row, so they have no handler here either: the extension's
   `:handlers` gives each one its own, and `stalled` and `unstalled`
-  are the row's part of it.
+  are the row's part of it. A factory with no ask to move names none,
+  and `build` gives the three doors `row-handlers`, the row's part
+  alone (ticket d42cf49c).
 
   A factory in this repository depends on the kit by `:local/root`. A
   factory outside it depends on it by `:git/url` with
@@ -122,6 +124,25 @@
   [row]
   (update row :data assoc :stall_reason nil :stalled_at nil :stalled_by nil))
 
+;; THE ROW'S PART ALONE (ticket d42cf49c). A factory that has no ask to
+;; move names no handler for the stall or the way back, and a door with
+;; no handler writes nothing: the stall kept no reason. `build` puts
+;; these on the three doors an extension's `:handlers` leaves out.
+
+(defhandler write-the-stall [row inp ctx]
+  (stalled row inp ctx))
+
+(defhandler clear-the-stall [row _inp _ctx]
+  ;; a person looked at it, so the rounds start again
+  (-> row unstalled (assoc-in [:data :rounds] 0)))
+
+(def row-handlers
+  "The handler `build` gives a core door the extension's `:handlers`
+  does not name: the row's part of the stall and of the way back."
+  {:stall write-the-stall
+   :unstick clear-the-stall
+   :unstick_submitted clear-the-stall})
+
 (def core
   "What every factory's change has. `:fields` is the entries of the
   schema's `:map`, in the core's own order."
@@ -210,6 +231,84 @@
                    {:label "The head branch"
                     :help "The branch that holds the change. A bench seat pushes to this branch."}}
      [:maybe [:string {:max 200}]]]
+    ;; WHAT THE SOURCE'S DOORS WRITE (ticket 354a7dc3). `observe` and
+    ;; `observe_submitted` write head_sha to missing_checks_head, and
+    ;; the doors are the core's, so the fields are the core's too.
+    [:head_sha {:optional true
+                :x-display
+                {:label "The head commit"
+                 :help "The full sha of the commit at the head of the branch. A ci_run names the same sha, so a red run can be read against the commit that caused it."}}
+     [:maybe [:string {:max 64}]]]
+    [:draft {:optional true
+             :x-display
+             {:label "A draft"
+              :help "True while the pull request is a draft. A draft asks for no review yet."}}
+     [:maybe :boolean]]
+    [:mergeable {:optional true :filter #{:eq :in}
+                 :x-display
+                 {:label "Can it merge"
+                  :choices {"clean" "It merges — no conflict and no block"
+                            "conflicted" "It conflicts with the base branch"
+                            "blocked" "A required check or a review blocks it"
+                            "unknown" "GitHub has not answered yet"}}}
+     [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
+    [:files_changed {:optional true
+                     :x-display
+                     {:label "Files changed"
+                      :help "How many files the change touches."}}
+     [:maybe [:int {:min 0}]]]
+    [:lines_added {:optional true
+                   :x-display
+                   {:label "Lines added"
+                    :help "How many lines the change adds. A repository policy may hold a ceiling against this number."}}
+     [:maybe [:int {:min 0}]]]
+    [:lines_removed {:optional true
+                     :x-display
+                     {:label "Lines removed"
+                      :help "How many lines the change removes."}}
+     [:maybe [:int {:min 0}]]]
+    ;; a list of scalars: every client draws it as rows.
+    ;; NOT filterable, deliberately: a containment filter over an
+    ;; array promotes an index of its own, and no reader of this bead
+    ;; asks "which changes touch this path" yet. The field is here so
+    ;; a policy can read it off the row.
+    [:touched_paths {:optional true
+                     :x-display
+                     {:label "The paths it touches"
+                      :help "Every path the change writes to, as GitHub lists them. A policy that fences a directory reads this list."}}
+     [:maybe [:vector [:string {:max 400}]]]]
+    [:labels {:optional true
+              :x-display
+              {:label "Labels"
+               :help "The labels that stand on the pull request now. The mirror pushes a ci label here; it does not invent one."}}
+     [:maybe [:vector [:string {:max 100}]]]]
+    [:review_state {:optional true :filter #{:eq :in}
+                    :x-display
+                    {:label "The review"
+                     :choices {"pending" "Nobody has reviewed it yet"
+                               "approved" "A reviewer approved it"
+                               "changes_requested" "A reviewer asked for changes"
+                               "commented" "A reviewer commented and asked for nothing"}}}
+     [:maybe [:enum "pending" "approved" "changes_requested" "commented"]]]
+    ;; ── a head that lacks a required check (ticket 498a089e) ──────
+    ;; the forge pass writes these; the merge line reads them to bring
+    ;; forward a front the rig would leave `waiting` forever
+    [:missing_checks {:optional true
+                      :x-display
+                      {:label "Required checks that never ran"
+                       :help "The policy's required checks with no run at all on the head — not merely pending. A branch cut before its base gained a workflow never runs that workflow's check."}}
+     [:maybe [:vector [:string {:max 200}]]]]
+    [:behind_base {:optional true
+                   :x-display
+                   {:label "Behind its base"
+                    :help "True when the head lacks the base branch's current head, as the forge's compare of base and head answered."}}
+     [:maybe :boolean]]
+    [:base_compared_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    ;; the head the two facts above were read at (ticket 716d12ba): the
+    ;; merge line trusts them only while it is still the row's head_sha
+    [:missing_checks_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     [:worktree_dirty {:default 0
                       :x-display
                       {:label "Edits waiting in the worktree"
@@ -240,6 +339,70 @@
                   {:label "Who stalled it"
                    :help "The principal, usually a seat, that walked the stall door. Empty unless the change is stuck by a stall."}}
      [:maybe [:string {:max 200}]]]
+    ;; written by the engine's `fail` and `stick`, cleared by
+    ;; `recover` and by the next submit (ticket d1742908)
+    [:failing_checks {:optional true
+                      :x-display
+                      {:label "The checks that went red"
+                       :help "The required checks that finished red on the head the seat last pushed. The house writes them when it moves the change to failing, and clears them when the head goes green or the seat submits again."}}
+     [:maybe [:vector [:string {:max 200}]]]]
+    ;; written beside `merge-conflict` in `failing_checks` when the
+    ;; bench can name the paths; cleared with it (ticket 5f12e772)
+    [:conflicts {:optional true
+                 :x-display
+                 {:label "The paths that conflict"
+                  :help "The paths a trial merge of the base branch into this change's branch left unmerged. The house writes them when a conflict moves the change to failing, and clears them when the head merges clean and goes green, or the seat submits again."}}
+     [:maybe [:vector [:string {:max 400}]]]]
+    ;; written by the forge pass through the observe doors (ticket
+    ;; 22f91244): the head whose interrupted run it re-ran, once, and
+    ;; a note when that same head died without a verdict again
+    [:rerun_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:rerun_note {:optional true
+                  :x-display
+                  {:label "A runner that keeps dying"
+                   :help "The house re-runs a head's checks once when they die without a verdict about the code. When the same head dies again, this says so, and a person looks at the runner."}}
+     [:maybe [:string {:max 240}]]]
+    ;; written beside `landing:<step>` in `failing_checks` when the
+    ;; rig's landing of a submit failed; cleared with it (ticket
+    ;; 92871afb)
+    [:landing_error {:optional true
+                     :x-display
+                     {:widget "prose"
+                      :label "Why the push did not land"
+                      :help "The end of the output of the step the bench's landing failed at, when a submit never reached GitHub. The house writes it when it moves the change to failing, and clears it when the seat submits again."}}
+     [:maybe [:string {:max 4000}]]]
+    ;; written by a merge train that found this change red though its
+    ;; own head is green (ticket 6566d32f): the head the train judged,
+    ;; and the train's branch and run url. While `head_sha` still is
+    ;; that head the forge pass does not recover the change; a new
+    ;; head, or the seat's next submit, clears both.
+    [:train_red_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:train_red {:optional true
+                 :x-display
+                 {:widget "prose"
+                  :label "Why a merge train found it red"
+                  :help "This change's own checks are green, and the merge train that carried it with others went red with it: the train's branch and the url of its run. `failing_checks` names the train's red checks. The change stays failing until its head moves."}}
+     [:maybe [:string {:max 1000}]]]
+    ;; a submit whose landing opened a pull request the forge never
+    ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
+    ;; and the note it writes once the window has passed. The adoption
+    ;; clears both. `unadopted_since` is the mirror's first-sight stamp,
+    ;; NOT a landing: no bench landing or merge writes it.
+    [:unadopted_since {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:adoption_note {:optional true
+                     :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
+                     :x-display
+                     {:widget "prose"
+                      :label "A pull request nobody adopted"
+                      :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
+     [:maybe [:string {:max 500}]]]
+    ;; hidden: the origin LINK is the affordance, and a raw URL in the
+    ;; fields is noise (task_list's own spelling). The adoption writes it.
+    [:url {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 500}]]]
     ;; ── where a seat-born change CAME FROM (waymark-fp62.6.3.14) ──
     ;; The walk kind, a colon and the walk row's own id — the words
     ;; `change_id` carries at the mint. The adoption overwrites
@@ -562,7 +725,9 @@
 
 (defn- with-the-handlers
   "The core's doors, each with the handler the extension's `:handlers`
-  names for it. A core door that has its own handler keeps it."
+  names for it. A core door that has its own handler keeps it. The
+  stall and the way back take the kit's `row-handlers` when the
+  extension names none, so a stall always says why on the row."
   [doors handlers]
   (when-some [unknown (seq (remove (set (keys doors)) (keys handlers)))]
     (refuse! (str ":handlers names " (pr-str (vec unknown))
@@ -574,7 +739,12 @@
              {:taken (vec taken)}))
   (reduce-kv (fn [doors door handler] (assoc-in doors [door :handler] handler))
              doors
-             handlers))
+             (merge (into {}
+                          (filter (fn [[door _]]
+                                    (and (contains? doors door)
+                                         (not (contains? (get doors door) :handler)))))
+                          row-handlers)
+                    handlers)))
 
 (defn build
   "The defresource map of a factory's change: `core` and the factory's
@@ -591,6 +761,8 @@
   - `:handlers`, a map of a core door's name to a handler, gives a
     core door that has no handler the extension's own. A door the
     core does not have, and one with the core's handler, is refused.
+    `stall`, `unstick` and `unstick_submitted` take the kit's
+    `row-handlers` when `:handlers` names none.
   - An extension may not redefine a core field or a core door.
   - The cracks law (`:waits`, `:left-by`, `:reached-by`,
     `:expected-age`) is the core's, with the extension's over it.

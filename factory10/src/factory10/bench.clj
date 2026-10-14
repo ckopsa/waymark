@@ -47,6 +47,7 @@
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
             [factory10.mirror :as mirror]
+            [factorykit.forge :as kit]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -1640,7 +1641,14 @@
           [(:ticket w) (str (get-in p [:data :repository]))])))
 
 (def ^:private red-deploys
-  #{"failure" "timed_out" "cancelled" "action_required" "startup_failure"})
+  "The conclusions of a deploy check that say the deploy did not land.
+  The house reruns no deploy, so the kit's table's reds for GitHub and
+  its interrupted states both hold the line here (ticket 4a7b5ebc).
+  `startup_failure` is a workflow run's conclusion that no check run
+  carries, so the table does not name it."
+  (-> (kit/raw-states :github :red)
+      (into (kit/raw-states :github :interrupted))
+      (conj "startup_failure")))
 
 (defn- deploy-run-order
   "Where one run of the deploy check stands among its runs on one head:

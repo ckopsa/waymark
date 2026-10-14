@@ -15,7 +15,12 @@
   THE CONFORMANCE SUITE is data too: `resources/forge-conformance.edn`
   and its JSON copy. Each case gives raw statuses and required checks
   and the answer every adapter must give. `conformance-failures` runs
-  them against one judge."
+  them against one judge.
+
+  THE CHANGE PASS is `change-pass!` (ticket 97bd7937): every pull
+  request a poll answered becomes a row minted, adopted, folded or
+  moved. It requires no engine. The factory hands it the `change`
+  kind's doors as functions, with its own principal closed into them."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -170,6 +175,288 @@
   lacks? None, or a count the forge did not give, is not behind."
   [behind-by]
   (pos? (long (or behind-by 0))))
+
+;; ── the change pass ─────────────────────────────────────────────────
+;;
+;; Lifted from factory10's `sources/forge.clj` (ticket 97bd7937). The
+;; pass names no engine and no principal. It takes the factory's HAND,
+;; a map of the `change` kind's doors, and the factory closes its own
+;; engine and its own system principal into them:
+;;
+;;   :find-change     (fn [change-id]) → the row with that id, or nil
+;;   :branch-changes  (fn [repository head-branch limit]) → the rows of
+;;                    that repository on that head branch
+;;   :create!         (fn [fields]) → the row the create door minted
+;;   :invoke!         (fn [row-id door input]) → the row after the door
+;;   :forge-id-prefix what a `change_id` this forge owns starts with;
+;;                    `forge-id-prefix` when the hand names none
+;;   :move!           (fn [row doc]) → [row moved?], for a factory that
+;;                    wraps `move-change!`; the pass moves through it
+;;
+;; A row is {:id :state :data}. A door that refuses throws.
+
+(def change-create-fields
+  "The `change` create door's whole vocabulary. The door is a closed
+  map, so a field it does not name refuses the mint."
+  [:change_id :repository :number :title :author :base_branch
+   :head_branch :head_sha :draft :url])
+
+(def change-observe-fields
+  "What `observe` writes. The state is NOT here: the machine advances
+  the state and a handler never does."
+  [:title :head_sha :draft :mergeable :files_changed :lines_added
+   :lines_removed :touched_paths :labels :review_state])
+
+(def observe-doors
+  "Which door writes the facts, read from the row's state. `observe` is
+  a self-loop on `open`. The bench's `submitted` state carries a door
+  of its own, because a v10 action declares one `:to` and a self-loop
+  is spelled once for each state (bead waymark-fp62.6.3.2). A state
+  that is in neither column keeps its stored facts: a closed row has
+  no observe door at all, and the pass does not argue with the
+  machine."
+  {:open :observe
+   :submitted :observe_submitted
+   :failing :observe_failing})
+
+(def forge-id-prefix
+  "What a `change_id` GitHub owns starts with, and what the pass reads
+  when the hand names no `:forge-id-prefix`. A row the engine minted
+  for a seat's ask starts with the walk kind's own name and a colon
+  instead (spec-seat.md R-12.32), so the prefix is what tells a pull
+  request's row from an ask's row."
+  "github:")
+
+(def adopt-doors
+  "Which door writes the forge's identity onto a row this house
+  already holds, read from the row's state. The same two states
+  `observe` serves, and for the same reason: a v10 action declares
+  one `:to`, so a self-loop is spelled once for each state. A
+  `failing` or `stuck` row is adopted too (ticket 3c59c688): a pull
+  request the house itself opened is that row's whatever its state,
+  and the adoption leaves the state where it is. A merged or closed
+  row is adopted by nobody — its story is over."
+  {:open :adopt
+   :submitted :adopt_submitted
+   :failing :adopt_failing
+   :stuck :adopt_stuck})
+
+(def fold-states
+  "The states a forge-minted duplicate can be folded from (ticket
+  3c59c688). A merged or closed row is left as it is."
+  #{:open :submitted :failing :stuck})
+
+(def adoption-scan-limit
+  "How many rows of one branch the adoption reads. A head branch
+  holds one change in every house that works, and the ceiling is
+  there so a repository with a strange branch cannot make the pass
+  read a table."
+  10)
+
+(def adopt-fields
+  "What the adoption writes: the pull request's own identity, and
+  nothing else. The facts follow through `observe`, as they do for
+  every other row."
+  [:change_id :number :url])
+
+(defn present
+  "The document, narrowed to the fields named and to what the forge
+  actually read. A field the forge did not read is absent, and absent
+  means silent: the stored value stands."
+  [doc fields]
+  (into {} (keep (fn [k] (when-some [v (get doc k)] [k v]))) fields))
+
+(defn state-of
+  "The row's state as a keyword, whichever way the store spells it."
+  [row]
+  (some-> (:state row) name keyword))
+
+(defn holds-conflict?
+  "Does the row's `conflicted` stand against what the forge reads now
+  (ticket bf8ba0a6)? The merge pass writes `conflicted` when the rig's
+  merge is refused as not mergeable, and parks that head: nothing writes
+  it a second time. The forge's own read of the same head may still say
+  `unknown` or `blocked` — it has not computed the merge, or the policy
+  word outranks it — and that word used to replace the conflict before
+  the failing pass read it, so #706 sat submitted and parked. Neither
+  word says the conflict is gone: only `clean`, or a new head, does."
+  [row doc]
+  (and (= "conflicted" (str (get-in row [:data :mergeable])))
+       (contains? #{"unknown" "blocked"} (str (:mergeable doc)))
+       (or (nil? (:head_sha doc))
+           (= (str (:head_sha doc)) (str (get-in row [:data :head_sha]))))))
+
+(defn changed-facts
+  "The facts that moved under the row. A value equal to the stored one
+  is not written again, so a pass that saw nothing new logs nothing. A
+  conflict the row holds (`holds-conflict?`) is not written over."
+  [row doc]
+  (into {}
+        (keep (fn [[k v]] (when (not= v (get-in row [:data k])) [k v])))
+        (present (cond-> doc (holds-conflict? row doc) (dissoc :mergeable))
+                 change-observe-fields)))
+
+(defn state-door
+  "The one door from the row's state to the forge's. nil when the row
+  already says what the forge says, and nil for a merged row: that
+  state is the kind's only tomb.
+
+  A `submitted` or `stuck` row follows the forge too (bead
+  waymark-fp62.6.3.14). A seat-born change stands at `submitted` once
+  the seat has pushed, and that is the state the adoption keeps — so
+  the pull request the forge then merges must move THAT row, or the row
+  never reaches `merged` and the task it was born from is never
+  completed. The kind's own `merge` and `close` doors admit all three
+  states; this table only says the same."
+  [row-state forge-state]
+  (case [row-state (str forge-state)]
+    [:open "merged"] :merge
+    [:submitted "merged"] :merge
+    [:failing "merged"] :merge
+    [:stuck "merged"] :merge
+    [:open "closed"] :close
+    [:submitted "closed"] :close
+    [:failing "closed"] :close
+    [:stuck "closed"] :close
+    [:closed "open"] :reopen
+    nil))
+
+(defn mint-change!
+  "One pull request the house has never seen → one `change` row. The
+  create door takes the identity and the words; `observe` takes the
+  counts, because the create door does not name them."
+  [{:keys [create! invoke!]} doc]
+  (let [row (create! (present doc change-create-fields))
+        facts (present doc change-observe-fields)]
+    (if (seq facts)
+      (invoke! (str (:id row)) :observe facts)
+      row)))
+
+(defn move-change!
+  "The row that is already here, moved to what the forge says now. The
+  facts are written while the row can still take them — `observe` is a
+  self-loop on `open` — and the state moves after. A row that comes
+  back from `closed` reopens first, because a closed row has no
+  `observe` door at all.
+
+  → [row moved?]"
+  [{:keys [invoke!]} row doc]
+  (let [id (str (:id row))
+        from (state-of row)
+        door (state-door from (:forge_state doc))
+        reopening? (= :reopen door)
+        row (if reopening? (invoke! id :reopen {}) row)
+        facts (changed-facts row doc)
+        observe-door (get observe-doors (state-of row))
+        observing? (boolean (and (seq facts) observe-door))
+        row (if observing? (invoke! id observe-door facts) row)
+        row (if (and door (not reopening?)) (invoke! id door {}) row)]
+    [row (boolean (or door observing?))]))
+
+(defn- move!
+  "The move the pass makes: the factory's own when the hand names one,
+  and `move-change!` when it does not."
+  [hand row doc]
+  (if-some [move (:move! hand)]
+    (move row doc)
+    (move-change! hand row doc)))
+
+(defn adoptable-row
+  "The row this house minted for an ask, waiting for the pull request
+  its own submit opened (bead waymark-fp62.6.3.10), or nil.
+
+  Three things make one: the same repository, the same head branch,
+  and a `change_id` that is not the forge's. A row at a state with no
+  adopt door is not one — a merged or closed row on that branch is a
+  row whose story is elsewhere. nil is the ordinary
+  answer: almost every pull request the forge reads was opened by a
+  person, and that is a mint and not an adoption."
+  [{:keys [branch-changes] :as hand} doc]
+  (when-some [head (some-> (:head_branch doc) str not-empty)]
+    (when-not (str/blank? (str (:repository doc)))
+      (->> (branch-changes (str (:repository doc)) head adoption-scan-limit)
+           (filter (fn [row]
+                     (and (not (str/starts-with?
+                                (str (get-in row [:data :change_id]))
+                                (or (:forge-id-prefix hand) forge-id-prefix)))
+                          (contains? adopt-doors (state-of row)))))
+           first))))
+
+(defn adopt-change!
+  "The row the house minted, given the pull request's own identity:
+  the id, the number and the url, through the mirror's own `adopt`
+  door. `change_id` is `:unique`, so the write lands whole or the
+  transaction does not land at all — a second pull request can never
+  take a row that is already spoken for.
+
+  → the row, with the forge's identity on it."
+  [{:keys [invoke!]} row doc]
+  (invoke! (str (:id row))
+           (get adopt-doors (state-of row))
+           (present doc adopt-fields)))
+
+(defn fold-duplicate!
+  "A row the forge minted beside the house's own row for the same pull
+  request (ticket 3c59c688: 0243f0a6 minted for #268 while 71cbbef9
+  stood stuck). The minted row is closed, gives up the id and names
+  the house row; the house row adopts the id and moves with the forge."
+  [{:keys [invoke!] :as hand} minted ours doc]
+  (invoke! (str (:id minted)) :fold {:folded_into (str (:id ours))})
+  (move! hand (adopt-change! hand ours doc) doc))
+
+(defn forge-minted?
+  "A row the forge minted, not one the house built for an ask: it was
+  born of no ask, and it stands where a fold can take it."
+  [row]
+  (and (str/blank? (str (get-in row [:data :born_from])))
+       (contains? fold-states (state-of row))))
+
+(defn- counted [census k]
+  (update census k (fnil inc 0)))
+
+(defn change-pass!
+  "Every pull request the forge answered → a row minted, a row
+  adopted, a duplicate folded, or a row moved, through the factory's
+  hand. → the census, with `:minted`, `:adopted`, `:folded`, `:moved`
+  and `:refused` counted. A row the engine refuses is counted and
+  skipped, and its document is kept in `refused`, a volatile the
+  caller hands back to the source: the cursor has already moved past
+  it, so only a retry offers it again (ticket 365043a6). `log-fn` takes
+  the parts of one line."
+  ([hand changes census log-fn]
+   (change-pass! hand changes census log-fn (volatile! [])))
+  ([hand changes census log-fn refused]
+   (reduce
+    (fn [census doc]
+      (try
+        (if-some [existing ((:find-change hand) (:change_id doc))]
+          (if-some [ours (when (forge-minted? existing)
+                           (adoptable-row hand doc))]
+            ;; a duplicate minted before the house row could adopt:
+            ;; fold it, so one row holds the pull request
+            (do (fold-duplicate! hand existing ours doc)
+                (counted census :folded))
+            (let [[_ moved?] (move! hand existing doc)]
+              (cond-> census moved? (counted :moved))))
+          (if-some [ours (adoptable-row hand doc)]
+            ;; the house asked for this pull request: the seat built
+            ;; the branch and its submit opened it. One row, adopted
+            ;; where it stands, rather than a second row beside it
+            (do (move! hand (adopt-change! hand ours doc) doc)
+                (counted census :adopted))
+            ;; a birth lands at `open`, because that is the kind's
+            ;; initial state; a pull request first seen after it merged
+            ;; walks its door in the same pass rather than waiting for
+            ;; a move that will never come again
+            (do (move! hand (mint-change! hand doc) doc)
+                (counted census :minted))))
+        (catch Exception e
+          (log-fn "the pull request " (:change_id doc)
+                  " was refused a row (" (ex-message e) ")")
+          (vswap! refused conj doc)
+          (counted census :refused))))
+    census
+    changes)))
 
 ;; ── the conformance suite ───────────────────────────────────────────
 

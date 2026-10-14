@@ -7,6 +7,10 @@
 ;; pending      the build has no verdict yet
 ;; interrupted  the build died without a verdict: a rerun, never green
 ;;              and never a recovery
+;;
+;; The table reads a CHECK on a head. A job inside a run is not a check:
+;; factory10 reads a timed out job as interrupted, to say whose fault a
+;; red run is. docs/factory-kit.md says where a reader leaves the table.
 {:verdicts ["green" "red" "pending" "interrupted"]
  :forges
  {:github    {:green       ["success" "neutral" "skipped"]
