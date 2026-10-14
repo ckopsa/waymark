@@ -1322,12 +1322,13 @@
                  :choices {"front" "It is the front of the line: the house brings it up to date and merges it when green"
                            "behind" "It waits its turn: only the front is brought up to date"
                            "red" "Its checks are red, so it is out of the line"
+                           "interrupted" "Its checks died without a verdict again after the house ran them again once, so it is out of the line"
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
                            "held" "Its ticket merges after tickets that are not done yet"
                            "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"}}}
-     [:maybe [:enum "front" "behind" "red" "conflicted" "draft" "parked" "held" "person"]]]
+     [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display
