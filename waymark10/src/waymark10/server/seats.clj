@@ -6970,6 +6970,28 @@
                                    :newest-first true})))))
     #{}))
 
+(defn holding-sittings
+  "The ids of this seat's open sittings that hold any of `row-ids` in
+  their `walked_rows`, newest first: the runs a sit that found every
+  row held names, so the stop it is told to make is seen to be right
+  (ticket 471d69dd). → a vector of ids."
+  [eng seat-id row-ids]
+  (let [wanted (into #{} (keep #(some-> % str not-empty)) row-ids)]
+    (if (and seat-id (seq wanted) (get (inv/resources eng) :sitting))
+      (let [st (:storage eng)]
+        (store/with-tx st
+          (fn [tx]
+            (into []
+                  (comp (filter (fn [s]
+                                  (some #(contains? wanted (some-> % str))
+                                        (get-in s [:data :walked_rows]))))
+                        (map #(str (:id %))))
+                  (store/query-rows st tx :sitting
+                                    {:seat (str seat-id) :state :open}
+                                    {:limit open-sitting-page
+                                     :newest-first true})))))
+      [])))
+
 (defn graced-row-ids
   "The part of `claimed-rows` a CLOSED sitting of this seat holds
   through the seat's release grace (`graced-rows`), the sitting
