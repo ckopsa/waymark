@@ -85,6 +85,21 @@
          clojure.lang.ExceptionInfo #"is not a \[:map"
          (kit/build a-core (assoc an-extension :schema [:map {:closed true} [:colour :string]]))))))
 
+(deftest the-extension-hands-a-core-door-its-handler
+  (let [finish (fn [row _inp _ctx] row)]
+    (testing "a core door with no handler takes the extension's"
+      (let [built (kit/build a-core (assoc an-extension :handlers {:merge finish}))]
+        (is (= finish (get-in built [:actions :merge :handler])))
+        (is (not (contains? built :handlers)))))
+    (testing "a door the core does not have, and one with the core's own handler"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"the core has no such door"
+           (kit/build a-core (assoc an-extension :handlers {:paint finish}))))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"the core's own handler"
+           (kit/build (assoc-in a-core [:actions :merge :handler] finish)
+                      (assoc an-extension :handlers {:merge finish})))))))
+
 (deftest the-shipped-core-is-the-six-states-and-the-shared-fields
   (is (= [:open :submitted :failing :stuck :merged :closed] (:states kit/core)))
   (is (= #{:merged} (:terminal kit/core)))
@@ -93,4 +108,10 @@
           :head_branch :worktree_dirty :rounds :stall_reason :stalled_at
           :stalled_by :born_from]
          (mapv first (:fields kit/core))))
-  (is (not (contains? kit/core :actions))))
+  (testing "and the source's eight doors (ticket 47e2c880)"
+    (is (= #{:adopt :adopt_submitted :observe :observe_submitted :fail
+             :recover :merge :close}
+           (set (keys (:actions kit/core)))))
+    (is (= #{:fail :recover :merge :close}
+           (set (remove #(contains? (get-in kit/core [:actions %]) :handler)
+                        (keys (:actions kit/core))))))))
