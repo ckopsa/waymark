@@ -4008,3 +4008,100 @@
     (close-sitting! grooming)
     (seat-do! seat :retire)
     (seat-do! groomer :retire)))
+
+;; Ticket 7c4f0392. ops-seat was woken by a burst of fourteen creates
+;; and handed ten, its `rows_per_firing`. No create came after, so the
+;; four it was not handed waited for the silent crack. The close of a
+;; sitting that was handed a full batch now fires the seat again.
+
+(deftest a-seat-whose-firing-hit-rows-per-firing-is-fired-again
+  (let [wn :wake-refire
+        fn' :wake-refire-fires
+        batch "refire-burst"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "refireclerk"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete"]
+                                :filter {:batch batch}}]
+                       :wake_on [{:kind "wake_item" :actions ["create"]
+                                  :filter {:batch batch}}]
+                       :rows_per_firing 10
+                       :fire_interval_seconds 1}
+                      fn')
+        waiting (nth-sitting! seat 1)
+        ids (vec (repeatedly 14 #(item! batch)))
+        [first-ten last-four] (split-at 10 ids)]
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    (close-sitting! waiting)
+    (drain-wakes! wn)
+
+    (testing "the burst waited on the open sitting and fired once"
+      (is (= 1 (count (seat-fires seat)))))
+
+    (testing "a sitting handed ten of fourteen fires the seat again at
+              its close, for the queue"
+      (let [run (nth-sitting! seat 2)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat run (mapv str first-ten)))))
+        (doseq [id first-ten] (item-do! id :complete))
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (let [ts (seat-fires seat)]
+          (is (= 2 (count ts)))
+          (is (nil? (get-in (last ts) [:inputs :text]))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (testing "the second run is handed the four, and its close, with the
+              walk empty, fires nothing"
+      (let [run (nth-sitting! seat 3)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat run (mapv str last-four)))))
+        (doseq [id last-four] (item-do! id :complete))
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (is (= 2 (count (seat-fires seat))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))
+
+(deftest a-full-batch-whose-walk-empties-is-not-fired-again
+  (let [wn :wake-refire-empty
+        fn' :wake-refire-empty-fires
+        batch "refire-exact"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "refireemptyclerk"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete"]
+                                :filter {:batch batch}}]
+                       :wake_on [{:kind "wake_item" :actions ["create"]
+                                  :filter {:batch batch}}]
+                       :rows_per_firing 10
+                       :fire_interval_seconds 1}
+                      fn')
+        waiting (nth-sitting! seat 1)
+        ids (vec (repeatedly 10 #(item! batch)))]
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    (close-sitting! waiting)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))))
+    (let [run (nth-sitting! seat 2)]
+      (is (true? (:claimed? (seats/claim-rows-atomically!
+                             *eng* seat run (mapv str ids)))))
+      (doseq [id ids] (item-do! id :complete))
+      (drain-wakes! wn)
+      (Thread/sleep 1200)
+      (close-sitting! run)
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+    (seat-do! seat :retire)))
