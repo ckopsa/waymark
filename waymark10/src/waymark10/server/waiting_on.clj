@@ -53,6 +53,9 @@
 
 (defn- text [v] (if (keyword? v) (name v) (str v)))
 
+(defn- seat-name [seat]
+  (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
+
 (defn- fget
   "A map's value for a key, whichever way the map spells the key."
   [m k]
@@ -134,22 +137,31 @@
   "Who holds the row, as the verdict names it (ticket ca68c559): a seat
   a model sits in first, a woken one before one on a cadence; then a
   source; then a person; then nobody. Not the first door of `next`:
-  many of those are held by nobody while a later one is held."
-  [doors]
+  many of those are held by nobody while a later one is held.
+
+  A seat counts only when its walk would hand it this row and a wake or
+  its cadence brings it to the row (ticket af41e6bf): `walking` is the
+  names of the seats whose walk admits the row, or that name no walk to
+  narrow them. `:strays` says a seat a
+  model sits in holds a door out and none of them walks the row."
+  [doors walking]
   (let [hs (holders doors)
-        models (remove :person hs)]
-    {:pick (or (first (filter (comp seq :woken_by) models))
-               (first (filter :cadence_seconds models))
-               (first models))
+        models (remove :person hs)
+        walkers (filter #(and (contains? walking (:seat %))
+                              (or (seq (:woken_by %)) (:cadence_seconds %)))
+                        models)]
+    {:pick (or (first (filter (comp seq :woken_by) walkers))
+               (first walkers))
+     :strays (boolean (and (seq models) (empty? walkers)))
      :person (first (filter :person hs))
      :source (first (filter #(= "source" (:held_by %)) doors))}))
 
 (defn- holder-of
   "The choice as the block carries it: {type name}, type one of seat,
   source, person or nobody; nil for a state a row rests in."
-  [doors]
+  [doors walking]
   (when doors
-    (let [{:keys [pick person source]} (choose doors)]
+    (let [{:keys [pick person source]} (choose doors walking)]
       (cond
         pick {:type "seat" :name (:seat pick)}
         source {:type "source" :name (:source source)}
@@ -158,8 +170,9 @@
 
 (defn- verdict
   "The one line, naming the holder `choose` picks."
-  [kind state doors for-words age-words held]
-  (let [{:keys [pick person source]} (choose doors)]
+  [kind state doors walking for-words age-words held]
+  (let [{:keys [pick person source strays]} (choose doors walking)
+        holds (if strays "walks this row to" "holds")]
     (str
      (cond
        (nil? doors)
@@ -178,21 +191,29 @@
        (str "waiting on the " (:source source) " (" (:door source) ")")
 
        person
-       (str "a person: no seat a model sits in holds a door out of " state
+       (str "a person: no seat a model sits in " holds " a door out of " state
             for-words "; " (:seat person) " holds " (some-of (:holds person)))
 
        :else
-       (str "nobody: no active seat holds a door out of " state for-words))
+       (str "nobody: no active seat " holds " a door out of " state for-words))
      (when doors age-words)
      (when (seq held) (str "; held by " (str/join ", " (keys held)))))))
+
+(defn- walk-led?
+  "Does this seat name a walk or a judgment that says which rows it is
+  handed?"
+  [seat]
+  (boolean (or (some-> (get-in seat [:data :walk]) text not-empty)
+               (some-> (get-in seat [:data :judgment]) str not-empty))))
 
 (defn block
   "The `waiting_on` block of one row. `seat-rows` is the ACTIVE seats,
   as stored; `by-kind` is every kind the engine serves, by name. `now`
   is the instant of the read, `entered` the transition that put the row
-  into its state when the log said (`:at`, `:action`), and `data` the
-  row's data as the caller is shown it."
-  [rdef seat-rows by-kind row {:keys [now entered data]}]
+  into its state when the log said (`:at`, `:action`), `data` the
+  row's data as the caller is shown it, and `tickets` and `judgments`
+  what `walk-reads` read for it."
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments]}]
   (let [kind (text (:kind rdef))
         state (text (:state row))
         doors (some->> (cracks/row-doors rdef seat-rows by-kind row) vec)
@@ -210,16 +231,52 @@
                     (str ", " (span secs)
                          (when expected (str " of " (span expected)))))
         held (held-by data)
-        holder (holder-of doors)]
+        reads {:tickets tickets :judgments judgments}
+        ;; a seat that names no walk and no judgment is narrowed by
+        ;; neither, so its cadence alone may bring it to any row
+        walking (into #{}
+                      (comp (filter #(or (not (walk-led? %))
+                                         (live-cracks/walk-admits? by-kind reads % rdef row)))
+                            (map seat-name))
+                      seat-rows)
+        holder (holder-of doors walking)]
     (cond-> {:state state
              :since (cond-> {}
                       at (assoc :at (str at))
                       (:action entered) (assoc :by (text (:action entered)))
                       expected (assoc :expected_seconds expected))
              :next (or doors [])
-             :verdict (verdict kind state doors for-words age-words held)}
+             :verdict (verdict kind state doors walking for-words age-words held)}
       holder (assoc :holder holder)
       (seq held) (assoc :held_by held))))
+
+(defn- born-ticket-id
+  "The id of the ticket a row was born from (`born_from` ticket:<id>),
+  or nil."
+  [row]
+  (let [born (str (fget (:data row) :born_from))]
+    (when (str/starts-with? born "ticket:")
+      (subs born (count "ticket:")))))
+
+(defn walk-reads
+  "What `block` reads, in `tx`, to tell whose walk hands it a row:
+  {:tickets id → row} for the tickets these rows were born from, and
+  {:judgments id → row} for the judgments these seats sit for."
+  [eng tx seat-rows rows]
+  (let [st (:storage eng)
+        resources (inv/resources eng)
+        load (fn [kind ids]
+               (if-some [rdef (get resources kind)]
+                 (into {}
+                       (keep (fn [id]
+                               (when-some [r (store/load-row st tx kind id {})]
+                                 [id (inv/decode-row rdef r)])))
+                       (distinct ids))
+                 {}))]
+    {:tickets (load :ticket (keep born-ticket-id rows))
+     :judgments (load :judgment
+                      (keep #(some-> (get-in % [:data :judgment]) str not-empty)
+                            seat-rows))}))
 
 (defn for-row
   "The block for a row the engine serves, or nil: for an engine that
@@ -230,19 +287,22 @@
     (let [st (:storage eng)
           resources (inv/resources eng)]
       (when (contains? resources :seat)
-        (let [[seat-rows log]
+        (let [[seat-rows log reads]
               (store/with-tx st
                 (fn [tx]
-                  [(store/query-rows st tx :seat {:state :active}
-                                     {:limit seat-page})
-                   (store/transitions st tx
-                                      {:kind (:kind rdef)
-                                       :resource-id (str (:id row))}
-                                      {:limit log-page :newest-first true})]))]
+                  (let [seat-rows (store/query-rows st tx :seat {:state :active}
+                                                    {:limit seat-page})]
+                    [seat-rows
+                     (store/transitions st tx
+                                        {:kind (:kind rdef)
+                                         :resource-id (str (:id row))}
+                                        {:limit log-page :newest-first true})
+                     (walk-reads eng tx seat-rows [row])])))]
           (block rdef seat-rows resources row
-                 {:now ((:now-fn eng))
-                  :entered (entered log (:state row))
-                  :data data}))))
+                 (assoc reads
+                        :now ((:now-fn eng))
+                        :entered (entered log (:state row))
+                        :data data)))))
     (catch Exception e
       (warn! (text (:kind rdef)) " " (:id row) ": " (ex-message e))
       nil)))
