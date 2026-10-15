@@ -1493,10 +1493,46 @@
         (schedules/schedule-for-seat eng (:id seat-row)))
     schedule-row))
 
+(def ^:private short-outcomes
+  "The outcomes of a sitting that did not walk its batch through: a
+  close of one of these is another crack, not rows left by the cap."
+  #{"cut_short" "refused_out" "never_sat"})
+
+(defn- refire-on-close
+  "A sitting handed a full `rows_per_firing` batch closed, and its walk
+  still holds rows that firing did not hand it (ticket 7c4f0392). No
+  transition of the walked kind may follow — the seat's wake came from
+  rows that all arrived before the fire — so the rows left would sit
+  until the cadence. The wake is marked pending here, as
+  `judge-count-on-close` marks one, and `release!` fires it under the
+  usual damper. Only a door or hook close is heard, not an abandon,
+  and not one whose outcome says it was cut short, refused out or
+  never sat. An empty walk marks nothing. A replayed close is heard
+  once. → the schedule row as it stands after."
+  [eng seat-row schedule-row t]
+  (let [sitting (raw-row eng :sitting (:resource-id t))
+        handed (count (distinct (map str (get-in sitting [:data :walked_rows]))))
+        cap (long (or (get-in seat-row [:data :rows_per_firing]) 20))]
+    (if (and seat-row schedule-row sitting
+             (= :close (:action t))
+             (= :active (:state seat-row))
+             (schedules/fires-out? eng schedule-row)
+             (not (get-in schedule-row [:data :wake_pending]))
+             (not (heard? schedule-row t))
+             (pos? handed)
+             (>= handed cap)
+             (not (contains? short-outcomes
+                             (some-> (get-in sitting [:data :outcome]) name)))
+             (pos? (long (or (walk-count eng seat-row) 0))))
+      (do (mark-pending! eng (remember-heard! eng schedule-row t))
+          (schedules/schedule-for-seat eng (:id seat-row)))
+      schedule-row)))
+
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
-  wake waiting on exactly that, or a count wake that still holds
-  (`judge-count-on-close`). Keyed by the sitting's own transition,
+  wake waiting on exactly that, a count wake that still holds
+  (`judge-count-on-close`), or rows its full batch left behind
+  (`refire-on-close`). Keyed by the sitting's own transition,
   so a replayed close releases once. A seat of several slots may fire
   with nothing pending, when a slot and a row for it are free."
   [eng t ^Instant at]
@@ -1505,8 +1541,11 @@
       (let [seat-row (raw-row eng :seat seat-id)]
         (release! eng
                   seat-row
-                  (judge-count-on-close
-                   eng seat-row (schedules/schedule-for-seat eng seat-id) t)
+                  (refire-on-close
+                   eng seat-row
+                   (judge-count-on-close
+                    eng seat-row (schedules/schedule-for-seat eng seat-id) t)
+                   t)
                   (str "wake:" seat-id ":release:" (:id t))
                   at
                   true)))))
