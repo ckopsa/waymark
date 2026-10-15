@@ -380,9 +380,11 @@
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
-;; All four are CHECK-TIER: each wall declares :reads [:principal] and
-;; neither needs a :given row, so `check` judges them with no database
-;; at all.
+;; The two allow scenarios are CHECK-TIER: their walls declare :reads
+;; [:principal] and need no :given row, so `check` judges them with no
+;; database. The two refuse scenarios are paid by the suite: the
+;; refuse door's second wall also reads the seat, grant and member rows
+;; to find the person's delegate.
 
 (def ^:private a-held-send
   {:tool "emila__send"
