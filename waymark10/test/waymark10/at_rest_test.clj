@@ -119,6 +119,34 @@
   (testing "a malformed key refuses rather than reading as none"
     (is (thrown? clojure.lang.ExceptionInfo (at-rest/parse-key "c2hvcnQ=")))))
 
+(deftest a-malformed-key-is-a-state-not-a-stop
+  (let [spelled "hunter2-not-a-key"
+        sealed (with-key k1 (at-rest/seal the-token))]
+    (is (= ::at-rest/malformed (at-rest/read-key spelled)))
+    (is (= ::at-rest/malformed (at-rest/read-key "c2hvcnQ=")))
+    (is (nil? (at-rest/read-key "  ")))
+    (is (= (:id k1) (:id (at-rest/read-key (.encodeToString (Base64/getEncoder)
+                                                            ^bytes (:bytes k1))))))
+    (with-key (at-rest/read-key spelled)
+      (is (at-rest/malformed?))
+      (is (nil? (at-rest/data-key)) "no key to seal with")
+      (is (= "malformed" (:state (at-rest/note))))
+      (is (false? (:encrypted (at-rest/note))))
+      (testing "a sealed value refuses to open, naming the problem"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                              #"must be 32 bytes, spelled in base64"
+                              (at-rest/open sealed))))
+      (testing "plaintext is not written to a declared field"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be 32 bytes"
+                              (at-rest/seal the-token)))
+        (is (nil? (at-rest/seal nil)))
+        (is (= sealed (at-rest/seal sealed))))
+      (testing "the boot line names the problem and never the value"
+        (let [line (at-rest/boot-line)]
+          (is (str/includes? line "ERROR"))
+          (is (str/includes? line "WAYMARK10_DATA_KEY must be 32 bytes, spelled in base64"))
+          (is (not (str/includes? line spelled))))))))
+
 (deftest the-mark-is-a-secret-fields-alone
   (is (thrown-with-msg? Exception #"is :at-rest :encrypted and not :secret"
                         (r/resource (assoc-in vault-decl [:schema 2 1]
@@ -166,6 +194,22 @@
             (store/ensure-kind! (:storage eng) (get (inv/resources eng) :ar_vault))
             (is (= once (raw eng "ar_vaults" id "token"))
                 "a second pass leaves a sealed value as it is")))))))
+
+(deftest a-malformed-key-boots-and-serves
+  (fresh!)
+  (let [id (with-key k1 (with-eng a-vault!))]
+    (with-key ::at-rest/malformed
+      (with-eng
+        (fn [eng]
+          (is (= "malformed" (:state (at-rest/note))))
+          (is (str/starts-with? (str (raw eng "ar_vaults" id "token")) "enc:v1:")
+              "the boot leaves a sealed value as it is")
+          (is (some? (:row (inv/create! eng :ar_vault {:name "b"}
+                                        {:principal colton})))
+              "a row with no declared value is written")
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be 32 bytes"
+                                (stored eng id))
+              "a sealed value refuses to open"))))))
 
 (deftest resolve-refs-forwards-the-plaintext
   (fresh!)

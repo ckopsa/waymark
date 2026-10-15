@@ -15,8 +15,15 @@
   NO KEY IS A STATE THIS ENGINE RUNS IN, said aloud: values are written
   as plaintext, `enc:` values already written refuse to open (loudly —
   never as an empty value), boot warns once and the cracks document
-  carries `at_rest`. A key that is set and malformed refuses at the
-  first use rather than reading as no key."
+  carries `at_rest`.
+
+  A MALFORMED KEY IS A THIRD STATE, and never a stop (ticket d8771d50):
+  a key that is set and is not 32 bytes of base64 boots and serves, but
+  nothing is sealed and nothing opens — `enc:` values refuse to open, a
+  plaintext write to a declared field refuses, the boot backfill does
+  not run — boot logs an ERROR naming the problem (never the value) and
+  the cracks document carries `at_rest {state \"malformed\"}`. It never
+  reads as no key."
   (:require [clojure.string :as str])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest SecureRandom)
@@ -47,23 +54,45 @@
     {:id (hex (.digest (MessageDigest/getInstance "SHA-256") ^bytes bs) 4)
      :bytes bs}))
 
+(def ^:private malformed-why
+  (str env-var " must be 32 bytes, spelled in base64"))
+
+(defn read-key
+  "The environment's spelling of a key → {:id :bytes}, nil when it is
+  unset or blank, or ::malformed when it is set and wrong — a state the
+  engine runs in, not an exception that stops it."
+  [s]
+  (when-some [s (some-> s str str/trim not-empty)]
+    (try (parse-key s)
+         (catch clojure.lang.ExceptionInfo _ ::malformed))))
+
 (def ^:private env-key
-  (delay (some-> (System/getenv env-var) str/trim not-empty parse-key)))
+  (delay (read-key (System/getenv env-var))))
 
 (defonce ^:private override (atom ::env))
 
 (defn use-key!
-  "For a test: this key ({:id :bytes}, or nil for none) in place of the
-  environment's until (use-key! ::env) gives it back. → the one it
-  put aside, so a test can put that back."
+  "For a test: this key ({:id :bytes}, nil for none, or ::malformed) in
+  place of the environment's until (use-key! ::env) gives it back. → the
+  one it put aside, so a test can put that back."
   [k]
   (first (reset-vals! override k)))
 
-(defn data-key
-  "The key values are sealed with now, or nil while none is set."
-  []
+(defn- current []
   (let [o @override]
     (if (= ::env o) @env-key o)))
+
+(defn malformed?
+  "Whether the key that is set is not one: see the ns doc."
+  []
+  (= ::malformed (current)))
+
+(defn data-key
+  "The key values are sealed with now, or nil while none is set or the
+  one set is malformed (malformed? tells the two apart)."
+  []
+  (let [k (current)]
+    (when (map? k) k)))
 
 (defn sealed? [v]
   (and (string? v) (str/starts-with? v prefix)))
@@ -74,10 +103,20 @@
   (doto (Cipher/getInstance "AES/GCM/NoPadding")
     (.init (int mode) (SecretKeySpec. k "AES") (GCMParameterSpec. 128 nonce))))
 
+(defn- refuse [msg]
+  ;; the value never rides the exception: only what is wrong
+  (throw (ex-info (str "at-rest: " msg) {:at-rest :unopenable})))
+
 (defn seal
   "`v` sealed under the data key; v itself when it is no string, is
-  sealed already, or no key is set."
+  sealed already, or no key is set. A string to seal while the key is
+  malformed THROWS: it is never written as plaintext beside values
+  that were sealed."
   [v]
+  (when (and (string? v) (not (sealed? v)) (malformed?))
+    (throw (ex-info (str "at-rest: " malformed-why
+                         "; a field declared :at-rest :encrypted is not written")
+                    {:at-rest :malformed-key})))
   (if-some [{:keys [id bytes]} (when (and (string? v) (not (sealed? v)))
                                  (data-key))]
     (let [nonce (byte-array 12)
@@ -87,10 +126,6 @@
       (str prefix "v1:" id ":" (.encodeToString enc nonce) ":"
            (.encodeToString enc ct)))
     v))
-
-(defn- refuse [msg]
-  ;; the value never rides the exception: only what is wrong
-  (throw (ex-info (str "at-rest: " msg) {:at-rest :unopenable})))
 
 (defn open
   "A sealed value opened; anything else as it is. A sealed value with
@@ -105,6 +140,8 @@
       (cond
         (or (not= 5 (count parts)) (not= "v1" ver))
         (refuse "a value in a form this engine did not write")
+        (malformed?)
+        (refuse (str "a value sealed under key " id " and " malformed-why))
         (nil? k)
         (refuse (str "a value sealed under key " id " and no " env-var " set"))
         (not= id kid)
@@ -144,21 +181,34 @@
 (defn note
   "What the cracks document says of at-rest encryption."
   []
-  (try
-    (if-some [k (data-key)]
-      {:encrypted true :key_id (:id k)}
-      {:encrypted false
-       :why (str "No " env-var " is set: the fields declared :at-rest "
-                 ":encrypted are written as plaintext.")})
-    (catch clojure.lang.ExceptionInfo e
-      {:encrypted false :why (ex-message e)})))
+  (cond
+    (malformed?)
+    {:state "malformed" :encrypted false
+     :why (str malformed-why ": nothing is sealed or opened, and the "
+               "fields declared :at-rest :encrypted refuse writes.")}
+    (data-key)
+    {:state "encrypted" :encrypted true :key_id (:id (data-key))}
+    :else
+    {:state "none" :encrypted false
+     :why (str "No " env-var " is set: the fields declared :at-rest "
+               ":encrypted are written as plaintext.")}))
+
+(defn boot-line
+  "Boot's sentence for the key, or nil when values are sealed. It names
+  the problem and never the value."
+  []
+  (let [{:keys [state why]} (note)]
+    (case state
+      "malformed" (str "waymark10 at-rest: ERROR " why)
+      "none" (str "waymark10 at-rest: WARNING " why)
+      nil)))
 
 (defonce ^:private warned (atom false))
 
 (defn warn-once!
-  "Boot's sentence when values will be written as plaintext."
+  "Boot's sentence when values are not sealed: no key, or a malformed one."
   []
-  (let [{:keys [encrypted why]} (note)]
-    (when (and (not encrypted) (compare-and-set! warned false true))
+  (when-some [line (boot-line)]
+    (when (compare-and-set! warned false true)
       (binding [*out* *err*]
-        (println (str "waymark10 at-rest: WARNING " why))))))
+        (println line)))))
