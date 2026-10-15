@@ -1,7 +1,7 @@
 (ns waymark10.at-rest-test
   "At-rest encryption (ticket dbeb2f25): a declared field round-trips
-  sealed through real Postgres, a wrong key fails loudly, no key keeps
-  plaintext and says so, the backfill is idempotent, the input digest
+  sealed through real Postgres, a wrong key fails loudly, no key refuses
+  the write and says so, the backfill is idempotent, the input digest
   is keyed, and resolve-refs! still forwards the plaintext."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -110,12 +110,17 @@
         (with-key nil
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no WAYMARK10_DATA_KEY"
                                 (at-rest/open s)))))))
-  (testing "no key: plaintext in, plaintext out, and said"
+  (testing "no key: a string to seal is refused, never written as plaintext"
     (with-key nil
-      (is (= the-token (at-rest/seal the-token)))
-      (is (= the-token (at-rest/open the-token)))
-      (is (= "d" (at-rest/keyed-digest "d")))
-      (is (false? (:encrypted (at-rest/note))))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no WAYMARK10_DATA_KEY is set"
+                            (at-rest/seal the-token)))
+      (is (nil? (at-rest/seal nil)))
+      (is (= the-token (at-rest/open the-token)) "plaintext written earlier still reads")
+      (is (= "d" (at-rest/keyed-digest "d")) "the lookup digest is unchanged")
+      (is (false? (:encrypted (at-rest/note))))
+      (is (true? (:crack (at-rest/note))))
+      (is (str/includes? (:why (at-rest/note)) "No WAYMARK10_DATA_KEY is set"))
+      (is (str/includes? (at-rest/boot-line) "ERROR"))))
   (testing "a malformed key refuses rather than reading as none"
     (is (thrown? clojure.lang.ExceptionInfo (at-rest/parse-key "c2hvcnQ=")))))
 
@@ -147,6 +152,14 @@
           (is (str/includes? line "WAYMARK10_DATA_KEY must be 32 bytes, spelled in base64"))
           (is (not (str/includes? line spelled))))))))
 
+(deftest the-suites-seal-under-the-test-key
+  (is (= (:id db/test-data-key) (:id (at-rest/data-key))))
+  (let [s (at-rest/seal the-token)]
+    (is (str/starts-with? s (str "enc:v1:" (:id db/test-data-key) ":")))
+    (is (= the-token (at-rest/open s))))
+  (is (= (at-rest/keyed-digest "d") (at-rest/keyed-digest "d"))
+      "HMAC under a fixed key is deterministic"))
+
 (deftest the-mark-is-a-secret-fields-alone
   (is (thrown-with-msg? Exception #"is :at-rest :encrypted and not :secret"
                         (r/resource (assoc-in vault-decl [:schema 2 1]
@@ -175,14 +188,26 @@
             (with-key k2
               (is (thrown? clojure.lang.ExceptionInfo (stored eng id))))))))))
 
-(deftest no-key-keeps-plaintext-and-the-backfill-seals-it-once
+(deftest no-key-refuses-the-write-and-the-backfill-seals-old-plaintext-once
   (fresh!)
   (let [id (with-key nil
              (with-eng
                (fn [eng]
-                 (let [id (a-vault! eng)]
-                   (is (= the-token (raw eng "ar_vaults" id "token"))
-                       "plaintext while no key is set")
+                 (is (= "none" (:state (at-rest/note))) "the engine boots")
+                 (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                       #"no WAYMARK10_DATA_KEY is set"
+                                       (a-vault! eng))
+                     "a declared field is never written as plaintext")
+                 (let [id (str (:id (:row (inv/create! eng :ar_vault {:name "a"}
+                                                       {:principal colton}))))]
+                   (is (seq id) "a row with no declared value is written")
+                   ;; plaintext written before no key refused it
+                   (store/with-tx (:storage eng)
+                     (fn [tx]
+                       (jdbc/execute! tx [(str "UPDATE ar_vaults SET data = jsonb_set(data, '{token}',"
+                                               " to_jsonb(?::text)) WHERE id::text = ?")
+                                          the-token id])))
+                   (is (= the-token (raw eng "ar_vaults" id "token")))
                    id))))]
     (with-key k1
       ;; the boot is the backfill

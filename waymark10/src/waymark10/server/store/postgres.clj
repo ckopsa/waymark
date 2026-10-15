@@ -266,10 +266,9 @@
   one wins. A change of representation, not of a value the engine
   reads: it bumps no version and logs no transition."
   [ds table fields migrate]
-  ;; a malformed key writes nothing here: the next boot under a real
-  ;; key runs the backfill (ticket d8771d50)
-  (when (and (not (at-rest/malformed?))
-             (or migrate (and (seq fields) (at-rest/data-key))))
+  ;; a malformed key or none writes nothing here: the next boot under a
+  ;; real key runs the backfill (tickets d8771d50, d682ee14)
+  (when (and (at-rest/data-key) (or migrate (seq fields)))
     (with-open [conn (jdbc/get-connection ds)]
       (doseq [r (jdbc/execute! conn [(str "SELECT id, version, data FROM " table)]
                                jdbc-opts)
