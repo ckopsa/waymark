@@ -177,6 +177,11 @@
    :summary-fn
    ;; hooks & engine weaves
    :on-create :mirror
+   ;; (fn [data]) → data: the at-rest backfill's move for a row from
+   ;; before a field was sealed (ticket dbeb2f25), applied by the
+   ;; Postgres store at boot before it seals. Never in the fingerprint
+   ;; — :on-create's precedent
+   :at-rest-migrate
    ;; what the create door's FULL rehearsal answers beyond its verdict:
    ;; `(fn [engine inp {:keys [principal grant]}])` → a map that rides
    ;; the dry-run's body as `preview`. Asked after the create guards

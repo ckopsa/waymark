@@ -178,7 +178,7 @@
     ;; THE TOKEN IS HELD AS THE SCHEDULE'S IS (R-12.11): never
     ;; rendered, never filterable, and never in a transition's recorded
     ;; inputs — which is why no door here records.
-    [:fire_token {:secret true
+    [:fire_token {:secret true :at-rest :encrypted
                   :x-display
                   {:hidden true
                    :label "The token"
