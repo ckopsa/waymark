@@ -105,6 +105,10 @@
                        (world {:task [{:id "t1" :state :draft
                                        :updated-at (ago 60) :data {}}]}
                               stale))
+                      "silent"))))
+    (testing "a seat whose only walk rows its sit withholds is not silent"
+      (is (empty? (of (live/find-cracks
+                       (assoc (world rows stale) :withheld {"walker" #{"t1"}}))
                       "silent"))))))
 
 (deftest a-ticket-shelved-twice-for-one-reason-is-a-bounce

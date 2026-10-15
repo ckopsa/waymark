@@ -228,8 +228,10 @@
   "silent: a fired seat with rows in its walk whose schedule shows no
   fire within its cadence. A seat a person sits in, and one that walks
   a judgment's queue, are not read. `schedules` is seat id → its
-  schedule row."
-  [rdefs seat-rows rows schedules now]
+  schedule row. `withheld` is seat id → the walk row ids its sit would
+  not hand (`seats/unwalkable-rows`), left out of the count as
+  `wakes/walk-count` leaves them out."
+  [rdefs seat-rows rows schedules withheld now]
   (let [by-kind (into {} (map (juxt (comp text :kind) identity)) rdefs)]
     (for [seat seat-rows
           :let [walk (some-> (get-in seat [:data :walk]) text not-empty)
@@ -238,7 +240,9 @@
                      (not (seats/interactive-seat? seat))
                      (str/blank? (str (get-in seat [:data :judgment]))))
           :let [flt (seats/walk-filter seat)
-                waiting (count (filter #(in-walk? rdef flt %)
+                skip (set (get withheld (str (:id seat))))
+                waiting (count (filter #(and (in-walk? rdef flt %)
+                                             (not (contains? skip (str (:id %)))))
                                        (get rows (keyword walk))))
                 sched (get schedules (str (:id seat)))
                 cadence (or (get-in seat [:data :cadence_seconds]) default-cadence)
@@ -340,13 +344,14 @@
   :schedules (seat id → schedule row), :sittings (seat id → closed
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
-  tickets) and :now."
-  [{:keys [rdefs seats rows schedules sittings shelvings tickets now]}]
+  tickets), :withheld (seat id → the walk row ids its sit would not
+  hand) and :now."
+  [{:keys [rdefs seats rows schedules sittings shelvings tickets withheld now]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
                        (aged-rows rdefs seats rows now))
-                  (silent-seats rdefs seats rows schedules now)
+                  (silent-seats rdefs seats rows schedules withheld now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
                   (orphans (:change by-kind) seats (:change rows) tickets)))))
@@ -509,6 +514,12 @@
                                     [tid t])))
                           born)))
                 {})
+     :withheld (into {}
+                     (keep (fn [seat]
+                             (when (some-> (get-in seat [:data :walk]) text not-empty)
+                               [(str (:id seat))
+                                (into #{} (map str) (seats/unwalkable-rows eng seat nil))])))
+                     seat-rows)
      :now ((:now-fn eng))}))
 
 (defn- standing-tickets
