@@ -1493,6 +1493,97 @@
         (schedules/schedule-for-seat eng (:id seat-row)))
     schedule-row))
 
+;; ── the sitting that closed without its delivery ────────────────────
+;;
+;; qa's sitting a4de3b09 walked a change, lost its grant and closed idle
+;; with no verdict; nothing woke qa or told anybody, and the row waited
+;; a whole cadence. A fired sitting that walked a row and closed without
+;; its seat's delivery now wakes the seat once more for that row, and a
+;; second such close on the same row is the seat's `undelivered` event.
+
+(def ^:private delivered-outcomes
+  "The close outcomes (`seats/sitting-health`) that count as the
+  sitting's work done: its delivery, a judge's verdict, or a stall that
+  said why it could not."
+  #{"submitted" "completed" "stalled"})
+
+(def ^:private undelivered-page
+  "The most of one seat's sittings read for the previous one on a row."
+  100)
+
+(defn- delivery-of
+  "What this seat's sitting owes, spelled kind.action: its `delivers`,
+  or `verdict.judge` for a seat with a judgment, or nil for a seat that
+  declares neither."
+  [seat-row]
+  (let [d (get-in seat-row [:data :delivers])]
+    (cond
+      (seq d) (apply str (interpose " or "
+                                    (map #(str (name (:kind %)) "."
+                                               (name (:action %)))
+                                         d)))
+      (some-> (get-in seat-row [:data :judgment]) str not-empty) "verdict.judge")))
+
+(defn- missed?
+  "Did this sitting row walk `row-id`, fired, and close undelivered?"
+  [sitting row-id]
+  (let [d (:data sitting)]
+    (and (= :closed (:state sitting))
+         (not= seats/interactive-mode (some-> (:mode d) str))
+         (some #(= row-id (str %)) (:walked_rows d))
+         (not (contains? delivered-outcomes (some-> (:outcome d) str))))))
+
+(defn- previous-on-row
+  "The seat's newest sitting before `sitting-id` that walked `row-id`."
+  [eng seat-id sitting-id row-id]
+  (let [rows (store/with-tx (:storage eng)
+               (fn [tx]
+                 (store/query-rows (:storage eng) tx :sitting {:seat seat-id}
+                                   {:limit undelivered-page :newest-first true})))]
+    (->> rows
+         (drop-while #(not= (str sitting-id) (str (:id %))))
+         rest
+         (filter #(some (fn [r] (= row-id (str r))) (get-in % [:data :walked_rows])))
+         first)))
+
+(defn- rewake-undelivered!
+  "A fired sitting closed: for each row it walked without its seat's
+  delivery, wake the seat once more naming that row (`wake-seat!`, so
+  the seat's gap and slots hold it as any wake), or, when the seat's
+  previous sitting on that row missed too, record `undelivered` on the
+  seat and fire nothing. A sitting that delivered on the row breaks the
+  run. Interactive sittings and seats owing no delivery are untouched."
+  [eng t ^Instant at]
+  (when-some [sitting (raw-row eng :sitting (:resource-id t))]
+    (let [d (:data sitting)
+          seat-id (some-> (:seat d) str not-empty)
+          seat-row (when seat-id (raw-row eng :seat seat-id))
+          delivery (delivery-of seat-row)]
+      (when (and seat-row delivery
+                 (= :active (:state seat-row))
+                 (not (seats/interactive-seat? seat-row))
+                 (not= seats/interactive-mode (some-> (:mode d) str))
+                 (not (contains? delivered-outcomes (some-> (:outcome d) str))))
+        (doseq [row-id (distinct (map str (:walked_rows d)))]
+          (if (some-> (previous-on-row eng seat-id (:id sitting) row-id)
+                      (missed? row-id))
+            (seats/seat-undelivered! eng seat-id (:id sitting) row-id delivery
+                                     (:last_refusal d))
+            (wake-seat! eng
+                        {:id seat-id
+                         :interval (interval-of seat-row)
+                         :max-open (max-open-of seat-row)}
+                        {:id (str (:id t) ":undelivered:" row-id)
+                         :kind (or (some-> (get-in seat-row [:data :walk]) str
+                                           not-empty keyword)
+                                   :sitting)
+                         :action :undelivered
+                         :resource-id row-id}
+                        at
+                        {:text (str "Your last sitting on " row-id
+                                    " closed without " delivery
+                                    "; walk it again.")})))))))
+
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
   wake waiting on exactly that, or a count wake that still holds
@@ -1885,7 +1976,10 @@
 
       seat <anything>          the active-seat cache is stale; drop it
       sitting close, abandon   release that seat's pending wake, and
-                               judge its count wakes once more
+                               judge its count wakes once more; a
+                               close without the seat's delivery
+                               wakes it again for the rows it walked
+                               (`rewake-undelivered!`)
       seat, sitting, schedule,
       subscription             nothing else — these are the engine's
                                own writing about wakes, and a seat
@@ -1905,7 +1999,13 @@
 
         (and (= :sitting kind)
              (contains? #{:close :abandon} (:action t)))
-        (release-for-sitting! eng t (now eng))
+        (let [at (now eng)]
+          (when (= :close (:action t))
+            (try (rewake-undelivered! eng t at)
+                 (catch Exception e
+                   (warn! "sitting " (:resource-id t)
+                          " undelivered check failed — " (ex-message e)))))
+          (release-for-sitting! eng t at))
 
         (contains? own-kinds kind) nil
 

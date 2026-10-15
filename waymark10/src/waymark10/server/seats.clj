@@ -1548,6 +1548,11 @@
 (defhandler clear-halt-mark [row _inp _ctx]
   (update row :data dissoc :halt))
 
+;; `undelivered` writes nothing on the row: its record is the transition
+;; itself, which a subscriber hears as `seat: ["undelivered"]`.
+(defhandler record-undelivered [row _inp _ctx]
+  row)
+
 ;; R-12.12: a new offer REPLACES the old one — at most one live sitter
 ;; key per seat, members' set-reentry overwrite exactly. The key the
 ;; person pasted into yesterday's Routine dies the moment a fresh one
@@ -3915,6 +3920,33 @@
      :handler clear-halt-mark
      :display {:label "Clear halt" :order 12}}
 
+    ;; A fired sitting walked a row and closed without its seat's
+    ;; delivery, twice in a row on that row: the wake consumer records
+    ;; it here instead of firing again (`wakes/rewake-undelivered!`).
+    ;; On the seat, not the sitting: `closed` is terminal.
+    :undelivered
+    {:from #{:active} :to :active
+     :input [:map
+             [:sitting {:x-display {:label "The sitting that closed"}}
+              [:string {:min 1 :max 64}]]
+             [:row {:x-display {:label "The row it walked"}}
+              [:string {:min 1 :max 128}]]
+             [:delivery {:x-display {:label "The delivery it lacked"}}
+              [:string {:min 1 :max 240}]]
+             [:last_refusal {:optional true
+                             :x-display {:raw true
+                                         :label "The sitting's last refusal"}}
+              [:maybe [:map
+                       [:type [:maybe [:string {:max 200}]]]
+                       [:guard {:optional true} [:maybe [:string {:max 200}]]]
+                       [:at [:string {:max 64}]]]]]]
+     :record true
+     :waives #{:edit-shape}
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler record-undelivered
+     :display {:label "Undelivered" :order 14}}
+
     ;; ── break glass runs out (ticket b177a14b) ──────────────────────
     ;; The clock sweep restates the scope without the entries whose
     ;; `until` has passed. The input names each one and its `because`,
@@ -6107,6 +6139,24 @@
              (= :active (:state row))
              (some? (get-in row [:data :halt])))
       (do (inv/invoke! eng :seat (:id row) :clear_halt nil
+                       {:principal seats-actor})
+          true)
+      false)))
+
+(defn seat-undelivered!
+  "Record that a fired sitting of this seat walked `row-id` and closed
+  without `delivery` a second time running, through the concealed
+  `undelivered` — system actor, logged. → true when it was written."
+  [eng seat-id sitting-id row-id delivery last-refusal]
+  (let [row (seat-row eng seat-id)]
+    (if (and row (= :active (:state row)))
+      (do (inv/invoke! eng :seat (:id row) :undelivered
+                       (cond-> {:sitting (str sitting-id)
+                                :row (str row-id)
+                                :delivery (str delivery)}
+                         (and (map? last-refusal) (some? (:at last-refusal)))
+                         (assoc :last_refusal
+                                (select-keys last-refusal [:type :guard :at])))
                        {:principal seats-actor})
           true)
       false)))

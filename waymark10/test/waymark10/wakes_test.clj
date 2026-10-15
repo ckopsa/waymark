@@ -4008,3 +4008,102 @@
     (close-sitting! grooming)
     (seat-do! seat :retire)
     (seat-do! groomer :retire)))
+
+;; ── the sitting that closed without its delivery ────────────────────
+
+(defn- walked-sitting!
+  "A sitting of `seat-id` that walked `row-id`, closed. `tag` names its
+  model, one of its own per sitting; `before-close` and `after-close`
+  write the row's data by hand before and after the close."
+  [seat-id tag row-id & {:keys [before-close after-close]}]
+  (let [sid (:id (:row (inv/create! *eng* :sitting
+                                    {:seat (str seat-id)
+                                     :model (str (model! (str "model-" tag "-" seat-id)))
+                                     :grant (str (grant!))}
+                                    {:principal clerk})))
+        write! (fn [f]
+                 (store/with-tx (:storage *eng*)
+                   (fn [tx]
+                     (let [row (store/load-row (:storage *eng*) tx :sitting
+                                               (str sid) {:for-update true})]
+                       (store/update-data! (:storage *eng*) tx :sitting (str sid)
+                                           (f (:data row)) nil)))))]
+    (write! #(cond-> (assoc % :walked_rows [(str row-id)])
+               before-close before-close))
+    (close-sitting! sid)
+    (when after-close (write! after-close))
+    sid))
+
+(defn- undelivered-of [seat-id]
+  (filterv #(= :undelivered (:action %)) (log-of :seat seat-id)))
+
+(deftest a-fired-sitting-that-closed-undelivered-wakes-its-seat-once-more
+  (let [wn :wake-undelivered
+        fn' :wake-undelivered-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "undeliveredclerk"
+                      {:delivers [{:kind "wake_task" :action "complete"}]
+                       :fire_interval_seconds 1}
+                      fn')
+        row-id (task! "walked and left")]
+
+    (testing "the first miss fires the seat again, naming the row"
+      (walked-sitting! seat "one" row-id
+                       :before-close #(assoc % :last_refusal
+                                             {:type "forbidden"
+                                              :guard "grant-admits"
+                                              :at (str (Instant/now))}))
+      (drain-wakes! wn)
+      (let [ts (seat-fires seat)]
+        (is (= 1 (count ts)))
+        (let [text (str (get-in (first ts) [:inputs :text]))]
+          (is (str/includes? text (str row-id)))
+          (is (str/includes? text "closed without wake_task.complete"))))
+      (is (empty? (undelivered-of seat))))
+
+    (testing "the second miss on the row is `undelivered`, and fires nothing"
+      (Thread/sleep 1200)
+      (let [sid (walked-sitting! seat "two" row-id
+                                 :before-close #(assoc % :last_refusal
+                                                       {:type "forbidden"
+                                                        :guard "grant-admits"
+                                                        :at (str (Instant/now))}))]
+        (drain-wakes! wn)
+        (wakes/sweep-pending! *eng*)
+        (is (= 1 (count (seat-fires seat))) "no second rewake")
+        (let [us (undelivered-of seat)]
+          (is (= 1 (count us)))
+          (let [in (:inputs (first us))]
+            (is (= (str sid) (str (:sitting in))))
+            (is (= (str row-id) (str (:row in))))
+            (is (= "wake_task.complete" (str (:delivery in))))
+            (is (= "grant-admits" (str (get-in in [:last_refusal :guard]))))))))
+
+    (testing "a sitting that delivered on the row does neither"
+      (Thread/sleep 1200)
+      (walked-sitting! seat "three" row-id
+                       :after-close #(assoc % :outcome "submitted"))
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (is (= 1 (count (undelivered-of seat)))))
+
+    (testing "an interactive sitting does neither"
+      (Thread/sleep 1200)
+      (walked-sitting! seat "four" row-id
+                       :before-close #(assoc % :mode "interactive"))
+      (drain-wakes! wn)
+      (is (= 1 (count (seat-fires seat))))
+      (is (= 1 (count (undelivered-of seat)))))
+
+    (testing "no hand but the engine's may write `undelivered`"
+      (doseq [who [clerk elena]]
+        (let [p (refusal #(inv/invoke! *eng* :seat (str seat) :undelivered
+                                       {:sitting "s" :row "r"
+                                        :delivery "wake_task.complete"}
+                                       {:principal who}))]
+          (is (some? p))
+          (is (= 404 (:status p))))))
+
+    (seat-do! seat :retire)))
