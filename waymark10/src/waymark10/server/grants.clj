@@ -2208,8 +2208,13 @@
   a still-:offered one (the door accepts it AS the audience on
   arrival; acceptance is the audience's own act). Unexpired judged
   by the live clock, same as enforcement. nil when nothing stands —
-  and the door goes dark with it."
-  [eng audience]
+  and the door goes dark with it.
+
+  `keep?` narrows the candidates before the pick (ticket acc89add):
+  the sit passes one that refuses a grant near its end, so an older
+  accepted grant does not hide the fresh offered one minted beside it."
+  ([eng audience] (standing-grant-for eng audience (constantly true)))
+  ([eng audience keep?]
   (let [now ((:now-fn eng))
         rows (->> (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :grant
@@ -2223,8 +2228,8 @@
         unexpired? (fn [row]
                      (let [exp (get-in row [:data :expires_at])]
                        (or (nil? exp) (neg? (compare now exp)))))]
-    (or (some #(when (and (= :accepted (:state %)) (unexpired? %)) %) rows)
-        (some #(when (and (= :offered (:state %)) (unexpired? %)) %) rows))))
+    (or (some #(when (and (= :accepted (:state %)) (unexpired? %) (keep? %)) %) rows)
+        (some #(when (and (= :offered (:state %)) (unexpired? %) (keep? %)) %) rows)))))
 
 (defn accept-as-audience!
   "The guest door's first-arrival courtesy: accept a still-:offered
@@ -2845,6 +2850,21 @@
                    (when-some [os (own-of k)]
                      (own-ids eng (keyword k) os pid)))))})))
 
+(defn- sitting-grant
+  "The grant the sitting `sitting-id` was opened under, when it still
+  stands for `audience`: accepted or offered, and unexpired by the live
+  clock, as `standing-grant-for` judges. nil otherwise."
+  [eng audience sitting-id]
+  (when-some [gid (some-> sitting-id str not-empty
+                          (->> (load-decoded eng :sitting))
+                          (get-in [:data :grant]) str not-empty)]
+    (when-some [g (load-decoded eng :grant gid)]
+      (let [exp (get-in g [:data :expires_at])]
+        (when (and (= (str audience) (str (get-in g [:data :audience])))
+                   (#{:accepted :offered} (:state g))
+                   (or (nil? exp) (neg? (compare ((:now-fn eng)) exp))))
+          g)))))
+
 (defn worn-visibility
   "The visibility a principal that can present NO grant header arrives
   with — the connector door's delegate (docs/spec-connector-door.md
@@ -2864,10 +2884,17 @@
   grant. So the flag bootstrap-visibility sets rides here too — names
   are schema, not data; rows outside the grant stay concealed exactly
   as before, because every other check reads the grant, not the flag.
-  `sitting-id`, when given, is the calling sitting (see `visibility`)."
+  `sitting-id`, when given, is the calling sitting (see `visibility`).
+
+  THE CALLING SITTING'S OWN GRANT IS WORN FIRST (ticket acc89add):
+  a sit that minted a fresh grant beside a near-expired accepted one
+  must hand its run the fresh one, or the run loses its powers with
+  the old grant. The newest standing grant answers only when the
+  sitting's grant no longer stands, or no sitting is named."
   ([eng principal] (worn-visibility eng principal nil))
   ([eng principal sitting-id]
-   (when-some [row (standing-grant-for eng (:id principal))]
+   (when-some [row (or (sitting-grant eng (:id principal) sitting-id)
+                       (standing-grant-for eng (:id principal)))]
      (when-some [row (accept-as-audience! eng row principal)]
        (when (= :accepted (:state row))
          (assoc (visibility eng (:id row) principal sitting-id)

@@ -3279,17 +3279,20 @@
   away would expire mid-run and take every power with it, so the sit
   mints afresh. The old grant is left to expire on its own clock: an
   open sitting of another run may still wear it. A seat with no ttl
-  reuses as before."
+  reuses as before. The near-end test is put INSIDE the pick, not after
+  it: the accepted old grant is otherwise always picked over the fresh
+  offered one, and every sit after it would mint again."
   [eng sitter-id seat ^Instant now]
-  (when-some [g (grants/standing-grant-for eng sitter-id)]
-    (when (= (str (:id seat)) (str (get-in g [:data :seat])))
-      (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
-            exp (some-> (get-in g [:data :expires_at]) str not-empty
-                        Instant/parse)]
-        (when (or (not (pos? ttl)) (nil? exp)
-                  (>= (.getSeconds (java.time.Duration/between now exp))
-                      (quot ttl 2)))
-          g)))))
+  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
+        long-enough? (fn [g]
+                       (let [exp (some-> (get-in g [:data :expires_at]) str
+                                         not-empty Instant/parse)]
+                         (or (not (pos? ttl)) (nil? exp)
+                             (>= (.getSeconds (java.time.Duration/between now exp))
+                                 (quot ttl 2)))))]
+    (when-some [g (grants/standing-grant-for eng sitter-id long-enough?)]
+      (when (= (str (:id seat)) (str (get-in g [:data :seat])))
+        g))))
 
 (defn- mint-seat-grant!
   "The seat grant, minted the way an approved seat ask mints one
