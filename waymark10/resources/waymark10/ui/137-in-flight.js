@@ -84,6 +84,13 @@ async function renderInFlight(view, href, seq) {
     strip.append(el("div", {class: "flight-count " + cls},
       el("b", {}, String(n ?? 0)), el("span", {}, label)));
   view.append(strip);
+  /* a state holding more than the per-state page was read in part: the
+     counts above are of what was read, so name each capped state's total */
+  if (doc.truncated)
+    view.append(el("p", {class: "muted flight-truncated"},
+      "Read in part — the counts above are of the rows read: " +
+      (doc.capped || []).map(c =>
+        `${title(c.kind)} ${pretty(c.state)}: ${c.read} of ${c.total}`).join("; ")));
   /* the filters' choices are the answer's facets, taken over the rows
      before any filter, and the one in force even when no row holds it */
   const facets = doc.facets || {};
