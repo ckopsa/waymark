@@ -851,11 +851,140 @@
                      (when (contains? required k) ", required") ")")))
          (str/join ", "))))
 
+;; ── pacing (ticket c785073c) ────────────────────────────────────────
+;; Seats busy-poll read tools while they wait, and each poll answers at
+;; once into a context re-read on every later call. Every proxied call
+;; crosses this door, so the pacing lives here: a READ a sitting repeats
+;; with the same arguments is held until its answer changes. A write is
+;; never re-run.
+
+(def read-hold-seconds
+  "The longest a repeated identical read is held, in seconds. It stays
+  under a client's tool timeout, and it is the bench's own
+  CEILING_CHECK_WAIT."
+  20)
+
+(def pace-window-ms
+  "A read repeated with the same arguments within this window is paced."
+  30000)
+
+(def ^:private pace-step-ms
+  "How often a held read is run again."
+  3000)
+
+(def ^:private pace-forget-ms
+  "A call a sitting has not repeated for this long is forgotten."
+  (* 6 60 60 1000))
+
+(defonce ^:private recent-calls
+  ;; [sitting call-hash] → {:at ms :n calls :answer the last answer's hash}
+  (atom {}))
+
+(defn- canonical
+  "`v` with every map's keys as strings, sorted, at every depth."
+  [v]
+  (cond
+    (map? v) (into (sorted-map)
+                   (map (fn [[k x]] [(if (keyword? k) (name k) (str k))
+                                     (canonical x)]))
+                   v)
+    (sequential? v) (mapv canonical v)
+    :else v))
+
+(defn call-hash
+  "The canonical hash of one call: the tool and its arguments, the why
+  in either spelling left out, so a new sentence is the same call."
+  [tname args]
+  (wire/sha256-hex
+   (pr-str [(str tname)
+            (canonical (into {}
+                             (remove (fn [[k _]] (contains? why-names (name k))))
+                             (or args {})))])))
+
+(defn read-tool?
+  "Is the tool a read? The power entry's `reads` names it, by the
+  prefixed or the bare name, or its server sent `readOnlyHint` and the
+  mirror kept it as `read_only`. A tool nothing marks is a write."
+  [row entry tname bare]
+  (boolean
+   (or (some #(contains? #{(str tname) (str bare)} (str %)) (:reads entry))
+       (some #(and (= (str bare) (str (:name %))) (true? (:read_only %)))
+             (get-in row [:data :tools])))))
+
+(defn paced-call
+  "Make one forwarded call, paced. `k` is [sitting call-hash], or nil
+  for a call no sitting makes, which is never paced; `call` makes the
+  call. A READ the sitting repeats within `pace-window-ms` is run at
+  once and answered at once when its answer is not the one the sitting
+  last read; otherwise it is run again every `pace-step-ms` and answered
+  as soon as the answer changes, or when `read-hold-seconds` end. Any
+  other call is made once and answered. `clock` is {:now :sleep}, for
+  the tests. → [answer n], n the times this sitting made this call."
+  ([k read? call] (paced-call k read? call nil))
+  ([k read? call clock]
+   (let [now (or (:now clock) #(System/currentTimeMillis))
+         sleep (or (:sleep clock) #(Thread/sleep (long %)))
+         t0 (long (now))
+         prior (when k (get @recent-calls k))
+         repeat? (and prior (< (- t0 (long (:at prior))) pace-window-ms))
+         first-answer (call)
+         ;; a run is not started when it would end past the hold, so a
+         ;; tool that waits on its own stays inside it
+         took (- (long (now)) t0)
+         answer (if (and read? repeat? (= (hash first-answer) (:answer prior)))
+                  (let [until (+ t0 (* 1000 read-hold-seconds))]
+                    (loop [last-answer first-answer]
+                      (let [left (- until (long (now)))]
+                        (if (<= left (+ pace-step-ms took))
+                          last-answer
+                          (do (sleep (min pace-step-ms left))
+                              (let [a (call)]
+                                (if (= a last-answer) (recur a) a)))))))
+                  first-answer)
+         n (inc (long (or (:n prior) 0)))]
+     (when k
+       (let [at (long (now))]
+         (swap! recent-calls
+                (fn [m]
+                  (assoc (into {}
+                               (remove (fn [[_ v]] (< (long (:at v)) (- at pace-forget-ms))))
+                               m)
+                         k {:at at :n n :answer (hash answer)})))))
+     [answer n])))
+
+(defn- note-repeat-calls!
+  "Raise an open sitting's `repeat_calls` to `n`, the most identical
+  calls it has made: the count seat health's `poll_loop` reads at the
+  close. A maintenance write, as `add-cancelled-run!`'s is."
+  [eng sitting-id n]
+  (when (and sitting-id (< 1 (long n)) (get (inv/resources eng) :sitting))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :sitting
+                                        (str sitting-id) {:for-update true})]
+          (when (and (= :open (:state row))
+                     (< (long (or (:repeat_calls (:data row)) 0)) (long n)))
+            (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                                (assoc (:data row) :repeat_calls (long n))
+                                nil)))))))
+
 (defn- refuse-shape
   "The 422 for arguments the tool's own input schema does not admit:
-  each mismatch by field, and the shape the tool takes."
+  each mismatch by field, and the shape the tool takes. An argument the
+  tool does not take also says the pacing (ticket c785073c), so a seat
+  that asked a read to wait drops it knowingly and does not loop."
   [tname schema why? errors]
-  (let [takes (expected-shape schema)]
+  (let [takes (expected-shape schema)
+        unknown (keep #(when (= "is not an argument of this tool" (:reason %))
+                         (:field %))
+                      errors)
+        pacing (when (seq unknown)
+                 (str "A repeated read is paced by the engine: the same call"
+                      " again within " (quot pace-window-ms 1000)
+                      " seconds is held up to " read-hold-seconds
+                      " seconds and answered when its answer changes, so"
+                      " call it again without "
+                      (str/join ", " (map #(str "`" % "`") unknown)) "."))]
     (throw (p/problem :invalid-arguments 422
                       "Arguments do not match the tool's input schema"
                       {:detail (str tname " was not called: "
@@ -866,12 +995,14 @@
                                     "."
                                     (if (str/blank? takes)
                                       " It takes no arguments."
-                                      (str " It takes " takes ".")))
+                                      (str " It takes " takes "."))
+                                    (when pacing (str " " pacing)))
                        :errors (vec errors)
                        :expected (present-schema schema why?)
-                       :remedies [(str "Call again with arguments that match"
-                                       " the tool's input schema;"
-                                       " waymark_powers serves it.")]}))))
+                       :remedies (cond-> [(str "Call again with arguments that match"
+                                               " the tool's input schema;"
+                                               " waymark_powers serves it.")]
+                                   pacing (conj pacing))}))))
 
 (def ^:private shape-words
   "What a server's own refusal says when it is about the arguments."
@@ -1247,14 +1378,23 @@
          (refuse-anonymous tname)
 
          :else
-         ;; the caller rides as headers the engine writes (`caller-headers`)
-         (binding [servers/*caller* (when (or (:principal opts) (:caller opts))
-                                      (select-keys opts [:principal :caller :sitting]))]
-           (teach-shape
-            tname schema why
-            (servers/call! eng tname
-                           (forward-args row schema
-                                         (with-allow args (:allow verdict)))))))))))
+         ;; a sitting's repeated read is paced (ticket c785073c), and
+         ;; its identical calls are counted for `poll_loop`
+         (let [sitting (some-> (:sitting opts) str not-empty)
+               [answer n]
+               (paced-call
+                (when sitting [sitting (call-hash tname args)])
+                (read-tool? row entry tname (:bare hit))
+                ;; the caller rides as headers the engine writes (`caller-headers`)
+                #(binding [servers/*caller* (when (or (:principal opts) (:caller opts))
+                                              (select-keys opts [:principal :caller :sitting]))]
+                   (teach-shape
+                    tname schema why
+                    (servers/call! eng tname
+                                   (forward-args row schema
+                                                 (with-allow args (:allow verdict)))))))]
+           (note-repeat-calls! eng sitting n)
+           answer))))))
 
 ;; ── the engine's own hand (the write path) ──────────────────────────
 

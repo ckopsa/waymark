@@ -34,6 +34,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -788,3 +789,105 @@
         (is (= "helper_put" (get-in (last (gate-calls log)) [:params :name])))
         (is (= {:name "away" :why sentence} (sent))
             "and the allow forwards what the server requires")))))
+
+;; ── pacing (ticket c785073c) ─────────────────────────────────────────
+
+(defn- fake-clock
+  "A clock whose sleep moves it, so a hold takes no wall time."
+  []
+  (let [t (atom 1000000)]
+    {:now #(deref t) :sleep #(swap! t + (long %)) :t t}))
+
+(defn- answer-of [text] {:content [{:type "text" :text text}]})
+
+(deftest a-sitting-polling-a-read-is-held-until-the-answer-changes
+  (let [clock (fake-clock)
+        elapsed (let [t0 (atom 0)] {:start #(reset! t0 @(:t clock))
+                                    :ms #(- @(:t clock) @t0)})
+        sitting (str "pace-" (random-uuid))
+        k [sitting (gate/call-hash "bench__status" {:repo "r"})]
+        calls (atom 0)
+        pending #(do (swap! calls inc) (answer-of "pending"))]
+    (testing "the first call answers at once"
+      ((:start elapsed))
+      (is (= 1 (second (gate/paced-call k true pending clock))))
+      (is (= 1 @calls))
+      (is (zero? ((:ms elapsed)))))
+    (testing "a repeat whose answer did not change is held, run again, to the hold's end"
+      ((:start elapsed))
+      (let [[a n] (gate/paced-call k true pending clock)]
+        (is (= "pending" (get-in a [:content 0 :text])))
+        (is (= 2 n))
+        (is (< 2 @calls) "run again while it was held")
+        (is (pos? ((:ms elapsed))))
+        (is (<= ((:ms elapsed)) (* 1000 gate/read-hold-seconds)))))
+    (testing "a held read answers as soon as its answer changes"
+      ((:start elapsed))
+      (let [runs (atom 0)
+            changing #(if (< (swap! runs inc) 3) (answer-of "pending") (answer-of "passed"))
+            [a] (gate/paced-call k true changing clock)]
+        (is (= "passed" (get-in a [:content 0 :text])))
+        (is (= 3 @runs))
+        (is (< ((:ms elapsed)) (* 1000 gate/read-hold-seconds)))))
+    (testing "an answer unlike the one last read is answered at once"
+      ((:start elapsed))
+      (gate/paced-call k true pending clock)
+      (is (zero? ((:ms elapsed)))))
+    (testing "a changed argument is answered at once"
+      ((:start elapsed))
+      (gate/paced-call [sitting (gate/call-hash "bench__status" {:repo "other"})]
+                       true pending clock)
+      (is (zero? ((:ms elapsed)))))
+    (testing "a write is never run again, only answered"
+      ((:start elapsed))
+      (let [kw [sitting (gate/call-hash "bench__edit" {:path "a"})]
+            writes (atom 0)
+            w #(do (swap! writes inc) {:ok true})]
+        (dotimes [_ 3] (gate/paced-call kw false w clock))
+        (is (= 3 @writes))
+        (is (zero? ((:ms elapsed))))))
+    (testing "a call no sitting makes is never paced"
+      ((:start elapsed))
+      (dotimes [_ 3] (gate/paced-call nil true pending clock))
+      (is (zero? ((:ms elapsed)))))))
+
+(deftest the-call-hash-and-the-read-marks
+  (testing "key order, key spelling and the why do not change a call"
+    (is (= (gate/call-hash "t" {:a 1 :b {:c 2 :d 3} :why "one"})
+           (gate/call-hash "t" {"b" {"d" 3 "c" 2} "a" 1 :__why "two"})))
+    (is (not= (gate/call-hash "t" {:a 1}) (gate/call-hash "t" {:a 2}))))
+  (testing "a read is named by the entry's reads, or marked by its server"
+    (is (gate/read-tool? {:data {:tools []}} {:reads ["bench__status"]}
+                         "bench__status" "status"))
+    (is (gate/read-tool? {:data {:tools [{:name "status" :read_only true}]}} {}
+                         "bench__status" "status"))
+    (is (not (gate/read-tool? {:data {:tools [{:name "prepare"}]}}
+                              {:reads ["bench__status"]}
+                              "bench__prepare" "prepare"))
+        "a tool nothing marks is a write"))
+  (testing "the mirror keeps MCP's readOnlyHint"
+    (is (true? (:read_only (#'servers/mirror-entry
+                            {:name "status" :annotations {:readOnlyHint true}}))))
+    (is (not (contains? (#'servers/mirror-entry {:name "prepare"}) :read_only)))))
+
+(deftest an-unknown-argument-teaches-the-pacing
+  (let [e (try (#'gate/refuse-shape
+                "bench__status"
+                {:type "object" :properties {:repo {:type "string"}}
+                 :additionalProperties false}
+                false
+                [{:field "wait" :reason "is not an argument of this tool"}])
+               nil
+               (catch clojure.lang.ExceptionInfo e e))
+        said (str (ex-message e) (pr-str (ex-data e)))]
+    (is (some? e))
+    (is (str/includes? said "paced by the engine") said)
+    (is (str/includes? said "without `wait`") said)))
+
+(deftest ten-identical-calls-flag-poll-loop-and-a-run-breaks-the-alert
+  (let [flags #(:flags (seats/sitting-health {:repeat_calls % :turns 20} [] []))]
+    (is (some #{"poll_loop"} (flags 10)))
+    (is (not (some #{"poll_loop"} (flags 9)))))
+  (is (= "flag_run:poll_loop"
+         (seats/health-breach {} {} (repeat 3 {:outcome "submitted"
+                                               :flags ["poll_loop"]})))))
