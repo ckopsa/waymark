@@ -1498,6 +1498,16 @@
   close of one of these is another crack, not rows left by the cap."
   #{"cut_short" "refused_out" "never_sat"})
 
+(defn- unhanded-count
+  "How many rows the seat's sit would hand it that `handed` (a closed
+  sitting's `walked_rows`) does not name: `walk-count`'s rows, by id,
+  less those. nil when the walk cannot be read."
+  [eng seat-row handed]
+  (when-some [[walk f] (walk-query eng seat-row)]
+    (some->> (ids-under eng walk f (judged-out eng seat-row))
+             (remove (into (withheld-rows eng seat-row) handed))
+             count)))
+
 (defn- refire-on-close
   "A sitting handed a full `rows_per_firing` batch closed, and its walk
   still holds rows that firing did not hand it (ticket 7c4f0392). No
@@ -1508,10 +1518,21 @@
   usual damper. Only a door or hook close is heard, not an abandon,
   and not one whose outcome says it was cut short, refused out or
   never sat. An empty walk marks nothing. A replayed close is heard
-  once. → the schedule row as it stands after."
+  once.
+
+  A SHORT batch counts too when the walk holds rows the sitting was
+  never handed (ticket 629f81b9). A create wake's fire names its one
+  row, and the sit hands that row alone, so a seat woken row by row
+  never walks the older rows its queue still holds: ops-seat's four
+  red ci_runs waited behind one named row a fire. The rows the sitting
+  was handed and left are not counted, so a run that could not move a
+  row does not fire itself again. → the schedule row as it stands
+  after."
   [eng seat-row schedule-row t]
   (let [sitting (raw-row eng :sitting (:resource-id t))
-        handed (count (distinct (map str (get-in sitting [:data :walked_rows]))))
+        walked (into #{} (keep #(some-> % str not-empty))
+                     (get-in sitting [:data :walked_rows]))
+        handed (count walked)
         cap (long (or (get-in seat-row [:data :rows_per_firing]) 20))]
     (if (and seat-row schedule-row sitting
              (= :close (:action t))
@@ -1520,10 +1541,11 @@
              (not (get-in schedule-row [:data :wake_pending]))
              (not (heard? schedule-row t))
              (pos? handed)
-             (>= handed cap)
              (not (contains? short-outcomes
                              (some-> (get-in sitting [:data :outcome]) name)))
-             (pos? (long (or (walk-count eng seat-row) 0))))
+             (if (>= handed cap)
+               (pos? (long (or (walk-count eng seat-row) 0)))
+               (pos? (long (or (unhanded-count eng seat-row walked) 0)))))
       (do (mark-pending! eng (remember-heard! eng schedule-row t))
           (schedules/schedule-for-seat eng (:id seat-row)))
       schedule-row)))
