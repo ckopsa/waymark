@@ -141,7 +141,8 @@
 
   A seat counts only when its walk would hand it this row and a wake or
   its cadence brings it to the row (ticket af41e6bf): `walking` is the
-  names of the seats whose walk admits the row. `:strays` says a seat a
+  names of the seats whose walk admits the row, or that name no walk to
+  narrow them. `:strays` says a seat a
   model sits in holds a door out and none of them walks the row."
   [doors walking]
   (let [hs (holders doors)
@@ -198,6 +199,13 @@
      (when doors age-words)
      (when (seq held) (str "; held by " (str/join ", " (keys held)))))))
 
+(defn- walk-led?
+  "Does this seat name a walk or a judgment that says which rows it is
+  handed?"
+  [seat]
+  (boolean (or (some-> (get-in seat [:data :walk]) text not-empty)
+               (some-> (get-in seat [:data :judgment]) str not-empty))))
+
 (defn block
   "The `waiting_on` block of one row. `seat-rows` is the ACTIVE seats,
   as stored; `by-kind` is every kind the engine serves, by name. `now`
@@ -224,8 +232,11 @@
                          (when expected (str " of " (span expected)))))
         held (held-by data)
         reads {:tickets tickets :judgments judgments}
+        ;; a seat that names no walk and no judgment is narrowed by
+        ;; neither, so its cadence alone may bring it to any row
         walking (into #{}
-                      (comp (filter #(live-cracks/walk-admits? by-kind reads % rdef row))
+                      (comp (filter #(or (not (walk-led? %))
+                                         (live-cracks/walk-admits? by-kind reads % rdef row)))
                             (map seat-name))
                       seat-rows)
         holder (holder-of doors walking)]
