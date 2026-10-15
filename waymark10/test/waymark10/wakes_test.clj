@@ -4105,3 +4105,64 @@
       (is (= 1 (count (seat-fires seat))))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
     (seat-do! seat :retire)))
+
+;; Ticket 629f81b9. ops-seat's fires were create wakes, each naming its
+;; one new ci_run, so each sit handed that row alone while four older
+;; red rows stayed in the walk, counted by the silent crack and never
+;; handed. The close of a sitting handed fewer than its cap now fires
+;; the seat again when its walk holds rows that sitting was not handed.
+
+(deftest a-named-firing-that-leaves-older-rows-is-fired-again
+  (let [wn :wake-refire-named
+        fn' :wake-refire-named-fires
+        batch "refire-named"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "refirenamedclerk"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete"]
+                                :filter {:batch batch}}]
+                       :wake_on [{:kind "wake_item" :actions ["create"]
+                                  :filter {:batch batch}}]
+                       :rows_per_firing 10
+                       :fire_interval_seconds 1}
+                      fn')
+        waiting (nth-sitting! seat 1)
+        ids (vec (repeatedly 5 #(item! batch)))
+        [older newest] [(vec (butlast ids)) (last ids)]]
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    (close-sitting! waiting)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))))
+
+    (testing "a sitting handed only the row its fire named fires the seat
+              again at its close, for the four older rows it withheld"
+      (let [run (nth-sitting! seat 2)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat run [(str newest)]))))
+        (item-do! newest :complete)
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (let [ts (seat-fires seat)]
+          (is (= 2 (count ts)))
+          (is (nil? (get-in (last ts) [:inputs :text]))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (testing "the next run is handed the four; a row it leaves does not
+              fire the seat again"
+      (let [run (nth-sitting! seat 3)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat run (mapv str older)))))
+        (doseq [id (rest older)] (item-do! id :complete))
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (is (= 2 (count (seat-fires seat))))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+    (seat-do! seat :retire)))
