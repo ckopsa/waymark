@@ -12,10 +12,14 @@
   SHA-256, so a value names the key that sealed it and a rotation has
   room to read both.
 
-  NO KEY IS A STATE THIS ENGINE RUNS IN, said aloud: values are written
-  as plaintext, `enc:` values already written refuse to open (loudly —
-  never as an empty value), boot warns once and the cracks document
-  carries `at_rest`.
+  NO KEY IS A STATE THIS ENGINE RUNS IN, said aloud (ticket d682ee14):
+  it boots and serves, but a string to seal is refused — never written
+  as plaintext — and `enc:` values already written refuse to open
+  (loudly, never as an empty value). Plaintext written before then
+  still reads, and the boot backfill seals it once a key is set. Boot
+  logs an ERROR and the cracks document carries `at_rest {crack true}`.
+  keyed-digest alone still answers its input with no key: it is a
+  lookup, not a stored value.
 
   A MALFORMED KEY IS A THIRD STATE, and never a stop (ticket d8771d50):
   a key that is set and is not 32 bytes of base64 boots and serves, but
@@ -108,24 +112,23 @@
   (throw (ex-info (str "at-rest: " msg) {:at-rest :unopenable})))
 
 (defn seal
-  "`v` sealed under the data key; v itself when it is no string, is
-  sealed already, or no key is set. A string to seal while the key is
-  malformed THROWS: it is never written as plaintext beside values
-  that were sealed."
+  "`v` sealed under the data key; v itself when it is no string or is
+  sealed already. A string to seal while no key is set, or while the
+  key is malformed, THROWS: it is never written as plaintext."
   [v]
-  (when (and (string? v) (not (sealed? v)) (malformed?))
-    (throw (ex-info (str "at-rest: " malformed-why
-                         "; a field declared :at-rest :encrypted is not written")
-                    {:at-rest :malformed-key})))
-  (if-some [{:keys [id bytes]} (when (and (string? v) (not (sealed? v)))
-                                 (data-key))]
-    (let [nonce (byte-array 12)
-          _ (.nextBytes rng nonce)
-          ct (.doFinal (cipher Cipher/ENCRYPT_MODE bytes nonce) (utf8 v))
-          enc (Base64/getEncoder)]
-      (str prefix "v1:" id ":" (.encodeToString enc nonce) ":"
-           (.encodeToString enc ct)))
-    v))
+  (if-not (and (string? v) (not (sealed? v)))
+    v
+    (if-some [{:keys [id bytes]} (data-key)]
+      (let [nonce (byte-array 12)
+            _ (.nextBytes rng nonce)
+            ct (.doFinal (cipher Cipher/ENCRYPT_MODE bytes nonce) (utf8 v))
+            enc (Base64/getEncoder)]
+        (str prefix "v1:" id ":" (.encodeToString enc nonce) ":"
+             (.encodeToString enc ct)))
+      (let [bad (malformed?)]
+        (throw (ex-info (str "at-rest: " (if bad malformed-why (str "no " env-var " is set"))
+                             "; a field declared :at-rest :encrypted is not written")
+                        {:at-rest (if bad :malformed-key :missing-key)}))))))
 
 (defn open
   "A sealed value opened; anything else as it is. A sealed value with
@@ -183,15 +186,16 @@
   []
   (cond
     (malformed?)
-    {:state "malformed" :encrypted false
+    {:state "malformed" :encrypted false :crack true
      :why (str malformed-why ": nothing is sealed or opened, and the "
                "fields declared :at-rest :encrypted refuse writes.")}
     (data-key)
     {:state "encrypted" :encrypted true :key_id (:id (data-key))}
     :else
-    {:state "none" :encrypted false
-     :why (str "No " env-var " is set: the fields declared :at-rest "
-               ":encrypted are written as plaintext.")}))
+    {:state "none" :encrypted false :crack true
+     :why (str "No " env-var " is set: the key is missing, so the fields "
+               "declared :at-rest :encrypted refuse writes and values "
+               "sealed earlier do not open.")}))
 
 (defn boot-line
   "Boot's sentence for the key, or nil when values are sealed. It names
@@ -200,7 +204,7 @@
   (let [{:keys [state why]} (note)]
     (case state
       "malformed" (str "waymark10 at-rest: ERROR " why)
-      "none" (str "waymark10 at-rest: WARNING " why)
+      "none" (str "waymark10 at-rest: ERROR " why)
       nil)))
 
 (defonce ^:private warned (atom false))

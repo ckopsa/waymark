@@ -406,7 +406,7 @@
         (is (nil? (:inputs minted))
             "raw inputs are persisted only for :record actions")
         (is (not (str/includes? (pr-str minted) rtok)))
-        (is (re-matches #"[0-9a-f]{64}" (str (:input-digest minted)))
+        (is (re-matches #"hmac:[0-9a-f]{64}" (str (:input-digest minted)))
             "the audit keeps a hash, never the credential")))))
 
 ;; ── the review's CONFIRMED breaks, reproduced-then-closed ────────────

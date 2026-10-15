@@ -4,8 +4,13 @@
   and only tables the passed declarations name are touched: a suite
   drops nothing it did not enroll.
 
-  WAYMARK10_TEST_DSN overrides the default local DSN."
+  WAYMARK10_TEST_DSN overrides the default local DSN.
+
+  Loading it seals under test-data-key (ticket d682ee14): every
+  Postgres suite loads it, and with no key a field declared :at-rest
+  :encrypted refuses its write."
   (:require [next.jdbc :as jdbc]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]))
@@ -13,6 +18,23 @@
 (def dsn
   (or (System/getenv "WAYMARK10_TEST_DSN")
       "jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa"))
+
+(def test-data-key
+  "A fixed, public 32-byte data key for the suites — never a real one.
+  HMAC and the key id under it are deterministic, so a suite may pin
+  them."
+  (at-rest/parse-key
+   (.encodeToString (java.util.Base64/getEncoder)
+                    (.getBytes "waymark10 test key, never real!!" "UTF-8"))))
+
+(defn use-test-key!
+  "Seal under test-data-key in place of the environment's key. A no-key
+  test binds it off with (at-rest/use-key! nil) and puts back what that
+  answers."
+  []
+  (at-rest/use-key! test-data-key))
+
+(defonce ^:private test-key-in-place (use-test-key!))
 
 (defn with-test-engine
   "Connect, drop the resources' tables plus the engine's transition
