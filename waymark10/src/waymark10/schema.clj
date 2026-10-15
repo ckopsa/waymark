@@ -333,6 +333,18 @@
                 (when (:secret properties) k)))
         (entry-map form)))
 
+(defn sealed-fields
+  "The {:at-rest :encrypted} entries of a :map schema (ticket
+  dbeb2f25): credentials that open something outside the engine, which
+  the Postgres store seals on write and opens on read
+  (waymark10.server.at-rest). Every one is :secret as well —
+  resource/check-secret! refuses the mark alone."
+  [form]
+  (into #{}
+        (keep (fn [[k {:keys [properties]}]]
+                (when (= :encrypted (:at-rest properties)) k)))
+        (entry-map form)))
+
 (defn- listed-form?
   "Does this entry form put its leaf inside a list? `[:vector …]`, and
   the `[:maybe [:vector …]]` the optional spelling wraps it in."

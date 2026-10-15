@@ -152,6 +152,7 @@
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
@@ -201,8 +202,10 @@
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
   ;; (batch H — the first :decimal input field met the digest);
-  ;; everything else is the same canonical bytes as ever
-  (wire/digest (wire/dec-nodes (or body {}))))
+  ;; everything else is the same canonical bytes as ever. Keyed once a
+  ;; data key is set (ticket dbeb2f25): an unsalted hash of a body that
+  ;; carries a sealed credential would let the log confirm a guess
+  (at-rest/keyed-digest (wire/digest (wire/dec-nodes (or body {})))))
 
 (defn resources
   "The kind → rdef map this engine serves: the phase-5 registry atom's

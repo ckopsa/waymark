@@ -754,7 +754,7 @@
     ;; writing door, never rendered, never filterable, and never in a
     ;; transition's recorded inputs — which is why `link` does not
     ;; record (see the deviations).
-    [:fire_token {:optional true :secret true
+    [:fire_token {:optional true :secret true :at-rest :encrypted
                   :x-display
                   {:hidden true
                    :label "The Routine's token"

@@ -90,6 +90,7 @@
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
@@ -946,7 +947,10 @@
      :seats (count seat-rows)
      :total (count cracks)
      :by_crack (into (sorted-map) (frequencies (map :crack cracks)))
-     :cracks cracks}))
+     :cracks cracks
+     ;; whether the :at-rest :encrypted fields are sealed (ticket
+     ;; dbeb2f25): a note beside the cracks, never one of them
+     :at_rest (at-rest/note)}))
 
 (def ^:private export-fields
   "What of a seat `audit` reads, and so all the export prints of one."

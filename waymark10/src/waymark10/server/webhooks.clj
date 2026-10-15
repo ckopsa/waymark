@@ -180,6 +180,19 @@
       row
       (update row :data assoc :secret literal-mark :signing_key s))))
 
+(defn- legacy-literal
+  "The at-rest backfill's move (ticket dbeb2f25): a row from before
+  `signing_key`, with its literal key still in the non-secret `secret`,
+  has it moved to `signing_key` and `secret` keeps the mark, as
+  conceal-literal does at create. A reference, the mark and an
+  unsigned row stay as they are."
+  [data]
+  (let [s (:secret data)]
+    (if (and (string? s) (not (str/blank? s)) (not= literal-mark s)
+             (not (re-matches row-id-form s)) (nil? (:signing_key data)))
+      (assoc data :secret literal-mark :signing_key s)
+      data)))
+
 (def ^:private skip-actors-field
   "The `skip_actors` field, one spelling for the row and for restate."
   [:skip_actors {:optional true
@@ -290,6 +303,7 @@
             ;; never rendered, never filterable
             [:signing_key {:optional true
                            :secret true
+                           :at-rest :encrypted
                            :x-display
                            {:hidden true
                             :label "The literal key"
@@ -329,6 +343,7 @@
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
    :on-create conceal-literal
+   :at-rest-migrate legacy-literal
    :actions
    {:pause {:from #{:active} :to :paused
             :safety {:idempotent true :reversible true :confirm false}

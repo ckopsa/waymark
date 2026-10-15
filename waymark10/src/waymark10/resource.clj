@@ -1721,6 +1721,14 @@
                          (map? x) (or (:secret x) (some walk (vals x)))
                          (vector? x) (some walk x)
                          :else false))]
+    (doseq [[f {:keys [properties]}] (schema/entry-map (:schema rmap))
+            :when (contains? properties :at-rest)]
+      (when-not (= :encrypted (:at-rest properties))
+        (err (str (name f) " declares :at-rest " (pr-str (:at-rest properties))
+                  " — the one disposition is :encrypted")))
+      (when-not (contains? secret f)
+        (err (str (name f) " is :at-rest :encrypted and not :secret — a "
+                  "value worth sealing in the database is one no projection shows"))))
     (when (seq secret)
       (when (contains? secret :state)
         (err ":state is the machine's token, not a data value — it cannot be :secret"))
