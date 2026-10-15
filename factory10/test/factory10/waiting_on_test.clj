@@ -30,10 +30,15 @@
    :updated-at (Instant/parse "2026-10-13T09:00:00Z")
    :data {:title "A ticket" :repo repo :blocked_by blocked-by}})
 
+(defn- read-row
+  ([kind seats row] (read-row kind seats row {}))
+  ([kind seats row reads]
+   (let [by-kind (into {} (map (juxt :kind identity)) (main/resources))]
+     (waiting-on/block (get by-kind kind) seats by-kind row
+                       (assoc reads :now now :data (:data row))))))
+
 (defn- read-it [seats row]
-  (let [by-kind (into {} (map (juxt :kind identity)) (main/resources))]
-    (waiting-on/block (get by-kind :ticket) seats by-kind row
-                      {:now now :data (:data row)})))
+  (read-row :ticket seats row))
 
 (def ^:private models [waymark-seat fixture/judge-seat fixture/ops-seat])
 
@@ -70,6 +75,48 @@
          "a person: no seat a model sits in holds a door out of open for repo ckopsa/messa; mayor holds ")
         (:verdict w))
     (is (not-any? #(= "seat" (:held_by %)) (:next w)))))
+
+(defn- change [data]
+  {:id "c-1"
+   :state :open
+   :updated-at (Instant/parse "2026-10-13T09:00:00Z")
+   :data (merge {:title "A change" :repository "ckopsa/waymark"} data)})
+
+(def ^:private draft-judge
+  "A judgment seat that holds doors out of an open ticket, and walks
+  its judgment's queue of drafts."
+  {:id "s-draft-judge"
+   :state :active
+   :data {:name "draft-judge"
+          :walk "ticket"
+          :judgment "j-draft"
+          :cadence_seconds 21600
+          :scope [{:kind "ticket" :actions ["block" "drop"]}]}})
+
+(deftest a-holder-is-a-seat-whose-walk-hands-it-the-row
+  (let [mayor (fixture/mayor (main/resources))]
+    (testing "a person's own change, born from no ticket, is the person's"
+      (let [w (read-row :change (conj models mayor)
+                        (change {:author "ckopsa"}))]
+        (is (= {:type "person" :name "mayor"} (:holder w)) (:verdict w))
+        (is (str/starts-with?
+             (:verdict w)
+             "a person: no seat a model sits in walks this row to a door out of open")
+            (:verdict w))
+        (testing "and `next` still names every seat that holds a door"
+          (is (some #(some #{"code-seat"} (map :seat (:seats %))) (:next w))))))
+    (testing "an open ticket no code seat's filter names, that the judge does not walk"
+      (let [w (read-row :ticket (conj models draft-judge mayor)
+                        (ticket "ckopsa/messa" [])
+                        {:judgments {"j-draft" {:id "j-draft"
+                                                :data {:queue {:state "draft"}}}}})]
+        (is (= {:type "person" :name "mayor"} (:holder w)) (:verdict w))
+        (is (some #(some #{"draft-judge"} (map :seat (:seats %))) (:next w)))))
+    (testing "a change born from a groomed ticket in the code seat's repository"
+      (let [w (read-row :change (conj models mayor)
+                        (change {:author "code-seat" :born_from "ticket:t-1"})
+                        {:tickets {"t-1" (ticket "ckopsa/waymark" [])}})]
+        (is (= {:type "seat" :name "code-seat"} (:holder w)) (:verdict w))))))
 
 (deftest a-hold-field-that-is-set-is-named
   (let [w (read-it models (ticket "ckopsa/waymark" ["t-0"]))]

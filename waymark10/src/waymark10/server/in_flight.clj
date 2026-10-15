@@ -96,8 +96,10 @@
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
   the row's data as the caller may read it, `summary` its line."
-  [rdef seat-rows by-kind row {:keys [now data summary]}]
-  (let [w (waiting-on/block rdef seat-rows by-kind row {:now now :data data})]
+  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments]}]
+  (let [w (waiting-on/block rdef seat-rows by-kind row
+                            {:now now :data data
+                             :tickets tickets :judgments judgments})]
     (when-not (str/starts-with? (str (:verdict w)) "nothing:")
       (let [at (inst (get-in w [:since :at]))
             now (inst now)
@@ -223,14 +225,20 @@
                   (or (nil? vis)
                       (boolean (some-> (:whole-kind? vis) (apply [(:kind rdef)])))
                       (boolean ((:row? vis) (:kind rdef) (str (:id row))))))
-        entries (for [{:keys [rdef raws]} pages
-                      raw raws
-                      :let [row (inv/decode-row rdef raw)]
-                      :when (admits? rdef row)
+        rows (vec (for [{:keys [rdef raws]} pages
+                        raw raws
+                        :let [row (inv/decode-row rdef raw)]
+                        :when (admits? rdef row)]
+                    [rdef row]))
+        ;; whose walk hands each row its holder (ticket af41e6bf)
+        reads (store/with-tx st
+                (fn [tx] (waiting-on/walk-reads eng tx seat-rows (map second rows))))
+        entries (for [[rdef row] rows
                       :let [e (entry rdef seat-rows resources row
-                                     {:now now
-                                      :data (shown-data rdef row vis)
-                                      :summary (render/target-summary rdef row vis)})]
+                                     (assoc reads
+                                            :now now
+                                            :data (shown-data rdef row vis)
+                                            :summary (render/target-summary rdef row vis)))]
                       :when e]
                   e)
         capped (into [] (keep :capped) pages)]

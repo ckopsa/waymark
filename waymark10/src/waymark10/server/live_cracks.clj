@@ -172,30 +172,42 @@
                    (= (text v) (some-> (fget (:data row) f) text)))
                  (dissoc flt "state")))))
 
+(defn walk-admits?
+  "Would this seat's walk hand it this row? A seat that walks the row's
+  kind does when the row is under its walk's filter; a seat that walks
+  tickets does for a change when the ticket the change was born from is
+  under it, since the sit hands a ticket's change beside it. A judgment
+  seat walks its judgment's `queue`, read from `judgments` when the
+  seat's judgment is there, and its scope entry's filter otherwise.
+  `by-kind` is kind keyword → its declaration, `tickets` ticket id →
+  row and `judgments` judgment id → row (ticket af41e6bf)."
+  [by-kind {:keys [tickets judgments]} seat rdef row]
+  (let [kind (text (:kind rdef))
+        born (str (fget (:data row) "born_from"))
+        ticket (when (and (= "change" kind) (str/starts-with? born "ticket:"))
+                 (get tickets (subs born (count "ticket:"))))
+        walk (some-> (get-in seat [:data :walk]) text not-empty)
+        queue (some->> (get-in seat [:data :judgment]) str not-empty
+                       (get judgments) :data :queue)
+        flt (if (map? queue) queue (seats/walk-filter seat))]
+    (boolean
+     (cond
+       (= walk kind) (in-walk? rdef flt row)
+       (and ticket (= "ticket" walk) (:ticket by-kind))
+       (in-walk? (:ticket by-kind) flt ticket)
+       :else false))))
+
 (defn- holders
   "The fired seats that hold a door out of this row's state and whose
-  walk admits the row: a seat that walks the row's kind with the row
-  under its walk's filter, or, for a change, a seat that walks tickets
-  with the ticket the change was born from under it, since the sit
-  hands a ticket's change beside it. `by-kind` is kind keyword → its
+  walk admits the row (`walk-admits?`). `by-kind` is kind keyword → its
   declaration and `tickets` is ticket id → row."
   [by-kind seat-rows tickets rdef row]
-  (let [kind (text (:kind rdef))
-        state (text (:state row))
-        born (str (get-in row [:data :born_from]))
-        ticket (when (and (= "change" kind) (str/starts-with? born "ticket:"))
-                 (get tickets (subs born (count "ticket:"))))]
+  (let [state (text (:state row))]
     (filterv (fn [seat]
-               (let [walk (some-> (get-in seat [:data :walk]) text not-empty)
-                     flt (seats/walk-filter seat)]
-                 (boolean
-                  (and (not (seats/interactive-seat? seat))
-                       (seq (cracks/movers rdef [seat] state))
-                       (cond
-                         (= walk kind) (in-walk? rdef flt row)
-                         (and ticket (= "ticket" walk) (:ticket by-kind))
-                         (in-walk? (:ticket by-kind) flt ticket)
-                         :else false)))))
+               (boolean
+                (and (not (seats/interactive-seat? seat))
+                     (seq (cracks/movers rdef [seat] state))
+                     (walk-admits? by-kind {:tickets tickets} seat rdef row))))
              seat-rows)))
 
 (defn- to-its-holder
