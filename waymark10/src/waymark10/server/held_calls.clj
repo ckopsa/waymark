@@ -55,6 +55,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as mcp-client]
@@ -250,6 +251,15 @@
        (or (and (= :human (:type p)) (= owner (str (:id p))))
            (and (= :agent (:type p)) (= owner (str (:acts-for p)))))))
 
+(defn- an-approver?
+  "Does this principal answer this held call: the person a held seat
+  call names, or a holder of the approver role for a held tool call?"
+  [row p]
+  (let [owner (some-> (get-in row [:data :owner]) str not-empty)]
+    (if (some? (get-in row [:data :door]))
+      (the-owner? p owner)
+      (contains? (:roles p) approver-role))))
+
 (g/defguard an-approver-decides
   {:reads [:principal]
    :open "The role is a `role` row and a member's own list, and the person a seat call waits on is the row's own owner; no field of this door confers either."
@@ -260,19 +270,50 @@
   ;; the person its author acts for, and that person alone answers it:
   ;; the delegation is theirs, so the approver role is not enough. A
   ;; held TOOL call is the role's, as it always was.
+  (if (an-approver? row (:principal ctx))
+    (t/allow)
+    (t/deny)))
+
+(defn- the-persons-delegate?
+  "Is this principal the sitter of a seat its person delegates to (a
+  seat whose row carries `delegates`, server/delegation), acting for
+  the person this held call waits on? The person is the row's `owner`
+  for a held seat call, and the member `waits_on` names for a held
+  tool call."
+  [row ctx]
   (let [p (:principal ctx)
-        owner (some-> (get-in row [:data :owner]) str not-empty)]
-    (if (if (some? (get-in row [:data :door]))
-          (the-owner? p owner)
-          (contains? (:roles p) approver-role))
-      (t/allow)
-      (t/deny))))
+        person (delegation/owner-of ctx)]
+    (boolean
+     (and (some? person)
+          (str/starts-with? (str (:id p)) "seat:")
+          (some? (delegation/author-seat ctx))
+          (or (= person (some-> (get-in row [:data :owner]) str not-empty))
+              (when-some [w (some-> (get-in row [:data :waits_on]) str not-empty)]
+                (= w (grants/waits-on ctx person))))))))
+
+(g/defguard an-approver-or-the-persons-delegate-refuses
+  {:reads [:principal :now :grant :seat :member]
+   :open "The role is a `role` row and a member's own list, the person a seat call waits on is the row's own owner, and a delegate is a seat whose row carries `delegates` and whose sitter acts for that person; no field of this door confers any of them."
+   :explain "A person who holds the approver role refuses a held tool call, a held seat call is refused by the person it was held for, and a seat that person delegates to may refuse either for them. Somebody else's call is waiting, and the no is theirs to say."}
+  [row _inp ctx]
+  ;; A refusal only stops a call: nothing leaves the engine. So the
+  ;; person's delegate (the mayor) may say no for them. Allow stays
+  ;; the person's alone, behind an-approver-decides.
+  (if (or (an-approver? row (:principal ctx))
+          (the-persons-delegate? row ctx))
+    (t/allow)
+    (t/deny)))
 
 (def ^:private decider-walls
   "The two walls, apart rather than folded. The order is the refusal
   order: `not you` is the sentence the caller most needs, and the
   role is the sentence everybody else needs."
   [the-caller-does-not-decide an-approver-decides])
+
+(def ^:private refuser-walls
+  "The refuse door's walls: the same first wall, and a second that the
+  person's delegate also passes."
+  [the-caller-does-not-decide an-approver-or-the-persons-delegate-refuses])
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
@@ -378,7 +419,7 @@
    :row     {:state :held :data a-held-send}
    :input   {:reason "not this one"}
    :as      {:id "iris" :type :human}
-   :expect  {:refused :an-approver-decides
+   :expect  {:refused :an-approver-or-the-persons-delegate-refuses
              :because "approver role"}})
 
 (defscenario an-approver-refuses-with-a-reason
@@ -688,7 +729,7 @@
     :refuse
     {:from #{:held} :to :refused
      :input reason-input
-     :guards decider-walls
+     :guards refuser-walls
      :record true
      :handler record-refusal
      :edit {:prefill [:reason] :fence false

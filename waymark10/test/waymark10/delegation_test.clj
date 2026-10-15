@@ -169,10 +169,11 @@
 (defn- open-mayor!
   "The person opens the mayor with its ceiling, and its sitter sits in
   it through an ask the person approves. → {:mayor id :as headers}."
-  [h]
+  ([h] (open-mayor! h mayor-scope))
+  ([h scope]
   (let [made (req h :post "/api/seats"
                   {:headers person
-                   :body (body "mayor" {:scope mayor-scope :delegates ceiling})})
+                   :body (body "mayor" {:scope scope :delegates ceiling})})
         _ (assert (= 201 (:status made)) (pr-str (json made)))
         mayor (id-of made)
         sitter (str "seat:" mayor)
@@ -187,7 +188,7 @@
                       {:headers person})
         _ (assert (= 200 (:status approved)) (pr-str (json approved)))
         grant (get-in (json approved) [:data :grant_id])]
-    {:mayor mayor :sitter sitter :as (as-sitter sitter grant)}))
+    {:mayor mayor :sitter sitter :as (as-sitter sitter grant)})))
 
 (defn- author!
   "The mayor's sitter opens a seat. → the response."
@@ -522,6 +523,74 @@
         made (author! h (as-sitter "plain-sitter" grant) "sideways" {})]
     (is (= 409 (:status made)))
     (is (= "not-a-sitter" (:guard (json made))))))
+
+;; ── the person's delegate refuses a held call, and never allows one ──
+
+(def ^:private refuser-scope
+  (conj mayor-scope {:kind "held_call" :actions ["allow" "refuse"]}))
+
+(defn- held-rename!
+  "A held door call that waits on colton, made by a seat that is not
+  the mayor. → its id."
+  [h eng]
+  (let [made (req h :post "/api/dl_gadgets" {:headers person :body {:name "sprocket"}})
+        _ (assert (= 201 (:status made)) (pr-str (json made)))
+        gid (id-of made)]
+    (:id (held/hold-door! eng {:kind :dl_gadget :action :rename :id gid
+                               :body {:name "cog"}
+                               :caller "seat:gadget-author"
+                               :owner "colton"
+                               :if-match (etag-of h (str "/api/dl_gadgets/" gid) person)
+                               :why "Rename it."}))))
+
+(defn- answer! [h who id action inp]
+  (req h :post (str "/api/held_calls/" id "/-/" (name action))
+       {:headers who :body inp}))
+
+(deftest the-persons-delegate-refuses-a-held-call-but-does-not-allow-it
+  (let [{:keys [h eng]} (world)
+        {:keys [sitter as]} (open-mayor! h refuser-scope)]
+    (testing "the mayor refuses a call that waits on colton"
+      (let [id (held-rename! h eng)
+            out (answer! h as id :refuse {:reason "Not this rename."})
+            row (get-row h "held_calls" id person)]
+        (is (= 200 (:status out)) (pr-str (json out)))
+        (is (= "refused" (:state row)))
+        (is (= sitter (get-in row [:data :decided_by])))
+        (is (= "Not this rename." (get-in row [:data :reason])))))
+
+    (testing "the mayor's allow of the same kind of call is refused"
+      (let [id (held-rename! h eng)
+            out (answer! h as id :allow {})]
+        (is (= 409 (:status out)) (pr-str (json out)))
+        (is (= "an-approver-decides" (:guard (json out))))
+        (is (= "held" (:state (get-row h "held_calls" id person))))))
+
+    (testing "a refuse without a reason is refused"
+      (let [id (held-rename! h eng)
+            out (answer! h as id :refuse {})]
+        (is (<= 400 (:status out) 499) (pr-str (json out)))
+        (is (= "held" (:state (get-row h "held_calls" id person))))))))
+
+(deftest a-seat-that-is-not-the-persons-delegate-does-not-refuse
+  (let [{:keys [h eng]} (world)
+        plain (id-of (req h :post "/api/seats"
+                          {:headers person :body (body "plain" {:scope refuser-scope})}))
+        sitter (str "seat:" plain)
+        asked (req h :post "/api/approval_requests"
+                   {:headers {"x-waymark-principal" sitter
+                              "x-waymark-actor-type" "agent"
+                              "x-waymark-acts-for" "colton"}
+                    :body {:task "Sit." :seat "plain"}})
+        grant (get-in (json (req h :post (str "/api/approval_requests/"
+                                              (id-of asked) "/-/approve")
+                                 {:headers person}))
+                      [:data :grant_id])
+        id (held-rename! h eng)
+        out (answer! h (as-sitter sitter grant) id :refuse {:reason "No."})]
+    (is (= 409 (:status out)) (pr-str (json out)))
+    (is (= "an-approver-or-the-persons-delegate-refuses" (:guard (json out))))
+    (is (= "held" (:state (get-row h "held_calls" id person))))))
 
 ;; ── invariant 5 · judgments ─────────────────────────────────────────
 
