@@ -627,9 +627,11 @@
   (wire/sha256-hex (wire/write-json tools)))
 
 (defn- mirror-entry [tool]
-  {:name (str (:name tool))
-   :description (str (or (:description tool) ""))
-   :input_schema (or (:inputSchema tool) {:type "object" :properties {}})})
+  (cond-> {:name (str (:name tool))
+           :description (str (or (:description tool) ""))
+           :input_schema (or (:inputSchema tool) {:type "object" :properties {}})}
+    ;; MCP's own read marker (ticket c785073c): the power door paces it
+    (true? (get-in tool [:annotations :readOnlyHint])) (assoc :read_only true)))
 
 (defn fetch-tools!
   "tools/list on the row's client → {:tools […] :hash s}, the tools
@@ -1121,7 +1123,16 @@
                        :examples [["entity_id"]]
                        :x-display {:label "Glob constraints"
                                    :help "The constraints whose filter values are globs, such as automation.school_* on entity_id. A field left out matches exact values only. The path field always takes globs."}}
-    [:maybe [:vector [:string {:min 1 :max 60}]]]]])
+    [:maybe [:vector [:string {:min 1 :max 60}]]]]
+   ;; ticket c785073c: which of the tools only READ. The power door
+   ;; paces a read a sitting repeats with the same arguments; a tool
+   ;; named nowhere, and not marked readOnlyHint by its server, is a
+   ;; write and is never run again.
+   [:reads {:optional true
+            :examples [["bench__status" "bench__test_result"]]
+            :x-display {:label "Read-only tools"
+                        :help "The tools of this power that change nothing, by name. A repeated call with the same arguments is held until its answer changes, up to 20 seconds. A tool left out is a write, unless its server marks it readOnlyHint."}}
+    [:maybe [:vector [:string {:min 1 :max 120}]]]]])
 
 (defn entry-approval-agrees?
   "R-14's one rule a `:map` cannot say: the two spellings of the same
@@ -1167,7 +1178,8 @@
    [:name [:string {:min 1 :max 120}]]
    [:description {:optional true :x-display {:raw true}}
     [:maybe [:string {:max 4000}]]]
-   [:input_schema {:optional true} [:maybe [:map-of :keyword :any]]]])
+   [:input_schema {:optional true} [:maybe [:map-of :keyword :any]]]
+   [:read_only {:optional true} [:maybe :boolean]]])
 
 (def ^:private note-example
   "The prose field's starting text: a blank box is the heaviest demand

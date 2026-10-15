@@ -227,6 +227,9 @@
    :cost-usd 3M
    ;; this many refusals or more is `refusals_high`
    :refusals 5
+   ;; this many identical calls or more, one tool with the same
+   ;; arguments, is `poll_loop` (ticket c785073c)
+   :poll-calls 10
    ;; how far back `backfill-health!` judges the sittings closed
    ;; before the close judged them
    :backfill-days 7
@@ -250,7 +253,7 @@
    ;; kind the seat walks wait outside its grant
    :walked_nothing_run 3
    ;; this many sittings in a row that carry the flag
-   :flag_run {:test_thrash 3 :rewalk 2}})
+   :flag_run {:test_thrash 3 :rewalk 2 :poll_loop 3}})
 
 (def ^:private alert-rate-sittings
   "…judged only once the window holds this many sittings: a rate over
@@ -264,14 +267,15 @@
 
 (def ^:private flags-help
   (let [{:keys [test-calls read-bytes dropped-share rewalk-sittings
-                cost-usd refusals]} health-thresholds]
+                cost-usd refusals poll-calls]} health-thresholds]
     (str "Written by the engine at the close; any number of them. test_thrash: more than "
          test-calls " bench.test calls, or a cancelled run. read_heavy: bench.read plus bench.find over "
          read-bytes " bytes, or more than " dropped-share
          " of the bytes served dropped. rewalk: a row it walked was walked by "
          rewalk-sittings " or more earlier sittings of the seat that did not submit. over_budget: it cost over $"
          cost-usd ". refusals_high: " refusals
-         " or more refusals. A refused_out sitting also carries refused:<type> and refused_by:<guard>, and so does one that a later answered call spared from refused_out.")))
+         " or more refusals. poll_loop: " poll-calls
+         " or more identical calls, one tool with the same arguments. A refused_out sitting also carries refused:<type> and refused_by:<guard>, and so does one that a later answered call spared from refused_out.")))
 
 (def halt-reasons
   "The walls of R-5.2, and the only reasons a seat halts. Each is HARD
@@ -1825,7 +1829,7 @@
   → {:outcome str :flags [str …]}."
   [data transitions earlier & [delivers]]
   (let [{:keys [cut-short-turns test-calls read-bytes dropped-share
-                cost-usd refusals]} health-thresholds
+                cost-usd refusals poll-calls]} health-thresholds
         closed (some-> (:closed_by data) name)
         turns (long (or (:turns data) 0))
         served (:served data)
@@ -1865,6 +1869,9 @@
 
               (>= (long (or (:refusals data) 0)) refusals)
               (conj "refusals_high")
+
+              (>= (long (or (:repeat_calls data) 0)) poll-calls)
+              (conj "poll_loop")
 
               ;; which law refused it out, beside the outcome; a sitting
               ;; that recovered keeps the record of what refused it
@@ -2379,7 +2386,8 @@
        (:cut_short_run health-alert-defaults) " cut short in a row, test_thrash on "
        (get-in health-alert-defaults [:flag_run :test_thrash])
        " in a row, rewalk on "
-       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row, and "
+       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row, poll_loop on "
+       (get-in health-alert-defaults [:flag_run :poll_loop]) " in a row, and "
        (:walked_nothing_run health-alert-defaults)
        " in a row that walked nothing while rows wait outside its grant."))
 
@@ -2426,6 +2434,9 @@
        [:maybe [:int {:min 1 :max 100}]]]
       [:refusals_high {:optional true
                        :x-display {:label "refusals_high in a row"}}
+       [:maybe [:int {:min 1 :max 100}]]]
+      [:poll_loop {:optional true
+                   :x-display {:label "poll_loop in a row"}}
        [:maybe [:int {:min 1 :max 100}]]]]]]])
 
 (def fire-keys-schema
@@ -4648,6 +4659,14 @@
                                      :label "Cancelled run ids"
                                      :help "The run ids already counted in cancelled_runs, so a second poll of one run does not count it again."}}
      [:vector :string]]
+    ;; IDENTICAL CALLS (ticket c785073c). The power door counts each
+    ;; sitting's calls by a hash of the tool and its arguments, and
+    ;; keeps here the most any one of them was made: seat health's
+    ;; `poll_loop` signal.
+    [:repeat_calls {:default 0
+                    :x-display {:label "Most identical calls"
+                                :help "The most times this sitting made one call through the power door, the same tool with the same arguments. Counted by the engine and frozen at the close."}}
+     [:int {:min 0}]]
     ;; THE CORRECTIONS LINE. Written by the router AFTER the close: a
     ;; person's transition on a row whose previous transition was this
     ;; sitting's (found by that transition's grant) adds one here and
