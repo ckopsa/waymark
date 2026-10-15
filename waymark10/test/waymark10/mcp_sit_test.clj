@@ -2306,3 +2306,57 @@
             got [@f3 @f4]]
         (is (not= (first got) (second got)))
         (is (= 1 (count (filter #{a} got))))))))
+
+(defn- rewrite-row!
+  "The stored row of `kind` at `id`, put through `f` behind the doors."
+  [eng kind id f]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (let [raw (store/load-row (:storage eng) tx kind (str id) {})]
+        (store/save-row! (:storage eng) tx kind (f raw) (:version raw))))))
+
+(deftest a-sit-mints-a-fresh-grant-when-the-standing-one-is-past-half-its-ttl
+  ;; Ticket acc89add: a run that sits on a grant about to expire loses
+  ;; every power mid-run, so a grant under half its ttl is not reused.
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [seat]} (open-seat! eng)
+        _ (rewrite-row! eng :seat (:id seat)
+                        #(assoc-in % [:data :standing_ttl_seconds] 7200))
+        sit! (fn []
+               (let [[sid _] (initialize! h)
+                     r (tool h (with-session sid) "waymark_sit" {:key a-key})]
+                 (is (false? (:isError r)) (text-of r))
+                 (doc-of r)))
+        expires! (fn [gid secs]
+                   (rewrite-row! eng :grant gid
+                                 #(assoc-in % [:data :expires_at]
+                                            (str (.plusSeconds (java.time.Instant/now) secs)))))
+        grant-row (fn [gid]
+                    (store/with-tx (:storage eng)
+                      (fn [tx] (store/load-row (:storage eng) tx :grant (str gid) {}))))
+        first-grant (str (:grant (sit!)))]
+    (testing "a grant with 5 minutes of 2 hours left is replaced by a new one"
+      (expires! first-grant 300)
+      (let [answer (sit!)
+            fresh (str (:grant answer))
+            exp (java.time.Instant/parse
+                 (str (get-in (grant-row fresh) [:data :expires_at])))
+            left (.getSeconds (java.time.Duration/between
+                               (java.time.Instant/now) exp))]
+        (is (not= first-grant fresh))
+        (is (< 7100 left 7201) "the new grant runs the seat's whole ttl")
+        (is (= fresh (str (get-in (sitting-row eng (:sitting answer))
+                                  [:data :grant])))
+            "the sitting cites the new grant")
+        (is (some? (grant-row first-grant)) "the old grant is left alone")))
+    (testing "a grant with 1 hour 50 minutes of 2 hours left is reused"
+      (let [standing (str (:grant (sit!)))]
+        (expires! standing 6600)
+        (is (= standing (str (:grant (sit!)))))))
+    (testing "a seat with no ttl reuses its grant as before"
+      (let [standing (str (:grant (sit!)))]
+        (rewrite-row! eng :seat (:id seat)
+                      #(update % :data dissoc :standing_ttl_seconds))
+        (expires! standing 300)
+        (is (= standing (str (:grant (sit!)))))))))
