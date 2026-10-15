@@ -4154,7 +4154,7 @@
                  :label "The Routine's fire URL"
                  :spelled-by-hand "Written by Link and cleared by Unlink: the endpoint of the Routine a person made for this model. Every seat it is the chair of, and that nobody linked a Routine of its own, fires through this."}}
      [:maybe [:string {:min 1 :max 400}]]]
-    [:fire_token {:optional true :secret true
+    [:fire_token {:optional true :secret true :at-rest :encrypted
                   :x-display
                   {:hidden true
                    :label "The Routine's token"

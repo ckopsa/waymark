@@ -57,6 +57,7 @@
             [org.httpkit.server :as http]
             [waymark10.modules :as modules]
             [waymark10.registry :as registry]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.belief :as server-belief]
             [waymark10.server.definitions :as defs]
             [waymark10.server.film-rules :as film-rules]
@@ -314,6 +315,7 @@
                                                  ;; 92ba2f71)
                                                  :resources (:kinds @(:registry eng))}
                                           reads (assoc :evidence-reads reads)))))))]
+    (at-rest/warn-once!)
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
     (migrate-gate! storage reg opts)

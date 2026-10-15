@@ -118,6 +118,7 @@
     ;; recorded inputs — which is why no door here records
     [:value {:optional true
              :secret true
+             :at-rest :encrypted
              :x-display
              {:hidden true
               :label "The value"

@@ -7,6 +7,8 @@
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
+            [waymark10.schema :as schema]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)
@@ -241,6 +243,39 @@
      :next-flip-at (->inst (:next_flip_at r))
      :created-at (->inst (:created_at r))
      :updated-at (->inst (:updated_at r))}))
+
+;; ── at rest (ticket dbeb2f25) ───────────────────────────────────────
+;; The ONE place a declared {:at-rest :encrypted} field is sealed and
+;; opened: every write's data passes sealed-data, every read's row
+;; passes opened, so no handler, guard or resolve-refs! sees ciphertext.
+
+(defn- opened [sealed kind row]
+  (if-let [fs (and row (not-empty (get @sealed kind)))]
+    (update row :data #(at-rest/open-fields fs %))
+    row))
+
+(defn- sealed-data ^PGobject [sealed kind row]
+  (jsonb (at-rest/seal-fields (get @sealed kind) (:data row))))
+
+(defn- reseal!
+  "The at-rest backfill, run by ensure-kind! at every boot: a row whose
+  declared fields hold plaintext is rewritten sealed once a key is set,
+  after the kind's :at-rest-migrate moved what it moves. Idempotent —
+  a sealed value stays as it is and an unchanged row is not written —
+  and fenced on version, so a write landing between the read and this
+  one wins. A change of representation, not of a value the engine
+  reads: it bumps no version and logs no transition."
+  [ds table fields migrate]
+  (when (or migrate (and (seq fields) (at-rest/data-key)))
+    (with-open [conn (jdbc/get-connection ds)]
+      (doseq [r (jdbc/execute! conn [(str "SELECT id, version, data FROM " table)]
+                               jdbc-opts)
+              :let [data (read-jsonb (:data r))
+                    after (at-rest/seal-fields fields ((or migrate identity) data))]
+              :when (not= data after)]
+        (jdbc/execute-one! conn [(str "UPDATE " table
+                                      " SET data = ? WHERE id = ? AND version = ?")
+                                 (jsonb after) (:id r) (:version r)])))))
 
 (defn- transition->map [r]
   (when r
@@ -672,7 +707,7 @@
            (cond-sql c)))
        conds))
 
-(defrecord PostgresStorage [^HikariDataSource ds tables]
+(defrecord PostgresStorage [^HikariDataSource ds tables sealed]
   store/Storage
   (with-tx* [_ f]
     (jdbc/with-transaction [tx ds]
@@ -684,13 +719,16 @@
         (jdbc/execute! conn [stmt])))
     (swap! tables assoc (:kind rmap)
            (store/definition-checked-name (:plural rmap)))
+    (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
+    (reseal! ds (table-for tables (:kind rmap)) (get @sealed (:kind rmap))
+             (:at-rest-migrate rmap))
     nil)
 
   (load-row [_ tx kind id opts]
     (let [table (table-for tables kind)
           sql (str "SELECT * FROM " table " WHERE id = ?"
                    (when (:for-update opts) " FOR UPDATE"))]
-      (row->map (jdbc/execute-one! tx [sql id] jdbc-opts))))
+      (opened sealed kind (row->map (jdbc/execute-one! tx [sql id] jdbc-opts)))))
 
   (insert-row! [_ tx kind row]
     (let [table (table-for tables kind)]
@@ -701,7 +739,7 @@
                " (id, state, version, data, shape, owner, law_revision, next_flip_at)"
                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           (:id row) (name (:state row)) (:version row 1)
-          (jsonb (:data row)) (:shape row 1) (:owner row)
+          (sealed-data sealed kind row) (:shape row 1) (:owner row)
           (:law-revision row)
           (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)])
         (catch org.postgresql.util.PSQLException e
@@ -722,7 +760,7 @@
                        " updated_at = now()"
                        " WHERE id = ? AND version = ?"
                        " RETURNING updated_at")
-                  (name (:state row)) (:version row) (jsonb (:data row))
+                  (name (:state row)) (:version row) (sealed-data sealed kind row)
                   (:shape row 1) (:owner row) (:law-revision row)
                   (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
                   (:id row) expected-version]
@@ -762,7 +800,8 @@
                    ;; contributes no SQL text beyond this literal.
                    (when (:newest-first opts) " DESC")
                    " LIMIT " (long (:limit opts 100)))]
-      (mapv row->map (jdbc/execute! tx (into [sql] params) jdbc-opts))))
+      (mapv #(opened sealed kind (row->map %))
+            (jdbc/execute! tx (into [sql] params) jdbc-opts))))
 
   (external-ids [_ tx kind]
     (let [table (table-for tables kind)]
@@ -998,7 +1037,7 @@
 
   (due-flips [_ tx kind now limit]
     (let [table (table-for tables kind)]
-      (mapv row->map
+      (mapv #(opened sealed kind (row->map %))
             (jdbc/execute!
              tx
              [(str "SELECT * FROM " table
@@ -1032,8 +1071,8 @@
                    " ORDER BY " order ", id"
                    " LIMIT " (long (or limit 100))
                    " OFFSET " (long (or offset 0)))]
-      (mapv row->map (jdbc/execute! tx (into [sql] (mapcat second parts))
-                                    jdbc-opts))))
+      (mapv #(opened sealed kind (row->map %))
+            (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
   (facet-counts [_ tx kind field conds array? absent-as]
     (let [table (table-for tables kind)
@@ -1296,7 +1335,7 @@
               (.setJdbcUrl jdbc-url)
               (.setMaximumPoolSize 8)
               (.setPoolName "waymark10"))]
-    (->PostgresStorage (HikariDataSource. cfg) (atom {}))))
+    (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}))))
 
 (defn close! [^PostgresStorage st]
   (.close ^HikariDataSource (:ds st)))
