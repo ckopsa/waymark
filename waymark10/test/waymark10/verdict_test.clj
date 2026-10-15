@@ -599,3 +599,44 @@
             said (judge! eng seat (verdict-body w))]
         (is (= 201 (:status said)))
         (is (nil? (get-in said [:doc :data :subject_head])))))))
+
+;; ── 7. a verdict names the deployments it was judged on ──────────────
+
+(def ^:private no-deployments
+  "Name the deployment this was judged on.")
+
+(defn- names-a-deployment
+  "An app's wall on one judgment that reads the body's deployments."
+  [inp _ctx]
+  (when (empty? (:deployments inp))
+    no-deployments))
+
+(deftest a-verdict-names-the-deployments-it-was-judged-on
+  (testing "the judge door stores the deployments as given and answers them"
+    (let [{:keys [eng seat] :as w} (world)
+          said (judge! eng seat (verdict-body w :deployments ["dep-1" "dep-2"]))]
+      (is (= 201 (:status said)))
+      (is (= ["dep-1" "dep-2"] (get-in said [:doc :data :deployments])))
+      (is (= ["dep-1" "dep-2"]
+             (get-in (call! eng :get (get-in said [:doc :self]))
+                     [:doc :data :deployments])))))
+  (testing "a body naming none is judged as it was before"
+    (let [{:keys [eng seat] :as w} (world)
+          said (judge! eng seat (verdict-body w))]
+      (is (= 201 (:status said)))
+      (is (nil? (get-in said [:doc :data :deployments])))))
+  (testing "a house wall keyed by judgment reads the field and refuses"
+    (let [eng (engine/engine
+               {:storage (memory/storage) :resources [ticket]
+                :services {:verdict-guards
+                           {"Why did the build go red" [names-a-deployment]}}})
+          w {:eng eng
+             :judgment (judgment! eng "Why did the build go red")
+             :ticket (ticket! eng "The nightly build went red")
+             :seat (leash! eng seat-id)}
+          out (judge! eng (:seat w) (verdict-body w))]
+      (is (= 409 (:status out)))
+      (is (= :the-house-admits-this-verdict (guard-of out)))
+      (is (str/includes? (detail-of out) no-deployments))
+      (is (= 201 (:status (judge! eng (:seat w)
+                                  (verdict-body w :deployments ["dep-1"]))))))))

@@ -690,6 +690,10 @@
     {:raw true
      :label "Judged at"
      :help "The commit the subject stood at when this was said, for a subject that has one. A new head on the subject reopens this verdict, because it judged code the subject no longer holds."}}
+   :deployments
+   {:x-display
+    {:label "Judged on"
+     :help "The deployments this verdict was judged on, by their ids, when the subject ran somewhere. Kept as given; the house's own walls for this judgment may read them."}}
    :corrects
    {:x-display
     {:label "Corrects"
@@ -748,6 +752,10 @@
            [:maybe [:string {:max 128}]])
     (entry :corrects {:optional true :kind :verdict :filter #{:eq}}
            [:maybe :waymark/ref])
+    ;; stored as the body gave it; the framework holds no law over it
+    ;; — a house's wall keyed by judgment (`verdict-guards-key`) does
+    (entry :deployments {:optional true}
+           [:maybe [:vector {:max 32} [:string {:min 1 :max 128}]]])
     ;; written by `reopen` and by nothing else — not in the create
     ;; model, so no body may name them
     (entry :reopened_by {:optional true :filter #{:eq}
@@ -775,7 +783,9 @@
     (entry :verdict {:not-a-ref "It holds a word of the judgment's vocabulary, not a verdict's id."}
            [:string {:min 1 :max 40}])
     (entry :remedy {} [:string {:min 1 :max 1000}])
-    (entry :corrects {:optional true :kind :verdict} [:maybe :waymark/ref])]
+    (entry :corrects {:optional true :kind :verdict} [:maybe :waymark/ref])
+    (entry :deployments {:optional true}
+           [:maybe [:vector {:max 32} [:string {:min 1 :max 128}]]])]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
    ;; whoever judged reads their own verdicts with no grant — an answer
