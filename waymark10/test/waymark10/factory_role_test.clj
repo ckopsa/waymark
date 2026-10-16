@@ -4,14 +4,16 @@
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
   role it wants. Only a manager walks `set_factory_role`, and only a
-  manager approves an approval_request (ticket 40d9c53b); deny stays
-  open to any decider. A person's effective scope (ticket 228f59e8) is
-  the whole engine for a manager and everything but the `a-manager`
-  doors for anyone else. In memory."
+  manager allows the bench's merge held call (ticket d121729e) and
+  approves an approval_request (ticket 40d9c53b); deny stays open to
+  any decider. A person's effective scope (ticket 228f59e8) is the
+  whole engine for a manager and everything but the `a-manager` doors
+  for anyone else. In memory."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
@@ -112,6 +114,23 @@
         (is (= ["manager"] (roles-of eng "mara")))))
     (testing "a person with no member row and no role is refused"
       (is (some? (refusal #(set-role! eng "stranger" "cole" nil)))))))
+
+;; ── the held merge: only a manager allows it ───────────────────────
+
+(defn- held! [eng tool]
+  (str (:id (:row (inv/create! eng :held_call
+                               {:tool tool
+                                :why "A person decides this call."
+                                :caller "merge-asker"
+                                :input {:number 7}
+                                :forward {:number 7}
+                                :shown "the call"}
+                               {:principal held/engine-actor})))))
+
+(defn- allow! [eng id who]
+  (:state (:row (inv/invoke! eng :held_call id :allow {}
+                             {:principal (t/principal {:id who :display who
+                                                       :roles #{"approver"}})}))))
 
 (deftest a-delegate-is-judged-as-its-person
   ;; ticket b7959730: an agent that acts for a person walks no manager's
@@ -255,6 +274,32 @@
                  (assoc (as "olive")
                         :if-match (inv/etag :domain (str (:id d)) (:version d))))))
 
+(deftest only-a-manager-allows-a-held-merge
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (testing "a contributor is refused at Allow, and the refusal names the role"
+      (let [id (held! eng "bench__merge")
+            r (refusal #(allow! eng id "cole"))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))))
+    (testing "a manager allows it"
+      (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "mara")))))
+    (testing "the owner allows it"
+      (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "olive")))))
+    (testing "allow on a held call for another tool is unchanged"
+      (is (= :allowed (keyword (allow! eng (held! eng "emila__send") "cole")))))
+    (testing "refuse on a held merge is unchanged"
+      (let [id (held! eng "bench__merge")]
+        (inv/invoke! eng :held_call id :refuse {:reason "Not this one."}
+                     {:principal (t/principal {:id "cole" :display "cole"
+                                               :roles #{"approver"}})})))))
+
+(deftest with-no-owner-a-contributor-allows-a-held-merge
+  (let [eng (eng!)]
+    (factory! eng)
+    (member! eng "cole" ["contributor"])
+    (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "cole"))))))
+
 (deftest a-managers-scope-is-the-whole-engine
   (let [eng (eng!)]
     (testing "while the factory domain has no owner, every person"
@@ -287,6 +332,76 @@
     (is (contains? (get (whole eng) "approval_request") "approve"))
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
+
+(defn- seat! [eng who seat-name scope]
+  (:row (inv/create! eng :seat
+                     {:name seat-name
+                      :charter "Decide what this errand asks of the house."
+                      :scope scope
+                      :standing_ttl_seconds 604800
+                      :cadence_seconds 3600
+                      :budget_usd_per_week 5M
+                      :sitting_budget_tokens 60000}
+                     (as who))))
+
+(defn- seat-row [eng id]
+  (let [rdef (get (inv/resources eng) :seat)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/load-row (:storage eng) tx :seat (str id) {})))
+             (inv/decode-row rdef))))
+
+(defn- restate-seat! [eng who id scope]
+  (let [row (seat-row eng id)]
+    (inv/invoke! eng :seat (str id) :restate
+                 {:charter "Decide what this errand asks of the house."
+                  :scope scope
+                  :standing_ttl_seconds 604800
+                  :cadence_seconds 3600
+                  :budget_usd_per_week 5M
+                  :sitting_budget_tokens 60000}
+                 (assoc (as who)
+                        :if-match (inv/etag :seat (str id) (:version row))))))
+
+(defn- own-seat!
+  "Record `owner` on the seat, behind the doors — the field is written
+  at birth by a delegating seat, never typed."
+  [eng id owner]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (let [raw (store/load-row (:storage eng) tx :seat (str id) {})]
+        (store/save-row! (:storage eng) tx :seat
+                         (assoc-in raw [:data :owner] owner) (:version raw))))))
+
+(def ^:private inside [{:kind "model" :actions ["retire"]}])
+(def ^:private past (conj inside {:kind "member" :actions ["set_factory_role"]}))
+
+(deftest a-seats-scope-stays-inside-its-owners
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (testing "a contributor's seat inside their scope is created"
+      (is (some? (seat! eng "cole" "cole-inside" inside))))
+    (testing "one naming a manager's door is refused at create, the entry named"
+      (let [r (refusal #(seat! eng "cole" "cole-past" past))]
+        (is (re-find #"set_factory_role" (pr-str r)) (pr-str r))
+        (is (re-find #"cole may not walk" (pr-str r)) (pr-str r)))
+      (is (empty? (rows-of eng :seat {:name "cole-past"}))))
+    (testing "a manager's seat is never refused"
+      (is (some? (seat! eng "mara" "mara-past" past))))
+    (testing "a restate that widens past the owner is refused, the entry named"
+      (let [s (seat! eng "mara" "cole-owned" inside)]
+        (own-seat! eng (:id s) "cole")
+        (let [r (refusal #(restate-seat! eng "mara" (:id s) past))]
+          (is (re-find #"set_factory_role" (pr-str r)) (pr-str r)))
+        (is (nil? (refusal #(restate-seat! eng "mara" (:id s) inside)))
+            "a restate inside the owner's scope passes")))
+    (testing "a manager-owned seat restates past a contributor's scope"
+      (let [s (seat! eng "mara" "mara-owned" inside)]
+        (own-seat! eng (:id s) "mara")
+        (is (nil? (refusal #(restate-seat! eng "mara" (:id s) past))))))
+    (testing "a seat with no owner restates as before"
+      (let [s (seat! eng "mara" "unowned" inside)]
+        (is (nil? (get-in (seat-row eng (:id s)) [:data :owner])))
+        (is (nil? (refusal #(restate-seat! eng "cole" (:id s) past))))))))
 
 (deftest wiring-a-manager-onto-a-door-narrows-a-contributor
   (let [eng (eng! [gadget])]

@@ -156,6 +156,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -482,6 +483,54 @@
                                         (some-> (:into inp) str)]))
                   (t/deny)
                   (t/allow)))))))
+
+;; ── a seat is never wider than its owner (epic 46831b3c, R-4.1–4.3) ──
+;;
+;; The owner is the seat's recorded `owner`; at the create door, where
+;; there is no row yet, it is the person `seat-born` would write, else
+;; the hand that opens the seat — its creator. A restated seat that
+;; records no owner is not judged, as before. Only the entries a write
+;; ADDS are judged, so a restate that leaves the scope alone passes.
+;; Dotted powers are not judged here: an effective scope names kinds
+;; only, and a person holds powers as granted.
+
+(defn- entry-shape [e]
+  [(str (:kind e)) (into #{} (map str) (:actions e))])
+
+(defn- seat-owner
+  "The principal whose effective scope bounds this seat write, or nil."
+  [row ctx]
+  (if (some? (:id row))
+    (when-some [o (some-> (get-in row [:data :owner]) str not-empty)]
+      (t/principal {:id o :display o}))
+    (or (when-some [author (delegation/authoring-seat ctx :seat nil)]
+          (when-some [o (or (delegation/owner-of ctx)
+                            (some-> (get-in author [:data :owner]) str not-empty))]
+            (t/principal {:id o :display o})))
+        (:principal ctx))))
+
+(g/defguard scope-inside-the-owners
+  {:judges [:scope]
+   :reads [:principal :member :domain :seat :grant :held_call :within :services]
+   :vars [:owner :entries]
+   :open "The owner's effective scope is every door this engine serves but the ones a manager holds; a manager's is the whole engine."
+   :explain "A seat's scope is never wider than its owner's own, and {owner} may not walk {entries}. Drop those entries, or ask a manager to open the seat."}
+  [row inp ctx]
+  (let [before (into #{} (map entry-shape) (get-in row [:data :scope]))
+        added (->> (:scope inp)
+                   (remove #(str/includes? (str (:kind %)) "."))
+                   (remove #(contains? before (entry-shape %))))]
+    (if (or (empty? added) (nil? (:rdefs ctx)))
+      (t/allow)
+      (if-some [owner (seat-owner row ctx)]
+        (let [eff (roles/effective-scope-in ctx owner)
+              past (remove (fn [e] (some #(delegation/entry-fits? e %) eff))
+                           added)]
+          (if (seq past)
+            (t/deny {:vars {:owner (str (:id owner))
+                            :entries (str/join "; " (map delegation/entry-text past))}})
+            (t/allow)))
+        (t/allow)))))
 
 (g/defguard drop-inside-scope
   {:judges [:substitute_drop :scope]
@@ -3455,6 +3504,7 @@
                    grants/scope-omits-private-kinds
                    grants/scope-ends-are-stated
                    drop-inside-scope
+                   scope-inside-the-owners
                    ttl-within-standing
                    held-for-active-models
                    walk-names-a-kind-in-scope
@@ -3681,6 +3731,7 @@
               grants/scope-omits-private-kinds
               grants/scope-ends-are-stated
               drop-inside-scope
+              scope-inside-the-owners
               ttl-within-standing
               held-for-active-models
               walk-names-a-kind-in-scope

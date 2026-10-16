@@ -755,6 +755,18 @@
               (and post? (= (:uri req) "/api/-/sittings/close"))
               (handler req)
 
+              ;; a pull runner link's two doors (pull-mode epic
+              ;; 54360702, piece 1b, routes/runner_links.clj): a
+              ;; localfire holds no bearer, and the link's token in its
+              ;; Waymark-Runner-Token header is the whole credential,
+              ;; compared in constant time behind the door, which
+              ;; answers 401 itself. GET the fires, POST one's answer.
+              (or (and get? (some? (re-matches #"/api/-/runner-links/[^/]+/fires"
+                                               (str (:uri req)))))
+                  (and post? (some? (re-matches #"/api/-/runner-links/[^/]+/fires/[^/]+"
+                                                (str (:uri req))))))
+              (handler req)
+
               ;; the key check (spec-seat.md § 16): the caller is a
               ;; service, not a member, and holds no bearer. The secret
               ;; of an active subscription in its header is the whole

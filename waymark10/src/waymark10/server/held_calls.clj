@@ -60,6 +60,7 @@
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.patch :as patch]
+            [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -274,6 +275,26 @@
   role is the sentence everybody else needs."
   [the-caller-does-not-decide an-approver-decides])
 
+(def ^:private bench-merge-tool
+  ;; gate-proxy/bench-tool :merge, spelled here: gate-proxy reads this
+  ;; namespace
+  "bench__merge")
+
+(g/defguard a-manager-allows-a-merge
+  {:reads [:principal :member :domain]
+   :vars [:role]
+   :explain "Allowing a merge is a manager's: it wants a person who holds the `{role}` role, or the factory domain's owner."
+   :open "A manager gives the role on the member's `set_factory_role` door; the factory domain's owner is set by restating that domain."}
+  [row _inp ctx]
+  ;; The third wall, on allow alone (ticket d121729e). A person merges
+  ;; by allowing the held call factory10's bench raises for its merge
+  ;; tool, so that one allow is a manager's (roles/manager?). Every
+  ;; other held call, and every refusal, is judged as it was.
+  (if (or (not= bench-merge-tool (str (get-in row [:data :tool])))
+          (roles/manager? ctx))
+    (t/allow)
+    (t/deny {:vars {:role roles/manager}})))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (def app-key-prefix
@@ -339,9 +360,11 @@
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
-;; All four are CHECK-TIER: each wall declares :reads [:principal] and
-;; neither needs a :given row, so `check` judges them with no database
-;; at all.
+;; The two refuse scenarios are CHECK-TIER: each wall declares :reads
+;; [:principal] and neither needs a :given row, so `check` judges them
+;; with no database at all. The two allow scenarios also meet
+;; `a-manager-allows-a-merge`, which reads :member and :domain, so they
+;; are judged in the conformance tier.
 
 (def ^:private a-held-send
   {:tool "emila__send"
@@ -675,7 +698,7 @@
    :actions
    {:allow
     {:from #{:held} :to :allowed
-     :guards decider-walls
+     :guards (conj decider-walls a-manager-allows-a-merge)
      ;; no :record here: the door takes no input, so there is nothing
      ;; to retain. The transition itself is the record of the tap, with
      ;; the actor and the instant on it, and `refuse` records because
