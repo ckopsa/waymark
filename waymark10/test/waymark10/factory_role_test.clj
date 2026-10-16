@@ -4,9 +4,12 @@
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
   role it wants. Only a manager walks `set_factory_role`, and only a
-  manager allows the bench's merge held call (ticket d121729e). In
+  manager allows the bench's merge held call (ticket d121729e). A
+  person's effective scope (ticket 228f59e8) is the whole engine for a
+  manager and everything but the `a-manager` doors for anyone else. In
   memory."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -16,10 +19,12 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
 
-(defn- eng! []
-  (let [eng (engine/engine {:storage (memory/storage) :resources []})]
-    (roles/ensure-factory-roles! eng)
-    eng))
+(defn- eng!
+  ([] (eng! []))
+  ([resources]
+   (let [eng (engine/engine {:storage (memory/storage) :resources resources})]
+     (roles/ensure-factory-roles! eng)
+     eng)))
 
 (defn- as [id] {:principal (t/principal {:id id :display id})})
 
@@ -112,7 +117,34 @@
                              {:principal (t/principal {:id who :display who
                                                        :roles #{"approver"}})}))))
 
+;; ── effective scope ──────────────────────────────────────────────────
+
+(defresource gadget
+  {:kind :gadget
+   :plural "gadgets"
+   :states [:open :shut]
+   :initial :open
+   :summary "{data.name} · {state}"
+   :schema [:map [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]]
+   :actions {:shut {:from #{:open} :to :shut
+                    :guards [roles/a-manager]
+                    :safety {:idempotent true :reversible true :confirm false}
+                    :display {:label "Shut"}}
+             :reopen {:from #{:shut} :to :open
+                      :safety {:idempotent true :reversible true :confirm false}
+                      :display {:label "Reopen"}}}})
+
+(defn- whole [eng]
+  (into {} (for [[k r] (inv/resources eng)] [(name k) (set (inv/action-names r))])))
+
+(defn- scope-of [eng id]
+  (into {} (for [e (roles/effective-scope eng (t/principal {:id id :display id}))]
+             [(:kind e) (set (:actions e))])))
+
 (defn- owned-factory! [eng]
+  (member! eng "olive" nil)
+  (member! eng "mara" ["manager"])
+  (member! eng "cole" ["contributor"])
   (let [d (factory! eng)]
     (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
                  (assoc (as "olive")
@@ -120,9 +152,6 @@
 
 (deftest only-a-manager-allows-a-held-merge
   (let [eng (eng!)]
-    (member! eng "olive" nil)
-    (member! eng "mara" ["manager"])
-    (member! eng "cole" ["contributor"])
     (owned-factory! eng)
     (testing "a contributor is refused at Allow, and the refusal names the role"
       (let [id (held! eng "bench__merge")
@@ -146,3 +175,31 @@
     (factory! eng)
     (member! eng "cole" ["contributor"])
     (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "cole"))))))
+
+(deftest a-managers-scope-is-the-whole-engine
+  (let [eng (eng!)]
+    (testing "while the factory domain has no owner, every person"
+      (is (= (whole eng) (scope-of eng "cole"))))
+    (owned-factory! eng)
+    (testing "the owner, and a member holding manager"
+      (is (= (whole eng) (scope-of eng "olive")))
+      (is (= (whole eng) (scope-of eng "mara"))))
+    (testing "each entry is a grant scope entry: kind and actions"
+      (is (every? #(= #{:kind :actions} (set (keys %)))
+                  (roles/effective-scope eng (t/principal {:id "mara" :display "mara"})))))))
+
+(deftest a-contributors-scope-drops-only-the-manager-doors
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (is (contains? (get (whole eng) "member") "set_factory_role"))
+    (is (= (update (whole eng) "member" disj "set_factory_role")
+           (scope-of eng "cole")))))
+
+(deftest wiring-a-manager-onto-a-door-narrows-a-contributor
+  (let [eng (eng! [gadget])]
+    (owned-factory! eng)
+    (is (contains? (get (scope-of eng "mara") "gadget") "shut"))
+    (is (= (-> (whole eng)
+               (update "member" disj "set_factory_role")
+               (update "gadget" disj "shut"))
+           (scope-of eng "cole")))))
