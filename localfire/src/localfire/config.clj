@@ -71,6 +71,26 @@
       (fail! "the config's :mcp :oauth needs a :callback-port, as a positive integer."))
     {:client-id client-id :callback-port (long port)}))
 
+(defn- normalize-oidc
+  "The optional `:oidc` map (§12): the Keycloak realm a person signs in
+  through, and where the sealed tokens live. No secret is in it."
+  [o]
+  (when-not (map? o)
+    (fail! "the config's :oidc must be a map."))
+  (let [issuer (some-> (:issuer o) str not-empty (str/replace #"/+$" ""))
+        tokens (some-> (:tokens-dir o) str not-empty)]
+    (when-not issuer
+      (fail! "the config's :oidc needs an :issuer, the realm's URL."))
+    (when-not tokens
+      (fail! "the config's :oidc needs a :tokens-dir, where the sealed tokens live."))
+    {:issuer        issuer
+     :client-id     (or (some-> (:client-id o) str not-empty) "localfire-claude")
+     :authorize-url (or (some-> (:authorize-url o) str not-empty)
+                        (str issuer "/protocol/openid-connect/auth"))
+     :token-url     (or (some-> (:token-url o) str not-empty)
+                        (str issuer "/protocol/openid-connect/token"))
+     :tokens-dir    tokens}))
+
 (defn normalize
   "The config as the server uses it: every default filled in, every
   name a string, every routine complete. It throws ex-info with one
@@ -129,6 +149,8 @@
      ;; hook runs here, under this process's HOME.
      :hook-via      (vec (:hook-via m))
      :claude-home   (:claude-home m)
+     ;; §12: nil without :oidc, and then no sign-in, as before
+     :oidc          (some-> (:oidc m) normalize-oidc)
      :routines      (into {}
                           (map (fn [[k v]]
                                  (let [nm (routine-name k)]

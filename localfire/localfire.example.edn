@@ -58,6 +58,15 @@
  ;; :hook-via    ["/path/to/hook-in-container"]
  ;; :claude-home "/home/agent"
 
+ ;; optional (spec-local-fire.md §12): a person signs in through the
+ ;; Keycloak realm and keeps their own Claude token here, sealed under
+ ;; LOCALFIRE_TOKEN_KEY (32 bytes, base64: `openssl rand -base64 32`).
+ ;; A confidential client's secret is LOCALFIRE_OIDC_SECRET. Absent,
+ ;; there is no sign-in and the server runs as one machine login.
+ ;; :oidc {:issuer     "https://auth.kopsa.info/realms/domestic"
+ ;;        :client-id  "localfire-claude"
+ ;;        :tokens-dir "/var/lib/localfire/tokens"}
+
  ;; one routine per CLI model — the local copy of "one Routine for each
  ;; model" (docs/routines/ci-classifier.md). :model is required;
  ;; :max-concurrent defaults to 1, :max-run-seconds to 3600, and
