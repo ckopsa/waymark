@@ -497,6 +497,17 @@
 (defn- entry-shape [e]
   [(str (:kind e)) (into #{} (map str) (:actions e))])
 
+(defn- opening-person
+  "The person whose own hand opens a seat no delegating seat authors:
+  a person in person, or the one a delegate acts for. nil for any other
+  hand — a bare agent, the engine's own actors."
+  [ctx]
+  (let [{:keys [type id]} (:principal ctx)]
+    (case type
+      :human (some-> id str not-empty)
+      :agent (delegation/owner-of ctx)
+      nil)))
+
 (defn- seat-owner
   "The principal whose effective scope bounds this seat write, or nil."
   [row ctx]
@@ -507,6 +518,8 @@
           (when-some [o (or (delegation/owner-of ctx)
                             (some-> (get-in author [:data :owner]) str not-empty))]
             (t/principal {:id o :display o})))
+        (when-some [o (opening-person ctx)]
+          (t/principal {:id o :display o}))
         (:principal ctx))))
 
 (g/defguard scope-inside-the-owners
@@ -1567,8 +1580,11 @@
 (defn seat-born
   "The seat's on-create (invariant 3 and 4 of server/delegation): a
   seat whose author is a DELEGATING seat is born parked, and carries
-  `authored_by` and `owner` from its first moment. A person's seat is
-  born as it always was.
+  `authored_by` and `owner` from its first moment. A seat a person
+  opens — in person, or through a delegate that acts for them — is
+  born live and carries that person as `owner`, so its later restates
+  are judged against them (`scope-inside-the-owners`). Any other hand
+  writes no owner.
 
   The author is read off the held call when this birth replays one,
   so a sitter whose grant lapsed between the ask and the tap still
@@ -1581,7 +1597,9 @@
           (assoc :state :parked)
           (update :data assoc :authored_by (str (:id author)))
           (cond-> owner (assoc-in [:data :owner] owner))))
-    row))
+    (if-some [person (opening-person ctx)]
+      (assoc-in row [:data :owner] person)
+      row)))
 
 (defhandler write-stale [row inp _ctx]
   (assoc-in row [:data :stale] (:stale inp)))
@@ -3182,8 +3200,9 @@
     ;;    and from restate; see the ns docstring's write fence) ───────
     ;; WHO AUTHORED THIS SEAT, AND FOR WHOM (server/delegation,
     ;; invariant 3). Stamped by `seat-born` when a delegating seat's
-    ;; sitter opens it, and absent from both input doors, so a closed
-    ;; map refuses a hand that tries to write it.
+    ;; sitter opens it — `owner` too when a person or their delegate
+    ;; opens it — and absent from both input doors, so a closed map
+    ;; refuses a hand that tries to write it.
     [:authored_by {:optional true
                    :kind :seat
                    :x-display
@@ -3195,7 +3214,7 @@
              :x-display
              {:raw true
               :label "For whom"
-              :spelled-by-hand "The person the authoring seat acts for, written at birth; never typed."}}
+              :spelled-by-hand "The person who opened this seat, or the one its authoring seat acts for, written at birth; never typed."}}
      [:maybe [:string {:max 128}]]]
     ;; INVARIANT 4's record: the person's first unpark of an authored
     ;; seat, written by `unpark` and by nothing else
