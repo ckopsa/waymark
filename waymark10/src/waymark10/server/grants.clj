@@ -184,6 +184,7 @@
             ;; members requires nothing that requires grants
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
+            ;; a-manager: widening authority is a manager's (R-3.2);
             ;; the requester role unscoped-visibility narrows (R-3.4);
             ;; roles requires nothing that requires grants
             [waymark10.server.roles :as roles]
@@ -1615,7 +1616,9 @@
     :verdicts
     [{:name :approve :to :approved
       :label "Approve" :style :primary :order 1
-      :guards [grant-still-accepting seat-has-one-sitter]
+      ;; a-manager (R-3.2): an approve widens a grant, and widening
+      ;; authority is a manager's; deny stays open to any decider
+      :guards [roles/a-manager grant-still-accepting seat-has-one-sitter]
       :safety {:idempotent true :reversible false :confirm true
                :consequence "The requester's grant gains exactly the scope shown, immediately."}
       ;; stamp-approver stamps the approver AND the id of the grant
