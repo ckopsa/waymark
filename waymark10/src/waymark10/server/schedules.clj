@@ -2259,11 +2259,14 @@
 
   runner-links requires this namespace, so its `fire-pool!` is
   resolved at the call."
-  [eng provider-of schedule-row text at ids & [order]]
+  [eng provider-of schedule-row text at ids & [order owner]]
   (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
-        {:keys [runner answer retry-at transient]}
+        {:keys [runner answer retry-at transient skipped]}
         (fire-pool! eng provider-of ids text order
-                    {:kind "schedule" :id (str (:id schedule-row))})]
+                    {:kind "schedule" :id (str (:id schedule-row))}
+                    owner)
+        ;; a contributor's seat (b7572409) says which links it passed by
+        why (when skipped (str " Skipped — " skipped "."))]
     (cond
       runner
       (try-act! eng schedule-row :fired
@@ -2279,12 +2282,15 @@
       retry-at
       (try-act! eng schedule-row :throttle
                 {:note (clip (str "Every runner link in this pool is waiting; the wake goes out at "
-                                  retry-at "."))
+                                  retry-at "." why))
                  :retry_after (str retry-at)})
 
       :else
       (note! eng schedule-row
-             "No runner link in this pool can fire: each is broken, retired or missing."))
+             (clip (str (if owner
+                          (str "No runner link of " owner "'s in this pool can fire.")
+                          "No runner link in this pool can fire: each is broken, retired or missing.")
+                        why))))
     nil))
 
 (defn- fire-by-pool-or-link!
@@ -2296,7 +2302,9 @@
     ;; Provider fires both (529deb73)
     (fire-through-pool! eng (constantly (claude-routine adapter))
                         schedule-row text at ids
-                        (pool-order-of eng schedule-row seat-row))
+                        (pool-order-of eng schedule-row seat-row)
+                        ((requiring-resolve 'waymark10.server.runner-links/pool-owner)
+                         eng seat-row))
     ;; the one link is no runner link, but its fire still goes out on
     ;; the claude_routine account: it waits on that row's hold and
     ;; counts toward its cap (5c499772)
