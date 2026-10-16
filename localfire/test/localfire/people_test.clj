@@ -14,6 +14,7 @@
             [localfire.config :as config]
             [localfire.page :as page]
             [localfire.people :as people]
+            [localfire.pull :as pull]
             [localfire.runs :as runs]
             [localfire.server :as server]
             [localfire.server-test :as w])
@@ -43,7 +44,7 @@
 (defn- world
   "A server with a fake spawner and a fake realm, which answers the
   claims for `good-code` and nothing for any other code."
-  [{:keys [oidc? stdout exit]}]
+  [{:keys [oidc? stdout exit pull-url]}]
   (let [calls  (atom [])
         port   (w/free-port)
         runs   (w/tmpdir "lf-runs")
@@ -52,7 +53,8 @@
         cfg    (config/normalize
                 (cond-> (base-config port runs)
                   oidc? (assoc :oidc {:issuer     "http://127.0.0.1:9/realms/domestic"
-                                      :tokens-dir (str tokens)})))
+                                      :tokens-dir (str tokens)})
+                  pull-url (assoc :person-pull-url pull-url)))
         st     (server/start!
                 {:config  cfg
                  :token   "the-token"
@@ -327,6 +329,57 @@
         (is (<= 7000 (Long/parseLong (str (:retry-after two))) 7200))
         (is (= 1 (count @(:calls w))) "no run starts until the reset"))
       (finally (server/stop! w)))))
+
+;; ── a person's pull link (R-12.12) ──────────────────────────────────
+
+(def pull-token "the-persons-pull-link-token-0123456789")
+
+(deftest a-person-stores-a-pull-link-and-its-loop-follows
+  (let [w      (world {:oidc? true :pull-url "http://127.0.0.1:9"})
+        p      (:people w)
+        nm     (people/routine-name subject)
+        starts (atom [])
+        mgr    (pull/start-people! w "http://127.0.0.1:9"
+                                   {:start (fn [_ pl token _]
+                                             (swap! starts conj [(:link-id pl) (:routine pl) token])
+                                             {:run (future :stopped) :stop (atom false)})})]
+    (try
+      (people/store-token! p subject claude-token)
+      (let [s      (sign-in! w)
+            page   (req :get (str (:base w) "/me") {:cookie (:cookie s)})
+            csrf   (csrf-of (:body page))
+            bad    (req :post (str (:base w) "/me/pull")
+                        {:cookie (:cookie s) :form {:csrf csrf :link_id "not a link" :pull_token pull-token}})
+            ok     (req :post (str (:base w) "/me/pull")
+                        {:cookie (:cookie s) :form {:csrf csrf :link_id "link-1" :pull_token pull-token}})
+            after  (req :get (str (:base w) "/me") {:cookie (:cookie s)})
+            stored (people/routine-pull-link p nm)
+            sealed (some (fn [^File f]
+                           (when (str/ends-with? (.getName f) ".pull.sealed")
+                             (String. (Files/readAllBytes (.toPath f)) StandardCharsets/UTF_8)))
+                         (token-files w))
+            listed (people/pull-routines p)
+            gone   (req :post (str (:base w) "/me/pull/remove")
+                        {:cookie (:cookie s) :form {:csrf csrf}})]
+        (testing "a pull link is offered, refused when malformed, and stored sealed"
+          (is (str/includes? (str (:body page)) "/me/pull"))
+          (is (= 422 (:status bad)))
+          (is (= 303 (:status ok)))
+          (is (= {:link-id "link-1" :token pull-token} stored))
+          (is (= [nm] listed))
+          (is (some? sealed))
+          (is (not (str/includes? sealed pull-token))))
+        (testing "the page names the link and never its token"
+          (is (str/includes? (str (:body after)) "link-1"))
+          (is (not (str/includes? (str (:body after)) pull-token))))
+        (testing "storing it starts the person's loop as their routine; removing it stops it"
+          (is (= [["link-1" nm pull-token]] @starts))
+          (is (= 303 (:status gone)))
+          (is (nil? (people/routine-pull-link p nm)))
+          (is (empty? @(:loops mgr)))))
+      (finally
+        (pull/stop-people! mgr)
+        (server/stop! w)))))
 
 (deftest the-cli-usage-sentence-is-read
   (is (= 3600 (server/usage-exhausted "You've hit your usage limit." 0)))

@@ -13,6 +13,7 @@
   The token rides its own header and nowhere else. Nothing here logs
   it, nor the fire's text, which carries a one-time Key."
   (:require [jsonista.core :as json]
+            [localfire.people :as people]
             [localfire.server :as server])
   (:import [java.net URI URLEncoder]
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers
@@ -121,7 +122,7 @@
                       (case step
                         :stopped      :stopped
                         :unauthorized (do (log! "localfire pull stopped: the engine answered 401,"
-                                                " so the token in " (:token-env pull)
+                                                " so the token in " (or (:token-from pull) (:token-env pull))
                                                 " is wrong or revoked.")
                                           :unauthorized)
                         :error        (let [ms (next-backoff backoff first-ms max-ms)]
@@ -135,3 +136,51 @@
   [{:keys [run stop]}]
   (reset! stop true)
   (future-cancel run))
+
+;; ── a person's pull link (R-12.12) ──────────────────────────────────
+
+(defn person-pull
+  "The pull map and token the person's routine `nm` polls with, from the
+  link they stored on /me, or nil when they stored none."
+  [people engine-url nm]
+  (when-let [{:keys [link-id token]} (people/routine-pull-link people nm)]
+    {:pull  {:engine-url engine-url
+             :link-id    link-id
+             :routine    nm
+             :token-from (str "the pull link stored for " nm)}
+     :token token}))
+
+(defn sync-person!
+  "Stand the person's loop up again under the link they stored now, or
+  leave it down when they removed it. A run a loop started goes on."
+  [{:keys [state engine-url loops start opts]} nm]
+  (locking loops
+    (some-> (get @loops nm) stop!)
+    (if-let [{:keys [pull token]} (person-pull (:people state) engine-url nm)]
+      (swap! loops assoc nm (start state pull token opts))
+      (swap! loops dissoc nm))))
+
+(defn start-people!
+  "One pull loop per person who stored a pull link (R-12.12), beside the
+  server's `state`, polling `engine-url`. A link stored or removed on
+  /me starts or stops its loop at once. A fire that finds the person's
+  Claude token gone posts 401 (R-12.8). `:start` is the tests' seam on
+  `start!`; the rest of `opts` goes to it. → the manager, for
+  `stop-people!`."
+  ([state engine-url] (start-people! state engine-url {}))
+  ([state engine-url {:keys [start] :as opts}]
+   (let [m {:state      state
+            :engine-url engine-url
+            :loops      (atom {})
+            :start      (or start start!)
+            :opts       (dissoc opts :start)}]
+     (reset! (:on-pull (:people state)) #(sync-person! m %))
+     (doseq [nm (people/pull-routines (:people state))]
+       (sync-person! m nm))
+     m)))
+
+(defn stop-people! [{:keys [state loops]}]
+  (reset! (:on-pull (:people state)) nil)
+  (locking loops
+    (doseq [l (vals @loops)] (stop! l))
+    (reset! loops {})))

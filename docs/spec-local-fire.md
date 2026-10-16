@@ -514,6 +514,15 @@ their own token and config directory (the fake spawner sees the
 environment), a revoked token answers 401, and no Claude token appears
 in a log, a page or a run record.
 
+**R-12.12** A person whose localfire sits behind NAT takes their fires
+by pull. `/me` takes a pull runner link's id and token and seals them
+beside the Claude token (`{hash}.pull.sealed`); the page shows the
+link's id again and never its token. For each stored link a pull loop
+(§13) polls `:person-pull-url` — the `:pull :engine-url` when the
+config names none — and runs each fire as the person's routine.
+Storing or removing the link starts or stops that loop at once. A fire
+that finds the person's Claude token gone posts 401 back (R-12.8).
+
 ## 13. Requirements: pull
 
 This section is piece 2 of the pull-mode epic (54360702). The engine's
