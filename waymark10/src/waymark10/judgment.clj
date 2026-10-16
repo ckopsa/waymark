@@ -64,6 +64,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.delegation :as delegation]
+            [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -431,6 +432,10 @@
               subject-kind-is-served
               queue-names-filterable-fields
               consequence-is-a-door
+              ;; a-manager (R-3.2): a promoted judgment is live law —
+              ;; its verdicts become words a seat may write. A draft is
+              ;; still a contributor's to create and revise
+              roles/a-manager
               ;; LAST (server/delegation, invariant 5): a delegating
               ;; seat promotes only the judgment of a seat it authored
               ;; that is still parked; any other promotion from it waits
