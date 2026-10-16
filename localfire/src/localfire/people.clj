@@ -197,6 +197,68 @@
   [people sub]
   (routine-token people (routine-name sub)))
 
+;; ── the person's pull link (R-12.12) ────────────────────────────────
+
+(def ^:private link-id-re #"[A-Za-z0-9._:-]{1,200}")
+
+(defn- pull-file ^File [people h]
+  (io/file (get-in people [:oidc :tokens-dir]) (str h ".pull.sealed")))
+
+(defn- pull-aad
+  "The pull link's associated data: not the token file's, so neither
+  file opens under the other's name."
+  [h]
+  (str h " pull"))
+
+(defn store-pull-link!
+  "Seal the person's pull runner link — its id and its token — beside
+  their Claude token, owner-only, before a byte is in it."
+  [people sub link-id token]
+  (let [h (person-hex sub)
+        f (pull-file people h)]
+    (.mkdirs (.getParentFile f))
+    (.createNewFile f)
+    (owner-only! f)
+    (Files/write (.toPath f)
+                 (seal (:key people) (pull-aad h)
+                       (json/write-value-as-string {:link_id link-id :token token}))
+                 (make-array OpenOption 0))
+    nil))
+
+(defn routine-pull-link
+  "The pull link behind the person's routine `nm`, opened — {:link-id
+  :token}, for the pull loop and never for a page — or nil when they
+  stored none, removed it, or its file does not open under the key."
+  [people nm]
+  (when-let [h (routine-hex nm)]
+    (let [f (pull-file people h)]
+      (when (.isFile f)
+        (try (let [m (json/read-value (unseal (:key people) (pull-aad h)
+                                              (Files/readAllBytes (.toPath f))))]
+               {:link-id (str (get m "link_id")) :token (str (get m "token"))})
+             (catch Exception _ nil))))))
+
+(defn remove-pull-link! [people sub]
+  (io/delete-file (pull-file people (person-hex sub)) true)
+  nil)
+
+(defn pull-routines
+  "The persons' routines that have a pull link stored, by their files."
+  [people]
+  (->> (.listFiles (io/file (get-in people [:oidc :tokens-dir])))
+       (keep (fn [^File f]
+               (some->> (re-matches #"([0-9a-f]{64})\.pull\.sealed" (.getName f))
+                        second
+                        (str "p-"))))
+       sort
+       vec))
+
+(defn- pulled!
+  "Tell the pull loops (`pull/start-people!`) the person's link moved."
+  [people sub]
+  (when-let [f @(:on-pull people)]
+    (f (routine-name sub))))
+
 ;; ── the realm (R-12.1, R-12.5) ──────────────────────────────────────
 
 (defn redirect-uri [public-url] (str public-url "/signin/callback"))
@@ -286,6 +348,9 @@
      :key      key
      :sessions (atom {})
      :pending  (atom {})
+     ;; R-12.12: where a person's pull link is polled, or nil for none
+     :pull-url (:person-pull-url config)
+     :on-pull  (atom nil)
      :exchange (or exchange
                    (fn [code verifier]
                      (exchange-code oidc secret (:public-url config) code verifier)))
@@ -447,7 +512,10 @@
                                          :url     (str public-url "/fire/" nm)
                                          :token   (fire-token people nm)
                                          :engine? (boolean (get-in people [:oidc :engine-url]))
-                                         :link    (read-link people sub)})})))
+                                         :link    (read-link people sub)})
+                   ;; R-12.12: the pull link, where an engine is named
+                   :pull       (when (and nm (:pull-url people))
+                                 {:link-id (:link-id (routine-pull-link people nm))})})))
 
 (defn handle
   "The sign-in and token routes (R-12.1–R-12.3), or nil for a path
@@ -493,6 +561,26 @@
                            :else (connect! people public-url sess))]
           (html 422 (me people public-url sess problem))
           (redirect "/me")))
+
+      [:post "/me/pull"]
+      (if-not (csrf-ok?)
+        (forbidden)
+        (let [link (str/trim (str (get @form "link_id")))
+              t    (str/trim (str (get @form "pull_token")))]
+          (if (or (nil? (:pull-url people))
+                  (not (re-matches link-id-re link))
+                  (str/blank? t) (> (count t) max-token-chars))
+            (html 422 (me people public-url sess "That is not a pull link's id and token. Nothing was stored."))
+            (do (store-pull-link! people (:sub sess) link t)
+                (pulled! people (:sub sess))
+                (redirect "/me")))))
+
+      [:post "/me/pull/remove"]
+      (if-not (csrf-ok?)
+        (forbidden)
+        (do (remove-pull-link! people (:sub sess))
+            (pulled! people (:sub sess))
+            (redirect "/me")))
 
       [:post "/signout"]
       (if-not (csrf-ok?)

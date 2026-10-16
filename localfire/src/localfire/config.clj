@@ -193,6 +193,12 @@
      ;; §12: what a person's routine runs as, with :oidc only
      :person-routine (when (:oidc m)
                        (normalize-routine "person" (or (:person-routine m) {:model "opus"})))
+     ;; R-12.12: the engine a person's pull link is polled at, with
+     ;; :oidc only; the :pull map's engine when the config names none
+     :person-pull-url (when (:oidc m)
+                        (some-> (or (some-> (:person-pull-url m) str not-empty)
+                                    (some-> (:pull m) :engine-url str not-empty))
+                                (str/replace #"/+$" "")))
      ;; §13: nil without :pull, and then localfire only takes pushes
      :pull          (some-> (:pull m)
                             (normalize-pull (set (map routine-name (keys rs)))))

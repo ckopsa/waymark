@@ -117,11 +117,28 @@
 (defn- hidden-csrf [csrf]
   (str "<input type=\"hidden\" name=\"csrf\" value=\"" (esc csrf) "\">"))
 
+(defn- pull-section
+  "R-12.12: the person's pull link — its id once stored, never its token."
+  [pull csrf]
+  (when pull
+    (str "<h2>your pull link</h2>"
+         (if (:link-id pull)
+           (str "<p>Your fires are pulled from the engine through the link <code>"
+                (esc (:link-id pull)) "</code>. Its token is not shown again.</p>"
+                "<form method=\"post\" action=\"/me/pull/remove\">" (hidden-csrf csrf)
+                "<button>Remove the pull link</button></form>")
+           (str "<p>When this machine cannot take the engine's fire, register a pull"
+                " runner link for your routine and store it here.</p>"
+                "<form method=\"post\" action=\"/me/pull\">" (hidden-csrf csrf)
+                "<label>Link id <input name=\"link_id\" autocomplete=\"off\" required></label> "
+                "<label>Link token <input type=\"password\" name=\"pull_token\" autocomplete=\"off\" required></label> "
+                "<button>Store it</button></form>")))))
+
 (defn me-page
   "The person's own page (§12): sign in, then paste or revoke the
   Claude token. A stored token is never rendered — the page says only
   that one is there (R-12.3)."
-  [{:keys [sub has-token? csrf problem routine]}]
+  [{:keys [sub has-token? csrf problem routine pull]}]
   (doc "your Claude token"
        (if-not sub
          (str "<h1>sign in</h1><p><a href=\"/signin\">Sign in</a> to keep your own"
@@ -145,6 +162,7 @@
                               (str "<form method=\"post\" action=\"/me/connect\">" (hidden-csrf csrf)
                                    "<button>" (if (:link routine) "Restate my link in the engine" "Connect to the engine")
                                    "</button></form>"))))
+                     (pull-section pull csrf)
                      "<form method=\"post\" action=\"/me/revoke\">" (hidden-csrf csrf)
                      "<button>Revoke and delete it</button></form>")
                 (str "<form method=\"post\" action=\"/me/token\">" (hidden-csrf csrf)
