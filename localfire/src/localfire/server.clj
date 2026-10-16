@@ -17,6 +17,7 @@
             [jsonista.core :as json]
             [localfire.config :as config]
             [localfire.page :as page]
+            [localfire.people :as people]
             [localfire.prompt :as prompt]
             [localfire.runs :as runs]
             [localfire.spawn :as spawn]
@@ -603,7 +604,9 @@
             (json-resp (if (:ok c) 200 503) c)))
 
         :else
-        (refusal 404 "No route of this server answers that path.")))))
+        ;; the sign-in routes (§12) exist only with :oidc in the config
+        (or (some-> (:people state) (people/handle (get-in state [:config :public-url]) req))
+            (refusal 404 "No route of this server answers that path."))))))
 
 ;; ── standing and stopping ───────────────────────────────────────────
 
@@ -614,9 +617,11 @@
   `:port`, which is the bound port even when the config asked for 0.
   `:closer` is the sitting's close seam, `spawn/run-to-end` by default;
   the lost runs' sittings are closed on a thread of their own, and
-  `:closing` is that thread's future → the number it tried (R-5.6)."
-  [{:keys [config token spawner closer check?]}]
-  (let [state {:config     config
+  `:closing` is that thread's future → the number it tried (R-5.6).
+  `:sign-in` is {:key :secret :exchange} for `people/init` (§12)."
+  [{:keys [config token spawner closer check? sign-in]}]
+  (let [state {:people     (people/init config sign-in)
+               :config     config
                :token      token
                :spawner    (or spawner (spawn/process-spawner))
                :closer     (or closer spawn/run-to-end)

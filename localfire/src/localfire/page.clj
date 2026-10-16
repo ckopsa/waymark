@@ -109,6 +109,41 @@
                           (esc (:started-at r)) "</li>")))
             "</ul>")))
 
+(def admin-disclosure
+  "R-12.4, on the person's page before the paste field."
+  (str "The administrator of this localfire machine can get access to the tokens stored on it. "
+       "If you do not accept this, run your own localfire on a machine you control."))
+
+(defn- hidden-csrf [csrf]
+  (str "<input type=\"hidden\" name=\"csrf\" value=\"" (esc csrf) "\">"))
+
+(defn me-page
+  "The person's own page (§12): sign in, then paste or revoke the
+  Claude token. A stored token is never rendered — the page says only
+  that one is there (R-12.3)."
+  [{:keys [sub has-token? csrf problem]}]
+  (doc "your Claude token"
+       (if-not sub
+         (str "<h1>sign in</h1><p><a href=\"/signin\">Sign in</a> to keep your own"
+              " Claude token on this machine.</p>")
+         (str "<h1>your Claude token</h1>"
+              "<p>Signed in as " (esc sub) ".</p>"
+              (when problem (str "<p><strong>" (esc problem) "</strong></p>"))
+              "<p><strong>" (esc admin-disclosure) "</strong></p>"
+              (if has-token?
+                (str "<p>A token is stored for you. It is not shown again.</p>"
+                     "<form method=\"post\" action=\"/me/revoke\">" (hidden-csrf csrf)
+                     "<button>Revoke and delete it</button></form>")
+                (str "<form method=\"post\" action=\"/me/token\">" (hidden-csrf csrf)
+                     "<label>A token from <code>claude setup-token</code> "
+                     "<input type=\"password\" name=\"token\" autocomplete=\"off\" required></label> "
+                     "<button>Store it</button></form>"))
+              "<form method=\"post\" action=\"/signout\">" (hidden-csrf csrf)
+              "<button>Sign out</button></form>"))))
+
+(defn problem-page [title sentence]
+  (doc title (str "<h1>" (esc title) "</h1><p>" (esc sentence) "</p>")))
+
 (defn not-found-page [id]
   (doc "no run" (str "<h1>no run</h1><p>No run " (esc id)
                      " is on this server.</p>")))

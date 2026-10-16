@@ -9,6 +9,7 @@
   on every schedule row in the house."
   (:require [clojure.string :as str]
             [localfire.config :as config]
+            [localfire.people :as people]
             [localfire.runs :as runs]
             [localfire.server :as server])
   (:gen-class))
@@ -25,9 +26,14 @@
           cfg  (try (config/load-config path)
                     (catch clojure.lang.ExceptionInfo e
                       (die! (str "localfire: " (ex-message e)))))]
+      ;; R-12.2: a sign-in with nowhere safe to keep the token is no start
+      (when (and (:oidc cfg) (nil? (people/env-key)))
+        (die! "localfire: the config has :oidc, and LOCALFIRE_TOKEN_KEY is not a base64 AES key of 32 bytes."))
       ;; R-5.6, before the first fire of this life
       (let [lost (runs/mark-lost! (:runs-dir cfg))
-            st   (server/start! {:config cfg :token token :check? true})]
+            st   (server/start! {:config cfg :token token :check? true
+                                 :sign-in {:key    (people/env-key)
+                                           :secret (people/env-secret)}})]
         (println (str "localfire listening on " (:port st)
                       " public-url=" (:public-url cfg)
                       " routines=" (str/join "," (sort (keys (:routines cfg))))
