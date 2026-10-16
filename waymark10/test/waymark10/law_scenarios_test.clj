@@ -337,7 +337,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 3 (:covered mine))
+    (is (= 5 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: errand's one, plus mcp_server's one (waymark-fp62.10"
              " — the chain rule: a-create-does-not-carry-a-secret"
@@ -348,7 +348,10 @@
              " and nothing else, and the check tier judges all six), plus"
              " verdict's one (waymark-fp62.11 — the chain rule again:"
              " every wall on the judge door reads the judgment row the"
-             " body cites). The :feed module's deferred scenarios —"
+             " body cites), plus held_call's two allow scenarios"
+             " (ticket d121729e: a-manager-allows-a-merge walls the allow"
+             " door and reads the member and the factory domain). The"
+             " :feed module's deferred scenarios —"
              " ranking_note's, recipe_proposal's, feed_view's,"
              " verdict_reason's and remark's — went with it (retired"
              " 2026-09). The other three of errand's are not re-run here"))))
