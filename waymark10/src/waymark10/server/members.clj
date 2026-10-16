@@ -144,6 +144,18 @@
     (t/deny {:vars {:roles (str/join ", " unknown)}})
     (t/allow)))
 
+(g/defguard factory-role-registered
+  {:judges [:role]
+   :reads [:role]
+   :explain "No active role named {role} — register the role first; an assignment naming it would grant nobody."
+   :open "The active roles are the roles collection, one query away; the boot seed registers both factory roles."
+   :remedies [:role/create]}
+  [_row inp ctx]
+  (if (and (some? (:role inp)) (:find ctx)
+           (not (roles/active-role? ctx (:role inp))))
+    (t/deny {:vars {:role (:role inp)}})
+    (t/allow)))
+
 (g/defguard registrar-binds
   {:reads [:principal]
    :hide true
@@ -590,6 +602,12 @@
 (defhandler set-roles [row inp _ctx]
   (assoc-in row [:data :roles] (vec (distinct (:roles inp)))))
 
+(defhandler set-factory-role [row inp _ctx]
+  ;; the member's other roles stay; at most one factory role is held
+  (let [kept (remove (set roles/factory-roles) (get-in row [:data :roles]))]
+    (assoc-in row [:data :roles]
+              (vec (cond-> (vec kept) (some? (:role inp)) (conj (:role inp)))))))
+
 (defhandler set-subject [row inp _ctx]
   (assoc-in row [:data :subject] (:subject inp)))
 
@@ -924,6 +942,20 @@
                    :safety {:idempotent true :reversible true :confirm false}
                    :handler set-roles
                    :display {:label "Assign roles" :order 2}}
+    ;; the factory role rides `roles` beside the recovery-admin ones,
+    ;; and a manager gives it: assign_roles stays the recovery-admin's
+    :set_factory_role {:from #{:active} :to :active
+                       :input [:map
+                               [:role {:optional true
+                                       :examples ["contributor"]
+                                       :x-display {:label "Factory role"
+                                                   :help "manager runs the factory and walks its manager-only doors; contributor works in it. Leave it empty to clear the member's factory role; its other roles stay."}}
+                                [:maybe [:enum "manager" "contributor"]]]]
+                       :record true
+                       :guards [roles/a-manager factory-role-registered]
+                       :safety {:idempotent true :reversible true :confirm false}
+                       :handler set-factory-role
+                       :display {:label "Set factory role" :order 2}}
     ;; the handle is unset at every birth — an auto-provisioned member
     ;; is named by its identity provider, which has never heard of the
     ;; chore board. Without this door a synced assignee could only ever

@@ -126,6 +126,7 @@
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.domains :as domains]
+            [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seed :as seed]
@@ -973,6 +974,8 @@
         _ (runner-links/ensure-seeded-links! eng)
         ;; one runner_provider row per provider, its cap empty
         _ (runner-links/ensure-providers! eng)
+        ;; the factory roles, manager and contributor, once each
+        _ (roles/ensure-factory-roles! eng)
         ;; domain `factory`, once: every seat that names no domain is in it
         _ (domains/ensure-factory! eng)
         ;; the bridge of Gate's deprecation, and none of it on a demo

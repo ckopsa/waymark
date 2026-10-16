@@ -17,6 +17,8 @@
     v10 consumer is the member's roles field (members.clj)."
   (:require [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -82,3 +84,87 @@
     :reactivate {:from #{:retired} :to :active
                  :safety {:idempotent true :reversible true :confirm false}
                  :display {:label "Reactivate" :order 1}}}})
+
+;; ── the factory roles: manager and contributor ──────────────────────
+
+(def manager
+  "The role `a-manager` passes."
+  "manager")
+
+(def contributor
+  "The role of a member who works in the factory and does not run it."
+  "contributor")
+
+(def factory-roles
+  "The two factory roles, each a role row `ensure-factory-roles!`
+  registers. A member holds at most one, given by `set_factory_role`."
+  [manager contributor])
+
+(def ^:private factory-domain
+  ;; seats/default-domain, spelled here: seats sits above members, and
+  ;; members reads this namespace
+  "factory")
+
+(defn manager?
+  "Does the ctx's principal pass as a manager? A person passes when the
+  factory domain has no owner (the engine as it was before the role),
+  when it is that owner, or when its own member row holds `manager` —
+  read from the ROW, never the token. Agents and the engine's own
+  actors are not judged here: they keep their grant rules. A ctx with
+  no read hooks (the render probe) passes."
+  [ctx]
+  (let [p (:principal ctx)
+        pid (some-> (:id p) str not-empty)
+        read' (:read ctx)
+        find' (:find ctx)]
+    (cond
+      (contains? #{:agent :system} (:type p)) true
+      (or (nil? read') (nil? find')) true
+      :else
+      (let [owner (some-> (first (find' :domain {:name factory-domain} {:limit 1}))
+                          (get-in [:data :owner]) str not-empty)
+            own (when pid
+                  (or (read' :member pid)
+                      (first (find' :member {:subject pid} {:limit 1}))))]
+        (boolean
+         (or (nil? owner)
+             (= owner pid)
+             (= owner (some-> (:id own) str))
+             (contains? (set (get-in own [:data :roles])) manager)))))))
+
+(g/defguard a-manager
+  {:reads [:principal :member :domain]
+   :vars [:role]
+   :explain "This door is a manager's: it wants a person who holds the `{role}` role, or the factory domain's owner."
+   :open "A manager gives the role on the member's `set_factory_role` door; the factory domain's owner is set by restating that domain."}
+  [_row _inp ctx]
+  (if (manager? ctx)
+    (t/allow)
+    (t/deny {:vars {:role manager}})))
+
+(def seed-actor
+  "The actor the role seed wears."
+  (t/principal {:id "waymark10-roles" :type :system
+                :display "Roles"}))
+
+(def ^:private factory-role-text
+  {manager "Runs the factory: may give members a factory role, and walks the doors only a manager may."
+   contributor "Works in the factory and does not run it."})
+
+(defn ensure-factory-roles!
+  "The boot seed: one active `role` row for each of `factory-roles`
+  that no role row spells yet. A second boot makes none."
+  [eng]
+  (when (contains? (inv/resources eng) :role)
+    (doseq [role-name factory-roles]
+      (try
+        (when (empty? (store/with-tx (:storage eng)
+                        (fn [tx] (store/query-rows (:storage eng) tx :role
+                                                   {:name role-name} {:limit 1}))))
+          (inv/create! eng :role {:name role-name
+                                  :description (factory-role-text role-name)}
+                       {:principal seed-actor}))
+        (catch Exception e
+          (binding [*out* *err*]
+            (println (str "waymark10 roles: seed of " role-name
+                          " failed — " (ex-message e)))))))))
