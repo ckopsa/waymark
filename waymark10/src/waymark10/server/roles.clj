@@ -85,7 +85,7 @@
                  :safety {:idempotent true :reversible true :confirm false}
                  :display {:label "Reactivate" :order 1}}}})
 
-;; ── the factory roles: manager and contributor ──────────────────────
+;; ── the factory roles: manager, contributor and requester ───────────
 
 (def manager
   "The role `a-manager` passes."
@@ -95,10 +95,16 @@
   "The role of a member who works in the factory and does not run it."
   "contributor")
 
+(def requester
+  "The role of a person who files tickets and sees only the ones they
+  filed (epic 46831b3c, R-3.4): `grants/unscoped-visibility` narrows
+  their sight, and the ticket's birth lands their ask in the backlog."
+  "requester")
+
 (def factory-roles
-  "The two factory roles, each a role row `ensure-factory-roles!`
+  "The three factory roles, each a role row `ensure-factory-roles!`
   registers. A member holds at most one, given by `set_factory_role`."
-  [manager contributor])
+  [manager contributor requester])
 
 (def ^:private factory-domain
   ;; seats/default-domain, spelled here: seats sits above members, and
@@ -149,7 +155,8 @@
 
 (def ^:private factory-role-text
   {manager "Runs the factory: may give members a factory role, and walks the doors only a manager may."
-   contributor "Works in the factory and does not run it."})
+   contributor "Works in the factory and does not run it."
+   requester "Files tickets and sees only the tickets they filed."})
 
 (defn ensure-factory-roles!
   "The boot seed: one active `role` row for each of `factory-roles`

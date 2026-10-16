@@ -184,6 +184,9 @@
             ;; members requires nothing that requires grants
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
+            ;; the requester role unscoped-visibility narrows (R-3.4);
+            ;; roles requires nothing that requires grants
+            [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -2603,7 +2606,13 @@
   ([eng grant-id principal] (visibility eng grant-id principal nil))
   ([eng grant-id principal sitting-id]
   (let [pid (:id principal)
-        row0 (when grant-id (load-decoded eng :grant grant-id))
+        ;; a grant ROW in hand (a role's standing scope,
+        ;; `requester-visibility`) is read as it stands: it is never
+        ;; stored, so there is nothing to load
+        row0 (if (map? grant-id)
+               grant-id
+               (when grant-id (load-decoded eng :grant grant-id)))
+        grant-id (if (map? grant-id) (:id grant-id) grant-id)
         own? (boolean (and row0 (= (get-in row0 [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
         now ((:now-fn eng))
@@ -2913,11 +2922,48 @@
   [eng principal]
   (assoc (visibility eng nil principal) :vocabulary-open? true))
 
+(defn- requester-member
+  "The member row of the person `principal` is, when that row holds the
+  `requester` role: the row of that id, or the row a binding stamped
+  with it as `subject`. nil for an agent, a system actor, anyone else,
+  and on an engine that serves no tickets."
+  [eng principal]
+  (when (and (not (contains? #{:agent :system} (:type principal)))
+             (contains? (inv/resources eng) :ticket))
+    (when-some [pid (some-> (:id principal) str not-empty)]
+      (when-some [rdef (get (inv/resources eng) :member)]
+        (when-some [m (or (load-decoded eng :member pid)
+                          (some->> (first (store/with-tx (:storage eng)
+                                            (fn [tx]
+                                              (store/query-rows (:storage eng) tx :member
+                                                                {:subject pid} {:limit 1}))))
+                                   (inv/decode-row rdef)))]
+          (when (contains? (set (get-in m [:data :roles])) roles/requester)
+            m))))))
+
+(defn requester-visibility
+  "What a person holding `requester` sees (epic 46831b3c, R-3.4): the
+  ticket kind narrowed to the rows whose `filed_by` is their member
+  id, and its create door — the scope of a grant that is never stored,
+  read through `visibility` like any presented one, so a requester's
+  get and query meet the same narrowing every scoped reader meets."
+  [eng principal member]
+  (visibility eng {:id (str "role:" roles/requester)
+                   :state :accepted
+                   :data {:audience (:id principal)
+                          :scope [{:kind "ticket"
+                                   :actions ["create"]
+                                   :filter {"filed_by" (str (:id member))}}]}}
+              principal))
+
 (defn unscoped-visibility
   "The visibility a principal arrives with when it presents NO grant —
   nil for a human or a system actor (unscoped sight, the router's
   `visibility-of` answering nothing), the bootstrap surface for a
-  named agent, which never runs unscoped.
+  named agent, which never runs unscoped. A PERSON WHO HOLDS
+  `requester` is the one human who is not unscoped: they arrive with
+  `requester-visibility`, their own tickets and the create door. The
+  cost is one member read per request a person makes.
 
   This is `wrap-identity`'s own else-branch, and it lives here rather
   than inline there because a SECOND door now needs it for somebody
@@ -2938,10 +2984,12 @@
   is untouched. The rule lives here, in the one expression, for the
   reason the paragraph above gives."
   [eng principal]
-  (when (= :agent (:type principal))
+  (if (= :agent (:type principal))
     (or (when (:acts-for principal)
           (worn-visibility eng principal))
-        (bootstrap-visibility eng principal))))
+        (bootstrap-visibility eng principal))
+    (when-some [m (requester-member eng principal)]
+      (requester-visibility eng principal m))))
 
 (defn capability-entry
   "The live surface entry a PRESENTED grant confers for one dotted

@@ -90,6 +90,7 @@
             [waymark10.holds :as holds]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -1577,7 +1578,14 @@
                    {:raw true
                     :label "Domain that asked"
                     :help "The name of the domain whose mayor asked another domain for this work. Only the receiving domain's mayor, or the owner, grooms, ranks or drops such a ticket, except that the asking domain's mayor grooms and ranks a ticket of a seat that serves any domain. Empty for a ticket filed in its own domain."}}
-    [:maybe [:string {:max 64}]]]])
+    [:maybe [:string {:max 64}]]]
+   ;; epic 46831b3c, R-3.4: written by the birth, never input, and
+   ;; read by a requester's sight (grants/requester-visibility)
+   [:filed_by {:optional true :kind :member
+               :x-display
+               {:label "Person who filed it"
+                :help "The member id of the person who filed this ticket, or of the person the tool that filed it acts for. The engine writes it at birth. Empty for a ticket a seat or the engine filed, and for one filed before it was kept."}}
+    [:maybe :waymark/ref]]])
 
 ;; ── a fired seat's ticket lands at the back (ticket b0ec4d47) ───────
 
@@ -1765,11 +1773,47 @@
                            (assoc % :asked_priority (:priority %)
                                   :priority fired-seat-priority)))))))
 
+;; ── who filed it, and a requester's ask (epic 46831b3c, R-3.4) ───────
+
+(defn- filing-person
+  "The member row of the person who files: a person's own row, or the
+  row of the person a delegate acts for. A seat, the engine's own hand
+  and a ctx with no read hooks answer nil."
+  [ctx]
+  (let [p (:principal ctx)
+        who (some-> (case (:type p)
+                      :agent (:acts-for p)
+                      :system nil
+                      (:id p))
+                    str not-empty)
+        read' (:read ctx)
+        find' (:find ctx)]
+    (when (and who read' find')
+      (or (read' :member who)
+          (first (find' :member {:subject who} {:limit 1}))))))
+
+(defn- stamp-who-filed
+  "The birth's third stamp. `filed_by` is the member id of the person
+  who filed; `requested_by` keeps naming the asking domain. A person
+  who holds `requester` files into the backlog: the ticket is born a
+  draft as every ticket is, and lands at `fired-seat-priority` with
+  what they asked kept in `asked_priority`."
+  [row ctx]
+  (if-some [m (filing-person ctx)]
+    (cond-> (assoc-in row [:data :filed_by] (str (:id m)))
+      (contains? (set (get-in m [:data :roles])) roles/requester)
+      (-> (update :data #(if (some? (:asked_priority %))
+                           %
+                           (assoc % :asked_priority (:priority %))))
+          (assoc-in [:data :priority] fired-seat-priority)))
+    row))
+
 (defn- stamp-the-birth
   [row ctx]
   (-> row
       (land-a-fired-seats-ticket-at-four ctx)
-      (take-the-domain ctx)))
+      (take-the-domain ctx)
+      (stamp-who-filed ctx)))
 
 (def ^:private close-input
   [:map
@@ -1886,6 +1930,8 @@
                 ;; ticket ab77e635: a seat's inbox cue names the domain
                 ;; that asked, and a query may too
                 :requested_by #{:eq}
+                ;; epic 46831b3c: a requester's sight is this filter
+                :filed_by #{:eq}
                 :bead_id #{:eq :set}}
    ;; a ticket born before domains stores none, and is factory's
    :absent-as {:domain "factory"}
