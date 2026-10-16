@@ -12,6 +12,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
+            [waymark10.server.pull-fires :as pf]
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
@@ -23,7 +24,7 @@
 
 (def ^:private tables
   ["runner_links" "runner_providers" "waymark10_transitions" "waymark10_idempotency"
-   "waymark10_drafts"])
+   "waymark10_drafts" "waymark10_pull_fires" "waymark10_pull_polls"])
 
 (use-fixtures :once
   (fn [f]
@@ -404,6 +405,107 @@
         (is (nil? (:runner out)))
         (is (= lf-free (:retry-at out)))
         (is (= [4 1] [@(fires lf) @(fires cloud)]))))))
+
+;; ── a pull link (pull-mode epic 54360702, piece 1a) ─────────────────
+
+(defn- pull-link-id! []
+  (str (:id (:row (inv/create! *eng* :runner_link
+                               {:provider "localfire"
+                                :delivery "pull"
+                                :fire_token a-token}
+                               {:principal colton})))))
+
+(def ^:private a-fire-text "Seat: s\nKey: one-time-key-0123456789")
+
+(deftest a-pull-link-has-no-url-and-a-push-link-needs-one
+  (is (= :a-pull-link-has-no-url
+         (:guard (refusal #(inv/create! *eng* :runner_link
+                                        {:provider "localfire" :delivery "pull"
+                                         :fire_url a-url :fire_token a-token}
+                                        {:principal colton})))))
+  (is (= :a-pull-link-has-no-url
+         (:guard (refusal #(inv/create! *eng* :runner_link
+                                        {:provider "claude_routine" :fire_token a-token}
+                                        {:principal colton})))))
+  (is (rl/pull? (row-of (pull-link-id!)))))
+
+(deftest a-pull-fire-is-held-sealed-not-posted
+  (let [id (pull-link-id!)
+        n (atom 0)
+        answer (rl/fire-link! *eng* (counting n {:started nil}) (row-of id)
+                              a-fire-text {:kind "schedule" :id "s-held"})]
+    (is (string? (:queued answer)))
+    (is (zero? @n) "nothing was posted")
+    (let [[f :as held] (pf/pending (:storage *eng*) id)]
+      (is (= 1 (count held)))
+      (is (= ["schedule" "s-held"] [(:for_kind f) (:for_id f)]))
+      (is (str/starts-with? (:text f) "enc:"))
+      (is (not (str/includes? (:text f) "one-time-key"))))
+    (testing "it survives a restart: a new engine over a new storage takes it"
+      (let [st (pg/storage db/dsn)]
+        (try
+          (let [eng2 (engine/engine {:storage st :resources []})
+                f (rl/take-fire! eng2 id)]
+            (is (= (:queued answer) (:id f)))
+            (is (= a-fire-text (:text f))))
+          (finally (pg/close! st)))))))
+
+(deftest take-leases-the-oldest-and-hands-a-lapsed-lease-out-again
+  (let [id (pull-link-id!)
+        st (:storage *eng*)
+        t0 (.minusSeconds (java.time.Instant/now) 3600)
+        q! #(pf/enqueue! st {:link-id id :text %1 :now %2})]
+    (q! "first" t0)
+    (q! "second" (.plusSeconds t0 1))
+    (is (= "first" (:text (pf/take! st id (.plusSeconds t0 10)))))
+    (is (= "second" (:text (pf/take! st id (.plusSeconds t0 11)))))
+    (is (nil? (pf/take! st id (.plusSeconds t0 12))) "both are leased")
+    (is (= "first" (:text (pf/take! st id (.plusSeconds t0 (+ 10 pf/lease-seconds)))))
+        "a lease run out is handed out again")))
+
+(deftest an-answer-lands-on-the-link-and-on-its-schedule
+  (let [id (pull-link-id!)
+        landed (atom nil)
+        {:keys [queued]} (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                        {:kind "schedule" :id "s-answer"})]
+    (with-redefs [sch/land-pull-answer! (fn [_eng sid answer _at runner]
+                                          (reset! landed [sid answer runner]))]
+      (is (= queued (:id (rl/answer-fire! *eng* queued {:started "https://run/1"})))))
+    (is (= ["s-answer" {:started "https://run/1"} id] @landed))
+    (is (some? (get-in (row-of id) [:data :last_fired_at])) "the link stamped the run")
+    (is (empty? (pf/pending (:storage *eng*) id)) "the fire left the queue")
+    (is (nil? (rl/answer-fire! *eng* queued {:started nil})) "a second answer finds none")))
+
+(deftest a-fire-a-day-old-is-dropped-as-missed
+  (let [id (pull-link-id!)
+        missed (atom [])]
+    (pf/enqueue! (:storage *eng*) {:link-id id :for-kind "schedule" :for-id "s-missed"
+                                   :text "late"
+                                   :now (.minusSeconds (java.time.Instant/now) 90000)})
+    (with-redefs [sch/miss! (fn [_eng sid _sentence] (swap! missed conj sid))]
+      (is (nil? (rl/take-fire! *eng* id))))
+    (is (= ["s-missed"] @missed))))
+
+(deftest a-pull-link-no-localfire-polled-reads-waiting
+  (let [pull (pull-link-id!)
+        cloud (link-id!)
+        n (atom 0)
+        now (java.time.Instant/now)]
+    (is (= "no localfire has polled this link" (rl/waiting-reason *eng* (row-of pull) now)))
+    (is (nil? (rl/waiting-reason *eng* (row-of cloud) now)) "a push link is untouched")
+    (testing "a pool [pull, cloud] with prefer falls to the cloud link"
+      (is (= cloud (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                           [pull cloud] nil "prefer"))))
+      (is (= 1 @n))
+      (is (empty? (pf/pending (:storage *eng*) pull))))
+    (testing "once a localfire polls, the pull link holds the fire"
+      (pf/poll! (:storage *eng*) pull now)
+      (is (nil? (rl/waiting-reason *eng* (row-of pull) now)))
+      (let [out (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                               [pull cloud] "go" "prefer")]
+        (is (= pull (:runner out)))
+        (is (string? (get-in out [:answer :queued])))
+        (is (= 1 @n) "nothing was posted")))))
 
 (deftest a-least-used-pool-keeps-its-rule-when-named
   (let [a (link-id!) b (link-id!)]
