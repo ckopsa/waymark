@@ -42,6 +42,7 @@
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.grants :as grants]
+            [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
 
 ;; ── the pre-sugar spelling of approval_request ──────────────────────
@@ -182,8 +183,8 @@
    :on-create (fn [row _ctx] row)
    :actions
    {:approve {:from #{:offered} :to :approved
-              :guards [grants/someone-else-decides grants/grant-still-accepting
-                       grants/seat-has-one-sitter]
+              :guards [grants/someone-else-decides roles/a-manager
+                       grants/grant-still-accepting grants/seat-has-one-sitter]
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The requester's grant gains exactly the scope shown, immediately."}
               :handler grants/stamp-approver
@@ -325,7 +326,12 @@
   ;; ask's scope entry with `until` states `because`, parses, and ends
   ;; at most 30 days ahead. Re-pinned from the bench's run 38276641700,
   ;; where this assertion alone failed.
-  "c69e809d89eba1426a7b3770979bf0d966d9704a5dd21771975276228cfb811e")
+  ;;
+  ;; THE LAW MOVED AGAIN (ticket 40d9c53b, epic 46831b3c R-3.2):
+  ;; approve gained roles/a-manager — widening authority is a
+  ;; manager's; deny is unchanged. Re-pinned from the bench's run
+  ;; 38853987049, where this assertion alone failed.
+  "8799b1d8ad84a8059b4b940ee00dd312301910a6483f4b52abbb3dedbe44360a")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

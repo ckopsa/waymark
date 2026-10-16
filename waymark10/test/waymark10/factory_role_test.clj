@@ -3,8 +3,11 @@
   registered once, and `roles/a-manager` passes every person while the
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
-  role it wants. Only a manager walks `set_factory_role`. In memory."
+  role it wants. Only a manager walks `set_factory_role`, and only a
+  manager approves an approval_request (ticket 40d9c53b); deny stays
+  open to any decider. In memory."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.fixtures :as fx]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -91,3 +94,39 @@
         (is (= ["manager"] (roles-of eng "mara")))))
     (testing "a person with no member row and no role is refused"
       (is (some? (refusal #(set-role! eng "stranger" "cole" nil)))))))
+
+(defn- ask! [eng who]
+  (str (:id (:row (inv/create! eng :approval_request
+                               {:task "Accept the week's meals."
+                                :scope [{:kind "meal" :actions ["accept"]}]}
+                               {:principal (t/principal
+                                            {:id who :type :agent
+                                             :display who})})))))
+
+(defn- state-of [result] (some-> result :row :state name))
+
+(deftest only-a-manager-approves-an-ask
+  (let [eng (engine/engine {:storage (memory/storage) :resources [fx/meal]})]
+    (roles/ensure-factory-roles! eng)
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "a contributor is refused at approve, and the refusal names the role"
+      (let [id (ask! eng "agent-a")
+            r (refusal #(inv/invoke! eng :approval_request id :approve nil
+                                     (as "cole")))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))))
+    (testing "a manager approves"
+      (let [id (ask! eng "agent-b")]
+        (is (= "approved" (state-of (inv/invoke! eng :approval_request id
+                                                 :approve nil (as "mara")))))))
+    (testing "deny is unchanged: a contributor still says no"
+      (let [id (ask! eng "agent-c")]
+        (is (= "denied" (state-of (inv/invoke! eng :approval_request id
+                                               :deny {:note "not this week"}
+                                               (as "cole")))))))))
