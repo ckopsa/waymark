@@ -247,7 +247,9 @@
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
 
-(defn- seat! [eng who seat-name scope]
+(defn- seat!
+  "Open a seat as `who`: a person's id, or a ctx such as `delegate`'s."
+  [eng who seat-name scope]
   (:row (inv/create! eng :seat
                      {:name seat-name
                       :charter "Decide what this errand asks of the house."
@@ -256,7 +258,7 @@
                       :cadence_seconds 3600
                       :budget_usd_per_week 5M
                       :sitting_budget_tokens 60000}
-                     (as who))))
+                     (if (map? who) who (as who)))))
 
 (defn- seat-row [eng id]
   (let [rdef (get (inv/resources eng) :seat)]
@@ -278,13 +280,17 @@
 
 (defn- own-seat!
   "Record `owner` on the seat, behind the doors — the field is written
-  at birth by a delegating seat, never typed."
+  at birth, never typed. A nil owner strips it: a seat opened before
+  people's seats recorded one."
   [eng id owner]
   (store/with-tx (:storage eng)
     (fn [tx]
       (let [raw (store/load-row (:storage eng) tx :seat (str id) {})]
         (store/save-row! (:storage eng) tx :seat
-                         (assoc-in raw [:data :owner] owner) (:version raw))))))
+                         (if (some? owner)
+                           (assoc-in raw [:data :owner] owner)
+                           (update raw :data dissoc :owner))
+                         (:version raw))))))
 
 (def ^:private inside [{:kind "model" :actions ["retire"]}])
 (def ^:private past (conj inside {:kind "member" :actions ["set_factory_role"]}))
@@ -314,8 +320,31 @@
         (is (nil? (refusal #(restate-seat! eng "mara" (:id s) past))))))
     (testing "a seat with no owner restates as before"
       (let [s (seat! eng "mara" "unowned" inside)]
+        (own-seat! eng (:id s) nil)
         (is (nil? (get-in (seat-row eng (:id s)) [:data :owner])))
         (is (nil? (refusal #(restate-seat! eng "cole" (:id s) past))))))))
+
+(deftest a-seat-a-person-opens-records-that-person-as-its-owner
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (testing "a person who opens a seat in person is its owner"
+      (let [s (seat! eng "cole" "cole-own" inside)]
+        (is (= "cole" (get-in (seat-row eng (:id s)) [:data :owner])))
+        (testing "and a widening restate is judged against them"
+          (let [r (refusal #(restate-seat! eng "mara" (:id s) past))]
+            (is (re-find #"cole may not walk" (pr-str r)) (pr-str r))))))
+    (testing "a delegate's seat is owned by the person it acts for"
+      (let [s (seat! eng (delegate "cole") "cole-delegated" inside)]
+        (is (= "cole" (get-in (seat-row eng (:id s)) [:data :owner])))
+        (let [r (refusal #(restate-seat! eng "mara" (:id s) past))]
+          (is (re-find #"cole may not walk" (pr-str r)) (pr-str r))))
+      (testing "and its create is judged against that person"
+        (let [r (refusal #(seat! eng (delegate "cole") "cole-delegated-past" past))]
+          (is (re-find #"cole may not walk" (pr-str r)) (pr-str r)))))
+    (testing "a manager's own seat is the manager's, and widens"
+      (let [s (seat! eng "mara" "mara-own" inside)]
+        (is (= "mara" (get-in (seat-row eng (:id s)) [:data :owner])))
+        (is (nil? (refusal #(restate-seat! eng "mara" (:id s) past))))))))
 
 (deftest wiring-a-manager-onto-a-door-narrows-a-contributor
   (let [eng (eng! [gadget])]
