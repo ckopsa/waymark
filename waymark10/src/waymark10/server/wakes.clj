@@ -715,7 +715,8 @@
   sentence (`wall-mark`), so a person reading the schedule row can see
   why the seat stayed quiet. The first fire that goes out takes
   `halted` off (`stamp-fired!`). One maintenance write, for
-  `write-pending!`'s reason."
+  `write-pending!`'s reason, and the seat marked halted
+  (`seats/seat-halt-at-the-wall!`), once across repeated holds."
   [eng schedule-row seat-row ^Instant at]
   (store/with-tx (:storage eng)
     (fn [tx]
@@ -725,6 +726,10 @@
                                  :last_halted_wake (str at)
                                  :halted (wall-mark eng seat-row at))
                           (:next-flip-at schedule-row))))
+  ;; … and the seat itself, once: a seat whose wakes are all held
+  ;; never reaches the router's wall, so the hold says it there too
+  (seats/seat-halt-at-the-wall! eng (:id seat-row)
+                                (:detail (wall-mark eng seat-row at)))
   nil)
 
 (defn- stamp-withheld!
