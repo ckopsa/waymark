@@ -277,8 +277,11 @@
         ;; …and (ticket ce9fdb99) the quests it accepted itself, by
         ;; :owner, with the invitations and walkthroughs it is one side
         ;; of, by :author and :subject
+        ;; …and (ticket 9602aac5) the runner links and accounts it
+        ;; owns, by :owner
         (is (= ["approval_request"
                 "grant" "held_call" "invitation" "job" "quest"
+                "runner_link" "runner_provider"
                 "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))

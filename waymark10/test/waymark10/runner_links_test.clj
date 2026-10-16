@@ -10,6 +10,7 @@
             [next.jdbc :as jdbc]
             [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.pull-fires :as pf]
@@ -131,6 +132,33 @@
   [answer]
   (reify sch/Provider
     (fire [_ _link _text] answer)))
+
+(deftest a-delegate-reaches-its-persons-own-link-and-no-other
+  ;; ticket 9602aac5: the link's own-surface opts in with :delegates, so
+  ;; a tool a person signed in to reaches what that person owns
+  (let [dana (t/principal {:id "dana" :display "Dana"})
+        tool (assoc (t/principal {:id "tool:dana" :type :agent
+                                  :display "Dana's tool"})
+                    :acts-for "dana")
+        mine (str (:id (make-link! tool)))
+        theirs (str (:id (make-link! colton)))
+        vis (grants/visibility *eng* nil tool)]
+    (testing "the tool's link is stamped as its person's"
+      (is (= "dana" (get-in (row-of mine) [:data :owner]))))
+    (testing "the delegate sees its person's link, and not another's"
+      (is ((:row? vis) :runner_link mine))
+      (is (not ((:row? vis) :runner_link theirs)))
+      (let [ids (set ((:ids-of vis) :runner_link))]
+        (is (contains? ids mine))
+        (is (not (contains? ids theirs)))))
+    (testing "restate opens on its person's link alone, and lands"
+      (is ((:action-on? vis) :runner_link :restate mine))
+      (restate! mine {:cap {:runs 3 :window_seconds 3600}} tool)
+      (is (= {:runs 3 :window_seconds 3600}
+             (get-in (row-of mine) [:data :cap]))))
+    (testing "an agent acting for nobody reaches no person's link"
+      (let [bare (grants/visibility *eng* nil clerk)]
+        (is (not ((:row? bare) :runner_link mine)))))))
 
 (deftest a-fire-writes-what-the-provider-answered
   (testing "started stamps the fire and counts the run in the window"

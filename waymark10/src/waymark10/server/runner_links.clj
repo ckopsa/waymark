@@ -296,6 +296,11 @@
    :create-guards [a-person-makes-the-link the-engine-writes-the-seed
                    a-pull-link-has-no-url]
    :on-create owned-at-birth
+   ;; the person who made a link reaches it with no grant naming the
+   ;; kind, and so does the tool they signed in to: owned-at-birth
+   ;; stamps the person a tool acts for, so the delegate opts in.
+   ;; The token stays write-only; a manager's grant still sees all
+   :own-surface {:by :owner :delegates true :actions #{:restate}}
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -463,6 +468,9 @@
    ;; the account spends money: only a manager changes it (R-3.2)
    :create-guards [the-engine-seeds-the-provider roles/a-manager]
    :on-create owned-at-birth
+   ;; the account's owner, and the tool they signed in to, see it; its
+   ;; restate stays a manager's, so the own-surface confers no door
+   :own-surface {:by :owner :delegates true}
    :actions
    {:restate
     {:from #{:live} :to :live

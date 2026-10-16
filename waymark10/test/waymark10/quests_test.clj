@@ -2131,6 +2131,14 @@
                                                     java.time.temporal.ChronoUnit/SECONDS))}
                                      {:principal person})))
                       :opens "cancel"}
+   ;; its owner's door is restate (ticket 9602aac5); runner_provider
+   ;; confers none, its restate being a manager's
+   :runner_link {:make (fn [eng _c _worn]
+                         (:row (inv/create! eng :runner_link
+                                            {:provider "claude_routine"
+                                             :fire_url "https://api.example.test/v1/routines/trig_01/fire"
+                                             :fire_token "sk-routine-first-token-0123456789"}
+                                            {:principal person})))}
    :walk {:make (fn [eng _c _worn]
                   (:row (inv/create! eng :walk
                                      {:followed "colton" :title "My own walk"}

@@ -430,7 +430,10 @@
                    ;; ticket ce9fdb99: and the quests it accepted, by
                    ;; :owner, with the invitations and walkthroughs it
                    ;; is one side of, by :author and :subject
-                   "quest" "invitation" "walkthrough"}
+                   "quest" "invitation" "walkthrough"
+                   ;; ticket 9602aac5: and the runner links and accounts
+                   ;; it owns, by :owner
+                   "runner_link" "runner_provider"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

@@ -1835,7 +1835,7 @@
                  views))
     rmap))
 
-(def ^:private own-surface-keys #{:by :actions :all :grantable})
+(def ^:private own-surface-keys #{:by :actions :all :grantable :delegates})
 
 (defn- normalize-own-surface
   "The own-surface declaration, canonicalized (spec-decision-kind seam
@@ -1870,7 +1870,16 @@
   and would expose every owner's rows. The declaration that says who
   owns a row says whether it may be leashed to anyone else — this used
   to be a second literal in grants.clj naming three app kinds. It is
-  kept only when false, so a kind that says nothing hashes as before."
+  kept only when false, so a kind that says nothing hashes as before.
+
+  :delegates true lets a delegate — an agent the identity gate marked
+  :acts-for, a tool a person signed in to — reach the rows its person
+  owns: a branch names the principal when it names any id the principal
+  OR its person answers to. It is per kind and never global, so the
+  private kinds (self, journal, letter) keep their sight; a kind whose
+  owner is stamped as the person a tool acts for (a runner link) opts
+  in. Kept only when true, the same way :grantable is kept only when
+  false."
   [rmap]
   (if-some [os (:own-surface rmap)]
     (let [kind (:kind rmap)]
@@ -1882,6 +1891,8 @@
                         (vec (sort own-surface-keys)))))
       (when-not (boolean? (:grantable os true))
         (sugar-err kind ":own-surface" ":grantable is true or false"))
+      (when-not (boolean? (:delegates os false))
+        (sugar-err kind ":own-surface" ":delegates is true or false"))
       (when-not (or (:by os) (:all os))
         (sugar-err kind ":own-surface"
                    (str "names neither :by (whose id the row carries) nor "
@@ -1897,7 +1908,8 @@
                (cond-> {:by branches
                         :all (boolean (:all os))
                         :actions (into #{} (map name) (:actions os))}
-                 (false? (:grantable os)) (assoc :grantable false)))))
+                 (false? (:grantable os)) (assoc :grantable false)
+                 (true? (:delegates os)) (assoc :delegates true)))))
     rmap))
 
 (defn normalize-resource

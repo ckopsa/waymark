@@ -190,6 +190,21 @@
           (is (= "amended" (:state (json a))))
           (is (= "First light (amended)" (get-in (json a) [:data :title]))))))))
 
+;; ticket 9602aac5: :delegates is a kind's own opt-in. The journal does
+;; not opt in, so a tool acting for the journal's owner sees none of it.
+(deftest a-delegate-does-not-see-its-persons-journal
+  (let [owner (agent-headers "cairn-delegated")
+        tool (assoc (agent-headers "tool:cairn-delegated")
+                    "x-waymark-acts-for" "cairn-delegated")
+        jid (id-of (req :post "/api/journals"
+                        {:title "Kept" :body "Mine alone." :mood "quiet"}
+                        owner))]
+    (is (= 200 (:status (req :get (str "/api/journals/" jid) owner))))
+    (testing "the row and the listing are both closed to the delegate"
+      (is (= 404 (:status (req :get (str "/api/journals/" jid) tool))))
+      (is (not-any? #(= jid (item-id %))
+                    (items (req :get "/api/journals" tool)))))))
+
 ;; ── 2. THE KEY TEST: a different agent sees NOTHING ─────────────────
 
 (deftest a-foreign-agent-is-locked-out-by-construction
