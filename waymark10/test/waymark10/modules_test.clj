@@ -283,6 +283,10 @@
                ;; …and the question a service asks about a seat's key:
                ;; under the seats' own word, since it opens no sitting
                "/api/-/seats/verify"
+               ;; …and a pull runner link's two doors (pull-mode epic
+               ;; 54360702, piece 1b): its fires, and one fire's answer
+               "/api/-/runner-links/:id/fires"
+               "/api/-/runner-links/:id/fires/:fire"
                ;; the dashboard slot's measure (dashboard measures
                ;; 1/3): one slot's number over its time window
                "/api/dashboard_slots/:id/-/measure"
