@@ -3,12 +3,15 @@
   registered once, and `roles/a-manager` passes every person while the
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
-  role it wants. Only a manager walks `set_factory_role`. A person's
-  effective scope (ticket 228f59e8) is the whole engine for a manager
-  and everything but the `a-manager` doors for anyone else. In memory."
+  role it wants. Only a manager walks `set_factory_role`, and only a
+  manager allows the bench's merge held call (ticket d121729e). A
+  person's effective scope (ticket 228f59e8) is the whole engine for a
+  manager and everything but the `a-manager` doors for anyone else. In
+  memory."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
@@ -109,6 +112,23 @@
         (is (= ["manager"] (roles-of eng "mara")))))
     (testing "a person with no member row and no role is refused"
       (is (some? (refusal #(set-role! eng "stranger" "cole" nil)))))))
+
+;; ── the held merge: only a manager allows it ───────────────────────
+
+(defn- held! [eng tool]
+  (str (:id (:row (inv/create! eng :held_call
+                               {:tool tool
+                                :why "A person decides this call."
+                                :caller "merge-asker"
+                                :input {:number 7}
+                                :forward {:number 7}
+                                :shown "the call"}
+                               {:principal held/engine-actor})))))
+
+(defn- allow! [eng id who]
+  (:state (:row (inv/invoke! eng :held_call id :allow {}
+                             {:principal (t/principal {:id who :display who
+                                                       :roles #{"approver"}})}))))
 
 (deftest a-delegate-is-judged-as-its-person
   ;; ticket b7959730: an agent that acts for a person walks no manager's
@@ -216,6 +236,32 @@
     (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
                  (assoc (as "olive")
                         :if-match (inv/etag :domain (str (:id d)) (:version d))))))
+
+(deftest only-a-manager-allows-a-held-merge
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (testing "a contributor is refused at Allow, and the refusal names the role"
+      (let [id (held! eng "bench__merge")
+            r (refusal #(allow! eng id "cole"))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))))
+    (testing "a manager allows it"
+      (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "mara")))))
+    (testing "the owner allows it"
+      (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "olive")))))
+    (testing "allow on a held call for another tool is unchanged"
+      (is (= :allowed (keyword (allow! eng (held! eng "emila__send") "cole")))))
+    (testing "refuse on a held merge is unchanged"
+      (let [id (held! eng "bench__merge")]
+        (inv/invoke! eng :held_call id :refuse {:reason "Not this one."}
+                     {:principal (t/principal {:id "cole" :display "cole"
+                                               :roles #{"approver"}})})))))
+
+(deftest with-no-owner-a-contributor-allows-a-held-merge
+  (let [eng (eng!)]
+    (factory! eng)
+    (member! eng "cole" ["contributor"])
+    (is (= :allowed (keyword (allow! eng (held! eng "bench__merge") "cole"))))))
 
 (deftest a-managers-scope-is-the-whole-engine
   (let [eng (eng!)]
