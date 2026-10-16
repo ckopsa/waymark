@@ -109,16 +109,21 @@
   "Does the ctx's principal pass as a manager? A person passes when the
   factory domain has no owner (the engine as it was before the role),
   when it is that owner, or when its own member row holds `manager` —
-  read from the ROW, never the token. Agents and the engine's own
-  actors are not judged here: they keep their grant rules. A ctx with
-  no read hooks (the render probe) passes."
+  read from the ROW, never the token. An agent that acts for a person
+  (a delegate, marked :acts-for) is judged as that person: it may walk
+  no manager's door its person may not. Any other agent (a seat
+  sitting) and the engine's own actors are not judged here: they keep
+  their grant rules. A ctx with no read hooks (the render probe)
+  passes."
   [ctx]
   (let [p (:principal ctx)
-        pid (some-> (:id p) str not-empty)
+        delegate (when (= :agent (:type p))
+                   (some-> (:acts-for p) str not-empty))
+        pid (or delegate (some-> (:id p) str not-empty))
         read' (:read ctx)
         find' (:find ctx)]
     (cond
-      (contains? #{:agent :system} (:type p)) true
+      (and (contains? #{:agent :system} (:type p)) (nil? delegate)) true
       (or (nil? read') (nil? find')) true
       :else
       (let [owner (some-> (first (find' :domain {:name factory-domain} {:limit 1}))
@@ -167,7 +172,8 @@
   {:kind :actions} for every kind this engine serves. A manager (as
   `a-manager` judges them, so every person while the factory domain
   has no owner) gets every action; anyone else gets every action but
-  the doors `a-manager` guards. Derived from the declarations, never
+  the doors `a-manager` guards. A delegate's scope is its person's,
+  by the same rule. Derived from the declarations, never
   a kept list: wiring `a-manager` onto a door narrows a contributor's
   scope by itself. Dotted powers are not here — a person holds those
   as granted."
