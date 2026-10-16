@@ -57,6 +57,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.roles :as roles]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Duration Instant ZoneOffset)
@@ -1035,7 +1036,10 @@
    :policy own-policy-fields
    :policy-order policy-order
    :engine engine-fields
+   ;; which repositories the house works and which checks it wants are
+   ;; a manager's to say (R-3.2): create, restate, retire and restore
    :create-guards [a-person-or-their-delegate-states-the-policy
+                   roles/a-manager
                    the-house-merges-only-what-a-check-tested
                    the-test-selection-pattern-compiles
                    the-hosted-workflows-are-workflow-paths]
@@ -1045,6 +1049,7 @@
    :actions
    {:restate
     {:guards [a-person-or-their-delegate-states-the-policy
+              roles/a-manager
               the-house-merges-only-what-a-check-tested
               the-test-selection-pattern-compiles
               the-hosted-workflows-are-workflow-paths
@@ -1067,7 +1072,7 @@
                :description "State what submit means in this repository again, whole"}}
 
     :retire
-    {:guards [a-person-or-their-delegate-states-the-policy]
+    {:guards [a-person-or-their-delegate-states-the-policy roles/a-manager]
      :handler unenrol-the-repository
      :safety {:idempotent true :reversible true :confirm true
               :consequence "The bench stops working this repository: a submit reads no policy and refuses. Nothing is deleted, and one tap brings it back."}
@@ -1075,7 +1080,7 @@
                :description "Put this policy away — the house does not work this repository now"}}
 
     :restore
-    {:guards [a-person-or-their-delegate-states-the-policy]
+    {:guards [a-person-or-their-delegate-states-the-policy roles/a-manager]
      :handler enrol-the-repository-again
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 2
