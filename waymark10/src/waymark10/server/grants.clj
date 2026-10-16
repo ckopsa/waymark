@@ -2166,10 +2166,16 @@
   member row id is the reader's as surely as one addressed by the
   principal id, and the feed and the open guard already say so. The
   cost is one member read per collection request, and one query per
-  spelling per branch (at most a handful)."
-  [eng kind os pid]
+  spelling per branch (at most a handful).
+
+  `person` is the one a delegate acts for, or nil. A kind whose
+  own-surface says :delegates true asks for that person's spellings
+  too; every other kind never reads it."
+  [eng kind os pid person]
   (when-not (:all os)
-    (let [pids (set (members/spellings-of eng pid))
+    (let [pids (cond-> (set (members/spellings-of eng pid))
+                 (and (:delegates os) person)
+                 (into (members/spellings-of eng person)))
           ids (store/with-tx
                 (:storage eng)
                 (fn [tx]
@@ -2659,6 +2665,16 @@
         ;; every id the principal answers to (waymark-27j), read once
         ;; and only when a row GET actually asks
         spellings (delay (set (members/spellings-of eng pid)))
+        ;; the person a delegate acts for (oidc.clj's :acts-for), and
+        ;; every id that person answers to — read only for a kind whose
+        ;; own-surface opts in with :delegates true. The private kinds
+        ;; (self, journal, letter) do not, so a tool a person signs in
+        ;; to never reads its person's own private rows
+        person (when (= :agent (:type principal))
+                 (some-> (:acts-for principal) str not-empty))
+        person-spellings (delay (if person
+                                  (set (members/spellings-of eng person))
+                                  #{}))
         own-row? (fn [k id]
                    (when-some [os (own-of k)]
                      (if (:all os)
@@ -2672,8 +2688,10 @@
                        ;; falls out of :row? and 404s like any
                        ;; un-granted one)
                        (when-some [row (load-decoded eng (keyword k) id)]
-                         (boolean (some #(branch-owns? row % @spellings)
-                                        (:by os)))))))
+                         (let [pids (cond-> @spellings
+                                      (:delegates os) (into @person-spellings))]
+                           (boolean (some #(branch-owns? row % pids)
+                                          (:by os))))))))
         ;; the two closures the GUARD-side of the leash consults
         ;; (waymark-sfe) are bound here rather than only in the map
         ;; below, because `:grant` — the guard's-eye view of the
@@ -2860,7 +2878,7 @@
                    ;; query, unioned. nil (the :all posture) is
                    ;; unrestricted — the whole registry lists
                    (when-some [os (own-of k)]
-                     (own-ids eng (keyword k) os pid)))))})))
+                     (own-ids eng (keyword k) os pid person)))))})))
 
 (defn- sitting-grant
   "The grant the sitting `sitting-id` was opened under, when it still

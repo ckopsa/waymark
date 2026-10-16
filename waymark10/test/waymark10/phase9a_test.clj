@@ -368,8 +368,11 @@
         ;; …and quest, invitation and walkthrough (ticket ce9fdb99):
         ;; the quests it accepted, by :owner, and the steps it is one
         ;; side of, by :author and :subject
+        ;; …and runner_link and runner_provider (ticket 9602aac5): the
+        ;; links and accounts it owns, by :owner
         (is (= ["approval_request"
                 "grant" "held_call" "invitation" "job" "plan" "quest"
+                "runner_link" "runner_provider"
                 "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
