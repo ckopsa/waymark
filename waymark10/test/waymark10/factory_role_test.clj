@@ -1,0 +1,93 @@
+(ns waymark10.factory-role-test
+  "The factory roles (ticket 6f917c11): `manager` and `contributor` are
+  registered once, and `roles/a-manager` passes every person while the
+  factory domain has no owner; with an owner set it passes the owner
+  and a member holding `manager` and refuses a contributor, naming the
+  role it wants. Only a manager walks `set_factory_role`. In memory."
+  (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
+            [waymark10.server.roles :as roles]
+            [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]))
+
+(defn- eng! []
+  (let [eng (engine/engine {:storage (memory/storage) :resources []})]
+    (roles/ensure-factory-roles! eng)
+    eng))
+
+(defn- as [id] {:principal (t/principal {:id id :display id})})
+
+(defn- member! [eng id roles']
+  (:row (inv/create! eng :member
+                     (cond-> {:display id :actor_type "human"}
+                       (seq roles') (assoc :roles roles'))
+                     {:principal members/registrar :id id})))
+
+(defn- rows-of [eng kind where]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit 100}))))
+
+(defn- roles-of [eng id]
+  (let [rdef (get (inv/resources eng) :member)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/load-row (:storage eng) tx :member (str id) {})))
+             (inv/decode-row rdef)
+             :data :roles vec)))
+
+(defn- refusal [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(defn- set-role! [eng who target role]
+  (inv/invoke! eng :member target :set_factory_role {:role role} (as who)))
+
+(defn- factory! [eng]
+  (:row (inv/create! eng :domain {:name "factory"
+                                  :charter "The engine's own work."
+                                  :budget_usd_per_week 40M}
+                     (as "olive"))))
+
+(deftest the-two-roles-are-registered-once
+  (let [eng (eng!)]
+    (roles/ensure-factory-roles! eng)
+    (doseq [r roles/factory-roles]
+      (is (= 1 (count (rows-of eng :role {:name r}))) r))))
+
+(deftest with-no-owner-every-person-is-a-manager
+  (let [eng (eng!)]
+    (factory! eng)
+    (member! eng "olive" nil)
+    (member! eng "cole" ["contributor"])
+    (testing "a contributor walks set_factory_role while no owner is set"
+      (set-role! eng "cole" "olive" "contributor")
+      (is (= ["contributor"] (roles-of eng "olive"))))
+    (testing "agents are not judged: they keep their grant rules"
+      (is (roles/manager? {:principal (t/principal {:id "clerk" :type :agent})
+                           :read (constantly nil) :find (constantly nil)})))))
+
+(deftest with-an-owner-only-a-manager-passes
+  (let [eng (eng!)]
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "the owner passes"
+      (set-role! eng "olive" "cole" "manager")
+      (is (= ["manager"] (roles-of eng "cole"))))
+    (testing "a member holding manager passes, and clears a role"
+      (set-role! eng "mara" "cole" nil)
+      (is (= [] (roles-of eng "cole"))))
+    (testing "a contributor is refused, and the refusal names the role"
+      (set-role! eng "mara" "cole" "contributor")
+      (let [r (refusal #(set-role! eng "cole" "mara" "contributor"))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))
+        (is (= ["manager"] (roles-of eng "mara")))))
+    (testing "a person with no member row and no role is refused"
+      (is (some? (refusal #(set-role! eng "stranger" "cole" nil)))))))
