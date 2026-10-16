@@ -15,6 +15,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
+            [waymark10.server.runner-links :as rl]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -111,8 +112,7 @@
 (defn- state-of [result] (some-> result :row :state name))
 
 (deftest only-a-manager-approves-an-ask
-  (let [eng (engine/engine {:storage (memory/storage) :resources [fx/meal]})]
-    (roles/ensure-factory-roles! eng)
+  (let [eng (eng! [fx/meal])]
     (member! eng "olive" nil)
     (member! eng "mara" ["manager"])
     (member! eng "cole" ["contributor"])
@@ -135,6 +135,46 @@
         (is (= "denied" (state-of (inv/invoke! eng :approval_request id
                                                :deny {:note "not this week"}
                                                (as "cole")))))))))
+
+(deftest only-a-manager-sets-a-provider-cap-or-a-secret
+  ;; ticket 3a5b43b3 (R-3.2): what spends money or holds a credential
+  (let [eng (eng!)]
+    (rl/ensure-providers! eng)
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "the runner provider's cap"
+      (let [cap! (fn [who]
+                   (let [row (rl/provider-row eng "claude_routine")
+                         id (str (:id row))]
+                     (inv/invoke! eng :runner_provider id :restate {:cap nil}
+                                  (assoc (as who)
+                                         :if-match (inv/etag :runner_provider id
+                                                             (:version row))))))]
+        (is (re-find #"`manager` role" (pr-str (refusal #(cap! "cole"))))
+            "a contributor is refused, and the refusal names the role")
+        (is (nil? (refusal #(cap! "mara"))) "a manager passes")))
+    (testing "a secret's create"
+      (is (re-find #"`manager` role"
+                   (pr-str (refusal #(inv/create! eng :secret
+                                                  {:name "cole-token" :value "sk-cole"}
+                                                  (as "cole"))))))
+      (is (empty? (rows-of eng :secret {:name "cole-token"}))))
+    (testing "a secret's replace"
+      (let [s (:row (inv/create! eng :secret {:name "mara-token" :value "sk-mara"}
+                                 (as "mara")))
+            replace! (fn [who v]
+                       (inv/invoke! eng :secret (str (:id s)) :replace {:value v}
+                                    (assoc (as who)
+                                           :if-match (inv/etag :secret (str (:id s))
+                                                               (:version s)))))]
+        (is (some? s) "a manager makes one")
+        (is (re-find #"`manager` role" (pr-str (refusal #(replace! "cole" "sk-cole")))))
+        (is (nil? (refusal #(replace! "mara" "sk-mara-2"))) "a manager passes")))))
 
 ;; ── effective scope ──────────────────────────────────────────────────
 
@@ -181,14 +221,23 @@
       (is (every? #(= #{:kind :actions} (set (keys %)))
                   (roles/effective-scope eng (t/principal {:id "mara" :display "mara"})))))))
 
+(defn- but-manager-doors
+  "The whole engine less the doors `a-manager` guards: the factory
+  role's, a runner provider's (ticket 3a5b43b3), a secret's and an
+  approval_request's approve (ticket 40d9c53b)."
+  [w]
+  (-> w
+      (update "member" disj "set_factory_role")
+      (update "approval_request" disj "approve")
+      (update "runner_provider" disj "create" "restate")
+      (update "secret" disj "create" "replace")))
+
 (deftest a-contributors-scope-drops-only-the-manager-doors
   (let [eng (eng!)]
     (owned-factory! eng)
     (is (contains? (get (whole eng) "member") "set_factory_role"))
     (is (contains? (get (whole eng) "approval_request") "approve"))
-    (is (= (-> (whole eng)
-               (update "member" disj "set_factory_role")
-               (update "approval_request" disj "approve"))
+    (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
 
 (deftest wiring-a-manager-onto-a-door-narrows-a-contributor
@@ -196,7 +245,6 @@
     (owned-factory! eng)
     (is (contains? (get (scope-of eng "mara") "gadget") "shut"))
     (is (= (-> (whole eng)
-               (update "member" disj "set_factory_role")
-               (update "approval_request" disj "approve")
+               but-manager-doors
                (update "gadget" disj "shut"))
            (scope-of eng "cole")))))

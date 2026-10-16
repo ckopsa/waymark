@@ -27,11 +27,20 @@
 
   `runner-provider` (ec7e7bfb) is the account behind every link of one
   provider: its cap counts every fire through any of them, from any
-  seat, and a throttle that names the account holds them all."
+  seat, and a throttle that names the account holds them all.
+
+  A link's `delivery` (pull-mode epic 54360702, piece 1a) is `push`,
+  the default, or `pull`. A pull link has no fire URL: a fire through it
+  is held, sealed, in pull_fires.clj until a localfire takes it
+  (`take-fire!`) and answers it (`answer-fire!`), and while no localfire
+  has polled it within `poll-seconds` it reads waiting
+  (`pull-waiting`), so a pool passes it by."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.pull-fires :as pf]
+            [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
@@ -87,6 +96,16 @@
     (t/allow)
     (t/deny)))
 
+(g/defguard a-pull-link-has-no-url
+  {:judges [:fire_url :delivery]
+   :explain "A push link names the fire URL the engine posts each fire to. A pull link names none: a localfire on the person's machine asks the engine for its fires. Give a fire URL with push, and none with pull."
+   :remedies [:runner_link/create]}
+  [_row inp _ctx]
+  (if (= (= "pull" (some-> (:delivery inp) name))
+         (nil? (some-> (:fire_url inp) str not-empty)))
+    (t/allow)
+    (t/deny)))
+
 (g/defguard the-engine-writes-the-fire
   {:reads [:principal]
    :hide true
@@ -132,11 +151,22 @@
    (into [:enum] providers)])
 
 (def ^:private fire-url-field
-  [:fire_url {:x-display
+  [:fire_url {:optional true
+              :x-display
               {:raw true
                :label "The fire URL"
-               :help "The one endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret."}}
+               :help "The one endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret. A pull link has none."}}
    [:string {:min 1 :max 400}]])
+
+(def ^:private delivery-field
+  [:delivery {:optional true
+              :x-display
+              {:label "How fires reach it"
+
+               :help "push, the default: the engine posts each fire to the fire URL. pull: a localfire asks the engine for its fires over its own outbound connection, and the engine holds them until it does."
+               :choices {"push" "The engine posts each fire to the fire URL."
+                         "pull" "A localfire asks for its fires; the link has no fire URL."}}}
+   [:maybe [:enum "push" "pull"]]])
 
 (def ^:private cap-field
   [:cap {:optional true
@@ -175,6 +205,7 @@
    [:map
     provider-field
     fire-url-field
+    delivery-field
     ;; THE TOKEN IS HELD AS THE SCHEDULE'S IS (R-12.11): never
     ;; rendered, never filterable, and never in a transition's recorded
     ;; inputs — which is why no door here records.
@@ -216,6 +247,7 @@
    [:map
     provider-field
     fire-url-field
+    delivery-field
     [:fire_token {:secret true
                   :x-display
                   {:raw true
@@ -228,7 +260,8 @@
                 :provider #{:eq :in}
                 :seeded_from #{:eq}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
-   :create-guards [a-person-makes-the-link the-engine-writes-the-seed]
+   :create-guards [a-person-makes-the-link the-engine-writes-the-seed
+                   a-pull-link-has-no-url]
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -392,13 +425,14 @@
    :filterable {:state #{:eq :in}
                 :provider #{:eq :in}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
-   :create-guards [the-engine-seeds-the-provider]
+   ;; the account spends money: only a manager changes it (R-3.2)
+   :create-guards [the-engine-seeds-the-provider roles/a-manager]
    :actions
    {:restate
     {:from #{:live} :to :live
      :input [:map cap-field]
      :record true
-     :guards [a-person-sets-the-cap]
+     :guards [a-person-sets-the-cap roles/a-manager]
      :edit {:prefill [:cap] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The account holds the cap this restate says; the one before is not kept."}
@@ -557,6 +591,43 @@
   (boolean (or (= "account" (some-> (:scope answer) name))
                (some->> (:body answer) str (re-find #"(?i)\baccount\b")))))
 
+;; ── a pull link (pull-mode epic 54360702, piece 1a) ─────────────────
+
+(def poll-seconds
+  "How recently a localfire must have polled a pull link for it to fire."
+  60)
+
+(defn- now-of ^Instant [eng]
+  (or (instant-of ((:now-fn eng))) (Instant/now)))
+
+(defn pull?
+  "Is this link one a localfire polls, rather than one the engine posts to?"
+  [row]
+  (= "pull" (some-> (get-in row [:data :delivery]) name)))
+
+(defn- drop-missed!
+  "Drop every held fire a day old, and say on each one's schedule that
+  it was missed."
+  [eng]
+  (doseq [f (pf/sweep! (:storage eng) (.minusSeconds (now-of eng) pf/keep-seconds))
+          :when (= "schedule" (:for_kind f))]
+    (sch/miss! eng (:for_id f)
+               "A fire waited a day on its pull runner link and no localfire took it; it was dropped as missed.")))
+
+(defn- queue-fire!
+  "A fire through a pull link: held, sealed, for a localfire to take.
+  `for` is {:kind :id}, the row it is for, or nil. → {:queued id}."
+  [eng link-row text for]
+  (drop-missed! eng)
+  {:queued (pf/enqueue! (:storage eng)
+                        {:link-id (str (:id link-row))
+                         :for-kind (:kind for)
+                         :for-id (:id for)
+                         :text text
+                         :now (now-of eng)})})
+
+(declare land-on-link!)
+
 (defn fire-link!
   "Fire one run through `link-row` by `provider` (a schedules/Provider),
   with `text`, and write what it answered onto the link: `started`
@@ -567,10 +638,25 @@
 
   A started run also counts in the window of the link's provider row,
   and a throttle that names the account (`account-throttle?`) holds the
-  provider row instead of the link."
-  [eng provider link-row text]
-  (let [answer (sch/fire provider (:data link-row) text)
-        at (or (instant-of ((:now-fn eng))) (Instant/now))
+  provider row instead of the link.
+
+  A pull link (`pull?`) posts nothing: the fire is held for a localfire
+  (`queue-fire!`) and the answer is {:queued id}; what the localfire
+  answers lands later, through `answer-fire!`. `for` names the row the
+  fire is for, {:kind :id}."
+  ([eng provider link-row text] (fire-link! eng provider link-row text nil))
+  ([eng provider link-row text for]
+   (if (pull? link-row)
+     (queue-fire! eng link-row text for)
+     (let [answer (sch/fire provider (:data link-row) text)]
+       (land-on-link! eng link-row answer)
+       answer))))
+
+(defn- land-on-link!
+  "Write on `link-row`, and on its provider row, what one fire
+  answered, as `fire-link!` documents."
+  [eng link-row answer]
+  (let [at (now-of eng)
         account (delay (provider-row eng (get-in link-row [:data :provider])))]
     (cond
       (contains? answer :started)
@@ -595,8 +681,7 @@
       (let [reason (or (not-empty (str (:bad-link answer)))
                        "The provider refused the link.")]
         (act! eng link-row :break
-              {:note (subs reason 0 (min 280 (count reason)))})))
-    answer))
+              {:note (subs reason 0 (min 280 (count reason)))})))))
 
 ;; ── the pool (waymark ticket d16b71bf) ─────────────────────────────
 ;; A model or a schedule names `runners`, an ordered list of link ids.
@@ -676,6 +761,23 @@
               {:retry_after (str (sch/retry-instant at (:throttled answer)
                                                     (:body answer)))})))))
 
+(defn pull-waiting
+  "For a pull link no localfire has polled within `poll-seconds` of
+  `at`: the instant to look again. nil when one has, and for a push link."
+  [eng row ^Instant at]
+  (when (pull? row)
+    (let [polled (pf/last-poll (:storage eng) (str (:id row)))]
+      (when (or (nil? polled)
+                (.isBefore polled (.minusSeconds at poll-seconds)))
+        (.plusSeconds at poll-seconds)))))
+
+(defn waiting-reason
+  "Why `row` reads waiting at `at` beyond its own retry and cap: for a
+  pull link no localfire has polled, the sentence that says so; else nil."
+  [eng row ^Instant at]
+  (when (pull-waiting eng row at)
+    "no localfire has polled this link"))
+
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
 
@@ -692,19 +794,26 @@
   through; else {:retry-at instant}, the earliest instant a live link
   of the pool is free again — nil when none will be (every link
   broken, retired or missing) — with `:transient`, the provider's
-  sentence, when a link answered a transient refusal."
-  [eng provider-of ids text & [order]]
+  sentence, when a link answered a transient refusal.
+
+  A pull link that is waiting (`pull-waiting`) is skipped as any
+  waiting link is; one a localfire polls holds the fire, answering
+  {:queued id}, which counts as the run the pool went out on. `for`
+  ({:kind :id}) names the row the fire is for."
+  [eng provider-of ids text & [order for]]
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
         pool (keep (links-by-id eng) (map str ids))
         transient (volatile! nil)]
     (or (some (fn [row]
-                (when (nil? (provider-waiting eng row at))
-                  (let [answer (fire-link! eng (provider-of row) row text)]
+                (when (and (nil? (provider-waiting eng row at))
+                           (nil? (pull-waiting eng row at)))
+                  (let [answer (fire-link! eng (provider-of row) row text for)]
                     (when (contains? answer :transient)
                       (vreset! transient
                                (or (not-empty (str (:transient answer)))
                                    "The provider could not start a run.")))
-                    (when (contains? answer :started)
+                    (when (or (contains? answer :started)
+                              (contains? answer :queued))
                       {:runner (str (:id row)) :answer answer}))))
               (pool-order pool at order))
         (let [fresh (links-by-id eng)]
@@ -714,9 +823,36 @@
                           (filter live?)
                           (keep (fn [r]
                                   (some->> [(waiting-until r at)
-                                            (provider-waiting eng r at)]
+                                            (provider-waiting eng r at)
+                                            (pull-waiting eng r at)]
                                            (remove nil?)
                                            seq sort last)))
                           sort
                           first)}
             @transient (assoc :transient @transient))))))
+
+;; ── the two doors piece 1b's routes stand on ─────────────────────────
+
+(defn take-fire!
+  "The oldest fire pull link `link-id` holds that nobody holds now —
+  never handed out, or its lease (pf/lease-seconds) run out — leased to
+  the caller: {:id :text :for_kind :for_id :created_at ...}, the text
+  opened. nil when none waits. Fires a day old are dropped first, as
+  missed."
+  [eng link-id]
+  (drop-missed! eng)
+  (pf/take! (:storage eng) (str link-id) (now-of eng)))
+
+(defn answer-fire!
+  "Land what a localfire answered (the Provider's four words) for the
+  fire `fire-id` it took. The fire leaves the queue; the link and its
+  provider row record the answer as `fire-link!` records a push answer,
+  and the schedule it was for lands it as `sch/fire!` lands one. → the
+  fire, or nil when no such fire waits."
+  [eng fire-id answer]
+  (when-some [f (pf/finish! (:storage eng) (str fire-id))]
+    (when-some [link (get (links-by-id eng) (:link_id f))]
+      (land-on-link! eng link answer))
+    (when (= "schedule" (:for_kind f))
+      (sch/land-pull-answer! eng (:for_id f) answer (now-of eng) (:link_id f)))
+    f))

@@ -23,6 +23,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
@@ -157,7 +158,9 @@
    :sortable {:fields [:name] :default "name"}
    :unique [[:name]]
    :no-own-surface "A secret is a value of the house; only a grant that names the kind shows that one exists."
-   :create-guards [a-person-enters-the-value]
+   ;; a credential is the house's: only a manager makes or fills one
+   ;; (R-3.2), and a person still enters the value
+   :create-guards [a-person-enters-the-value roles/a-manager]
    :on-create born
    :actions
    {:replace
@@ -171,7 +174,7 @@
              note-field]
      ;; NOT :record: this input carries the credential, and a recorded
      ;; action persists its raw inputs into the log.
-     :guards [the-owner-fills-the-value]
+     :guards [the-owner-fills-the-value roles/a-manager]
      :edit {:prefill [:note] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The secret holds the value this replace enters; the old one is not kept."}
