@@ -469,8 +469,8 @@
    :create-guards [the-engine-seeds-the-provider roles/a-manager]
    :on-create owned-at-birth
    ;; the account's owner, and the tool they signed in to, see it; its
-   ;; restate stays a manager's (the guards below judge every knock)
-   :own-surface {:by :owner :delegates true :actions #{:restate}}
+   ;; restate stays a manager's, so the own-surface confers no door
+   :own-surface {:by :owner :delegates true}
    :actions
    {:restate
     {:from #{:live} :to :live
