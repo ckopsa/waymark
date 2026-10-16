@@ -48,6 +48,8 @@
   (case (long status)
     200 {:claude_code_session_id id :claude_code_session_url url}
     400 {:status 400}
+    ;; a person's routine with no live token (R-12.8): the link is broken
+    401 {:status 401}
     429 {:status 429 :retry_after (long (or retry-after 60))}
     {:status 429 :retry_after 60}))
 

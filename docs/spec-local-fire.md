@@ -439,10 +439,10 @@ database, and `serve-localfire`.
 
 ## 12. Requirements: people
 
-This section builds R-6.1, R-6.2, R-6.3 and R-6.7 of the parent spec
-(ticket 46831b3c). Runs under each person's own login and the runner
-link's registration are later tickets; `people/read-token` is the one
-door they open the token through.
+This section builds R-6.1, R-6.2, R-6.3, R-6.4, R-6.6 and R-6.7 of the
+parent spec (ticket 46831b3c). The runner link's registration is a
+later ticket; `people/routine-token` is the one door a run opens the
+token through.
 
 **R-12.1** With an `:oidc` map in the config, localfire signs a person
 in through the Keycloak realm (`:issuer`, client `localfire-claude` by
@@ -459,7 +459,8 @@ before.
 `claude setup-token` (`POST /me/token`). localfire seals it with
 AES-256-GCM under `LOCALFIRE_TOKEN_KEY` — 32 bytes in base64, from the
 environment and nowhere else — with a fresh 12-byte nonce and the
-subject as associated data, and writes it owner-only to
+subject's hash (the file's name) as associated data, and writes it
+owner-only to
 `{tokens-dir}/{sha256(sub)}.sealed`. localfire refuses to start with
 `:oidc` and no such key.
 
@@ -481,6 +482,37 @@ straight from the token endpoint over TLS (OIDC Core 3.1.3.7); its
 store and revoke a token, that the stored bytes are not the token, that
 no page and no log carries it, and that localfire without `:oidc`
 answers these routes 404.
+
+**R-12.7** Each person who stored a token has one routine, named
+`p-{sha256(sub)}`. Its push credential is a bearer of its own,
+`HMAC-SHA256(LOCALFIRE_TOKEN_KEY, "localfire fire " + name)` in
+base64url: nothing more is stored, it survives a restart, a revoke and
+a new token, and it opens no other routine. `LOCALFIRE_TOKEN` does not
+open a person's routine. It runs as the config's `:person-routine`
+(`{:model "opus"}` unless said).
+
+**R-12.8** A fire for a person's routine runs with that person's token
+in `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CONFIG_DIR` set to
+`{runs-dir}/{id}/home/.claude`, in the run's environment only;
+`ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from what it
+inherits, so the machine's own login never stands in, and the
+machine's credential check (R-4.6) does not hold it back. A person with
+no stored token, or a revoked one, has no live routine: the fire
+answers 401 (a pulled one posts status 401), so the engine marks the
+link broken and that person's seats wait.
+
+**R-12.9** A person's run that fails saying the usage limit was
+reached holds that routine's fires at 429 until it resets: the
+Retry-After is the seconds to the reset the CLI names
+(`…limit reached|{epoch}`), or an hour when it names none.
+
+**R-12.10** `/me` lists the person's routine, its fire URL and its
+bearer, so the runner link's registration can use them.
+
+**R-12.11** `localfire.people-test` shows two persons' fires run with
+their own token and config directory (the fake spawner sees the
+environment), a revoked token answers 401, and no Claude token appears
+in a log, a page or a run record.
 
 ## 13. Requirements: pull
 

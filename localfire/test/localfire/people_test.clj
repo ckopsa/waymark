@@ -7,11 +7,14 @@
   What this suite proves is R-12.6: a signed-in person stores and
   revokes a token, the stored bytes are not the token, no page and no
   log carries it, and without `:oidc` the routes are not there."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [jsonista.core :as json]
             [localfire.config :as config]
             [localfire.page :as page]
             [localfire.people :as people]
+            [localfire.runs :as runs]
             [localfire.server :as server]
             [localfire.server-test :as w])
   (:import [java.io File StringWriter]
@@ -40,8 +43,9 @@
 (defn- world
   "A server with a fake spawner and a fake realm, which answers the
   claims for `good-code` and nothing for any other code."
-  [{:keys [oidc?]}]
-  (let [port   (w/free-port)
+  [{:keys [oidc? stdout exit]}]
+  (let [calls  (atom [])
+        port   (w/free-port)
         runs   (w/tmpdir "lf-runs")
         tokens (w/tmpdir "lf-tokens")
         codes  (atom [])
@@ -52,13 +56,13 @@
         st     (server/start!
                 {:config  cfg
                  :token   "the-token"
-                 :spawner (w/fake-spawner {:calls (atom [])})
+                 :spawner (w/fake-spawner {:calls calls :stdout stdout :exit exit})
                  :closer  (w/fake-closer (atom []))
                  :sign-in {:key      the-key
                            :exchange (fn [code verifier]
                                        (swap! codes conj [code verifier])
                                        (when (= code "good-code") {"sub" subject}))}})]
-    (assoc st :base (str "http://127.0.0.1:" port) :tokens tokens :codes codes)))
+    (assoc st :base (str "http://127.0.0.1:" port) :tokens tokens :codes codes :calls calls)))
 
 ;; ── a browser that follows nothing ───────────────────────────────────
 
@@ -240,3 +244,91 @@
   (let [sealed (people/seal the-key "sam" claude-token)]
     (is (= claude-token (people/unseal the-key "sam" sealed)))
     (is (thrown? javax.crypto.AEADBadTagException (people/unseal the-key "alex" sealed)))))
+
+;; ── a person's routine (R-12.7 to R-12.11) ──────────────────────────
+
+(def alex "alex-subject-2")
+(def alex-token "sk-ant-oat01-ALEX-OWN-TOKEN-9876543210")
+
+(defn- fire! [w nm bearer]
+  (w/POST (str (:base w) "/fire/" nm) bearer "{\"text\":\"go\"}"))
+
+(defn- env-of
+  "The environment the spawner saw for the run a 200 started."
+  [w resp]
+  (let [id (get-in resp [:json :claude_code_session_id])]
+    (some (fn [c] (when (some #{id} (:argv c)) (:env c))) @(:calls w))))
+
+(deftest each-persons-fires-run-under-their-own-token-and-config
+  (let [w       (world {:oidc? true})
+        p       (:people w)
+        sam-nm  (people/routine-name subject)
+        alex-nm (people/routine-name alex)]
+    (try
+      (people/store-token! p subject claude-token)
+      (people/store-token! p alex alex-token)
+      (let [[r logs]
+            (capture
+             #(let [sam   (fire! w sam-nm (people/fire-token p sam-nm))
+                    al    (fire! w alex-nm (people/fire-token p alex-nm))
+                    _     (w/wait-for (fn [] (= 2 (count @(:calls w)))))
+                    cross (fire! w sam-nm (people/fire-token p alex-nm))
+                    mach  (fire! w sam-nm "the-token")
+                    _     (people/revoke-token! p alex)
+                    gone  (fire! w alex-nm (people/fire-token p alex-nm))
+                    me    (req :get (str (:base w) "/me") {:cookie (:cookie (sign-in! w))})]
+                {:sam sam :al al :cross cross :mach mach :gone gone :me me}))
+            {:keys [sam al cross mach gone me]} r
+            runs-dir (get-in w [:config :runs-dir])
+            sam-env  (env-of w sam)
+            al-env   (env-of w al)]
+        (testing "each person's fire runs with their own token and a config directory of its own (R-12.8)"
+          (is (= [200 200] [(:status sam) (:status al)]))
+          (is (= claude-token (get sam-env "CLAUDE_CODE_OAUTH_TOKEN")))
+          (is (= alex-token (get al-env "CLAUDE_CODE_OAUTH_TOKEN")))
+          (is (= (.getPath (runs/claude-config-dir runs-dir (get-in sam [:json :claude_code_session_id])))
+                 (get sam-env "CLAUDE_CONFIG_DIR")))
+          (is (some? (get al-env "CLAUDE_CONFIG_DIR")))
+          (is (not= (get sam-env "CLAUDE_CONFIG_DIR") (get al-env "CLAUDE_CONFIG_DIR")))
+          (is (and (contains? sam-env "ANTHROPIC_API_KEY") (nil? (get sam-env "ANTHROPIC_API_KEY")))
+              "the machine's own key is dropped, not inherited"))
+        (testing "a person's routine takes its own bearer and no other (R-12.7)"
+          (is (= 401 (:status cross)))
+          (is (= 401 (:status mach))))
+        (testing "a revoked token is no live routine (R-12.8)"
+          (is (= 401 (:status gone))))
+        (testing "the person's page lists the routine and its credential (R-12.10)"
+          (is (str/includes? (str (:body me)) (str (:base w) "/fire/" sam-nm)))
+          (is (str/includes? (str (:body me)) (people/fire-token p sam-nm))))
+        (testing "no token in a log, a page or a run record (R-12.11)"
+          (doseq [t [claude-token alex-token]]
+            (is (not (str/includes? logs t)))
+            (doseq [x [sam al cross mach gone me]]
+              (is (not (str/includes? (str (:body x)) t))))
+            (doseq [^File f (file-seq (io/file runs-dir)) :when (.isFile f)]
+              (is (not (str/includes? (slurp f) t)) (str f))))))
+      (finally (server/stop! w)))))
+
+(deftest a-person-whose-usage-ran-out-waits-for-the-reset
+  (let [reset (+ (quot (System/currentTimeMillis) 1000) 7200)
+        w     (world {:oidc? true :exit 1
+                      :stdout (json/write-value-as-string
+                               {"type" "result" "is_error" true
+                                "result" (str "Claude AI usage limit reached|" reset)})})
+        p     (:people w)
+        nm    (people/routine-name subject)]
+    (try
+      (people/store-token! p subject claude-token)
+      (let [one (fire! w nm (people/fire-token p nm))
+            _   (w/wait-for #(get @(:exhausted w) nm))
+            two (fire! w nm (people/fire-token p nm))]
+        (is (= 200 (:status one)))
+        (is (= 429 (:status two)))
+        (is (<= 7000 (Long/parseLong (str (:retry-after two))) 7200))
+        (is (= 1 (count @(:calls w))) "no run starts until the reset"))
+      (finally (server/stop! w)))))
+
+(deftest the-cli-usage-sentence-is-read
+  (is (= 3600 (server/usage-exhausted "You've hit your usage limit." 0)))
+  (is (= 100 (server/usage-exhausted "Claude AI usage limit reached|1760000100" 1760000000000)))
+  (is (nil? (server/usage-exhausted "Error: something else" 0))))

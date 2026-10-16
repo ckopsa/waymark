@@ -72,6 +72,14 @@
           (MessageDigest/isEqual (.getBytes ^String p StandardCharsets/UTF_8)
                                  (.getBytes ^String t StandardCharsets/UTF_8))))))
 
+(defn- fire-token-ok?
+  "A person's routine takes its own bearer and no other, the server's
+  included; every other routine takes the server's (R-12.7)."
+  [state nm req]
+  (if (people/person-routine? nm)
+    (token-ok? (assoc state :token (some-> (:people state) (people/fire-token nm))) req)
+    (token-ok? state req)))
+
 ;; ── the run cap (R-5.1) ─────────────────────────────────────────────
 
 (defn- claim!
@@ -129,6 +137,30 @@
   so the Waymark tools load up front and no ToolSearch is needed."
   {"ENABLE_TOOL_SEARCH" "false"})
 
+(defn person-env
+  "A person's run (R-12.8): run-env, their own token, and a config
+  directory of the run's own, so two persons' runs share no login and
+  no config. A nil drops the variable from the inherited environment,
+  so the machine's own login never stands in."
+  [runs-dir id claude-token]
+  (assoc run-env
+         "CLAUDE_CODE_OAUTH_TOKEN" claude-token
+         "CLAUDE_CONFIG_DIR"       (.getPath (runs/claude-config-dir runs-dir id))
+         "ANTHROPIC_API_KEY"       nil
+         "ANTHROPIC_AUTH_TOKEN"    nil))
+
+(defn usage-exhausted
+  "R-12.9: whether a failed run's output says the person's Claude usage
+  ran out → the seconds until it resets, where the CLI names the time
+  (`…limit reached|<epoch seconds>`), an hour where it does not, or nil
+  for a run that failed for another reason."
+  [out now-ms]
+  (let [s (str out)]
+    (when (re-find #"(?i)usage limit|limit reached" s)
+      (if-let [[_ epoch] (re-find #"\|(\d{10})\b" s)]
+        (max 1 (- (Long/parseLong epoch) (quot (long now-ms) 1000)))
+        3600))))
+
 (defn- log-run!
   "One line per fire (R-7.3): the routine, the run, the status. Not the
   token, not the argument vector, not the text."
@@ -169,9 +201,12 @@
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
         hook     (runs/hook-file runs-dir id)
+        ;; a person's run kept its transcript under its own config (§12)
+        own      (runs/claude-config-dir runs-dir id)
+        home     (if (.isDirectory own) (.getParentFile own) (claude-home cfg))
         input    (json/write-value-as-string
                   {:session_id      (str id)
-                   :transcript_path (.getPath (runs/transcript-file (claude-home cfg) runs-dir id))})
+                   :transcript_path (.getPath (runs/transcript-file home runs-dir id))})
         {:keys [exit out]}
         (if-not (.isFile hook)
           {:exit nil :out "failed (none): the run's place has no sitting-close.sh"}
@@ -234,21 +269,36 @@
 
 (defn- start-run!
   "R-5.2: the run goes on a thread of its own, after the answer is
-  decided. Whatever happens to it, the routine's slot comes back."
-  [state {:keys [id routine text]}]
-  (let [cfg (:config state)
-        nm  (:name routine)]
+  decided. Whatever happens to it, the routine's slot comes back. A
+  person's run carries their token in its environment only (R-12.8),
+  and one that ran out of usage holds the routine's fires off until it
+  resets (R-12.9)."
+  [state {:keys [id routine text claude-token]}]
+  (let [cfg      (:config state)
+        runs-dir (:runs-dir cfg)
+        nm       (:name routine)]
     (future
       (try
         (let [argv (fire-argv cfg routine id
                               (prompt/compose (:prompt routine) text id))
+              env  (if claude-token
+                     (do (.mkdirs (runs/claude-config-dir runs-dir id))
+                         (person-env runs-dir id claude-token))
+                     run-env)
               rec  (execute-run! state
                                  {:id id
                                   :argv argv
-                                  :env run-env
-                                  :dir (runs/place-dir (:runs-dir cfg) id)
+                                  :env env
+                                  :dir (runs/place-dir runs-dir id)
                                   :max-run-seconds (:max-run-seconds routine)})]
           (log-run! nm id (:status rec))
+          (when (and claude-token (not= :done (:status rec)))
+            (when-let [s (usage-exhausted
+                          (str (runs/slurp-file (runs/stdout-file runs-dir id))
+                               (runs/tail (runs/stderr-file runs-dir id) 4000))
+                          (System/currentTimeMillis))]
+              (swap! (:exhausted state) assoc nm
+                     (+ (System/currentTimeMillis) (* 1000 (long s))))))
           (try (close-sitting! state id "localfire saw the run exit")
                (catch Exception e
                  (binding [*out* *err*]
@@ -493,6 +543,21 @@
 
 ;; ── the routes (R-4.4) ──────────────────────────────────────────────
 
+(defn- routine-of
+  "The routine `nm` names: one in the config, or a person's (§12) when
+  sign-in is on, run as the config's `:person-routine`."
+  [state nm]
+  (or (config/routine (:config state) nm)
+      (when (and (:people state) (people/person-routine? nm))
+        (assoc (get-in state [:config :person-routine]) :name (str nm) :person? true))))
+
+(defn- exhausted-seconds
+  "The seconds until a person's routine's usage resets, or nil."
+  [state nm]
+  (when-let [until (get @(:exhausted state) (str nm))]
+    (let [s (quot (- (long until) (System/currentTimeMillis)) 1000)]
+      (when (pos? s) s))))
+
 (defn fire!
   "One fire's judgment after the bearer (R-5.1) and its start (R-5.2),
   whichever way it came: pushed to `/fire` or pulled from the engine
@@ -502,17 +567,30 @@
   [state nm text-fn]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
-        routine  (config/routine cfg nm)]
+        routine  (routine-of state nm)
+        person?  (:person? routine)
+        claude   (when person? (people/routine-token (:people state) nm))]
     ;; R-5.1: this order, and stop at the first that holds
     (cond
       (nil? routine)
       {:status 404 :detail "No routine of that name is on this server."}
 
+      ;; R-12.8: no stored token, or a revoked one, is no live routine
+      (and person? (nil? claude))
+      {:status 401 :detail "No Claude token is stored for this person's routine."}
+
       (runs/paused? runs-dir nm)
       {:status 400 :detail "The routine is paused on this server."}
 
-      ;; R-4.6: throttled, so the engine's pool falls back until then
-      (not (:ok @(:credential state)))
+      ;; R-12.9: the person's own usage ran out; it resets on its own
+      (and person? (exhausted-seconds state nm))
+      (let [s (exhausted-seconds state nm)]
+        {:status 429 :retry-after s
+         :detail (str "This person's Claude usage is exhausted. Try again after " s " seconds.")})
+
+      ;; R-4.6: throttled, so the engine's pool falls back until then.
+      ;; The machine's credential is not a person's routine's (R-12.8).
+      (and (not person?) (not (:ok @(:credential state))))
       (let [c @(:credential state)
             s (retry-after-seconds c)]
         {:status 429 :retry-after s
@@ -533,7 +611,8 @@
                 ;; engine is about to write onto the row already opens
                 (runs/begin! cfg {:id id :routine nm :model (:model routine)
                                   :fire-text (prompt/redact-key text)})
-                (start-run! state {:id id :routine routine :text text})
+                (start-run! state {:id id :routine routine :text text
+                                   :claude-token claude})
                 {:status 200 :id id :url (config/run-url cfg id)}
                 (catch Throwable t
                   (release! (:running state) nm id)
@@ -541,7 +620,7 @@
                                             (ex-message t))})))))))))
 
 (defn- handle-fire [state nm req]
-  (if-not (token-ok? state req)
+  (if-not (fire-token-ok? state nm req)
     (refusal 401 "The bearer token is not this server's token.")
     (let [{:keys [status id url detail retry-after]}
           (fire! state nm #(let [body (read-json-object req)]
@@ -641,6 +720,7 @@
                :spawner    (or spawner (spawn/process-spawner))
                :closer     (or closer spawn/run-to-end)
                :running    (atom {})
+               :exhausted  (atom {})
                :credential (credential-initial)}
         closing (future
                   (try (close-lost! state)

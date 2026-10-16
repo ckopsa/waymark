@@ -21,7 +21,7 @@
            [java.security MessageDigest SecureRandom]
            [java.time Duration]
            [java.util Base64]
-           [javax.crypto Cipher]
+           [javax.crypto Cipher Mac]
            [javax.crypto.spec GCMParameterSpec SecretKeySpec]))
 
 (def cookie-name "localfire_session")
@@ -97,8 +97,9 @@
 
 (defn seal
   "AES-256-GCM: a fresh 12-byte nonce, then the ciphertext and its tag.
-  The subject is the associated data, so one person's file moved under
-  another's name does not open."
+  The subject's hash — the file's name — is the associated data, so one
+  person's file moved under another's name does not open, and a fire
+  that knows only its routine's name opens its own."
   ^bytes [^bytes k sub ^String plain]
   (let [iv  (random-bytes 12)
         c   (doto (Cipher/getInstance "AES/GCM/NoPadding")
@@ -120,11 +121,16 @@
     (String. ^bytes (.doFinal ^Cipher c sealed 12 (- (alength sealed) 12))
              StandardCharsets/UTF_8)))
 
+(defn- person-hex [sub] (hex (sha256 (utf8 sub))))
+
+(defn- sealed-file ^File [people h]
+  (io/file (get-in people [:oidc :tokens-dir]) (str h ".sealed")))
+
 (defn token-file
   "One file per person, named by the hash of the subject so the
   directory names nobody."
   ^File [people sub]
-  (io/file (get-in people [:oidc :tokens-dir]) (str (hex (sha256 (utf8 sub))) ".sealed")))
+  (sealed-file people (person-hex sub)))
 
 (defn- owner-only! [^File f]
   (doto f
@@ -138,7 +144,7 @@
     (.mkdirs (.getParentFile f))
     (.createNewFile f)
     (owner-only! f)
-    (Files/write (.toPath f) (seal (:key people) sub token) (make-array OpenOption 0))
+    (Files/write (.toPath f) (seal (:key people) (person-hex sub) token) (make-array OpenOption 0))
     nil))
 
 (defn has-token? [people sub]
@@ -148,13 +154,47 @@
   (io/delete-file (token-file people sub) true)
   nil)
 
+;; ── the person's routine (R-12.7, R-12.8) ───────────────────────────
+
+(defn routine-name
+  "The routine a person's fires run as: named, as their file is, by the
+  hash of the subject, so the engine's rows name nobody either."
+  [sub]
+  (str "p-" (person-hex sub)))
+
+(defn- routine-hex [nm]
+  (second (re-matches #"p-([0-9a-f]{64})" (str nm))))
+
+(defn person-routine?
+  "Whether `nm` is spelled as a person's routine."
+  [nm]
+  (some? (routine-hex nm)))
+
+(defn fire-token
+  "The bearer a person's routine takes, and no other routine does: an
+  HMAC of its name under the key, so nothing more is stored and it is
+  the same after a restart, a revoke and a new token."
+  [people nm]
+  (let [mac (doto (Mac/getInstance "HmacSHA256")
+              (.init (SecretKeySpec. ^bytes (:key people) "HmacSHA256")))]
+    (b64url (.doFinal ^Mac mac (utf8 (str "localfire fire " nm))))))
+
+(defn routine-token
+  "The Claude token behind the person's routine `nm`, opened — for a run
+  under their own login, never for a page — or nil when they stored
+  none, revoked it, or its file does not open under the key."
+  [people nm]
+  (when-let [h (routine-hex nm)]
+    (let [f (sealed-file people h)]
+      (when (.isFile f)
+        (try (unseal (:key people) h (Files/readAllBytes (.toPath f)))
+             (catch Exception _ nil))))))
+
 (defn read-token
   "The person's token, opened — for a run under their own login, never
   for a page."
   [people sub]
-  (let [f (token-file people sub)]
-    (when (.isFile f)
-      (unseal (:key people) sub (Files/readAllBytes (.toPath f))))))
+  (routine-token people (routine-name sub)))
 
 ;; ── the realm (R-12.1, R-12.5) ──────────────────────────────────────
 
@@ -293,11 +333,18 @@
   (html 403 (page/problem-page "refused"
                                "This form did not come from your own signed-in page. Open /me and try again.")))
 
-(defn- me [people sess problem]
-  (page/me-page {:sub        (:sub sess)
-                 :has-token? (boolean (and sess (has-token? people (:sub sess))))
-                 :csrf       (:csrf sess)
-                 :problem    problem}))
+(defn- me [people public-url sess problem]
+  (let [sub  (:sub sess)
+        has? (boolean (and sess (has-token? people sub)))
+        nm   (when has? (routine-name sub))]
+    (page/me-page {:sub        sub
+                   :has-token? has?
+                   :csrf       (:csrf sess)
+                   :problem    problem
+                   ;; R-12.10: what the runner link's registration needs
+                   :routine    (when nm {:name  nm
+                                         :url   (str public-url "/fire/" nm)
+                                         :token (fire-token people nm)})})))
 
 (defn handle
   "The sign-in and token routes (R-12.1–R-12.3), or nil for a path
@@ -314,14 +361,14 @@
     (case [method path]
       [:get "/signin"]          (begin-signin people public-url)
       [:get "/signin/callback"] (finish-signin people public-url (parse-form (:query-string req)))
-      [:get "/me"]              (html 200 (me people sess nil))
+      [:get "/me"]              (html 200 (me people public-url sess nil))
 
       [:post "/me/token"]
       (if-not (csrf-ok?)
         (forbidden)
         (let [t (str/trim (str (get @form "token")))]
           (if (or (str/blank? t) (> (count t) max-token-chars))
-            (html 422 (me people sess "That is not a token from claude setup-token. Nothing was stored."))
+            (html 422 (me people public-url sess "That is not a token from claude setup-token. Nothing was stored."))
             (do (store-token! people (:sub sess) t)
                 (redirect "/me")))))
 

@@ -121,7 +121,7 @@
   "The person's own page (§12): sign in, then paste or revoke the
   Claude token. A stored token is never rendered — the page says only
   that one is there (R-12.3)."
-  [{:keys [sub has-token? csrf problem]}]
+  [{:keys [sub has-token? csrf problem routine]}]
   (doc "your Claude token"
        (if-not sub
          (str "<h1>sign in</h1><p><a href=\"/signin\">Sign in</a> to keep your own"
@@ -132,6 +132,12 @@
               "<p><strong>" (esc admin-disclosure) "</strong></p>"
               (if has-token?
                 (str "<p>A token is stored for you. It is not shown again.</p>"
+                     (when routine
+                       (str "<h2>your routine</h2>"
+                            "<p>Your fires run as <code>" (esc (:name routine))
+                            "</code>, under your own token.</p>"
+                            "<p>Fire URL: <code>" (esc (:url routine)) "</code><br>"
+                            "Bearer: <code>" (esc (:token routine)) "</code></p>"))
                      "<form method=\"post\" action=\"/me/revoke\">" (hidden-csrf csrf)
                      "<button>Revoke and delete it</button></form>")
                 (str "<form method=\"post\" action=\"/me/token\">" (hidden-csrf csrf)
