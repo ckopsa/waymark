@@ -142,6 +142,44 @@
     (t/allow)
     (t/deny {:vars {:role manager}})))
 
+(defn- manager-guarded?
+  "Does this guard vector require `a-manager`? An :all recurses, an
+  :any does not: a door a manager OR someone else may walk is not a
+  manager's door."
+  [guards]
+  (boolean (some #(= (:name a-manager) (:name %))
+                 (mapcat g/iter-leaves guards))))
+
+(defn- manager-doors
+  "The action names of one kind whose guards require `a-manager`,
+  its create verbs among them when its create guards do."
+  [rdef]
+  (into #{}
+        (map name)
+        (concat (for [[n a] (:actions rdef)
+                      :when (manager-guarded? (:guards a))]
+                  n)
+                (when (manager-guarded? (:create-guards rdef))
+                  (:create-action-names rdef)))))
+
+(defn effective-scope
+  "A person's effective scope, in a grant scope's shape: one entry
+  {:kind :actions} for every kind this engine serves. A manager (as
+  `a-manager` judges them, so every person while the factory domain
+  has no owner) gets every action; anyone else gets every action but
+  the doors `a-manager` guards. Derived from the declarations, never
+  a kept list: wiring `a-manager` onto a door narrows a contributor's
+  scope by itself. Dotted powers are not here — a person holds those
+  as granted."
+  [eng principal]
+  (let [whole? (manager? (assoc (inv/render-hooks eng) :principal principal))]
+    (->> (inv/resources eng)
+         (sort-by key)
+         (mapv (fn [[kind rdef]]
+                 (let [held (if whole? #{} (manager-doors rdef))]
+                   {:kind (name kind)
+                    :actions (vec (remove held (inv/action-names rdef)))}))))))
+
 (def seed-actor
   "The actor the role seed wears."
   (t/principal {:id "waymark10-roles" :type :system
