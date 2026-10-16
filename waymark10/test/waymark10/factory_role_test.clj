@@ -6,7 +6,8 @@
   role it wants. Only a manager walks `set_factory_role`, and only a
   manager allows the bench's merge held call (ticket d121729e) and
   approves an approval_request (ticket 40d9c53b); deny stays open to
-  any decider. A person's effective scope (ticket 228f59e8) is the
+  any decider. Only a manager pilots, promotes or withdraws a
+  definition, or promotes a judgment (ticket bcb0b2cd). A person's effective scope (ticket 228f59e8) is the
   whole engine for a manager and everything but the `a-manager` doors
   for anyone else. In memory."
   (:require [clojure.string :as str]
@@ -392,11 +393,14 @@
 (defn- but-manager-doors
   "The whole engine less the doors `a-manager` guards: the factory
   role's, a runner provider's (ticket 3a5b43b3), a secret's, a
-  domain's (ticket bf8336c5) and an approval_request's approve
-  (ticket 40d9c53b)."
+  domain's (ticket bf8336c5), an approval_request's approve
+  (ticket 40d9c53b), and a definition's and a judgment's doors to
+  live law (ticket bcb0b2cd)."
   [w]
   (-> w
       (update "member" disj "set_factory_role")
+      (update "definition" disj "pilot" "promote" "withdraw")
+      (update "judgment" disj "promote")
       (update "domain" disj "create" "restate")
       (update "approval_request" disj "approve")
       (update "runner_provider" disj "create" "restate")
@@ -409,6 +413,76 @@
     (is (contains? (get (whole eng) "approval_request") "approve"))
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
+
+;; ── live law: definitions and judgments ──────────────────────────────
+
+(defn- law-world!
+  "Two boots over one store, the deploy simulated in-process: the
+  plan's strict law, then a lenient revision proposed and held — a
+  :proposed definition — with an owned factory."
+  []
+  (let [st (memory/storage)
+        boot (fn [plan mode]
+               (engine/engine {:storage st :resources [fx/meal plan]
+                               :deploy-mode mode}))]
+    (boot (fx/plan-resource) :promote)
+    (let [eng (boot (fx/plan-resource
+                     {:calendar-when '(<= (data :calendar_conflicts) 1)})
+                    :propose)]
+      (roles/ensure-factory-roles! eng)
+      (owned-factory! eng)
+      eng)))
+
+(defn- definition-of [eng]
+  (first (filter #(= 2 (get-in % [:data :revision]))
+                 (rows-of eng :definition {:target_kind "plan"}))))
+
+(defn- move-definition! [eng who action inp]
+  (inv/invoke! eng :definition (str (:id (definition-of eng))) action inp
+               (assoc (if (map? who) who (as who))
+                      :idempotency-key (str (random-uuid)))))
+
+(deftest only-a-manager-moves-a-definition
+  ;; ticket bcb0b2cd (R-3.2): pilot, promote and withdraw change live law
+  (let [eng (law-world!)]
+    (is (= :proposed (:state (definition-of eng))))
+    (doseq [[action inp] [[:pilot {:after true}] [:promote nil] [:withdraw nil]]
+            who ["cole" (delegate "cole")]]
+      (is (re-find #"`manager` role"
+                   (pr-str (refusal #(move-definition! eng who action inp))))
+          (str (name action) ": a contributor or their delegate is refused,"
+               " and the refusal names the role")))
+    (is (= :proposed (:state (definition-of eng))) "nothing moved")
+    (testing "a manager pilots, then promotes"
+      (is (nil? (refusal #(move-definition! eng "mara" :pilot {:after true}))))
+      (is (= :piloted (:state (definition-of eng))))
+      (is (nil? (refusal #(move-definition! eng "mara" :promote nil))))
+      (is (= :current (:state (definition-of eng))))))
+  (testing "a manager withdraws"
+    (let [eng (law-world!)]
+      (is (nil? (refusal #(move-definition! eng "mara" :withdraw nil))))
+      (is (= :withdrawn (:state (definition-of eng)))))))
+
+(deftest only-a-manager-promotes-a-judgment
+  ;; ticket bcb0b2cd (R-3.2): a contributor drafts, a manager puts it in force
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (let [j (:row (inv/create! eng :judgment
+                               {:name "role-check"
+                                :subject_kind "role"
+                                :verdicts [{:name "keep" :sentence "The role stands."}
+                                           {:name "drop" :sentence "The role goes."}]
+                                :remedy_max 200}
+                               (as "cole")))
+          promote! (fn [who]
+                     (inv/invoke! eng :judgment (str (:id j)) :promote {}
+                                  (if (map? who) who (as who))))]
+      (is (some? j) "a contributor creates the draft")
+      (doseq [who ["cole" (delegate "cole")]]
+        (is (re-find #"`manager` role" (pr-str (refusal #(promote! who))))
+            "a contributor or their delegate is refused, naming the role"))
+      (is (nil? (refusal #(promote! "mara"))) "a manager passes")
+      (is (= :promoted (:state (first (rows-of eng :judgment {:name "role-check"}))))))))
 
 (defn- seat!
   "Open a seat as `who`: a person's id, or a ctx such as `delegate`'s."

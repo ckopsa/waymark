@@ -122,6 +122,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.problems :as p]
+            [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
@@ -355,7 +356,9 @@
                               :help "Set this instead of a filter to pilot forward only — existing rows keep the current law, new ones are born under this revision."}}
                      [:maybe :boolean]]]
             :record true
-            :guards [population-shape data-law-only]
+            ;; a-manager (R-3.2): pilot, promote and withdraw are the
+            ;; doors that change live law, and live law is a manager's
+            :guards [roles/a-manager population-shape data-law-only]
             :safety {:idempotent false :reversible false :confirm true
                      :consequence "The declared population's rows begin living under this revision; the current law keeps governing everything else. The way back is withdraw."}
             :handler record-population
@@ -364,11 +367,12 @@
     ;; logs creation as :create, so the actual logged action name
     ;; carries the bar): the deploy actor that proposed cannot promote
     :promote {:from #{:proposed :piloted} :to :current
-              :guards [(g/four-eyes :create)]
+              :guards [roles/a-manager (g/four-eyes :create)]
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "This proposal becomes the served law for every row of its kind; rows adopt or grandfather per the kind's adoption declaration."}
               :display {:label "Promote" :order 1}}
     :withdraw {:from #{:proposed :piloted} :to :withdrawn
+               :guards [roles/a-manager]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "The proposal closes; the current law continues to govern — served from its stored trees while the withdrawn code stays resident."
                         ;; final on purpose (waymark-9u10): the current law
