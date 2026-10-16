@@ -1453,6 +1453,8 @@
         _ (doseq [[id role] [["mara" "manager"] ["cole" "contributor"]]]
             (inv/create! eng :member {:display id :actor_type "human" :roles [role]}
                          {:principal members/registrar :id id}))
+        _ (inv/create! eng :member {:display "colton" :actor_type "human"}
+                       {:principal members/registrar :id "colton"})
         d (:row (inv/create! eng :domain {:name "factory"
                                           :charter "The engine's own work."
                                           :budget_usd_per_week 40M}
