@@ -4,11 +4,14 @@
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
   role it wants. Only a manager walks `set_factory_role`, and only a
-  manager allows the bench's merge held call (ticket d121729e). A
-  person's effective scope (ticket 228f59e8) is the whole engine for a
-  manager and everything but the `a-manager` doors for anyone else. In
-  memory."
-  (:require [clojure.test :refer [deftest is testing]]
+  manager allows the bench's merge held call (ticket d121729e) and
+  approves an approval_request (ticket 40d9c53b); deny stays open to
+  any decider. A person's effective scope (ticket 228f59e8) is the
+  whole engine for a manager and everything but the `a-manager` doors
+  for anyone else. In memory."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.fixtures :as fx]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
@@ -16,6 +19,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as rl]
+            [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -164,6 +168,97 @@
       (is (= (set (roles/effective-scope eng (t/principal {:id "mara" :display "mara"})))
              (set (roles/effective-scope eng (:principal (delegate "mara")))))))))
 
+(deftest a-contributors-seat-fires-only-on-its-owners-links
+  ;; ticket b7572409 (R-5.1, R-5.3)
+  (let [eng (eng!)
+        link! (fn [ctx]
+                (str (:id (:row (inv/create! eng :runner_link
+                                             {:provider "claude_routine"
+                                              :fire_url "https://api.example.test/v1/routines/trig_01/fire"
+                                              :fire_token "sk-routine-first-token-0123456789"}
+                                             ctx)))))
+        owner-of (fn [id]
+                   (some->> (store/with-tx (:storage eng)
+                              (fn [tx] (store/load-row (:storage eng) tx :runner_link id {})))
+                            (inv/decode-row (get (inv/resources eng) :runner_link))
+                            :data :owner))
+        started (reify sch/Provider (fire [_ _link _text] {:started nil}))
+        fire! (fn [owner ids]
+                (rl/fire-pool! eng (constantly started) ids nil "prefer" nil
+                               (rl/pool-owner eng {:data {:owner owner}})))
+        house (link! {:principal rl/seed-actor})
+        maras (link! (as "mara"))
+        sams (link! (delegate "sam"))]
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "sam" ["contributor"])
+    (testing "with no factory owner every seat fires on any link, as today"
+      (is (nil? (rl/pool-owner eng {:data {:owner "sam"}}))))
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "a link's owner is its maker, or the person a tool acts for; the engine's is a house link"
+      (is (= "mara" (owner-of maras)))
+      (is (= "sam" (owner-of sams)))
+      (is (nil? (owner-of house))))
+    (testing "a contributor's seat fires on its owner's link, past a house link and another person's"
+      (is (= "sam" (rl/pool-owner eng {:data {:owner "sam"}})))
+      (is (= sams (:runner (fire! "sam" [house maras sams])))))
+    (testing "with no link of its own, it waits naming each link it skipped and why"
+      (let [out (fire! "sam" [house maras])]
+        (is (nil? (:runner out)))
+        (is (nil? (:retry-at out)))
+        (is (str/includes? (:skipped out) (str "link " house ": a house link")))
+        (is (str/includes? (:skipped out) (str "link " maras ": another person's link")))))
+    (testing "a manager's seat fires on any link in its pool"
+      (is (nil? (rl/pool-owner eng {:data {:owner "mara"}})))
+      (is (= house (:runner (fire! "mara" [house maras sams])))))
+    (testing "a seat with no owner fires on the house link"
+      (is (= house (:runner (fire! nil [house sams])))))
+    (testing "a contributor's seat with only broken links of its own waits with that reason"
+      (inv/invoke! eng :runner_link sams :break {:note "The Routine refused the token."}
+                   {:principal sch/system-actor})
+      (let [out (fire! "sam" [sams])]
+        (is (nil? (:runner out)))
+        (is (nil? (:retry-at out)))
+        (is (= (str "link " sams ": broken") (:skipped out)))))))
+
+(defn- ask! [eng who]
+  (str (:id (:row (inv/create! eng :approval_request
+                               {:task "Accept the week's meals."
+                                :scope [{:kind "meal" :actions ["accept"]}]}
+                               {:principal (t/principal
+                                            {:id who :type :agent
+                                             :display who})})))))
+
+(defn- state-of [result] (some-> result :row :state name))
+
+(deftest only-a-manager-approves-an-ask
+  (let [eng (eng! [fx/meal])]
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "a contributor is refused at approve, and the refusal names the role"
+      (let [id (ask! eng "agent-a")
+            r (refusal #(inv/invoke! eng :approval_request id :approve nil
+                                     (as "cole")))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))))
+    (testing "a manager approves"
+      (let [id (ask! eng "agent-b")]
+        (is (= "approved" (state-of (inv/invoke! eng :approval_request id
+                                                 :approve nil (as "mara")))))))
+    (testing "deny is unchanged: a contributor still says no"
+      (let [id (ask! eng "agent-c")]
+        (is (= "denied" (state-of (inv/invoke! eng :approval_request id
+                                               :deny {:note "not this week"}
+                                               (as "cole")))))))))
+
 (deftest only-a-manager-sets-a-provider-cap-or-a-secret
   ;; ticket 3a5b43b3 (R-3.2): what spends money or holds a credential
   (let [eng (eng!)]
@@ -277,12 +372,14 @@
 
 (defn- but-manager-doors
   "The whole engine less the doors `a-manager` guards: the factory
-  role's, a runner provider's (ticket 3a5b43b3), a secret's and a
-  domain's (ticket bf8336c5)."
+  role's, a runner provider's (ticket 3a5b43b3), a secret's, a
+  domain's (ticket bf8336c5) and an approval_request's approve
+  (ticket 40d9c53b)."
   [w]
   (-> w
       (update "member" disj "set_factory_role")
       (update "domain" disj "create" "restate")
+      (update "approval_request" disj "approve")
       (update "runner_provider" disj "create" "restate")
       (update "secret" disj "create" "replace")))
 
@@ -290,6 +387,7 @@
   (let [eng (eng!)]
     (owned-factory! eng)
     (is (contains? (get (whole eng) "member") "set_factory_role"))
+    (is (contains? (get (whole eng) "approval_request") "approve"))
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
 

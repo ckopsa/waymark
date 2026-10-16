@@ -25,6 +25,13 @@
   link that is waiting and takes the least-used of the rest, or, in
   `prefer` order (529deb73), the first of the rest in list order.
 
+  A link and a provider row have an `owner` (b7572409, R-5.1): the
+  person who made it, or the one the tool that made it acts for, written
+  at birth. The engine's own rows have none: a link with no owner is a
+  HOUSE link. A contributor's seat fires only on its owner's links
+  (`pool-owner`, R-5.3); a manager's seat, and a seat with no owner,
+  fire on every link of the pool.
+
   `runner-provider` (ec7e7bfb) is the account behind every link of one
   provider: its cap counts every fire through any of them, from any
   seat, and a throttle that names the account holds them all.
@@ -181,6 +188,31 @@
                                           :help "How long one window lasts."}}
              [:int {:min 1 :max 31622400}]]]]])
 
+(def ^:private owner-field
+  [:owner {:optional true
+           :x-ref {:principal true}
+           :x-display
+           {:raw true
+            :label "Whose it is"
+            :spelled-by-hand "The person who made this, or the one the tool that made it acts for, written at birth; never typed. Empty for the engine's own, a house link."}}
+   [:maybe [:string {:max 128}]]])
+
+(defn- maker
+  "The person whose hand makes a row: a person, or the one a tool acts
+  for. nil for the engine and for any other agent."
+  [ctx]
+  (let [{:keys [type id acts-for]} (:principal ctx)]
+    (cond
+      (= :human type) (some-> id str not-empty)
+      (= :agent type) (some-> acts-for str not-empty))))
+
+(defn- owned-at-birth
+  "The on-create of a link and a provider row: its maker is its owner."
+  [row ctx]
+  (if-some [person (maker ctx)]
+    (assoc-in row [:data :owner] person)
+    row))
+
 (def ^:private seeded-from-field
   [:seeded_from {:optional true
                  :x-display
@@ -242,7 +274,8 @@
              :label "Why the link broke"
              :help "The provider's own sentence about why it refused the last fire. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate. Engine-written."}}
      [:maybe [:string {:max 280}]]]
-    seeded-from-field]
+    seeded-from-field
+    owner-field]
    :create-schema
    [:map
     provider-field
@@ -262,6 +295,7 @@
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
    :create-guards [a-person-makes-the-link the-engine-writes-the-seed
                    a-pull-link-has-no-url]
+   :on-create owned-at-birth
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -417,7 +451,8 @@
                       :x-display
                       {:label "Runs this window"
                        :help "How many runs every link of this provider, from every seat, has started in the cap's current window. Engine-written."}}
-     [:maybe [:int {:min 0}]]]]
+     [:maybe [:int {:min 0}]]]
+    owner-field]
    :create-schema
    [:map
     provider-field
@@ -427,6 +462,7 @@
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
    ;; the account spends money: only a manager changes it (R-3.2)
    :create-guards [the-engine-seeds-the-provider roles/a-manager]
+   :on-create owned-at-birth
    :actions
    {:restate
     {:from #{:live} :to :live
@@ -781,6 +817,37 @@
 (defn- links-by-id [eng]
   (into {} (map (juxt (comp str :id) identity)) (rows-of eng :runner_link {})))
 
+(defn- owner-of [row]
+  (some-> (get-in row [:data :owner]) str not-empty))
+
+(defn pool-owner
+  "The person whose links alone a seat's fire may go out on (b7572409,
+  R-5.3): the seat's `owner` when that person is no manager, as
+  `roles/manager?` judges them; else nil. A manager's seat, and a seat
+  with no owner, fire on every link of the pool, house or owned."
+  [eng seat-row]
+  (when-some [owner (owner-of seat-row)]
+    (when-not (roles/manager? (assoc (inv/render-hooks eng)
+                                     :principal {:type :human :id owner}))
+      owner)))
+
+(defn- skipped
+  "Why a fire for `owner`'s seat went out on none of the links `ids`,
+  one clause a link: a house link, another person's link, or its own
+  link broken, retired, missing or waiting."
+  [eng ids owner]
+  (let [fresh (links-by-id eng)]
+    (str/join "; "
+              (for [id (map str ids)
+                    :let [r (get fresh id)]]
+                (str "link " id ": "
+                     (cond
+                       (nil? r) "missing"
+                       (nil? (owner-of r)) "a house link"
+                       (not= owner (owner-of r)) "another person's link"
+                       (not (live? r)) (name (:state r))
+                       :else "waiting"))))))
+
 (defn fire-pool!
   "Fire one run through the pool `ids`: each link that may fire, in
   `pool-order` under `order` (\"least_used\" or \"prefer\"), until one
@@ -799,10 +866,15 @@
   A pull link that is waiting (`pull-waiting`) is skipped as any
   waiting link is; one a localfire polls holds the fire, answering
   {:queued id}, which counts as the run the pool went out on. `for`
-  ({:kind :id}) names the row the fire is for."
-  [eng provider-of ids text & [order for]]
+  ({:kind :id}) names the row the fire is for.
+
+  `owner` (`pool-owner`) is the contributor whose seat fires: only
+  that person's links are tried, and a fire that goes out on none
+  answers `:skipped`, the sentence that names each link and why."
+  [eng provider-of ids text & [order for owner]]
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
-        pool (keep (links-by-id eng) (map str ids))
+        pool (cond->> (keep (links-by-id eng) (map str ids))
+               owner (filter #(= owner (owner-of %))))
         transient (volatile! nil)]
     (or (some (fn [row]
                 (when (and (nil? (provider-waiting eng row at))
@@ -829,7 +901,8 @@
                                            seq sort last)))
                           sort
                           first)}
-            @transient (assoc :transient @transient))))))
+            @transient (assoc :transient @transient)
+            owner (assoc :skipped (skipped eng ids owner)))))))
 
 ;; ── the two doors piece 1b's routes stand on ─────────────────────────
 
