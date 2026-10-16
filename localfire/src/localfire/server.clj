@@ -493,52 +493,67 @@
 
 ;; ── the routes (R-4.4) ──────────────────────────────────────────────
 
-(defn- handle-fire [state nm req]
+(defn fire!
+  "One fire's judgment after the bearer (R-5.1) and its start (R-5.2),
+  whichever way it came: pushed to `/fire` or pulled from the engine
+  (§13). `text-fn` gives the fire's text, or `::bad` for a body that is
+  not a JSON object; it is called only once a slot is held. → {:status
+  200 :id :url}, or {:status :detail} with `:retry-after` on a 429."
+  [state nm text-fn]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
         routine  (config/routine cfg nm)]
     ;; R-5.1: this order, and stop at the first that holds
     (cond
-      (not (token-ok? state req))
-      (refusal 401 "The bearer token is not this server's token.")
-
       (nil? routine)
-      (refusal 404 "No routine of that name is on this server.")
+      {:status 404 :detail "No routine of that name is on this server."}
 
       (runs/paused? runs-dir nm)
-      (refusal 400 "The routine is paused on this server.")
+      {:status 400 :detail "The routine is paused on this server."}
 
       ;; R-4.6: throttled, so the engine's pool falls back until then
       (not (:ok @(:credential state)))
       (let [c @(:credential state)
             s (retry-after-seconds c)]
-        (refusal 429 (str "The credential check failed: " (:detail c)
-                          " Try again after " s " seconds.")
-                 {"Retry-After" (str s)}))
+        {:status 429 :retry-after s
+         :detail (str "The credential check failed: " (:detail c)
+                      " Try again after " s " seconds.")})
 
       :else
       (let [id (str (UUID/randomUUID))]
         (if-not (claim! (:running state) nm id (:max-concurrent routine))
-          (refusal 429 "The routine has no free run. Try again after 60 seconds."
-                   {"Retry-After" "60"})
-          (let [body (read-json-object req)]
-            (if (= ::bad body)
+          {:status 429 :retry-after 60
+           :detail "The routine has no free run. Try again after 60 seconds."}
+          (let [text (text-fn)]
+            (if (= ::bad text)
               (do (release! (:running state) nm id)
-                  (refusal 422 "The fire body must be a JSON object."))
-              (let [text (some-> (:text body) str not-empty)]
-                (try
-                  ;; the record exists before the answer, so the URL the
-                  ;; engine is about to write onto the row already opens
-                  (runs/begin! cfg {:id id :routine nm :model (:model routine)
-                                    :fire-text (prompt/redact-key text)})
-                  (start-run! state {:id id :routine routine :text text})
-                  (json-resp 200 {:type "routine_fire"
-                                  :claude_code_session_id id
-                                  :claude_code_session_url (config/run-url cfg id)})
-                  (catch Throwable t
-                    (release! (:running state) nm id)
-                    (json-resp 500 {:detail (str "The run could not be prepared: "
-                                                 (ex-message t))})))))))))))
+                  {:status 422 :detail "The fire body must be a JSON object."})
+              (try
+                ;; the record exists before the answer, so the URL the
+                ;; engine is about to write onto the row already opens
+                (runs/begin! cfg {:id id :routine nm :model (:model routine)
+                                  :fire-text (prompt/redact-key text)})
+                (start-run! state {:id id :routine routine :text text})
+                {:status 200 :id id :url (config/run-url cfg id)}
+                (catch Throwable t
+                  (release! (:running state) nm id)
+                  {:status 500 :detail (str "The run could not be prepared: "
+                                            (ex-message t))})))))))))
+
+(defn- handle-fire [state nm req]
+  (if-not (token-ok? state req)
+    (refusal 401 "The bearer token is not this server's token.")
+    (let [{:keys [status id url detail retry-after]}
+          (fire! state nm #(let [body (read-json-object req)]
+                             (if (= ::bad body)
+                               ::bad
+                               (some-> (:text body) str not-empty))))]
+      (cond
+        (= 200 status) (json-resp 200 {:type "routine_fire"
+                                       :claude_code_session_id id
+                                       :claude_code_session_url url})
+        retry-after    (refusal status detail {"Retry-After" (str retry-after)})
+        :else          (refusal status detail)))))
 
 (defn- handle-pause [state nm req pause?]
   (let [cfg (:config state)]
