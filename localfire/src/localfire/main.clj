@@ -44,6 +44,9 @@
                                          :secret (people/env-secret)}})]
       (when pull-cfg
         (pull/start! st pull-cfg pull-token))
+      ;; R-12.12: a loop for each person who stored a pull link
+      (when (and (:people st) (:person-pull-url cfg))
+        (pull/start-people! st (:person-pull-url cfg)))
       (println (str "localfire listening on " (:port st)
                     " public-url=" (:public-url cfg)
                     " routines=" (str/join "," (sort (keys (:routines cfg))))
