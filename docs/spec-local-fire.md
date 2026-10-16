@@ -436,3 +436,48 @@ database, and `serve-localfire`.
 - **A hook trust prompt in headless mode.** Project hooks under the
   place's `.claude/settings.json` may need a one-time trust on that
   machine. The first hand firing shows whether they run.
+
+## 12. Requirements: people
+
+This section builds R-6.1, R-6.2, R-6.3 and R-6.7 of the parent spec
+(ticket 46831b3c). Runs under each person's own login and the runner
+link's registration are later tickets; `people/read-token` is the one
+door they open the token through.
+
+**R-12.1** With an `:oidc` map in the config, localfire signs a person
+in through the Keycloak realm (`:issuer`, client `localfire-claude` by
+default) with the OIDC authorization code flow and PKCE (S256).
+`GET /signin` sends the browser to the realm; `GET /signin/callback`
+takes the code back, exchanges it on the back channel and records the
+id token's `sub` as the person. A state is single-use and lasts ten
+minutes. A session is an HttpOnly cookie that lasts twelve hours and
+lives in memory, so a restart signs everyone out. Without `:oidc` none
+of these routes exist and localfire runs as one machine login, as
+before.
+
+**R-12.2** After sign-in, `GET /me` takes a token from
+`claude setup-token` (`POST /me/token`). localfire seals it with
+AES-256-GCM under `LOCALFIRE_TOKEN_KEY` — 32 bytes in base64, from the
+environment and nowhere else — with a fresh 12-byte nonce and the
+subject as associated data, and writes it owner-only to
+`{tokens-dir}/{sha256(sub)}.sealed`. localfire refuses to start with
+`:oidc` and no such key.
+
+**R-12.3** A stored token is never rendered and never logged: the page
+says only that one is stored, and `POST /me/revoke` deletes the file.
+Every POST carries the session's CSRF value or is refused 403.
+
+**R-12.4** Before the paste field the page says: "The administrator of
+this localfire machine can get access to the tokens stored on it. If
+you do not accept this, run your own localfire on a machine you
+control."
+
+**R-12.5** A confidential client's secret is `LOCALFIRE_OIDC_SECRET`.
+The id token is read without a signature check, because it came
+straight from the token endpoint over TLS (OIDC Core 3.1.3.7); its
+`iss` must be the `:issuer` and its `aud` must name the client.
+
+**R-12.6** `localfire.people-test` shows that a signed-in person can
+store and revoke a token, that the stored bytes are not the token, that
+no page and no log carries it, and that localfire without `:oidc`
+answers these routes 404.
