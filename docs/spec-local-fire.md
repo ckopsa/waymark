@@ -481,3 +481,51 @@ straight from the token endpoint over TLS (OIDC Core 3.1.3.7); its
 store and revoke a token, that the stored bytes are not the token, that
 no page and no log carries it, and that localfire without `:oidc`
 answers these routes 404.
+
+## 13. Requirements: pull
+
+This section is piece 2 of the pull-mode epic (54360702). The engine's
+side is waymark#1315 (pull links, durable sealed pending fires) and
+waymark#1319 (the routes). A machine behind a home router or a cafe's
+network cannot take the engine's POST, but it can open a connection
+out, so it asks for its fires instead.
+
+**R-13.1** The config may hold `:pull {:engine-url :link-id :routine
+:token-env}`. `:engine-url` is the engine's base URL, `:link-id` the
+pull runner link's id, and `:routine` names the routine under
+`:routines` its fires run as. `:token-env` names the variable the
+link's token is read from, `LOCALFIRE_PULL_TOKEN` by default.
+
+**R-13.2** The link's token is read from that variable and from nowhere
+else: a `:pull` map that holds a `:token` is refused at start, and so
+is a `:pull` whose variable is empty. The token is never written to a
+file or a log, and neither is a fire's text. A localfire with `:pull`
+needs no `LOCALFIRE_TOKEN`; with both it serves push and pull.
+
+**R-13.3** With `:pull`, localfire long-polls
+`GET {engine-url}/api/-/runner-links/{link-id}/fires` in a loop with
+the header `Waymark-Runner-Token: <token>`, not an Authorization
+bearer. The engine answers the oldest fire, `{"id", "text"}`, or 204
+after about 25 seconds.
+
+**R-13.4** Each fire goes through the judgment and the start a pushed
+fire does (R-5.1, R-5.2: the same place copy, the same headless Claude
+Code, the same run record), and localfire then posts
+`POST .../fires/{fire}` with the same header: the push wire's 200
+body (`claude_code_session_id`, `claude_code_session_url`) for a
+started run, `{"status": 429, "retry_after": n}` when the routine is
+at its run cap or the credential check fails, `{"status": 400}` when
+the routine is paused, and a 429 for 60 seconds when the run could
+not be prepared.
+
+**R-13.5** A network error or a 5xx backs off, one second doubling to
+sixty, and polls again; a poll that answers resets the wait. So a
+laptop that sleeps or changes networks resumes on its own. A 401 stops
+the loop with one log line naming the variable: the token is wrong or
+revoked, and no wait mends it.
+
+**R-13.6** `localfire.pull-test`, against a stub engine on the
+loopback, shows that a fire is received by a poll that carries the
+header, starts a run, and is answered with the session id and URL;
+that the loop backs off and resumes after a dropped connection; that
+it stops on 401; and that the token is in no file and no log.

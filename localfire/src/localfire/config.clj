@@ -44,6 +44,42 @@
   [k]
   (if (keyword? k) (name k) (str k)))
 
+(def default-pull-token-env
+  "The variable the pull link's token is read from when `:pull` names
+  none (R-13.2)."
+  "LOCALFIRE_PULL_TOKEN")
+
+(defn pull-token
+  "The pull link's token, from the variable `:pull :token-env` names and
+  from nowhere else (R-13.2)."
+  [pull]
+  (some-> (System/getenv (:token-env pull)) not-empty))
+
+(defn- normalize-pull
+  "The optional `:pull` map (§13): the engine and the runner link this
+  localfire asks for its fires, and the routine they run as. The
+  link's token is not in it; only the name of its variable is."
+  [p routine-names]
+  (when-not (map? p)
+    (fail! "the config's :pull must be a map."))
+  (when (contains? p :token)
+    (fail! "the config's :pull must not hold the link's token; name its variable in :token-env."))
+  (let [url     (some-> (:engine-url p) str not-empty (str/replace #"/+$" ""))
+        link    (some-> (:link-id p) str not-empty)
+        routine (some-> (:routine p) routine-name not-empty)]
+    (when-not url
+      (fail! "the config's :pull needs an :engine-url, the engine's base URL."))
+    (when-not link
+      (fail! "the config's :pull needs a :link-id, the pull runner link's id."))
+    (when-not routine
+      (fail! "the config's :pull needs a :routine, the routine its fires run as."))
+    (when-not (contains? routine-names routine)
+      (fail! (str "the config's :pull :routine " routine " is not under :routines.")))
+    {:engine-url url
+     :link-id    link
+     :routine    routine
+     :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}))
+
 (defn- normalize-routine [nm r]
   (when-not (map? r)
     (fail! (str "the routine " nm " must be a map in the config.")))
@@ -151,6 +187,9 @@
      :claude-home   (:claude-home m)
      ;; §12: nil without :oidc, and then no sign-in, as before
      :oidc          (some-> (:oidc m) normalize-oidc)
+     ;; §13: nil without :pull, and then localfire only takes pushes
+     :pull          (some-> (:pull m)
+                            (normalize-pull (set (map routine-name (keys rs)))))
      :routines      (into {}
                           (map (fn [[k v]]
                                  (let [nm (routine-name k)]
