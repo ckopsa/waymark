@@ -137,7 +137,14 @@
                             "<p>Your fires run as <code>" (esc (:name routine))
                             "</code>, under your own token.</p>"
                             "<p>Fire URL: <code>" (esc (:url routine)) "</code><br>"
-                            "Bearer: <code>" (esc (:token routine)) "</code></p>"))
+                            "Bearer: <code>" (esc (:token routine)) "</code></p>"
+                            (when-let [link (:link routine)]
+                              (str "<p>Your runner link in the engine: <code>" (esc (:id link)) "</code>"
+                                   (when (:retired link) ", retired when you revoked your token") ".</p>"))
+                            (when (:engine? routine)
+                              (str "<form method=\"post\" action=\"/me/connect\">" (hidden-csrf csrf)
+                                   "<button>" (if (:link routine) "Restate my link in the engine" "Connect to the engine")
+                                   "</button></form>"))))
                      "<form method=\"post\" action=\"/me/revoke\">" (hidden-csrf csrf)
                      "<button>Revoke and delete it</button></form>")
                 (str "<form method=\"post\" action=\"/me/token\">" (hidden-csrf csrf)
