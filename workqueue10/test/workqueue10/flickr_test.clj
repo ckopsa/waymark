@@ -14,6 +14,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [dayplan10.passage :as passage]
+            [org.httpkit.server :as server]
             [workqueue10.confluence :as conf]
             [workqueue10.main :as main]
             [workqueue10.sources.flickr :as fk]
@@ -526,3 +527,55 @@
       (fk/down! f true)
       (is (= [] (main/places srcs :media row))
           "a flickr that does not answer offers nothing, and nothing throws"))))
+
+(deftest the-wire-sends-the-bearer-and-refetches-once-on-401
+  ;; flickr has required a login since 2026-09-28. The fake stands
+  ;; behind the transport and sees no header, so a local stub plays
+  ;; flickr here: it accepts only the tokens `accept` names
+  (let [saw (atom [])
+        accept (atom #{"t1"})
+        srv (server/run-server
+             (fn [req]
+               (let [auth (get-in req [:headers "authorization"])]
+                 (swap! saw conj auth)
+                 (if (contains? @accept (some-> auth (subs 7)))
+                   {:status 200 :headers {"content-type" "application/json"}
+                    :body "{\"works\":[],\"cursor\":\"l0.s0\"}"}
+                   {:status 401 :body "{}"})))
+             {:port 0 :legacy-return-value? false})
+        base (str "http://localhost:" (server/server-port srv))
+        mints (atom 0)
+        tok (atom nil)
+        ;; client-credentials-fn's shape: cached, (f true) re-mints
+        token-fn (fn [& [fresh?]]
+                   (when (or fresh? (nil? @tok))
+                     (reset! tok (str "t" (swap! mints inc))))
+                   @tok)
+        call (fk/http-call {:base base :token-fn token-fn})]
+    (try
+      (testing "the cached token rides as the bearer"
+        (is (= [] (:works (call "GET" "/api/feed/media" {}))))
+        (is (= ["Bearer t1"] @saw))
+        (is (= 1 @mints)))
+      (testing "a 401 refetches once and the second send carries the fresh token"
+        (reset! saw [])
+        (reset! accept #{"t2"})
+        (is (= [] (:works (call "GET" "/api/feed/media" {}))))
+        (is (= ["Bearer t1" "Bearer t2"] @saw))
+        (is (= 2 @mints)))
+      (testing "a second 401 is not retried again: it throws as unreachable, token-free"
+        (reset! saw [])
+        (reset! accept #{})
+        (let [e (is (thrown? clojure.lang.ExceptionInfo
+                             (call "GET" "/api/feed/media" {})))]
+          (is (= 401 (:status (ex-data e))))
+          (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e)))
+                                  "t3"))))
+        (is (= ["Bearer t2" "Bearer t3"] @saw)))
+      (testing "no token-fn (dev) sends no credential and never retries"
+        (reset! saw [])
+        (is (thrown? clojure.lang.ExceptionInfo
+                     ((fk/http-call {:base base}) "GET" "/api/feed/media" {})))
+        (is (= [nil] @saw)))
+      (finally
+        (server/server-stop! srv)))))
