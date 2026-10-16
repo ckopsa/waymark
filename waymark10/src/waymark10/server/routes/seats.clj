@@ -76,6 +76,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
+            [waymark10.server.routes.runner-links :as runner-link-routes]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
@@ -1244,15 +1245,19 @@
 
 (defn routes [eng]
   {:module :seats
-   :static [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
-            ["/api/-/cracks" {:get (cracks-doc eng)}]
-            ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
-            ["/api/-/in-flight" {:get (in-flight-doc eng)}]
-            [close-path {:post (sitting-close eng)}]
-            [tally-path {:post (sitting-tally eng)}]
-            [transcript-path {:post (sitting-transcript eng)}]
-            [inbox-path {:get (sitting-inbox eng)}]
-            [verify-path {:post (seat-verify eng)}]]})
+   :static (into [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
+                  ["/api/-/cracks" {:get (cracks-doc eng)}]
+                  ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
+                  ["/api/-/in-flight" {:get (in-flight-doc eng)}]
+                  [close-path {:post (sitting-close eng)}]
+                  [tally-path {:post (sitting-tally eng)}]
+                  [transcript-path {:post (sitting-transcript eng)}]
+                  [inbox-path {:get (sitting-inbox eng)}]
+                  [verify-path {:post (seat-verify eng)}]]
+                 ;; a pull runner link's two doors (pull-mode epic
+                 ;; 54360702, piece 1b), keyed by their own header as
+                 ;; the sittings doors above are
+                 (runner-link-routes/static eng))})
 
 ;; ── what discover shows a sitter (R-7.4, R-12.3) ────────────────────
 

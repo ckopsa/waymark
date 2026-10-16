@@ -14,11 +14,13 @@
             [waymark10.server.render :as render]
             [waymark10.server.pull-fires :as pf]
             [waymark10.server.runner-links :as rl]
+            [waymark10.server.routes.runner-links :as rlr]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:dynamic *eng* nil)
 
@@ -512,3 +514,86 @@
     (is (= [a b a b]
            (vec (repeatedly 4 #(:runner (rl/fire-pool! *eng* (constantly (stub {:started nil}))
                                                        [a b] nil "least_used"))))))))
+
+;; ── a pull link's two doors (pull-mode epic 54360702, piece 1b) ─────
+
+(defn- door [method]
+  (let [[[_ get-door] [_ post-door]] (rlr/static *eng*)]
+    (case method :get (:get get-door) :post (:post post-door))))
+
+(defn- poll [id token]
+  ((door :get) {:request-method :get
+                :path-params {:id id}
+                :headers (cond-> {} token (assoc "waymark-runner-token" token))}))
+
+(defn- answer [id fire token body]
+  ((door :post) {:request-method :post
+                 :path-params {:id id :fire fire}
+                 :headers (cond-> {} token (assoc "waymark-runner-token" token))
+                 :body (wire/write-json body)}))
+
+(deftest a-poll-with-the-token-gets-the-fire-and-is-recorded
+  (let [id (pull-link-id!)
+        {:keys [queued]} (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                        {:kind "schedule" :id "s-poll"})
+        out (binding [rlr/*wait-ms* 0] (poll id a-token))]
+    (is (= 200 (:status out)))
+    (is (= {:id queued :text a-fire-text} (wire/read-json (:body out))))
+    (is (some? (pf/last-poll (:storage *eng*) id)) "the poll was recorded")
+    (is (nil? (rl/waiting-reason *eng* (row-of id) (java.time.Instant/now))))))
+
+(deftest a-wrong-or-missing-token-is-401-and-a-push-link-404
+  (let [id (pull-link-id!)]
+    (binding [rlr/*wait-ms* 0]
+      (is (= 401 (:status (refusal #(poll id nil)))))
+      (is (= 401 (:status (refusal #(poll id a-second-token)))))
+      (is (= 401 (:status (refusal #(poll "no-such-link" a-token)))))
+      (is (= 401 (:status (refusal #(answer id "f" nil {:status 429})))))
+      (is (= 404 (:status (refusal #(poll (link-id!) a-token))))))
+    (is (nil? (pf/last-poll (:storage *eng*) id)) "a refused poll is not recorded")))
+
+(deftest an-empty-queue-answers-204-after-the-wait
+  (let [id (pull-link-id!)
+        t0 (System/currentTimeMillis)
+        out (binding [rlr/*wait-ms* 120 rlr/*step-ms* 20] (poll id a-token))]
+    (is (= 204 (:status out)))
+    (is (<= 120 (- (System/currentTimeMillis) t0)) "it waited")))
+
+(deftest an-answer-lands-on-the-schedule-row
+  (let [id (pull-link-id!)
+        landed (atom [])
+        fire! #(:queued (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                       {:kind "schedule" :id %}))
+        started (fire! "s-run")
+        throttled (fire! "s-wait")]
+    (with-redefs [sch/land-pull-answer! (fn [_eng sid ans _at runner]
+                                          (swap! landed conj [sid ans runner]))]
+      (is (= 200 (:status (answer id started a-token
+                                  {:claude_code_session_id "session_01"
+                                   :claude_code_session_url "https://run/1"}))))
+      (is (= 200 (:status (answer id throttled a-token {:status 429 :retry_after 30}))))
+      (is (= 404 (:status (refusal #(answer id started a-token {:status 429}))))
+          "an answered fire is gone")
+      (is (= 422 (:status (refusal #(answer id "x" a-token {:what 1}))))))
+    (is (= [["s-run" {:started "https://run/1" :session-id "session_01"} id]
+            ["s-wait" {:throttled "30" :status 429} id]]
+           @landed))
+    (is (= {:transient "The Routine is paused at the provider." :status 400}
+           (rlr/answer-of {:status 400})))
+    (is (= {:bad-link "The Routine refused the token." :status 401}
+           (rlr/answer-of {:status 401})))))
+
+(deftest no-token-or-fire-text-reaches-a-log
+  (let [id (pull-link-id!)
+        {:keys [queued]} (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                        {:kind "schedule" :id "s-quiet"})
+        err (java.io.StringWriter.)
+        out (with-out-str
+              (binding [*err* err rlr/*wait-ms* 0]
+                (with-redefs [sch/land-pull-answer! (fn [& _] nil)]
+                  (poll id a-token)
+                  (refusal #(poll id a-second-token))
+                  (answer id queued a-token {:status 429}))))
+        said (str out err)]
+    (doseq [secret [a-token a-second-token "one-time-key"]]
+      (is (not (str/includes? said secret))))))
