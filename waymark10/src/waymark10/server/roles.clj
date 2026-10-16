@@ -167,6 +167,17 @@
                 (when (manager-guarded? (:create-guards rdef))
                   (:create-action-names rdef)))))
 
+(defn- scope-over
+  "One {:kind :actions} entry per [kind rdef] pair, sorted by kind:
+  every action when `whole?`, else every action but the manager doors."
+  [whole? kinds]
+  (->> kinds
+       (sort-by (comp name first))
+       (mapv (fn [[kind rdef]]
+               (let [held (if whole? #{} (manager-doors rdef))]
+                 {:kind (name kind)
+                  :actions (vec (remove held (inv/action-names rdef)))})))))
+
 (defn effective-scope
   "A person's effective scope, in a grant scope's shape: one entry
   {:kind :actions} for every kind this engine serves. A manager (as
@@ -178,13 +189,17 @@
   scope by itself. Dotted powers are not here — a person holds those
   as granted."
   [eng principal]
-  (let [whole? (manager? (assoc (inv/render-hooks eng) :principal principal))]
-    (->> (inv/resources eng)
-         (sort-by key)
-         (mapv (fn [[kind rdef]]
-                 (let [held (if whole? #{} (manager-doors rdef))]
-                   {:kind (name kind)
-                    :actions (vec (remove held (inv/action-names rdef)))}))))))
+  (scope-over (manager? (assoc (inv/render-hooks eng) :principal principal))
+              (inv/resources eng)))
+
+(defn effective-scope-in
+  "`effective-scope` from inside a write: the ctx's own registry
+  (:rdefs) and read hooks, so the answer is the write's transaction's.
+  nil for a ctx that carries no registry (the render probe)."
+  [ctx principal]
+  (when-some [rdefs (:rdefs ctx)]
+    (scope-over (manager? (assoc ctx :principal principal))
+                (map (juxt :kind identity) (rdefs)))))
 
 (def seed-actor
   "The actor the role seed wears."

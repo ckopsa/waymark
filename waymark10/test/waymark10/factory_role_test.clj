@@ -247,6 +247,76 @@
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
 
+(defn- seat! [eng who seat-name scope]
+  (:row (inv/create! eng :seat
+                     {:name seat-name
+                      :charter "Decide what this errand asks of the house."
+                      :scope scope
+                      :standing_ttl_seconds 604800
+                      :cadence_seconds 3600
+                      :budget_usd_per_week 5M
+                      :sitting_budget_tokens 60000}
+                     (as who))))
+
+(defn- seat-row [eng id]
+  (let [rdef (get (inv/resources eng) :seat)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/load-row (:storage eng) tx :seat (str id) {})))
+             (inv/decode-row rdef))))
+
+(defn- restate-seat! [eng who id scope]
+  (let [row (seat-row eng id)]
+    (inv/invoke! eng :seat (str id) :restate
+                 {:charter "Decide what this errand asks of the house."
+                  :scope scope
+                  :standing_ttl_seconds 604800
+                  :cadence_seconds 3600
+                  :budget_usd_per_week 5M
+                  :sitting_budget_tokens 60000}
+                 (assoc (as who)
+                        :if-match (inv/etag :seat (str id) (:version row))))))
+
+(defn- own-seat!
+  "Record `owner` on the seat, behind the doors — the field is written
+  at birth by a delegating seat, never typed."
+  [eng id owner]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (let [raw (store/load-row (:storage eng) tx :seat (str id) {})]
+        (store/save-row! (:storage eng) tx :seat
+                         (assoc-in raw [:data :owner] owner) (:version raw))))))
+
+(def ^:private inside [{:kind "model" :actions ["retire"]}])
+(def ^:private past (conj inside {:kind "member" :actions ["set_factory_role"]}))
+
+(deftest a-seats-scope-stays-inside-its-owners
+  (let [eng (eng!)]
+    (owned-factory! eng)
+    (testing "a contributor's seat inside their scope is created"
+      (is (some? (seat! eng "cole" "cole-inside" inside))))
+    (testing "one naming a manager's door is refused at create, the entry named"
+      (let [r (refusal #(seat! eng "cole" "cole-past" past))]
+        (is (re-find #"set_factory_role" (pr-str r)) (pr-str r))
+        (is (re-find #"cole may not walk" (pr-str r)) (pr-str r)))
+      (is (empty? (rows-of eng :seat {:name "cole-past"}))))
+    (testing "a manager's seat is never refused"
+      (is (some? (seat! eng "mara" "mara-past" past))))
+    (testing "a restate that widens past the owner is refused, the entry named"
+      (let [s (seat! eng "mara" "cole-owned" inside)]
+        (own-seat! eng (:id s) "cole")
+        (let [r (refusal #(restate-seat! eng "mara" (:id s) past))]
+          (is (re-find #"set_factory_role" (pr-str r)) (pr-str r)))
+        (is (nil? (refusal #(restate-seat! eng "mara" (:id s) inside)))
+            "a restate inside the owner's scope passes")))
+    (testing "a manager-owned seat restates past a contributor's scope"
+      (let [s (seat! eng "mara" "mara-owned" inside)]
+        (own-seat! eng (:id s) "mara")
+        (is (nil? (refusal #(restate-seat! eng "mara" (:id s) past))))))
+    (testing "a seat with no owner restates as before"
+      (let [s (seat! eng "mara" "unowned" inside)]
+        (is (nil? (get-in (seat-row eng (:id s)) [:data :owner])))
+        (is (nil? (refusal #(restate-seat! eng "cole" (:id s) past))))))))
+
 (deftest wiring-a-manager-onto-a-door-narrows-a-contributor
   (let [eng (eng! [gadget])]
     (owned-factory! eng)
