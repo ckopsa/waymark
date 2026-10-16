@@ -395,14 +395,16 @@
 
 (deftest the-declared-law-still-holds
   (doseq [r (main/resources)]
-    (let [{:keys [total checked violations]} (scenario/report r)]
+    (let [{:keys [total deferred violations]} (scenario/report r)]
       (is (pos? (long (or total 0)))
           (str (name (:kind r)) " writes its wall down as a scenario"))
-      (is (= total checked)
+      (is (every? #(= "reads :domain, :member" (:why %)) deferred)
           (str (name (:kind r))
                "'s scenarios are check-tier: every guard reads
                 :principal and nothing else, so the gate judges them
-                with no database"))
+                with no database — save a manager's door, whose
+                `roles/a-manager` reads the member and domain rows
+                (ticket 3a5b43b3)"))
       (is (= [] (vec violations))))))
 
 ;; ── the shape the source and the walker both read ───────────────────

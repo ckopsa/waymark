@@ -40,6 +40,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.pull-fires :as pf]
+            [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
@@ -424,13 +425,14 @@
    :filterable {:state #{:eq :in}
                 :provider #{:eq :in}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
-   :create-guards [the-engine-seeds-the-provider]
+   ;; the account spends money: only a manager changes it (R-3.2)
+   :create-guards [the-engine-seeds-the-provider roles/a-manager]
    :actions
    {:restate
     {:from #{:live} :to :live
      :input [:map cap-field]
      :record true
-     :guards [a-person-sets-the-cap]
+     :guards [a-person-sets-the-cap roles/a-manager]
      :edit {:prefill [:cap] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The account holds the cap this restate says; the one before is not kept."}
