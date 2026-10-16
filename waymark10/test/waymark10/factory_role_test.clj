@@ -4,12 +4,14 @@
   factory domain has no owner; with an owner set it passes the owner
   and a member holding `manager` and refuses a contributor, naming the
   role it wants. Only a manager walks `set_factory_role`, and only a
-  manager allows the bench's merge held call (ticket d121729e). A
-  person's effective scope (ticket 228f59e8) is the whole engine for a
-  manager and everything but the `a-manager` doors for anyone else. In
-  memory."
+  manager allows the bench's merge held call (ticket d121729e) and
+  approves an approval_request (ticket 40d9c53b); deny stays open to
+  any decider. A person's effective scope (ticket 228f59e8) is the
+  whole engine for a manager and everything but the `a-manager` doors
+  for anyone else. In memory."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.fixtures :as fx]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
@@ -222,6 +224,41 @@
         (is (nil? (:retry-at out)))
         (is (= (str "link " sams ": broken") (:skipped out)))))))
 
+(defn- ask! [eng who]
+  (str (:id (:row (inv/create! eng :approval_request
+                               {:task "Accept the week's meals."
+                                :scope [{:kind "meal" :actions ["accept"]}]}
+                               {:principal (t/principal
+                                            {:id who :type :agent
+                                             :display who})})))))
+
+(defn- state-of [result] (some-> result :row :state name))
+
+(deftest only-a-manager-approves-an-ask
+  (let [eng (eng! [fx/meal])]
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "a contributor is refused at approve, and the refusal names the role"
+      (let [id (ask! eng "agent-a")
+            r (refusal #(inv/invoke! eng :approval_request id :approve nil
+                                     (as "cole")))]
+        (is (some? r))
+        (is (re-find #"`manager` role" (pr-str r)))))
+    (testing "a manager approves"
+      (let [id (ask! eng "agent-b")]
+        (is (= "approved" (state-of (inv/invoke! eng :approval_request id
+                                                 :approve nil (as "mara")))))))
+    (testing "deny is unchanged: a contributor still says no"
+      (let [id (ask! eng "agent-c")]
+        (is (= "denied" (state-of (inv/invoke! eng :approval_request id
+                                               :deny {:note "not this week"}
+                                               (as "cole")))))))))
+
 (deftest only-a-manager-sets-a-provider-cap-or-a-secret
   ;; ticket 3a5b43b3 (R-3.2): what spends money or holds a credential
   (let [eng (eng!)]
@@ -335,12 +372,14 @@
 
 (defn- but-manager-doors
   "The whole engine less the doors `a-manager` guards: the factory
-  role's, a runner provider's (ticket 3a5b43b3), a secret's and a
-  domain's (ticket bf8336c5)."
+  role's, a runner provider's (ticket 3a5b43b3), a secret's, a
+  domain's (ticket bf8336c5) and an approval_request's approve
+  (ticket 40d9c53b)."
   [w]
   (-> w
       (update "member" disj "set_factory_role")
       (update "domain" disj "create" "restate")
+      (update "approval_request" disj "approve")
       (update "runner_provider" disj "create" "restate")
       (update "secret" disj "create" "replace")))
 
@@ -348,6 +387,7 @@
   (let [eng (eng!)]
     (owned-factory! eng)
     (is (contains? (get (whole eng) "member") "set_factory_role"))
+    (is (contains? (get (whole eng) "approval_request") "approve"))
     (is (= (but-manager-doors (whole eng))
            (scope-of eng "cole")))))
 
