@@ -9,6 +9,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
+            [waymark10.server.runner-links :as rl]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -91,3 +92,43 @@
         (is (= ["manager"] (roles-of eng "mara")))))
     (testing "a person with no member row and no role is refused"
       (is (some? (refusal #(set-role! eng "stranger" "cole" nil)))))))
+
+(deftest only-a-manager-sets-a-provider-cap-or-a-secret
+  ;; ticket 3a5b43b3 (R-3.2): what spends money or holds a credential
+  (let [eng (eng!)]
+    (rl/ensure-providers! eng)
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "the runner provider's cap"
+      (let [cap! (fn [who]
+                   (let [row (rl/provider-row eng "claude_routine")
+                         id (str (:id row))]
+                     (inv/invoke! eng :runner_provider id :restate {:cap nil}
+                                  (assoc (as who)
+                                         :if-match (inv/etag :runner_provider id
+                                                             (:version row))))))]
+        (is (re-find #"`manager` role" (pr-str (refusal #(cap! "cole"))))
+            "a contributor is refused, and the refusal names the role")
+        (is (nil? (refusal #(cap! "mara"))) "a manager passes")))
+    (testing "a secret's create"
+      (is (re-find #"`manager` role"
+                   (pr-str (refusal #(inv/create! eng :secret
+                                                  {:name "cole-token" :value "sk-cole"}
+                                                  (as "cole"))))))
+      (is (empty? (rows-of eng :secret {:name "cole-token"}))))
+    (testing "a secret's replace"
+      (let [s (:row (inv/create! eng :secret {:name "mara-token" :value "sk-mara"}
+                                 (as "mara")))
+            replace! (fn [who v]
+                       (inv/invoke! eng :secret (str (:id s)) :replace {:value v}
+                                    (assoc (as who)
+                                           :if-match (inv/etag :secret (str (:id s))
+                                                               (:version s)))))]
+        (is (some? s) "a manager makes one")
+        (is (re-find #"`manager` role" (pr-str (refusal #(replace! "cole" "sk-cole")))))
+        (is (nil? (refusal #(replace! "mara" "sk-mara-2"))) "a manager passes")))))

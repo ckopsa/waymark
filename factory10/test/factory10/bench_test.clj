@@ -53,6 +53,8 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
+            [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1437,6 +1439,69 @@
       (is (thrown? clojure.lang.ExceptionInfo (restated clerk 4000)))
       (is (= 600 (get-in (policy-row eng (:id row)) [:data :max_lines]))
           "a seat's sitter could otherwise raise its own ceiling"))))
+
+(deftest only-a-manager-states-the-policy
+  ;; ticket 3a5b43b3 (R-3.2): which repositories the house works and
+  ;; which checks it wants. With the factory domain owned, a
+  ;; contributor is refused at each door with the role named, and a
+  ;; manager passes.
+  (let [st (state)
+        eng (fresh-engine st)
+        mara (t/principal {:id "mara" :display "Mara"})
+        cole (t/principal {:id "cole" :display "Cole"})
+        _ (roles/ensure-factory-roles! eng)
+        _ (doseq [[id role] [["mara" "manager"] ["cole" "contributor"]]]
+            (inv/create! eng :member {:display id :actor_type "human" :roles [role]}
+                         {:principal members/registrar :id id}))
+        d (:row (inv/create! eng :domain {:name "factory"
+                                          :charter "The engine's own work."
+                                          :budget_usd_per_week 40M}
+                             {:principal person}))
+        _ (inv/invoke! eng :domain (str (:id d)) :restate {:owner "colton"}
+                       {:principal person
+                        :if-match (inv/etag :domain (str (:id d)) (:version d))})
+        refused (fn [thunk]
+                  (try (thunk) nil
+                       (catch clojure.lang.ExceptionInfo e (pr-str (ex-data e)))))
+        created (fn [who repo]
+                  (:row (inv/create! eng :repo_policy
+                                     {:repository repo
+                                      :branch_pattern "waymark/*"
+                                      :base "main"
+                                      :max_lines 400
+                                      :opens_pr true
+                                      :auto_merge true
+                                      :rounds_per_change 3
+                                      :formatter "runner"}
+                                     {:principal who})))
+        restated (fn [who id lines]
+                   (let [current (policy-row eng id)]
+                     (inv/invoke! eng :repo_policy (str id) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter])
+                                         :max_lines lines)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy id
+                                                       (:version current))})))
+        moved (fn [who id action]
+                (inv/invoke! eng :repo_policy (str id) action {} {:principal who}))]
+    (testing "create"
+      (is (re-find #"`manager` role" (str (refused #(created cole "ckopsa/cole")))))
+      (is (nil? (refused #(created mara "ckopsa/mara")))))
+    (let [id (:id (created mara "ckopsa/kept"))]
+      (testing "restate"
+        (is (re-find #"`manager` role" (str (refused #(restated cole id 4000)))))
+        (is (= 400 (get-in (policy-row eng id) [:data :max_lines])))
+        (restated mara id 600)
+        (is (= 600 (get-in (policy-row eng id) [:data :max_lines]))))
+      (testing "retire"
+        (is (re-find #"`manager` role" (str (refused #(moved cole id :retire)))))
+        (is (nil? (refused #(moved mara id :retire)))))
+      (testing "restore"
+        (is (re-find #"`manager` role" (str (refused #(moved cole id :restore)))))
+        (is (nil? (refused #(moved mara id :restore))))))))
 
 (deftest the-hosted-workflows-wall-is-a-registered-hold
   (is (holds/hold? :only-a-person-widens-the-hosted-workflows)
