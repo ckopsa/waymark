@@ -16,7 +16,7 @@
   (start [s argv dir env]
     "Start one process: `argv` a vector of strings, `dir` the working
     directory, `env` a map of extra variables to add to the inherited
-    environment → a `Handle`."))
+    environment, where a nil value removes one → a `Handle`."))
 
 (defprotocol Handle
   (stdout [h] "The process's standard output, as a stream.")
@@ -50,7 +50,12 @@
       ;; the environment is INHERITED and added to. R-8.3: the server
       ;; sets no seat variable, so the Stop hook takes its second path
       ;; and the session closes its own sitting through the connector.
-      (doseq [[k v] env] (.put (.environment pb) (str k) (str v)))
+      ;; a nil value REMOVES the variable: a person's run must not
+      ;; inherit the machine's own key (§12)
+      (doseq [[k v] env]
+        (if (nil? v)
+          (.remove (.environment pb) (str k))
+          (.put (.environment pb) (str k) (str v))))
       ;; an empty stdin: nothing is ever written to it, and a pipe left
       ;; open makes `claude -p` wait three seconds for input first
       (.redirectInput pb (ProcessBuilder$Redirect/from (io/file "/dev/null")))

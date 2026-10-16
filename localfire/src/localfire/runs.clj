@@ -39,6 +39,12 @@
 (defn paused-file ^File [runs-dir routine] (io/file (str runs-dir) "paused" (str routine)))
 (defn hook-file ^File [runs-dir id] (io/file (place-dir runs-dir id) ".claude" "hooks" "sitting-close.sh"))
 
+(defn claude-config-dir
+  "A person's run's own CLAUDE_CONFIG_DIR (§12), laid out as a HOME's
+  `.claude` so its transcript is where `transcript-file` looks."
+  ^File [runs-dir id]
+  (io/file (run-dir runs-dir id) "home" ".claude"))
+
 (defn transcript-file
   "Where Claude Code writes the run's transcript: under `home`, in the
   project directory named for the run's working directory — the place,

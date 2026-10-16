@@ -187,6 +187,9 @@
      :claude-home   (:claude-home m)
      ;; §12: nil without :oidc, and then no sign-in, as before
      :oidc          (some-> (:oidc m) normalize-oidc)
+     ;; §12: what a person's routine runs as, with :oidc only
+     :person-routine (when (:oidc m)
+                       (normalize-routine "person" (or (:person-routine m) {:model "opus"})))
      ;; §13: nil without :pull, and then localfire only takes pushes
      :pull          (some-> (:pull m)
                             (normalize-pull (set (map routine-name (keys rs)))))
