@@ -18,12 +18,18 @@
   total and what is left as `allocated_usd_per_week` and
   `headroom_usd_per_week`, worked out at read time. `move_budget` takes
   an amount from one seat and gives it to another in one transaction;
-  a person or the sitter of the domain's mayor seat makes it."
+  a person or the sitter of the domain's mayor seat makes it.
+
+  ONLY A MANAGER MAKES OR RESTATES ONE (epic 46831b3c, R-3.2).
+  `create` and `restate` carry `roles/a-manager`. The factory domain's
+  owner restate is what makes a manager real, and while no owner is set
+  every person passes, so the first owner can still be set."
   (:require [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -266,7 +272,7 @@
                 :name #{:eq}
                 :mayor #{:eq}}
    :sortable {:fields [:name] :default "name"}
-   :create-guards [domain-waits-for-the-tap]
+   :create-guards [roles/a-manager domain-waits-for-the-tap]
    :actions
    {:restate
     {:from #{:active} :to :active
@@ -277,7 +283,7 @@
              owner-field]
      :record true
      ;; the hold LAST, so a held restate is one every other wall passed
-     :guards [budget-covers-the-seats domain-waits-for-the-tap]
+     :guards [roles/a-manager budget-covers-the-seats domain-waits-for-the-tap]
      :edit {:prefill [:charter :mayor :budget_usd_per_week :owner] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The domain holds what this restate says; the values before are not kept."}

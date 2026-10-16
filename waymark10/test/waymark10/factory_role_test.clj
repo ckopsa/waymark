@@ -269,11 +269,13 @@
 
 (defn- but-manager-doors
   "The whole engine less the doors `a-manager` guards: the factory
-  role's, a runner provider's (ticket 3a5b43b3), a secret's and an
-  approval_request's approve (ticket 40d9c53b)."
+  role's, a runner provider's (ticket 3a5b43b3), a secret's, a
+  domain's (ticket bf8336c5) and an approval_request's approve
+  (ticket 40d9c53b)."
   [w]
   (-> w
       (update "member" disj "set_factory_role")
+      (update "domain" disj "create" "restate")
       (update "approval_request" disj "approve")
       (update "runner_provider" disj "create" "restate")
       (update "secret" disj "create" "replace")))
