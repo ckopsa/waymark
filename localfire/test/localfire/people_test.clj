@@ -32,6 +32,7 @@
 (def the-key (byte-array (range 32)))
 (def subject "sam-subject-1")
 (def claude-token "sk-ant-oat01-THE-PERSONS-OWN-TOKEN-0123456789")
+(def access-token "the-persons-access-token-from-the-realm")
 
 (defn- base-config [port runs]
   {:port       port
@@ -44,7 +45,7 @@
 (defn- world
   "A server with a fake spawner and a fake realm, which answers the
   claims for `good-code` and nothing for any other code."
-  [{:keys [oidc? stdout exit pull-url]}]
+  [{:keys [oidc? stdout exit engine pull-url]}]
   (let [calls  (atom [])
         port   (w/free-port)
         runs   (w/tmpdir "lf-runs")
@@ -52,8 +53,9 @@
         codes  (atom [])
         cfg    (config/normalize
                 (cond-> (base-config port runs)
-                  oidc? (assoc :oidc {:issuer     "http://127.0.0.1:9/realms/domestic"
-                                      :tokens-dir (str tokens)})
+                  oidc? (assoc :oidc (cond-> {:issuer     "http://127.0.0.1:9/realms/domestic"
+                                              :tokens-dir (str tokens)}
+                                       engine (assoc :engine-url "http://engine.test")))
                   pull-url (assoc :person-pull-url pull-url)))
         st     (server/start!
                 {:config  cfg
@@ -63,7 +65,9 @@
                  :sign-in {:key      the-key
                            :exchange (fn [code verifier]
                                        (swap! codes conj [code verifier])
-                                       (when (= code "good-code") {"sub" subject}))}})]
+                                       (when (= code "good-code")
+                                         {"sub" subject :access-token access-token}))
+                           :engine   engine}})]
     (assoc st :base (str "http://127.0.0.1:" port) :tokens tokens :codes codes :calls calls)))
 
 ;; ── a browser that follows nothing ───────────────────────────────────
@@ -241,6 +245,66 @@
                                           :token  "t"})))
     (is (nil? (people/parse-key "too-short")))
     (is (= 32 (alength ^bytes (people/parse-key (.encodeToString (Base64/getEncoder) ^bytes the-key)))))))
+
+(defn- stub-engine
+  "An engine that answers every POST and keeps what it was sent."
+  [calls]
+  (fn [url at body]
+    (swap! calls conj {:url url :access-token at :body body})
+    {:status (if (str/ends-with? url "/runner_links") 201 200)
+     :body   {"id" "link-1"}}))
+
+(deftest a-person-registers-their-runner-link-in-the-engine
+  ;; ticket eae4b907
+  (let [calls (atom [])
+        w     (world {:oidc? true :engine (stub-engine calls)})]
+    (try
+      (let [base  (:base w)
+            ck    (:cookie (sign-in! w))
+            csrf  (csrf-of (:body (req :get (str base "/me") {:cookie ck})))
+            _     (req :post (str base "/me/token") {:cookie ck :form {:csrf csrf :token claude-token}})
+            me1   (req :get (str base "/me") {:cookie ck})
+            nm    (people/routine-name subject)
+            press #(req :post (str base "/me/connect") {:cookie ck :form {:csrf csrf}})
+            first-press (press)
+            second-press (press)
+            revoke (req :post (str base "/me/revoke") {:cookie ck :form {:csrf csrf}})
+            [made restated retired] @calls]
+        (testing "the page offers the button"
+          (is (str/includes? (str (:body me1)) "/me/connect")))
+        (testing "the first press makes a push link with the person's token, the routine's URL and bearer"
+          (is (= 303 (:status first-press)))
+          (is (= "http://engine.test/api/runner_links" (:url made)))
+          (is (= access-token (:access-token made)))
+          (is (= {:provider "localfire" :delivery "push"
+                  :fire_url (str base "/fire/" nm)
+                  :fire_token (people/fire-token (:people w) nm)}
+                 (:body made))))
+        (testing "a second press restates that link instead of making another"
+          (is (= 303 (:status second-press)))
+          (is (= "http://engine.test/api/runner_links/link-1/-/restate" (:url restated)))
+          (is (= access-token (:access-token restated)))
+          (is (= (people/fire-token (:people w) nm) (get-in restated [:body :token]))))
+        (testing "a revoke marks the link: retired in the engine and here"
+          (is (= 303 (:status revoke)))
+          (is (= "http://engine.test/api/runner_links/link-1/-/retire" (:url retired)))
+          (is (= {:id "link-1" :retired true} (people/read-link (:people w) subject))))
+        (testing "no call carries the Claude token"
+          (is (not (str/includes? (pr-str @calls) claude-token)))))
+      (finally (server/stop! w)))))
+
+(deftest a-refused-link-says-so-and-records-nothing
+  (let [w (world {:oidc? true :engine (fn [_ _ _] {:status 403 :body {"detail" "not yours"}})})]
+    (try
+      (let [base (:base w)
+            ck   (:cookie (sign-in! w))
+            csrf (csrf-of (:body (req :get (str base "/me") {:cookie ck})))
+            _    (req :post (str base "/me/token") {:cookie ck :form {:csrf csrf :token claude-token}})
+            r    (req :post (str base "/me/connect") {:cookie ck :form {:csrf csrf}})]
+        (is (= 422 (:status r)))
+        (is (str/includes? (str (:body r)) "not yours"))
+        (is (nil? (people/read-link (:people w) subject))))
+      (finally (server/stop! w)))))
 
 (deftest a-sealed-token-opens-only-for-its-own-subject
   (let [sealed (people/seal the-key "sam" claude-token)]

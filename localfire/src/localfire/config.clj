@@ -114,18 +114,21 @@
   (when-not (map? o)
     (fail! "the config's :oidc must be a map."))
   (let [issuer (some-> (:issuer o) str not-empty (str/replace #"/+$" ""))
-        tokens (some-> (:tokens-dir o) str not-empty)]
+        tokens (some-> (:tokens-dir o) str not-empty)
+        engine (some-> (:engine-url o) str not-empty (str/replace #"/+$" ""))]
     (when-not issuer
       (fail! "the config's :oidc needs an :issuer, the realm's URL."))
     (when-not tokens
       (fail! "the config's :oidc needs a :tokens-dir, where the sealed tokens live."))
-    {:issuer        issuer
-     :client-id     (or (some-> (:client-id o) str not-empty) "localfire-claude")
-     :authorize-url (or (some-> (:authorize-url o) str not-empty)
-                        (str issuer "/protocol/openid-connect/auth"))
-     :token-url     (or (some-> (:token-url o) str not-empty)
-                        (str issuer "/protocol/openid-connect/token"))
-     :tokens-dir    tokens}))
+    (cond-> {:issuer        issuer
+             :client-id     (or (some-> (:client-id o) str not-empty) "localfire-claude")
+             :authorize-url (or (some-> (:authorize-url o) str not-empty)
+                                (str issuer "/protocol/openid-connect/auth"))
+             :token-url     (or (some-> (:token-url o) str not-empty)
+                                (str issuer "/protocol/openid-connect/token"))
+             :tokens-dir    tokens}
+      ;; where /me registers the person's runner link (ticket eae4b907)
+      engine (assoc :engine-url engine))))
 
 (defn normalize
   "The config as the server uses it: every default filled in, every

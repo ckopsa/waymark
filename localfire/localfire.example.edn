@@ -65,7 +65,10 @@
  ;; there is no sign-in and the server runs as one machine login.
  ;; :oidc {:issuer     "https://auth.kopsa.info/realms/domestic"
  ;;        :client-id  "localfire-claude"
- ;;        :tokens-dir "/var/lib/localfire/tokens"}
+ ;;        :tokens-dir "/var/lib/localfire/tokens"
+ ;;        ;; optional: /me's "Connect to the engine" registers each
+ ;;        ;; person's routine there as their own runner link
+ ;;        :engine-url "https://work.kopsa.info"}
 
  ;; one routine per CLI model — the local copy of "one Routine for each
  ;; model" (docs/routines/ci-classifier.md). :model is required;

@@ -8,7 +8,8 @@
   `read-token` only — no page renders it and no line logs it — and the
   person can delete it. Without `:oidc` in the config `init` answers
   nil, and the server has none of these routes."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [jsonista.core :as json]
             [localfire.page :as page])
@@ -307,19 +308,38 @@
         resp (try (.send ^HttpClient @client req (HttpResponse$BodyHandlers/ofString))
                   (catch Exception _ nil))]
     (when (and resp (= 200 (.statusCode ^HttpResponse resp)))
-      (let [claims (some-> (try (json/read-value (str (.body ^HttpResponse resp)))
-                                (catch Exception _ nil))
-                           (get "id_token")
-                           jwt-claims)]
+      (let [body   (try (json/read-value (str (.body ^HttpResponse resp)))
+                        (catch Exception _ nil))
+            claims (some-> body (get "id_token") jwt-claims)]
         (when (and claims
                    (= (get claims "iss") (:issuer oidc))
                    (audience? claims (:client-id oidc)))
-          claims)))))
+          ;; the access token is the person's own, for the engine's doors
+          (assoc claims :access-token (get body "access_token")))))))
+
+(defn engine-post
+  "One POST to the engine as the signed-in person: their own access
+  token is the bearer, so the engine sees localfire-claude acting for
+  them. → {:status :body}, the body read as JSON, or nil when the
+  engine did not answer."
+  [url access-token body]
+  (let [req (-> (HttpRequest/newBuilder (URI/create url))
+                (.timeout (Duration/ofSeconds 10))
+                (.header "content-type" "application/json")
+                (.header "accept" "application/json")
+                (.header "authorization" (str "Bearer " access-token))
+                (.POST (HttpRequest$BodyPublishers/ofString (json/write-value-as-string body)))
+                (.build))]
+    (try (let [resp ^HttpResponse (.send ^HttpClient @client req (HttpResponse$BodyHandlers/ofString))]
+           {:status (.statusCode resp)
+            :body   (try (json/read-value (str (.body resp))) (catch Exception _ nil))})
+         (catch Exception _ nil))))
 
 (defn init
   "The sign-in's state, or nil when the config has no `:oidc`.
-  `:exchange` is the seam the tests fake: (code verifier) → claims."
-  [config {:keys [key secret exchange]}]
+  `:exchange` is the seam the tests fake: (code verifier) → claims.
+  `:engine` is the other: (url access-token body) → {:status :body}."
+  [config {:keys [key secret exchange engine]}]
   (when-let [oidc (:oidc config)]
     (when-not key
       (throw (ex-info "the config has :oidc, and LOCALFIRE_TOKEN_KEY is not a base64 AES key of 32 bytes."
@@ -333,7 +353,87 @@
      :on-pull  (atom nil)
      :exchange (or exchange
                    (fn [code verifier]
-                     (exchange-code oidc secret (:public-url config) code verifier)))}))
+                     (exchange-code oidc secret (:public-url config) code verifier)))
+     :engine   (or engine engine-post)}))
+
+;; ── the person's runner link (ticket eae4b907) ───────────────────────
+
+(defn link-file
+  "Where the id of the person's runner link is kept, beside their token.
+  It is no secret, and a revoke keeps it, so a later press restates the
+  same link instead of making another."
+  ^File [people sub]
+  (io/file (get-in people [:oidc :tokens-dir]) (str (person-hex sub) ".link")))
+
+(defn read-link [people sub]
+  (let [f (link-file people sub)]
+    (when (.isFile f)
+      (try (edn/read-string (slurp f)) (catch Exception _ nil)))))
+
+(defn- write-link! [people sub link]
+  (let [f (link-file people sub)]
+    (.mkdirs (.getParentFile f))
+    (spit f (pr-str link))
+    nil))
+
+(defn- links-url [people & parts]
+  (apply str (get-in people [:oidc :engine-url]) "/api/runner_links" parts))
+
+(defn- answered? [r]
+  (boolean (some-> (:status r) (< 300))))
+
+(defn- refused [r]
+  (if-let [s (:status r)]
+    (str "The engine refused your link (" s
+         (some->> (get-in r [:body "detail"]) (str ": ")) ").")
+    "The engine did not answer. Try again in a moment."))
+
+(defn connect!
+  "Register the person's routine as their own runner link: the engine
+  sees localfire-claude acting for them and stamps them its owner. The
+  first press makes a push link with the routine's fire URL and bearer;
+  a later one restates it, restoring it first when a revoke retired it.
+  → nil, or the sentence for the page."
+  [people public-url sess]
+  (let [sub  (:sub sess)
+        at   (:access-token sess)
+        nm   (routine-name sub)
+        url  (str public-url "/fire/" nm)
+        tok  (fire-token people nm)
+        post (:engine people)
+        link (read-link people sub)]
+    (cond
+      (str/blank? at)
+      "Your sign-in carried no access token for the engine. Sign out and sign in again."
+
+      (nil? link)
+      (let [r  (post (links-url people) at {:provider "localfire" :delivery "push"
+                                             :fire_url url :fire_token tok})
+            id (some-> (get-in r [:body "id"]) str not-empty)]
+        (if (and (answered? r) id)
+          (write-link! people sub {:id id})
+          (refused r)))
+
+      :else
+      (let [id (str (:id link))]
+        ;; a person may have restored it by hand: the restate judges
+        (when (:retired link)
+          (post (links-url people "/" (url-encode id) "/-/restore") at {}))
+        (let [r (post (links-url people "/" (url-encode id) "/-/restate") at
+                      {:provider "localfire" :fire_url url :token tok})]
+          (if (answered? r)
+            (write-link! people sub {:id id})
+            (refused r)))))))
+
+(defn- retire-link!
+  "A revoked token leaves the routine nothing to run under, so its link
+  is retired: nothing fires through it until the next press."
+  [people sess]
+  (when-let [id (some-> (read-link people (:sub sess)) :id str)]
+    (when-not (str/blank? (:access-token sess))
+      ((:engine people) (links-url people "/" (url-encode id) "/-/retire")
+                        (:access-token sess) {}))
+    (write-link! people (:sub sess) {:id id :retired true})))
 
 ;; ── the routes ──────────────────────────────────────────────────────
 
@@ -391,7 +491,8 @@
                                    "The sign-in did not come back as one this server began. Sign in again."))
       (let [sid (b64url (random-bytes 32))]
         (swap! (:sessions people) assoc sid
-               {:sub sub :csrf (b64url (random-bytes 24)) :expires (+ now session-ms)})
+               {:sub sub :csrf (b64url (random-bytes 24)) :expires (+ now session-ms)
+                :access-token (some-> (:access-token claims) str not-empty)})
         (redirect "/me" (session-cookie sid public-url))))))
 
 (defn- forbidden []
@@ -407,9 +508,11 @@
                    :csrf       (:csrf sess)
                    :problem    problem
                    ;; R-12.10: what the runner link's registration needs
-                   :routine    (when nm {:name  nm
-                                         :url   (str public-url "/fire/" nm)
-                                         :token (fire-token people nm)})
+                   :routine    (when nm {:name    nm
+                                         :url     (str public-url "/fire/" nm)
+                                         :token   (fire-token people nm)
+                                         :engine? (boolean (get-in people [:oidc :engine-url]))
+                                         :link    (read-link people sub)})
                    ;; R-12.12: the pull link, where an engine is named
                    :pull       (when (and nm (:pull-url people))
                                  {:link-id (:link-id (routine-pull-link people nm))})})))
@@ -444,7 +547,20 @@
       (if-not (csrf-ok?)
         (forbidden)
         (do (revoke-token! people (:sub sess))
+            (retire-link! people sess)
             (redirect "/me")))
+
+      [:post "/me/connect"]
+      (if-not (csrf-ok?)
+        (forbidden)
+        (if-let [problem (cond
+                           (not (has-token? people (:sub sess)))
+                           "Store a token first: your link fires your routine, which runs under it."
+                           (str/blank? (get-in people [:oidc :engine-url]))
+                           "This localfire names no engine (:oidc :engine-url), so it cannot register your link."
+                           :else (connect! people public-url sess))]
+          (html 422 (me people public-url sess problem))
+          (redirect "/me")))
 
       [:post "/me/pull"]
       (if-not (csrf-ok?)

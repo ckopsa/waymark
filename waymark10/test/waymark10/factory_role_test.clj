@@ -168,6 +168,25 @@
       (is (= (set (roles/effective-scope eng (t/principal {:id "mara" :display "mara"})))
              (set (roles/effective-scope eng (:principal (delegate "mara")))))))))
 
+(deftest a-link-localfire-makes-for-a-person-is-that-persons
+  ;; ticket eae4b907: /me presses create with the person's own access
+  ;; token, so the engine sees localfire-claude acting for them
+  (let [eng  (eng!)
+        ctx  {:principal (assoc (t/principal {:id "localfire-claude:sam" :type :agent
+                                              :display "localfire"})
+                                :acts-for "sam")}
+        id   (str (:id (:row (inv/create! eng :runner_link
+                                          {:provider "localfire" :delivery "push"
+                                           :fire_url "https://lf.example.test/fire/p-0123"
+                                           :fire_token "localfire-fire-bearer-0123456789"}
+                                          ctx))))
+        data (some->> (store/with-tx (:storage eng)
+                        (fn [tx] (store/load-row (:storage eng) tx :runner_link id {})))
+                      (inv/decode-row (get (inv/resources eng) :runner_link))
+                      :data)]
+    (is (= "sam" (:owner data)))
+    (is (= "localfire" (str (:provider data))))))
+
 (deftest a-contributors-seat-fires-only-on-its-owners-links
   ;; ticket b7572409 (R-5.1, R-5.3)
   (let [eng (eng!)
