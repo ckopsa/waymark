@@ -491,6 +491,8 @@
 ;; the hand that opens the seat — its creator. A restated seat that
 ;; records no owner is not judged, as before. Only the entries a write
 ;; ADDS are judged, so a restate that leaves the scope alone passes.
+;; Dotted powers are not judged here: an effective scope names kinds
+;; only, and a person holds powers as granted.
 
 (defn- entry-shape [e]
   [(str (:kind e)) (into #{} (map str) (:actions e))])
@@ -515,7 +517,9 @@
    :explain "A seat's scope is never wider than its owner's own, and {owner} may not walk {entries}. Drop those entries, or ask a manager to open the seat."}
   [row inp ctx]
   (let [before (into #{} (map entry-shape) (get-in row [:data :scope]))
-        added (remove #(contains? before (entry-shape %)) (:scope inp))]
+        added (->> (:scope inp)
+                   (remove #(str/includes? (str (:kind %)) "."))
+                   (remove #(contains? before (entry-shape %))))]
     (if (or (empty? added) (nil? (:rdefs ctx)))
       (t/allow)
       (if-some [owner (seat-owner row ctx)]
