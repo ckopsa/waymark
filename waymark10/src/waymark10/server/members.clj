@@ -949,10 +949,11 @@
                                [:role {:optional true
                                        :examples ["contributor"]
                                        :x-display {:label "Factory role"
-                                                   :help "manager runs the factory and walks its manager-only doors; contributor works in it. Leave it empty to clear the member's factory role; its other roles stay."
+                                                   :help "manager runs the factory and walks its manager-only doors; contributor works in it; requester files tickets and sees only their own. Leave it empty to clear the member's factory role; its other roles stay."
                                                    :choices {"manager" "Manager — runs the factory and walks its manager-only doors"
-                                                             "contributor" "Contributor — works in the factory"}}}
-                                [:maybe [:enum "manager" "contributor"]]]]
+                                                             "contributor" "Contributor — works in the factory"
+                                                             "requester" "Requester — files tickets and sees only their own"}}}
+                                [:maybe [:enum "manager" "contributor" "requester"]]]]
                        :record true
                        :guards [roles/a-manager factory-role-registered]
                        :safety {:idempotent true :reversible true :confirm false}
