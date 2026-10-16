@@ -29,6 +29,13 @@
 
 (defn- as [id] {:principal (t/principal {:id id :display id})})
 
+(defn- delegate
+  "An agent acting for `person`, as the identity gate marks one."
+  [person]
+  {:principal (assoc (t/principal {:id (str person "-claude") :type :agent
+                                   :display (str person "'s Claude")})
+                     :acts-for person)})
+
 (defn- member! [eng id roles']
   (:row (inv/create! eng :member
                      (cond-> {:display id :actor_type "human"}
@@ -75,7 +82,12 @@
       (is (= ["contributor"] (roles-of eng "olive"))))
     (testing "agents are not judged: they keep their grant rules"
       (is (roles/manager? {:principal (t/principal {:id "clerk" :type :agent})
-                           :read (constantly nil) :find (constantly nil)})))))
+                           :read (constantly nil) :find (constantly nil)})))
+    (testing "a delegate of a contributor passes while no owner is set"
+      (set-role! eng "olive" "olive" nil)
+      (inv/invoke! eng :member "olive" :set_factory_role {:role "contributor"}
+                   (delegate "cole"))
+      (is (= ["contributor"] (roles-of eng "olive"))))))
 
 (deftest with-an-owner-only-a-manager-passes
   (let [eng (eng!)]
@@ -117,6 +129,40 @@
   (:state (:row (inv/invoke! eng :held_call id :allow {}
                              {:principal (t/principal {:id who :display who
                                                        :roles #{"approver"}})}))))
+
+(deftest a-delegate-is-judged-as-its-person
+  ;; ticket b7959730: an agent that acts for a person walks no manager's
+  ;; door its person may not
+  (let [eng (eng!)]
+    (member! eng "olive" nil)
+    (member! eng "mara" ["manager"])
+    (member! eng "cole" ["contributor"])
+    (let [d (factory! eng)]
+      (inv/invoke! eng :domain (str (:id d)) :restate {:owner "olive"}
+                   (assoc (as "olive")
+                          :if-match (inv/etag :domain (str (:id d)) (:version d)))))
+    (testing "a contributor's delegate is refused, and the refusal names the role"
+      (let [r (refusal #(inv/invoke! eng :member "mara" :set_factory_role
+                                     {:role "contributor"} (delegate "cole")))]
+        (is (re-find #"`manager` role" (pr-str r)))
+        (is (= ["manager"] (roles-of eng "mara")))))
+    (testing "a manager's delegate passes"
+      (inv/invoke! eng :member "cole" :set_factory_role {:role nil} (delegate "mara"))
+      (is (= [] (roles-of eng "cole"))))
+    (testing "the owner's delegate passes"
+      (inv/invoke! eng :member "cole" :set_factory_role {:role "contributor"}
+                   (delegate "olive"))
+      (is (= ["contributor"] (roles-of eng "cole"))))
+    (testing "a seat's agent with no acts-for keeps its grant rules"
+      (is (roles/manager? (assoc (inv/render-hooks eng)
+                                 :principal (t/principal {:id "code-seat" :type :agent})))))
+    (testing "a delegate's scope is its person's"
+      (is (not (roles/manager? (assoc (inv/render-hooks eng)
+                                      :principal (:principal (delegate "cole"))))))
+      (is (= (set (roles/effective-scope eng (t/principal {:id "cole" :display "cole"})))
+             (set (roles/effective-scope eng (:principal (delegate "cole"))))))
+      (is (= (set (roles/effective-scope eng (t/principal {:id "mara" :display "mara"})))
+             (set (roles/effective-scope eng (:principal (delegate "mara")))))))))
 
 (deftest only-a-manager-sets-a-provider-cap-or-a-secret
   ;; ticket 3a5b43b3 (R-3.2): what spends money or holds a credential
