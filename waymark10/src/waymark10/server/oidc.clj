@@ -215,15 +215,16 @@
   or unreachable IdP throws — to a mirror that is one unreachable
   feed, never a silently-empty one. Two racing callers may both mint;
   both tokens are valid and the cache keeps the later — recorded, not
-  fenced."
+  fenced. (f true) mints past the cache: a caller's one retry when
+  the target refused a token before its exp."
   [{:keys [issuer client-id client-secret scope token-endpoint]}]
   (let [endpoint (or token-endpoint
                      (str issuer "/protocol/openid-connect/token"))
         cache (atom nil)]
-    (fn []
+    (fn [& [fresh?]]
       (let [now (quot (System/currentTimeMillis) 1000)
             {:keys [token exp]} @cache]
-        (if (and token (< (+ now 30) exp))
+        (if (and token (not fresh?) (< (+ now 30) exp))
           token
           (let [{:keys [status body error]}
                 @(http/post endpoint

@@ -94,10 +94,11 @@
   (:require [clojure.string :as str]
             [dayplan10.passage :as passage]
             [workqueue10.confluence :as conf]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.net URI URLDecoder URLEncoder)
-           (java.net.http HttpClient HttpRequest
+           (java.net.http HttpClient HttpRequest HttpResponse
                           HttpRequest$BodyPublishers
                           HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
@@ -106,7 +107,8 @@
 (set! *warn-on-reflection* true)
 
 (def default-base
-  "The household's engine — LAN-only ingress, no credential."
+  "The household's engine — LAN-only ingress, behind a login since
+  2026-09-28 (http-call's bearer)."
   "https://stream.kopsa.info")
 
 (def feed-path "/api/feed/media")
@@ -380,11 +382,16 @@
 
 (defn http-call
   "The real transport: (fn [method path {:keys [params]}]) → the
-  parsed body. No credential — the engine is LAN-only ingress.
-  Non-2xx throws ex-info carrying :status: 400 for a malformed
-  cursor (resync from scratch), anything else the caller reads as
-  unreachable."
-  [{:keys [base]}]
+  parsed body. flickr has required a login since 2026-09-28: the
+  bearer is asked for PER REQUEST of :token-fn (the engine's own
+  client-credentials mint, oidc/outbound-token-fn), and a 401 asks it
+  once for a fresh mint and sends again — a token refused before its
+  exp heals in one call. No :token-fn (dev, no OIDC env) sends no
+  credential. Non-2xx throws ex-info carrying :status: 400 for a
+  malformed cursor (resync from scratch), anything else the caller
+  reads as unreachable. The token rides neither the ex-info nor a
+  log line."
+  [{:keys [base token-fn]}]
   (let [client (-> (HttpClient/newBuilder)
                    (.connectTimeout (Duration/ofSeconds 10))
                    (.build))
@@ -392,11 +399,18 @@
     (fn [^String method path {:keys [params]}]
       (let [url (str base path (when (seq params)
                                  (str "?" (query-string params))))
-            req (-> (HttpRequest/newBuilder (URI/create url))
-                    (.timeout (Duration/ofSeconds 30))
-                    (.method method (HttpRequest$BodyPublishers/noBody))
-                    (.build))
-            resp (.send client req (HttpResponse$BodyHandlers/ofString))
+            send! (fn [token]
+                    (let [b (-> (HttpRequest/newBuilder (URI/create url))
+                                (.timeout (Duration/ofSeconds 30))
+                                (.method method (HttpRequest$BodyPublishers/noBody)))]
+                      (when token
+                        (.header b "authorization" (str "Bearer " token)))
+                      (.send client (.build b) (HttpResponse$BodyHandlers/ofString))))
+            ^HttpResponse resp
+            (let [^HttpResponse first-resp (send! (when token-fn (token-fn)))]
+              (if (and token-fn (= 401 (.statusCode first-resp)))
+                (send! (token-fn true))
+                first-resp))
             status (.statusCode resp)]
         (when (>= status 400)
           (throw (ex-info (str "flickr answered " status " for "
@@ -512,22 +526,26 @@
   "The real boundary over a flickr engine.
   config: :base (the engine's URL — default the household's),
   :preferred-fn (work_key → the audience name the row follows, nil
-  for no opinion — engine-audience-fn is the wired spelling)."
-  [{:keys [base preferred-fn]}]
+  for no opinion — engine-audience-fn is the wired spelling),
+  :token-fn (the bearer source http-call asks; nil sends none)."
+  [{:keys [base preferred-fn token-fn]}]
   (let [base (str/replace (str (or base default-base)) #"/+$" "")]
-    (->FlickrSource (http-call {:base base}) base
+    (->FlickrSource (http-call {:base base :token-fn token-fn}) base
                     (or preferred-fn (constantly nil))
                     (atom nil))))
 
 (defn from-env
   "The deployed boundary off WORKQUEUE10_FLICKR_URL. nil when unset,
   which is offline dev's cue to use the fake — the same
-  nil-means-absent contract every boundary here keeps."
+  nil-means-absent contract every boundary here keeps. The bearer is
+  the engine's own client-credentials token off the WAYMARK10_OIDC_*
+  env; without that env it sends none, as before."
   ([] (from-env nil))
   ([{:keys [preferred-fn]}]
    (when-some [url (some-> (System/getenv "WORKQUEUE10_FLICKR_URL")
                            str not-empty)]
-     (http-source {:base url :preferred-fn preferred-fn}))))
+     (http-source {:base url :preferred-fn preferred-fn
+                   :token-fn (oidc/outbound-token-fn nil)}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 ;;
