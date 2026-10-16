@@ -1647,7 +1647,7 @@
   (note! eng row (or (not-empty (str (ex-message e)))
                      "The adapter could not reach the provider.")))
 
-(declare instant-of provider-note)
+(declare instant-of provider-note land-answer!)
 
 (def ^:private link-refusals
   "The statuses that say the link itself is bad. Only these break a
@@ -2167,35 +2167,63 @@
    (fire! eng adapter schedule-row text at link nil))
   ([eng adapter schedule-row text at link on-answer]
    (when (some-> (:fire_url link) str not-empty)
-     (let [answer (fire (claude-routine adapter) link text)
-           status (some-> (:status answer) long)]
+     (let [answer (fire (claude-routine adapter) link text)]
        (when on-answer (on-answer answer))
-       (cond
-         (contains? answer :started)
-         (try-act! eng schedule-row :fired
-                   (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))}
-                     (:started answer)
-                     (assoc :last_run_url (str (:started answer)))))
+       (land-answer! eng schedule-row answer at)))))
 
-         ;; a throttle: the row stays live and the wake waits
-         (contains? answer :throttled)
-         (throttle! eng schedule-row (:throttled answer) (:body answer))
+(defn land-answer!
+  "Land one provider `answer` (the Provider's four words) on
+  `schedule-row`, as `fire!` documents. `stamp` is merged into a
+  started run's `fired` (a pull link's `last_runner`). A push answer
+  lands here from `fire!`, and a pull link's from `land-pull-answer!`."
+  [eng schedule-row answer at & [stamp]]
+  (let [status (some-> (:status answer) long)]
+    (cond
+      (contains? answer :started)
+      (try-act! eng schedule-row :fired
+                (cond-> (merge {:last_fired_at (str (or (instant-of at) (now eng)))}
+                               stamp)
+                  (:started answer)
+                  (assoc :last_run_url (str (:started answer)))))
 
-         ;; a paused Routine is not a bad link: a live row says so as a
-         ;; state, a paused row already does, and any other row keeps
-         ;; trying until it is live enough to pause
-         (= 400 status)
-         (case (:state schedule-row)
-           :live (try-act! eng schedule-row :pause nil)
-           :paused nil
-           (throttle! eng schedule-row nil nil (:transient answer)))
+      ;; a throttle: the row stays live and the wake waits
+      (contains? answer :throttled)
+      (throttle! eng schedule-row (:throttled answer) (:body answer))
 
-         ;; only the link itself breaks the row
-         (contains? link-refusals status)
-         (note! eng schedule-row (:bad-link answer))
+      ;; a paused Routine is not a bad link: a live row says so as a
+      ;; state, a paused row already does, and any other row keeps
+      ;; trying until it is live enough to pause
+      (= 400 status)
+      (case (:state schedule-row)
+        :live (try-act! eng schedule-row :pause nil)
+        :paused nil
+        (throttle! eng schedule-row nil nil (:transient answer)))
 
-         ;; a transient refusal: the row stays live and tries again
-         :else (throttle! eng schedule-row nil nil (:transient answer)))))))
+      ;; only the link itself breaks the row
+      (contains? link-refusals status)
+      (note! eng schedule-row (:bad-link answer))
+
+      ;; a transient refusal: the row stays live and tries again
+      :else (throttle! eng schedule-row nil nil (:transient answer)))))
+
+(defn land-pull-answer!
+  "What a localfire answered for a fire it took through the pull link
+  `runner`, landed on the schedule `id` exactly as `fire!` lands a push
+  answer, with `runner` as `last_runner`. nil when no such schedule."
+  [eng id answer at runner]
+  (when-some [row (raw-row eng :schedule id)]
+    (land-answer! eng (update row :state #(some-> % name keyword))
+                  answer at {:last_runner (str runner)})))
+
+(defn miss!
+  "A pull fire for the schedule `id` that no localfire took within a
+  day: the row says `sentence` through `throttle`, stays live, and its
+  next wake fires afresh."
+  [eng id sentence]
+  (when-some [row (raw-row eng :schedule id)]
+    (try-act! eng row :throttle
+              {:note (clip sentence)
+               :retry_after (str (or (instant-of (now eng)) (Instant/now)))})))
 
 ;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
 
@@ -2233,7 +2261,9 @@
   resolved at the call."
   [eng provider-of schedule-row text at ids & [order]]
   (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
-        {:keys [runner answer retry-at transient]} (fire-pool! eng provider-of ids text order)]
+        {:keys [runner answer retry-at transient]}
+        (fire-pool! eng provider-of ids text order
+                    {:kind "schedule" :id (str (:id schedule-row))})]
     (cond
       runner
       (try-act! eng schedule-row :fired
