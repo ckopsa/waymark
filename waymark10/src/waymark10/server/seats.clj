@@ -6206,6 +6206,25 @@
           true)
       false)))
 
+(defn seat-halt-at-the-wall!
+  "Mark the seat halted `budget_reached` when the week's fuel wall
+  held it — a wake held back (`wakes/hold-at-the-wall!`) or a halted
+  sit. A seat whose wakes are all held never makes the request the
+  router halts on, so without this its row never said it. `detail` is
+  the wall's sentence, cut to 240 characters. Best effort, the
+  router's posture: a seat that moved under us is not an error here.
+  Idempotent because `seat-halt!` is: one `mark_halted` across every
+  hold. → true when the halt was written."
+  [eng seat-id detail]
+  (try
+    (seat-halt! eng seat-id "budget_reached"
+                (some-> detail str (as-> s (subs s 0 (min 240 (count s))))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 seats: seat" seat-id
+                 "could not record its halt at the wall -" (ex-message e)))
+      false)))
+
 (defn mark-stale!
   "Write the scope entries that stopped resolving, through the
   concealed `mark_stale` — system actor, logged, the guard's own

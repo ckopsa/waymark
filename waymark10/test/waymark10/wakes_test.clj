@@ -2723,6 +2723,16 @@
       (is (= "budget" (:wall (halted))))
       (is (re-find #"The week's fuel is spent" (str (:detail (halted))))))
 
+    (testing "the seat itself is marked halted budget_reached, once"
+      (task-do! (task! "another thing the wall holds") :complete)
+      (drain-wakes! wn)
+      (is (empty? (seat-fires seat)))
+      (is (= "budget_reached" (get-in (raw :seat seat) [:data :halt :reason])))
+      (is (<= (count (get-in (raw :seat seat) [:data :halt :detail])) 240))
+      (is (= 1 (count (filter #(= :mark_halted (:action %))
+                              (log-of :seat seat))))
+          "one mark_halted across repeated holds"))
+
     (testing "the first fire after the wall lifts clears it"
       (let [later (.plusSeconds now (* 8 86400))
             rolled (assoc *eng* :now-fn (constantly later))]
