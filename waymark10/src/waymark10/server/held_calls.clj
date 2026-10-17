@@ -55,6 +55,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as mcp-client]
@@ -251,6 +252,15 @@
        (or (and (= :human (:type p)) (= owner (str (:id p))))
            (and (= :agent (:type p)) (= owner (str (:acts-for p)))))))
 
+(defn- an-approver?
+  "`an-approver-decides`'s reading: the person a held seat call was
+  held for, or a holder of the approver role for a held tool call."
+  [row p]
+  (let [owner (some-> (get-in row [:data :owner]) str not-empty)]
+    (if (some? (get-in row [:data :door]))
+      (the-owner? p owner)
+      (contains? (:roles p) approver-role))))
+
 (g/defguard an-approver-decides
   {:reads [:principal]
    :open "The role is a `role` row and a member's own list, and the person a seat call waits on is the row's own owner; no field of this door confers either."
@@ -261,19 +271,49 @@
   ;; the person its author acts for, and that person alone answers it:
   ;; the delegation is theirs, so the approver role is not enough. A
   ;; held TOOL call is the role's, as it always was.
+  (if (an-approver? row (:principal ctx))
+    (t/allow)
+    (t/deny)))
+
+(defn- the-persons-delegate?
+  "Is this principal the sitter of a DELEGATING seat whose person is
+  the one this held call waits on? A seat call names that person as
+  its `owner`; a tool call names the member as its `waits_on`, read
+  the way the birth stamp read it (grants/waits-on)."
+  [row ctx]
   (let [p (:principal ctx)
-        owner (some-> (get-in row [:data :owner]) str not-empty)]
-    (if (if (some? (get-in row [:data :door]))
-          (the-owner? p owner)
-          (contains? (:roles p) approver-role))
-      (t/allow)
-      (t/deny))))
+        person (delegation/owner-of ctx)]
+    (boolean
+     (and (str/starts-with? (str (:id p)) "seat:")
+          person
+          (delegation/author-seat ctx)
+          (if (some? (get-in row [:data :door]))
+            (= person (some-> (get-in row [:data :owner]) str not-empty))
+            (when-some [w (some-> (get-in row [:data :waits_on]) str not-empty)]
+              (= w (grants/waits-on ctx person))))))))
+
+(g/defguard an-approver-or-the-persons-delegate-refuses
+  {:reads [:principal :now :grant :seat :member]
+   :open "The role is a `role` row and a member's own list, the person a call waits on is the row's own, and a delegate is a seat whose person wrote it a ceiling; no field of this door confers any of them."
+   :explain "A person who holds the approver role refuses a held tool call, and a held seat call is refused by the person it was held for. That person's delegate seat may refuse either kind when it waits on its own person. Somebody else's call is waiting, and the no is theirs to say."}
+  [row _inp ctx]
+  ;; Refuse only: a no takes nothing out of the person's hands, so the
+  ;; seat that keeps their house may say it. Allow stays the person's.
+  (if (or (an-approver? row (:principal ctx))
+          (the-persons-delegate? row ctx))
+    (t/allow)
+    (t/deny)))
 
 (def ^:private decider-walls
   "The two walls, apart rather than folded. The order is the refusal
   order: `not you` is the sentence the caller most needs, and the
   role is the sentence everybody else needs."
   [the-caller-does-not-decide an-approver-decides])
+
+(def ^:private refuser-walls
+  "The refuse door's walls: the first wall as it is, and the second
+  widened to the person's delegate seat."
+  [the-caller-does-not-decide an-approver-or-the-persons-delegate-refuses])
 
 (def ^:private bench-merge-tool
   ;; gate-proxy/bench-tool :merge, spelled here: gate-proxy reads this
@@ -360,11 +400,13 @@
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
-;; The two refuse scenarios are CHECK-TIER: each wall declares :reads
-;; [:principal] and neither needs a :given row, so `check` judges them
-;; with no database at all. The two allow scenarios also meet
-;; `a-manager-allows-a-merge`, which reads :member and :domain, so they
-;; are judged in the conformance tier.
+;; The allow-refused scenario is CHECK-TIER: its wall declares :reads
+;; [:principal] and needs no :given row, so `check` judges it with no
+;; database at all. The two allow scenarios also meet
+;; `a-manager-allows-a-merge`, which reads :member and :domain, and the
+;; two refuse scenarios meet `an-approver-or-the-persons-delegate-refuses`,
+;; which reads the grant, the seat and the member, so all four are
+;; judged in the conformance tier.
 
 (def ^:private a-held-send
   {:tool "emila__send"
@@ -401,7 +443,7 @@
    :row     {:state :held :data a-held-send}
    :input   {:reason "not this one"}
    :as      {:id "iris" :type :human}
-   :expect  {:refused :an-approver-decides
+   :expect  {:refused :an-approver-or-the-persons-delegate-refuses
              :because "approver role"}})
 
 (defscenario an-approver-refuses-with-a-reason
@@ -711,7 +753,7 @@
     :refuse
     {:from #{:held} :to :refused
      :input reason-input
-     :guards decider-walls
+     :guards refuser-walls
      :record true
      :handler record-refusal
      :edit {:prefill [:reason] :fence false
