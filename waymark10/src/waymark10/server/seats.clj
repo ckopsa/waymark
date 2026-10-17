@@ -3985,6 +3985,31 @@
      :handler clear-halt-mark
      :display {:label "Clear halt" :order 12}}
 
+    ;; ── a walked row left without its delivery (ticket 00bad58a) ────
+    ;; `wakes/rewake-undelivered!` wakes a fired seat once more for a
+    ;; row its sitting walked and left without the delivery the seat
+    ;; owes. When the seat's sitting before on that row missed too, the
+    ;; second miss is recorded here instead and nothing fires. Concealed
+    ;; like the three above; the input is the record, and the row is not
+    ;; written.
+    :undelivered
+    {:from #{:active} :to :active
+     :input [:map
+             [:sitting {:kind :sitting
+                        :x-display {:label "The sitting that missed"}}
+              :waymark/ref]
+             [:row {:x-display {:label "The row it walked"}}
+              [:string {:min 1 :max 128}]]
+             [:delivery {:x-display {:label "What it owed"}}
+              [:string {:min 1 :max 240}]]
+             [:last_refusal {:optional true
+                             :x-display {:label "Its last refusal"}}
+              [:maybe [:string {:max 200}]]]]
+     :record true
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Record undelivered" :order 20}}
+
     ;; ── break glass runs out (ticket b177a14b) ──────────────────────
     ;; The clock sweep restates the scope without the entries whose
     ;; `until` has passed. The input names each one and its `because`,
