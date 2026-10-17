@@ -1534,8 +1534,13 @@
   move a row does not fire itself again for them: those rows are
   `rewake-undelivered!`'s, which gives a row a seat owed a delivery on
   one more try and then records it (ticket 00bad58a). Unhanded rows
-  refire; handed rows get one more try, then are recorded. → the
-  schedule row as it stands after."
+  refire; handed rows get one more try, then are recorded.
+
+  A wake already pending stops this only when it is itself the queue
+  wake. A rewake's waiting text, written by the same close, is not:
+  the queue wake is marked `wake_textless` beside it
+  (`schedules/keep-textless`) and the release sends both (ticket
+  2a9252a4). → the schedule row as it stands after."
   [eng seat-row schedule-row t]
   (let [sitting (raw-row eng :sitting (:resource-id t))
         walked (into #{} (keep #(some-> % str not-empty))
@@ -1546,7 +1551,9 @@
              (= :close (:action t))
              (= :active (:state seat-row))
              (schedules/fires-out? eng schedule-row)
-             (not (get-in schedule-row [:data :wake_pending]))
+             (let [data (:data schedule-row)]
+               (not (and (:wake_pending data)
+                         (= data (schedules/keep-textless data)))))
              (not (heard? schedule-row t))
              (pos? handed)
              (not (contains? short-outcomes

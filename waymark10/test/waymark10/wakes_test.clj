@@ -4261,3 +4261,52 @@
       (is (= 1 (count (undelivered-of seat)))))
 
     (seat-do! seat :retire)))
+
+;; Ticket 2a9252a4. One close left its handed row undelivered AND left
+;; rows in the walk it was never handed. The rewake's waiting text must
+;; not keep the queue wake from being marked: it waits beside the text
+;; as `wake_textless`, and goes out as its own fire.
+
+(deftest a-rewake-beside-unhanded-rows-keeps-the-queue-wake
+  (let [wn :wake-rewake-queue
+        fn' :wake-rewake-queue-fires
+        batch "rewake-queue"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "rewakequeueclerk"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete"]
+                                :filter {:batch batch}}]
+                       :wake_on [{:kind "wake_item" :actions ["create"]
+                                  :filter {:batch batch}}]
+                       :delivers [{:kind "wake_item" :action "complete"}]
+                       :release_grace_seconds 0
+                       :rows_per_firing 10
+                       :fire_interval_seconds 1}
+                      fn')
+        waiting (nth-sitting! seat 1)
+        handed (str (item! batch))
+        _ (item! batch)]
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    (close-sitting! waiting)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))))
+
+    (testing "the close fires the rewake naming its row, and the queue
+              wake for the row it was never handed is not lost"
+      (let [run (nth-sitting! seat 2)]
+        (is (true? (:claimed? (seats/claim-rows-atomically!
+                               *eng* seat run [handed]))))
+        (drain-wakes! wn)
+        (Thread/sleep 1200)
+        (close-sitting! run)
+        (drain-wakes! wn)
+        (let [after (rest (seat-fires seat))
+              texts (mapv #(get-in % [:inputs :text]) after)]
+          (is (some #(str/includes? (str %) handed) texts))
+          (is (or (some nil? texts)
+                  (true? (get-in (sched-of seat) [:data :wake_pending])))))))
+
+    (seat-do! seat :retire)))
