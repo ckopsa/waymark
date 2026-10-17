@@ -514,7 +514,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         for (const w of warns)
           errBox.append(el("div", {class: "warnbox"},
             el("span", {class:"prose"}, w.reason || w.name),
-            remedyChips(w.remedies, doc, () => closeDlg()),
+            remedyChips(w.remedies, doc, () => closeDlg(), w.resolved_remedies),
             questOffer(w.remedies)));
       }
     } else showErrors(res.body);
@@ -567,7 +567,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
         el("b", {}, "The server warns:"),
         el("ul", {}, (problem.warnings || []).map(w =>
           el("li", {}, (w.name ? w.name + ": " : "") + (w.reason || ""),
-             remedyChips(w.remedies, doc, () => closeDlg()),
+             remedyChips(w.remedies, doc, () => closeDlg(), w.resolved_remedies),
              questOffer(w.remedies)))),
         el("div", {class: "actions"},
           el("button", {class: "primary", onclick: () => {

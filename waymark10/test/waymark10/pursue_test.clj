@@ -240,7 +240,44 @@
               :safety fx/routine}
      :close {:from #{:open} :to :shut :safety fx/routine}}}))
 
-(def resources [fx/meal plan-day plan grocery-list latch hatch gate crate])
+;; a create remedy on ANOTHER kind, its input bound from the refused
+;; call: pursue creates the check for the very fund the pledge names
+(g/defguard fund-is-checked
+  {:reads [:investor_check]
+   :explain "That fund has no investor check yet."
+   :remedies [{:door :investor_check/create :input {:fund '(input :fund)}}]}
+  [_row inp ctx]
+  (if-some [find' (:find ctx)]
+    (if (seq (find' :investor_check {:fund (:fund inp)} {:limit 1}))
+      (t/allow)
+      (t/deny))
+    (t/allow)))
+
+(def investor-check
+  (r/resource
+   {:kind :investor_check
+    :states [:draft :done]
+    :initial :draft
+    :summary "Check · {data.fund}"
+    :schema [:map [:fund [:string {:max 80}]]]
+    :actions
+    {:finish {:from #{:draft} :to :done :safety fx/routine}
+     :reopen {:from #{:done} :to :draft :safety fx/routine}}}))
+
+(def pledge
+  (r/resource
+   {:kind :pledge
+    :states [:draft :done]
+    :initial :draft
+    :summary "Pledge · {data.fund}"
+    :schema [:map [:fund [:string {:max 80}]]]
+    :create-guards [fund-is-checked]
+    :actions
+    {:finish {:from #{:draft} :to :done :safety fx/routine}
+     :reopen {:from #{:done} :to :draft :safety fx/routine}}}))
+
+(def resources [fx/meal plan-day plan grocery-list latch hatch gate crate
+                investor-check pledge])
 
 (def ^:dynamic *session* nil)
 
@@ -410,6 +447,16 @@
   (let [lt (make! :latch {:free true})]
     (is (= "open" (:state (c/act! *session* (c/get-doc *session* (:self lt)) :lift nil))))
     (f lt)))
+
+(deftest a-bound-create-remedy-on-another-kind-creates-with-its-input
+  ;; no :resolve and no choices: the refusal's bound input is the call
+  (let [fund (str "Fund " (subs (str (random-uuid)) 0 8))
+        res (c/pursue! *session* (coll :pledge) :create {:fund fund} {})]
+    ;; fund-is-checked finds a check by this fund, so the pledge landing
+    ;; is the proof the check was created with the bound input
+    (is (c/doc? (:done res)) (pr-str res))
+    (is (= ["investor_check.create" "pledge.create"] (mapv :door (:writes res))))
+    (is (= (str "Pledge · " fund) (:summary (:done res))))))
 
 (deftest an-out-of-state-door-names-the-doors-that-lead-to-it
   (with-lifted
