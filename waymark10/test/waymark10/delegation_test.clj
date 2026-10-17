@@ -169,10 +169,11 @@
 (defn- open-mayor!
   "The person opens the mayor with its ceiling, and its sitter sits in
   it through an ask the person approves. → {:mayor id :as headers}."
-  [h]
+  ([h] (open-mayor! h mayor-scope))
+  ([h scope]
   (let [made (req h :post "/api/seats"
                   {:headers person
-                   :body (body "mayor" {:scope mayor-scope :delegates ceiling})})
+                   :body (body "mayor" {:scope scope :delegates ceiling})})
         _ (assert (= 201 (:status made)) (pr-str (json made)))
         mayor (id-of made)
         sitter (str "seat:" mayor)
@@ -187,7 +188,7 @@
                       {:headers person})
         _ (assert (= 200 (:status approved)) (pr-str (json approved)))
         grant (get-in (json approved) [:data :grant_id])]
-    {:mayor mayor :sitter sitter :as (as-sitter sitter grant)}))
+    {:mayor mayor :sitter sitter :as (as-sitter sitter grant)})))
 
 (defn- author!
   "The mayor's sitter opens a seat. → the response."
@@ -324,6 +325,69 @@
       (is (= "done" (:state call)))
       (is (= sitter (get-in (last (log-of eng :seat child)) [:actor :id]))
           "the unpark is in the seat's history as the author's move"))))
+
+;; ── the person's delegate refuses what waits on the person ──────────
+
+(def ^:private answering-scope
+  (conj mayor-scope {:kind "held_call" :actions ["allow" "refuse"]}))
+
+(defn- refuse-as! [h who held-id]
+  (req h :post (str "/api/held_calls/" held-id "/-/refuse")
+       {:headers who :body {:reason "Not this one."}}))
+
+(defn- allow-as! [h who held-id]
+  (req h :post (str "/api/held_calls/" held-id "/-/allow") {:headers who}))
+
+(defn- held-tool-call! [eng caller]
+  (:row (held/hold! eng {:tool "emila__send"
+                         :why "The household asked for the reply."
+                         :caller caller
+                         :input {:to "otto@example.test"}
+                         :forward {:to "otto@example.test"}})))
+
+(defn- held-seat-call! [h eng owner]
+  (let [made (req h :post "/api/dl_gadgets" {:headers person :body {:name "sprocket"}})]
+    (assert (= 201 (:status made)) (pr-str (json made)))
+    (held/hold-door! eng {:kind :dl_gadget :action :poke :id (id-of made)
+                          :body {}
+                          :caller "seat:gadget-author"
+                          :owner owner
+                          :why "Poke it."})))
+
+(defn- state-of [h held-id]
+  (:state (get-row h "held_calls" held-id person)))
+
+(deftest the-mayor-refuses-the-held-calls-that-wait-on-its-person
+  (let [{:keys [h eng]} (world)
+        {:keys [as]} (open-mayor! h answering-scope)]
+    (testing "its person's held seat call"
+      (let [call (held-seat-call! h eng "colton")
+            resp (refuse-as! h as (:id call))]
+        (is (= 200 (:status resp)) (pr-str (json resp)))
+        (is (= "refused" (state-of h (:id call))))))
+    (testing "its person's held tool call"
+      (let [call (held-tool-call! eng "colton")
+            _ (is (some? (get-in call [:data :waits_on])) "the call waits on the person")
+            resp (refuse-as! h as (:id call))]
+        (is (= 200 (:status resp)) (pr-str (json resp)))
+        (is (= "refused" (state-of h (:id call))))))))
+
+(deftest the-mayor-does-not-allow-its-persons-held-calls
+  (let [{:keys [h eng]} (world)
+        {:keys [as]} (open-mayor! h answering-scope)]
+    (doseq [call [(held-seat-call! h eng "colton") (held-tool-call! eng "colton")]]
+      (let [resp (allow-as! h as (:id call))]
+        (is (not= 200 (:status resp)) (pr-str (json resp)))
+        (is (= "held" (state-of h (:id call))) "allow stays the person's")))))
+
+(deftest the-mayor-does-not-refuse-another-persons-call
+  (let [{:keys [h eng]} (world)
+        {:keys [as]} (open-mayor! h answering-scope)
+        _ (req h :get "/api/held_calls" {:headers {"x-waymark-principal" "iris"}})]
+    (doseq [call [(held-seat-call! h eng "iris") (held-tool-call! eng "iris")]]
+      (let [resp (refuse-as! h as (:id call))]
+        (is (not= 200 (:status resp)) (pr-str (json resp)))
+        (is (= "held" (state-of h (:id call))) "the no is iris's to say")))))
 
 ;; ── after the approval · restates within the ceiling ────────────────
 
