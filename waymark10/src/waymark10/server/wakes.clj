@@ -1530,9 +1530,12 @@
   row, and the sit hands that row alone, so a seat woken row by row
   never walks the older rows its queue still holds: ops-seat's four
   red ci_runs waited behind one named row a fire. The rows the sitting
-  was handed and left are not counted, so a run that could not move a
-  row does not fire itself again. → the schedule row as it stands
-  after."
+  was handed and left are not counted here, so a run that could not
+  move a row does not fire itself again for them: those rows are
+  `rewake-undelivered!`'s, which gives a row a seat owed a delivery on
+  one more try and then records it (ticket 00bad58a). Unhanded rows
+  refire; handed rows get one more try, then are recorded. → the
+  schedule row as it stands after."
   [eng seat-row schedule-row t]
   (let [sitting (raw-row eng :sitting (:resource-id t))
         walked (into #{} (keep #(some-> % str not-empty))
@@ -1554,6 +1557,108 @@
       (do (mark-pending! eng (remember-heard! eng schedule-row t))
           (schedules/schedule-for-seat eng (:id seat-row)))
       schedule-row)))
+
+(def ^:private delivered-outcomes
+  "The outcomes of a sitting that left with what it owed: its delivery,
+  a stall that says why not, or a judge's verdict."
+  #{"submitted" "completed" "stalled"})
+
+(def ^:private rewake-page
+  "How many of a seat's newest sittings `missed-before?` reads for the
+  one that walked a row before."
+  50)
+
+(defn- delivery-of
+  "What a seat owes a sitting's close, as one line: its `delivers`, or
+  `verdict.judge` for a judge that states none. nil when it owes
+  nothing a close can miss."
+  [seat-row]
+  (let [delivers (get-in seat-row [:data :delivers])]
+    (cond
+      (seq delivers)
+      (apply str (interpose ", " (map #(str (some-> (:kind %) name) "."
+                                            (some-> (:action %) name))
+                                      delivers)))
+
+      (some-> (get-in seat-row [:data :judgment]) str not-empty)
+      "verdict.judge")))
+
+(defn- missed-before?
+  "Did the newest earlier sitting of this seat that walked `row` leave
+  without its delivery too? One that delivered answers false, so a
+  delivered sitting in between starts the count again."
+  [eng seat-id sitting-id row]
+  (let [st (:storage eng)
+        prior (->> (store/with-tx st
+                     (fn [tx]
+                       (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                         {:limit rewake-page
+                                          :newest-first true})))
+                   (remove #(= (str (:id %)) (str sitting-id)))
+                   (filter #(some-> (get-in % [:data :outcome]) name))
+                   (filter #(some #{row} (map str (get-in % [:data :walked_rows]))))
+                   first)]
+    (boolean
+     (when prior
+       (not (contains? delivered-outcomes
+                       (name (get-in prior [:data :outcome]))))))))
+
+(defn- rewake-undelivered!
+  "A fired sitting of an active seat that owes a delivery (`delivery-of`)
+  closed without it, its outcome none of `delivered-outcomes` (ticket
+  00bad58a). For each row it walked, the seat is woken ONE more time
+  naming that row: a waiting text on the schedule, due when the row's
+  release grace lifts, which `release!` fires under the usual damper.
+  When the seat's sitting before on that row missed too, the wake is
+  not given again: the concealed seat door `undelivered` records the
+  sitting, the row, the delivery and the last refusal, and nothing
+  fires. `refire-on-close` keeps the rows a sitting was never handed;
+  this is the bounded path for the rows it was. A close replayed after
+  the wake went out wakes nothing again, and the record's key makes it
+  once. Never throws."
+  [eng t ^Instant at]
+  (when-some [sitting (when (= :close (:action t))
+                        (raw-row eng :sitting (:resource-id t)))]
+    (let [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)
+          seat-row (some->> seat-id (raw-row eng :seat))
+          delivery (some-> seat-row delivery-of)
+          walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+          outcome (some-> (get-in sitting [:data :outcome]) name)
+          walked (into [] (comp (keep #(some-> % str not-empty)) (distinct))
+                       (get-in sitting [:data :walked_rows]))
+          refusal (get-in sitting [:data :last_refusal])
+          refused (some-> (or (:guard refusal) (:type refusal)) str not-empty)
+          ended (instant-of (get-in sitting [:data :ended_at]))]
+      (when (and delivery walk outcome (seq walked)
+                 (= :active (:state seat-row))
+                 (not (seats/interactive-seat? seat-row))
+                 (not (contains? delivered-outcomes outcome)))
+        (doseq [row walked]
+          (try
+            (if (missed-before? eng seat-id (:id sitting) row)
+              (inv/invoke! eng :seat seat-id :undelivered
+                           (cond-> {:sitting (str (:id sitting))
+                                    :row row
+                                    :delivery delivery}
+                             refused (assoc :last_refusal refused))
+                           {:principal seats/seats-actor
+                            :idempotency-key (str "undelivered:" (:id t) ":" row)})
+              (when-some [schedule (schedules/schedule-for-seat eng seat-id)]
+                (let [fired (instant-of (get-in schedule [:data :wake_fired_at]))
+                      text (wire/write-json {:kind walk :id row :action "rewake"})]
+                  (when (and (schedules/fires-out? eng schedule)
+                             (not (and fired ended
+                                       (.isAfter ^Instant fired ^Instant ended))))
+                    (mark-settling! eng schedule
+                                    (due-at schedule
+                                            (or (seats/fire-deferred-until
+                                                 eng seat-row text at)
+                                                at)
+                                            0)
+                                    text)))))
+            (catch Exception e
+              (warn! "seat " seat-id " was not woken again for " row
+                     " — " (ex-message e)))))))))
 
 (defn- release-for-sitting!
   "A sitting closed or abandoned: the seat it belonged to may have a
@@ -1971,7 +2076,8 @@
 
         (and (= :sitting kind)
              (contains? #{:close :abandon} (:action t)))
-        (release-for-sitting! eng t (now eng))
+        (do (rewake-undelivered! eng t (now eng))
+            (release-for-sitting! eng t (now eng)))
 
         (contains? own-kinds kind) nil
 

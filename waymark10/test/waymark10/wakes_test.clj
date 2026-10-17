@@ -4176,3 +4176,88 @@
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
 
     (seat-do! seat :retire)))
+
+;; Ticket 00bad58a. A fired run that walked its row and left without the
+;; delivery its seat owes is woken once more for that row. A second miss
+;; on the same row records `undelivered` on the seat and fires nothing,
+;; and a delivered run in between starts the count again.
+
+(defn- undelivered-of [seat-id]
+  (filterv #(= :undelivered (:action %)) (log-of :seat seat-id)))
+
+(defn- delivered-close!
+  "`close-sitting!`, with a delivered sitting's outcome written over the
+  close's own before the wake consumer reads it."
+  [sitting-id]
+  (close-sitting! sitting-id)
+  (let [st (:storage *eng*)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :sitting (str sitting-id) {})]
+          (store/update-data! st tx :sitting (str sitting-id)
+                              (assoc (:data row) :outcome "submitted")
+                              nil))))))
+
+(deftest a-walked-row-left-undelivered-wakes-once-then-is-recorded
+  (let [wn :wake-undelivered
+        fn' :wake-undelivered-fires
+        batch "undelivered"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (linked-seat! "undeliveredclerk"
+                      {:walk "wake_item"
+                       :scope [{:kind "wake_item" :actions ["complete"]
+                                :filter {:batch batch}}]
+                       :wake_on [{:kind "wake_item" :actions ["create"]
+                                  :filter {:batch batch}}]
+                       :delivers [{:kind "wake_item" :action "complete"}]
+                       :release_grace_seconds 0
+                       :rows_per_firing 10
+                       :fire_interval_seconds 1}
+                      fn')
+        waiting (nth-sitting! seat 1)
+        id (str (item! batch))
+        walk! (fn [n close!]
+                (let [run (nth-sitting! seat n)]
+                  (is (true? (:claimed? (seats/claim-rows-atomically!
+                                         *eng* seat run [id]))))
+                  (drain-wakes! wn)
+                  (Thread/sleep 1200)
+                  (close! run)
+                  (drain-wakes! wn)))
+        names-row? (fn [n]
+                     (str/includes?
+                      (str (get-in (nth (seat-fires seat) n) [:inputs :text]))
+                      id))]
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    (close-sitting! waiting)
+    (drain-wakes! wn)
+    (is (= 1 (count (seat-fires seat))))
+
+    (testing "the first miss wakes the seat once, naming the row"
+      (walk! 2 close-sitting!)
+      (is (= 2 (count (seat-fires seat))))
+      (is (names-row? 1))
+      (is (empty? (undelivered-of seat))))
+
+    (testing "a second miss on the row records undelivered and fires
+              nothing"
+      (walk! 3 close-sitting!)
+      (is (= 2 (count (seat-fires seat))))
+      (let [us (undelivered-of seat)]
+        (is (= 1 (count us)))
+        (is (= id (str (get-in (first us) [:inputs :row]))))
+        (is (= "wake_item.complete"
+               (str (get-in (first us) [:inputs :delivery]))))))
+
+    (testing "a delivered run in between starts the count again"
+      (walk! 4 delivered-close!)
+      (is (= 2 (count (seat-fires seat))))
+      (walk! 5 close-sitting!)
+      (is (= 3 (count (seat-fires seat))))
+      (is (names-row? 2))
+      (is (= 1 (count (undelivered-of seat)))))
+
+    (seat-do! seat :retire)))
