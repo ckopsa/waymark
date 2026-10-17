@@ -1032,7 +1032,13 @@
                            "The week's fuel is spent"))))
     (testing "and so does the seat's schedule"
       (is (= "budget" (get-in (schedules/schedule-for-seat eng (:id seat))
-                              [:data :halted :wall]))))))
+                              [:data :halted :wall]))))
+    (testing "and the seat itself is marked halted budget_reached"
+      (is (= "budget_reached"
+             (get-in (store/with-tx (:storage eng)
+                       (fn [tx] (store/load-row (:storage eng) tx :seat
+                                                (str (:id seat)) {})))
+                     [:data :halt :reason]))))))
 
 (deftest an-empty-walk-over-graced-rows-says-the-grace-held-them
   ;; Ticket ae64b57c: a walk emptied by a closed sitting's release

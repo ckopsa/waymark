@@ -5414,6 +5414,10 @@
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)
+            ;; … and the seat row, once: the halted sit marks the seat
+            ;; `budget_reached` the way the router's wall does
+            _ (when halted
+                (seats/seat-halt-at-the-wall! eng seat-id (get halted "detail")))
             ;; i' · the change this firing submits: the walk's own
             ;; first row for a code seat (R-12.29), and the row the
             ;; engine finds or mints for a seat that walks a queue of
