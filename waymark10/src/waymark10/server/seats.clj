@@ -5167,7 +5167,8 @@
                 :missed #{:eq}
                 :closed_by #{:eq :in}
                 :outcome #{:eq :in}
-                :started_at #{:after :before :range}}
+                :started_at #{:after :before :range}
+                :ended_at #{:after :before :range}}
    :absent-as {:domain default-domain}
    :sortable {:fields [:started_at] :default "-started_at"}
    :links [{:rel "seat" :kind :seat
