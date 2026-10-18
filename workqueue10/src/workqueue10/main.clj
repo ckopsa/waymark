@@ -62,7 +62,10 @@
   dev-header resolver, unchanged), WAYMARK10_SEED (a demo engine
   only, docs/spec-demo-clones.md § 1: the name of the seed loaded
   through the doors at boot — it needs FACTORY10=1, an engine named
-  demo-…, and no IdP, and the boot refuses otherwise).
+  demo-…, and no IdP, and the boot refuses otherwise), WAYMARK10_ORG
+  (an org, docs/orgkit.md: its directory or its module namespace,
+  on the classpath — its kinds are served and its seed loads on a
+  fresh engine; see `with-org`).
 
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -127,6 +130,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
+            [waymark10.server.org :as org-boot]
             [waymark10.server.domains :as domains]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
@@ -761,6 +765,28 @@
       (into dashboard/resources)
       (into (factory/resources))))
 
+(defn with-org
+  "`resources` with the kinds of the org WAYMARK10_ORG names folded in
+  (docs/orgkit.md, epic cafa6106 M1b), or as they are when `org` is
+  nil. The engine's registry judges them with everything else, so a
+  broken org kind fails the boot with the registry's own message. With
+  FACTORY10_ONLY=1 the engine is framework, factory and the one org."
+  [resources org]
+  (if org
+    (into (vec resources) (org-boot/resources org))
+    resources))
+
+(defn org-on-boot!
+  "The org's seed, behind WAYMARK10_ORG and nothing otherwise: loaded
+  through the doors as the org's owner on a fresh engine, and skipped
+  on an engine that holds its marker. A refusal throws, so the boot
+  ends before the server listens. `org` is the org's name, as
+  `org-boot/org-name` read the variable; `opts` are `org-boot/boot!`'s."
+  ([eng org] (org-on-boot! eng org {}))
+  ([eng org opts]
+   (when org
+     (org-boot/boot! eng org opts))))
+
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
       "jdbc:postgresql://localhost:5433/workqueue10_dev?user=ckopsa"))
@@ -927,6 +953,8 @@
   (let [storage (pg/storage (dsn))
         ;; FACTORY10_ONLY=1: no household source is built at all
         only? (factory-only?)
+        ;; WAYMARK10_ORG: the one org this engine serves, or nil
+        org (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
         ;; the one Home Assistant, shared by the todo source and the
         ;; engine's :services (a decision's service launch fires
         ;; through it) — built once, or nil when unconfigured
@@ -941,14 +969,16 @@
         eng (clocked-engine (System/getenv "WAYMARK10_SEED")
                             #(mirror/with-push (engine/engine %))
                             {:storage storage
-                             :resources (if only?
-                                          (factory-only-resources)
-                                          (resources
-                                           (sources ha-src)
-                                           media-srcs
-                                           (thread-sources)
-                                           (calendar-adapter)
-                                           (connections/fan-reporter engine-ref)))
+                             :resources (with-org
+                                         (if only?
+                                           (factory-only-resources)
+                                           (resources
+                                            (sources ha-src)
+                                            media-srcs
+                                            (thread-sources)
+                                            (calendar-adapter)
+                                            (connections/fan-reporter engine-ref)))
+                                         org)
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook
@@ -1041,6 +1071,8 @@
                          (System/getenv "WAYMARK10_SEED")
                          (when (factory-on?) "1")
                          (System/getenv "WAYMARK_WALL_URL"))
+        ;; the org's seed, after the demo seed's place: the same rule
+        _ (org-on-boot! eng org)
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before

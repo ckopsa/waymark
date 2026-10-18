@@ -88,8 +88,9 @@
           :let [t (template n)
                 seat (filled t)]]
     (testing n
-      (is (= (holes (pr-str (:seat t))) (set (keys (:params (:template t)))))
-          "every hole is a param, and every param a hole")
+      (is (= (disj (holes (pr-str (:seat t))) :domain)
+             (disj (set (keys (:params (:template t)))) :domain))
+          "every hole is a param, and every param a hole; domain, the name, is declared beside domain_id even where no hole takes it")
       (is (= n (:name seat)))
       (is (<= 1 (count (:charter seat)) 1200) "the charter's cap")
       (is (<= (count (:instructions seat)) 2000) "the instructions' cap")
@@ -107,28 +108,52 @@
               (pr-str seat)
               values)))
 
+(def ^:private domain-names #{"draft-judge" "ops-seat" "sitting-judge" "mayor"})
+
+(deftest every-domain-template-writes-the-domain-ref-and-not-in-domain
+  (is (= domain-names
+         (set (filter #(contains? (get-in (template %) [:template :params]) :domain) names))))
+  (doseq [n names
+          :let [t (template n)]]
+    (testing n
+      (is (not (contains? (:seat t) :in_domain))
+          "in_domain is the seat kind's computed field, not one a create writes")
+      (when (domain-names n)
+        (is (contains? (get-in t [:template :params]) :domain_id))
+        (is (= "{{domain_id}}" (get-in t [:seat :domain])))))))
+
 (def ^:private house-repos
   "ckopsa/waymark,ckopsa/waymark-doors,ckopsa/waymark-bench,ckopsa/home-infrastructure,ckopsa/colton-tools")
+
+(def ^:private factory-domain-id
+  "A stand-in for the factory domain row's id: the live rows were read
+  by their computed in_domain, which names the domain and not its id.
+  factory10.seat-templates-test creates against a real domain row."
+  "factory-domain-id")
 
 (def ^:private house
   "This house's value for each hole of each template (ticket 9a7a6b1a)."
   {"draft-judge" {:repos house-repos
                   :judgment "6804d539-7365-4392-8c8e-d02cfde8f6c7"
-                  :domain "factory"}
+                  :domain "factory"
+                  :domain_id factory-domain-id}
    "ops-seat" {:repos house-repos
                :restart_jobs "clone-mcp,waymark-bench,github-runner"
-               :domain "factory"}
+               :domain "factory"
+               :domain_id factory-domain-id}
    "sitting-judge" {:judgment "2d3adcf5-dae8-4411-a2a8-aebd884c0d56"
-                    :domain "factory"}})
+                    :domain "factory"
+                    :domain_id factory-domain-id}})
 
 (def ^:private live
   "The live seat rows' template fields, as the mayor read them on
-  2026-10-14 (ticket 9a7a6b1a). The draft judge's instructions spell
-  its repositories short; the one hole spells them as its scope does."
-  (-> {"draft-judge"
+  2026-10-14 (ticket 9a7a6b1a). The draft judge's instructions no longer
+  spell its repositories, which would not fit the seat kind's 2000-character
+  cap (ticket 56ea5929): each ticket names its own repo; its scope spells them."
+  {"draft-judge"
        {:name "draft-judge" :mode "fired" :walk "ticket"
         :charter "You judge whether a draft ticket is ready to be groomed, then act on your verdict. For each draft the sit hands you, read its title, detail, type, repository, parent and history. Look for the same ask elsewhere: scan the titles of tickets in its repository across states. Choose the one verdict whose sentence is true; when two are true, choose the one that asks the least of the person. Write one remedy sentence naming the other ticket by id where there is one. Then act. Filers land at P4 and P4 never enters the queue; you decide whether it earns more. ready: when it names a failure that happened on a path the house uses, or blocks a goal the owner set, groom it at P3 (P2 only when that failure stops work now); otherwise it stays a P4 draft. A follow-up whose ticket is still open, blocked or in review is blocked on it. already_done or duplicate: drop it naming what settles it. stale: drop it saying what moved on; a refinement that held nothing up is stale. Leave needs_person, needs_restate and epic in draft. needs_person: a credential, a host step, a grant or power, anything that speaks for the person or moves money, and a cracks-audit note (aged:, silent:, orphan:) for the mayor."
-        :instructions "You sit in `draft-judge`. The sit answers the charter, the judgment (verdicts and their sentences) and up to ten drafts.\n\nFor each ticket:\n1. Read it with waymark_get kind \"ticket\" and its full id. For the same ask: there is no title search; waymark_query kind \"ticket\", filter {\"state\": \"open,draft,blocked,in_review,done\", \"repo\": its repo}, fields [\"title\"], return \"summary\", scan titles; read a matching done one's close_reason.\n2. A follow-up builds on another ticket: its found_in, or a ticket its detail says it follows or extends. Read that ticket. If it is open, blocked or in review, the follow-up is blocked on it. Not needs_person if 1 or 2 finds a duplicate, done work or open found_in.\n3. Before you call it ready, read main for what it names, through waymark_power (ToolSearch \"select:mcp__Waymark__waymark_power\"): bench__prepare once per repo, then bench__find (mode \"grep\") and bench__read (offset, limit), all with branch \"read/draft-judge\" (main itself is refused). Repos: ckopsa/waymark, waymark-doors, waymark-bench, home-infrastructure, colton-tools. For a CI flake, read .github/workflows too. If main already does it, it is already_done. If the code lives in another repository, it is needs_restate, naming it. If main cannot be read, say so and do not call it ready.\n4. Judge: waymark_invoke kind \"verdict\", action \"judge\", no id, input {subject_kind: \"ticket\", subject_id: full id, verdict, remedy: one sentence}.\n5. Act by the charter: groom (input {priority: 3}, or 2) for a ready ticket that earns it; block (input {blocked_by: [full id], then: \"open\"} for a P0-P3 ticket, then: \"draft\" for a P4); or drop (input {close_reason: one sentence}). needs_person, needs_restate, epic and an unearned P4 get no act.\n\nWhen a door refuses, leave the ticket and say so in the note. When halted or parked, say why and stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call. In the note, list each ticket id with its verdict and act; take counts from that list."
+        :instructions "You sit in `draft-judge`. The sit answers the charter, the judgment (verdicts and their sentences) and up to ten drafts.\n\nFor each ticket:\n1. Read it with waymark_get kind \"ticket\" and its full id. For the same ask: there is no title search; waymark_query kind \"ticket\", filter {\"state\": \"open,draft,blocked,in_review,done\", \"repo\": its repo}, fields [\"title\"], return \"summary\", scan titles; read a matching done one's close_reason.\n2. A follow-up builds on another ticket: its found_in, or a ticket its detail says it follows or extends. Read that ticket. If it is open, blocked or in review, the follow-up is blocked on it. Not needs_person if 1 or 2 finds a duplicate, done work or open found_in.\n3. Before you call it ready, read main for what it names, through waymark_power (ToolSearch \"select:mcp__Waymark__waymark_power\"): bench__prepare once per ticket repo, then bench__find (mode \"grep\") and bench__read (offset, limit), all with branch \"read/draft-judge\" (main itself is refused). For a CI flake, read .github/workflows too. If main already does it, it is already_done. If the code lives in another repository, it is needs_restate, naming it. If main cannot be read, say so and do not call it ready.\n4. Judge: waymark_invoke kind \"verdict\", action \"judge\", no id, input {subject_kind: \"ticket\", subject_id: full id, verdict, remedy: one sentence}.\n5. Act by the charter: groom (input {priority: 3}, or 2) for a ready ticket that earns it; block (input {blocked_by: [full id], then: \"open\"} for a P0-P3 ticket, then: \"draft\" for a P4); or drop (input {close_reason: one sentence}). needs_person, needs_restate, epic and an unearned P4 get no act.\n\nWhen a door refuses, leave the ticket and say so in the note. When halted or parked, say why and stop. If a routine-fire-payload names a row id, walk that row and stop. When the Stop hook asks you to close the sitting, make that one call. In the note, list each ticket id with its verdict and act; take counts from that list."
         :scope [{:kind "change" :actions []}
                 {:kind "verdict" :actions ["judge"]}
                 {:kind "bench.find" :actions [] :filter {:repo house-repos}}
@@ -142,7 +167,7 @@
         :rows_per_firing 10 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 30M
         :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}
+        :domain factory-domain-id}
        "ops-seat"
        {:name "ops-seat" :mode "fired" :walk "ci_run"
         :charter "You keep the house's CI honest. For each red CI run the sit hands you, decide what broke it from its log excerpt, its change and its head commit. Take classify_this_change when the change itself is wrong, naming the file or line to fix; classify_base_red when the base branch fails the same way; classify_infra when a runner, cache, network or registry broke and no test ran; supersede when its commit is no longer its change's head. After classify_infra, re-run the failed job once, and when a house job it depends on is down, read it with nomad.read and restart it only if the restart allowlist names it. Never re-run a run you classified this_change or base_red, never re-run a job twice, and never touch a job the allowlist does not name. When one infra break or red base holds more than one run, or only a stop, a variable or a command inside a job would fix it, file one draft ticket saying what is broken and what would fix it, and leave that fix to a person. You never edit code, merge, dispatch, or read or write a secret."
@@ -165,7 +190,7 @@
         :rows_per_firing 10 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 30M
         :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}
+        :domain factory-domain-id}
        "sitting-judge"
        {:name "sitting-judge" :mode "fired" :walk "sitting"
         :charter "You judge how a fired seat sat, from what it left behind. For each sitting the sit hands you, read the sitting row (its seat, note, counts, refusals and served calls), then its transcript: the transcript row for that sitting, then its entries in order, the assistant's words and every entry marked is_error first. Read what the sitting was asked to do from the row it walked, named in the transcript. Choose the one verdict whose sentence is true of this sitting; when two are true, choose the one a person must act on first. Write one remedy sentence: the fix, or the ticket that already carries it, by id. Judge only what the transcript shows. Do not guess at what a run meant."
@@ -181,10 +206,7 @@
         :rows_per_firing 5 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 60M
         :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}}
-      (update-in ["draft-judge" :instructions] str/replace
-                 "ckopsa/waymark, waymark-doors, waymark-bench, home-infrastructure, colton-tools"
-                 house-repos)))
+        :domain factory-domain-id}})
 
 (deftest each-template-filled-with-this-house-gives-back-its-live-seat
   (doseq [[n values] house
@@ -193,5 +215,7 @@
     (testing n
       (is (= (set (keys values)) (set (keys (:params (:template t)))))
           "this house has a value for every hole")
+      (when-let [i (:instructions seat)]
+        (is (<= (count i) 2000) "instructions fit the seat kind's 2000-character cap"))
       (doseq [[k v] (get live n)]
         (is (= v (get seat k)) (str (name k) " is the live seat's"))))))
