@@ -2445,6 +2445,65 @@
       (is (= a-head (arg (:arguments (last (calls-of state "bench__merge")))
                          :head_sha))))))
 
+;; ticket e99ac1f5: the carry is a logged move on the held call
+(defn- carries-of
+  "The `carry` entries the transition log holds for one held call."
+  [eng id]
+  (filterv #(= "carry" (name (:action %)))
+           (store/with-tx (:storage eng)
+             (fn [tx] (store/transitions (:storage eng) tx
+                                         {:kind :held_call :resource-id (str id)}
+                                         {:limit 20})))))
+
+(def ^:private a-carry
+  {:head_sha a-head :from_head a-commit :compared {:carries true}})
+
+(deftest a-carried-yes-is-one-logged-carry-with-both-heads-and-the-compare
+  (let [{:keys [eng waiting]}
+        (moved-head-world {:parents [a-commit "b"] :merged_with_base true
+                           :same_own_diff true :carries true})]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [ask (first (bench/merge-asks eng))
+          [carry :as carries] (carries-of eng (:id ask))
+          inputs (:inputs carry)
+          compared (or (:compared inputs) (get inputs "compared"))]
+      (is (= :allowed_waiting (:state ask)))
+      (is (= 1 (count carries)))
+      (is (= "allowed_waiting" (name (:from-state carry))))
+      (is (= "allowed_waiting" (name (:to-state carry))))
+      (is (= a-head (arg inputs :head_sha)))
+      (is (= a-commit (arg inputs :from_head)))
+      (is (= "true" (arg compared :carries)))
+      (is (= "true" (arg compared :same_own_diff)))
+      (is (= "b" (arg compared :base_parent)))
+      (is (= (str "carried the yes from " (subs a-commit 0 7)
+                  " to " (subs a-head 0 7))
+             (:summary carry))))))
+
+(deftest only-the-engine-walks-carry
+  (let [{:keys [eng]} (allowed-waiting-world)
+        id (str (:id (first (bench/merge-asks eng))))
+        seat (t/principal {:id "a-seat" :type :agent :display "A seat"})]
+    (doseq [who [approver seat]]
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry a-carry
+                                {:principal who}))
+          (str (:id who) " is refused")))
+    (is (empty? (carries-of eng id)))
+    (is (= :allowed_waiting (:state (first (bench/merge-asks eng)))))))
+
+(deftest a-held-call-not-waiting-refuses-carry
+  (let [{:keys [eng]} (clean-world person-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (let [id (str (:id (first (bench/merge-asks eng))))]
+      (is (= :held (:state (first (bench/merge-asks eng)))))
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry a-carry
+                                {:principal held/engine-actor})))
+      (is (empty? (carries-of eng id))))))
+
 (defn- asks-again
   "A moved head the rig answered `compared` for expires its yes with a
   reason naming `said`, and a fresh ask follows for the new head."
