@@ -196,9 +196,14 @@ def connect():
 
 def link():
     mcp = Mcp(AS_OWNER)
-    doc, _ = mcp.call("waymark_query", {"kind": "runner_link", "filter": {"delivery": "pull"},
+    # delivery is no filterable field of runner_link: read every link, keep the pull one
+    doc, _ = mcp.call("waymark_query", {"kind": "runner_link", "page_size": 100,
                                         "return": "summary"})
-    rows = items_of(doc)
+    rows = []
+    for r in items_of(doc):
+        row, _ = mcp.call("waymark_get", {"kind": "runner_link", "id": r["id"], "return": "summary"})
+        if (row.get("data") or {}).get("delivery") == "pull":
+            rows.append(row)
     if len(rows) != 1:
         fail(f"runner_link with delivery pull answered {len(rows)} rows, not one")
     link_id = rows[0]["id"]
