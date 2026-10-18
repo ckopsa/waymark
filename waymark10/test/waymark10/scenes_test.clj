@@ -9,6 +9,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -292,3 +293,46 @@
     (testing "a take of a version the scene never had is refused"
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
                                         {:principal mayor})))))))
+
+(defn- hole [since until]
+  {"$rows" {:kind "chore" :since (str since) :until (str until)}})
+
+(deftest a-say-hole-is-filled-from-the-rows-in-its-window
+  (let [eng (fresh-engine)
+        _ (inv/create! eng :chore {:title "Sweep the porch"} {:principal mayor})
+        _ (inv/create! eng :chore {:title "Wash the van"} {:principal mayor})
+        now (java.time.Instant/now)
+        rows-of #(scenes/rows-in-window eng %)]
+    (testing "two rows in the window: both summaries"
+      (let [said (scenes/fill-say ["In came: " (hole (.minusSeconds now 3600)
+                                                     (.plusSeconds now 3600)) "."]
+                                  rows-of)]
+        (is (str/starts-with? said "In came: "))
+        (is (str/includes? said "Sweep the porch"))
+        (is (str/includes? said "Wash the van"))
+        (is (not (str/includes? said "$rows")))))
+    (testing "none in the window: the plain sentence"
+      (is (= "In came: nothing came in."
+             (scenes/fill-say ["In came: " (hole "2026-01-01" "2026-01-02") "."]
+                              rows-of))))
+    (testing "a string say is spoken as written"
+      (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
+
+(deftest a-say-hole-checks
+  (let [eng (fresh-engine)]
+    (testing "a say with a hole checks ready"
+      (let [id (write! eng (assoc-in well-formed [:shots 0 :say]
+                                     ["Every chore: " (hole "2026-10-19" "2026-10-20")]))]
+        (is (nil? (refusal #(walk! eng id :check))))))
+    (testing "a hole on a kind not served"
+      (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
+                                         :say [{"$rows" {:kind "meal" :since "2026-10-19"
+                                                         :until "2026-10-20"}}]})
+                         "shot 1: `meal` is not a kind this engine serves.")))
+    (testing "a window out of order"
+      (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
+                                         :say [(hole "2026-10-20" "2026-10-19")]})
+                         "shot 1: a `$rows` hole's `since` comes before its `until`.")))
+    (testing "a say that is neither a string nor a list"
+      (is (str/includes? (why-not eng 1 {:open {:collection "chores"} :say {:x 1}})
+                         "shot 1: `say` is a string")))))

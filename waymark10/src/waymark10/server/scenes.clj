@@ -15,6 +15,12 @@
   judged against the row last opened, and `type` against the door last
   tapped. Where a kind is not known, the kind's own law is not judged.
 
+  A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
+  `{\"$rows\": {kind, since, until, field, none}}` holes. `check` judges
+  each hole; the performer fills it when the shot plays (`fill-say`),
+  from the rows the scene's clone holds in that window
+  (`rows-in-window`), and a hole that finds none says so plainly.
+
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
   (:require [clojure.string :as str]
@@ -23,8 +29,12 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.film-rules :as film-rules]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.routes.ui :as ui-routes]
-            [waymark10.types :as t]))
+            [waymark10.server.store :as store]
+            [waymark10.summary :as summary]
+            [waymark10.types :as t])
+  (:import (java.time Instant LocalDate ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -297,6 +307,126 @@
       "meanwhile"
       (call-step v st people rdef-of))))
 
+;; ── holes in a say ──────────────────────────────────────────────────
+
+(def hole-fields
+  "The timestamps a `$rows` hole may read its window on."
+  ["created_at" "updated_at"])
+
+(def nothing
+  "What a hole that finds no rows says, unless it names its own `none`."
+  "nothing came in")
+
+(def ^:private say-shape
+  "`say` is a string, or a list of strings and `$rows` holes.")
+
+(defn- instant-of
+  "An RFC 3339 instant, or a YYYY-MM-DD date read as its first moment in
+  UTC; nil when it is neither."
+  ^Instant [s]
+  (let [s (str s)]
+    (or (try (Instant/parse s) (catch Exception _ nil))
+        (try (.toInstant (.atStartOfDay (LocalDate/parse s) ZoneOffset/UTC))
+             (catch Exception _ nil)))))
+
+(defn- hole-of
+  "The `$rows` map a say part holds; nil when the part is no hole."
+  [part]
+  (when (map? part) (get part "$rows")))
+
+(defn- hole-problem
+  "Why one `$rows` hole cannot be filled; nil when it can."
+  [h rdef-of]
+  (if-not (map? h)
+    "a `$rows` hole is a map of `kind`, `since` and `until`."
+    (let [k (some-> (get h "kind") str)
+          stray (remove #{"kind" "since" "until" "field" "none"} (keys h))
+          since (instant-of (get h "since"))
+          until (instant-of (get h "until"))]
+      (cond
+        (seq stray)
+        (str "a `$rows` hole takes kind, since, until, field and none, not "
+             (tick (first stray)) ".")
+
+        (str/blank? k) "a `$rows` hole names a `kind`."
+
+        (nil? (rdef-of k)) (str (tick k) " is not a kind this engine serves.")
+
+        (nil? since)
+        (str "a `$rows` hole's `since` is a date or an instant, and this one is "
+             (tick (get h "since")) ".")
+
+        (nil? until)
+        (str "a `$rows` hole's `until` is a date or an instant, and this one is "
+             (tick (get h "until")) ".")
+
+        (not (.isBefore since until))
+        "a `$rows` hole's `since` comes before its `until`."
+
+        (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
+        (str (tick (get h "field")) " is not a field a hole reads; the fields are "
+             (str/join ", " hole-fields) ".")))))
+
+(defn- say-problem
+  "Why a shot's `say` cannot be spoken; nil when it can."
+  [say rdef-of]
+  (cond
+    (or (nil? say) (string? say)) nil
+    (not (sequential? say)) say-shape
+    :else (some (fn [part]
+                  (cond
+                    (string? part) nil
+                    (and (map? part) (contains? part "$rows"))
+                    (hole-problem (hole-of part) rdef-of)
+                    :else say-shape))
+                say)))
+
+(defn fill-say
+  "A shot's `say` as the film speaks it. A string stays as written; a
+  list is joined, each `$rows` hole replaced by the summary lines of the
+  rows `rows-of` answers for it, joined with `; `, or by its `none`
+  (`nothing came in` unless it names one) when there are none. `rows-of`
+  is a fn of {:kind :since :until :field} to summary lines; the performer
+  passes `rows-in-window` over the scene's clone."
+  [say rows-of]
+  (let [say (plain say)]
+    (if-not (sequential? say)
+      (str say)
+      (apply str
+             (for [part say]
+               (if-some [h (hole-of part)]
+                 (let [lines (rows-of {:kind (str (get h "kind"))
+                                       :since (instant-of (get h "since"))
+                                       :until (instant-of (get h "until"))
+                                       :field (get h "field" "created_at")})]
+                   (if (seq lines)
+                     (str/join "; " lines)
+                     (str (get h "none" nothing))))
+                 (str part)))))))
+
+(defn rows-in-window
+  "The summary lines of engine `eng`'s rows of `kind` whose `field`
+  (created_at, or updated_at) falls in [since, until), oldest first.
+  None for a kind the engine does not serve."
+  [eng {:keys [kind since until field]}]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) (keyword kind))
+        at (if (= "updated_at" field) :updated-at :created-at)
+        within? (fn [row]
+                  (let [t (get row at)]
+                    (and (inst? t)
+                         (<= (inst-ms since) (inst-ms t))
+                         (< (inst-ms t) (inst-ms until)))))]
+    (if-not rdef
+      []
+      (store/with-tx st
+        (fn [tx]
+          (->> (store/query-rows st tx (keyword kind) {} {})
+               (filter within?)
+               (sort-by #(inst-ms (get % at)))
+               (mapv #(summary/line rdef (assoc (inv/decode-row rdef %)
+                                                :kind (:kind rdef))))))))))
+
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."
   [shot st people rdef-of]
@@ -331,6 +461,9 @@
 
         (and (true? (get shot "trim")) (not (str/blank? (str (get shot "say")))))
         (fail "a shot with `trim` is cut from the film, so it has no `say`.")
+
+        (say-problem (get shot "say") rdef-of)
+        (fail (say-problem (get shot "say") rdef-of))
 
         :else
         (let [v (get shot verb)
