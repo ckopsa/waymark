@@ -1,0 +1,20 @@
+{:seed "gamma"
+ :version 1
+ :org "gamma"
+ :domains [{:name "gamma" :label "Gamma"}]
+ :cast {:owner {:id "owner" :display "Owner" :type :human}}
+ :seats
+ [{:seat {:name "gamma-mayor"
+          :mode "fired"
+          :walk "gear"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You read each new gear. Finish it when its work is done. Say why in one sentence."
+          :scope [{:kind "gear" :actions ["finish"]}]
+          :wake_on [{:kind "gear" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :gear :ref :one :create {:title "One gear"}}]}
