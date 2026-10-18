@@ -210,10 +210,7 @@
 
 (defn- narrowed-wake
   "The seat with its ticket wake narrowed to the tickets in review, so
-  that a groom into open does not wake it. A filter on the repository
-  alone opens nothing here: code-seat also leaves ticket/open by its
-  change doors, and the audit reads a wake of such a seat as no
-  narrower than its scope."
+  that a groom into open does not wake it."
   [seat]
   (assoc-in seat [:data :wake_on 0 :filter] {:state "in_review"}))
 
@@ -293,3 +290,21 @@
                                        (door-ctx rdefs narrowed
                                                  {:id "mayor-model" :type :agent
                                                   :acts-for "colton"}))))))))))
+
+;; ticket adcf09e1: a far door excuses no wake filter on the kind itself.
+
+(deftest a-ticket-wake-on-one-repository-is-narrower-than-a-far-door
+  (let [rdefs (main/resources)
+        seats (vec (fixture/seats rdefs))
+        one-repo (assoc-in fixture/code-seat [:data :wake_on 0 :filter]
+                           {:state "open" :repo "ckopsa/waymark"})
+        narrowed (vec (replace {fixture/code-seat one-repo} seats))
+        person {:id "colton" :type :human}]
+    (testing "code-seat holds change submit, and ticket/open is still unwoken"
+      (let [found (cracks/opened rdefs seats narrowed)]
+        (is (some #(= ticket-open (crack-key %)) found) (pr-str (mapv told found)))))
+    (testing "and the seat door's crack guard names it"
+      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat
+                                  (:data one-repo) (door-ctx rdefs seats person))]
+        (is denied?)
+        (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))))

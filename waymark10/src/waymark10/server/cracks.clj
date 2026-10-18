@@ -192,16 +192,18 @@
 (defn- no-narrower?
   "Is the wake filter no narrower than one of the filters the seat
   acts under? Every field it names, that scope filter names the same.
-  `::any` stands for a door held on ANOTHER kind: its filter speaks of
-  that kind's fields, and narrows no row of this one."
+  `::any` stands for a door held on ANOTHER kind, and excuses no wake
+  entry: one on that kind reaches here with its filter dropped
+  (`wake-entries`), so it is empty; one on this kind names this kind's
+  fields, and narrows its rows whatever far door the seat also holds
+  (ticket adcf09e1)."
   [wake-filter scope-filters]
   (or (empty? wake-filter)
       (boolean
        (some (fn [sf]
-               (or (= ::any sf)
-                   (every? (fn [[k v]] (= (text v) (some-> (fval sf k) text)))
-                           wake-filter)))
-             scope-filters))))
+               (every? (fn [[k v]] (= (text v) (some-> (fval sf k) text)))
+                       wake-filter))
+             (remove #{::any} scope-filters)))))
 
 (defn- far-arrivals
   "The doors of OTHER kinds the kind declares bring a row to `state`
