@@ -240,6 +240,10 @@ jobs:
       # for `org-findings`'s matrix: [] on a PR that touches no org, and
       # unset on any other event.
       orgs: ${{ steps.detect.outputs.orgs }}
+      # Whether a pull request touches what the self-host walk follows:
+      # SELFHOST.md, selfhost/** or the factory seed. `selfhost` runs on
+      # it. Unset on any other event.
+      selfhost: ${{ steps.detect.outputs.selfhost }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
       # Why `select` refused a dispatch's `only`, when it did. `gate`
@@ -341,11 +345,15 @@ jobs:
 
           code=false
           workflows=false
+          selfhost=false
           declare -A orgs=()
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
               .github/workflows/*|selfhost/repo-kit/.github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
+            esac
+            case "$f" in
+              SELFHOST.md|selfhost/*|waymark10/resources/waymark10/factory/*) selfhost=true ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|orgs/*|orgkit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -361,8 +369,10 @@ jobs:
           done <<< "$files"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
-          # The changed orgs still present at the head, for `org-findings`.
+          # The changed orgs still present at the head, for `org-findings`,
+          # and whether the self-host walk runs.
           if [ "$EVENT" = pull_request ]; then
+            echo "selfhost=$selfhost" >> "$GITHUB_OUTPUT"
             org_list=()
             for o in "${!orgs[@]}"; do
               [ -d "orgs/$o" ] && org_list+=("$o")
@@ -1854,9 +1864,16 @@ jobs:
   # request and the mayor's "waiting on your merge" stay with the hand
   # walk on a clean VM (ticket a01d303d). selfhost/ci/walk.py stands in
   # for Claude: a stub of localfire's pull loop that grooms as
-  # draft-judge and sits as code-seat. Not in `gate`: a dispatch only.
+  # draft-judge and sits as code-seat. It also runs on a pull request
+  # that touches SELFHOST.md, selfhost/** or the factory seed (ticket
+  # c4507d5c), so a drift from the walk is red before it merges. Not in
+  # `gate` until it has proven stable.
   selfhost:
-    if: github.event_name == 'workflow_dispatch' && inputs.selfhost
+    needs: changes
+    if: >-
+      !cancelled() && (
+      (github.event_name == 'workflow_dispatch' && inputs.selfhost) ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.selfhost == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
