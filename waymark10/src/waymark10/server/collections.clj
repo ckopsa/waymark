@@ -60,7 +60,9 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store])
   (:import (java.net URLEncoder)
-           (java.nio.charset StandardCharsets)))
+           (java.nio.charset StandardCharsets)
+           (java.time Duration Instant)
+           (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
 
@@ -91,7 +93,7 @@
 
 ;; ── the filter grammar ──────────────────────────────────────────────
 
-(defn- grammar
+(defn grammar
   "param name → {:field :mode :in? :array? :head (:states)} for one
   declared kind. state= always filters, enum-checked against the
   machine. id= always filters too, on the row's own id, unless the
@@ -213,6 +215,21 @@
   (when-some [[t & more] (seq terms)]
     (cond-> t (seq more) (assoc :then (vec more)))))
 
+(defn- relative-instant
+  "A negative ISO-8601 duration (-PT72H, -P3D) on an instant field's
+  _after/_before/_gte/_lte param → the instant that long before now,
+  which validation and the cond then read as any absolute bound; every
+  other value unchanged. A stored query (a judgment's queue) can so say
+  `ended_at_after=-PT72H` and mean the last three days on every read."
+  [e ^String v]
+  (if (and (= :waymark/instant (:head e))
+           (#{:after :before :gte :lte} (:mode e))
+           (str/starts-with? v "-P"))
+    (try (str (.minus (Instant/now) (Duration/parse (subs v 1))))
+         ;; not a duration after all: validation names the bad value
+         (catch DateTimeParseException _ v))
+    v))
+
 (defn parse-query
   "Query params ({string string}) → {:conds […] :sort {:field :desc :then}
   :page {:size :number} :filters sorted-map :applied sorted-map}, or
@@ -288,6 +305,7 @@
                                  (into [] (comp (map str/trim) (remove str/blank?))
                                        (str/split raw #","))
                                  [raw])
+                        values (mapv #(relative-instant e %) values)
                         errs (into []
                                    (comp
                                     (keep (fn [v]
