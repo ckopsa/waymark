@@ -5281,8 +5281,9 @@
   that is not retired — read by the kind's name, so an engine serving
   no org_plan answers nil — and the sitting is its first when it is the
   seat's only one. The org's held calls are those still held whose
-  caller, or whose door's author, is the sitter of a seat in the org's
-  domain; its aged rows are `live-cracks/aged-rows` over the rows whose
+  stamped `domain` is the org's, or, for a call that stores none (held
+  before the stamp, ticket afcce783), whose caller or door's author is
+  the sitter of a seat in the org's domain; its aged rows are `live-cracks/aged-rows` over the rows whose
   domain is the org's."
   [eng seat sitting now]
   (let [read' (row-reader eng)
@@ -5300,10 +5301,12 @@
             held (filterv (fn [row]
                             (let [d (:data row)
                                   door (:door d)]
-                              (or (contains? callers (str (:caller d)))
-                                  (contains? callers
-                                             (str (or (get door :author)
-                                                      (get door "author")))))))
+                              (if-some [dom (some-> (:domain d) str not-empty)]
+                                (= org dom)
+                                (or (contains? callers (str (:caller d)))
+                                    (contains? callers
+                                               (str (or (get door :author)
+                                                        (get door "author"))))))))
                           (decoded-rows eng :held_call {:state :held}))
             rdefs (vec (vals (inv/resources eng)))
             rows (into {}

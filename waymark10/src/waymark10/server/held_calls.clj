@@ -387,22 +387,62 @@
   (cond-> row
     (:reason inp) (assoc-in [:data :reason] (:reason inp))))
 
+(defn- field-of [m k]
+  (some-> (or (get m k) (get m (name k))) str not-empty))
+
+(defn- read-row
+  "The row of `kind` and `id` through ctx, or nil. An id that is not a
+  row id is not read: a malformed one must not abort the create's
+  transaction."
+  [ctx kind id]
+  (when (some-> id parse-uuid)
+    ((:read ctx) kind id)))
+
+(defn- seat-domain
+  "The name of the domain a sitter's seat STORES, read through ctx, or
+  nil: a seat that names no domain is the house's here, not
+  seats/default-domain's derived one."
+  [ctx who]
+  (when-some [sid (some-> who str (as-> s (when (str/starts-with? s "seat:")
+                                           (not-empty (subs s 5)))))]
+    (when-some [did (field-of (:data (read-row ctx :seat sid)) :domain)]
+      (field-of (:data (read-row ctx :domain did)) :name))))
+
+(defn held-domain
+  "The domain a held call is the work of (ticket afcce783), read at
+  birth and never from the body: the stored domain of the row its door
+  moves, else the domain of the calling seat (the caller, or the door's
+  author), else nil, the house."
+  [row ctx]
+  (when (:read ctx)
+    (let [d (:data row)
+          door (:door d)
+          kind (field-of door :kind)
+          id (field-of door :id)]
+      (or (when (and kind id)
+            (field-of (:data (read-row ctx (keyword kind) id)) :domain))
+          (seat-domain ctx (:caller d))
+          (seat-domain ctx (field-of door :author))))))
+
 (defn- born
   "The birth stamps: the leash the caller never chose, and the person
   the call waits on. `expires_at` is written AT CREATE, so the person
   who reads the row reads the moment it will actually stop waiting.
   `waits_on` is the member the `owner` names, or the one the `caller`
   is or acts for (grants/waits-on), so a notice_rule can address it.
-  It is read from the member rows, never from the body."
+  It is read from the member rows, never from the body. `domain` is
+  `held-domain`'s, so an org reads its held calls by that field."
   [row ctx]
   (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
                 (get-in row [:data :caller]))
-        m (grants/waits-on ctx who)]
+        m (grants/waits-on ctx who)
+        dom (held-domain row ctx)]
     (-> row
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
-        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on))))))
+        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on)))
+        (update :data #(if dom (assoc % :domain dom) (dissoc % :domain))))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -619,6 +659,17 @@
                 :x-display {:label "Tells"
                             :help "The member this call waits on: the person the calling seat or delegate acts for, or the caller themselves. The engine stamps it at birth, and a notice rule tells them."}}
      [:maybe :waymark/ref]]
+    ;; THE ORG WHOSE WORK THIS IS (ticket afcce783): `born` stamps it,
+    ;; and no input names it. Engine-written but unfenced: the
+    ;; `:engine-written` mark (9e0a105b) has not landed. Not a
+    ;; `:maybe`, so it promotes the column the filter walks; a row
+    ;; held before it, or in the house, stores none.
+    [:domain {:optional true
+              :not-a-ref "The name of a domain: a word, not a row id."
+              :x-display {:raw true
+                          :label "Domain"
+                          :help "The name of the domain this call is the work of: the domain of the row its door moves, else of the seat that called. The engine stamps it at birth; a call of the house names none."}}
+     [:string {:min 1 :max 64}]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -743,7 +794,8 @@
    :filterable {:state #{:eq :in}
                 :caller #{:eq}
                 :tool #{:eq}
-                :answered_via #{:eq}}
+                :answered_via #{:eq}
+                :domain #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
