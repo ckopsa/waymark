@@ -77,8 +77,5 @@
 (deftest the-mayor-template-is-created-through-the-seat-door
   (let [t (template "seats/mayor.edn")
         eng (world)
-        ;; in_domain is the seat kind's computed field, which its create
-        ;; door refuses; ticket 65928b96 takes it out of the templates
-        seat (:row (inv/create! eng :seat (dissoc (fill t (:seat t)) :in_domain)
-                                as-person))]
+        seat (:row (inv/create! eng :seat (fill t (:seat t)) as-person))]
     (is (= "mayor" (get-in seat [:data :name])))))
