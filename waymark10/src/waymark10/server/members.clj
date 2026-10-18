@@ -327,6 +327,22 @@
     (t/deny)
     (t/allow)))
 
+;; the same fence for the cast marker (clone guard 2/3): a member the
+;; seed loader made from its `:cast` is one a clone's acts_as_cast seat
+;; may act as. Hand-set, it would let anyone mark a member a seat may
+;; then speak for, so the registrar, through which the loader creates,
+;; is the one writer allowed through.
+(g/defguard cast-not-written-by-hand
+  {:judges [:cast]
+   :reads [:principal]
+   :explain "A seeded cast member is marked by the seed loader alone, never by hand — a create may not carry cast."
+   :open "No door marks a cast member: the seed loader does, when a seed names the member in its :cast. Create the member without cast."}
+  [_row inp ctx]
+  (if (and (contains? inp :cast)
+           (not= :system (get-in ctx [:principal :type])))
+    (t/deny)
+    (t/allow)))
+
 ;; the homecoming durable guard (waymark-4zj.8.3, closed): offer_reentry
 ;; had no durable-self guard, so a recovery-admin could mint a way home
 ;; onto a HOLLOW namesake — a knock-born guest row that owns no self, no
@@ -791,6 +807,16 @@
                                     :label "Acts for"
                                     :help "The person this agent acts for — the identity a connector's token named when the gate first saw it. Written by the identity gate, never by hand; empty for people and for agents holding their own key."}}
              [:maybe [:string {:max 256}]]]
+            ;; a seeded cast member (clone guard 2/3): written by the
+            ;; seed loader alone, through the registrar, and fenced by
+            ;; cast-not-written-by-hand. On a clone, a seat with
+            ;; acts_as_cast may name this member as `as` on an invoke
+            ;; (router/cast-principal).
+            [:cast {:optional true
+                    :x-display {:raw true
+                                :label "Seeded cast member"
+                                :help "True when the seed loader made this member from its cast: on a clone, a seat with acts_as_cast may act as it. Written by the seed loader, never by hand."}}
+             [:maybe :boolean]]
             ;; the zone this member's own local times are read in
             ;; (docs/spec-scheduled-actions.md R-7.2). The quiet hours
             ;; keep a zone of their own inside :notify; this one is the
@@ -856,7 +882,8 @@
    :sortable {:fields [:display] :default "display"}
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
-                   acts-for-not-written-by-hand]
+                   acts-for-not-written-by-hand
+                   cast-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
