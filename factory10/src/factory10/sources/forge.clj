@@ -2605,11 +2605,20 @@
     (let [found (or (get doc (keyword org)) (get doc org))]
       (when (sequential? found) (vec found)))))
 
+(defn law-page-of
+  "The law page the artifact's JSON carries beside the findings, its
+  `law_page` (ticket 4ab34d18), or nil when it carries none."
+  [doc]
+  (when (map? doc)
+    (let [page (or (get doc :law_page) (get doc "law_page"))]
+      (when (and (string? page) (not (str/blank? page))) page))))
+
 (defn findings-pass!
   "Every drafting or proposed org_plan whose change carries a head its
   findings were not recorded at → the artifact
   `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
-  written through the door the plan's state affords. Once per head: a
+  written through the door the plan's state affords, with the law page
+  the same artifact carries (ticket 4ab34d18). Once per head: a
   plan whose `findings_sha` is its change's head is not read, and an
   artifact not there yet is tried on the next pass. A forge that does
   not answer, or a door the engine refuses, costs that plan one pass and
@@ -2636,14 +2645,15 @@
                    (= head (str (get-in plan [:data :findings_sha]))))
              census
              (try
-               (if-some [found (findings-of
-                                (forge-artifact source repo
-                                                (str "org-findings-" org "-" head))
-                                org)]
-                 (do (inv/invoke! eng :org_plan (str (:id plan)) door
-                                  {:head_sha head :findings found} (as-opts))
-                     (update census :findings (fnil inc 0)))
-                 census)
+               (let [doc (forge-artifact source repo
+                                         (str "org-findings-" org "-" head))]
+                 (if-some [found (findings-of doc org)]
+                   (do (inv/invoke! eng :org_plan (str (:id plan)) door
+                                    (cond-> {:head_sha head :findings found}
+                                      (law-page-of doc) (assoc :law_page (law-page-of doc)))
+                                    (as-opts))
+                       (update census :findings (fnil inc 0)))
+                   census))
                (catch Exception e
                  (log-fn "the findings of " org " at " head
                          " were not recorded (" (ex-message e) ")")
