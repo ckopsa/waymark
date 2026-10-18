@@ -113,13 +113,10 @@
 (def ^:private house
   "This house's value for each hole of each template (ticket 9a7a6b1a)."
   {"draft-judge" {:repos house-repos
-                  :judgment "6804d539-7365-4392-8c8e-d02cfde8f6c7"
-                  :domain "factory"}
+                  :judgment "6804d539-7365-4392-8c8e-d02cfde8f6c7"}
    "ops-seat" {:repos house-repos
-               :restart_jobs "clone-mcp,waymark-bench,github-runner"
-               :domain "factory"}
-   "sitting-judge" {:judgment "2d3adcf5-dae8-4411-a2a8-aebd884c0d56"
-                    :domain "factory"}})
+               :restart_jobs "clone-mcp,waymark-bench,github-runner"}
+   "sitting-judge" {:judgment "2d3adcf5-dae8-4411-a2a8-aebd884c0d56"}})
 
 (def ^:private live
   "The live seat rows' template fields, as the mayor read them on
@@ -141,8 +138,7 @@
         :cadence_seconds 21600 :fire_interval_seconds 300
         :rows_per_firing 10 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 30M
-        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}
+        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30}
        "ops-seat"
        {:name "ops-seat" :mode "fired" :walk "ci_run"
         :charter "You keep the house's CI honest. For each red CI run the sit hands you, decide what broke it from its log excerpt, its change and its head commit. Take classify_this_change when the change itself is wrong, naming the file or line to fix; classify_base_red when the base branch fails the same way; classify_infra when a runner, cache, network or registry broke and no test ran; supersede when its commit is no longer its change's head. After classify_infra, re-run the failed job once, and when a house job it depends on is down, read it with nomad.read and restart it only if the restart allowlist names it. Never re-run a run you classified this_change or base_red, never re-run a job twice, and never touch a job the allowlist does not name. When one infra break or red base holds more than one run, or only a stop, a variable or a command inside a job would fix it, file one draft ticket saying what is broken and what would fix it, and leave that fix to a person. You never edit code, merge, dispatch, or read or write a secret."
@@ -164,8 +160,7 @@
         :cadence_seconds 3600 :fire_interval_seconds 300
         :rows_per_firing 10 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 30M
-        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}
+        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30}
        "sitting-judge"
        {:name "sitting-judge" :mode "fired" :walk "sitting"
         :charter "You judge how a fired seat sat, from what it left behind. For each sitting the sit hands you, read the sitting row (its seat, note, counts, refusals and served calls), then its transcript: the transcript row for that sitting, then its entries in order, the assistant's words and every entry marked is_error first. Read what the sitting was asked to do from the row it walked, named in the transcript. Choose the one verdict whose sentence is true of this sitting; when two are true, choose the one a person must act on first. Write one remedy sentence: the fix, or the ticket that already carries it, by id. Judge only what the transcript shows. Do not guess at what a run meant."
@@ -180,8 +175,7 @@
         :cadence_seconds 21600 :fire_interval_seconds 3600
         :rows_per_firing 5 :max_open_sittings 1
         :sitting_budget_tokens 400000 :budget_usd_per_week 60M
-        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
-        :in_domain "factory"}}
+        :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30}}
       (update-in ["draft-judge" :instructions] str/replace
                  "ckopsa/waymark, waymark-doors, waymark-bench, home-infrastructure, colton-tools"
                  house-repos)))
