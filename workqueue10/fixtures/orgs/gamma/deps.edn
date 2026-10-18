@@ -1,0 +1,3 @@
+;; A fixture org workqueue10.live-orgs-test finds on disk: live beside
+;; alpha, in a domain of its own, and no deps root of the engine.
+{:paths ["src" "resources"]}
