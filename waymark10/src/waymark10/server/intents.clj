@@ -142,39 +142,11 @@
    :display (let [d (:display principal)]
               (if (str/blank? (str d)) (:id principal) d))})
 
-(defn- member-display
-  "The display on this pid's member row — found by id, or by the bound
-  subject, curtain/member-lookup's own two resolutions. nil when the
-  engine has no member kind, when nobody answers to pid, and when the
-  row is unnamed. A failed read warns and answers nil: a card that
-  names an id is still a card."
-  [eng pid]
-  (when (some? (get (inv/resources eng) :member))
-    (try
-      (let [st (:storage eng)
-            row (store/with-tx st
-                  (fn [tx]
-                    (or (store/load-row st tx :member pid {})
-                        (first (store/query-rows st tx :member
-                                                 {:subject pid}
-                                                 {:limit 1})))))]
-        (some-> (get-in row [:data :display]) str str/trim not-empty))
-      (catch Exception e
-        (warn! "member display read failed - " (ex-message e))
-        nil))))
-
 (defn- named
   "principal, carrying its member row's display when it arrived with
-  none: gate! unions the row's ROLES onto a principal and nothing
-  else, so a member resolved from a credential that names no display
-  would otherwise ride every frame as a bare id. A principal that
-  names itself is believed and costs no read."
+  none — curtain/named, the lookup presence shares."
   [reg principal]
-  (if (str/blank? (str (:display principal)))
-    (if-some [d (member-display (:eng reg) (:id principal))]
-      (assoc principal :display d)
-      principal)
-    principal))
+  (curtain/named (:eng reg) principal))
 
 ;; ── the registry ────────────────────────────────────────────────────
 ;;
