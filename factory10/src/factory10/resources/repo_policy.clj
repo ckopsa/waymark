@@ -204,6 +204,25 @@
       (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
       :else (t/deny {:vars {:what (str/join " and " what)}}))))
 
+(defguardfn only-a-person-frees-the-person-paths
+  {:reads [:principal :within]
+   :hold true
+   :vars [:removed]
+   :explain "Removing {removed} from the person's paths is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. A change that touches one of those paths is merged only by a person, and a shorter list lets the house merge more."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that adds entries, or leaves the list as it stands, is not held."}
+  ;; ticket 15305c4a: `only-a-person-widens-the-hosted-workflows` turned
+  ;; over. This list is what the house may NOT merge, so an added entry
+  ;; narrows the house and passes, and a removed one is the person's own
+  ;; yes. Judged against the stored list.
+  [row inp ctx]
+  (let [kept (set (map str (get inp :person_paths)))
+        removed (remove kept (map str (get-in row [:data :person_paths])))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? removed) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:removed (str/join ", " removed)}}))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -674,6 +693,15 @@
                 {:label "CI may run on GitHub-hosted runners"
                  :help "Turn this on when this repository's CI runs on GitHub-hosted runners, as a self-hosted factory's own repository does. Leave it empty for the rig's default."}}
     [:maybe :boolean]]
+   ;; the person's paths (ticket 15305c4a). OPTIONAL: a row without it,
+   ;; or with an empty list, keeps no path for a person.
+   [:person_paths {:optional true
+                   :examples [["terraform/keycloak_*.tf"]]
+                   :x-display
+                   {:raw true
+                    :label "Paths only a person merges"
+                    :help "Globs, one for each row, in the grammar of the paths the bench never serves. A change that touches a path one matches is never merged by the house: once green and clean it waits merge_wait_seconds, then asks a person for the merge. Empty means the house merges every green change as the policy says."}}
+    [:maybe [:vector {:max 50} [:string {:min 1 :max 200}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -1064,7 +1092,8 @@
               ;; last, so a call that is held is one the walls above
               ;; would let the person's Allow run
               only-a-person-widens-the-hosted-workflows
-              only-a-person-loosens-the-merge-gate]
+              only-a-person-loosens-the-merge-gate
+              only-a-person-frees-the-person-paths]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes
