@@ -2112,20 +2112,74 @@
     (try (Instant/parse (str (get-in change [:data :held_since])))
          (catch Exception _ nil))))
 
+(defn- same-pull?
+  "Is this ask for this change's pull request?"
+  [ask change]
+  (let [in (get-in ask [:data :input])]
+    (and (= (str (field-of in :repo))
+            (str (get-in change [:data :repository])))
+         (= (str (field-of in :number))
+            (str (get-in change [:data :number]))))))
+
+(defn- ask-state [ask] (some-> (:state ask) name keyword))
+
 (defn- asked-already?
   "Is there an ask for this pull request still waiting, or one for this
   head at all?"
   [asks change head]
   (some (fn [a]
-          (let [in (get-in a [:data :input])]
-            (and (= (str (field-of in :repo))
-                    (str (get-in change [:data :repository])))
-                 (= (str (field-of in :number))
-                    (str (get-in change [:data :number])))
-                 (or (contains? #{:held :allowed}
-                                (some-> (:state a) name keyword))
-                     (= head (str (field-of in :head_sha)))))))
+          (and (same-pull? a change)
+               (or (contains? #{:held :allowed :allowed_waiting} (ask-state a))
+                   (= head (str (field-of (get-in a [:data :input])
+                                          :head_sha))))))
         asks))
+
+(defn- waiting-yes
+  "The person's yes on this pull request at this head that the rig
+  answered `waiting` (`allowed_waiting`, ticket 4180a699), or nil."
+  [asks change head]
+  (some (fn [a]
+          (when (and (= :allowed_waiting (ask-state a))
+                     (same-pull? a change)
+                     (= head (str (field-of (get-in a [:data :input])
+                                            :head_sha))))
+            a))
+        asks))
+
+(defn- change-of-ask
+  "The change row an ask names by repository and number, or nil."
+  [eng ask]
+  (when-some [rd (rdef-of-kind eng :change)]
+    (let [st (:storage eng)
+          in (get-in ask [:data :input])]
+      (some #(when (same-pull? ask %) %)
+            (mapv #(inv/decode-row rd %)
+                  (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :change
+                                               {:repository (str (field-of in :repo))}
+                                               {:limit 1000}))))))))
+
+(defn- expire-spent-yeses!
+  "Expire every `allowed_waiting` merge ask whose change has closed or
+  whose head moved from the one the person allowed: the yes was for
+  that head (carrying it over is ticket aa0e9c90's). A change still
+  open at that head keeps its yes, green or not."
+  [eng asks]
+  (doseq [a asks
+          :when (= :allowed_waiting (ask-state a))
+          :let [change (try (change-of-ask eng a)
+                            (catch Exception _ ::unread))]
+          :when (not= ::unread change)
+          :when (or (nil? change)
+                    (contains? #{:closed :merged}
+                               (some-> (:state change) name keyword))
+                    (not= (str (field-of (get-in a [:data :input]) :head_sha))
+                          (some-> (get-in change [:data :head_sha]) str)))]
+    (try
+      (held/expire! eng a)
+      (catch Exception e
+        (warn! "the waiting merge " (:id a) " did not expire ("
+               (ex-message e) "); the next pass tries again")))))
 
 (defn pull-url [change]
   (or (some-> (get-in change [:data :url]) str not-empty)
@@ -2217,7 +2271,10 @@
   merge pass writes `line_why: person` on the change instead. A head
   the forge pass read with a required check missing or still running is
   not green, so it is neither timed nor asked (`head-not-green?`,
-  tickets 8e809671 and 9f19742e). `waiting`
+  tickets 8e809671 and 9f19742e). A person's yes the rig answered
+  `waiting` (`allowed_waiting`, ticket 4180a699) is forwarded again,
+  with no new ask, by the pass that reads its change green on the same
+  head; one whose change closed or whose head moved is expired. `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
   a merge hold keeps it. Throws nothing. → the number
   of asks raised."
@@ -2253,6 +2310,12 @@
                                :else (:since prior))
               seconds (.getSeconds (Duration/between since now))]
           (vswap! clean assoc id {:head head :since since})
+          (when-some [yes (waiting-yes asks change head)]
+            (try
+              (held/reforward! eng yes)
+              (catch Exception e
+                (warn! "the waiting merge for " id " did not go out ("
+                       (ex-message e) "); the next pass tries again"))))
           (when (and (<= (merge-wait-of policy) seconds)
                      (not (asked-already? asks change head)))
             (try
@@ -2261,6 +2324,7 @@
               (catch Exception e
                 (warn! "the merge ask for " id " did not land ("
                        (ex-message e) "); the next pass asks again")))))))
+    (expire-spent-yeses! eng asks)
     ;; a change that is no longer clean, or no longer submitted, starts
     ;; its wait again the next time it is
     (reset! waiting @clean)

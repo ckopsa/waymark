@@ -2375,6 +2375,40 @@
         (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 300)))
             "an answered ask is not raised again for its head")))))
 
+;; ticket 4180a699: an Allow the rig answers `waiting` keeps the yes
+(defn- allowed-waiting-world
+  []
+  (let [{:keys [eng state] :as w} (clean-world person-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (answer! state "bench__merge" {:state "waiting" :waits_on "checks"})
+    (let [out (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
+                           :allow {} {:principal approver})]
+      (held/after-allow! eng (get (inv/resources eng) :held_call) :allow out))
+    (assoc w :waiting waiting)))
+
+(deftest an-allowed-merge-answered-waiting-keeps-the-yes
+  (let [{:keys [eng state waiting]} (allowed-waiting-world)]
+    (is (= :allowed_waiting (:state (first (bench/merge-asks eng))))
+        "a merge that only waits is not done")
+    (testing "the next green pass on the same head merges it with no new ask"
+      (answer! state "bench__merge" {:state "merged"})
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+      (let [asks (bench/merge-asks eng)]
+        (is (= 1 (count asks)))
+        (is (= :done (:state (first asks)))))
+      (is (= 2 (count (calls-of state "bench__merge")))))))
+
+(deftest a-head-move-expires-a-waiting-merge-yes
+  (let [{:keys [eng state waiting] :as w} (allowed-waiting-world)]
+    (answer! state "bench__merge" {:state "merged"})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (is (= :expired (:state (first (bench/merge-asks eng)))))
+    (is (= 1 (count (calls-of state "bench__merge")))
+        "the moved head is not merged under the old yes")))
+
 (deftest a-required-check-missing-on-the-head-raises-no-merge-ask
   (let [{:keys [eng] :as w} (clean-world (assoc person-policy
                                                 :required_checks ["test"]))
