@@ -1209,6 +1209,33 @@
               true)
           (mark-pending! eng row)))))))
 
+(defn wake-held
+  "What would hold a wake of this seat at `at`, asked with no transition
+  and remembering nothing: the live cracks pass wakes a seat on an aged
+  row by its `fire` door (ticket 4ff29b4a) and asks this first, so its
+  wake is held where `wake-seat!` would hold one. `text` is the fire's
+  text, read for the row it names.
+
+    :held        a broken Routine (`schedules/held?`)
+    :damped      an open sitting or a fire inside the gap; for a seat
+                 of several slots, `damped?`
+    :throttled   the provider's `retry_after` is still ahead
+    :fuel_wall   the seat's week of fuel is spent
+    :spoken_for  a run of the seat already has the row
+
+  nil when nothing holds it. A seat with no schedule, or one that fires
+  nowhere, is nil too: its `fire` door refuses it with its own sentence."
+  [eng seat-id text ^Instant at]
+  (let [seat-row (raw-row eng :seat seat-id)
+        row (when seat-row (schedules/schedule-for-seat eng (:id seat-row)))]
+    (when (and row (schedules/fires-out? eng row))
+      (cond
+        (schedules/held? eng row) :held
+        (damped? eng seat-row row at) :damped
+        (throttled? row at) :throttled
+        (at-the-fuel-wall? eng seat-row at) :fuel_wall
+        (and (some? text) (spoken-for? eng seat-row text at)) :spoken_for))))
+
 (defn- walk-count
   "How many rows the seat's sit would hand it, or nil when the seat
   walks nothing or the count cannot be taken. The sit's own filter
