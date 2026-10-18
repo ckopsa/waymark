@@ -136,6 +136,14 @@ in that window (`rows-in-window`): their summary lines, oldest first,
 joined with `; `. A hole that finds no rows says its `none`, or
 `nothing came in`, and never the hole itself.
 
+A `$moves` hole, `{"$moves": {kind, since, until, by, none}}`, reads the
+log instead: the transitions on rows of `kind` logged in
+[`since`, `until`), made by those `by` names: `seats` (the default, the
+org's seats), `people`, or `anyone`. `check` judges it as it judges a
+`$rows` hole, with `by` one of the three. The performer fills it from
+the clone's log (`moves-in-window`): each move as `<summary>: <action>`,
+oldest first, joined with `; `, or its `none`, or `nothing moved`.
+
 ## `wearing`
 
 `wearing` is a map from a cast id to the grant that cast member wears
