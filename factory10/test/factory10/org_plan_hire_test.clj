@@ -48,9 +48,13 @@
   [eng]
   (let [id (str (:id (filed! eng)))]
     (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/greenleaf.mp4"
+                  :take_report "{}" :head_sha "5e469c6166edf6a3"}
+                 {:principal the-owner})
     (inv/invoke! eng :org_plan id :attach_film
                  {:film_url "https://example.com/greenleaf.mp4"}
-                 {:principal the-owner})
+                 {:principal the-engine})
     (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
     id))
 

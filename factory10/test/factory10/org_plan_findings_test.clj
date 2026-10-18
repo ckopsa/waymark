@@ -151,9 +151,13 @@
                                   {:headers person})))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
                                {:headers person :body {}}))
-        filmed! #(inv/invoke! eng :org_plan id :record_film_findings
-                              {:head_sha "ddddddd1" :findings [red-film]}
-                              {:principal the-forge})
+        filmed! #(do (inv/invoke! eng :org_plan id :hand_in_film
+                                  {:film_url "https://films.example.test/greenleaf.mp4"
+                                   :take_report "{}" :head_sha "ddddddd1"}
+                                  {:principal the-forge})
+                     (inv/invoke! eng :org_plan id :record_film_findings
+                                  {:head_sha "ddddddd1" :findings [red-film]}
+                                  {:principal the-forge}))
         warning (assoc unexplained :severity "warning")]
     (recorded! eng id "ccccccc1" [warning])
     (is (= 200 (propose)))
