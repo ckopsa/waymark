@@ -46,6 +46,14 @@
  ;; is there.
  ;;   :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"
  ;;         :oauth {:client-id "localfire-claude" :callback-port 8765}}
+ ;;
+ ;; :headers is optional, for a solo engine with no OIDC: the identity
+ ;; each run (and the probe) presents, written into its mcp.json. It is
+ ;; refused together with :oauth.
+ ;;   :mcp {:name "Waymark" :url "http://127.0.0.1:8080/api/-/mcp"
+ ;;         :headers {"X-Waymark-Principal"  "agent:localfire"
+ ;;                   "X-Waymark-Actor-Type" "agent"
+ ;;                   "X-Waymark-Acts-For"   "<owner>"}}
  :mcp {:name "Waymark" :url "https://work.kopsa.info/api/-/mcp"}
 
  ;; passed to --allowedTools, one argument each. This is the default.
