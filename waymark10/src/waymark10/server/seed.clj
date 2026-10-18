@@ -93,7 +93,8 @@
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [jsonista.core :as json])
-  (:import (java.time Instant LocalDate ZoneOffset)))
+  (:import (java.time Instant LocalDate ZoneOffset)
+           (java.util UUID)))
 
 (set! *warn-on-reflection* true)
 
@@ -427,6 +428,20 @@
                         (value-of ctx (or (:with step) {})))])
     [(:kind step) (value-of ctx (:create step))]))
 
+(defn- step-id
+  "The id a create or template step's row is born with when the step
+  names a `:ref`: drawn from the seed and that ref, so a later load
+  finds the row again even when it has no `:name` (`gain!`). nil for a
+  step with no `:ref`."
+  [{:keys [seed]} step]
+  (when-some [r (:ref step)]
+    (str (UUID/nameUUIDFromBytes
+          (.getBytes (str "seed:" seed ":" r) "UTF-8")))))
+
+(defn- made-opts [ctx step]
+  (cond-> (hand-of ctx step)
+    (step-id ctx step) (assoc :id (step-id ctx step))))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
   [{:keys [eng refs] :as ctx} step]
@@ -443,7 +458,7 @@
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (hand-of ctx step))))
+      (:row (inv/create! eng kind body (made-opts ctx step))))
 
     ;; a row the boot made before the seed: found, not made
     (:find step)
@@ -458,7 +473,7 @@
 
     (contains? step :create)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (hand-of ctx step))))
+      (:row (inv/create! eng kind body (made-opts ctx step))))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -480,9 +495,12 @@
   found when a row of its kind holds that name, and made when none
   does. A create's name is read alone, so a found row's body, which may
   point at a step this load skipped, is not filled. Every other step
-  was walked by the first load and is skipped.
+  was walked by the first load and is skipped — but its `:ref` is
+  still bound, so a gained step may point at it: an unnamed create or
+  template is found by the id `step-id` gave it, and an action step
+  names the row it moved, its `:on`.
   → [row made?], row nil for a skipped step."
-  [{:keys [eng] :as ctx} step]
+  [{:keys [eng refs] :as ctx} step]
   (cond
     (:find step) [(step! ctx step) false]
 
@@ -492,15 +510,21 @@
       (if-some [row (named-row eng kind nm)]
         [row false]
         (let [[kind body] (made-body ctx step)]
-          [(:row (inv/create! eng kind body (hand-of ctx step))) true])))
+          [(:row (inv/create! eng kind body (made-opts ctx step))) true])))
 
     (:template step)
     (let [[kind body] (made-body ctx step)]
       (if-some [nm (:name body)]
         (if-some [row (named-row eng kind nm)]
           [row false]
-          [(:row (inv/create! eng kind body (hand-of ctx step))) true])
-        [nil false]))
+          [(:row (inv/create! eng kind body (made-opts ctx step))) true])
+        [(some->> (step-id ctx step) (load-row eng kind)) false]))
+
+    (contains? step :create)
+    [(some->> (step-id ctx step) (load-row eng (:kind step))) false]
+
+    (and (:ref step) (:on step) (get refs (:on step)))
+    [(get refs (:on step)) false]
 
     :else [nil false]))
 
@@ -537,7 +561,7 @@
             (reduce
                   (fn [{:keys [refs] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
-                               :params (keyed params)}
+                               :params (keyed params) :seed (:seed seed)}
                           [row made?] (try
                                 (if seeded
                                   (gain! ctx step)

@@ -212,6 +212,27 @@
             (is (= {:members 0 :steps 0} (:added again)))
             (is (= (-> before (update :member inc) (update :seat inc)) (counts)))))))))
 
+(deftest a-gained-step-may-point-at-an-unnamed-step-the-load-skipped
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng live {:params params})
+        grown (update live :steps conj
+                      {:as :ada :kind :seat :ref :s3
+                       :create {:name "seed-test-seat-3"
+                                :charter [:ref :c1]
+                                :scope [{:kind "model" :actions ["retire"]}]
+                                :standing_ttl_seconds 604800
+                                :cadence_seconds 3600
+                                :budget_usd_per_week 5M
+                                :sitting_budget_tokens 60000}})
+        more (seed/load! eng grown {:params params})]
+    (is (false? (:seeded more)))
+    (is (= {:members 0 :steps 1} (:added more)))
+    (is (= (get-in once [:refs :c1]) (get-in more [:refs :c1]))
+        "the unnamed chore the load skipped is still bound")
+    (is (= (get-in once [:refs :c1 :id])
+           (get-in (dev/row eng :seat (get-in more [:refs :s3 :id])) [:data :charter]))
+        "and the gained seat points at it")))
+
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
         once (seed/load! eng live {:params params})]
