@@ -682,13 +682,26 @@ jobs:
             > "$RUNNER_TEMP/kondo.json" || rc=$?
           # 2 and 3 are warnings and errors found; anything else is kondo failing.
           case "$rc" in 0|2|3) ;; *) echo "clj-kondo exited $rc"; exit "$rc" ;; esac
+      # The org's law page rides the same artifact as `law_page`, for the
+      # forge pass to write onto the org_plan (ticket 4ab34d18). The
+      # org's own deps.edn puts its namespaces on the classpath, as in
+      # org-law. A page that does not render costs the page, not the
+      # findings.
+      - name: law-text
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+          clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG" > "$RUNNER_TEMP/law.md" \
+            || { echo "law-text exited $?; the artifact carries no law page"; : > "$RUNNER_TEMP/law.md"; }
       # Lint keys leave the line out, so a finding keeps its key when code
       # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
       # for repeats of one slug in one file, in line order.
       - name: merge findings
         run: |
           set -euo pipefail
-          jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" '
+          jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
+             --rawfile law "$RUNNER_TEMP/law.md" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -704,6 +717,7 @@ jobs:
                             + (.row | tostring) + ":" + (.col | tostring) + ".")}))
             | add // []
             | {($org): (($c[0][$org] // []) + .)}
+              + (if ($law | length) > 0 then {law_page: $law} else {} end)
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
           jq -r --arg org "$ORG" '.[$org] | "\(length) finding(s) for \($org)"' "$RUNNER_TEMP/org-findings.json"
       - uses: actions/upload-artifact@v4

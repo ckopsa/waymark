@@ -48,7 +48,10 @@
   classpath, so the factory cannot render it. The onboarding seat runs
   `factory10.law-text` on its bench and hands the page to `propose`,
   which writes it onto the plan as `law_page`: the person reads the
-  law in the plan's own document.
+  law in the plan's own document. The audit's run renders it too, in
+  the org-findings artifact beside the findings (ticket 4ab34d18), and
+  `record_findings` writes it for that head, so the page always matches
+  the latest head; a propose without one keeps the recorded page.
 
   `answer` AND `go_live` ARE THE OWNER'S. A question is asked of the
   person who owns the plan, so only that person answers it, or an
@@ -167,6 +170,8 @@
                 (assoc-in [:data :findings] found)
                 (assoc-in [:data :findings_sha] (:head_sha inp))
                 (assoc-in [:data :next_step] (next-step found)))
+      (some? (:law_page inp))
+      (assoc-in [:data :law_page] (:law_page inp))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -427,7 +432,8 @@
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
-    ;; WRITTEN ONLY BY propose: the page factory10.law-text renders
+    ;; WRITTEN BY propose and the findings doors: the page
+    ;; factory10.law-text renders
     [:law_page {:optional true
                 :x-display
                 {:widget "prose"
@@ -552,7 +558,11 @@
               [:string {:min 7 :max 64}]]
              [:findings {:x-display {:hidden true
                                      :label "The run's findings"}}
-              [:vector {:max 200} finding-schema]]]
+              [:vector {:max 200} finding-schema]]
+             [:law_page {:optional true
+                         :x-display {:hidden true
+                                     :label "The run's law page"}}
+              [:maybe [:string {:max 40000}]]]]
      ;; :edit-shape — a run replaces the findings, nobody edits them
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
@@ -573,7 +583,11 @@
               [:string {:min 7 :max 64}]]
              [:findings {:x-display {:hidden true
                                      :label "The run's findings"}}
-              [:vector {:max 200} finding-schema]]]
+              [:vector {:max 200} finding-schema]]
+             [:law_page {:optional true
+                         :x-display {:hidden true
+                                     :label "The run's law page"}}
+              [:maybe [:string {:max 40000}]]]]
      ;; :edit-shape — a run replaces the findings, nobody edits them
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
