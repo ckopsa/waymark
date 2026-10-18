@@ -1,0 +1,4 @@
+;; A fixture org factorykit.conform-test judges: its one cast member's
+;; :scope names an action gizmo does not declare and a kind the engine
+;; does not serve, and nothing else is wrong.
+{:paths ["src" "resources"]}
