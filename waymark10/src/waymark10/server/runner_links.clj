@@ -45,10 +45,12 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.at-rest :as at-rest]
             [waymark10.server.invoke :as inv]
             [waymark10.server.pull-fires :as pf]
             [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -681,26 +683,66 @@
   [row]
   (= "pull" (some-> (get-in row [:data :delivery]) name)))
 
+(defn- rearm!
+  "Arm again the wake a dropped fire spent, as the missed-fire sweep
+  arms one (`wakes/record-missed!`): `wake_pending` on the schedule row,
+  one maintenance write."
+  [eng schedule-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [row (store/load-row st tx :schedule (str schedule-id)
+                                        {:for-update true})]
+          (store/update-data! st tx :schedule (str schedule-id)
+                              (assoc (:data row) :wake_pending true)
+                              (:next-flip-at row)))))))
+
 (defn- drop-missed!
   "Drop every held fire a day old, and say on each one's schedule that
-  it was missed."
+  it was missed. A fire whose key no sit spent has its key revoked and
+  its wake armed again (ticket a25950b4): the missed-fire sweep passes a
+  fire nobody took by, so this is where it is written down."
   [eng]
   (doseq [f (pf/sweep! (:storage eng) (.minusSeconds (now-of eng) pf/keep-seconds))
           :when (= "schedule" (:for_kind f))]
-    (sch/miss! eng (:for_id f)
-               "A fire waited a day on its pull runner link and no localfire took it; it was dropped as missed.")))
+    (let [revoked? (seats/revoke-fire-key!
+                    eng (seats/fire-key-of-text (at-rest/open (:text f))))]
+      (sch/miss! eng (:for_id f)
+                 "A fire waited a day on its pull runner link and no localfire took it; it was dropped as missed.")
+      (when revoked?
+        (rearm! eng (:for_id f))))))
 
 (defn- queue-fire!
   "A fire through a pull link: held, sealed, for a localfire to take.
-  `for` is {:kind :id}, the row it is for, or nil. → {:queued id}."
+  `for` is {:kind :id}, the row it is for, or nil. → {:queued id}.
+
+  ONE WAITING FIRE PER ROW PER LINK (ticket a25950b4). When the link
+  already holds a fire for `for` that no localfire took, no second one
+  is queued: the new fire's key is revoked, and the answer is
+  {:queued id :waiting true}, naming the fire that waits. A laptop that
+  comes back runs the seat once. Else the fire's key is marked as a
+  pull fire's (`seats/queue-fire-key!`), to answer for the keep."
   [eng link-row text for]
   (drop-missed! eng)
-  {:queued (pf/enqueue! (:storage eng)
-                        {:link-id (str (:id link-row))
-                         :for-kind (:kind for)
-                         :for-id (:id for)
-                         :text text
-                         :now (now-of eng)})})
+  (let [st (:storage eng)
+        link-id (str (:id link-row))
+        held (seats/fire-key-of-text text)
+        waiting (when for
+                  (first (filter #(and (nil? (:handed_out_at %))
+                                       (= (some-> (:kind for) name) (:for_kind %))
+                                       (= (some-> (:id for) str) (:for_id %)))
+                                 (pf/pending st link-id))))]
+    (if waiting
+      (do (seats/revoke-fire-key! eng held)
+          {:queued (:id waiting) :waiting true})
+      (let [id (pf/enqueue! st {:link-id link-id
+                                :for-kind (:kind for)
+                                :for-id (:id for)
+                                :text text
+                                :now (now-of eng)})]
+        (seats/queue-fire-key! eng held id
+                               (.plusSeconds (now-of eng) pf/keep-seconds))
+        {:queued id}))))
 
 (declare land-on-link!)
 
@@ -951,10 +993,13 @@
   never handed out, or its lease (pf/lease-seconds) run out — leased to
   the caller: {:id :text :for_kind :for_id :created_at ...}, the text
   opened. nil when none waits. Fires a day old are dropped first, as
-  missed."
+  missed. The take is stamped on the fire's key
+  (`seats/take-fire-key!`), so the missed-fire sweep counts from it."
   [eng link-id]
   (drop-missed! eng)
-  (pf/take! (:storage eng) (str link-id) (now-of eng)))
+  (when-some [f (pf/take! (:storage eng) (str link-id) (now-of eng))]
+    (seats/take-fire-key! eng (seats/fire-key-of-text (:text f)) (now-of eng))
+    f))
 
 (defn answer-fire!
   "Land what a localfire answered (the Provider's four words) for the

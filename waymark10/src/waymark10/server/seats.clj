@@ -2563,7 +2563,20 @@
            :x-display
            {:label "The row it named"
             :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting already holds it, of this seat or of another seat that walks the same kind."}}
-     [:string {:min 1 :max 128}]]]])
+     [:string {:min 1 :max 128}]]
+    ;; a fire held on a pull link (ticket a25950b4): its id in the
+    ;; link's queue, and when a localfire took it, since the missed-fire
+    ;; sweep counts from the take and passes a fire nobody took by
+    [:pull_fire {:optional true
+                 :x-display
+                 {:label "The pull fire it rides"
+                  :help "The id of the fire a pull runner link holds for a localfire. Until one takes it, the key is not a run that never sat."}}
+     [:string {:min 1 :max 128}]]
+    [:taken_at {:optional true
+                :x-display
+                {:label "When a localfire took it"
+                 :help "The instant a localfire took this pull fire. A key still unspent some minutes after it is a run that never sat."}}
+     :waymark/instant]]])
 
 (def ^:private delivers-help
   "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")
@@ -6671,6 +6684,66 @@
                                     (assoc (:data row) :fire_keys kept)
                                     (:next-flip-at row))
                 true))))))))
+
+;; ── the key of a fire a pull link holds (ticket a25950b4) ────────────
+
+(defn fire-key-of-text
+  "The seat and the key hash a fire's text carries — the seat line and
+  the key under it (`schedules/fire-text`) — as {:seat :hash}, or nil
+  for a text with no key. A pull link holds the text alone, so this is
+  how it finds the entry its fire minted."
+  [text]
+  (when-some [[_ seat key] (re-find #"(?m)^Seat: (\S+) [^\n]*\nKey: (\S+)"
+                                    (str text))]
+    {:seat seat :hash (key-hash key)}))
+
+(defn- rewrite-fire-key!
+  "Rewrite the entry `held` ({:seat :hash}) names on its seat row, in
+  one transaction FOR UPDATE, as `spend-fire-key!` reads it: `f` of the
+  entry, or nil to take it off. → true when the entry was there."
+  [eng {:keys [seat hash]} f]
+  (when (and seat hash (get (inv/resources eng) :seat))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :seat (str seat)
+                                        {:for-update true})]
+          (let [held (get-in row [:data :fire_keys])
+                same? #(= (str (:hash %)) (str hash))]
+            (when (some same? held)
+              (store/update-data! (:storage eng) tx :seat (str seat)
+                                  (assoc (:data row) :fire_keys
+                                         (into [] (keep #(if (same? %) (f %) %))
+                                               held))
+                                  (:next-flip-at row))
+              true)))))))
+
+(defn queue-fire-key!
+  "Mark the key of a fire a pull link holds: the entry keeps the fire's
+  id as `:pull_fire`, and answers until `until` at least (the link's
+  keep), so the key still opens the seat when a laptop that slept takes
+  the fire. → true when the entry was there."
+  [eng held fire-id ^Instant until]
+  (rewrite-fire-key! eng held
+                     (fn [e]
+                       (let [was (instant-of (:expires_at e))]
+                         (assoc e
+                                :pull_fire (str fire-id)
+                                :expires_at (str (if (and was (.isAfter ^Instant was until))
+                                                   was
+                                                   until)))))))
+
+(defn take-fire-key!
+  "Stamp `:taken_at` on the key of a pull fire a localfire took at `at`:
+  the missed-fire sweep counts from here. → true when the entry was
+  there."
+  [eng held ^Instant at]
+  (rewrite-fire-key! eng held #(assoc % :taken_at (str at))))
+
+(defn revoke-fire-key!
+  "Take the key of a pull fire off its seat row unspent: the fire was
+  dropped, or never queued. → true when the entry was there."
+  [eng held]
+  (rewrite-fire-key! eng held (constantly nil)))
 
 (defn keep-fire-key!
   "Keep the trace of a spent firing's key on the sitting it opened: its
