@@ -1912,6 +1912,36 @@ jobs:
       - name: "1. Prerequisites"
         run: docker compose version
 
+      # The official images come from Google's Docker Hub mirror, not
+      # Docker Hub or public.ecr.aws: runners share those registries'
+      # anonymous pull limits, and a pull refused there failed the walk
+      # before any step ran. public.ecr.aws is the fallback for a tag
+      # the mirror lacks. compose reads POSTGRES_IMAGE from the
+      # environment; the house's images are ghcr.io's already.
+      - name: Official images from a mirror
+        run: |
+          set -euo pipefail
+          tag=postgres:17
+          image=""
+          for wait in 0 5 15 30; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave $tag; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "mirror.gcr.io/library/$tag" "public.ecr.aws/docker/library/$tag"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave $tag"
+            exit 1
+          fi
+          echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
+
       - name: "2. The engine, the database and the bench"
         run: |
           set -euo pipefail
