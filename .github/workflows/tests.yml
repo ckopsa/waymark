@@ -332,7 +332,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
+              .github/workflows/*|selfhost/repo-kit/.github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -1298,6 +1298,9 @@ jobs:
           set -euo pipefail
           bash <(curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
           ./actionlint -color
+          # the workflow selfhost/repo-kit hands a self-hoster, which no
+          # run of this repository's own reads
+          ./actionlint -color selfhost/repo-kit/.github/workflows/tests.yml
       - name: shellcheck the scripts
         if: ${{ !cancelled() }}
         run: |
