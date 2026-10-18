@@ -873,7 +873,7 @@
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
    :base-kept 0
-   :stale-noted 0 :floor-filed 0 :refused 0})
+   :stale-noted 0 :floor-filed 0 :findings 0 :refused 0})
 
 (defn census-line
   "The one line a pass prints of its census, so every factory prints
@@ -910,6 +910,8 @@
             (n :base-kept) " kept on green"))
      (when (pos? (n :floor-filed))
        (str ", " (n :floor-filed) " groom-floor tickets filed"))
+     (when (pos? (n :findings))
+       (str ", " (n :findings) " org findings heads recorded"))
      (when (pos? (n :refused))
        (str ", " (n :refused) " refused"))
      (when-some [left (:remaining census)]
