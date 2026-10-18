@@ -11,6 +11,7 @@ two-kind org with one seat.
 ```
 orgs/<org>/
   deps.edn                 waymark10 and factorykit by local root
+  org.edn                  the manifest: {:name "<org>" :live false}
   src/<org>/org.clj        the module: resources, check-resources, domain
   src/<org>/kinds/*.clj    one defresource per kind, guards as defguard sentences
   resources/<org>/seed.edn what a fresh engine holds at boot
@@ -23,6 +24,19 @@ every `myorg` with the org's name: the directories under `src/` and
 `deps.edn` roots are relative to `orgs/<org>/`, so a copy keeps them.
 `clojure -M:check` in the org's directory runs the declaration gate,
 and `factory10.orgkit-test` loads the template and the example.
+
+## The manifest
+
+`org.edn` is the org's manifest: at least `{:name "<org>" :live
+false}`. The template writes it with `:live false`, and going live
+flips it to `:live true`. The conformance suite requires it: a missing
+one is the finding `manifest/missing/<org>`. The house engine reads
+it: at boot it lists the org directories under `WAYMARK10_ORGS_DIR`
+(`../orgs` from the engine's working directory unless set; the image
+copies `orgs/` there), keeps the live ones, loads each one's `src` and
+`resources` through its own class loader, then serves its kinds and
+runs its seed, as `WAYMARK10_ORG` does for one org on the classpath.
+No live org is a deps root of the engine.
 
 ## Naming rules
 

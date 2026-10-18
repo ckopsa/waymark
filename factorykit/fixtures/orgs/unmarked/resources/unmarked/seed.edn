@@ -1,0 +1,8 @@
+{:seed "unmarked"
+ :version 1
+ :org "unmarked"
+ :domains [{:name "unmarked" :label "Unmarked"}]
+ :cast {:owner {:id "owner" :display "Owner" :type :human}}
+ :seats []
+ :judgments []
+ :steps []}
