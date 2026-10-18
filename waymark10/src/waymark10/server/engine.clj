@@ -223,6 +223,15 @@
                     :name (or (not-empty (some-> (:name opts) str))
                               (not-empty (System/getenv "WAYMARK_ENGINE_NAME"))
                               "waymark")
+                    ;; the solo owner (self-host, no IdP): the :solo-owner
+                    ;; option, else WAYMARK10_SOLO_OWNER, and never beside
+                    ;; :oidc. Set, the dev headers resolve only for this
+                    ;; principal and its delegates (router/solo-admits),
+                    ;; it is born manager and recovery-admin
+                    ;; (members/provision!), and start! binds loopback.
+                    :solo-owner (when-not (:oidc opts)
+                                  (or (not-empty (some-> (:solo-owner opts) str))
+                                      (not-empty (System/getenv "WAYMARK10_SOLO_OWNER"))))
                     ;; when this engine ends: the :expires-at option, else
                     ;; WAYMARK_ENGINE_EXPIRES_AT, read once at boot. Only
                     ;; a demo clone carries one (docs/spec-demo-clones.md
@@ -367,6 +376,18 @@
     (reset! rt nil))
   nil)
 
+(defn bind-host
+  "The interface start! serves on: the :host option, else
+  WAYMARK10_HOST, else 127.0.0.1 for a solo engine (:solo-owner) —
+  its dev headers are its only identity, so only this machine may
+  present them — and nil otherwise, http-kit's own 0.0.0.0. `env` is
+  any (fn [name] value); tests pass a map."
+  ([eng opts] (bind-host eng opts #(System/getenv ^String %)))
+  ([eng {:keys [host]} env]
+   (or (not-empty (some-> host str))
+       (not-empty (env "WAYMARK10_HOST"))
+       (when (:solo-owner eng) "127.0.0.1"))))
+
 (defn start!
   "Serve the engine on port via http-kit and start its running
   surfaces (start-runtime!). Returns the server; pass BOTH engine and
@@ -375,11 +396,13 @@
   opts: :wrap-handler — a ring middleware the embedding composes
   around the engine's handler (an app-level route that needs the
   engine alive, e.g. a byte-store redirect, mounts here without
-  forking the boot)."
-  [eng port & [{:keys [wrap-handler]}]]
+  forking the boot). :host — the interface to bind (bind-host)."
+  [eng port & [{:keys [wrap-handler] :as opts}]]
   (start-runtime! eng)
-  (http/run-server ((or wrap-handler identity) (handler eng))
-                   {:port port :legacy-return-value? false}))
+  (let [host (bind-host eng opts)]
+    (http/run-server ((or wrap-handler identity) (handler eng))
+                     (cond-> {:port port :legacy-return-value? false}
+                       host (assoc :ip host)))))
 
 (defn stop!
   "Stop the server; the two-arity form also stops the engine's
