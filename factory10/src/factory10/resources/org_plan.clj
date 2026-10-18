@@ -23,6 +23,13 @@
   names the finding, and the way out is to answer the question it
   raised and let the audit run again.
 
+  THE LAW PAGE RIDES THE PROPOSAL (ticket 36c70e59). The org's
+  directory lives on the pull request's branch, not on the factory's
+  classpath, so the factory cannot render it. The onboarding seat runs
+  `factory10.law-text` on its bench and hands the page to `propose`,
+  which writes it onto the plan as `law_page`: the person reads the
+  law in the plan's own document.
+
   `answer` AND `go_live` ARE THE OWNER'S. A question is asked of the
   person who owns the plan, so only that person answers it, or an
   agent acting for them whose answer is held for their tap. `go_live`
@@ -86,7 +93,8 @@
 
 (defhandler put-the-pull-request-up [row inp _ctx]
   (cond-> row
-    (some? (:change inp)) (assoc-in [:data :change] (:change inp))))
+    (some? (:change inp)) (assoc-in [:data :change] (:change inp))
+    (some? (:law_page inp)) (assoc-in [:data :law_page] (:law_page inp))))
 
 (defhandler attach-the-film [row inp _ctx]
   (assoc-in row [:data :film_url] (:film_url inp)))
@@ -188,7 +196,7 @@
    :attempt :propose
    :row     {:state :drafting
              :data (assoc a-plan :findings [(assoc an-error :severity "warning")])}
-   :input   {}
+   :input   {:law_page "# The law of greenleaf"}
    :as      {:id "onboarding" :type :agent}
    :expect  {:allowed true}})
 
@@ -306,6 +314,13 @@
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
+    ;; WRITTEN ONLY BY propose: the page factory10.law-text renders
+    [:law_page {:optional true
+                :x-display
+                {:widget "prose"
+                 :label "The law"
+                 :help "The org's law in sentences, as the pull request carries it: what the person approves when it merges."}}
+     [:maybe [:string {:max 40000}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true
@@ -383,7 +398,12 @@
      :input [:map
              [:change {:optional true :kind :change
                        :x-display {:label "The pull request"}}
-              [:maybe :waymark/ref]]]
+              [:maybe :waymark/ref]]
+             [:law_page {:optional true
+                         :examples ["# The law of greenleaf\n\nThis is what you approve when you merge: each kind of record this org keeps, how it moves, what each move asks first, which moves wait for a person, and which seats work here and what they may spend."]
+                         :x-display {:widget "prose" :label "The law"
+                                     :help "The page factory10.law-text renders from the org's directory, for the person to read on the plan."}}
+              [:maybe [:string {:max 40000}]]]]
      ;; :edit-shape — the first pull request onto a blank row is not an
      ;; edit of one
      :waives #{:edit-shape}

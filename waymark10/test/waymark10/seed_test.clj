@@ -177,6 +177,15 @@
         (is (false? (:seeded twice)))
         (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
 
+(deftest a-live-seed-loads-on-an-engine-with-an-idp
+  (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
+        once (seed/load! eng live {:params params})]
+    (is (true? (:seeded once)))
+    (testing "and a later boot skips it, by the marker"
+      (let [twice (seed/load! eng live {:params params})]
+        (is (false? (:seeded twice)))
+        (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
+
 (deftest a-live-seed-refuses-an-engine-that-has-members
   (let [eng (engine {:name "waymark"})
         _ (seed/load! eng live {:params params})
@@ -191,6 +200,30 @@
   (let [eng (engine {:name "waymark"})
         e (refused #(seed/load! eng live {:params {"chore" "Water the ferns"}}))]
     (is (re-find #"repo" (str (ex-message (or (ex-cause e) e)))))))
+
+(def ^:private owned
+  "A live seed whose one cast member is made from the boot's params."
+  (assoc live
+         :seed "owned"
+         :cast {:owner {:id [:param :owner] :display [:param :owner_display]
+                        :type :human}}
+         :steps [{:as :owner :kind :chore :create {:title [:param :chore]} :ref :c1}]))
+
+(deftest a-live-seed-takes-a-cast-members-id-and-display-from-the-params
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng owned {:params (assoc params "owner" "lee"
+                                                   "owner_display" "Lee Example")})]
+    (is (true? (:seeded once)))
+    (is (= "Lee Example" (get-in (dev/row eng :member "lee") [:data :display]))
+        "the member is born with the param's id and display")
+    (is (some? (dev/row eng :chore (get-in once [:refs :c1 :id])))
+        "and walks its steps as that member")))
+
+(deftest a-live-seed-refuses-a-cast-param-the-boot-does-not-give
+  (let [eng (engine {:name "waymark"})
+        e (refused #(seed/load! eng owned {:params params}))]
+    (is (re-find #"owner" (str (ex-message e))))
+    (is (empty? (dev/rows eng :chore)) "and nothing was written")))
 
 (deftest the-params-read-as-json-or-edn
   (is (= {:repo "acme/garden"} (seed/read-params "{\"repo\": \"acme/garden\"}")))
