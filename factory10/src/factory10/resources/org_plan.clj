@@ -44,6 +44,12 @@
   lands it through `attach_film` or `record_film_findings`; both are
   the engine's doors alone.
 
+  A NEW HEAD VOIDS THE TAKE (ticket 4d9311f1). The film must be of the
+  head the owner approves: a push to a `filming` plan's branch, seen by
+  the findings pass or by the film pass before it lands the take, takes
+  `void_take`, the engine's door alone, which clears the take and sends
+  the plan back to `proposed` for the director to film the new head.
+
   THE WALK IS THE FINDINGS, IN A FIXED ORDER (ticket f64c9ce1, M2c).
   The onboarding walk is a computed `next_step` on the plan, not a
   `walkthrough` row: a walkthrough's steps are invitations a person or
@@ -355,6 +361,29 @@
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
 
+(defhandler void-the-take [row inp _ctx]
+  ;; A take of a head the branch has left is no film of the plan the
+  ;; owner approves: it is cleared, and the moved head is a finding the
+  ;; next run at that head replaces.
+  (let [voided {:key "take_voided" :severity "warning" :class "film"
+                :subject "film"
+                :sentence (str "The branch's head moved to " (short-sha (:head_sha inp))
+                               " while the film of "
+                               (short-sha (get-in row [:data :take_sha]))
+                               " waited to be judged, so that take was voided.")
+                :remedy "Film the new head: the film must be of the head the owner approves."}
+        found (conj (vec (remove #(= "take_voided" (str (:key %)))
+                                 (get-in row [:data :findings])))
+                    voided)]
+    (-> row
+        (assoc-in [:data :film_url] nil)
+        (assoc-in [:data :take_film_url] nil)
+        (assoc-in [:data :take_report] nil)
+        (assoc-in [:data :take_sha] nil)
+        (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :findings] found)
+        (assoc-in [:data :next_step] (next-step found)))))
+
 ;; ── the walls ───────────────────────────────────────────────────────
 
 (defguardfn a-person-files-the-plan
@@ -616,7 +645,8 @@
              {:in #{:going_live} :by :engine :via :mark_live :to :live}
              {:in #{:going_live} :by :engine :via :head_moved :to :simulated}
              {:in #{:filming} :by :engine :via :attach_film :to :simulated}
-             {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}]
+             {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}
+             {:in #{:filming} :by :engine :via :void_take :to :proposed}]
    ;; going_live waits a day at most on the merge and the mayor's seat
    :expected-age {:drafting 86400 :proposed 21600 :filming 3600 :simulated 604800
                   :going_live 86400}
@@ -868,6 +898,24 @@
               :one-way "The film is on the plan for the owner to watch."}
      :display {:label "Attach the film" :order 4
                :description "Attach the film of the org's simulated first week"}}
+
+    ;; A NEW HEAD WHILE FILMING (ticket 4d9311f1). The engine's hand
+    ;; alone: the findings pass or the film pass voids a take whose head
+    ;; the branch has left, and the director films the new head.
+    :void_take
+    {:from #{:filming} :to :proposed
+     :guards [the-engine-records-the-findings]
+     :handler void-the-take
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              [:string {:min 7 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take is voided: the plan is proposed again, for the director to film its new head."}
+     :display {:label "Take voided" :order 11
+               :description "A new head on the branch voids the film waiting to be judged"}}
 
     ;; THE AUDIT'S OWN DOOR (M2b). Hidden, and the engine's hand alone,
     ;; for repo_policy's note_source's reasons. An empty run clears the
