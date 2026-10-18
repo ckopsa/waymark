@@ -55,6 +55,20 @@ it:
 
 The loader that walks it on a fresh engine is M1b's.
 
+## Conformance
+
+`factorykit.conform` judges an org the way the engine would:
+`(conform org-dir)` answers findings, each `{:key :severity :class
+:subject :sentence :remedy}`, and an org passes when it answers none.
+It loads the module, fills the seed's seats, runs the defresource and
+registry checks, the cracks audit over the kinds and the seed's seats,
+the sentence checks on guards and confirm doors, a memory engine's
+discover, schema, query, get and dry-run create for every kind, and
+the seats' scopes against the kinds the engine serves.
+`clojure -M:conform` runs it in an org's directory, and
+`clojure -M:conform ../orgs` in `factorykit/` runs it over every org;
+CI runs the latter.
+
 ## What an org may not do
 
 - No engine code: an org declares kinds, guards and its seed. A

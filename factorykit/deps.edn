@@ -2,6 +2,8 @@
  :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
          waymark10/waymark10  {:local/root "../waymark10"}}
  :aliases
- {:test {:extra-paths ["test"]
+ {;; clojure -M:conform ../orgs: the org conformance suite over every org
+  :conform {:main-opts ["-m" "factorykit.conform"]}
+  :test {:extra-paths ["test"]
          :extra-deps  {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
          :main-opts   ["-m" "kaocha.runner"]}}}
