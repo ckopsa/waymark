@@ -142,7 +142,7 @@
 (defn- create-as! [h sid as-id title]
   (tool h (with-session sid) "waymark_invoke"
         {:kind "request" :action "create" :as as-id
-         :input {:title title :customer "Lee Park"}
+         :input {:title title :customer "Ana Ruiz"}
          :return "summary"}))
 
 (defn- moves [eng kind id]
@@ -151,8 +151,8 @@
       (store/transitions (:storage eng) tx
                          {:kind kind :resource-id (str id)} {}))))
 
-;; the seed's cast member who is neither the owner nor a manager
-(def ^:private cast-member "crew")
+;; the seed's customer: neither the owner nor a manager
+(def ^:private cast-member "ana")
 
 ;; ── 1 · on a clone, the log records both hands ──────────────────────
 

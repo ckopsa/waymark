@@ -50,10 +50,17 @@ it:
   `:label`, its budget its `:budget_usd_per_week` or the factory's 3600.
   A `:ref` names the row, so a seat template's `:domain_id` can be
   `[:ref …]`.
-- `:cast`: the members, as in the demo seed.
+- `:cast`: the members, as in the demo seed. A member may declare
+  `:scope`, in a seat's own shape (`[{:kind "request" :actions
+  ["accept"]}]`, `"*"` for every action of a kind): its ceiling, what
+  any seat it owns may hold. A member with no `:scope` holds the whole
+  org: every kind and action the engine serves.
 - `:seats`: each a factorykit seat template and its params,
   `{:template "mayor" :params {...}}`, or a whole seat map under
-  `:seat` when no template walks the org's kinds.
+  `:seat` when no template walks the org's kinds. Either may name
+  `:owner`, a `:cast` key: the member whose ceiling the seat's scope
+  sits inside. A seat with no owner is judged only against the kinds
+  the engine serves.
 - `:judgments`: each a factorykit judgment template and its params.
 - `:steps`: the starting rows, each an ordinary create or invoke by a
   cast member, as in the demo seed.
@@ -69,7 +76,8 @@ It loads the module, fills the seed's seats, runs the defresource and
 registry checks, the cracks audit over the kinds and the seed's seats,
 the sentence checks on guards and confirm doors, a memory engine's
 discover, schema, query, get and dry-run create for every kind, and
-the seats' scopes against the kinds the engine serves.
+the seats' scopes against the kinds the engine serves and against
+each owner's ceiling.
 `clojure -M:conform` runs it in an org's directory, and
 `clojure -M:conform ../orgs` in `factorykit/` runs it over every org;
 CI runs the latter.

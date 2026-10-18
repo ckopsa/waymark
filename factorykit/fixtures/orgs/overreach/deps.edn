@@ -1,0 +1,3 @@
+;; A fixture org factorykit.conform-test judges: its one seat holds a
+;; door its owner's ceiling does not, and nothing else is wrong.
+{:paths ["src" "resources"]}
