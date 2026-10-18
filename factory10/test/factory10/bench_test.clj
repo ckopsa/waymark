@@ -2386,10 +2386,30 @@
     (is (empty? (bench/merge-asks eng)))
     (testing "once `test` reports green on that head, the ask is filed"
       (observe! w {:missing_checks [] :missing_checks_head a-commit})
+      (bench/mark-row! eng :change (str (:id (change-row w)))
+                       {:green_head a-commit} #{})
       (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 62))))
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 123))))
       (let [why (str (get-in (first (bench/merge-asks eng)) [:data :why]))]
         (is (str/includes? why "required checks (test) are green") why)))))
+
+;; ticket 9f19742e: a check queued or running on the head is not missing,
+;; and the head is not green until the mirror stamps `green_head`
+(deftest a-required-check-running-on-the-head-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (clean-world (assoc person-policy
+                                                :required_checks ["test"]))
+        waiting (atom {})]
+    (observe! w {:missing_checks [] :missing_checks_head a-commit})
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "GitHub calls it clean, but `test` still runs on this head")
+    (is (empty? (bench/merge-asks eng)))
+    (testing "once `test` is green on that head, the ask is filed"
+      (bench/mark-row! eng :change (str (:id (change-row w)))
+                       {:green_head a-commit} #{})
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 62))))
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 123))))
+      (is (= 1 (count (bench/merge-asks eng)))))))
 
 (deftest a-house-merged-repository-raises-no-merge-ask
   (let [{:keys [eng]} (clean-world house-policy)
