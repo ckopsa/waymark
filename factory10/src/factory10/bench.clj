@@ -330,12 +330,16 @@
   (ticket 856e825c): the command the bench's check runs after its lint,
   sent only when the row states one. `hosted_workflows` rides the same
   way (ticket 0de73a7a): the workflow files a person allowed on
-  GitHub-hosted runners, sent only when the row names at least one."
+  GitHub-hosted runners, sent only when the row names at least one.
+  `hosted_ok` rides the same way (ticket 83dd6dc3): the rig's per-repo
+  leave to run CI on GitHub-hosted runners, sent only when the row
+  states it."
   [row]
   (let [test-block (get-in row [:data :test])
         check-block (get-in row [:data :check])
         pattern (:select_pattern test-block)
-        hosted (seq (get-in row [:data :hosted_workflows]))]
+        hosted (seq (get-in row [:data :hosted_workflows]))
+        hosted-ok (get-in row [:data :hosted_ok])]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
@@ -345,7 +349,8 @@
                                         (not (str/blank? (str pattern)))
                                         (assoc :select_pattern (str pattern))))
       (some? check-block) (assoc :check (select-keys check-block [:command :timeout]))
-      hosted (assoc :hosted_workflows (vec hosted)))))
+      hosted (assoc :hosted_workflows (vec hosted))
+      (boolean? hosted-ok) (assoc :hosted_ok hosted-ok))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).

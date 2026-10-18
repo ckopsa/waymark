@@ -11,6 +11,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -78,6 +79,20 @@
         (is (string? (get-in e [:waiting_on :verdict])))))
     (testing "repo reads `repository` too"
       (is (= "r1" (:repo (by-id "sync-1")))))))
+
+;; ticket 9ff24b82: the envelope's ETag is the row's version, and
+;; `waiting_on` is outside it. `since` must hold still under one
+;; version, so it carries the instant and never an age.
+(deftest since-holds-still-under-one-version
+  (let [r (row "open-old" :open 2 {})
+        read-at #(waiting-on/block job seats {:job job} r {:now % :data {}})
+        first-read (read-at now)
+        later (read-at (.plusSeconds ^Instant now 7200))]
+    (testing "since is the instant and the expected age, the same at any clock"
+      (is (= (:since first-read) (:since later)))
+      (is (= #{:at :expected_seconds} (set (keys (:since first-read))))))
+    (testing "the verdict's age words move with the clock, which the ETag does not cover"
+      (is (not= (:verdict first-read) (:verdict later))))))
 
 (def ^:private ticket
   "The shapes of ticket ca68c559: a row whose `next` opens with doors

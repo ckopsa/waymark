@@ -1770,6 +1770,16 @@
     (is (= hosted (:hosted_workflows (sent 1)))
         "the restate carries the list to the rig's enrollment")))
 
+(deftest a-policy-with-hosted-ok-enrolls-with-it
+  (let [enrolled (fn [extra]
+                   (let [st (state)]
+                     (a-policy! (fresh-engine st) extra)
+                     (:arguments (first (calls-of st "bench__enroll")))))]
+    (is (not (contains? (enrolled {}) :hosted_ok))
+        "a policy that states no hosted_ok sends none")
+    (is (true? (:hosted_ok (enrolled {:hosted_ok true})))
+        "a policy with hosted_ok true carries it to the rig's enrollment")))
+
 (deftest a-patch-restate-leaves-the-groom-floor-as-it-stood
   (let [st (state)
         eng (fresh-engine st)

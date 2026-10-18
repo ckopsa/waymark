@@ -21,7 +21,13 @@
 
   The hold fields and the values the verdict names are read from the
   data the caller was SHOWN, so the block says nothing of a field the
-  caller's grant hides."
+  caller's grant hides.
+
+  The block is OUTSIDE what the envelope's ETag covers (ticket
+  9ff24b82): the ETag is the row's version, and the verdict's age words
+  and the seats `next` names move without a write. `since` serves the
+  instant and the expected age, never an age, so it holds still under
+  one version; the reader subtracts."
   (:require [clojure.string :as str]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
