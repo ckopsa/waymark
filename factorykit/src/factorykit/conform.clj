@@ -412,11 +412,32 @@
   [f]
   (-> f (update :severity text) (update :class text)))
 
+(defn live-report
+  "What org_plan's go_live reads of the org at org-dir (ticket c8e131fb,
+  M2e): its manifest's :live as `live_flag`, and its `mayor`, the seed's
+  seat named <org>-mayor, as {name budget_usd_per_week}; no mayor when
+  the seed seats none. A boolean and strings, as the findings doors
+  take them."
+  [org-dir]
+  (let [dir (.getCanonicalFile (io/file org-dir))
+        org (.getName dir)
+        m (try (org-boot/manifest dir) (catch Throwable _ nil))
+        seed (try (edn/read-string (slurp (io/file dir "resources" org "seed.edn")))
+                  (catch Throwable _ nil))
+        mayor (when (map? seed)
+                (some #(when (= (str org "-mayor") (str (:name %))) %)
+                      (:seats (seed-seats seed))))
+        budget (:budget_usd_per_week mayor)]
+    (cond-> {:live_flag (true? (when (map? m) (:live m)))}
+      mayor (assoc :mayor (cond-> {:name (str (:name mayor))}
+                            (some? budget) (assoc :budget_usd_per_week (str budget)))))))
+
 (defn -main
   "Judge each org named, or each under a directory named. Exit 1 on
   any error finding, 2 when no org was found. `--json` prints one JSON
   object instead, each org's name to its findings, for the audit's CI
-  job to hand to org_plan's record_findings (ticket 5d62058e)."
+  job to hand to org_plan's record_findings (ticket 5d62058e), and under
+  `_live` each org's `live-report` (ticket c8e131fb)."
   [& args]
   (let [json? (boolean (some #{"--json"} args))
         dirs (mapcat org-dirs (or (seq (remove #{"--json"} args)) ["."]))
@@ -425,9 +446,13 @@
         errors (count (filter #(= :error (:severity %)) (mapcat second judged)))]
     (if json?
       (println (wire/write-json
-                (into (sorted-map)
-                      (map (fn [[org fs]] [org (mapv wire-finding fs)]))
-                      judged)))
+                (assoc (into (sorted-map)
+                             (map (fn [[org fs]] [org (mapv wire-finding fs)]))
+                             judged)
+                       "_live" (into (sorted-map)
+                                     (map (fn [^File d]
+                                            [(.getName (.getCanonicalFile d)) (live-report d)]))
+                                     dirs))))
       (doseq [[org fs] judged]
         (println (str org ": "
                       (if (seq fs) (str (count fs) " finding(s)") "conforms")))

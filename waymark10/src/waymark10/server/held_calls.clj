@@ -1214,7 +1214,7 @@
                                 (:next-flip-at raw))
             true))))))
 
-(defn- compared
+(defn compared
   "What the rig's `compare_heads` said of `approved` and `head`:
   {:carries true}, or {:carries false :reason <why not>}. A refusal or
   a call that failed does not carry."
