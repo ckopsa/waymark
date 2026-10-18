@@ -896,22 +896,6 @@
 
 (defonce ^:private dev (atom nil))
 
-(defn- gate-row-on-boot!
-  "The bridge of Gate's deprecation (spec-mcp-servers § 3 step 1): one
-  mcp_server row named gate, passthrough, at the Gate
-  WORKQUEUE10_GATE_URL names, seeded once and never overwritten. The
-  sources and the power door resolve every <rig>__<tool> name through
-  it until each rig has its own row. A demo engine (WAYMARK10_SEED,
-  docs/spec-demo-clones.md § 4) gets none, whatever the url says: a
-  passthrough row answers to every unprefixed tool name, so the seeded
-  held call would be forwarded at Gate's address and not refused with
-  the no-server sentence. `gate-url` and `seed` are the two variables'
-  values as `start!` read them."
-  [eng gate-url seed]
-  (when-not (some-> seed str not-empty)
-    (when-some [url (some-> gate-url str not-empty)]
-      (mcp-servers/ensure-gate-row! eng {:url url}))))
-
 (defn- demo-seed?
   "Whether WAYMARK10_SEED names a demo seed: a name, and not one of a
   seed marked `:live-ok`. A live seed is a self-hosted engine's first
@@ -923,6 +907,23 @@
   (boolean
    (when-some [n (some-> seed str not-empty)]
      (not (:live-ok (seed/read-seed n))))))
+
+(defn- gate-row-on-boot!
+  "The bridge of Gate's deprecation (spec-mcp-servers § 3 step 1): one
+  mcp_server row named gate, passthrough, at the Gate
+  WORKQUEUE10_GATE_URL names, seeded once and never overwritten. The
+  sources and the power door resolve every <rig>__<tool> name through
+  it until each rig has its own row. A demo engine (a demo seed,
+  `demo-seed?`, docs/spec-demo-clones.md § 4) gets none, whatever the
+  url says: a passthrough row answers to every unprefixed tool name, so
+  the seeded held call would be forwarded at Gate's address and not
+  refused with the no-server sentence. A `:live-ok` seed is a
+  self-hosted engine, not a clone, so it gets the row. `gate-url` and
+  `seed` are the two variables' values as `start!` read them."
+  [eng gate-url seed]
+  (when-not (demo-seed? seed)
+    (when-some [url (some-> gate-url str not-empty)]
+      (mcp-servers/ensure-gate-row! eng {:url url}))))
 
 (defn- seed-on-boot!
   "The seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED

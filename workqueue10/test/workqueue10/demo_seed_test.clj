@@ -170,6 +170,16 @@
               #(gate-row-on-boot! ::eng "http://gate.test/mcp/" seed)))
           (pr-str seed)))))
 
+(deftest a-live-seeded-boot-makes-the-gate-row-at-the-url-named
+  (testing "a :live-ok seed is no demo clone"
+    (is (= [[::eng {:url "http://gate.test/mcp/"}]]
+           (gate-rows-asked
+            #(gate-row-on-boot! ::eng "http://gate.test/mcp/" "live-test")))))
+  (testing "with no url named, none"
+    (doseq [url [nil ""]]
+      (is (= [] (gate-rows-asked #(gate-row-on-boot! ::eng url "live-test")))
+          (pr-str url)))))
+
 ;; ── allowing the seeded held call (§ 4) ─────────────────────────────
 
 (defn- ada
