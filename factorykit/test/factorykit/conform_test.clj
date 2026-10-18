@@ -3,11 +3,46 @@
   a fixture org with a state no seat leaves, a guard with no sentence
   and a seat scope naming an unknown kind earns exactly those three
   findings, keyed the same on every run. No database, no network."
-  (:require [clojure.test :refer [deftest is testing]]
-            [factorykit.conform :as conform]))
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
+            [factorykit.conform :as conform])
+  (:import (java.io File)
+           (java.nio.file Files)
+           (java.nio.file.attribute FileAttribute)))
 
 (deftest the-example-org-conforms
   (is (= [] (conform/conform "../orgs/example"))))
+
+(defn- example-with-mayor
+  "A copy of orgs/example whose seed holds the org-mayor template,
+  filled with `kinds`, as the onboarding seat writes it. → its dir."
+  [kinds]
+  (let [src (io/file "../orgs/example")
+        dir (io/file (str (Files/createTempDirectory "org-mayor" (make-array FileAttribute 0)))
+                     "example")
+        seed-file (io/file dir "resources" "example" "seed.edn")]
+    (doseq [^File f (file-seq src)
+            :when (.isFile f)
+            :let [to (io/file dir (str (.relativize (.toPath src) (.toPath f))))]]
+      (io/make-parents to)
+      (io/copy f to))
+    (spit seed-file
+          (pr-str (-> (edn/read-string (slurp seed-file))
+                      (update :domains (partial mapv #(assoc % :ref :example)))
+                      (update :seats conj
+                              {:template "org-mayor"
+                               :params {:org "example" :domain "example"
+                                        :domain_id [:ref :example] :owner "owner"
+                                        :budget_usd_per_week 8M :kinds kinds}}))))
+    (str dir)))
+
+(deftest the-example-org-conforms-with-its-mayor-in-the-seed
+  (is (= [] (conform/conform (example-with-mayor [{:kind "request" :actions []}
+                                                  {:kind "work_order" :actions []}]))))
+  (testing "and a mayor naming a kind the org does not serve earns its finding"
+    (is (= ["scope/unknown-kind/example-mayor/ticket"]
+           (mapv :key (conform/conform (example-with-mayor [{:kind "ticket" :actions []}])))))))
 
 (deftest a-broken-org-earns-exactly-its-three-findings
   (let [fs (conform/conform "fixtures/orgs/broken")]
