@@ -266,8 +266,11 @@
         ;; from the PUBLISHED create body though the door accepts it —
         ;; the union covers a separate :create-schema spelling the
         ;; mark either place
-        secret (into (schema/secret-fields (:schema rdef))
-                     (schema/secret-fields create-model))
+        ;; an engine-written field (ticket 9e0a105b) is not offered
+        ;; either: the door refuses it from a hand
+        secret (-> (schema/secret-fields (:schema rdef))
+                   (into (schema/secret-fields create-model))
+                   (into (schema/engine-written-fields (:schema rdef))))
         base
         {col
          {:get {:tags [kname]

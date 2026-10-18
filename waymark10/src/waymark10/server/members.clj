@@ -819,8 +819,10 @@
              [:maybe :boolean]]
             ;; the org a seed's completion marker was loaded for: written
             ;; by the seed loader (seed/mark!) and read back by
-            ;; seed/marker-org. Hidden: no form or roster shows it.
+            ;; seed/marker-org. Hidden: no form or roster shows it, and
+            ;; :engine-written: no hand's create or edit may carry it.
             [:seed_org {:optional true
+                        :engine-written true
                         :x-display {:hidden true
                                     :label "Seeded for org"
                                     :help "The org a seed's completion marker was loaded for. Written by the seed loader, never by hand."}}
@@ -846,6 +848,7 @@
             ;; the notices quiet hours hold for the digest: written in
             ;; place by the engine, emptied when the digest goes out.
             [:quiet_held {:optional true
+                          :engine-written true
                           :x-display {:raw true
                                       :label "Held for quiet hours"
                                       :help "The notices that arrived during quiet hours, each a summary and a link, sent as one digest when the window closes. Written by the engine."}}
@@ -853,11 +856,13 @@
             ;; a digest that did not go out: its lines stay in
             ;; :quiet_held for the next sweep, and it is counted here
             [:quiet_digest_failed {:optional true
+                                   :engine-written true
                                    :x-display {:raw true
                                                :label "Digests that failed"
                                                :help "How many times a quiet-hours digest could not be sent; its notices were kept for the next try. Written by the engine."}}
              [:maybe :int]]
             [:quiet_digest_error {:optional true
+                                  :engine-written true
                                   :x-display {:raw true
                                               :label "Last digest failure"
                                               :help "Why the last quiet-hours digest could not be sent. Written by the engine."}}
@@ -865,12 +870,14 @@
             ;; "no carrier": notices are held but :notify names no
             ;; notifier that exists, so no digest is tried or counted
             [:quiet_digest_carrier {:optional true
+                                    :engine-written true
                                     :x-display {:raw true
                                                 :label "Digest carrier"
                                                 :help "\"no carrier\" when quiet-hours notices are held but no notifier is named, or the one named is gone: they wait, and no digest is tried or counted. Written by the engine."
                                                 :choices {"no carrier" "No carrier — notices are held, but no notifier can send the digest"}}}
              [:maybe [:enum "no carrier"]]]
             [:invited_by {:optional true
+                          :engine-written true
                           :x-ref {:principal true}
                           :x-display {:raw true
                                       :label "Invited by"

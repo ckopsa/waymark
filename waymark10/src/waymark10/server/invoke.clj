@@ -1331,6 +1331,21 @@
             (when (= limit (count children))
               (recur (into seen (map :id) due)))))))))
 
+(defn- hand-written-errors
+  "The engine-written fields (schema/engine-written-fields of the kind's
+  :schema) an input carries from a hand — {field [why]}, or nil. A
+  :system principal (the seed loader, the registrar, a pass) writes
+  them; every other principal is refused as schema-invalid, before any
+  guard runs."
+  [rdef principal inp]
+  (when-not (= :system (:type principal))
+    (not-empty
+     (into {}
+           (keep (fn [k]
+                   (when (contains? inp k)
+                     [k ["written by the engine, never by hand"]])))
+           (schema/engine-written-fields (:schema rdef))))))
+
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
   invoke-declared! wraps in its own with-tx; bulk items and batch
@@ -1468,6 +1483,9 @@
                                            not-empty))]
                           (when errors
                             (throw (p/schema-invalid action-name errors)))
+                          (when-some [hand (when (:edit defn)
+                                             (hand-written-errors rdef principal decoded))]
+                            (throw (p/schema-invalid action-name hand)))
                           decoded)
                         (if (seq body)
                           (throw (p/schema-invalid
@@ -2232,6 +2250,8 @@
                  partial? (-> (select-keys (keys (or body {})))
                               not-empty))]
     (when errors (throw (p/schema-invalid :create errors)))
+    (when-some [hand (hand-written-errors rdef principal inp)]
+      (throw (p/schema-invalid :create hand)))
     (if (empty? (create-walled-guards rdef))
       (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
       (store/with-tx (:storage engine)
@@ -2425,6 +2445,8 @@
             inp (if mint? inp (schema/apply-defaults model inp))
             _ (when-some [errors (schema/closed-errors model inp)]
                 (throw (p/schema-invalid :create errors)))
+            _ (when-some [hand (hand-written-errors rdef principal inp)]
+                (throw (p/schema-invalid :create hand)))
             ctx (make-ctx engine tx :invoke principal
                           {:correlation-id correlation-id
                            :within within

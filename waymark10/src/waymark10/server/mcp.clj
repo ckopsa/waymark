@@ -1666,7 +1666,8 @@
                         (schema/json-schema (:input a))
                         (when-some [arg? (:arg? vis)]
                           #(arg? (:kind rdef) (:name a) %)))
-                       (render/edit-input-js a)))]
+                       (render/edit-input-js a)
+                       (render/engine-written-js a rdef)))]
     (cond-> {:name (name (:name a))
              :from (mapv name (sort (:from a)))
              :to (name (:to a))

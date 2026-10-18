@@ -333,6 +333,19 @@
                 (when (:secret properties) k)))
         (entry-map form)))
 
+(defn engine-written-fields
+  "The {:engine-written true} entries of a :map schema — fields only
+  the engine writes (a seed load, a pass, a birth hook). The create and
+  edit doors drop them from every advertised input, and refuse an
+  input that carries one from any principal but :system as
+  schema-invalid, before any guard runs (ticket 9e0a105b). A schema
+  mark rather than a guard: no free-text :open judgment to answer for."
+  [form]
+  (into #{}
+        (keep (fn [[k {:keys [properties]}]]
+                (when (:engine-written properties) k)))
+        (entry-map form)))
+
 (defn sealed-fields
   "The {:at-rest :encrypted} entries of a :map schema (ticket
   dbeb2f25): credentials that open something outside the engine, which

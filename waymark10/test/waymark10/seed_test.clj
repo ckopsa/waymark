@@ -10,9 +10,12 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
+            [waymark10.server.collections :as coll]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org]
             [waymark10.server.seed :as seed]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.types :as t])
   (:import (clojure.lang ExceptionInfo)
            (java.time Instant)))
 
@@ -361,6 +364,28 @@
     (testing "and another org's name is refused by the field"
       (let [e (refused #(seed/load! eng (org-seed nm) {:org "other"}))]
         (is (= "org_mismatch" (:reason (ex-data e))))))))
+
+(deftest seed-org-is-written-by-the-engine-alone
+  (let [eng (engine {:name "waymark"})
+        ada (t/principal {:id "ada" :type :human :display "Ada Example"})
+        body {:display "Ada Example" :actor_type "human" :subject "ada"}]
+    (testing ":system's seed load still writes seed_org"
+      (is (true? (:seeded (seed/load! eng (org-seed "sys") {:org "sys"}))))
+      (is (= "sys" (get-in (dev/row eng :member "seed-sys") [:data :seed_org]))))
+    (testing "a hand-written member create carrying seed_org is refused, naming the field"
+      (let [e (refused #(inv/create! eng :member (assoc body :seed_org "sys")
+                                     {:principal ada :id "ada"}))]
+        (is (= :schema-invalid (:waymark10/problem (ex-data e))))
+        (is (contains? (:errors (ex-data e)) :seed_org))
+        (is (nil? (dev/row eng :member "ada")) "and nothing was written")))
+    (testing "the same create without it passes"
+      (is (nil? (refused #(inv/create! eng :member body {:principal ada :id "ada"}))))
+      (is (some? (dev/row eng :member "ada"))))
+    (testing "the member create door's projected input schema does not list seed_org"
+      (let [props (get-in (coll/create-affordance (get (inv/resources eng) :member) nil)
+                          [:input :properties])]
+        (is (contains? props :display))
+        (is (not (contains? props :seed_org)))))))
 
 (deftest an-old-marker-with-its-org-in-the-display-is-read-and-rewritten
   (let [eng (engine {:name "waymark"})
