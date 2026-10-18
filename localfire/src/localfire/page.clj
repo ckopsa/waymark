@@ -157,7 +157,7 @@
                             "Bearer: <code>" (esc (:token routine)) "</code></p>"
                             (when-let [link (:link routine)]
                               (str "<p>Your runner link in the engine: <code>" (esc (:id link)) "</code>"
-                                   (when (:retired link) ", retired when you revoked your token") ".</p>"))
+                                   (when (or (:broken link) (:retired link)) ", broken when you revoked your token") ".</p>"))
                             (when (:engine? routine)
                               (str "<form method=\"post\" action=\"/me/connect\">" (hidden-csrf csrf)
                                    "<button>" (if (:link routine) "Restate my link in the engine" "Connect to the engine")
