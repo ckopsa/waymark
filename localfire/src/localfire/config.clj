@@ -242,6 +242,69 @@
             (fail! (str "the config at " (.getPath f) " is not readable EDN: "
                         (ex-message e))))))))
 
+;; ── `localfire pull` (§13): a config built from flags ────────────────
+
+(def pull-flags
+  "The flags `localfire pull` takes, each to the key it fills. Only
+  --engine and --link are required."
+  {"--engine"   :engine-url
+   "--link"     :link-id
+   "--place"    :place
+   "--runs-dir" :runs-dir
+   "--port"     :port
+   "--model"    :model
+   "--mcp-url"  :mcp-url
+   "--claude"   :claude})
+
+(def default-pull-place
+  "The seat place `localfire pull` copies when --place names none: the
+  one the image bakes in (Dockerfile.localfire)."
+  "/srv/waymark-seat")
+
+(def pull-routine
+  "The one routine `localfire pull` serves, and its fires run as."
+  "pull")
+
+(defn- parse-pull-flags [args]
+  (loop [m {} [f v & more :as as] (seq args)]
+    (cond
+      (empty? as) m
+      (not (contains? pull-flags f))
+      (fail! (str "localfire pull does not take " f "; it takes "
+                  (str/join ", " (sort (keys pull-flags))) "."))
+      (or (nil? v) (str/starts-with? v "--"))
+      (fail! (str "localfire pull's " f " needs a value."))
+      :else (recur (assoc m (pull-flags f) v) more))))
+
+(defn pull-config-map
+  "The config map `localfire pull --engine <url> --link <id>` stands for:
+  the EDN a localfire.edn with a `:pull` block would hold, built from
+  the flags and the defaults, so `normalize` judges both alike. The
+  link's token is read from LOCALFIRE_PULL_TOKEN, as the EDN path's is."
+  [args]
+  (let [f      (parse-pull-flags args)
+        engine (some-> (:engine-url f) (str/replace #"/+$" "") not-empty)
+        port   (if-let [p (:port f)]
+                 (or (parse-long p)
+                     (fail! (str "localfire pull's --port must be an integer, not " p ".")))
+                 8112)]
+    (when-not engine
+      (fail! "localfire pull needs --engine, the engine's base URL."))
+    (when-not (:link-id f)
+      (fail! "localfire pull needs --link, the pull runner link's id."))
+    {:port       port
+     :public-url (str "http://127.0.0.1:" port)
+     :place      (or (:place f) default-pull-place)
+     :runs-dir   (or (:runs-dir f)
+                     (str (System/getProperty "user.home") "/.localfire/runs"))
+     :claude     (or (:claude f) "claude")
+     :mcp        {:name default-mcp-name
+                  :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+     :routines   {pull-routine {:model (or (:model f) "opus")}}
+     :pull       {:engine-url engine
+                  :link-id    (:link-id f)
+                  :routine    pull-routine}}))
+
 (defn routine
   "The routine of that name, or nil — the 404 of R-5.1."
   [cfg nm]

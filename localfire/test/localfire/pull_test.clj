@@ -162,3 +162,46 @@
                           (config/normalize
                            (assoc base :pull {:engine-url "https://e" :link-id "l"
                                               :routine "sonnet" :token "t"}))))))
+
+(deftest localfire-pull-builds-the-pull-config-from-flags
+  (let [place (str (w/make-place!))
+        cfg   (config/normalize
+               (config/pull-config-map ["--engine" "https://e/" "--link" "l"
+                                        "--place" place "--runs-dir" "/tmp/lf-runs"]))
+        edn   (config/normalize
+               {:port 8112 :public-url "http://127.0.0.1:8112" :place place
+                :runs-dir "/tmp/lf-runs" :mcp {:url "https://e/api/-/mcp"}
+                :routines {"pull" {:model "opus"}}
+                :pull {:engine-url "https://e" :link-id "l" :routine "pull"}})]
+    (testing "the flags make the same config the EDN path makes"
+      (is (= {:engine-url "https://e" :link-id "l" :routine "pull"
+              :token-env "LOCALFIRE_PULL_TOKEN"}
+             (:pull cfg)))
+      (is (= edn cfg)))
+    (testing "each flag lands on its key"
+      (let [c (config/normalize
+               (config/pull-config-map ["--engine" "https://e" "--link" "l" "--place" place
+                                        "--port" "9000" "--model" "sonnet"
+                                        "--mcp-url" "http://m/mcp" "--claude" "/bin/claude"]))]
+        (is (= 9000 (:port c)))
+        (is (= "http://127.0.0.1:9000" (:public-url c)))
+        (is (= "sonnet" (get-in c [:routines "pull" :model])))
+        (is (= "http://m/mcp" (get-in c [:mcp :url])))
+        (is (= "/bin/claude" (:claude c)))))
+    (testing "a missing or unknown flag is one sentence"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"--engine"
+                            (config/pull-config-map ["--link" "l"])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"--link"
+                            (config/pull-config-map ["--engine" "https://e"])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not take --token"
+                            (config/pull-config-map ["--engine" "https://e" "--link" "l"
+                                                     "--token" "t"])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a value"
+                            (config/pull-config-map ["--engine" "https://e" "--link"])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"--port must be an integer"
+                            (config/pull-config-map ["--engine" "https://e" "--link" "l"
+                                                     "--port" "x"]))))
+    (testing "the README names every flag"
+      (let [readme (slurp (io/file "README.md"))]
+        (doseq [f (keys config/pull-flags)]
+          (is (str/includes? readme (str "`" f "`")) f))))))
