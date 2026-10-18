@@ -381,6 +381,12 @@
 (defhandler record-failure [row inp _ctx]
   (assoc-in row [:data :reason] (:reason inp)))
 
+(defhandler record-expiry [row inp _ctx]
+  ;; the engine's sentence on a waiting merge whose moved head did not
+  ;; carry the yes (ticket abd12627); the sweep's expiry writes none
+  (cond-> row
+    (:reason inp) (assoc-in [:data :reason] (:reason inp))))
+
 (defn- born
   "The birth stamps: the leash the caller never chose, and the person
   the call waits on. `expires_at` is written AT CREATE, so the person
@@ -812,7 +818,13 @@
      :display {:label "Failed"}}
     :expire
     {:from #{:held :allowed :allowed_waiting} :to :expired
+     :input [:map
+             [:reason {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 240}]]]]
      :guards [the-engine-finishes-it]
+     :handler record-expiry
+     :edit {:fence false
+            :unfenced-reason "The engine's own expiry of a call whose moment passed. No read preceded it to fence against."}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Nothing runs late: an expired call never goes out, and making it again is a new call."}
      :display {:label "Expired"}}}
@@ -1079,22 +1091,33 @@
             (:content payload))
       (wire/write-json payload)))
 
+(defn- answer-result
+  "The map a rig tool answered: structuredContent's `result`, or the
+  JSON object in a text part. nil when it answered neither."
+  [payload]
+  (let [result (or (get-in payload [:structuredContent :result])
+                   (some (fn [part]
+                           (when-some [t (:text part)]
+                             (try (let [v (wire/read-json (str t))]
+                                    (when (map? v) v))
+                                  (catch Exception _ nil))))
+                         (:content payload)))]
+    (when (map? result) result)))
+
+(defn- result-field
+  "One field of a rig's answer, however its keys decoded."
+  [m k]
+  (if (contains? m k) (get m k) (get m (name k))))
+
 (defn- answered-waiting?
   "Did the server answer that it acted on nothing yet? The rig's
   `bench__merge` says `state: waiting` while a change's checks run
   (ticket 4180a699): the call reached it and merged nothing."
   [row payload]
   (and (= bench-merge-tool (str (get-in row [:data :tool])))
-       (let [result (or (get-in payload [:structuredContent :result])
-                        (some (fn [part]
-                                (when-some [t (:text part)]
-                                  (try (let [v (wire/read-json (str t))]
-                                         (when (map? v) v))
-                                       (catch Exception _ nil))))
-                              (:content payload)))]
+       (let [result (answer-result payload)]
          (and (map? result)
-              (= "waiting" (some-> (or (:state result) (get result "state"))
-                                   name))))))
+              (= "waiting" (some-> (result-field result :state) name))))))
 
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
@@ -1154,11 +1177,93 @@
 
 (defn expire!
   "Expire an `allowed_waiting` call whose moment has passed — the
-  change it would merge closed, or its head moved. → the moved row, or
-  nil."
-  [eng row]
+  change it would merge closed, or its head moved and the yes did not
+  carry (`carry-or-expire!`). `reason`, when given, is written on the
+  row. → the moved row, or nil."
+  ([eng row] (expire! eng row nil))
+  ([eng row reason]
+   (when (= :allowed_waiting (:state row))
+     (finish! eng (:id row) :expire (if reason {:reason reason} {})))))
+
+(def ^:private compare-heads-tool
+  ;; the rig's answer to whether a moved head is the approved one
+  ;; brought up to date from base (waymark-bench#131)
+  "bench__compare_heads")
+
+(defn- head-key
+  "The key a stored call map spells `head_sha` with."
+  [m]
+  (if (and (map? m) (contains? m "head_sha")) "head_sha" :head_sha))
+
+(defn- carry-head!
+  "Pin a waiting merge's yes to `head`: the `head_sha` of the call a
+  person saw and of the one the rig receives. → true when the row was
+  still `allowed_waiting` and is pinned now."
+  [eng row head]
+  (let [st (:storage eng)
+        id (str (:id row))
+        pin #(assoc % (head-key %) head)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :held_call id {:for-update true})]
+          (when (= "allowed_waiting" (some-> (:state raw) name))
+            (store/update-data! st tx :held_call id
+                                (-> (:data raw)
+                                    (update :input pin)
+                                    (update :forward pin))
+                                (:next-flip-at raw))
+            true))))))
+
+(defn- compared
+  "What the rig's `compare_heads` said of `approved` and `head`:
+  {:carries true}, or {:carries false :reason <why not>}. A refusal or
+  a call that failed does not carry."
+  [eng {:keys [repo base approved head]}]
+  (try
+    (let [payload (servers/call! eng compare-heads-tool
+                                 {:repo repo :base base
+                                  :approved approved :head head})
+          result (answer-result payload)]
+      (cond
+        (true? (:isError payload))
+        {:carries false
+         :reason (str "compare_heads refused: "
+                      (or (some-> result (result-field :refused) str not-empty)
+                          (error-words payload)))}
+
+        (true? (some-> result (result-field :carries)))
+        {:carries true}
+
+        (false? (some-> result (result-field :same_own_diff)))
+        {:carries false :reason "own diff changed"}
+
+        :else {:carries false :reason "not a base update"}))
+    (catch Exception e
+      {:carries false :reason (str "compare_heads failed: " (ex-message e))})))
+
+(defn carry-or-expire!
+  "A person's yes on a merge the rig answered `waiting`, whose change's
+  head then moved (ticket abd12627). The yes carries over when the rig's
+  `compare_heads` says the new head is the approved one brought up to
+  date from base with the pull request's own diff unchanged: the row
+  is pinned to the new head, stays `allowed_waiting`, and `reforward!`
+  merges it with no new ask. Anything else expires it with the reason,
+  so the merge ask files a fresh one. `at` is {:repo :base :head}, the
+  change now. → :carried, :expired, or nil when the row is not
+  waiting."
+  [eng row {:keys [repo base head]}]
   (when (= :allowed_waiting (:state row))
-    (finish! eng (:id row) :expire {})))
+    (let [input (get-in row [:data :input])
+          approved (str (or (get input :head_sha) (get input "head_sha")))
+          {:keys [carries reason]}
+          (if (str/blank? head)
+            {:carries false :reason "the change names no head"}
+            (compared eng {:repo repo :base base
+                           :approved approved :head head}))]
+      (if (and carries (carry-head! eng row head))
+        :carried
+        (do (expire! eng row (:text (capped (str reason) 240)))
+            :expired)))))
 
 (defn after-allow!
   "THE WIRE-BOUNDARY EFFECT of a person's allow (R-4), called by the

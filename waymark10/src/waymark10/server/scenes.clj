@@ -16,10 +16,12 @@
   tapped. Where a kind is not known, the kind's own law is not judged.
 
   A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
-  `{\"$rows\": {kind, since, until, field, none}}` holes. `check` judges
+  `{\"$rows\": {kind, since, until, field, none}}` and
+  `{\"$moves\": {kind, since, until, by, none}}` holes. `check` judges
   each hole; the performer fills it when the shot plays (`fill-say`),
   from the rows the scene's clone holds in that window
-  (`rows-in-window`), and a hole that finds none says so plainly.
+  (`rows-in-window`) or the transitions its log holds there
+  (`moves-in-window`), and a hole that finds none says so plainly.
 
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
@@ -34,7 +36,7 @@
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
-  (:import (java.time Instant LocalDate ZoneOffset)))
+  (:import (java.time Instant LocalDate OffsetDateTime ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -317,8 +319,18 @@
   "What a hole that finds no rows says, unless it names its own `none`."
   "nothing came in")
 
+(def move-actors
+  "Whose transitions a `$moves` hole may read: the org's seats (the
+  default), its people, or anyone."
+  ["seats" "people" "anyone"])
+
+(def no-moves
+  "What a `$moves` hole that finds no transitions says, unless it names
+  its own `none`."
+  "nothing moved")
+
 (def ^:private say-shape
-  "`say` is a string, or a list of strings and `$rows` holes.")
+  "`say` is a string, or a list of strings and `$rows` or `$moves` holes.")
 
 (defn- instant-of
   "An RFC 3339 instant, or a YYYY-MM-DD date read as its first moment in
@@ -334,38 +346,57 @@
   [part]
   (when (map? part) (get part "$rows")))
 
-(defn- hole-problem
-  "Why one `$rows` hole cannot be filled; nil when it can."
-  [h rdef-of]
+(defn- moves-hole-of
+  "The `$moves` map a say part holds; nil when the part is no such hole."
+  [part]
+  (when (map? part) (get part "$moves")))
+
+(defn- window-problem
+  "Why one hole named `hole` (`$rows`, `$moves`) cannot read its window:
+  its shape, its `kind` and its [since, until). `names` are the keys it
+  takes. Nil when it can."
+  [hole names h rdef-of]
   (if-not (map? h)
-    "a `$rows` hole is a map of `kind`, `since` and `until`."
+    (str "a `" hole "` hole is a map of `kind`, `since` and `until`.")
     (let [k (some-> (get h "kind") str)
-          stray (remove #{"kind" "since" "until" "field" "none"} (keys h))
+          stray (remove (set names) (keys h))
           since (instant-of (get h "since"))
           until (instant-of (get h "until"))]
       (cond
         (seq stray)
-        (str "a `$rows` hole takes kind, since, until, field and none, not "
-             (tick (first stray)) ".")
+        (str "a `" hole "` hole takes " (str/join ", " (butlast names))
+             " and " (last names) ", not " (tick (first stray)) ".")
 
-        (str/blank? k) "a `$rows` hole names a `kind`."
+        (str/blank? k) (str "a `" hole "` hole names a `kind`.")
 
         (nil? (rdef-of k)) (str (tick k) " is not a kind this engine serves.")
 
         (nil? since)
-        (str "a `$rows` hole's `since` is a date or an instant, and this one is "
+        (str "a `" hole "` hole's `since` is a date or an instant, and this one is "
              (tick (get h "since")) ".")
 
         (nil? until)
-        (str "a `$rows` hole's `until` is a date or an instant, and this one is "
+        (str "a `" hole "` hole's `until` is a date or an instant, and this one is "
              (tick (get h "until")) ".")
 
         (not (.isBefore since until))
-        "a `$rows` hole's `since` comes before its `until`."
+        (str "a `" hole "` hole's `since` comes before its `until`.")))))
 
-        (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
+(defn- hole-problem
+  "Why one `$rows` hole cannot be filled; nil when it can."
+  [h rdef-of]
+  (or (window-problem "$rows" ["kind" "since" "until" "field" "none"] h rdef-of)
+      (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
         (str (tick (get h "field")) " is not a field a hole reads; the fields are "
-             (str/join ", " hole-fields) ".")))))
+             (str/join ", " hole-fields) "."))))
+
+(defn- moves-problem
+  "Why one `$moves` hole cannot be filled; nil when it can."
+  [h rdef-of]
+  (or (window-problem "$moves" ["kind" "since" "until" "by" "none"] h rdef-of)
+      (when (and (contains? h "by") (not (some #{(get h "by")} move-actors)))
+        (str (tick (get h "by")) " is not whose moves a hole reads; it reads "
+             (str/join ", " move-actors) "."))))
 
 (defn- say-problem
   "Why a shot's `say` cannot be spoken; nil when it can."
@@ -378,6 +409,8 @@
                     (string? part) nil
                     (and (map? part) (contains? part "$rows"))
                     (hole-problem (hole-of part) rdef-of)
+                    (and (map? part) (contains? part "$moves"))
+                    (moves-problem (moves-hole-of part) rdef-of)
                     :else say-shape))
                 say)))
 
@@ -387,22 +420,34 @@
   rows `rows-of` answers for it, joined with `; `, or by its `none`
   (`nothing came in` unless it names one) when there are none. `rows-of`
   is a fn of {:kind :since :until :field} to summary lines; the performer
-  passes `rows-in-window` over the scene's clone."
-  [say rows-of]
-  (let [say (plain say)]
-    (if-not (sequential? say)
-      (str say)
-      (apply str
-             (for [part say]
-               (if-some [h (hole-of part)]
-                 (let [lines (rows-of {:kind (str (get h "kind"))
+  passes `rows-in-window` over the scene's clone. Each `$moves` hole is
+  replaced the same way by the lines `moves-of` answers, a fn of
+  {:kind :since :until :by} (`moves-in-window`), or by its `none`
+  (`nothing moved`)."
+  ([say rows-of] (fill-say say rows-of (constantly [])))
+  ([say rows-of moves-of]
+   (let [say (plain say)
+         spoken (fn [lines h none]
+                  (if (seq lines)
+                    (str/join "; " lines)
+                    (str (get h "none" none))))]
+     (if-not (sequential? say)
+       (str say)
+       (apply str
+              (for [part say]
+                (if-some [h (hole-of part)]
+                  (spoken (rows-of {:kind (str (get h "kind"))
+                                    :since (instant-of (get h "since"))
+                                    :until (instant-of (get h "until"))
+                                    :field (get h "field" "created_at")})
+                          h nothing)
+                  (if-some [h (moves-hole-of part)]
+                    (spoken (moves-of {:kind (str (get h "kind"))
                                        :since (instant-of (get h "since"))
                                        :until (instant-of (get h "until"))
-                                       :field (get h "field" "created_at")})]
-                   (if (seq lines)
-                     (str/join "; " lines)
-                     (str (get h "none" nothing))))
-                 (str part)))))))
+                                       :by (get h "by" "seats")})
+                            h no-moves)
+                    (str part)))))))))
 
 (defn rows-in-window
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
@@ -426,6 +471,47 @@
                (sort-by #(inst-ms (get % at)))
                (mapv #(summary/line rdef (assoc (inv/decode-row rdef %)
                                                 :kind (:kind rdef))))))))))
+
+(defn- moved-by?
+  "Whether a logged actor is one a `$moves` hole's `by` names: a seat
+  (its principal is `seat:<id>`), a person, or anyone."
+  [by actor]
+  (case by
+    "anyone" true
+    "people" (= "human" (some-> (:type actor) name))
+    (str/starts-with? (str (:id actor)) "seat:")))
+
+(defn- ms-of
+  "A logged `at` as epoch millis; nil when it is no time."
+  [t]
+  (cond
+    (inst? t) (inst-ms t)
+    (instance? OffsetDateTime t) (.toEpochMilli (.toInstant ^OffsetDateTime t))
+    (some? t) (some-> (instant-of t) inst-ms)))
+
+(defn moves-in-window
+  "The transitions engine `eng`'s log holds on rows of `kind` in [since,
+  until), made by those `by` names (`seats`, the default, `people` or
+  `anyone`), oldest first, each as `<summary>: <action>`. None for a
+  kind the engine does not serve."
+  [eng {:keys [kind since until by]}]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) (keyword kind))
+        lo (inst-ms since)
+        hi (inst-ms until)]
+    (if-not rdef
+      []
+      (->> (store/with-tx st #(store/transitions st % {:kind (:kind rdef)}
+                                                 {:limit 100000}))
+           (keep (fn [t]
+                   (let [ms (ms-of (:at t))]
+                     (when (and ms (<= lo ms) (< ms hi)
+                                (moved-by? (or by "seats") (:actor t)))
+                       [ms t]))))
+           (sort-by first)
+           (mapv (fn [[_ t]]
+                   (str (or (not-empty (str (:summary t))) (:resource-id t))
+                        ": " (name (:action t)))))))))
 
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."
