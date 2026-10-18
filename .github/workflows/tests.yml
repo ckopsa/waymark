@@ -260,6 +260,7 @@ jobs:
           #   calendar10/**     calendar10, workqueue10
           #   factory10/**      factory10, workqueue10
           #   factorykit/**     factory10, workqueue10
+          #   orgs/**, orgkit/** factory10 (orgkit-test loads them via :test)
           #   workqueue10/**    workqueue10
           #   waymark10/**      waymark10, calendar10, factory10, workqueue10
           #   anything else     all of them: .github/, Makefile, Dockerfile.*,
@@ -287,6 +288,7 @@ jobs:
               calendar10/*)   reach[calendar10]=1; reach[workqueue10]=1 ;;
               factory10/*|factorykit/*)
                               reach[factory10]=1; reach[workqueue10]=1 ;;
+              orgs/*|orgkit/*) reach[factory10]=1 ;;
               workqueue10/*)  reach[workqueue10]=1 ;;
               waymark10/*)    reach[waymark10]=1; reach[calendar10]=1
                               reach[factory10]=1; reach[workqueue10]=1 ;;
@@ -335,7 +337,7 @@ jobs:
               .github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|orgs/*|orgkit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
                 echo "code path: $f"
                 code=true ;;
             esac
