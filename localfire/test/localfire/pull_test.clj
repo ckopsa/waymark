@@ -5,8 +5,10 @@
   the token in `Waymark-Runner-Token` and not as a bearer, starts a run
   through the server's own fire door, and is answered with the push
   wire's session id and URL; the loop backs off, one second doubling,
-  while the engine is unreachable and resumes when it is back; a 401
-  stops it; and the token is in no file and no log."
+  while the engine is unreachable and resumes when it is back, each wait
+  jittered between half and the whole of its step; a 401 does not stop
+  it, and a new token written to the token file is taken up without a
+  restart; and the token is in no file and no log."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -102,11 +104,12 @@
         world   (w/world)
         p       (binding [*err* (StringWriter.)]
                   (pull/start! world (pull-cfg port) secret
-                               {:sleep (fn [ms] (swap! sleeps conj ms) (Thread/sleep 20))}))]
+                               {:sleep  (fn [ms] (swap! sleeps conj ms) (Thread/sleep 20))
+                                :random (constantly 0.0)}))]
     (try
       ;; nothing listens on the port yet: the lid is closed
       (is (w/wait-for #(>= (count @sleeps) 3)))
-      (is (= [1000 2000 4000] (take 3 @sleeps)) "one second, doubling")
+      (is (= [500 1000 2000] (take 3 @sleeps)) "one second, doubling, the lowest draw halves it")
       (let [eng (stub-engine port answers seen)]
         (try
           (is (w/wait-for #(seq (posts seen))) "the waiting fire runs")
@@ -116,24 +119,89 @@
         (pull/stop! p)
         (server/stop! world)))))
 
-(deftest a-401-stops-the-loop
+(deftest ten-401s-do-not-end-the-loop
   (let [port    (w/free-port)
         seen    (atom [])
-        eng     (stub-engine port (atom [401]) seen)
+        sleeps  (atom [])
+        eng     (stub-engine port (atom (vec (repeat 10 401))) seen)
         world   (w/world)
         err     (StringWriter.)
-        p       (binding [*err* err] (pull/start! world (pull-cfg port) secret))]
+        p       (binding [*err* err]
+                  (pull/start! world (pull-cfg port) secret
+                               {:sleep (fn [ms] (swap! sleeps conj ms) (Thread/sleep 5))}))]
     (try
-      (is (= :unauthorized (deref (:run p) 5000 ::timeout)))
-      (is (= 1 (count @seen)) "no poll after the 401")
+      (is (w/wait-for #(> (count @seen) 10)) "it asks again after the tenth")
+      (is (not (realized? (:run p))) "the loop is still running")
+      (is (every? #(<= 30000 % 60000) (take 10 @sleeps)) "each 401 waits at the jittered cap")
       (is (empty? @(:calls world)))
-      (is (str/includes? (str err) "401"))
-      (is (str/includes? (str err) "LF_PULL_TOKEN"))
-      (is (not (str/includes? (str err) secret)))
+      (is (w/wait-for #(str/includes? (str err) "pulling again")) "a 204 after the 401s says it is back")
+      (let [log (str err)]
+        (is (= 1 (count (re-seq #"waiting for a new one" log))) "one line while refused")
+        (is (str/includes? log "LF_PULL_TOKEN"))
+        (is (not (str/includes? log secret))))
       (finally
         (pull/stop! p)
         (hk/server-stop! eng)
         (server/stop! world)))))
+
+(defn- token-engine
+  "An engine that takes only the token `good` holds: any other answers
+  401, and the good one gets `fire` once, then 204s."
+  [port good fire seen]
+  (let [given (atom false)]
+    (hk/run-server
+     (fn [req]
+       (let [tok (get-in req [:headers "waymark-runner-token"])]
+         (swap! seen conj {:method (:request-method req) :uri (:uri req) :token tok})
+         (cond
+           (not= @good tok) {:status 401 :body ""}
+           (= :post (:request-method req))
+           {:status 200 :headers {"content-type" "application/json"} :body "{}"}
+           (compare-and-set! given false true)
+           {:status 200 :headers {"content-type" "application/json"}
+            :body (json/write-value-as-string fire)}
+           :else (do (Thread/sleep 50) {:status 204 :body ""}))))
+     {:port port :legacy-return-value? false})))
+
+(deftest a-rotated-token-is-taken-up-without-a-restart
+  (let [port  (w/free-port)
+        old   "old-pull-s3cret"
+        f     (doto (java.io.File/createTempFile "lf-pull" ".token") (.deleteOnExit))
+        _     (spit f (str old "\n"))
+        seen  (atom [])
+        eng   (token-engine port (atom secret) {:id "fire-3" :text "rotated"} seen)
+        world (w/world)
+        err   (StringWriter.)
+        cfg   (assoc (pull-cfg port) :token-file (str f))
+        p     (binding [*err* err]
+                (pull/start! world cfg #(config/pull-token cfg)
+                             {:sleep (fn [_] (Thread/sleep 20))}))]
+    (try
+      (is (w/wait-for #(>= (count @seen) 3)) "it keeps asking after a 401")
+      (is (every? #(= old (:token %)) @seen))
+      (spit f (str secret "\n"))
+      (is (w/wait-for #(seq (posts seen))) "the new token is taken up")
+      (is (= "/api/-/runner-links/link-1/fires/fire-3" (:uri (first (posts seen)))))
+      (is (= secret (:token (first (posts seen)))))
+      (is (not (realized? (:run p))))
+      (is (w/wait-for #(str/includes? (str err) "pulling again")))
+      (let [log (str err)]
+        (is (= 1 (count (re-seq #"waiting for a new one" log))) "one line while refused")
+        (is (str/includes? log (str f)))
+        (is (not (str/includes? log old)))
+        (is (not (str/includes? log secret))))
+      (finally
+        (pull/stop! p)
+        (hk/server-stop! eng)
+        (server/stop! world)))))
+
+(deftest backoff-waits-are-jittered
+  (is (= 500 (pull/jittered 1000 0.0)))
+  (is (= 1000 (pull/jittered 1000 0.9999999)))
+  (is (= 30000 (pull/jittered 60000 0.0)))
+  (is (= 60000 (pull/jittered 60000 0.9999999)))
+  (is (every? #(<= 500 % 1000) (repeatedly 1000 #(pull/jittered 1000 (Math/random)))))
+  (is (every? #(<= 30000 % 60000) (repeatedly 1000 #(pull/jittered 60000 (Math/random))))))
 
 (deftest the-answer-names-what-the-engine-reads
   (is (= {:claude_code_session_id "r" :claude_code_session_url "u"}
@@ -154,6 +222,18 @@
            (:pull (config/normalize
                    (assoc base :pull {:engine-url "https://e/" :link-id "l"
                                       :routine :sonnet})))))
+    (testing ":token-file sits beside :token-env, and wins when both are set"
+      (let [f (doto (java.io.File/createTempFile "lf-pull" ".token") (.deleteOnExit))
+            p (:pull (config/normalize
+                      (assoc base :pull {:engine-url "https://e" :link-id "l" :routine "sonnet"
+                                         :token-env "LF_NONE" :token-file (str f)})))]
+        (is (= (str f) (:token-file p)))
+        (is (nil? (config/pull-token p)) "an empty file is no token")
+        (spit f "t-1\n")
+        (is (= "t-1" (config/pull-token p)))
+        (spit f "t-2")
+        (is (= "t-2" (config/pull-token p)) "read again on each call")
+        (is (not (str/includes? (config/pull-token-source p) "t-2")))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not under :routines"
                           (config/normalize
                            (assoc base :pull {:engine-url "https://e" :link-id "l"
