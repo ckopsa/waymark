@@ -2141,13 +2141,23 @@
       (str h "h " (rem m 60) "m")
       (str m "m"))))
 
+(defn- checks-missing-at-head?
+  "Does the forge pass say a required check has not reported on this
+  very head (`missing_checks`, read at `missing_checks_head`, ticket
+  8e809671)? Such a head is not green, whatever `mergeable` says."
+  [change head]
+  (boolean
+   (and (= head (some-> (get-in change [:data :missing_checks_head]) str))
+        (seq (get-in change [:data :missing_checks])))))
+
 (defn merge-ask-why
-  "The one sentence the person reads: the pull request, the title and
-  how long it has waited."
-  [change seconds]
+  "The one sentence the person reads: the pull request, the title, the
+  required checks it saw green and how long it has waited."
+  [change policy seconds]
   (str "Merge " (pull-url change) " ("
        (or (some-> (get-in change [:data :title]) str not-empty) "untitled")
-       "): its checks are green, it merges clean, and it has waited "
+       "): its required checks (" (str/join ", " (required-checks-of policy))
+       ") are green, it merges clean, and it has waited "
        (waited-text seconds) " for a person."))
 
 (defn- owner-of
@@ -2172,7 +2182,8 @@
         owner (owner-of eng change)]
     (inv/create! eng :held_call
                  (cond-> {:tool (gate/bench-tool :merge)
-                          :why (:text (held/capped (merge-ask-why change seconds)
+                          :why (:text (held/capped (merge-ask-why change policy
+                                                                  seconds)
                                                    240))
                           :caller merge-asker
                           :input args
@@ -2199,7 +2210,10 @@
   wait starts once nothing holds it, at the pass that sees it free. A repository whose policy names no
   required check is asked nothing (`person-merges-on-github?`): the rig
   would refuse the allowed call, so the tap would merge nothing, and the
-  merge pass writes `line_why: person` on the change instead. `waiting`
+  merge pass writes `line_why: person` on the change instead. A head
+  the forge pass read with a required check missing is not green, so it
+  is neither timed nor asked (`checks-missing-at-head?`, ticket
+  8e809671). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
   a merge hold keeps it. Throws nothing. → the number
   of asks raised."
@@ -2221,7 +2235,8 @@
                        (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
-                       (not (true? (get-in change [:data :draft]))))]
+                       (not (true? (get-in change [:data :draft])))
+                       (not (checks-missing-at-head? change head)))]
       (if (get holds (born-ticket change))
         ;; not timed while held; the pass that sees it free starts its
         ;; wait, not its stored held_since

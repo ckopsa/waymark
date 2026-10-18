@@ -2375,6 +2375,22 @@
         (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 300)))
             "an answered ask is not raised again for its head")))))
 
+(deftest a-required-check-missing-on-the-head-raises-no-merge-ask
+  (let [{:keys [eng] :as w} (clean-world (assoc person-policy
+                                                :required_checks ["test"]))
+        waiting (atom {})]
+    (observe! w {:missing_checks ["test"] :missing_checks_head a-commit})
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "GitHub calls it clean, but `test` never reported on this head")
+    (is (empty? (bench/merge-asks eng)))
+    (testing "once `test` reports green on that head, the ask is filed"
+      (observe! w {:missing_checks [] :missing_checks_head a-commit})
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 62))))
+      (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 123))))
+      (let [why (str (get-in (first (bench/merge-asks eng)) [:data :why]))]
+        (is (str/includes? why "required checks (test) are green") why)))))
+
 (deftest a-house-merged-repository-raises-no-merge-ask
   (let [{:keys [eng]} (clean-world house-policy)
         waiting (atom {})]
