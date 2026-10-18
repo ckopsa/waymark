@@ -120,7 +120,8 @@ on:
       selfhost:
         description: >-
           Also run the self-host acceptance walk (the `selfhost` job):
-          SELFHOST.md on this runner, from compose up to code-seat's sit.
+          SELFHOST.md on this runner, from compose up to code-seat's sit,
+          and on to the mayor's merge when SELFHOST_FIXTURE_TOKEN is set.
         type: boolean
         default: false
 
@@ -1869,14 +1870,17 @@ jobs:
 
   # ── SELF-HOST ACCEPTANCE (ticket ea4a9447) ──────────────────────────
   #
-  # SELFHOST.md followed on a clean runner, with no secrets: dispatch
-  # this workflow with selfhost=true. Each step is named for the section
-  # it follows, so a red step names the section that drifted. It stops
-  # where the forge begins: the fixture repository lives in the job (a
-  # bare repo served by `git daemon`), and the walk ends at code-seat's
-  # sit with the bench's worktree prepared from it. The push, the pull
-  # request and the mayor's "waiting on your merge" stay with the hand
-  # walk on a clean VM (ticket a01d303d). selfhost/ci/walk.py stands in
+  # SELFHOST.md followed on a clean runner: dispatch this workflow with
+  # selfhost=true. Each step is named for the section it follows, so a
+  # red step names the section that drifted. With the Actions secret
+  # SELFHOST_FIXTURE_TOKEN set (scoped to ckopsa/selfhost-fixture alone,
+  # ticket a01d303d) the walk runs to the end on that real repository:
+  # code-seat submits, the bench pushes bench/<ticket>, the pull request
+  # opens, and the mayor's sit names the change as waiting on the merge;
+  # the PR and its branch are closed and deleted afterwards, always.
+  # Without the secret the fixture lives in the job (a bare repo served
+  # by `git daemon`), the walk ends at code-seat's sit, and the job says
+  # the forge steps were skipped. selfhost/ci/walk.py stands in
   # for Claude: a stub of localfire's pull loop that grooms as
   # draft-judge and sits as code-seat. It also runs on a pull request
   # that touches SELFHOST.md, selfhost/** or the factory seed (ticket
@@ -1890,6 +1894,13 @@ jobs:
       (github.event_name == 'pull_request' && needs.changes.outputs.selfhost == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # one walk at a time owns the fixture's branches and pull requests
+    concurrency:
+      group: selfhost-fixture
+      cancel-in-progress: false
+    env:
+      FIXTURE_TOKEN: ${{ secrets.SELFHOST_FIXTURE_TOKEN }}
+      FIXTURE_REPO: ckopsa/selfhost-fixture
     steps:
       - uses: actions/checkout@v4
 
@@ -1906,14 +1917,21 @@ jobs:
           set -euo pipefail
           cp selfhost/.env.example selfhost/.env
           fresh() { openssl rand -base64 24 | tr '+/' '-_' | tr -d '='; }
-          # the fixture's owner and repository; no forge, so no real token
+          # the fixture's owner and repository; with no fixture token, no
+          # forge and so no real token
+          if [ -n "$FIXTURE_TOKEN" ]; then
+            repo=$FIXTURE_REPO git_token=$FIXTURE_TOKEN
+          else
+            repo=fixture/widgets git_token=no-forge-in-ci
+          fi
           sed -i \
             -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(fresh)|" \
             -e "s|^WAYMARK_PULL_TOKEN=.*|WAYMARK_PULL_TOKEN=$(fresh)|" \
             -e "s|^WAYMARK_OWNER=.*|WAYMARK_OWNER=tim|" \
-            -e "s|^WAYMARK_REPO=.*|WAYMARK_REPO=fixture/widgets|" \
+            -e "s|^WAYMARK_REPO=.*|WAYMARK_REPO=$repo|" \
             -e "s|^WAYMARK_MODEL=.*|WAYMARK_MODEL=claude-opus-5|" \
-            -e "s|^BENCH_GIT_TOKEN=.*|BENCH_GIT_TOKEN=no-forge-in-ci|" \
+            -e "s|^BENCH_GIT_TOKEN=.*|BENCH_GIT_TOKEN=$git_token|" \
+            -e "s|^BENCH_GITHUB_TOKEN=.*|BENCH_GITHUB_TOKEN=${FIXTURE_TOKEN}|" \
             selfhost/.env
           docker compose -f selfhost/compose.yml up -d
           timeout 180 bash -c 'until curl -fsS http://127.0.0.1:8014/api/.well-known/waymark >/dev/null; do sleep 5; done'
@@ -1928,7 +1946,17 @@ jobs:
       - name: "4. The pull link (a stub in localfire's chair)"
         run: python3 selfhost/ci/walk.py link
 
+      - name: "5. The repo kit, on the fixture repository on GitHub"
+        if: env.FIXTURE_TOKEN != ''
+        run: |
+          set -euo pipefail
+          head=$(git ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
+          [ -n "$head" ] || { echo "::error title=SELFHOST.md drifted (5)::$FIXTURE_REPO has no main"; exit 1; }
+          echo "FIXTURE_HEAD=$head" >> "$GITHUB_ENV"
+          python3 selfhost/ci/walk.py enroll ""
+
       - name: "5. The repo kit, in a fixture repository served to the bench"
+        if: env.FIXTURE_TOKEN == ''
         run: |
           set -euo pipefail
           git config --global user.name selfhost-walk
@@ -1956,9 +1984,38 @@ jobs:
       - name: "7. The first ticket, to code-seat's sit"
         run: python3 selfhost/ci/walk.py ticket
 
+      - name: "7. code-seat submits, and the pull request opens"
+        if: env.FIXTURE_TOKEN != ''
+        run: python3 selfhost/ci/walk.py submit
+
+      - name: "7. The mayor says it is waiting on the merge"
+        if: env.FIXTURE_TOKEN != ''
+        run: python3 selfhost/ci/walk.py mayor
+
+      - name: "7. The forge steps (skipped)"
+        if: env.FIXTURE_TOKEN == ''
+        run: >-
+          echo "::notice title=selfhost forge steps skipped::SELFHOST_FIXTURE_TOKEN is not set, so
+          the push, the pull request and the mayor's 'waiting on your merge' were skipped"
+
       - name: Logs
         if: failure()
         run: docker compose -f selfhost/compose.yml logs --no-color --timestamps
+
+      # no open pull request and no bench/ branch is left on the fixture
+      - name: Close the fixture's pull request and branch
+        if: always() && env.FIXTURE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.SELFHOST_FIXTURE_TOKEN }}
+        run: |
+          set -uo pipefail
+          for n in $(gh pr list -R "$FIXTURE_REPO" --state open --json number,headRefName \
+                       -q '.[] | select(.headRefName | startswith("bench/")) | .number'); do
+            gh pr close -R "$FIXTURE_REPO" "$n" --comment "Closed by the self-host walk's clean-up." || true
+          done
+          for ref in $(gh api "repos/$FIXTURE_REPO/git/matching-refs/heads/bench/" -q '.[].ref'); do
+            gh api -X DELETE "repos/$FIXTURE_REPO/git/$ref" || true
+          done
 
       - name: Tear down
         if: always()
