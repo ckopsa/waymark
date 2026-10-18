@@ -18,8 +18,9 @@
   loader's grammar (`waymark10.server.seed`): each of its `:domains`,
   then its `:seats` and `:judgments`, becomes a step walked as the
   cast's `:owner`, before the org's own `:steps`, and the seed is
-  `:live-ok`, so it loads on a fresh engine and is skipped, by its
-  marker, on every boot after.
+  `:live-ok`, so it loads whole on a fresh engine, and on every boot
+  after it loads additively: by its marker, only the cast members and
+  the steps the seed gained since are added (`seed/load!`).
 
   OR THE ORG IS ON DISK, AND LIVE (ticket 29f8e07a). Its manifest,
   `orgs/<org>/org.edn`, says `{:name \"<org>\" :live true}` once it went
@@ -120,9 +121,21 @@
                     (into (map made-step) judgments)
                     (into steps))))
 
+(defn boot-line
+  "The line `boot!` prints for an org's `seed/load!` answer: what was
+  seeded, or, on an engine seeded before, `:added` beside the sentence
+  that says what was skipped."
+  [org result]
+  (if (:seeded result)
+    (str "waymark10 org: `" org "` seeded, " (:members result)
+         " members and " (:steps result) " steps.")
+    (str "waymark10 org: `" org "`: :added " (pr-str (:added result))
+         " · " (:skipped result))))
+
 (defn boot!
-  "The boot step behind WAYMARK10_ORG: load the org's seed, or skip it
-  when this engine was seeded with it before, saying which. → `seed/load!`'s
+  "The boot step behind WAYMARK10_ORG: load the org's seed, whole on a
+  fresh engine and additively on one seeded with it before, adding only
+  what the seed gained since, and say what it added. → `seed/load!`'s
   answer; nil for an org that carries no seed. Throws for everything
   `seed/load!` throws for. `opts` are `seed/load!`'s, and `:params`, when
   absent, are read from WAYMARK10_SEED_PARAMS."
@@ -133,10 +146,7 @@
                   (not (contains? opts :params))
                   (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
            result (seed/load! eng (loader-seed s) opts)]
-       (println (if (:seeded result)
-                  (str "waymark10 org: `" org "` seeded, " (:members result)
-                       " members and " (:steps result) " steps.")
-                  (str "waymark10 org: `" org "`: " (:skipped result))))
+       (println (boot-line org result))
        result))))
 
 ;; ── live orgs, found on disk ────────────────────────────────────────
