@@ -4226,6 +4226,34 @@
     (is (empty? (get-in answer [:walk :rows]))
         "the fire names the leftover, and the sit hands nothing")))
 
+(deftest a-sit-woken-by-its-own-failing-change-is-handed-that-ticket-to-fix
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        _ (submitted-and-adopted! w 91)
+        _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+        ;; the ticket under review while its change is red, as prod's
+        ;; was when a new failing head woke the seat (ticket c91b3af9)
+        _ (force-ticket-state! w :in_review)
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        k (seats/hold-fire-key! (:eng w) seat-row ((:now-fn (:eng w)))
+                                (wire/write-json {:kind "change" :id change-id
+                                                  :action "observe_failing"}))
+        answer (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                              {:key k :seat "bench-seat"}))
+        row (first (get-in answer [:walk :rows]))]
+    (is (= "failing" (name (:state (change-by-id w change-id)))))
+    (is (= ticket-id (:id row)) "the failing change's ticket comes first")
+    (is (= "failing_change" (:why row)))
+    (is (= change-id (:change row)))
+    (is (= 91 (:pr row)))
+    (testing "a failing change whose ticket the seat cannot fix marks nothing"
+      (is (nil? (seats/failing-change-mark
+                 (:eng w)
+                 {:data {:walk "ticket" :name "another-seat"
+                         :scope [{:kind "ticket" :actions ["ungroom"]}]}}
+                 change-id))))))
+
 (deftest the-sweep-closes-leftovers-and-leaves-live-ones
   (let [w (ticket-world)
         eng (:eng w)
