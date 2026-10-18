@@ -46,7 +46,8 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.security KeyPairGenerator)))
+  (:import (java.security KeyPairGenerator)
+           (java.time Duration Instant)))
 
 ;; ── the connector door, as mcp_sit_test stands it up ────────────────
 
@@ -784,6 +785,76 @@
 
     (testing "a sealed transcript is judged by the judgment's other words"
       (is (nil? (say sealed "keep"))))))
+
+;; ── 4d · a queue bounded by age leaves the old sittings out ─────────
+
+(defn- ended-at! [eng sid ^Instant at]
+  (let [st (:storage eng)
+        row (raw-of eng :sitting sid)]
+    (store/with-tx st
+      (fn [tx]
+        (store/update-data! st tx :sitting (str sid)
+                            (assoc (:data row) :ended_at (str at))
+                            (:next-flip-at row))))))
+
+(deftest a-queue-bounded-by-age-leaves-a-two-week-old-sitting-out
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        judgment (let [row (:row (inv/create!
+                                  eng :judgment
+                                  {:name "recent-sittings"
+                                   :subject_kind "sitting"
+                                   :queue {:state "closed"
+                                           :ended_at_after "-PT72H"}
+                                   :verdicts [{:name "keep" :sentence keep-sentence}
+                                              {:name "query" :sentence query-sentence}]
+                                   :remedy_max 200
+                                   :notes "Only the last three days."}
+                                  {:principal person}))]
+                   (inv/invoke! eng :judgment (str (:id row)) :promote {}
+                                {:principal person})
+                   row)
+        judge (open-judge-seat!
+               eng judgment
+               {:name "sitting-judge"
+                :walk "sitting"
+                :scope [{:kind "sitting" :actions []}
+                        {:kind "transcript" :actions []}
+                        {:kind "verdict" :actions ["judge"]}]})
+        model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
+        worker (:id (:row (inv/create!
+                           eng :seat
+                           {:name "worker"
+                            :charter charter
+                            :scope [{:kind "expense" :actions []}]
+                            :walk "expense"
+                            :held_for [(str model)]
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000}
+                           {:principal person})))
+        grant (:id (:row (inv/create! eng :grant
+                                      {:audience "worker"
+                                       :scope [{:kind "expense" :actions []}]}
+                                      {:principal person})))
+        close! #(inv/invoke! eng :sitting % :close spent {:principal worker-sitter})
+        old (doto (sitting-of! eng worker model grant) close!)
+        recent (doto (sitting-of! eng worker model grant) close!)
+        now (Instant/now)]
+    (ended-at! eng old (.minus now (Duration/ofDays 14)))
+    (ended-at! eng recent (.minus now (Duration/ofHours 1)))
+
+    (testing "the guard admits a bound as a queue key"
+      (is (not= "draft" (name (:state (raw-of eng :judgment (:id judgment)))))
+          "promote took the ended_at_after key"))
+
+    (testing "the sit hands the sitting that ended an hour ago, not two weeks ago"
+      (let [[_ r answer] (sit! h)
+            handed (set (mapv :id (:rows (:walk answer))))]
+        (is (false? (:isError r)) (text-of r))
+        (is (contains? handed recent))
+        (is (not (contains? handed old)))))))
 
 ;; ── 5 · a listed verdict files one draft ticket ───────────────────────
 

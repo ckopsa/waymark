@@ -63,6 +63,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
@@ -121,7 +122,7 @@
    {:x-display
     {:label "Which of them"
      :spelled-by-hand queue-spelled-by-hand
-     :help "The slice this judgment is about: field=value pairs in the shape of that kind's own query, equality only. Leave it empty and the judgment is about every row of the kind."}}
+     :help "The slice this judgment is about: field=value pairs in the shape of that kind's own query — an equality, or a bound such as ended_at_after=-PT72H, where a negative duration counts back from each read. Leave it empty and the judgment is about every row of the kind."}}
    :verdicts
    {:x-display
     {:label "The verdicts"
@@ -210,19 +211,20 @@
    :reads [:storage]
    :vars [:field :kind :fields]
    :remedies [:judgment/revise]
-   :explain "The queue narrows {kind} by {field}, which that kind does not filter by equality. It filters by {fields}. A queue the collection cannot express is a queue nobody can read back."}
+   :explain "The queue narrows {kind} by {field}, which is no filter that kind's query takes. It takes {fields}. A queue the collection cannot express is a queue nobody can read back."}
   [row _inp ctx]
   (if-some [rdef (served-rdef row ctx)]
-    (let [eq (into (sorted-set)
-                   (keep (fn [[f ops]] (when (contains? (set ops) :eq) (name f))))
-                   (:filterable rdef))
+    ;; the queue is read back through parse-query, so any param its
+    ;; grammar knows is a queue key — an equality or a bound
+    ;; (ended_at_after), not equalities alone
+    (let [known (into (sorted-set) (keys (collections/grammar rdef)))
           bad (->> (keys (get-in row [:data :queue]))
                    (map name) sort
-                   (remove eq) first)]
+                   (remove known) first)]
       (if bad
         (t/deny {:vars {:field bad
                         :kind (str (get-in row [:data :subject_kind]))
-                        :fields (if (seq eq) (str/join ", " eq) "nothing")}})
+                        :fields (str/join ", " known)}})
         (t/allow)))
     ;; an unserved kind (or no consult) is the wall above's sentence to
     ;; say, and one refusal per author per tap is the courtesy
