@@ -20,3 +20,7 @@
     (testing "the keys are stable across runs"
       (is (= (mapv :key fs)
              (mapv :key (conform/conform "fixtures/orgs/broken")))))))
+
+(deftest a-seat-above-its-owners-ceiling-earns-one-finding
+  (is (= ["scope/outside-owner/clerk/gizmo/finish"]
+         (mapv :key (conform/conform "fixtures/orgs/overreach")))))

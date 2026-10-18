@@ -24,9 +24,9 @@
   boot      a memory engine answers discover, schema, query, get and
             a dry run of each create, for every kind
   scope     every seat's scope names kinds and actions the booted
-            engine serves, and sits inside its owner's when the seat
-            names an owner whose cast entry declares a scope (an owner
-            with none holds the whole org)
+            engine serves; a seat whose seed entry names an :owner
+            names a cast member, and sits inside that member's :scope,
+            its ceiling (a member with no :scope holds the whole org)
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -114,12 +114,12 @@
   "The seed's seats as whole seat maps, and what kept any from filling."
   [seed]
   (reduce
-   (fn [acc [i {:keys [seat template] :as entry}]]
+   (fn [acc [i {:keys [seat template owner] :as entry}]]
      (cond
-       seat (update acc :seats conj seat)
+       seat (update acc :seats conj (cond-> seat owner (assoc :owner owner)))
        template
        (if-some [{:keys [seat holes]} (fill-template entry)]
-         (cond-> (update acc :seats conj seat)
+         (cond-> (update acc :seats conj (cond-> seat owner (assoc :owner owner)))
            (seq holes)
            (update :findings conj
                    (finding :seed ["holes" (:name seat)] (str "seat " (:name seat))
