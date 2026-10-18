@@ -103,7 +103,8 @@
             [jsonista.core :as json])
   (:import (java.nio.charset StandardCharsets)
            (java.security MessageDigest)
-           (java.time Instant LocalDate ZoneOffset)))
+           (java.time Instant LocalDate ZoneOffset)
+           (java.util UUID)))
 
 (set! *warn-on-reflection* true)
 
@@ -475,6 +476,20 @@
                         (value-of ctx (or (:with step) {})))])
     [(:kind step) (value-of ctx (:create step))]))
 
+(defn- step-id
+  "The id a create or template step's row is born with when the step
+  names a `:ref`: drawn from the seed and that ref, so a later load
+  finds the row again even when it has no `:name` (`gain!`). nil for a
+  step with no `:ref`."
+  [{:keys [seed]} step]
+  (when-some [r (:ref step)]
+    (str (UUID/nameUUIDFromBytes
+          (.getBytes (str "seed:" seed ":" r) "UTF-8")))))
+
+(defn- made-opts [ctx step]
+  (cond-> (hand-of ctx step)
+    (step-id ctx step) (assoc :id (step-id ctx step))))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
   [{:keys [eng refs] :as ctx} step]
@@ -491,7 +506,7 @@
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (hand-of ctx step))))
+      (:row (inv/create! eng kind body (made-opts ctx step))))
 
     ;; a row the boot made before the seed: found, not made
     (:find step)
@@ -506,7 +521,7 @@
 
     (contains? step :create)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (hand-of ctx step))))
+      (:row (inv/create! eng kind body (made-opts ctx step))))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -529,9 +544,12 @@
   row of its kind holds that name, known or not, and made when none
   does and the step is not known. A create's name is read alone, so a
   found row's body, which may point at a step this load skipped, is not
-  filled. Any other step is walked when it is not known, and skipped
-  when it is. → [row made?], row nil for a skipped step."
-  [{:keys [eng] :as ctx} step known?]
+  filled. An unnamed create or template is found, known or not, by the
+  id `step-id` gave it, and an action step a known one binds its `:ref`
+  to the row it moved, its `:on`, so a gained step may point at either.
+  Any other step is walked when it is not known, and skipped when it
+  is. → [row made?], row nil for a skipped step."
+  [{:keys [eng refs] :as ctx} step known?]
   (cond
     (:find step) [(step! ctx step) false]
 
@@ -542,7 +560,7 @@
         (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
         known? [nil false]
         :else (let [[kind body] (made-body ctx step)]
-                [(:row (inv/create! eng kind body (hand-of ctx step))) true])))
+                [(:row (inv/create! eng kind body (made-opts ctx step))) true])))
 
     (:template step)
     (let [[kind body] (made-body ctx step)]
@@ -550,8 +568,18 @@
         (cond
           (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
           known? [nil false]
-          :else [(:row (inv/create! eng kind body (hand-of ctx step))) true])
-        (if known? [nil false] [(step! ctx step) true])))
+          :else [(:row (inv/create! eng kind body (made-opts ctx step))) true])
+        (if-some [row (some->> (step-id ctx step) (load-row eng kind))]
+          [row false]
+          (if known? [nil false] [(step! ctx step) true]))))
+
+    (contains? step :create)
+    (if-some [row (some->> (step-id ctx step) (load-row eng (:kind step)))]
+      [row false]
+      (if known? [nil false] [(step! ctx step) true]))
+
+    (and known? (:ref step) (:on step) (get refs (:on step)))
+    [(get refs (:on step)) false]
 
     known? [nil false]
 
@@ -598,7 +626,7 @@
             (reduce
                   (fn [{:keys [refs] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
-                               :params (keyed params)}
+                               :params (keyed params) :seed (:seed seed)}
                           [row made?] (try
                                 (if seeded
                                   (let [k (step-key step)
