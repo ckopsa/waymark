@@ -219,7 +219,9 @@
 ;; public-entry: {:principal {…} :self :source :at iso :at-ms ms}
 
 (defn- entry-of [reg principal self source]
-  {:principal (author-of principal)
+  ;; a principal that arrives with no display is named by its member
+  ;; row (curtain/named), as the intent frame is
+  {:principal (author-of (curtain/named (:eng reg) principal))
    :self self
    :source source
    :at (str ((:now-fn (:eng reg) (fn [] (java.time.Instant/now)))))
