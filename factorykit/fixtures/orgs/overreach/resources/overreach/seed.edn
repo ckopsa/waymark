@@ -1,0 +1,19 @@
+{:seed "overreach"
+ :version 1
+ :org "overreach"
+ :domains [{:name "overreach" :label "Overreach"}]
+ :cast {:boss {:id "boss" :display "Boss" :type :human
+               :scope [{:kind "gizmo" :actions ["create" "start"]}]}}
+ :seats
+ [{:owner :boss
+   :seat {:name "clerk"
+          :mode "fired"
+          :walk "gizmo"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :charter "You start each new gizmo and finish each started one."
+          :scope [{:kind "gizmo" :actions ["start" "finish"]}]
+          :wake_on [{:kind "gizmo" :actions ["create" "start"]}]}}]
+ :judgments []
+ :steps
+ [{:as :boss :kind :gizmo :ref :one :create {:title "One gizmo"}}]}
