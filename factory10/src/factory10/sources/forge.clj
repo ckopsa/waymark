@@ -849,14 +849,54 @@
                        (required-runs required checks))]
     (when (seq findings) {:verdict :red :names findings})))
 
+;; A required check with NO run on the head never queues either, so it
+;; never reaches `queued-verdict`: a workflow that does not trigger on
+;; the branch, or one that is disabled. Past the same limit, counted
+;; from the time the head was first seen held (`held_since`), its
+;; absence is the red, naming the check (ticket 3520d15b).
+
+(def ^:private missing-finding-mark " has no run after ")
+
+(defn- missing-finding [check-name minutes]
+  (let [tail (str missing-finding-mark minutes
+                  " minutes; no workflow started it (check its triggers)")
+        head (str "check " check-name)]
+    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
+
+(defn- missing-finding? [s]
+  (let [s (str s)]
+    (and (str/starts-with? s "check ")
+         (str/includes? s missing-finding-mark))))
+
+(defn missing-verdict
+  "{:verdict :red :names [finding …]} when a required check has no run
+  at all among `checks` and the head has waited longer than `limit`
+  minutes since `since` at `now`, one finding for each such check; nil
+  otherwise. A head that does not say since when it waits is not
+  judged."
+  [required checks limit since now]
+  (when-some [m (when since (minutes-since now since))]
+    (when (> (long m) (long limit))
+      (let [findings (into [] (keep (fn [[n runs]]
+                                      (when (empty? runs)
+                                        (missing-finding n m))))
+                           (required-runs required checks))]
+        (when (seq findings) {:verdict :red :names findings})))))
+
+(defn- waited-red
+  "The findings of `verdicts` as one red, or nil when none has any."
+  [& verdicts]
+  (let [names (into [] (mapcat :names) verdicts)]
+    (when (seq names) {:verdict :red :names names})))
+
 (defn- queue-left?
-  "True when a row that is failing ONLY for queued checks has none of
-  its required checks queued any more: a runner took them."
+  "True when a row that is failing ONLY for queued or missing checks has
+  every required check run and none queued any more: a runner took them."
   [row required checks]
   (let [names (get-in row [:data :failing_checks])
         runs (required-runs required checks)]
     (boolean (and (seq names)
-                  (every? queued-finding? names)
+                  (every? #(or (queued-finding? %) (missing-finding? %)) names)
                   (seq runs)
                   (every? (fn [[_ rs]] (and (seq rs) (not-any? queued? rs)))
                           runs)))))
@@ -1118,12 +1158,19 @@
                    ;; a required check nobody runs never concludes, so
                    ;; the wait past the policy's limit is the red, and
                    ;; a check that starts after it clears that red
-                   ;; (ticket bc3ff12c)
+                   ;; (ticket bc3ff12c); so is a required check with no
+                   ;; run at all on a head held past it (ticket 3520d15b)
                    waited (when (and (not landing) (nil? checked))
-                            (or (queued-verdict
-                                 required checks
-                                 (bench/queued-check-minutes-of policy)
-                                 (now-of eng))
+                            (or (waited-red
+                                 (queued-verdict
+                                  required checks
+                                  (bench/queued-check-minutes-of policy)
+                                  (now-of eng))
+                                 (missing-verdict
+                                  required checks
+                                  (bench/queued-check-minutes-of policy)
+                                  (held-kept row head)
+                                  (now-of eng)))
                                 (when (and (= :failing (state-of row))
                                            (queue-left? row required checks))
                                   {:verdict :started})))
