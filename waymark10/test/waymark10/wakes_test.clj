@@ -405,7 +405,10 @@
                   :if-match (inv/etag :seat (str seat-id) (:version row))})))
 
 (defn- seat-do! [seat-id action]
-  (inv/invoke! *eng* :seat (str seat-id) action nil {:principal elena}))
+  ;; a test's seat is often a state's only staffer: its retire opens
+  ;; that crack on purpose (ticket a77bf705)
+  (inv/invoke! *eng* :seat (str seat-id) action nil
+               {:principal elena :acknowledged #{:opens-no-crack}}))
 
 (defn- task! [title]
   (:id (:row (inv/create! *eng* :wake_task {:title title}
