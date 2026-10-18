@@ -468,7 +468,7 @@
                :merge_wait_seconds :rounds_per_change :queued_check_minutes
                :merge_strategy
                :train_size :formatter :deny
-               :test :check :hosted_workflows
+               :test :check :hosted_workflows :person_paths
                :orientation :enrolled_at :note :source_note
                :forge_cursor :forge_retry :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
