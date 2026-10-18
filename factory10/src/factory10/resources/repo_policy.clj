@@ -204,6 +204,23 @@
       (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
       :else (t/deny {:vars {:what (str/join " and " what)}}))))
 
+(defguardfn only-a-person-turns-hosted-ok-on
+  {:reads [:principal :within]
+   :hold true
+   :explain "A restate that turns hosted_ok on is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. hosted_ok widens the house's exception to its rule that CI runs on its own runners, as an added hosted workflow does."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that turns hosted_ok off, or leaves it as it stands, is not held."}
+  ;; ticket d39b224b: the hosted-workflows hold's sibling for the flag
+  ;; ticket 83dd6dc3 added. It is judged against the stored row, so only
+  ;; a move from a stored non-true to true is held; the replay of the
+  ;; call the person allowed is the one agent call this admits.
+  [row inp ctx]
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (true? (get-in row [:data :hosted_ok])) (t/allow)
+    (not (true? (get inp :hosted_ok))) (t/allow)
+    (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+    :else (t/deny)))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -1064,6 +1081,7 @@
               ;; last, so a call that is held is one the walls above
               ;; would let the person's Allow run
               only-a-person-widens-the-hosted-workflows
+              only-a-person-turns-hosted-ok-on
               only-a-person-loosens-the-merge-gate]
      :handler restate-the-policy
      :record true
