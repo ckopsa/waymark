@@ -13,6 +13,7 @@
             [factory10.main :as main]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -210,3 +211,22 @@
                  :body {:head_sha "aaaaaaa1" :findings [quote-approver]}})]
     (is (not= 200 (:status no)) (pr-str (json no)))
     (is (empty? (:findings (plan-of h id))))))
+
+(defn- entry-schema
+  "The schema of entry `k` in a :map form."
+  [form k]
+  (some #(when (and (vector? %) (= k (first %))) (last %)) form))
+
+(deftest every-head-the-plan-takes-is-lower-case-hex
+  ;; ticket 9c8711ac
+  (let [doors [:record_findings :record_findings_proposed :record_findings_simulated
+               :hand_in_film :record_film_findings :head_moved]
+        heads (concat (for [d doors]
+                        [d (entry-schema (get-in org-plan/org-plan [:actions d :input]) :head_sha)])
+                      (for [f [:findings_sha :approved_head :take_sha]]
+                        [f (entry-schema (:schema org-plan/org-plan) f)]))]
+    (doseq [[at s] heads]
+      (is (some? s) (name at))
+      (is (schema/validate s "5e469c6166edf6a3f28ae2e6bdb88b775025f14d") (name at))
+      (doseq [bad ["5E469C6166EDF6A3F28AE2E6BDB88B775025F14D" "5e469c6z" "head-1b"]]
+        (is (not (schema/validate s bad)) (str (name at) " " bad))))))

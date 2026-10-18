@@ -97,6 +97,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -578,7 +579,7 @@
    [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                :x-display {:hidden true :raw true
                            :label "The head commit"}}
-    [:string {:min 7 :max 64}]]
+    schema/commit-sha]
    [:findings {:x-display {:hidden true
                            :label "The run's findings"}}
     [:vector {:max 200} finding-schema]]
@@ -658,7 +659,7 @@
                     {:raw true
                      :label "Audited at"
                      :help "The head commit of the org's branch the findings were found on."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN ONLY BY THE FINDINGS DOORS, for that head (M2e)
     [:live_flag {:optional true
                  :x-display
@@ -676,7 +677,7 @@
                      {:raw true
                       :label "Allowed at"
                       :help "The head of the org's branch the owner's go_live allowed: the house merges the pull request at that head, and no other."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
     [:next_step {:optional true
                  :x-display
@@ -724,7 +725,7 @@
                 {:raw true
                  :label "Filmed at"
                  :help "The head commit of the org's branch the film handed in was made at."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN BY attach_film and record_film_findings: the take is landed
     [:take_landed_at {:optional true
                       :x-display
@@ -845,7 +846,7 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:raw true :label "The filmed commit"
                                      :help "The head commit of the org's branch the film was made at."}}
-              [:string {:min 7 :max 64}]]]
+              schema/commit-sha]]
      ;; :edit-shape — a take replaces the last one, nobody edits it
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
@@ -922,7 +923,7 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The filmed commit"}}
-              [:string {:min 7 :max 64}]]
+              schema/commit-sha]
              [:findings {:x-display {:hidden true
                                      :label "The film's red rules"}}
               [:vector {:min 1 :max 200} finding-schema]]]
@@ -963,7 +964,7 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The moved head"}}
-              [:string {:min 7 :max 64}]]]
+              schema/commit-sha]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes is retired: the plan is simulated again, with the moved head among its findings."}

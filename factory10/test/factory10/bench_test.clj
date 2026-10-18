@@ -2504,6 +2504,19 @@
                                 {:principal held/engine-actor})))
       (is (empty? (carries-of eng id))))))
 
+(deftest carry-refuses-a-head-that-is-not-lower-case-hex
+  ;; ticket 9c8711ac: a head is a commit sha, judged at the door
+  (let [{:keys [eng]} (allowed-waiting-world)
+        id (str (:id (first (bench/merge-asks eng))))]
+    (doseq [bad [(str/upper-case a-head) (str (subs a-head 0 39) "g") "head-1b"]
+            k [:head_sha :from_head]]
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry (assoc a-carry k bad)
+                                {:principal held/engine-actor}))
+          (str (name k) " " bad)))
+    (is (empty? (carries-of eng id)))
+    (is (= :allowed_waiting (:state (first (bench/merge-asks eng)))))))
+
 (defn- asks-again
   "A moved head the rig answered `compared` for expires its yes with a
   reason naming `said`, and a fresh ask follows for the new head."
