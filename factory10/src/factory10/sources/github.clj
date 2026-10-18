@@ -1345,7 +1345,7 @@
 (defn fake-state
   "A fresh in-memory GitHub. Script it with `seed-pull!`,
   `seed-check!`, `seed-status!`, `seed-job!`, `seed-log!`, `log-mode!`,
-  `fail-path!` and `down!`;
+  `seed-artifact!`, `fail-path!` and `down!`;
   read it back with `requests` and `labels-pushed`."
   []
   (atom {:repos {} :logs {} :log-mode :text :labels [] :requests []
@@ -1434,6 +1434,19 @@
   [state mode]
   (swap! state assoc :log-mode mode))
 
+(defn seed-artifact!
+  "One workflow artifact at the fake, in GitHub's own listing shape
+  ({:id :name :expired …}), and the zip bytes its `/zip` route
+  redirects to (ticket 38251e4b). The listing answers newest first, as
+  GitHub's does: the artifact seeded last is listed first."
+  [state repo artifact archive]
+  (swap! state
+         (fn [s]
+           (-> s
+               (update-in [:repos repo :artifacts]
+                          (fn [as] (into [artifact] as)))
+               (assoc-in [:archives (str (:id artifact))] archive)))))
+
 (defn down! [state down?] (swap! state assoc :down (boolean down?)))
 
 (defn refuse!
@@ -1493,6 +1506,9 @@
 (def ^:private compare-path #"/repos/([^/]+/[^/]+)/compare/([^.]+)\.\.\.(.+)")
 (def ^:private rerun-path
   #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/rerun-failed-jobs")
+(def ^:private artifacts-path #"/repos/([^/]+/[^/]+)/actions/artifacts")
+(def ^:private artifact-zip-path
+  #"/repos/([^/]+/[^/]+)/actions/artifacts/(\d+)/zip")
 
 (defn reruns
   "Every re-run the source asked for, oldest first, as {:repository
@@ -1505,18 +1521,25 @@
   the source follows it without the token."
   "https://logs.example/job/")
 
+(def archive-base
+  "Where the fake's artifact `/zip` redirect points: another host, as
+  the job log's blob is, so the source follows it without the token."
+  "https://artifacts.example/zip/")
+
 (defn- newest-first [pulls]
   (vec (sort-by #(str (:updated_at %)) #(compare %2 %1) pulls)))
 
 (defn fake-call
   "An in-memory GitHub behind the transport seam."
   [state]
-  (fn [method path {:keys [params body url raw anonymous]}]
+  (fn [method path {:keys [params body url raw anonymous binary]}]
     (swap! state update :requests conj
-           {:method method :path (or path url) :params params :body body
-            ;; recorded so a test can prove the token did NOT travel to
-            ;; the blob host the job log redirects to
-            :anonymous (boolean anonymous)})
+           (cond-> {:method method :path (or path url) :params params
+                    :body body
+                    ;; recorded so a test can prove the token did NOT
+                    ;; travel to the blob host the job log redirects to
+                    :anonymous (boolean anonymous)}
+             binary (assoc :binary true)))
     (when (:down @state)
       (throw (ex-info "github unreachable" {})))
     (when (some #(re-find % (str path)) (:failing @state))
@@ -1529,6 +1552,17 @@
           repo-of (fn [m] (get-in st [:repos (second m)]))]
       (cond
         ;; the blob the job log's redirect points at — no token here
+        (and url (str/starts-with? (str url) archive-base))
+        (if-some [archive (get (:archives st) (subs (str url)
+                                                    (count archive-base)))]
+          {:status 200
+           ;; bytes only when asked for them, as the real transport
+           :body (if binary
+                   archive
+                   (String. ^bytes archive StandardCharsets/UTF_8))
+           :content-type "application/zip"}
+          {:status 404 :body "not found"})
+
         url
         (let [job (last (str/split (str url) #"/"))]
           {:status 200 :body (get (:logs st) job "") :content-type "text/plain"})
@@ -1585,6 +1619,15 @@
             :missing {:status 404 :body "not found"}
             {:status 200 :body (get (:logs st) job "")
              :content-type "text/plain"}))
+
+        (re-matches artifact-zip-path path)
+        (let [[_ _ id] (re-matches artifact-zip-path path)]
+          {:status 302 :body "" :location (str archive-base id)})
+
+        (re-matches artifacts-path path)
+        (let [m (re-matches artifacts-path path)]
+          {:artifacts (filterv #(= (str (:name params)) (str (:name %)))
+                               (:artifacts (repo-of m)))})
 
         (re-matches compare-path path)
         (let [[_ r from to] (re-matches compare-path path)]

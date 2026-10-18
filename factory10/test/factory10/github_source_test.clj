@@ -3261,3 +3261,57 @@
             "the statuses did not change")
         (is (contains? (set (map :check_name checks)) "test10 (shard 3)")
             "the new red check is read")))))
+
+;; ── the artifact read (ticket 38251e4b) ──────────────────────────────
+
+(defn- a-zip
+  "A zip archive holding one entry, as upload-artifact makes one."
+  [^String entry ^String text]
+  (let [out (java.io.ByteArrayOutputStream.)]
+    (with-open [zout (java.util.zip.ZipOutputStream. out)]
+      (.putNextEntry zout (java.util.zip.ZipEntry. entry))
+      (.write zout (.getBytes text "UTF-8"))
+      (.closeEntry zout))
+    (.toByteArray out)))
+
+(deftest an-artifact-is-read-through-its-redirect-without-the-token
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)]
+    (gh/seed-artifact! state repo {:id 502 :name "findings" :expired false}
+                       (a-zip "findings.json"
+                              "{\"greenleaf\": [{\"key\": \"gap\"}]}"))
+    (gh/seed-artifact! state repo {:id 501 :name "findings" :expired true}
+                       (a-zip "findings.json" "{\"greenleaf\": []}"))
+    (gh/seed-artifact! state repo {:id 503 :name "other" :expired false}
+                       (a-zip "other.json" "{\"other\": []}"))
+    (is (= {:greenleaf [{:key "gap"}]}
+           (forge/forge-artifact source repo "findings"))
+        "the newest unexpired artifact of that name, its first entry as JSON")
+    (let [asked (gh/requests state)
+          listing (first asked)
+          zip (second asked)
+          blob (nth asked 2 nil)]
+      (is (= 3 (count asked)) "the listing, the zip route and the blob")
+      (is (= (str "/repos/" repo "/actions/artifacts") (:path listing)))
+      (is (= "findings" (str (:name (:params listing))))
+          "the listing is asked by name")
+      (is (= (str "/repos/" repo "/actions/artifacts/502/zip") (:path zip))
+          "the expired artifact listed before it is passed over")
+      (is (false? (:anonymous zip)) "the zip route carries the token")
+      (is (= (str gh/archive-base "502") (:path blob)))
+      (is (true? (:anonymous blob))
+          "and the redirect is followed with no bearer to another host")
+      (is (true? (:binary blob)) "for the archive's bytes"))))
+
+(deftest an-artifact-listed-only-expired-answers-nil
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)]
+    (is (nil? (forge/forge-artifact source repo "findings"))
+        "nothing listed yet")
+    (gh/seed-artifact! state repo {:id 501 :name "findings" :expired true}
+                       (a-zip "findings.json" "{\"greenleaf\": []}"))
+    (is (nil? (forge/forge-artifact source repo "findings"))
+        "only an expired one")
+    (is (not-any? #(str/includes? (str (:path %)) "/zip")
+                  (gh/requests state))
+        "and no archive is asked for")))
