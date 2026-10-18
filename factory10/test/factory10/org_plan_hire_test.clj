@@ -10,6 +10,7 @@
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
@@ -46,13 +47,7 @@
 (defn- live!
   "A found plan the owner walked to live. → its id."
   [eng]
-  (let [id (str (:id (filed! eng)))]
-    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
-    (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/greenleaf.mp4"}
-                 {:principal the-owner})
-    (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
-    id))
+  (walk/live! eng (:id (filed! eng)) the-owner))
 
 (defn- hire! [eng who]
   (org-plan/open-hire! eng {:name "greenleaf" :gap gap} {:principal who}))

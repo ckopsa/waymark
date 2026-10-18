@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.ticket :as tk]
             [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
@@ -2627,6 +2628,52 @@
     (bench/ask-for-merges! eng waiting t0)
     (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61))))
     (is (empty? (bench/merge-asks eng)))))
+
+;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────────
+
+(def ^:private orgs-policy (assoc house-policy :person_paths ["orgs/**"]))
+
+(def ^:private colton (t/principal {:id "colton" :type :human :display "colton"}))
+
+(defn- going-live-world
+  "A clean submitted change touching orgs/, whose pull request a plan
+  names that the owner took to going_live at `approved`. → w with :plan."
+  [approved]
+  (let [{:keys [eng change state] :as w} (submitted-world orgs-policy)
+        filed (:row (inv/create! eng :org_plan {:name "greenleaf"} {:principal colton}))]
+    (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (assoc w :plan (walk/going-live! eng (:id filed) colton
+                                     {:change (str (:id change)) :head approved}))))
+
+(defn- plan-row [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :org_plan (str id) {}))))
+
+(deftest a-going-live-plans-pull-request-merges-on-the-owners-yes
+  (let [{:keys [eng state plan]} (going-live-world a-commit)
+        waiting (atom {})]
+    (is (= 1 (bench/merge-green! eng (atom {})))
+        "the owner's go_live is the merge's yes, under person_paths orgs/** too")
+    (let [calls (calls-of state "bench__merge")]
+      (is (= 1 (count calls)))
+      (is (= a-commit (arg (:arguments (first calls)) :head_sha))))
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (empty? (bench/merge-asks eng)) "no second ask")
+    (is (= "going_live" (name (:state (plan-row eng plan)))))))
+
+(deftest a-head-the-owner-did-not-allow-is-not-merged
+  (let [{:keys [eng state plan] :as w} (going-live-world a-commit)]
+    (answer! state "bench__compare_heads" {:carries false :same_own_diff false})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (empty? (calls-of state "bench__merge")) "the moved head is not merged")
+    (let [row (plan-row eng plan)]
+      (is (= "simulated" (name (:state row))) "the plan goes back to simulated")
+      (is (nil? (get-in row [:data :approved_head])) "and its yes is retired")
+      (is (= ["head_moved"]
+             (mapv #(str (or (:key %) (get % "key"))) (get-in row [:data :findings])))))))
 
 (deftest an-agents-removed-person-path-waits-for-the-person
   (let [eng (fresh-engine (state))
