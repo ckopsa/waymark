@@ -2141,14 +2141,18 @@
       (str h "h " (rem m 60) "m")
       (str m "m"))))
 
-(defn- checks-missing-at-head?
-  "Does the forge pass say a required check has not reported on this
-  very head (`missing_checks`, read at `missing_checks_head`, ticket
-  8e809671)? Such a head is not green, whatever `mergeable` says."
+(defn- head-not-green?
+  "Does the forge pass say this very head is not green yet? It read the
+  head's checks (`missing_checks_head`) and found a required check with
+  no run at all (`missing_checks`, ticket 8e809671), or one that has run
+  but not gone green: a check queued or in progress is not missing, so
+  a head the pass read but never stamped `green_head` still waits on it
+  (ticket 9f19742e). Such a head is not green, whatever `mergeable` says."
   [change head]
   (boolean
    (and (= head (some-> (get-in change [:data :missing_checks_head]) str))
-        (seq (get-in change [:data :missing_checks])))))
+        (or (seq (get-in change [:data :missing_checks]))
+            (not= head (some-> (get-in change [:data :green_head]) str))))))
 
 (defn merge-ask-why
   "The one sentence the person reads: the pull request, the title, the
@@ -2211,9 +2215,9 @@
   required check is asked nothing (`person-merges-on-github?`): the rig
   would refuse the allowed call, so the tap would merge nothing, and the
   merge pass writes `line_why: person` on the change instead. A head
-  the forge pass read with a required check missing is not green, so it
-  is neither timed nor asked (`checks-missing-at-head?`, ticket
-  8e809671). `waiting`
+  the forge pass read with a required check missing or still running is
+  not green, so it is neither timed nor asked (`head-not-green?`,
+  tickets 8e809671 and 9f19742e). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
   a merge hold keeps it. Throws nothing. → the number
   of asks raised."
@@ -2236,7 +2240,7 @@
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
                        (not (true? (get-in change [:data :draft])))
-                       (not (checks-missing-at-head? change head)))]
+                       (not (head-not-green? change head)))]
       (if (get holds (born-ticket change))
         ;; not timed while held; the pass that sees it free starts its
         ;; wait, not its stored held_since
