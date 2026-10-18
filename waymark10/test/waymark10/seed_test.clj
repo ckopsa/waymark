@@ -10,6 +10,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
+            [waymark10.server.org :as org]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store])
   (:import (clojure.lang ExceptionInfo)
@@ -211,6 +212,77 @@
           (let [again (seed/load! eng grown {:params params})]
             (is (= {:members 0 :steps 0} (:added again)))
             (is (= (-> before (update :member inc) (update :seat inc)) (counts)))))))))
+
+(def ^:private porch
+  "Two steps that name no row: an unnamed create, and an invoke on it."
+  [{:as :ada :kind :chore :create {:title "Sweep the porch"} :ref :c2}
+   {:as :plan :kind :chore :on :c2 :action "finish"}])
+
+(defn- strip-walked!
+  "The marker as an engine seeded before keys were kept holds it."
+  [eng seed-name]
+  (let [st (:storage eng)
+        id (str "seed-" seed-name)]
+    (store/with-tx st
+      (fn [tx]
+        (let [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id (dissoc (:data raw) :walked_steps)
+                              (:next-flip-at raw)))))))
+
+(deftest a-seeded-engine-walks-a-gained-step-that-names-no-row-once
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        grown (update live :steps into porch)
+        more (seed/load! eng grown {:params params})
+        c2 (get-in more [:refs :c2 :id])]
+    (is (= {:members 0 :steps 2} (:added more)))
+    (is (= 2 (count (dev/rows eng :chore))))
+    (is (= "done" (name (:state (dev/row eng :chore c2)))) "the invoke was walked")
+    (testing "and the next load walks neither again"
+      (let [again (seed/load! eng grown {:params params})]
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= 2 (count (dev/rows eng :chore))))))))
+
+(deftest an-old-marker-backfills-its-keys-and-walks-nothing
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        _ (strip-walked! eng "live")
+        grown (update live :steps into porch)
+        back (seed/load! eng grown {:params params})]
+    (is (= {:members 0 :steps 0} (:added back)))
+    (is (= 1 (count (dev/rows eng :chore))) "no step ran twice, and none ran at all")
+    (testing "and the keys it took stay walked"
+      (let [again (seed/load! eng grown {:params params})]
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= 1 (count (dev/rows eng :chore))))))))
+
+(defn- seat-step [charter]
+  {:as :ada :kind :seat :ref :s2
+   :create {:name "seed-test-seat-2"
+            :charter charter
+            :scope [{:kind "model" :actions ["retire"]}]
+            :standing_ttl_seconds 604800
+            :cadence_seconds 3600
+            :budget_usd_per_week 5M
+            :sitting_budget_tokens 60000}})
+
+(deftest an-edited-named-step-makes-no-second-row
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng (update live :steps conj (seat-step "Keep acme/garden tidier."))
+                      {:params params})
+        seats (count (dev/rows eng :seat))
+        edited (seed/load! eng (update live :steps conj (seat-step "Keep acme/garden tidiest."))
+                           {:params params})]
+    (is (= {:members 0 :steps 0} (:added edited)))
+    (is (= seats (count (dev/rows eng :seat))) "the named row is found, not made again")
+    (is (some? (get-in edited [:refs :s2 :id])))))
+
+(deftest org-boot-says-what-it-added
+  (let [line (org/boot-line "acme" {:seed "acme" :seeded false
+                                   :added {:members 0 :steps 1}
+                                   :skipped "only what the seed gained was added"})]
+    (is (re-find #":added \{:members 0, :steps 1\}" line))
+    (is (re-find #"only what the seed gained" line))))
 
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
