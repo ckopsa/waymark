@@ -71,6 +71,7 @@ on:
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'
       - '.github/scripts/dispatch-migrate.sh'
+      - 'orgs/**'
   pull_request:
     paths:
       - 'waymark10/**'
@@ -81,6 +82,7 @@ on:
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'
       - '.github/scripts/dispatch-migrate.sh'
+      - 'orgs/**'
   workflow_dispatch:
 
 # A second push to the same branch makes the first build's image

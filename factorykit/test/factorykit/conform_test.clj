@@ -60,6 +60,11 @@
   (is (= ["scope/outside-owner/clerk/gizmo/finish"]
          (mapv :key (conform/conform "fixtures/orgs/overreach")))))
 
+(deftest an-org-with-no-manifest-earns-a-finding-naming-it
+  (let [[f] (conform/conform "fixtures/orgs/unmarked")]
+    (is (= "manifest/missing/unmarked" (:key f)))
+    (is (re-find #"orgs/unmarked/org\.edn" (:sentence f)))))
+
 (deftest a-cast-scope-naming-what-the-engine-does-not-serve-earns-its-findings
   (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
           "scope/unknown-kind/cast/boss/gadget"]

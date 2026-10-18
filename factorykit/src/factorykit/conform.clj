@@ -38,6 +38,7 @@
             [waymark10.server.cracks :as cracks]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.org :as org-boot]
             [waymark10.server.seed :as seed]
             [waymark10.wire :as wire])
   (:import (clojure.lang Compiler DynamicClassLoader)
@@ -328,13 +329,42 @@
 
 ;; ── the suite ───────────────────────────────────────────────────────
 
-(defn conform
-  "Every finding the org at org-dir earns, in a stable order; [] when
-  it conforms. The directory's name is the org's name."
-  [org-dir]
-  (let [dir (.getCanonicalFile (io/file org-dir))
-        org (.getName dir)
-        seed-file (io/file dir "resources" org "seed.edn")
+(defn- manifest-findings
+  "The org's manifest, org.edn (ticket 29f8e07a): there, readable, a
+  map naming the org and saying whether it is live."
+  [^File dir org]
+  (let [m (try (org-boot/manifest dir) (catch Throwable e e))
+        remedy (str "Write org.edn beside deps.edn, as docs/orgkit.md § The manifest says: {:name \""
+                    org "\" :live false}.")]
+    (cond
+      (instance? Throwable m)
+      [(finding :manifest ["file" org] org
+                (str "orgs/" org "/org.edn does not read: " (root-message m))
+                remedy)]
+      (nil? m)
+      [(finding :manifest ["missing" org] org
+                (str "The org has no manifest: orgs/" org "/org.edn is missing.")
+                remedy)]
+      (not (map? m))
+      [(finding :manifest ["file" org] org
+                (str "orgs/" org "/org.edn is not a map.")
+                remedy)]
+      :else
+      (cond-> []
+        (not= org (:name m))
+        (conj (finding :manifest ["name" org] org
+                       (str "The manifest names the org " (pr-str (:name m)) ", not " org ".")
+                       "Set the manifest's :name to the org's directory name."))
+        (not (boolean? (:live m)))
+        (conj (finding :manifest ["live" org] org
+                       (str "The manifest's :live is " (pr-str (:live m)) ", not true or false.")
+                       "Set :live false; going live sets it true."))))))
+
+(defn- judged
+  "Every finding but the manifest's that the org at `dir`, named `org`,
+  earns."
+  [^File dir org]
+  (let [seed-file (io/file dir "resources" org "seed.edn")
         seed (try (edn/read-string (slurp seed-file)) (catch Throwable e e))]
     (if (instance? Throwable seed)
       [(finding :seed ["file" org] org
@@ -358,6 +388,15 @@
                   (:findings booted)
                   (when-some [eng (:engine booted)]
                     (scope-findings eng seats seed))))))))))
+
+(defn conform
+  "Every finding the org at org-dir earns, in a stable order, its
+  manifest's first; [] when it conforms. The directory's name is the
+  org's name."
+  [org-dir]
+  (let [dir (.getCanonicalFile (io/file org-dir))
+        org (.getName dir)]
+    (into (vec (manifest-findings dir org)) (judged dir org))))
 
 (defn- org-dirs
   "An org directory as itself; any other directory as the orgs in it."

@@ -65,7 +65,10 @@
   demo-…, and no IdP, and the boot refuses otherwise), WAYMARK10_ORG
   (an org, docs/orgkit.md: its directory or its module namespace,
   on the classpath — its kinds are served and its seed loads on a
-  fresh engine; see `with-org`).
+  fresh engine; see `with-org`), WAYMARK10_ORGS_DIR (the orgs on disk,
+  default ../orgs: each one whose org.edn says `:live true` is served
+  and seeded the same way, and none is a deps root; see
+  `with-live-orgs`).
 
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -787,6 +790,22 @@
    (when org
      (org-boot/boot! eng org opts))))
 
+(defn with-live-orgs
+  "`resources` with the kinds of the live orgs `orgs` names folded in
+  (`org-boot/live-orgs` over WAYMARK10_ORGS_DIR, ticket 29f8e07a): each
+  loaded from its directory, none a deps root. The registry judges them
+  with everything else, as `with-org`'s."
+  [resources orgs]
+  (into (vec resources) (org-boot/live-resources orgs)))
+
+(defn live-orgs-on-boot!
+  "Each live org's seed, after WAYMARK10_ORG's and by the same rule:
+  loaded on a fresh engine, skipped on one that holds its marker, and a
+  refusal throws. `opts` are `org-boot/boot!`'s."
+  ([eng orgs] (live-orgs-on-boot! eng orgs {}))
+  ([eng orgs opts]
+   (org-boot/boot-live! eng orgs opts)))
+
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
       "jdbc:postgresql://localhost:5433/workqueue10_dev?user=ckopsa"))
@@ -970,6 +989,12 @@
         only? (factory-only?)
         ;; WAYMARK10_ORG: the one org this engine serves, or nil
         org (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
+        ;; WAYMARK10_ORGS_DIR: the live orgs on disk, less the one
+        ;; WAYMARK10_ORG already serves
+        live (->> (org-boot/live-orgs
+                   (org-boot/orgs-dir (System/getenv "WAYMARK10_ORGS_DIR")))
+                  (remove #(= org (:org %)))
+                  vec)
         ;; the one Home Assistant, shared by the todo source and the
         ;; engine's :services (a decision's service launch fires
         ;; through it) — built once, or nil when unconfigured
@@ -984,7 +1009,8 @@
         eng (clocked-engine (System/getenv "WAYMARK10_SEED")
                             #(mirror/with-push (engine/engine %))
                             {:storage storage
-                             :resources (with-org
+                             :resources (with-live-orgs
+                                         (with-org
                                          (if only?
                                            (factory-only-resources)
                                            (resources
@@ -994,6 +1020,7 @@
                                             (calendar-adapter)
                                             (connections/fan-reporter engine-ref)))
                                          org)
+                                         live)
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook
@@ -1088,6 +1115,8 @@
                          (System/getenv "WAYMARK_WALL_URL"))
         ;; the org's seed, after the demo seed's place: the same rule
         _ (org-on-boot! eng org)
+        ;; and each live org's, after it
+        _ (live-orgs-on-boot! eng live)
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
