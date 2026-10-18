@@ -177,6 +177,15 @@
         (is (false? (:seeded twice)))
         (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
 
+(deftest a-live-seed-loads-on-an-engine-with-an-idp
+  (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
+        once (seed/load! eng live {:params params})]
+    (is (true? (:seeded once)))
+    (testing "and a later boot skips it, by the marker"
+      (let [twice (seed/load! eng live {:params params})]
+        (is (false? (:seeded twice)))
+        (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
+
 (deftest a-live-seed-refuses-an-engine-that-has-members
   (let [eng (engine {:name "waymark"})
         _ (seed/load! eng live {:params params})

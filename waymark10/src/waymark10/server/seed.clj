@@ -127,7 +127,8 @@
 (defn admit!
   "Throws unless this engine may be seeded: it is named `demo-…` and
   has no IdP. A working engine is neither. A `:live-ok` seed needs no
-  `demo-` name, and is refused instead on an engine that already has a
+  `demo-` name and may load on an engine with an IdP, since a live
+  engine has one; it is refused instead on an engine that already has a
   member, unless that engine holds the seed's own marker (`load!` then
   skips it)."
   ([eng] (admit! eng nil))
@@ -140,8 +141,8 @@
                             "`, and a seed loads only on an engine whose name begins with `demo-`.")
                        {:engine n}))
 
-       (some? (:oidc eng))
-       (throw (refusal "The seed is refused: this engine has an identity provider, and a seed loads only on an engine with none."
+       (and (some? (:oidc eng)) (not (:live-ok seed)))
+       (throw (refusal "The seed is refused: this engine has an identity provider, and only a live seed loads on an engine with one."
                        {:engine n}))
 
        (and (not demo?) (not (seeded? eng seed)) (members? eng))
