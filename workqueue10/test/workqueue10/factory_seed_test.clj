@@ -60,27 +60,26 @@
 (def ^:private explained
   "The cracks on the kinds `walked` names that the seed leaves standing,
   each [kind state crack door remedy] with why. The mayor is the
-  owner's interactive seat (the template's mode), but no seat holds
-  these doors: each is a person's act, and the owner takes it as
-  themself, on their own grant, not through a seat. A seed change that
-  opens any other crack on a walked kind fails here."
-  (let [policy "The repository's policy is the owner's to write: no seat writes it."
-        judgment "A judgment is promoted by the owner, as the seed itself does."
-        domain "A domain is restated by the owner: no seat holds the navigation."
-        seat "Parking, unparking and retiring a seat are the owner's acts."
-        reopen "Reopening a done ticket is the owner's call."
-        restate "Restating a ticket's ask is the owner's: the mayor grooms and files, it does not rewrite."
-        evidence "Showing a ticket's evidence is the owner's act."]
+  owner's interactive seat (the template's mode) and holds the grooming
+  doors (ticket restate, reopen, show_evidence, resume; change rework),
+  so their cracks are gone. No seat holds these: each stays the
+  person's by design, and an org's mayor reaches it through a held
+  call. A seed change that opens any other crack on a walked kind
+  fails here."
+  (let [policy "The repository's policy stays the person's by design (policy): no seat writes it; the mayor reaches it through a held call."
+        judgment "Promoting a judgment stays the person's by design (policy), as the seed itself does; the mayor reaches it through a held call."
+        domain "Restating a domain stays the person's by design (power): no seat holds the navigation; the mayor reaches it through a held call."
+        seat "Parking, unparking and retiring a seat stay the person's by design (power and money); the mayor reaches them through a held call."]
     {["approval_request" "offered" "silent_person_exit" nil nil]
-     "An ask waits on the owner's tap; no seat inbox tells them, the ask door does."
+     "An ask's offered doors stay the person's by design (power): no seat inbox tells them, the ask door does."
      ["change" "failing" "remedy_unheld" "submit" "repo_policy/create"] policy
      ["change" "failing" "remedy_unheld" "submit" "repo_policy/restate"] policy
      ["change" "open" "remedy_unheld" "submit" "repo_policy/create"] policy
      ["change" "open" "remedy_unheld" "submit" "repo_policy/restate"] policy
      ["change" "submitted" "remedy_unheld" "submit" "repo_policy/create"] policy
      ["change" "submitted" "remedy_unheld" "submit" "repo_policy/restate"] policy
-     ["change" "stuck" "no_exit" nil nil]
-     "A stuck change is reworked or closed by the owner, who reads every stall."
+     ["change" "stuck" "cadence_only" nil nil]
+     "The mayor reworks a stuck change on its daily sitting; the person reads every stall."
      ["seat" "active" "no_exit" nil nil] seat
      ["seat" "active" "remedy_unheld" "restate" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "judgment/promote"] judgment
@@ -88,20 +87,8 @@
      ["seat" "parked" "remedy_unheld" "unpark" "judgment/promote"] judgment
      ["seat" nil "remedy_unheld" "create" "domain/restate"] domain
      ["seat" nil "remedy_unheld" "create" "judgment/promote"] judgment
-     ["ticket" "blocked" "remedy_unheld" "block" "ticket/reopen"] reopen
-     ["ticket" "blocked" "remedy_unheld" "reparent_blocked" "ticket/reopen"] reopen
-     ["ticket" "deferred" "no_exit" nil nil]
-     "A deferred ticket is resumed by the owner, who deferred it."
-     ["ticket" "draft" "remedy_unheld" "block" "ticket/reopen"] reopen
-     ["ticket" "draft" "remedy_unheld" "complete" "ticket/restate"] restate
-     ["ticket" "draft" "remedy_unheld" "complete" "ticket/show_evidence"] evidence
-     ["ticket" "draft" "remedy_unheld" "groom" "ticket/restate"] restate
-     ["ticket" "draft" "remedy_unheld" "reparent_draft" "ticket/reopen"] reopen
-     ["ticket" "open" "remedy_unheld" "block" "ticket/reopen"] reopen
-     ["ticket" "open" "remedy_unheld" "complete" "ticket/restate"] restate
-     ["ticket" "open" "remedy_unheld" "complete" "ticket/show_evidence"] evidence
-     ["ticket" "open" "remedy_unheld" "reparent" "ticket/reopen"] reopen
-     ["ticket" nil "remedy_unheld" "create" "ticket/reopen"] reopen
+     ["ticket" "deferred" "cadence_only" nil nil]
+     "The mayor resumes a deferred ticket on its daily sitting, when the person says so."
      ["verdict" "said" "no_exit" nil nil]
      "A said verdict is the judge's record and stays said; the owner reads it."
      ["verdict" nil "remedy_unheld" "create" "judgment/promote"] judgment}))
@@ -111,7 +98,7 @@
   the `explained` ones, they stand on the kinds a factory-only engine
   serves and no seeded seat staffs. A change in
   either direction fails here and is read."
-  {"no_exit" 74 "remedy_unheld" 44 "silent_person_exit" 20})
+  {"cadence_only" 2 "no_exit" 72 "remedy_unheld" 32 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
