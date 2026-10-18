@@ -15,7 +15,9 @@ name: waymark-factory
 
 services:
   postgres:
-    image: public.ecr.aws/docker/library/postgres:17
+    # POSTGRES_IMAGE names another registry's copy of the same image;
+    # the selfhost CI job sets it to mirror.gcr.io's
+    image: ${POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:17}
     restart: unless-stopped
     environment:
       POSTGRES_DB: waymark
@@ -47,6 +49,9 @@ services:
       FACTORY10_ONLY: "1"
       WAYMARK10_AUTO_MIGRATE: "1"
       WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:?set WAYMARK_OWNER in .env}
+      # the key the seed's :at-rest :encrypted fields (the pull token)
+      # are sealed with; without it the first boot dies mid-seed
+      WAYMARK10_DATA_KEY: ${WAYMARK_DATA_KEY:?set WAYMARK_DATA_KEY in .env}
       WAYMARK10_SEED: factory
       WAYMARK10_SEED_PARAMS: >-
         {"owner": "${WAYMARK_OWNER}",
