@@ -494,7 +494,9 @@
              :wake_text
              ;; every waiting fire's text, and the textless wake that
              ;; waits beside them (58573175)
-             :wake_texts :wake_textless}
+             :wake_texts :wake_textless
+             ;; the head each woken row was last heard at (70aca5e6)
+             :wake_seen}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]

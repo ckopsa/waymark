@@ -847,6 +847,15 @@
                   {:label "Transitions the wake heard"
                    :help "The last transitions that matched this seat's wake_on, so a re-delivered one does not wake the seat twice. Engine-written."}}
      [:maybe [:vector :string]]]
+    ;; The heads the wake last heard (ticket 70aca5e6). A self-loop on
+    ;; a row whose `head_sha` has not moved since the wake last heard
+    ;; it — the forge poll's observe_failing on a red change — wakes
+    ;; nothing, so a seat is not fired again and again for no news.
+    [:wake_seen {:optional true
+                 :x-display
+                 {:label "Heads the wake heard"
+                  :help "Each row's head when a transition on it last matched this seat's wake_on, as kind/id and head. A self-loop on the same head does not wake the seat again. Engine-written."}}
+     [:maybe [:vector :string]]]
     ;; The fuel wall's mark (waymark ticket b790752f). A wake that
     ;; matched while the seat's week of fuel was spent does not fire:
     ;; it waits as `wake_pending`, and this says when the wall last

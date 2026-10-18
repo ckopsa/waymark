@@ -264,7 +264,7 @@
 (def ^:private outcome-help
   (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
-       " turns. idle: none of these; it moved nothing."))
+       " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
 
 (def ^:private flags-help
   (let [{:keys [test-calls read-bytes dropped-share rewalk-sittings
@@ -1926,6 +1926,11 @@
                   ;; delivery still decides (e2a379e0)
                   (and (empty? delivers)
                        (moved? transitions "verdict" "judge")) "completed"
+                  ;; a sit that handed no rows, and a sitting that moved
+                  ;; nothing after, left no work to cut short (ticket
+                  ;; 70aca5e6): it is idle, however few its turns
+                  (and (true? (:walked_nothing data))
+                       (empty? transitions)) "idle"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
@@ -5745,7 +5750,8 @@
 (defn- walked-nothing?
   "Did this sitting end with nothing walked: its sit handed it no rows
   (`stamp-walked-nothing!`) and it moved nothing after. A hook closes
-  such a wake within a few turns, so `cut_short` counts beside `idle`."
+  such a wake within a few turns, and one closed before ticket 70aca5e6
+  reads `cut_short`, so `cut_short` counts beside `idle`."
   [sitting]
   (and (true? (:walked_nothing sitting))
        (contains? #{"idle" "cut_short"} (some-> (:outcome sitting) name))))
