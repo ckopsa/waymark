@@ -295,28 +295,47 @@
 (defn- mark!
   "The completion marker: one member row the loader owns, born through
   the member door as the registrar after the last step succeeds. An
-  org's load names its org in the display, where `marker-org` reads it."
+  org's load records its org in `seed_org`, where `marker-org` reads it."
   [eng seed org]
   (let [id (marker-id seed)]
     (inv/create! eng :member
-                 {:display (if org
-                             (str "Seed `" (:seed seed) "` for org `" org "`")
-                             (str "Seed `" (:seed seed) "`, loaded whole"))
-                  :actor_type "agent"
-                  :subject id}
+                 (cond-> {:display (if org
+                                     (str "Seed `" (:seed seed) "`")
+                                     (str "Seed `" (:seed seed) "`, loaded whole"))
+                          :actor_type "agent"
+                          :subject id}
+                   org (assoc :seed_org org))
                  {:principal members/registrar :id id})))
 
 (defn- seeded? [eng seed]
   (some? (load-row eng :member (marker-id seed))))
 
+(defn- org-recorded!
+  "Write `org` into the marker's `seed_org`: a maintenance write, in
+  place, as `walk-recorded!` keeps `walked_steps`."
+  [eng seed org]
+  (let [st (:storage eng)
+        id (marker-id seed)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id
+                              (assoc (:data raw) :seed_org org)
+                              (:next-flip-at raw)))))))
+
 (defn- marker-org
   "The org the seed's marker records, or nil: no marker, or one a load
-  without `:org` wrote."
+  without `:org` wrote. A marker from before `seed_org` named its org in
+  the display: it is read from there once, and rewritten with the field."
   [eng seed]
-  (some->> (load-row eng :member (marker-id seed))
-           :data ((juxt :display #(get % "display"))) (some identity) str
-           (re-find #"for org `([^`]+)`")
-           second))
+  (when-some [data (:data (load-row eng :member (marker-id seed)))]
+    (or (some-> (or (:seed_org data) (get data "seed_org")) str not-empty)
+        (when-some [org (some->> data ((juxt :display #(get % "display")))
+                                 (some identity) str
+                                 (re-find #"for org `([^`]+)`")
+                                 second)]
+          (org-recorded! eng seed org)
+          org))))
 
 (defn- step-key
   "A step's key: the SHA-256 of its edn form, its maps and sets sorted,
@@ -511,6 +530,23 @@
     (str (UUID/nameUUIDFromBytes
           (.getBytes (str "seed:" seed ":" r) "UTF-8")))))
 
+(defn- half-walked?
+  "True when this engine holds a row one of the seed's create or
+  template steps is born with (`step-id`): a load of the seed began
+  here and did not reach its marker."
+  [eng seed]
+  (let [ctx {:seed (:seed seed)}]
+    (boolean
+     (some (fn [step]
+             (when-some [id (step-id ctx step)]
+               (when-some [kind (cond
+                                  (or (:hold step) (:grant step)) nil
+                                  (:template step) (:kind (template-of (:template step)))
+                                  (:find step) nil
+                                  (contains? step :create) (:kind step))]
+                 (load-row eng kind id))))
+           (:steps seed)))))
+
 (defn- made-opts [ctx step]
   (cond-> (hand-of ctx step)
     (step-id ctx step) (assoc :id (step-id ctx step))))
@@ -624,12 +660,19 @@
   it is given, the seed's `:walled` servers are made at it, and when
   it is not, none is made. `:params` are the values `[:param k]` reads.
   `:org` is the org boot's alone (`admit!`): a cast member the engine
-  already holds is then reused as it is, and the marker records the org."
+  already holds is then reused as it is, and the marker records the org.
+  Under `:org` a load that finds no marker but finds a row a step is
+  born with stopped half-way: it is resumed, additively as over a
+  marker, the marker written at its end, and `:resumed true` said."
   [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params org] :as opts}]
   (admit! eng seed opts)
   (let [seeded (seeded? eng seed)
         org (some-> org str not-empty)
-        cast (filled-cast cast (keyed params))]
+        cast (filled-cast cast (keyed params))
+        ;; reused members are expected under :org, so a half-way load
+        ;; is told by the rows its steps made, and resumed, not refused
+        resumed (boolean (and (not seeded) org (half-walked? eng seed)))
+        additive (or seeded resumed)]
     (when (and (not seeded) (not org) (enrolled? eng cast))
       (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
                       {:seed (:seed seed) :half-seeded true})))
@@ -643,20 +686,24 @@
         (enrol! eng cast who))
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
-      (let [walked (when seeded
+      (let [walked (cond
+                     seeded
                      (or (walked-of eng seed)
                          ;; a marker from before keys were kept: every
                          ;; step the seed holds now counts as walked
                          (let [all (into #{} (map step-key) steps)]
                            (walk-recorded! eng seed all)
-                           all)))
+                           all))
+                     ;; no marker holds keys yet: each step is found
+                     ;; by its name or its id, or walked
+                     resumed #{})
             {:keys [refs made]}
             (reduce
                   (fn [{:keys [refs] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
                                :params (keyed params) :seed (:seed seed)}
                           [row made?] (try
-                                (if seeded
+                                (if additive
                                   (let [k (step-key step)
                                         known? (contains? walked k)
                                         walked-step (gain! ctx step known?)]
@@ -692,8 +739,11 @@
             ;; last, and only after every step went through
             (mark! eng seed org)
             (walk-recorded! eng seed (map step-key steps))
-            {:seed (:seed seed) :seeded true
-             :members (count cast) :steps (count steps) :refs refs}))))))
+            (when resumed
+              (println (str "resumed half-seeded org " org)))
+            (cond-> {:seed (:seed seed) :seeded true
+                     :members (count cast) :steps (count steps) :refs refs}
+              resumed (assoc :resumed true))))))))
 
 (defn boot!
   "The boot step behind WAYMARK10_SEED: read the named seed and load
