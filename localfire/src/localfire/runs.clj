@@ -88,15 +88,18 @@
   engine's MCP door, named so `--strict-mcp-config` lets the session
   reach that door and nothing else. With an `:oauth` client the entry
   carries it, in the shape `claude mcp add --client-id --callback-port`
-  writes, so the stored sign-in (R-8.2) matches this entry."
-  [^File f {:keys [name url oauth]}]
+  writes, so the stored sign-in (R-8.2) matches this entry. With
+  `:headers` the entry carries them as they are: the identity a run
+  presents at a door with no OIDC."
+  [^File f {:keys [name url oauth headers]}]
   (io/make-parents f)
   (spit f (json/write-value-as-string
            {"mcpServers"
             {(str name)
              (cond-> {"type" "http" "url" (str url)}
-               oauth (assoc "oauth" {"clientId"     (:client-id oauth)
-                                     "callbackPort" (:callback-port oauth)}))}})))
+               oauth   (assoc "oauth" {"clientId"     (:client-id oauth)
+                                       "callbackPort" (:callback-port oauth)})
+               headers (assoc "headers" headers))}})))
 
 ;; ── the record ──────────────────────────────────────────────────────
 
