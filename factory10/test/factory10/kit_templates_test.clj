@@ -12,7 +12,6 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
-            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.roles :as roles]
@@ -28,28 +27,9 @@
    :repos "ckopsa/waymark"
    :domain "factory"})
 
-(def ^:private journal
-  "A stand-in for the house's journal kind (workqueue10), which the
-  mayor's scope names and factory10 does not serve (ticket bad6628c)."
-  (r/resource
-   {:kind :journal
-    :plural "journals"
-    :states [:written :struck]
-    :initial :written
-    :terminal #{:struck}
-    :summary "{data.title} · {state}"
-    :schema [:map [:title [:string {:min 1 :max 60}]]]
-    :filterable {:state #{:eq :in}}
-    :actions
-    {:strike {:from #{:written} :to :struck
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "Striking is acknowledged."}
-              :display {:label "Strike" :order 1
-                        :description "Strike this entry"}}}}))
-
 (defn- world []
   (let [eng (engine/engine {:storage (memory/storage)
-                            :resources (conj (vec (main/resources)) journal)})]
+                            :resources (main/resources)})]
     (roles/ensure-factory-roles! eng)
     eng))
 
