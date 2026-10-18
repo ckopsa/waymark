@@ -392,7 +392,8 @@
   "Register the person's routine as their own runner link: the engine
   sees localfire-claude acting for them and stamps them its owner. The
   first press makes a push link with the routine's fire URL and bearer;
-  a later one restates it, restoring it first when a revoke retired it.
+  a later one restates it, which brings a link a revoke marked broken
+  back live, restoring it first when an older revoke retired it.
   → nil, or the sentence for the page."
   [people public-url sess]
   (let [sub  (:sub sess)
@@ -427,13 +428,14 @@
 
 (defn- retire-link!
   "A revoked token leaves the routine nothing to run under, so its link
-  is retired: nothing fires through it until the next press."
+  is marked broken, with the reason: nothing fires through it until the
+  next press restates it."
   [people sess]
   (when-let [id (some-> (read-link people (:sub sess)) :id str)]
     (when-not (str/blank? (:access-token sess))
-      ((:engine people) (links-url people "/" (url-encode id) "/-/retire")
-                        (:access-token sess) {}))
-    (write-link! people (:sub sess) {:id id :retired true})))
+      ((:engine people) (links-url people "/" (url-encode id) "/-/mark_broken")
+                        (:access-token sess) {:note "The person revoked their token."}))
+    (write-link! people (:sub sess) {:id id :broken true})))
 
 ;; ── the routes ──────────────────────────────────────────────────────
 
