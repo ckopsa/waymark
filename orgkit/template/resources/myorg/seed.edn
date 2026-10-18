@@ -1,0 +1,20 @@
+;; myorg's seed: what a fresh engine holds the moment it boots this
+;; org. The grammar is docs/orgkit.md § The seed: the demo seed's
+;; :cast and :steps (docs/spec-demo-clones.md § 1) under the org's
+;; :domains, :seats and :judgments.
+{:seed "myorg"
+ :version 1
+ :org "myorg"
+ :domains [{:name "myorg" :label "My Org"}]
+ :cast
+ {:owner {:id "owner" :display "The Owner" :type :human :roles ["approver"]}}
+ ;; a seat is a factorykit template and its params, or a whole seat
+ ;; map under :seat when no template walks the org's kinds
+ :seats
+ [{:template "mayor" :params {:repos "owner/repo"}}]
+ ;; a judgment is a factorykit judgment template and its params
+ :judgments
+ [{:template "sitting" :params {:ticket_repo "owner/repo"}}]
+ :steps
+ [{:as :owner :kind :item :ref :first
+   :create {:title "The first piece of work" :assignee "owner"}}]}
