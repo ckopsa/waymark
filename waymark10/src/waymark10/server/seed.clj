@@ -54,6 +54,13 @@
   counted from the boot, and `[:param :repo]` is the boot's param of
   that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
 
+  A CAST MEMBER'S `:id` AND `:display` MAY BE PARAMS TOO:
+  `{:owner {:id [:param :owner] :display [:param :owner_display]}}`,
+  so a live seed makes its owner from the boot. Only those two are
+  filled; `:acts-for` names another cast key, not a value. A secret a
+  step's create needs, such as a pull `runner_link`'s `fire_token`, is
+  a param the same way: `{:fire_token [:param :pull_token]}`.
+
   A STEP MAY FILL A FACTORY KIT TEMPLATE: `{:template \"code-seat\"
   :params {:repo [:param :repo]}}` reads `seats/code-seat.edn` (or
   `judgments/<name>.edn`) from the classpath, fills each `{{hole}}` its
@@ -144,6 +151,31 @@
 
 ;; ── the cast ────────────────────────────────────────────────────────
 
+(defn- param-of
+  "A `[:param k]` form's value from the boot's params, or the form
+  itself when it is not one. Throws for a param the boot does not give."
+  [params form]
+  (if (and (vector? form) (= 2 (count form)) (= :param (first form)))
+    (let [k (second form)]
+      (if (contains? params k)
+        (get params k)
+        (throw (refusal (str "The seed names the param `" (name k)
+                             "`, and WAYMARK10_SEED_PARAMS holds none of that name.")
+                        {:param k}))))
+    form))
+
+(defn- filled-cast
+  "The cast with each member's `:id` and `:display` filled from the
+  boot's params, so `member-id`, `principal-of` and `enrol!` read
+  values."
+  [cast params]
+  (into {}
+        (map (fn [[who m]]
+               [who (cond-> m
+                      (contains? m :id) (update :id #(param-of params %))
+                      (contains? m :display) (update :display #(param-of params %)))]))
+        cast))
+
 (defn- member-id [cast who]
   (or (some-> (get-in cast [who :id]) str not-empty)
       (throw (refusal (str "The seed names `" who "`, and its cast holds no such member.")
@@ -233,11 +265,7 @@
   [{:keys [eng cast refs now params] :as ctx} form]
   (let [[op arg] (when (and (vector? form) (= 2 (count form))) form)]
     (case op
-      :param (if (contains? params arg)
-               (get params arg)
-               (throw (refusal (str "The seed names the param `" (name arg)
-                                    "`, and WAYMARK10_SEED_PARAMS holds none of that name.")
-                               {:param arg})))
+      :param (param-of params form)
       :ref (:id (ref-of refs arg))
       :self (let [{:keys [kind id]} (ref-of refs arg)]
               (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))
@@ -384,12 +412,13 @@
     {:seed (:seed seed) :seeded false
      :skipped "This engine already holds the seed's completion marker, so the seed was applied before and is skipped whole."}
 
-    (enrolled? eng cast)
+    (enrolled? eng (filled-cast cast (keyed params)))
     (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
                     {:seed (:seed seed) :half-seeded true}))
 
     :else
-    (let [now (or now ((or (:now-fn eng) #(Instant/now))))]
+    (let [now (or now ((or (:now-fn eng) #(Instant/now))))
+          cast (filled-cast cast (keyed params))]
       (register-roles! eng cast)
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
