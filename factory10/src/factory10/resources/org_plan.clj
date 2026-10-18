@@ -59,12 +59,25 @@
   is the one tap: an agent's go_live is HELD, and the owner's Allow
   runs it. The merge and the mayor's sitting behind it are M2e's.
 
+  A PLAN CAN BE A HIRE PLAN (ticket 78f11fa7, M4a). `purpose` is
+  `found` (the plan that stands an org up; a plan born before the field
+  reads as found) or `hire`: a plan the engine opens on a live org for
+  one `gap` its own audit found, kind rows waiting in a state that no
+  seat holds or that the seats on it do not keep up with. `open-hire!`
+  is that birth, the engine's hand alone: it copies the live plan's
+  owner and directory, writes the brief from the gap, and opens one
+  hire plan per gap key. It is a function and not a declared door
+  because a kind has one create verb; the ordinary create keeps
+  `a-person-files-the-plan`, and the engine's birth passes it by.
+
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -84,15 +97,98 @@
             str not-empty)))
 
 (defn- stamp-the-owner
-  "The birth's stamps: the owner is the person who filed the plan, and
-  the org directory is orgs/<name> unless the filer named one."
+  "The birth's stamps: the owner is the person who filed the plan, the
+  org directory is orgs/<name> unless the filer named one, and a plan
+  born with no purpose founds its org."
   [row ctx]
   (cond-> row
     (some? (the-person ctx))
     (assoc-in [:data :owner] (the-person ctx))
 
     (str/blank? (str (get-in row [:data :org_dir])))
-    (assoc-in [:data :org_dir] (str "orgs/" (get-in row [:data :name])))))
+    (assoc-in [:data :org_dir] (str "orgs/" (get-in row [:data :name])))
+
+    (str/blank? (str (get-in row [:data :purpose])))
+    (assoc-in [:data :purpose] "found")))
+
+;; ── the hire plan (M4a) ──────────────────────────────────────────────
+
+(defn purpose-of
+  "The plan's purpose, `found` or `hire`. A plan born before the field
+  was declared has none, and reads as found."
+  [plan]
+  (if (= "hire" (some-> (get-in plan [:data :purpose]) name)) "hire" "found"))
+
+(def ^:private standing-hire-states
+  "The states a hire plan blocks another for its gap in. A retired or
+  live one does not."
+  #{"drafting" "proposed" "simulated"})
+
+(defn hire-brief
+  "The hire plan's brief: one sentence written from its gap."
+  [{:keys [kind state reason row_ids oldest_since]}]
+  (str kind " rows wait in " state ": " (count row_ids)
+       " past their expected age, oldest since " (or oldest_since "unknown") "; "
+       (if (= "pressure" (some-> reason name))
+         "more than the seats on it keep up with"
+         "no seat holds the door out")))
+
+(defn- state-name [row] (some-> (:state row) name))
+
+(defn- plans-of
+  "Every org_plan of the org `org` in a state that is not retired,
+  decoded."
+  [eng org]
+  (let [st (:storage eng)
+        rd (get (inv/resources eng) :org_plan)]
+    (into []
+          (comp (map #(inv/decode-row rd %))
+                (filter #(= org (str (get-in % [:data :name])))))
+          (store/with-tx st
+            (fn [tx]
+              (mapcat #(store/query-rows st tx :org_plan {:state %} {:limit 1000})
+                      ["live" "drafting" "proposed" "simulated"]))))))
+
+(defn open-hire!
+  "The engine opens a hire plan for the org `name` on one `gap`. →
+  inv/create!'s answer, or {:refused <reason> :why <sentence>}:
+  `engine_only` when the hand is not the engine's, `no_live_org` when
+  the org has no live found plan, and `hire_open` when a hire plan for
+  the same gap key stands in drafting, proposed or simulated. The plan
+  is born in drafting with the live plan's owner and directory, and
+  the brief written from the gap."
+  [eng {org :name gap :gap} {:keys [principal] :as opts}]
+  (if-not (= :system (:type principal))
+    {:refused :engine_only
+     :why "Only the engine's hand opens a hire plan: it opens one for each gap its own audit finds."}
+    (let [plans (plans-of eng org)
+          live (first (filter #(and (= "live" (state-name %))
+                                    (= "found" (purpose-of %)))
+                              plans))
+          open (first (filter #(and (= "hire" (purpose-of %))
+                                    (contains? standing-hire-states (state-name %))
+                                    (= (str (:key gap))
+                                       (str (get-in % [:data :gap :key]))))
+                              plans))]
+      (cond
+        (nil? live)
+        {:refused :no_live_org
+         :why (str "No live plan founds " org ": a hire plan is opened on an org that is live.")}
+
+        (some? open)
+        {:refused :hire_open
+         :hire (str (:id open))
+         :why (str "A hire plan for " (:key gap) " stands already, in " (state-name open) ".")}
+
+        :else
+        (inv/create! eng :org_plan
+                     {:name org
+                      :purpose "hire"
+                      :org_dir (get-in live [:data :org_dir])
+                      :owner (str (get-in live [:data :owner]))
+                      :gap gap
+                      :brief (hire-brief gap)}
+                     (assoc opts :mint? true))))))
 
 ;; ── the findings walk (M2c) ─────────────────────────────────────────
 
@@ -363,6 +459,16 @@
    [:answered_at {:optional true} [:maybe :waymark/instant]]
    [:resolved_at {:optional true} [:maybe :waymark/instant]]])
 
+(def ^:private gap-schema
+  [:map
+   [:kind [:string {:min 1 :max 64}]]
+   [:state [:string {:min 1 :max 64}]]
+   [:reason [:enum "no_holder" "pressure"]]
+   [:row_ids {:optional true} [:maybe [:vector {:max 20} [:string {:max 64}]]]]
+   [:oldest_since {:optional true} [:maybe :waymark/instant]]
+   [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
+   [:key [:string {:min 1 :max 200}]]])
+
 (defresource org-plan
   {:kind :org_plan
    :plural "org_plans"
@@ -385,7 +491,8 @@
    :display {:title "{data.name}"}
    :filterable {:state #{:eq :in}
                 :name #{:eq}
-                :owner #{:eq}}
+                :owner #{:eq}
+                :purpose #{:eq}}
    :on-create stamp-the-owner
    :create-guards [a-person-files-the-plan]
    :schema
@@ -451,6 +558,18 @@
                    {:label "Why it was retired"
                     :help "The owner's one sentence, written by the retire door."}}
      [:maybe [:string {:max 240}]]]
+    ;; stamped at birth: found, unless the engine opened it to hire (M4a)
+    [:purpose {:optional true
+               :x-display
+               {:label "Purpose"
+                :help "found: the plan stands the org up. hire: the engine opened it on a live org, for one gap its audit found. A plan with none founds its org."}}
+     [:maybe [:enum "found" "hire"]]]
+    ;; WRITTEN ONLY BY THE ENGINE'S open-hire!: no create form takes it
+    [:gap {:optional true
+           :x-display
+           {:label "The gap"
+            :help "What the hire plan is for: the kind's rows waiting in a state past their expected age, and whether no seat holds the door out or the seats on it do not keep up."}}
+     [:maybe gap-schema]]
     ;; stamped at birth, never input
     [:owner {:optional true :kind :member
              :x-display
