@@ -200,8 +200,75 @@
     (testing "a seat that holds the door and does not walk the row is not woken"
       (is (nil? (:wake (aged [(seat "closer" {:scope [{:kind "change"
                                                          :actions ["submit"]}]})])))))
-    (testing "two seats that hold the row name no one seat"
-      (is (nil? (:wake (aged [coder (assoc coder :id "coder2")])))))))
+    (testing "of two seats that hold the row, the shorter cadence is woken"
+      (let [slow (seat "slow" (assoc (:data coder) :cadence_seconds 86400))
+            fast (seat "fast" (assoc (:data coder) :cadence_seconds 600))]
+        (is (= "fast" (get-in (aged [slow fast]) [:wake :seat])))
+        (testing "and on a tie, the first seat name"
+          (is (= "a-coder" (get-in (aged [(seat "b-coder" (:data coder))
+                                          (seat "a-coder" (:data coder))])
+                                   [:wake :seat]))))))))
+
+(deftest an-orphan-wakes-the-seat-that-walks-changes
+  (let [change {:kind :change
+                :states [:open :submitted :merged :closed]
+                :initial :open
+                :terminal #{:merged :closed}
+                :actions {:close {:from #{:open :submitted} :to :closed}}}
+        ticket {:kind :ticket
+                :states [:open :done]
+                :initial :open
+                :terminal #{:done}
+                :actions {}}
+        sweeper (seat "sweeper" {:walk "change"
+                                 :scope [{:kind "change" :actions ["close"]}]})
+        coder (seat "coder" {:walk "ticket"
+                             :scope [{:kind "ticket" :actions []}
+                                     {:kind "change" :actions ["close"]}]})
+        orphan (fn [seats]
+                 (first (of (live/find-cracks
+                             {:rdefs [change ticket]
+                              :seats seats
+                              :rows {:change [{:id "c1" :state :submitted
+                                               :updated-at (ago 60)
+                                               :data {:born_from "ticket:k1"}}]}
+                              :tickets {"k1" {:id "k1" :state :done :data {}}}
+                              :now now})
+                            "orphan")))]
+    (testing "the seat whose walk is change is woken on it"
+      (let [c (orphan [coder sweeper])]
+        (is (= {:seat "sweeper" :name "sweeper"} (:wake c)))
+        (is (= 86400 (:expected_seconds c)))
+        (is (= :wake (first (live/route c nil now))))
+        (is (re-find #"orphan:change:c1" (live/wake-text c)))
+        (testing "and the mayor is told one expected age later"
+          (let [[door tried] (live/route c (ago 90000) now)]
+            (is (= :file door))
+            (is (re-find #"Seat tried: sweeper" (:detail (live/ticket-of tried))))))))
+    (testing "a ticket walk does not get it: its sit withholds the change"
+      (is (nil? (:wake (orphan [coder])))))))
+
+(deftest a-silent-seat-is-woken-itself-before-the-mayor-is-told
+  (let [walker (seat "walker" {:scope [{:kind "task" :actions ["finish"]}]
+                               :walk "task"
+                               :cadence_seconds 600})
+        [c] (of (live/find-cracks
+                 {:rdefs [task] :seats [walker]
+                  :rows {:task [{:id "t1" :state :open :updated-at (ago 60) :data {}}]}
+                  :schedules {"walker" {:data {:wake_fired_at (str (ago 3600))}}}
+                  :now now})
+                "silent")]
+    (is (= {:seat "walker" :name "walker"} (:wake c)))
+    (is (= :wake (first (live/route c nil now))))
+    (testing "by a fire that names no row, so its sit walks its queue"
+      (is (re-find #"silent:seat:walker" (live/wake-text c)))
+      (is (not (re-find #"\"id\"" (live/wake-text c)))))
+    (testing "and waits one cadence on it"
+      (is (= :wait (first (live/route c (ago 60) now)))))
+    (testing "and then reaches the mayor, saying it was tried"
+      (let [[door tried] (live/route c (ago 700) now)]
+        (is (= :file door))
+        (is (re-find #"Seat tried: walker" (:detail (live/ticket-of tried))))))))
 
 (deftest a-change-whose-ticket-is-dropped-is-an-orphan
   (let [change {:kind :change
