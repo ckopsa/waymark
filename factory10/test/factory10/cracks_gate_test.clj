@@ -293,3 +293,17 @@
                                        (door-ctx rdefs narrowed
                                                  {:id "mayor-model" :type :agent
                                                   :acts-for "colton"}))))))))))
+
+(deftest a-retire-or-merge-is-judged-at-its-own-door
+  (let [rdefs (main/resources)
+        seats (vec (fixture/seats rdefs))
+        person {:id "colton" :type :human}
+        at (fn [door] (assoc (door-ctx rdefs seats person) :door door))]
+    (testing "a retire that takes the only woken seat out is warned, by its door"
+      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat nil
+                                  (at :retire))]
+        (is denied?)
+        (is (re-find #"ticket/" (str why)) why)))
+    (testing "the same empty body at a door that is not a leaving one is no crack"
+      (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
+                                 (:data fixture/code-seat) (at :restate)))))))
