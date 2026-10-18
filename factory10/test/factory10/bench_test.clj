@@ -1604,6 +1604,49 @@
       (restated delegate {:auto_merge false})
       (is (= {:auto_merge false :required_checks ["gate"]} (gate-now))))))
 
+(deftest the-hosted-ok-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-turns-hosted-ok-on)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-hosted-ok-turned-on-waits-for-the-person
+  ;; ticket d39b224b. In the suite for the reason above.
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who changed]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         changed)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        held-by (fn [changed]
+                  (try (restated delegate changed)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e
+                         (some-> (:guard (ex-data e)) name keyword))))
+        hosted-ok-now #(get-in (policy-row eng (:id row)) [:data :hosted_ok])]
+    (testing "an agent's hosted_ok turned on is the hold's refusal, and the row stands"
+      (is (= :only-a-person-turns-hosted-ok-on (held-by {:hosted_ok true})))
+      (is (not (true? (hosted-ok-now)))))
+    (testing "the person's own hosted_ok turned on runs directly"
+      (restated person {:hosted_ok true})
+      (is (true? (hosted-ok-now))))
+    (testing "an agent's restate that leaves hosted_ok on is not held"
+      (is (nil? (held-by {:hosted_ok true})))
+      (is (true? (hosted-ok-now))))
+    (testing "an agent's hosted_ok turned off narrows the exception and is not held"
+      (is (nil? (held-by {:hosted_ok false})))
+      (is (false? (hosted-ok-now))))))
+
 (deftest a-policy-states-its-merge-strategy-and-never-its-train
   ;; the merge train, slice a (ticket 394d0602): data only
   (let [st (state)
