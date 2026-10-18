@@ -2967,7 +2967,13 @@
   ticket kind narrowed to the rows whose `filed_by` is their member
   id, and its create door — the scope of a grant that is never stored,
   read through `visibility` like any presented one, so a requester's
-  get and query meet the same narrowing every scoped reader meets."
+  get and query meet the same narrowing every scoped reader meets.
+
+  A requester KEEPS the own-surface `visibility` adds for every named
+  principal (their own asks, grants, sittings, letters ...): it is
+  the asking door, and a requester who wants more than their own
+  tickets asks for it there like anyone else. It shows them only rows
+  that already name them, so it widens nothing past their own."
   [eng principal member]
   (visibility eng {:id (str "role:" roles/requester)
                    :state :accepted

@@ -7,7 +7,8 @@
   absent; and a person with no role still arrives unscoped. In memory.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
@@ -15,7 +16,8 @@
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (defn- person [id] (t/principal {:id id :display id}))
 
@@ -88,6 +90,38 @@
       ;; matches-nothing sentinel and no row
       (let [ids ((:ids-of vis) :sitting)]
         (is (and (some? ids) (every? #{"-none-"} ids)) (pr-str ids))))))
+
+(defn- get-as [eng who uri-and-query]
+  (let [[uri query] (str/split uri-and-query #"\?" 2)
+        resp ((engine/handler eng)
+              (cond-> {:request-method :get :uri uri
+                       :headers {"x-waymark-principal" who}}
+                query (assoc :query-string query)))]
+    (assoc resp :json (some-> (:body resp) wire/read-json))))
+
+(deftest a-requester-through-the-router
+  (let [eng (world)
+        _ (member! eng "sam" [roles/requester])
+        _ (member! eng "olive" [])
+        mine (str (:id (file! eng "sam" "Mine")))
+        theirs (str (:id (file! eng "olive" "Not mine")))]
+    ;; both tickets land drafts, and the collection's default filter
+    ;; is state=open
+    (testing "the ticket collection lists their own ticket and no other"
+      (let [b (:json (get-as eng "sam" "/api/tickets?state=draft"))]
+        (is (= [mine]
+               (mapv #(last (str/split (str (:self %)) #"/"))
+                     (get-in b [:data :items]))))))
+    (testing "another's ticket is absent, their own is served"
+      (is (= 200 (:status (get-as eng "sam" (str "/api/tickets/" mine)))))
+      (is (= 404 (:status (get-as eng "sam" (str "/api/tickets/" theirs))))))
+    (testing "seats are absent"
+      (is (= 404 (:status (get-as eng "sam" "/api/seats")))))
+    (testing "the asking door stays: their own-surface is kept"
+      (is (= 200 (:status (get-as eng "sam" "/api/approval_requests")))))
+    (testing "a person with no role still sees every ticket"
+      (is (= 2 (count (get-in (:json (get-as eng "olive" "/api/tickets?state=draft"))
+                              [:data :items])))))))
 
 (deftest a-person-with-no-role-sees-what-they-see-today
   (let [eng (world)]
