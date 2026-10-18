@@ -2816,7 +2816,9 @@
 ;; stops: an authoring seat's restate as a held call for its person,
 ;; and a person's create on a warning the person acknowledges by its
 ;; name. A person's own restate and the park are not judged here: the
-;; park is the cheap lever, one tap and no confirm.
+;; park is the cheap lever, one tap and no confirm. Retire and merge
+;; take an active seat out of the staffing for good, and carry both
+;; guards (ticket a77bf705).
 
 (defonce ^:private staffing-rule (atom nil))
 
@@ -2829,15 +2831,27 @@
   (reset! staffing-rule f))
 
 (defn- as-it-would-stand
-  "The active seats after this write. A body with no row is a seat
-  born. A body that states nothing is the park door's, and the seat
-  leaves. Any other body is a restate, read as `restate-seat` writes
-  it."
-  [active row inp]
-  (let [others (into [] (remove #(= (str (:id %)) (str (:id row)))) active)]
+  "The active seats after this write, read as the door that makes it:
+  `door` is the action the invoke stands on (ctx :door). A body with no
+  row is a seat born. Park and retire take the seat out. Merge takes it
+  out and folds its scope into `into`, as `merge-seat` does. Any other
+  door is a restate, read as `restate-seat` writes it."
+  [active row inp door]
+  (let [same? #(= (str (:id %1)) (str %2))
+        others (into [] (remove #(same? % (:id row))) active)
+        mine (:data row)]
     (cond
       (nil? (:id row)) (conj others {:state :active :data inp})
-      (empty? inp) others
+      (#{:park :retire} door) others
+      (= :merge door)
+      (mapv (fn [s]
+              (if (same? s (:into inp))
+                (-> s
+                    (update-in [:data :scope] grants/merge-scope (:scope mine))
+                    (update-in [:data :substitute_drop] grants/merge-scope
+                               (:substitute_drop mine)))
+                s))
+            others)
       :else (conj others (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
                                  row restatable)))))
 
@@ -2852,7 +2866,9 @@
     (when (and rule find' rdefs
                (or (nil? (:id row)) (= "active" (name (:state row)))))
       (let [active (vec (find' :seat {:state "active"} {:limit 10000}))]
-        (seq (rule (rdefs) active (as-it-would-stand active row inp)))))))
+        (seq (rule (rdefs) active
+                   (as-it-would-stand active row inp
+                                      (some-> (:door ctx) keyword))))))))
 
 (defn- cracks-told
   "The new cracks in the audit's own words, one sentence each."
@@ -2887,9 +2903,11 @@
    :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could open a crack alone would leave work with no seat and nobody told."
    :explain "Held for the person's tap. This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
   [row inp ctx]
-  ;; the restate door's, from an authoring seat. A seat an author
-  ;; creates is born parked and changes no staffing, so the create door
-  ;; does not carry this guard, and only a person parks.
+  ;; the restate door's, from an authoring seat, and retire's and
+  ;; merge's, where `the-persons-lever` holds an author first and this
+  ;; names the crack its replay would open. A seat an author creates is
+  ;; born parked and changes no staffing, so the create door does not
+  ;; carry this guard, and only a person parks.
   (cond
     (nil? (delegation/author-seat ctx)) (t/allow)
     (delegation/approved-hold? ctx :seat (:id row)) (t/allow)
@@ -3917,7 +3935,9 @@
               :waymark/ref]]
      :record true
      :guards [a-person not-a-sitter merge-target-is-active
-              delegation/the-persons-lever]
+              delegation/the-persons-lever
+              opens-no-crack
+              a-crack-waits-on-the-person]
      ;; the fold lands on `into` through its own concealed door, in
      ;; this transaction — declared so a reader can see it coming and
      ;; checks-assembly/check-touches can verify the pair at assembly
@@ -3929,7 +3949,9 @@
 
     :retire
     {:from #{:active :parked} :to :retired
-     :guards [a-person delegation/the-persons-lever]
+     :guards [a-person delegation/the-persons-lever
+              opens-no-crack
+              a-crack-waits-on-the-person]
      :safety {:idempotent true :reversible false :confirm true
               :consequence "The office closes for good. Its sittings and its whole history stay on record; its grants scope to nothing and expire on their own clocks. Opening the work again is a new seat."}
      :display {:label "Retire" :style :danger :order 9}}
