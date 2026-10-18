@@ -125,6 +125,30 @@
       (is (= [] (keys-of proposed)))
       (is (= "proposed" (state proposed))))))
 
+(deftest the-pass-writes-the-law-page-beside-the-findings
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (a-change! eng 102 head-2)
+        id (a-proposed-plan! eng "acme" change)
+        by-name (atom {(str "org-findings-acme-" head-2)
+                       {:acme [gap] :law_page "# The law of acme"}})
+        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                     (fn [& _] nil))
+        data #(:data (plan eng id))]
+    (testing "the pass writes both onto the plan for that head"
+      (is (= 1 (:findings (pass!))))
+      (is (= head-2 (:findings_sha (data))))
+      (is (= [(:key gap)] (mapv :key (:findings (data)))))
+      (is (= "# The law of acme" (:law_page (data)))))
+    (testing "a later head replaces both"
+      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-3)
+             {:acme [lint] :law_page "# The law of acme, again"})
+      (is (= 1 (:findings (pass!))))
+      (is (= head-3 (:findings_sha (data))))
+      (is (= [(:key lint)] (mapv :key (:findings (data)))))
+      (is (= "# The law of acme, again" (:law_page (data)))))))
+
 (deftest a-source-without-artifacts-records-nothing
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
