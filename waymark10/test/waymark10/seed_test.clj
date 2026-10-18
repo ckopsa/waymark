@@ -406,6 +406,59 @@
         (is (= "org_mismatch" (:reason (ex-data e))))
         (is (= 3 (count (dev/rows eng :chore))) "and nothing was written")))))
 
+(deftest an-orgs-marker-records-its-org-in-a-field-of-its-own
+  (let [eng (engine {:name "waymark"})
+        nm (apply str (repeat 50 "s"))
+        org-name (apply str (repeat 50 "o"))]
+    (testing "a seed and org whose names come to 100 characters load"
+      (is (true? (:seeded (seed/load! eng (org-seed nm) {:org org-name}))))
+      (let [marker (dev/row eng :member (str "seed-" nm))]
+        (is (= org-name (get-in marker [:data :seed_org])))
+        (is (= (str "Seed `" nm "`") (get-in marker [:data :display])))))
+    (testing "and another org's name is refused by the field"
+      (let [e (refused #(seed/load! eng (org-seed nm) {:org "other"}))]
+        (is (= "org_mismatch" (:reason (ex-data e))))))))
+
+(deftest an-old-marker-with-its-org-in-the-display-is-read-and-rewritten
+  (let [eng (engine {:name "waymark"})
+        st (:storage eng)
+        _ (seed/load! eng (org-seed "old") {:org "old"})
+        _ (store/with-tx st
+            (fn [tx]
+              (let [raw (store/load-row st tx :member "seed-old" {:for-update true})]
+                (store/update-data! st tx :member "seed-old"
+                                    (-> (:data raw)
+                                        (dissoc :seed_org)
+                                        (assoc :display "Seed `old` for org `old`"))
+                                    (:next-flip-at raw)))))]
+    (is (nil? (get-in (dev/row eng :member "seed-old") [:data :seed_org])))
+    (is (false? (:seeded (seed/load! eng (org-seed "old") {:org "old"}))))
+    (is (= "old" (get-in (dev/row eng :member "seed-old") [:data :seed_org]))
+        "the org read from the display is written to the field")
+    (let [e (refused #(seed/load! eng (org-seed "old") {:org "new"}))]
+      (is (= "org_mismatch" (:reason (ex-data e)))))))
+
+(deftest an-org-load-that-failed-half-way-resumes
+  (let [eng (engine {:name "waymark"})
+        half {:seed "half" :version 1 :live-ok true
+              :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+              :steps [{:as :owner :kind :chore :create {:title "One"} :ref :c1}
+                      {:as :owner :kind :chore :create {:title "Two"} :ref :c2}
+                      {:as :owner :kind :chore :create {:title [:param :chore]} :ref :c3}
+                      {:as :owner :kind :chore :create {:title "Four"} :ref :c4}]}]
+    (is (some? (refused #(seed/load! eng half {:org "half"})))
+        "the third step names a param the boot does not give")
+    (is (= 2 (count (dev/rows eng :chore))))
+    (is (nil? (dev/row eng :member "seed-half")) "and no marker was written")
+    (let [out (java.io.StringWriter.)
+          again (binding [*out* out]
+                  (seed/load! eng half {:org "half" :params {"chore" "Three"}}))]
+      (is (true? (:seeded again)))
+      (is (true? (:resumed again)))
+      (is (re-find #"resumed half-seeded org half" (str out)))
+      (is (= 4 (count (dev/rows eng :chore))) "the two made before are not made again")
+      (is (= "half" (get-in (dev/row eng :member "seed-half") [:data :seed_org]))))))
+
 (deftest a-live-seed-refuses-a-param-the-boot-does-not-give
   (let [eng (engine {:name "waymark"})
         e (refused #(seed/load! eng live {:params {"chore" "Water the ferns"}}))]
