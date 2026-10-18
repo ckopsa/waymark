@@ -6,6 +6,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.wire :as wire]))
 
 (defn- whoami
@@ -43,6 +45,20 @@
       (let [[status p] (whoami h {})]
         (is (= 200 status))
         (is (nil? p))))))
+
+(deftest an-owner-row-born-before-solo-owner-gains-its-roles
+  (let [eng (dev/scratch! [] {:solo-owner "tim"})
+        _ (inv/create! eng :member {:display "tim" :actor_type "human"
+                                    :subject "tim"}
+                       {:principal members/registrar :id "tim"})
+        h (dev/handler eng)]
+    (testing "the first request heals the row's roles"
+      (let [[status p] (whoami h {"x-waymark-principal" "tim"})]
+        (is (= 200 status))
+        (is (= #{"manager" "recovery-admin"} (set (:roles p))))))
+    (testing "a second request still resolves them"
+      (is (= #{"manager" "recovery-admin"}
+             (set (:roles (second (whoami h {"x-waymark-principal" "tim"})))))))))
 
 (deftest without-a-solo-owner-the-dev-headers-are-unchanged
   (let [h (dev/handler (dev/scratch! []))

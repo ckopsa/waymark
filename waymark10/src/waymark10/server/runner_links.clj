@@ -121,6 +121,15 @@
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
 
+(g/defguard a-person-breaks-the-link
+  {:reads [:principal]
+   :explain "A person marks their own link broken — themselves, or a tool they are signed in to — when they know it can no longer run, as when they revoked its token. The engine marks a link broken through its own door when the provider refuses a fire."
+   :open "No door changes who the caller is: ask the person whose link this is."}
+  [_row _inp ctx]
+  (if (or (a-persons-hand? ctx)
+          (= :system (get-in ctx [:principal :type])))
+    (t/allow) (t/deny)))
+
 (def ^:private engine-writes
   {:idempotent true :reversible false :confirm false
    :one-way "Bookkeeping the engine writes as it fires through the link; the next fire moves the row again."})
@@ -227,9 +236,10 @@
    :states [:live :broken :retired]
    :initial :live
    :terminal #{}                       ; retirement is reversible, deliberately
-   ;; :broken is the engine's to write: `fire-link!` marks a link
-   ;; broken through the hidden `break` door when the provider answers
-   ;; that the link is bad.
+   ;; :broken is written two ways: `fire-link!` marks a link broken
+   ;; through the hidden `break` door when the provider answers that
+   ;; the link is bad, and the link's owner walks `mark_broken` when
+   ;; they know it is (ticket 44abe17a: a revoked token).
    :nav :system
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} link"
@@ -272,7 +282,7 @@
             :x-display
             {:widget "prose"
              :label "Why the link broke"
-             :help "The provider's own sentence about why it refused the last fire. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate. Engine-written."}}
+             :help "The provider's own sentence about why it refused the last fire, or the owner's when they marked it broken. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate."}}
      [:maybe [:string {:max 280}]]]
     seeded-from-field
     owner-field]
@@ -300,7 +310,7 @@
    ;; kind, and so does the tool they signed in to: owned-at-birth
    ;; stamps the person a tool acts for, so the delegate opts in.
    ;; The token stays write-only; a manager's grant still sees all
-   :own-surface {:by :owner :delegates true :actions #{:restate}}
+   :own-surface {:by :owner :delegates true :actions #{:restate :mark_broken}}
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -348,6 +358,28 @@
     {:from #{:retired} :to :live
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restore" :order 2}}
+
+    ;; the owner's own break (ticket 44abe17a): they know the link can
+    ;; no longer run, as when they revoked its token, and say why. A
+    ;; restate brings it back live, as after the engine's `break`.
+    :mark_broken
+    {:from #{:live} :to :broken
+     :input [:map
+             [:note {:x-display
+                     {:widget "prose"
+                      :label "Why it is broken"
+                      :help "One sentence for the next reader, such as: the person revoked their token."}}
+              [:string {:min 1 :max 280}]]]
+     :record true
+     :guards [a-person-breaks-the-link]
+     :edit {:prefill [:note] :fence false
+            :unfenced-reason
+            "The owner says the link can no longer run; nothing it read since makes that less true."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The link fires nothing until a person restates it."}
+     :handler record-break
+     :display {:label "Mark broken" :style :danger :order 8
+               :description "Nothing fires through this link until it is restated"}}
 
     ;; the fire's landing (1b). Hidden and engine-written: a run
     ;; started, so the link is good and its window counts one more.
