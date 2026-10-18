@@ -145,3 +145,55 @@
                            [:data :due])))]
     (is (= "2026-10-04" (due :later)))
     (is (= "2026-09-29" (due :earlier)))))
+
+;; ── a live seed ─────────────────────────────────────────────────────
+
+;; Its values are the boot's params, and its second step fills a seat
+;; template in the factory kit's shape: test/seats/seed-test-seat.edn,
+;; since the kit itself is not on this classpath.
+(def ^:private live
+  (assoc toy
+         :seed "live"
+         :live-ok true
+         :steps [{:as :ada :kind :chore :create {:title [:param :chore]} :ref :c1}
+                 {:as :ada :template "seed-test-seat"
+                  :params {:repo [:param :repo]} :ref :s1}]))
+
+(def ^:private params {"chore" "Water the ferns" "repo" "acme/garden"})
+
+(deftest a-live-seed-loads-on-a-fresh-engine-named-waymark
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng live {:params params})]
+    (is (true? (:seeded once)))
+    (is (= "Water the ferns"
+           (get-in (dev/row eng :chore (get-in once [:refs :c1 :id])) [:data :title]))
+        "a [:param k] value is the boot's param")
+    (testing "a template step creates the seat with its holes filled"
+      (is (= :seat (get-in once [:refs :s1 :kind])))
+      (is (= "Keep acme/garden tidy."
+             (get-in (dev/row eng :seat (get-in once [:refs :s1 :id])) [:data :charter]))))
+    (testing "a second boot skips it, by the marker"
+      (let [twice (seed/load! eng live {:params params})]
+        (is (false? (:seeded twice)))
+        (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
+
+(deftest a-live-seed-refuses-an-engine-that-has-members
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        other (assoc live :seed "other"
+                     :steps [{:as :ada :kind :chore :create {:title "Sweep"}}])
+        e (refused #(seed/load! eng other {}))]
+    (is (some? e))
+    (is (re-find #"already has members" (str (ex-message e))))
+    (is (= 1 (count (dev/rows eng :chore))) "and nothing was written")))
+
+(deftest a-live-seed-refuses-a-param-the-boot-does-not-give
+  (let [eng (engine {:name "waymark"})
+        e (refused #(seed/load! eng live {:params {"chore" "Water the ferns"}}))]
+    (is (re-find #"repo" (str (ex-message (or (ex-cause e) e)))))))
+
+(deftest the-params-read-as-json-or-edn
+  (is (= {:repo "acme/garden"} (seed/read-params "{\"repo\": \"acme/garden\"}")))
+  (is (= {:repo "acme/garden"} (seed/read-params "{:repo \"acme/garden\"}")))
+  (is (= {} (seed/read-params nil)))
+  (is (some? (refused #(seed/read-params "[1 2]")))))
