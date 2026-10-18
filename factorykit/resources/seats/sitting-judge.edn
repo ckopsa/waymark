@@ -1,6 +1,6 @@
 ;; The sitting judge: reads closed sittings and says one verdict on
 ;; each. Its charter and instructions are the ones this house runs
-;; (2026-10-14), with the judgment and the domain as holes. See
+;; (2026-10-14), with the judgment as a hole. See
 ;; docs/factory-kit-migration.md, step 7.
 {:template
  {:params {:judgment "The id of the promoted judgment over closed fired sittings (subject_kind sitting), whose verdicts carry the sentences the charter chooses between, no_transcript among them. Create and promote it first."
@@ -8,7 +8,7 @@
            :domain_id "The id of that domain's row: the seat's :domain ref."}
   :judgment_template "sitting"
   :verdicts ["no_transcript"]
-  :note "One sitting judge per house. It reads every seat's sittings and transcripts and moves none: its only door is verdict/judge, and what a verdict does is the judgment's consequence."}
+  :note "One sitting judge per house. It reads every seat's sittings and transcripts and moves none: its only door is verdict/judge, and what a verdict does is the judgment's consequence. A seat lands in a domain through its `domain` field, a domain row's id, set on create or after; left empty it reads as factory (in_domain is computed, and the create door refuses it)."}
  :seat
  {:name "sitting-judge"
   :mode "fired"

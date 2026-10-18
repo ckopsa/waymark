@@ -1,14 +1,14 @@
 ;; The ops seat: classifies each red check run, re-runs an infra break
 ;; once and restarts a house job its allowlist names. Its charter and
 ;; instructions are the ones this house runs (2026-10-14), with the
-;; repositories, the restart allowlist and the domain as holes. See
+;; repositories and the restart allowlist as holes. See
 ;; docs/factory-kit-migration.md, step 7.
 {:template
  {:params {:repos "The repositories whose failed jobs the seat may re-run, as the forge spells them, comma-separated: owner/repo,owner/other."
            :restart_jobs "The nomad jobs the seat may restart, comma-separated: the house jobs a red run depends on."
            :domain "The navigation domain the seat sits in, by its name."
            :domain_id "The id of that domain's row: the seat's :domain ref."}
-  :note "One ops seat per house: a ci_run row carries no repository, so its ci_run scope takes no repo filter. The four classify doors are factory10's ci_run doors; a factory whose red runs have other doors names those. The bench and nomad tools are external powers; a house without nomad drops the two nomad entries and the sentences that name them."}
+  :note "One ops seat per house: a ci_run row carries no repository, so its ci_run scope takes no repo filter. The four classify doors are factory10's ci_run doors; a factory whose red runs have other doors names those. The bench and nomad tools are external powers; a house without nomad drops the two nomad entries and the sentences that name them. A seat lands in a domain through its `domain` field, a domain row's id, set on create or after; left empty it reads as factory (in_domain is computed, and the create door refuses it)."}
  :seat
  {:name "ops-seat"
   :mode "fired"

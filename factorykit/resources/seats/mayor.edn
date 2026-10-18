@@ -8,7 +8,7 @@
  {:params {:repos "The repositories whose tickets the mayor grooms, files, blocks and drops, as the forge spells them, comma-separated: owner/repo,owner/other."
            :domain "The navigation domain the seat sits in, by its name, and whose in-flight read it starts from."
            :domain_id "The id of that domain's row: the seat's :domain ref."}
-  :note "One mayor per house, sat by its person from their own machine; nothing fires it. Its restate is judged against the ceiling of its own grant, and anything wider goes to the person as an approval_request."}
+  :note "One mayor per house, sat by its person from their own machine; nothing fires it. Its restate is judged against the ceiling of its own grant, and anything wider goes to the person as an approval_request. A seat lands in a domain through its `domain` field, a domain row's id, set on create or after; left empty it reads as factory (in_domain is computed, and the create door refuses it)."}
  :seat
  {:name "mayor"
   :mode "interactive"

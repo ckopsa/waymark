@@ -1604,6 +1604,49 @@
       (restated delegate {:auto_merge false})
       (is (= {:auto_merge false :required_checks ["gate"]} (gate-now))))))
 
+(deftest the-hosted-ok-wall-is-a-registered-hold
+  (is (holds/hold? :only-a-person-turns-hosted-ok-on)
+      "the guard's `:hold true` registered it when the module loaded"))
+
+(deftest a-delegates-hosted-ok-turned-on-waits-for-the-person
+  ;; ticket d39b224b. In the suite for the reason above.
+  (let [st (state)
+        eng (fresh-engine st)
+        row (a-policy! eng {})
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who changed]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (merge (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :rounds_per_change :formatter
+                                                       :deny :orientation])
+                                         changed)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        held-by (fn [changed]
+                  (try (restated delegate changed)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e
+                         (some-> (:guard (ex-data e)) name keyword))))
+        hosted-ok-now #(get-in (policy-row eng (:id row)) [:data :hosted_ok])]
+    (testing "an agent's hosted_ok turned on is the hold's refusal, and the row stands"
+      (is (= :only-a-person-turns-hosted-ok-on (held-by {:hosted_ok true})))
+      (is (not (true? (hosted-ok-now)))))
+    (testing "the person's own hosted_ok turned on runs directly"
+      (restated person {:hosted_ok true})
+      (is (true? (hosted-ok-now))))
+    (testing "an agent's restate that leaves hosted_ok on is not held"
+      (is (nil? (held-by {:hosted_ok true})))
+      (is (true? (hosted-ok-now))))
+    (testing "an agent's hosted_ok turned off narrows the exception and is not held"
+      (is (nil? (held-by {:hosted_ok false})))
+      (is (false? (hosted-ok-now))))))
+
 (deftest a-policy-states-its-merge-strategy-and-never-its-train
   ;; the merge train, slice a (ticket 394d0602): data only
   (let [st (state)
@@ -2386,6 +2429,78 @@
     (testing "the change says a person merges it on GitHub"
       (bench/merge-green! eng (atom {}))
       (is (= "person" (get-in (change-row w) [:data :line_why]))))))
+
+;; ── the person's paths (ticket 15305c4a) ───────────────────────────────
+
+(def ^:private keycloak-policy
+  (assoc house-policy :person_paths ["terraform/keycloak_*.tf"]))
+
+(deftest a-change-touching-a-person-path-asks-for-its-merge
+  (let [{:keys [eng state] :as w} (submitted-world keycloak-policy)
+        waiting (atom {})]
+    (observe! w {:mergeable "clean"
+                 :touched_paths ["terraform/main.tf" "terraform/keycloak_users.tf"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (is (= 0 (bench/merge-green! eng (atom {})))
+        "the house's line does not merge it")
+    (is (empty? (calls-of state "bench__merge")))
+    (is (= "person" (get-in (change-row w) [:data :line_why])))
+    (is (= "touches terraform/keycloak_users.tf, which this repository's policy keeps for a person"
+           (get-in (change-row w) [:data :line_reason])))
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 59)))
+        "nothing is asked before merge_wait_seconds")
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (is (= 1 (count (bench/merge-asks eng))) "one held merge call")))
+
+(deftest a-change-touching-no-person-path-merges-as-before
+  (let [{:keys [eng state] :as w} (submitted-world keycloak-policy)
+        waiting (atom {})]
+    (observe! w {:mergeable "clean" :touched_paths ["terraform/main.tf"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (is (= 1 (bench/merge-green! eng (atom {}))))
+    (is (= 1 (count (calls-of state "bench__merge"))))
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (empty? (bench/merge-asks eng)))))
+
+(deftest an-agents-removed-person-path-waits-for-the-person
+  (let [eng (fresh-engine (state))
+        both ["terraform/keycloak_*.tf" "terraform/iam_*.tf"]
+        row (a-policy! eng (assoc keycloak-policy :person_paths both))
+        delegate (assoc (t/principal {:id "claude-for-colton" :type :agent
+                                      :display "Claude for Colton"})
+                        :acts-for "colton")
+        restated (fn [who paths]
+                   (let [current (policy-row eng (:id row))]
+                     (inv/invoke! eng :repo_policy (str (:id row)) :restate
+                                  (assoc (select-keys (:data current)
+                                                      [:repository :branch_pattern :base
+                                                       :max_lines :opens_pr :auto_merge
+                                                       :merge_by :required_checks
+                                                       :merge_method :rounds_per_change
+                                                       :formatter :deny :orientation])
+                                         :person_paths paths)
+                                  {:principal who
+                                   :if-match (inv/etag :repo_policy (:id row)
+                                                       (:version current))})))
+        held-by (fn [paths]
+                  (try (restated delegate paths)
+                       nil
+                       (catch clojure.lang.ExceptionInfo e
+                         (some-> (:guard (ex-data e)) name keyword))))
+        paths-now #(get-in (policy-row eng (:id row)) [:data :person_paths])]
+    (testing "an agent's removed entry is the hold's refusal, and the row stands"
+      (is (= :only-a-person-frees-the-person-paths
+             (held-by ["terraform/keycloak_*.tf"])))
+      (is (= both (paths-now))))
+    (testing "an agent's added entry narrows the house and is not held"
+      (is (nil? (held-by (conj both "terraform/vault_*.tf"))))
+      (is (= (conj both "terraform/vault_*.tf") (paths-now))))
+    (testing "the person's own removal runs directly"
+      (restated person ["terraform/keycloak_*.tf"])
+      (is (= ["terraform/keycloak_*.tf"] (paths-now))))))
 
 (deftest a-merge-the-rig-refuses-after-the-allow-lands-failed
   (let [{:keys [eng state]} (clean-world person-policy)

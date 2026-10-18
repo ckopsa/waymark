@@ -1,0 +1,34 @@
+;; example's seed: what a fresh engine holds the moment it boots this
+;; org. The grammar is docs/orgkit.md § The seed: the demo seed's
+;; :cast and :steps (docs/spec-demo-clones.md § 1) under the org's
+;; :domains, :seats and :judgments.
+{:seed "example"
+ :version 1
+ :org "example"
+ :domains [{:name "example" :label "Example Landscaping"}]
+ :cast
+ {:owner {:id "owner" :display "Rosa Delgado" :type :human :roles ["approver"]}
+  :crew  {:id "crew"  :display "Lee Park"     :type :human}}
+ ;; one seat. No factorykit template walks a request, so it is a whole
+ ;; seat map under :seat, in the shape a template's :seat takes
+ :seats
+ [{:seat {:name "office-clerk"
+          :mode "fired"
+          :walk "request"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :budget_usd_per_week 5M
+          :charter "You read each new request. Accept it when its detail says what the work is, and write the work order it becomes; decline it when it is not work this office does. Say why in one sentence."
+          :scope [{:kind "request" :actions ["accept" "decline"]}
+                  {:kind "work_order" :actions ["create"]}]
+          :wake_on [{:kind "request" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :request :ref :hedge
+   :create {:title "Trim the front hedge" :customer "Ana Ruiz"
+            :detail "Front hedge, about 20 metres, trimmed to waist height before the 30th."}}
+  {:as :owner :kind :request :on :hedge :action "accept"}
+  {:as :owner :kind :work_order :ref :hedge-job
+   :create {:title "Trim the front hedge" :crew "crew"}}
+  {:as :owner :kind :request :ref :lawn
+   :create {:title "Weekly lawn mowing" :customer "Ben Cole"}}]}
