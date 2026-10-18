@@ -116,12 +116,14 @@
             [factory10.sources.forge :as forge]
             [factorykit.forge :as kit]
             [waymark10.wire :as wire])
-  (:import (java.net URI URLEncoder)
+  (:import (java.io ByteArrayInputStream)
+           (java.net URI URLEncoder)
            (java.net.http HttpClient HttpClient$Redirect HttpRequest
                           HttpRequest$BodyPublishers HttpRequest$Builder
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration Instant)))
+           (java.time Duration Instant)
+           (java.util.zip ZipInputStream)))
 
 (set! *warn-on-reflection* true)
 
@@ -300,7 +302,8 @@
                    (.followRedirects HttpClient$Redirect/NEVER)
                    (.build))
         base (str/replace (str (or base api-base)) #"/+$" "")]
-    (fn [^String method path {:keys [params body url raw anonymous etag heard]}]
+    (fn [^String method path {:keys [params body url raw anonymous etag heard
+                                     binary]}]
       (let [target (or url
                        (str base path
                             (when (seq params) (str "?" (query-string params)))))
@@ -328,15 +331,18 @@
                          (wire/write-json body) StandardCharsets/UTF_8)
                         (HttpRequest$BodyPublishers/noBody))
             req (-> builder (.method method publisher) (.build))
+            ;; :binary keeps a raw answer's bytes (an artifact's zip)
             ^HttpResponse resp (.send client req
-                                      (HttpResponse$BodyHandlers/ofString))
+                                      (if binary
+                                        (HttpResponse$BodyHandlers/ofByteArray)
+                                        (HttpResponse$BodyHandlers/ofString)))
             status (.statusCode resp)
-            text (str (.body resp))
+            text (if binary "" (str (.body resp)))
             facts (answer-facts status #(header-of resp %) text (Instant/now))]
         (when heard (heard facts))
         (cond
           raw
-          {:status status :body text
+          {:status status :body (if binary (.body resp) text)
            :location (header-of resp "location")
            :content-type (header-of resp "content-type")}
 
@@ -968,6 +974,35 @@
        (not (str/includes? (str/lower-case (str content-type)) "zip"))
        (not (str/starts-with? (str body) "PK"))))
 
+(defn- unzip-json
+  "The first entry of a zip archive, read as JSON, or nil."
+  [^bytes archive]
+  (with-open [zin (ZipInputStream. (ByteArrayInputStream. archive))]
+    (when (.getNextEntry zin)
+      (wire/read-json (String. (.readAllBytes zin) StandardCharsets/UTF_8)))))
+
+(defn- artifact!
+  "The newest unexpired artifact of this name, read as JSON (ticket
+  c4893567), or nil when there is none yet. Its zip's redirect is
+  followed WITHOUT the token, as the log's is."
+  [this repository artifact-name]
+  (let [listed (:artifacts (call! this "GET"
+                                  (str "/repos/" repository "/actions/artifacts")
+                                  {:params {:name artifact-name :per_page 10}}))
+        id (some-> (first (remove #(true? (:expired %)) listed)) :id)]
+    (when (some? id)
+      (let [resp (call! this "GET"
+                        (str "/repos/" repository "/actions/artifacts/" id "/zip")
+                        {:raw true})
+            status (long (:status resp))
+            location (when (and (>= status 300) (< status 400))
+                       (word (:location resp)))
+            blob (when location
+                   (call! this "GET" nil {:url location :raw true
+                                          :anonymous true :binary true}))]
+        (when (and blob (= 200 (long (:status blob))) (bytes? (:body blob)))
+          (unzip-json (:body blob)))))))
+
 ;; ── the source ──────────────────────────────────────────────────────
 
 (defn- repos-now
@@ -1152,6 +1187,10 @@
   forge/ForgeSteps
   (forge-failed-steps [this check]
     (failed-steps! this check))
+
+  forge/ForgeArtifact
+  (forge-artifact [this repository artifact-name]
+    (artifact! this repository artifact-name))
 
   forge/ForgeCompare
   (forge-behind? [this repository base head-sha]
