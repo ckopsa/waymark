@@ -66,7 +66,12 @@
      the checks on it (`forge-base`). A base red on two passes opens
      one groomed fix ticket in that repository, a later red head is
      noted on it, and a green base completes it (ticket ade81ae9).
-  9. It prints one census line: the calls, the rows minted and the
+  9. For each drafting or proposed org_plan whose change carries a head
+     its findings were not recorded at, it reads the artifact that
+     head's tests.yml run uploaded (`forge-artifact`) and writes the
+     org's findings through the door the plan's state affords (ticket
+     c4893567).
+  10. It prints one census line: the calls, the rows minted and the
      rows moved.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
@@ -207,6 +212,16 @@
     the steps of the job behind it that finished red, in order. Empty
     when the check names no job. Throws when the forge does not
     answer."))
+
+(defprotocol ForgeArtifact
+  "One workflow artifact, read as JSON (ticket c4893567): the org
+  findings a pull request's tests.yml run uploads as
+  `org-findings-<org>-<head sha>`. A protocol of its own: a source that
+  does not implement it records no findings."
+  (forge-artifact [s repository artifact-name]
+    "→ the parsed JSON of the newest unexpired artifact of that name in
+    `repository`, or nil when there is none yet. Throws when the forge
+    does not answer."))
 
 (def ForgeBudget
   "The forge's rate limit as the source last heard it (ticket
@@ -2500,6 +2515,81 @@
                   ", and its ticket was refused (" (ex-message e) ")")
           nil)))))
 
+;; ── the org findings (ticket c4893567) ──────────────────────────────
+
+(def findings-scan-limit
+  "How many plans of each state one pass reads for their findings."
+  50)
+
+(def findings-doors
+  "The findings door each plan state affords. A push to a proposed
+  plan's branch still lands, so the plan a person approves is the plan
+  as it stands."
+  {:drafting :record_findings
+   :proposed :record_findings_proposed})
+
+(defn org-of
+  "The org a plan names, as `orgs/<org>` spells it: the last segment of
+  its directory, else its name."
+  [plan]
+  (or (some-> (get-in plan [:data :org_dir]) str
+              (str/replace #"/+$" "") (str/split #"/") last not-empty)
+      (some-> (get-in plan [:data :name]) str not-empty)))
+
+(defn findings-of
+  "The org's findings in the artifact's JSON, `{org [finding …]}`, or
+  nil when it names no such org."
+  [doc org]
+  (when (map? doc)
+    (let [found (or (get doc (keyword org)) (get doc org))]
+      (when (sequential? found) (vec found)))))
+
+(defn findings-pass!
+  "Every drafting or proposed org_plan whose change carries a head its
+  findings were not recorded at → the artifact
+  `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
+  written through the door the plan's state affords. Once per head: a
+  plan whose `findings_sha` is its change's head is not read, and an
+  artifact not there yet is tried on the next pass. A forge that does
+  not answer, or a door the engine refuses, costs that plan one pass and
+  nothing else. → the census, with `:findings` counted."
+  [eng source census log-fn]
+  (if-not (satisfies? ForgeArtifact source)
+    census
+    (let [st (:storage eng)
+          plans (store/with-tx st
+                  (fn [tx]
+                    (into []
+                          (mapcat #(store/query-rows st tx :org_plan
+                                                     {:state (name %)}
+                                                     {:limit findings-scan-limit}))
+                          (keys findings-doors))))]
+      (reduce
+       (fn [census plan]
+         (let [door (get findings-doors (state-of plan))
+               change (row-by-id eng :change (get-in plan [:data :change]))
+               repo (some-> (get-in change [:data :repository]) str not-empty)
+               head (some-> (get-in change [:data :head_sha]) str not-empty)
+               org (org-of plan)]
+           (if (or (nil? door) (nil? repo) (nil? head) (nil? org)
+                   (= head (str (get-in plan [:data :findings_sha]))))
+             census
+             (try
+               (if-some [found (findings-of
+                                (forge-artifact source repo
+                                                (str "org-findings-" org "-" head))
+                                org)]
+                 (do (inv/invoke! eng :org_plan (str (:id plan)) door
+                                  {:head_sha head :findings found} (as-opts))
+                     (update census :findings (fnil inc 0)))
+                 census)
+               (catch Exception e
+                 (log-fn "the findings of " org " at " head
+                         " were not recorded (" (ex-message e) ")")
+                 census)))))
+       census
+       plans))))
+
 (defn- stamp-pass!
   "The pass's own clock on the policy of each repository it ran over,
   with a maintenance write as `base_checked_at` is: a held pass and a
@@ -2565,7 +2655,8 @@
       (fn [census _]
         (let [census (staleness-pass! eng source read-checks census
                                       log-fn)
-              census (adoption-note-pass! eng source census log-fn)]
+              census (adoption-note-pass! eng source census log-fn)
+              census (findings-pass! eng source census log-fn)]
           (sweep-reader-changes! eng log-fn)
           census))
       ;; the base pass runs whatever a pass before it did (ticket
