@@ -45,7 +45,8 @@
                 :refs {:type "object"}
                 :actions {:type "object"}
                 :unavailable {:type "object"}
-                :waiting_on {:type "object"}
+                :waiting_on {:type "object"
+                             :description "Who moves the row next, computed at each read from the clock and the active seat rows. The ETag (meta.etag) names the row's version and does NOT cover this block: two reads of one version may differ in the verdict's age words and in the seats `next` names, and a 304 to If-None-Match keeps the block first read. `since.at` and `since.expected_seconds` hold still under one version; the age is your clock less `since.at`."}
                 :links {:type "object"}
                 :meta {:type "object"}}
    :required ["kind" "self" "state" "summary"]})
