@@ -47,7 +47,9 @@
   rig whose listing takes no limit), an optional folder, and how many
   seconds between passes (900); it reaches the same Gate
   WORKQUEUE10_GATE_URL names, and the same twin when it is unset),
-  FACTORY10=1 (fold the day job's kinds in — `factory-resources`)
+  FACTORY10=1 (fold the day job's kinds in — `factory-resources`),
+  FACTORY10_ONLY=1 (the factory ALONE: it implies FACTORY10=1 and
+  leaves the household out — `factory-only?`)
   with FACTORY10_GITHUB_TOKEN / _EVERY (the GitHub source behind them,
   waymark-fp62.6.4: the token it spends and how many seconds between
   passes, 300; with no token nothing starts and there is no fake.
@@ -469,6 +471,21 @@
 
 ;; ── the day job, behind a switch (waymark-fp62.6.2, R-8) ────────────
 
+(defn factory-only?
+  "FACTORY10_ONLY=1: the factory without the household (epic 00680418,
+  self-host). A self-hoster wants tickets, changes and seats, not
+  chores, meals and the fakes standing in for their sources — so this
+  boot serves `factory-only-resources` and starts no household source,
+  surface, connection or inbox pass. It implies FACTORY10=1 (see
+  `factory-on?`). Unset, the boot is unchanged."
+  []
+  (= "1" (System/getenv "FACTORY10_ONLY")))
+
+(defn- factory-on?
+  "FACTORY10=1, or FACTORY10_ONLY=1, which implies it."
+  []
+  (or (= "1" (System/getenv "FACTORY10")) (factory-only?)))
+
 (defn factory-resources
   "factory10's kinds — `ticket`, `change`, `ci_run` and `repo_policy` — when FACTORY10=1,
   and nothing otherwise.
@@ -489,7 +506,7 @@
   the household's gate reads the day job's law whether or not it
   serves it."
   []
-  (if (= "1" (System/getenv "FACTORY10"))
+  (if (factory-on?)
     (factory/resources)
     []))
 
@@ -511,7 +528,7 @@
   person writes says what submit means in a repository and that the
   house polls it, and a retire stops the polling with no deploy."
   [eng]
-  (when (= "1" (System/getenv "FACTORY10"))
+  (when (factory-on?)
     (github/from-env #(System/getenv ^String %)
                      #(bench/active-repositories eng)
                      (forge/cursor-store eng))))
@@ -733,6 +750,17 @@
              fake-calendar
              nil))
 
+(defn factory-only-resources
+  "What FACTORY10_ONLY=1 serves: the framework's own domainless kinds
+  (saved views and dashboards, the capability registry, the breaker
+  panel, the dwelling kinds and letters) and the factory's kinds —
+  and no household domain, kind or fake. The engine enrols its own
+  (seat, member, grant …) either way."
+  []
+  (-> [saved-view capability connection self journal letter]
+      (into dashboard/resources)
+      (into (factory/resources))))
+
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
       "jdbc:postgresql://localhost:5433/workqueue10_dev?user=ckopsa"))
@@ -897,32 +925,36 @@
   []
   (assert-reconsent-client-pairing!)
   (let [storage (pg/storage (dsn))
+        ;; FACTORY10_ONLY=1: no household source is built at all
+        only? (factory-only?)
         ;; the one Home Assistant, shared by the todo source and the
         ;; engine's :services (a decision's service launch fires
         ;; through it) — built once, or nil when unconfigured
-        ha-src (home-assistant)
+        ha-src (when-not only? (home-assistant))
         ;; the media confluence's sources, built once: the :media kind
         ;; drinks them and :services :places asks the same flickr for
         ;; a row's chapters (waymark-z8u4)
-        media-srcs (media-sources)
+        media-srcs (if only? {} (media-sources))
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
         eng (clocked-engine (System/getenv "WAYMARK10_SEED")
                             #(mirror/with-push (engine/engine %))
                             {:storage storage
-                             :resources (resources
-                                         (sources ha-src)
-                                         media-srcs
-                                         (thread-sources)
-                                         (calendar-adapter)
-                                         (connections/fan-reporter engine-ref))
+                             :resources (if only?
+                                          (factory-only-resources)
+                                          (resources
+                                           (sources ha-src)
+                                           media-srcs
+                                           (thread-sources)
+                                           (calendar-adapter)
+                                           (connections/fan-reporter engine-ref)))
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook
                              :report-pass (connections/pass-reporter
                                            engine-ref {:event "calendar"})
-                             :surfaces surfaces
+                             :surfaces (if only? [] surfaces)
                              :deploy-mode (deploy-mode)
                              ;; the render probe carries the read hooks
                              ;; (waymark-1pq): this is the boot prod
@@ -993,19 +1025,21 @@
         _ (mcp-servers/sweep-capabilities! eng)
         ;; the factory's old `landed_at` (ticket 2d216859), cleared
         ;; once: a boot over rows already cleared writes nothing
-        _ (when (= "1" (System/getenv "FACTORY10"))
+        _ (when (factory-on?)
             (forge/clear-landed-at! eng))
         ;; a parent left in review by a merge before its children
         ;; ended (ticket 499bcd72), ended once they have
-        _ (when (= "1" (System/getenv "FACTORY10"))
+        _ (when (factory-on?)
             (forge/finish-merged-parents! eng))
-        _ (connections/ensure-connections! eng (connection-descriptors))
+        ;; the breaker panel's inventory is the household's authorities
+        _ (when-not only?
+            (connections/ensure-connections! eng (connection-descriptors)))
         ;; the demo seed, after every other boot row and before the
         ;; server listens: a refusal throws here, so a half-seeded
         ;; engine is never served
         _ (seed-on-boot! eng
                          (System/getenv "WAYMARK10_SEED")
-                         (System/getenv "FACTORY10")
+                         (when (factory-on?) "1")
                          (System/getenv "WAYMARK_WALL_URL"))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
@@ -1023,7 +1057,7 @@
         ;; pass rides the same shape one level down: a daemon thread
         ;; under an ELECTED role, so one process per database lists
         ;; the household's inbox however many serve it
-        inbox-pass (when-some [src (inbox-source eng)]
+        inbox-pass (when-some [src (when-not only? (inbox-source eng))]
                      (store/elect-role!
                       storage :workqueue10-inbox
                       {:retry-ms 5000
@@ -1059,7 +1093,7 @@
         ;; twice — and the pass itself is factory10's, because
         ;; server/mcp_servers is core and core reads no module's kinds.
         factory-enrol-pass
-        (when (= "1" (System/getenv "FACTORY10"))
+        (when (factory-on?)
           (store/elect-role!
            storage :factory10-enroll
            {:retry-ms 5000

@@ -6,10 +6,15 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
-(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge"])
+(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor"])
+
+(def ^:private judgment-names ["draft-ticket" "sitting"])
 
 (defn- template [n]
   (edn/read-string (slurp (io/resource (str "seats/" n ".edn")))))
+
+(defn- judgment-template [n]
+  (edn/read-string (slurp (io/resource (str "judgments/" n ".edn")))))
 
 (defn- holes [s]
   (set (map (comp keyword second) (re-seq #"\{\{([a-z_]+)\}\}" s))))
@@ -21,6 +26,62 @@
    (reduce (fn [s k] (str/replace s (str "{{" (name k) "}}") "owner/repo"))
            (pr-str seat)
            (keys (:params template)))))
+
+(defn- filled-judgment
+  "The judgment template's judgment with every hole its params name filled."
+  [{:keys [template judgment]}]
+  (edn/read-string
+   (reduce (fn [s k] (str/replace s (str "{{" (name k) "}}") "owner/repo"))
+           (pr-str judgment)
+           (keys (:params template)))))
+
+(defn- unfilled [x]
+  (re-seq #"\{\{[^}]*\}\}" (pr-str x)))
+
+(deftest every-template-fills-with-no-hole-left
+  (doseq [n names]
+    (testing n
+      (is (empty? (unfilled (filled (template n)))))))
+  (doseq [n judgment-names]
+    (testing n
+      (is (empty? (unfilled (filled-judgment (judgment-template n))))))))
+
+(deftest every-judgment-template-fills-into-a-judgment-the-kind-takes
+  (doseq [n judgment-names
+          :let [t (judgment-template n)
+                j (filled-judgment t)
+                words (map :name (:verdicts j))]]
+    (testing n
+      (is (= (holes (pr-str (:judgment t))) (set (keys (:params (:template t)))))
+          "every hole is a param, and every param a hole")
+      (is (<= 1 (count (:name j)) 120))
+      (is (seq (:subject_kind j)))
+      (is (<= 1 (count words) 12) "between one and twelve verdicts")
+      (is (apply distinct? words) "the verdict names are distinct")
+      (doseq [{w :name s :sentence} (:verdicts j)]
+        (is (re-matches #"[a-z][a-z_]{0,39}" w) (str w " is one snake_case word"))
+        (is (<= 1 (count s) 240) (str w "'s sentence")))
+      (is (every? (set words) (:files_ticket_on j))
+          "a ticket is filed only on one of its verdicts")
+      (is (<= 40 (:remedy_max j) 1000))
+      (is (<= (count (:notes j)) 1200)))))
+
+(deftest every-verdict-a-judge-seat-names-is-in-its-judgment
+  (is (= #{"draft-judge" "sitting-judge"}
+         (set (filter #(get-in (template %) [:template :judgment_template]) names))))
+  (doseq [n names
+          :let [t (template n)
+                jn (get-in t [:template :judgment_template])]
+          :when jn]
+    (testing n
+      (let [seat (filled t)
+            text (str (:charter seat) "\n" (:instructions seat))
+            words (set (map :name (:verdicts (filled-judgment (judgment-template jn)))))]
+        (is (seq (get-in t [:template :verdicts])))
+        (doseq [v (get-in t [:template :verdicts])]
+          (is (re-find (re-pattern (str "\\b" v "\\b")) text)
+              (str v " is a verdict the seat names"))
+          (is (contains? words v) (str v " is a verdict of " jn)))))))
 
 (deftest every-template-fills-into-a-seat-the-seat-kind-takes
   (doseq [n names

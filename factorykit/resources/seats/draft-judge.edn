@@ -7,6 +7,8 @@
  {:params {:repos "The repositories whose drafts the seat judges and whose main it reads, as the forge spells them, comma-separated: owner/repo,owner/other."
            :judgment "The id of the promoted judgment over draft tickets (subject_kind ticket), whose verdicts the charter names: ready, already_done, duplicate, stale, needs_person, needs_restate and epic. Create and promote it first."
            :domain "The navigation domain the seat sits in."}
+  :judgment_template "draft-ticket"
+  :verdicts ["ready" "already_done" "duplicate" "stale" "needs_person" "needs_restate" "epic"]
   :note "One draft judge per house, over every repository its code seats build in: its groom is what wakes a code seat. The bench reads are external powers, filtered to those repositories."}
  :seat
  {:name "draft-judge"

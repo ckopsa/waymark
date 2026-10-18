@@ -5,6 +5,8 @@
 {:template
  {:params {:judgment "The id of the promoted judgment over closed fired sittings (subject_kind sitting), whose verdicts carry the sentences the charter chooses between, no_transcript among them. Create and promote it first."
            :domain "The navigation domain the seat sits in."}
+  :judgment_template "sitting"
+  :verdicts ["no_transcript"]
   :note "One sitting judge per house. It reads every seat's sittings and transcripts and moves none: its only door is verdict/judge, and what a verdict does is the judgment's consequence."}
  :seat
  {:name "sitting-judge"

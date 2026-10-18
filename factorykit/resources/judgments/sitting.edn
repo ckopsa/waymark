@@ -1,0 +1,28 @@
+;; The sitting judgment: the verdicts the sitting judge says on each
+;; closed fired sitting, each with the sentence it means. Create it with
+;; the judgment kind's create door and promote it; its id is the
+;; sitting-judge seat template's judgment hole. See
+;; docs/routines/judge.md.
+{:template
+ {:params {:ticket_repo "The repository a filed ticket names, as the forge spells it: owner/repo. The verdicts in files_ticket_on each file one draft ticket there."}
+  :note "no_transcript is the word the engine holds a transcript-less sitting to, and the sitting-judge seat names it; keep it. The verdicts a person must act on file a ticket."}
+ :judgment
+ {:name "How did the seat sit"
+  :subject_kind "sitting"
+  :queue {:state "closed"}
+  :verdicts [{:name "sat_well"
+              :sentence "The seat did what its row asked, inside its charter, and its note says so truly."}
+             {:name "wrong_act"
+              :sentence "The seat took a door its charter did not choose, or left a row it should have moved."}
+             {:name "lost_context"
+              :sentence "The seat spent its context on reads it did not need and stopped short of the act."}
+             {:name "tool_broke"
+              :sentence "A tool, a power or a door failed under the seat in a way nothing it could do would fix."}
+             {:name "charter_gap"
+              :sentence "The seat followed its charter, and the charter was wrong or silent about this case."}
+             {:name "no_transcript"
+              :sentence "The sitting kept no transcript, so nothing of it could be read."}]
+  :remedy_max 240
+  :files_ticket_on ["wrong_act" "tool_broke" "charter_gap"]
+  :ticket_repo "{{ticket_repo}}"
+  :notes "The sitting judge's judgment, from the factory kit. A verdict a person must act on files one draft ticket, so the remedy reaches the groomers."}}
