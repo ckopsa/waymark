@@ -178,6 +178,26 @@
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
 
+(deftest a-film-error-walks-after-the-audit-errors-and-before-warnings
+  (let [lint {:key "lint/crew/label" :severity "warning" :class "lint"}
+        seats (assoc seat-outside :severity "warning")
+        kinds {:key "resource/quote/no-check" :severity "error"
+               :class "resource"}]
+    (testing "the film's error comes before every warning"
+      (is (= (:key red-film)
+             (:key (org-plan/next-step [lint seats red-film])))))
+    (testing "an audit error comes before the film's"
+      (is (= [(:key kinds) (:key red-film)]
+             (->> (org-plan/walk-steps [lint seats red-film kinds])
+                  (filter #(= "error" (:severity %)))
+                  (map :key))))
+      (is (= (:key kinds)
+             (:key (org-plan/next-step [lint seats red-film kinds])))))
+    (testing "a film finding ranks ahead of lint"
+      (is (= [(:key red-film) (:key lint)]
+             (map :key (org-plan/walk-steps
+                        [lint (assoc red-film :severity "warning")])))))))
+
 (deftest only-the-engine-records-findings
   (let [{:keys [h]} (world)
         id (filed! h)

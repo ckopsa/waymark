@@ -96,16 +96,19 @@
 (def walk-order
   "The rank of each audit class on the onboarding walk: the kinds
   (do they check), then states and doors, who holds each door (cracks),
-  rules and held doors (sentences), the seats (scope, budget), and lint
-  last. These are factorykit.conform's classes; a class not named here
-  is lint."
+  rules and held doors (sentences), the seats (scope, budget), a film's
+  red rules (film), and lint last. A film is judged on a plan the audit
+  already passed, so its rule comes after the audit's classes, but no
+  lint nit outranks it (ticket 23f82fff). The others are
+  factorykit.conform's classes; a class not named here is lint."
   {"load" 0 "resource" 0 "registry" 0
    "boot" 1
    "crack" 2
    "sentence" 3
-   "seed" 4 "scope" 4 "budget" 4})
+   "seed" 4 "scope" 4 "budget" 4
+   "film" 5})
 
-(def ^:private lint-rank 5)
+(def ^:private lint-rank 6)
 
 (defn walk-steps
   "The plan's open findings as the walk's steps: by class in
@@ -116,11 +119,11 @@
                 findings)))
 
 (defn next-step
-  "The walk's next step: its first open finding, or nil when no error
+  "The walk's next step: its first open error finding, whatever its
+  class, so an error comes before any warning; nil when no error
   finding is open, and the walk is done."
   [findings]
-  (when (some #(= "error" (str (:severity %))) findings)
-    (first (walk-steps findings))))
+  (first (walk-steps (filter #(= "error" (str (:severity %))) findings))))
 
 ;; ── the doors' writes ───────────────────────────────────────────────
 
