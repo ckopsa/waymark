@@ -1,0 +1,14 @@
+;; A toy seat template in the factory kit's shape
+;; (factorykit/resources/seats/), for waymark10.seed-test: the kit is
+;; not on waymark10's classpath, and its seats name kinds this engine
+;; does not serve.
+{:template
+ {:params {:repo "The repository the seat keeps, as the forge spells it: owner/repo."}}
+ :seat
+ {:name "seed-test-seat"
+  :charter "Keep {{repo}} tidy."
+  :scope [{:kind "model" :actions ["retire"]}]
+  :standing_ttl_seconds 604800
+  :cadence_seconds 3600
+  :budget_usd_per_week 5M
+  :sitting_budget_tokens 60000}}
