@@ -20,6 +20,8 @@
             [:detail {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in} :customer #{:eq}}
+   ;; the office-clerk seat walks requests: its queue is the new ones
+   :default-filters {:state "new"}
    :actions
    {:accept  {:from #{:new} :to :accepted
               :guards [has-detail]

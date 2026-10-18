@@ -17,7 +17,9 @@
           :walk "request"
           :rows_per_firing 1
           :cadence_seconds 3600
+          :standing_ttl_seconds 604800
           :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
           :charter "You read each new request. Accept it when its detail says what the work is, and write the work order it becomes; decline it when it is not work this office does. Say why in one sentence."
           :scope [{:kind "request" :actions ["accept" "decline"]}
                   {:kind "work_order" :actions ["create"]}]
