@@ -1166,11 +1166,16 @@
                                   required checks
                                   (bench/queued-check-minutes-of policy)
                                   (now-of eng))
-                                 (missing-verdict
-                                  required checks
-                                  (bench/queued-check-minutes-of policy)
-                                  (held-kept row head)
-                                  (now-of eng)))
+                                 ;; a behind house change's missing
+                                 ;; check is the merge pass's to bring
+                                 ;; up to date (ticket 7100a73b)
+                                 (when-not (and (= :submitted (state-of row))
+                                                (bench/house-brings-forward? row policy))
+                                   (missing-verdict
+                                    required checks
+                                    (bench/queued-check-minutes-of policy)
+                                    (held-kept row head)
+                                    (now-of eng))))
                                 (when (and (= :failing (state-of row))
                                            (queue-left? row required checks))
                                   {:verdict :started})))

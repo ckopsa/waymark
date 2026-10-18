@@ -177,6 +177,41 @@
         (is (false? (:seeded twice)))
         (is (= 1 (count (dev/rows eng :chore))) "no second row")))))
 
+(deftest a-seeded-engine-gains-only-what-the-seed-gained
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        counts (fn [] (into {} (map (juxt identity #(count (dev/rows eng %))))
+                            [:member :seat :chore]))
+        before (counts)]
+    (testing "a second load of the same seed adds nothing"
+      (let [again (seed/load! eng live {:params params})]
+        (is (false? (:seeded again)))
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= before (counts)))))
+    (testing "a seed with one more seat and one more cast member adds just those two"
+      (let [grown (-> live
+                      (assoc-in [:cast :bea] {:id "bea" :display "Bea Example" :type :human})
+                      (update :steps conj
+                              {:as :ada :kind :seat :ref :s2
+                               :create {:name "seed-test-seat-2"
+                                        :charter "Keep acme/garden tidier."
+                                        :scope [{:kind "model" :actions ["retire"]}]
+                                        :standing_ttl_seconds 604800
+                                        :cadence_seconds 3600
+                                        :budget_usd_per_week 5M
+                                        :sitting_budget_tokens 60000}}))
+            more (seed/load! eng grown {:params params})]
+        (is (false? (:seeded more)))
+        (is (= {:members 1 :steps 1} (:added more)))
+        (is (= (-> before (update :member inc) (update :seat inc)) (counts)))
+        (is (some? (dev/row eng :member "bea")))
+        (is (= "seed-test-seat-2"
+               (get-in (dev/row eng :seat (get-in more [:refs :s2 :id])) [:data :name])))
+        (testing "and a load of the grown seed again adds nothing"
+          (let [again (seed/load! eng grown {:params params})]
+            (is (= {:members 0 :steps 0} (:added again)))
+            (is (= (-> before (update :member inc) (update :seat inc)) (counts)))))))))
+
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
         once (seed/load! eng live {:params params})]

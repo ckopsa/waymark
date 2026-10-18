@@ -44,9 +44,15 @@
 
   IT MARKS A WHOLE LOAD. After the last step the loader makes one more
   row through the member door, `seed-<name>`: the completion marker. An
-  engine that holds the marker was seeded before, and the whole seed is
-  skipped. An engine that holds a member of the cast and no marker
-  stopped half-way through a seed, and the load refuses.
+  engine that holds the marker was seeded before, and the load is
+  additive: it enrols only the cast members it holds no row for, and
+  walks only the steps that make a named row (a `:name` in the body)
+  of which no row of that kind and name is there yet; `:find` steps are
+  read as ever, and every other step was walked by the first load and
+  is skipped. So a boot over a seeded org changes nothing, and a seed
+  that gained a seat or a cast member adds only those. An engine that
+  holds a member of the cast and no marker stopped half-way through a
+  seed, and the load refuses.
 
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
@@ -127,7 +133,7 @@
         (throw (refusal "The seed is refused: WAYMARK10_SEED_PARAMS is not a JSON or EDN map."
                         {}))))))
 
-(declare seeded?)
+(declare seeded? named-row)
 
 (defn- members? [eng]
   (let [st (:storage eng)]
@@ -140,7 +146,7 @@
   `demo-` name and may load on an engine with an IdP, since a live
   engine has one; it is refused instead on an engine that already has a
   member, unless that engine holds the seed's own marker (`load!` then
-  skips it)."
+  adds only what the seed gained)."
   ([eng] (admit! eng nil))
   ([eng seed]
    (let [n (str (:name eng))
@@ -200,9 +206,11 @@
 
 (defn- register-roles!
   "One `role` row for each role the cast holds, before any member is
-  born holding it: a member's create refuses a role nobody registered."
+  born holding it: a member's create refuses a role nobody registered.
+  A role already registered is left as it is."
   [eng cast]
-  (doseq [role (sort (distinct (map str (mapcat :roles (vals cast)))))]
+  (doseq [role (sort (distinct (map str (mapcat :roles (vals cast)))))
+          :when (nil? (named-row eng :role role))]
     (inv/create! eng :role {:name role} {:principal members/registrar})))
 
 (defn- enrol!
@@ -247,6 +255,13 @@
 
 (defn- enrolled? [eng cast]
   (boolean (some #(load-row eng :member (member-id cast %)) (keys cast))))
+
+(defn- named-row
+  "The first row of `kind` whose `:name` is `nm`, or nil."
+  [eng kind nm]
+  (let [st (:storage eng)]
+    (first (store/with-tx st
+             (fn [tx] (store/query-rows st tx kind {:name (str nm)} {:limit 1}))))))
 
 ;; ── the completion marker ───────────────────────────────────────────
 
@@ -401,6 +416,17 @@
       (assoc :grant (:grant (grants/visibility
                              eng (:id (ref-of refs (:wearing step))) p))))))
 
+(defn- made-body
+  "What a template or create step makes, before it is made: its kind
+  and its filled body."
+  [ctx step]
+  (if (:template step)
+    (let [t (template-of (:template step))
+          given (keyed (value-of ctx (or (:params step) {})))]
+      [(:kind t) (merge (fill t given (:template step))
+                        (value-of ctx (or (:with step) {})))])
+    [(:kind step) (value-of ctx (:create step))]))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
   [{:keys [eng refs] :as ctx} step]
@@ -416,12 +442,8 @@
 
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
-    (let [t (template-of (:template step))
-          given (keyed (value-of ctx (or (:params step) {})))]
-      (:row (inv/create! eng (:kind t)
-                         (merge (fill t given (:template step))
-                                (value-of ctx (or (:with step) {})))
-                         (hand-of ctx step))))
+    (let [[kind body] (made-body ctx step)]
+      (:row (inv/create! eng kind body (hand-of ctx step))))
 
     ;; a row the boot made before the seed: found, not made
     (:find step)
@@ -435,8 +457,8 @@
                           {:find kind :where where}))))
 
     (contains? step :create)
-    (:row (inv/create! eng (:kind step) (value-of ctx (:create step))
-                       (hand-of ctx step)))
+    (let [[kind body] (made-body ctx step)]
+      (:row (inv/create! eng kind body (hand-of ctx step))))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -452,44 +474,74 @@
       (:row (inv/invoke! eng kind id action
                          (value-of ctx (or (:input step) {})) opts)))))
 
+(defn- gain!
+  "Walk one step on an engine that holds the seed's marker. A `:find`
+  is read as ever. A template or create whose body names a `:name` is
+  found when a row of its kind holds that name, and made when none
+  does. A create's name is read alone, so a found row's body, which may
+  point at a step this load skipped, is not filled. Every other step
+  was walked by the first load and is skipped.
+  → [row made?], row nil for a skipped step."
+  [{:keys [eng] :as ctx} step]
+  (cond
+    (:find step) [(step! ctx step) false]
+
+    (and (contains? step :create) (contains? (:create step) :name))
+    (let [kind (:kind step)
+          nm (value-of ctx (:name (:create step)))]
+      (if-some [row (named-row eng kind nm)]
+        [row false]
+        (let [[kind body] (made-body ctx step)]
+          [(:row (inv/create! eng kind body (hand-of ctx step))) true])))
+
+    (:template step)
+    (let [[kind body] (made-body ctx step)]
+      (if-some [nm (:name body)]
+        (if-some [row (named-row eng kind nm)]
+          [row false]
+          [(:row (inv/create! eng kind body (hand-of ctx step))) true])
+        [nil false]))
+
+    :else [nil false]))
+
 (defn load!
   "Seed this engine: enrol the cast, walk the steps in order, then
   write the completion marker.
   → {:seed :seeded true :members n :steps n :refs {name {:kind :id}}},
-  or {:seed :seeded false :skipped sentence} for an engine that holds
-  the marker. Throws on an engine `admit!` refuses, on the first step
-  the law refuses, and on an engine that holds a cast member and no
-  marker. `:now` is the boot's moment, the engine's clock when absent;
-  relative dates count from it. `:wall-url` is the clone's wall: when
+  or, for an engine that holds the marker, {:seed :seeded false
+  :added {:members n :steps n} :refs … :skipped sentence}: only what
+  the seed gained since is added (`gain!`). Throws on an engine
+  `admit!` refuses, on the first step the law refuses, and on an engine
+  that holds a cast member and no marker. `:now` is the boot's moment,
+  the engine's clock when absent; relative dates count from it. `:wall-url` is the clone's wall: when
   it is given, the seed's `:walled` servers are made at it, and when
   it is not, none is made. `:params` are the values `[:param k]` reads."
   [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params]}]
   (admit! eng seed)
-  (cond
-    (seeded? eng seed)
-    {:seed (:seed seed) :seeded false
-     :skipped "This engine already holds the seed's completion marker, so the seed was applied before and is skipped whole."}
-
-    (enrolled? eng (filled-cast cast (keyed params)))
-    (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
-                    {:seed (:seed seed) :half-seeded true}))
-
-    :else
+  (let [seeded (seeded? eng seed)
+        cast (filled-cast cast (keyed params))]
+    (when (and (not seeded) (enrolled? eng cast))
+      (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
+                      {:seed (:seed seed) :half-seeded true})))
     (let [now (or now ((or (:now-fn eng) #(Instant/now))))
-          cast (filled-cast cast (keyed params))]
-      (register-roles! eng cast)
+          fresh (filterv #(nil? (load-row eng :member (member-id cast %)))
+                         (keys cast))]
+      (register-roles! eng (select-keys cast fresh))
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
-                           (keys cast))]
+                           fresh)]
         (enrol! eng cast who))
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
-      (let [refs (reduce
-                  (fn [refs [i step]]
+      (let [{:keys [refs made]}
+            (reduce
+                  (fn [{:keys [refs] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
                                :params (keyed params)}
-                          row (try
-                                (step! ctx step)
+                          [row made?] (try
+                                (if seeded
+                                  (gain! ctx step)
+                                  [(step! ctx step) true])
                                 (catch Exception e
                                   (throw (ex-info
                                           (str "The seed's step " (inc i)
@@ -499,16 +551,26 @@
                                            :step (inc i)
                                            :seed-step step}
                                           e))))]
-                      (cond-> refs
-                        (:ref step) (assoc (:ref step)
-                                           {:kind (kind-of refs step)
-                                            :id (str (:id row))}))))
-                  {}
+                      (cond-> acc
+                        made? (update :made inc)
+                        (and row (:ref step))
+                        (assoc-in [:refs (:ref step)]
+                                  {:kind (kind-of refs step)
+                                   :id (str (:id row))}))))
+                  {:refs {} :made 0}
                   (map-indexed vector steps))]
-        ;; last, and only after every step went through
-        (mark! eng seed)
-        {:seed (:seed seed) :seeded true
-         :members (count cast) :steps (count steps) :refs refs}))))
+        (if seeded
+          {:seed (:seed seed) :seeded false
+           :added {:members (count fresh) :steps made} :refs refs
+           :skipped (if (and (empty? fresh) (zero? made))
+                      "This engine already holds the seed's completion marker, and the seed gained nothing since, so nothing was added."
+                      (str "This engine already holds the seed's completion marker, so only what the seed gained was added: "
+                           (count fresh) " members and " made " steps."))}
+          (do
+            ;; last, and only after every step went through
+            (mark! eng seed)
+            {:seed (:seed seed) :seeded true
+             :members (count cast) :steps (count steps) :refs refs}))))))
 
 (defn boot!
   "The boot step behind WAYMARK10_SEED: read the named seed and load
