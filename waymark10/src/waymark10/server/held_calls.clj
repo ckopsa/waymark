@@ -387,6 +387,29 @@
   (cond-> row
     (:reason inp) (assoc-in [:data :reason] (:reason inp))))
 
+(defn- head-key
+  "The key a stored call map spells `head_sha` with."
+  [m]
+  (if (and (map? m) (contains? m "head_sha")) "head_sha" :head_sha))
+
+(defhandler record-carry [row inp _ctx]
+  ;; a waiting merge's yes pinned to the head the house brought up to
+  ;; date from base (ticket e99ac1f5): the call a person saw, and the
+  ;; one the rig receives
+  (let [pin #(assoc % (head-key %) (:head_sha inp))]
+    (-> row
+        (update-in [:data :input] pin)
+        (update-in [:data :forward] pin))))
+
+(defn- short-sha [s]
+  (let [s (str s)] (subs s 0 (min 7 (count s)))))
+
+(defn- carry-says
+  "The carry's line in the held call's history."
+  [_row inp]
+  (str "carried the yes from " (short-sha (:from_head inp))
+       " to " (short-sha (:head_sha inp))))
+
 (defn- born
   "The birth stamps: the leash the caller never chose, and the person
   the call waits on. `expires_at` is written AT CREATE, so the person
@@ -827,7 +850,30 @@
             :unfenced-reason "The engine's own expiry of a call whose moment passed. No read preceded it to fence against."}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Nothing runs late: an expired call never goes out, and making it again is a new call."}
-     :display {:label "Expired"}}}
+     :display {:label "Expired"}}
+    ;; a waiting merge's yes carried to a head the house brought up to
+    ;; date from base (ticket e99ac1f5): its own logged move, so the
+    ;; person reads in the history that their yes now covers another
+    ;; head, from which, and what the rig compared
+    :carry
+    {:from #{:allowed_waiting} :to :allowed_waiting
+     :input [:map
+             [:head_sha {:x-display {:hidden true}} [:string {:min 7 :max 64}]]
+             [:from_head {:x-display {:hidden true}} [:string {:min 7 :max 64}]]
+             [:compared {:x-display {:hidden true}}
+              [:map
+               [:base_parent {:optional true} [:maybe [:string {:max 64}]]]
+               [:same_own_diff {:optional true} [:maybe :boolean]]
+               [:carries :boolean]]]]
+     :guards [the-engine-finishes-it]
+     :handler record-carry
+     :record true
+     :log-says carry-says
+     :edit {:fence false
+            :unfenced-reason "The engine's own re-pin of a yes the rig said carries over. No read preceded it to fence against."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The person's yes now covers the new head; a head that moves again is compared again."}
+     :display {:label "Carried"}}}
    :scenarios [the-caller-does-not-allow-its-own-call
                an-approver-allows-the-call
                a-person-without-the-role-does-not-decide
@@ -1190,29 +1236,19 @@
   ;; brought up to date from base (waymark-bench#131)
   "bench__compare_heads")
 
-(defn- head-key
-  "The key a stored call map spells `head_sha` with."
-  [m]
-  (if (and (map? m) (contains? m "head_sha")) "head_sha" :head_sha))
-
 (defn- carry-head!
-  "Pin a waiting merge's yes to `head`: the `head_sha` of the call a
-  person saw and of the one the rig receives. → true when the row was
-  still `allowed_waiting` and is pinned now."
-  [eng row head]
-  (let [st (:storage eng)
-        id (str (:id row))
-        pin #(assoc % (head-key %) head)]
-    (store/with-tx st
-      (fn [tx]
-        (when-some [raw (store/load-row st tx :held_call id {:for-update true})]
-          (when (= "allowed_waiting" (some-> (:state raw) name))
-            (store/update-data! st tx :held_call id
-                                (-> (:data raw)
-                                    (update :input pin)
-                                    (update :forward pin))
-                                (:next-flip-at raw))
-            true))))))
+  "Pin a waiting merge's yes to `head` through the held call's own
+  `carry` door (ticket e99ac1f5): the `head_sha` of the call a person
+  saw and of the one the rig receives, logged with the head it carried
+  from and what the rig compared. → true when the row was still
+  `allowed_waiting` and is pinned now."
+  [eng row approved head said]
+  (some? (finish! eng (:id row) :carry
+                  {:head_sha head :from_head approved
+                   :compared (into {} (remove (comp nil? val))
+                                   (select-keys said [:base_parent
+                                                      :same_own_diff
+                                                      :carries]))})))
 
 (defn- compared
   "What the rig's `compare_heads` said of `approved` and `head`:
@@ -1232,7 +1268,11 @@
                           (error-words payload)))}
 
         (true? (some-> result (result-field :carries)))
-        {:carries true}
+        {:carries true
+         :same_own_diff (true? (result-field result :same_own_diff))
+         :base_parent (or (some-> (result-field result :base_parent) str not-empty)
+                          (some->> (result-field result :parents)
+                                   (map str) (remove #{approved}) first))}
 
         (false? (some-> result (result-field :same_own_diff)))
         {:carries false :reason "own diff changed"}
@@ -1255,12 +1295,12 @@
   (when (= :allowed_waiting (:state row))
     (let [input (get-in row [:data :input])
           approved (str (or (get input :head_sha) (get input "head_sha")))
-          {:keys [carries reason]}
+          {:keys [carries reason] :as said}
           (if (str/blank? head)
             {:carries false :reason "the change names no head"}
             (compared eng {:repo repo :base base
                            :approved approved :head head}))]
-      (if (and carries (carry-head! eng row head))
+      (if (and carries (carry-head! eng row approved head said))
         :carried
         (do (expire! eng row (:text (capped (str reason) 240)))
             :expired)))))
