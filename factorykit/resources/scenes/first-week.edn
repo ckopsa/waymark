@@ -37,8 +37,8 @@
    :say ["Day {{day}}, {{date}}. In came: "
          {"$rows" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"}}
          ". What {{org_display}} did: "
-         {"$rows" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"
-                   :field "updated_at" :none "nothing moved"}}
+         {"$moves" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"
+                    :by "seats" :none "nothing moved"}}
          ". What it asked {{owner_display}}: "
          {"$rows" {:kind "held_call" :since "{{date}}" :until "{{next_date}}"
                    :none "no held call"}}
