@@ -50,11 +50,21 @@
       (is (= "example" (:seed scene)))
       (is (= ["owner"] (:cast scene)))
       (is (= "The first week of Example Landscaping" (:title scene))))
-    (testing "a caption per day, day 1 on day_one to day 7"
-      (is (= 7 (count (filter #(str/starts-with? % "Day ") says))))
-      (is (some #(str/starts-with? % "Day 1, 2026-10-19:") says))
-      (is (some #(str/starts-with? % "Day 7, 2026-10-25:") says))
-      (is (every? #(str/includes? % "Rosa Delgado") (filter #(str/starts-with? % "Day ") says))))
+    (testing "a caption per day, day 1 on day_one to day 7, with holes for the day's rows"
+      (let [days (filter #(and (sequential? %) (str/starts-with? (first %) "Day ")) says)
+            holes (fn [say] (keep #(get % "$rows") say))]
+        (is (= 7 (count days)))
+        (is (str/starts-with? (first (first days)) "Day 1, 2026-10-19"))
+        (is (str/starts-with? (first (last days)) "Day 7, 2026-10-25"))
+        (is (every? #(str/includes? (apply str (filter string? %)) "Rosa Delgado") days))
+        (testing "each hole reads its own day"
+          (is (every? #(= {:since "2026-10-19" :until "2026-10-20"}
+                          (select-keys % [:since :until]))
+                      (holes (first days))))
+          (is (every? #(= "2026-10-26" (:until %)) (holes (last days)))))
+        (testing "what came in, what the house did, and what it asked"
+          (is (= #{"approval_request" "held_call" (:kind (first (holes (first days))))}
+                 (set (map :kind (holes (first days)))))))))
     (testing "the arc runs friction, turn, payoff"
       (is (= ["friction" "turn" "payoff"] (keep :role (:shots scene)))))
     (testing "about 45 seconds"
