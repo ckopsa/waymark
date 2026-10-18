@@ -75,7 +75,8 @@
         day (fn [k]
               (let [shots (fill (:day t)
                                 (assoc values :day k
-                                       :date (str (.plusDays day-one (dec k)))))]
+                                       :date (str (.plusDays day-one (dec k)))
+                                       :next_date (str (.plusDays day-one k))))]
                 (cond-> shots
                   (get roles k) (update (dec (count shots)) assoc :role (get roles k)))))]
     {:scene (assoc (fill (:scene t) values)
