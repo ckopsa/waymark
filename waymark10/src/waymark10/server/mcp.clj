@@ -4621,7 +4621,18 @@
   could not be built again. The sit reads a row that is in the queue,
   so the ask stands, and a change with no pull request number and a
   `change_id` that is still the walk row's has nothing on the forge to
-  disagree. It goes back to `open` through `reopen` with the same
+  disagree.
+
+  ONLY AN ASK AFTER THE CLOSE REOPENS IT (ticket 7e12f1e8). A person's
+  `close_without_pr` leaves the ticket where it stands, so a ticket in
+  the queue is not by itself the ask: the person may have meant the
+  house to stop. The change reopens only when the ticket's newest
+  groom, unblock, resume, return or reopen is newer than the change's
+  newest close, close_without_pr or supersede
+  (`seats/ask-after-close`), as `regroomed-change` asks a groom after
+  a stall. A close with no such move after it stays closed.
+
+  It goes back to `open` through `reopen` with the same
   system hand the mint uses, its rounds at zero, and `rebranched-change`
   mints its branch from the policy's pattern after this.
 
@@ -4632,7 +4643,10 @@
   (or (when (and change
                  (= :closed (some-> (:state change) name keyword))
                  (nil? (get-in change [:data :number]))
-                 (not (forge-owned? (get-in change [:data :change_id]))))
+                 (not (forge-owned? (get-in change [:data :change_id])))
+                 (some? (get (inv/resources eng) :ticket))
+                 (some->> (born-row-id change)
+                          (seats/ask-after-close eng change)))
         (try
           (let [moved (:row (inv/invoke! eng :change (str (:id change))
                                          :reopen {}

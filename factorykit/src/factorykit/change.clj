@@ -642,7 +642,7 @@
               the-engine-closes-a-stopped-change
               only-a-person-closes-a-change]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open; the house opens it again only when its ticket is in the queue and a code seat sits down to it."}
+              :one-way "The change is let go and the house stops working it; its ticket is not touched. Nothing here brings it back to open; the house opens it again only when its ticket is put in the queue again after this close and a code seat sits down to it."}
      :display {:label "Close" :style :danger :order 30
                :description "Let go of a change that never opened a pull request — its ticket stays where it is"}}
 

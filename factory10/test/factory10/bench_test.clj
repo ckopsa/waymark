@@ -4407,6 +4407,42 @@
         "and the seat is offered submit on the change beside its walk")
     (is (nil? (:change_note answer)))))
 
+;; A PERSON'S CLOSE STANDS UNTIL THE ASK COMES AGAIN (ticket 7e12f1e8):
+;; `close_without_pr` leaves the ticket open, and the sit does not undo
+;; the close until a groom comes after it.
+
+(deftest a-close-with-no-groom-after-it-stays-closed
+  (let [w (ticket-world)
+        change-id (get-in (:answer w) [:change :id])
+        state #(name (:state (change-row {:eng (:eng w) :change {:id change-id}})))
+        version (:version (change-row {:eng (:eng w) :change {:id change-id}}))
+        _ (inv/invoke! (:eng w) :change change-id :close_without_pr
+                       {:why "No longer wanted: the person stops the work."}
+                       {:principal person
+                        :if-match (inv/etag :change (str change-id) version)})
+        _ (sit-again! w)]
+    (is (= "open" (ticket-state w))
+        "close_without_pr leaves the ticket where it stands")
+    (is (= "closed" (state))
+        "the sit does not undo a close no groom came after")
+    (force-ticket-state! w :draft)
+    (person-moves-ticket! w :groom)
+    (sit-again! w)
+    (is (= "open" (state))
+        "a groom after the close is the ask again")))
+
+(deftest a-sit-leaves-a-closed-pull-request-alone
+  (let [w (ticket-world)
+        _ (stalled-with-a-pull-request! w 96)
+        change-id (get-in (:answer w) [:change :id])]
+    (mirror-moves-change! w :close nil)
+    (force-ticket-state! w :draft)
+    (person-moves-ticket! w :groom)
+    (sit-again! w)
+    (is (= "closed" (name (:state (change-row {:eng (:eng w)
+                                               :change {:id change-id}}))))
+        "GitHub closed it, and the sit does not open it again")))
+
 (deftest the-ticket-door-is-refused-to-every-hand
   (let [w (ticket-world)
         _ (stalled-with-a-pull-request! w 95)
