@@ -155,8 +155,9 @@
 (defn- in-walk?
   "Does a walk under `flt` read this row? Its `state` entry, or the
   kind's default, names the states; with neither, any state that is not
-  terminal. Every other entry is read as field = value, so an entry
-  that is not an equality admits no row and its seat is not reported."
+  terminal. A range bound (_after, _before, _gte, _lte) is not judged
+  here and lets the row pass; every other entry is read as field =
+  value, so an entry that is no equality admits no row."
   [rdef flt row]
   (let [flt (into {} (map (fn [[k v]] [(text k) v])) flt)
         sv (or (get flt "state") (get-in rdef [:default-filters :state]))
@@ -170,7 +171,8 @@
            (not (contains? (into #{} (map text) (:terminal rdef)) state)))
          (every? (fn [[f v]]
                    (= (text v) (some-> (fget (:data row) f) text)))
-                 (dissoc flt "state")))))
+                 (remove (fn [[f _]] (re-find #"_(after|before|gte|lte)$" f))
+                         (dissoc flt "state"))))))
 
 (defn walk-admits?
   "Would this seat's walk hand it this row? A seat that walks the row's
