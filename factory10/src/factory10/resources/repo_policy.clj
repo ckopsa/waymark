@@ -666,6 +666,14 @@
                         :label "Workflows allowed on GitHub-hosted runners"
                         :help "Workflow files that may run on GitHub-hosted runners, as paths from the repository root, one for each row. The house runs CI on its own runners. Name a workflow here only when it must not go down with them, such as one that deploys or repairs those runners. Empty means no exception."}}
     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+   ;; the rig's per-repo hosted leave (ticket 83dd6dc3). OPTIONAL: a row
+   ;; without it sends no `hosted_ok`, and the rig keeps its own default.
+   [:hosted_ok {:optional true
+                :examples [true]
+                :x-display
+                {:label "CI may run on GitHub-hosted runners"
+                 :help "Turn this on when this repository's CI runs on GitHub-hosted runners, as a self-hosted factory's own repository does. Leave it empty for the rig's default."}}
+    [:maybe :boolean]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
