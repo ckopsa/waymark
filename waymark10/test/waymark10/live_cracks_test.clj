@@ -494,14 +494,43 @@
       (is (re-find #"Seat tried: holder, which would not be woken"
                    (str (get-in (first filed) [:data :detail])))))))
 
+(defn- at-clock
+  "The engine at `seconds` past `t0`."
+  [eng ^Instant t0 seconds]
+  (assoc eng :now-fn (constantly (.plusMillis t0 (long (* 1000 seconds))))))
+
 (deftest an-open-sitting-holds-the-wake-for-a-later-pass
+  ;; the open ticket's expected age is one second, so 2.5 seconds after
+  ;; its write the row is aged and still under `held-ages` of them
   (let [eng (pass-engine)
         seat-id (holder! eng true)
         _ (sitting! eng seat-id)
+        t0 (Instant/now)
         row-id (aged-ticket! eng)
-        eng (later eng)]
+        eng (at-clock eng t0 2.5)]
     (live/pass! eng)
     (testing "a seat of one slot with a sitting open is not fired a second run"
       (is (empty? (fires-of eng seat-id))))
     (testing "and the crack waits rather than reaching the mayor"
       (is (empty? (filed-for eng row-id))))))
+
+(deftest a-wake-held-past-three-expected-ages-reaches-the-mayor-naming-the-hold
+  (let [eng (pass-engine)
+        seat-id (holder! eng true)
+        sitting-id (str (get-in (sitting! eng seat-id) [:row :id]))
+        row-id (aged-ticket! eng)
+        eng (later eng)]
+    (live/pass! eng)
+    (testing "the held seat is still not fired"
+      (is (empty? (fires-of eng seat-id))))
+    (testing "the draft is filed, naming the seat, the hold and the sitting"
+      (let [filed (filed-for eng row-id)
+            detail (str (get-in (first filed) [:data :detail]))]
+        (is (= 1 (count filed)))
+        (is (re-find #"Seat tried: holder, whose wake was held as damped" detail))
+        (is (str/includes? detail (str "by an open sitting, " sitting-id)))
+        (is (re-find #"open \d+ seconds" detail))))
+    (testing "a second pass does not file it again"
+      (live/pass! eng)
+      (is (= 1 (count (filed-for eng row-id))))
+      (is (empty? (fires-of eng seat-id))))))
