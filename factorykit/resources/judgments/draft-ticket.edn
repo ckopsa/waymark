@@ -1,0 +1,27 @@
+;; The draft ticket judgment: the verdicts the draft judge says on each
+;; draft ask, each with the sentence it means. Create it with the
+;; judgment kind's create door and promote it; its id is the draft-judge
+;; seat template's judgment hole. See docs/routines/judge.md.
+{:template
+ {:params {}
+  :note "The verdict names are the ones the draft-judge seat's charter acts on; a renamed verdict is one the seat can no longer say. No consequence: the seat grooms, blocks or drops by its charter."}
+ :judgment
+ {:name "Is this draft ready to groom"
+  :subject_kind "ticket"
+  :queue {:state "draft"}
+  :verdicts [{:name "ready"
+              :sentence "The draft names one change in one repository that a code seat can build as written, and nothing already does it."}
+             {:name "already_done"
+              :sentence "Main or a done ticket already does what the draft asks."}
+             {:name "duplicate"
+              :sentence "Another ticket that is not dropped asks for the same change."}
+             {:name "stale"
+              :sentence "What the draft asked for has moved on: the code, the goal or the failure it names is gone, or it refines something that held nothing up."}
+             {:name "needs_person"
+              :sentence "Only the person can move it: a credential, a host step, a grant or power, money, or a cracks-audit note for the mayor."}
+             {:name "needs_restate"
+              :sentence "The ask is not clear enough to build as written, or its code lives in another repository than the one it names."}
+             {:name "epic"
+              :sentence "The draft holds more than one change: it is a parent for tickets, not a ticket to build."}]
+  :remedy_max 240
+  :notes "The draft judge's judgment, from the factory kit. Its verdicts are the ones the draft-judge charter chooses between."}}
