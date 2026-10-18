@@ -438,7 +438,7 @@
         (is (seq (silent [clerk fired] nil))
             "a fired seat's inbox tells a model, not the person")))))
 
-(def ^:private ticket
+(def ^:private draft-ticket
   {:kind :ticket
    :states [:draft :open :done]
    :initial :draft
@@ -456,7 +456,7 @@
                        {:id "3" :state :done :data {:repo "ckopsa/gone"}}]}
         unwalked (fn [seats]
                    (filterv #(= "unwalked_value" (:crack %))
-                            (cracks/audit [ticket] seats {:rows rows})))]
+                            (cracks/audit [draft-ticket] seats {:rows rows})))]
     (testing "an open ticket in a repo no seat's filter admits"
       (let [[c & more] (unwalked [builder])]
         (is (nil? more) "the admitted repo and the terminal row are no crack")
@@ -473,11 +473,10 @@
       (is (empty? (unwalked [builder (walker "any" {:state "open"})]))))
     (testing "with no rows read there is nothing to report"
       (is (empty? (filter #(= "unwalked_value" (:crack %))
-                          (cracks/audit [ticket] [builder])))))))
+                          (cracks/audit [draft-ticket] [builder])))))))
 
 ;; ticket 5cb126ab: a seat that walks the drafts of every repo hid the
-;; open row no builder is handed. The kind is said here: `ticket` is
-;; defined a second time below, and a var holds the last one.
+;; open row no builder is handed. The kind is said here, beside the test.
 (deftest a-walk-shut-to-the-state-hides-no-value
   (let [ticket {:kind :ticket
                 :states [:draft :open :done]
