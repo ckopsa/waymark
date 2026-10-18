@@ -300,6 +300,60 @@
       (is (= ["closer"] (:seats c)))
       (is (re-find #"\[crack orphan:change:c1\]" (:detail (live/ticket-of c)))))))
 
+;; ── an org's hiring gaps (ticket 6a3fac3e) ─────────────────────────────
+
+(def ^:private clerk-seat
+  (seat "clerk" {:walk "task" :scope [{:kind "task" :actions ["finish"]}]}))
+
+(defn- gaps [seats seat-domains rows]
+  (live/hiring-gaps {:rdefs [task] :seats seats :seat-domains seat-domains
+                     :rows {:task rows} :now now}
+                    #{"acme" "beta"}))
+
+(defn- open-row [id domain seconds]
+  {:id id :state :open :updated-at (ago seconds) :data {:domain domain}})
+
+(deftest an-orgs-hiring-gaps-are-a-door-nobody-holds-or-a-queue-behind
+  (testing "one aged row in a state nobody in the org holds is a no_holder gap"
+    (let [[g :as all] (gaps [] {} [(open-row "t1" "acme" 4000)])]
+      (is (= 1 (count all)))
+      (is (= {:org "acme" :kind "task" :state "open" :reason "no_holder"
+              :row_ids ["t1"] :oldest_since (str (ago 4000))
+              :expected_seconds 3600 :key "acme/task/open"}
+             g))
+      (testing "and a seat that holds it in another domain does not fill it"
+        (is (= ["no_holder"]
+               (map :reason (gaps [clerk-seat] {"clerk" "beta"}
+                                  [(open-row "t1" "acme" 4000)])))))))
+  (testing "three held rows, the oldest at 2.5 expected ages, are a pressure gap"
+    (let [rows [(open-row "t3" "acme" 4000)
+                (open-row "t1" "acme" 9000)
+                (open-row "t2" "acme" 5000)]
+          [g :as all] (gaps [clerk-seat] {"clerk" "acme"} rows)]
+      (is (= 1 (count all)))
+      (is (= "pressure" (:reason g)))
+      (is (= ["t1" "t2" "t3"] (:row_ids g)))
+      (is (= (str (ago 9000)) (:oldest_since g)))))
+  (testing "three held rows, the oldest at 1.5 expected ages, are no gap"
+    (is (= [] (gaps [clerk-seat] {"clerk" "acme"}
+                    [(open-row "t1" "acme" 5400)
+                     (open-row "t2" "acme" 4000)
+                     (open-row "t3" "acme" 4000)]))))
+  (testing "two held rows at five expected ages are no gap"
+    (is (= [] (gaps [clerk-seat] {"clerk" "acme"}
+                    [(open-row "t1" "acme" 18000)
+                     (open-row "t2" "acme" 18000)]))))
+  (testing "the same rows outside the org's domains are never gaps"
+    (is (= [] (gaps [] {} [(open-row "t1" "elsewhere" 4000)])))
+    (is (= [] (gaps [clerk-seat] {"clerk" "elsewhere"}
+                    [(open-row "t1" "elsewhere" 9000)
+                     (open-row "t2" "elsewhere" 9000)
+                     (open-row "t3" "elsewhere" 9000)]))))
+  (testing "keys and order are stable, whatever order the rows come in"
+    (let [rows [(open-row "b1" "beta" 4000) (open-row "a1" "acme" 4000)]]
+      (is (= ["acme/task/open" "beta/task/open"] (map :key (gaps [] {} rows))))
+      (is (= (gaps [] {} rows) (gaps [] {} (reverse rows)))))))
+
 ;; ── the pass against an engine (ticket 4ff29b4a) ──────────────────────
 ;;
 ;; `pass!` over a memory engine: the wake goes out with the crack's key

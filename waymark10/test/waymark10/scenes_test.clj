@@ -318,6 +318,30 @@
     (testing "a string say is spoken as written"
       (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
 
+(deftest a-moves-hole-is-filled-from-the-log-in-its-window
+  (let [eng (fresh-engine)
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        _ (inv/create! eng :chore {:title "Sweep the porch"} {:principal seat})
+        _ (inv/create! eng :chore {:title "Wash the van"} {:principal mayor})
+        now (java.time.Instant/now)
+        moves (fn [by since until]
+                {"$moves" {:kind "chore" :since (str since) :until (str until) :by by}})
+        said (fn [hole] (scenes/fill-say ["Did: " hole "."] (constantly [])
+                                         #(scenes/moves-in-window eng %)))
+        before (.minusSeconds now 3600)
+        after (.plusSeconds now 3600)]
+    (testing "by seats: the seat's move only, as summary and action"
+      (let [s (said (moves "seats" before after))]
+        (is (str/includes? s "Sweep the porch") s)
+        (is (str/includes? s ": create") s)
+        (is (not (str/includes? s "Wash the van")) s)))
+    (testing "by people: the person's move only"
+      (let [s (said (moves "people" before after))]
+        (is (str/includes? s "Wash the van") s)
+        (is (not (str/includes? s "Sweep the porch")) s)))
+    (testing "none in the window: the plain sentence"
+      (is (= "Did: nothing moved." (said (moves "anyone" "2026-01-01" "2026-01-02")))))))
+
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]
     (testing "a say with a hole checks ready"
@@ -333,6 +357,15 @@
       (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
                                          :say [(hole "2026-10-20" "2026-10-19")]})
                          "shot 1: a `$rows` hole's `since` comes before its `until`.")))
+    (testing "a `$moves` hole checks, and its `by` is judged"
+      (let [id (write! eng (assoc-in well-formed [:shots 0 :say]
+                                     ["Did: " {"$moves" {:kind "chore" :since "2026-10-19"
+                                                         :until "2026-10-20"}}]))]
+        (is (nil? (refusal #(walk! eng id :check)))))
+      (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
+                                         :say [{"$moves" {:kind "chore" :since "2026-10-19"
+                                                          :until "2026-10-20" :by "bots"}}]})
+                         "shot 1: `bots` is not whose moves a hole reads")))
     (testing "a say that is neither a string nor a list"
       (is (str/includes? (why-not eng 1 {:open {:collection "chores"} :say {:x 1}})
                          "shot 1: `say` is a string")))))
