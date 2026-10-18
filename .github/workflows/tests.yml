@@ -629,7 +629,7 @@ jobs:
   org-findings:
     needs: changes
     if: needs.changes.outputs.orgs != '' && needs.changes.outputs.orgs != '[]'
-    runs-on: [self-hosted, waymark]
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
