@@ -17,6 +17,7 @@
             [waymark10.server.runner-links :as rl]
             [waymark10.server.routes.runner-links :as rlr]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -650,3 +651,64 @@
         said (str out err)]
     (doseq [secret [a-token a-second-token "one-time-key"]]
       (is (not (str/includes? said secret))))))
+
+;; ── the puller (LP2) ─────────────────────────────────────────────────
+
+(deftest a-pull-link-says-when-its-puller-was-last-seen
+  (let [id (pull-link-id!)
+        t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
+        seen #(some-> (get-in (row-of id) [:data :puller_seen_at]) str)]
+    (testing "a pull link never polled reads never, with no time"
+      (is (nil? (seen)))
+      (is (= "never" (rl/puller-of (row-of id) t0))))
+    (testing "after a poll it reads connected, with the poll's time"
+      (let [version (:version (row-of id))]
+        (is (true? (rl/seen! *eng* id t0)))
+        (is (= (str t0) (seen)))
+        (is (= "connected" (rl/puller-of (row-of id) t0)))
+        (is (= version (:version (row-of id))) "a maintenance write: the version stands")))
+    (testing "a second poll 5s later writes nothing"
+      (is (nil? (rl/seen! *eng* id (.plusSeconds t0 5))))
+      (is (= (str t0) (seen))))
+    (testing "61s after the last poll it reads away"
+      (is (= "away" (rl/puller-of (row-of id) (.plusSeconds t0 61)))))
+    (testing "a push link has no puller"
+      (is (nil? (rl/puller-of (row-of (link-id!)) t0))))))
+
+(deftest a-poll-stamps-the-puller-once-in-thirty-seconds
+  (let [id (pull-link-id!)]
+    (binding [rlr/*wait-ms* 0]
+      (poll id a-token)
+      (let [first-seen (get-in (row-of id) [:data :puller_seen_at])]
+        (is (some? first-seen) "the poll stamped the row")
+        (is (= 204 (:status (poll id a-token))) "the token still opens the link")
+        (is (= first-seen (get-in (row-of id) [:data :puller_seen_at]))
+            "a second poll within thirty seconds leaves it")))))
+
+(deftest a-pool-of-away-pull-links-reads-waiting-not-broken
+  (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
+        hour-ago (.minusSeconds t0 3600)
+        away {:id "aaaaaaaa-1" :state :live
+              :data {:provider "localfire" :delivery "pull" :puller_seen_at (str hour-ago)}}
+        never {:id "bbbbbbbb-2" :state :live :data {:provider "localfire" :delivery "pull"}}
+        here (assoc-in away [:data :puller_seen_at] (str t0))
+        push {:id "cccccccc-3" :state :live :data {:provider "claude_routine"}}]
+    (is (= (str "waiting for localfire link aaaaaaaa to connect (last seen " hour-ago ")")
+           (rl/away-sentence [away] t0)))
+    (is (= "waiting for localfire link bbbbbbbb to connect (never connected)"
+           (rl/away-sentence [never away] t0)))
+    (is (nil? (rl/away-sentence [away here] t0)) "one connected link fires")
+    (is (nil? (rl/away-sentence [away push] t0)) "a push link fires")
+    (is (nil? (rl/away-sentence [(assoc away :state :retired)] t0)) "no live link is no wait")))
+
+(deftest a-seat-on-an-away-link-reads-the-wait
+  (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
+        link {:id "aaaaaaaa-1" :state :live :data {:provider "localfire" :delivery "pull"}}
+        seat {:id "s1" :state :active :data {:name "s"}}
+        read' (fn [kind id] (when (and (= :runner_link kind) (= "aaaaaaaa-1" (str id))) link))
+        find-with (fn [sched] (fn [kind _ _] (when (and sched (= :schedule kind)) [sched])))]
+    (is (= "waiting for localfire link aaaaaaaa to connect (never connected)"
+           (seats/pull-wait read' (find-with {:data {:runners ["aaaaaaaa-1"]}}) seat t0)))
+    (is (nil? (seats/pull-wait read' (find-with {:data {:fire_url a-url}}) seat t0))
+        "a seat with a link of its own fires through it")
+    (is (nil? (seats/pull-wait read' (find-with nil) seat t0)) "no schedule, no pool")))
