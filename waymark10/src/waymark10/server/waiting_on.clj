@@ -43,6 +43,13 @@
   of them set says why its row does not move."
   ["blocked_by" "merge_waits" "held_reason" "line_why" "shelved_because"])
 
+(def ^:private person-holds
+  "The hold fields whose value `person` says a row is kept for a
+  person's tap, by NAME, each with the field that says why (ticket
+  6644eeeb): a change whose touched paths its repository keeps for a
+  person carries line_why person and its line_reason."
+  {"line_why" "line_reason"})
+
 (def ^:private seat-page
   "The most active seats one read takes."
   500)
@@ -110,6 +117,15 @@
               :when (set-value? v)]
           [f v])))
 
+(defn- kept-for
+  "Why this data says its row is kept for a person's tap, or nil."
+  [data]
+  (some (fn [[f why]]
+          (when (= "person" (text (fget data f)))
+            (let [r (fget data why)]
+              (when (set-value? r) (text r)))))
+        person-holds))
+
 (defn- entered
   "The transition that put the row into `state`, from its log newest
   first: the first one that arrived there from another state, with only
@@ -176,7 +192,7 @@
 
 (defn- verdict
   "The one line, naming the holder `choose` picks."
-  [kind state doors walking for-words age-words held]
+  [kind state doors walking for-words age-words held kept]
   (let [{:keys [pick person source strays]} (choose doors walking)
         holds (if strays "walks this row to" "holds")]
     (str
@@ -203,7 +219,8 @@
        :else
        (str "nobody: no active seat " holds " a door out of " state for-words))
      (when doors age-words)
-     (when (seq held) (str "; held by " (str/join ", " (keys held)))))))
+     (when (seq held) (str "; held by " (str/join ", " (keys held))))
+     (when kept (str "; waits on a person's tap: " kept)))))
 
 (defn- walk-led?
   "Does this seat name a walk or a judgment that says which rows it is
@@ -237,6 +254,7 @@
                     (str ", " (span secs)
                          (when expected (str " of " (span expected)))))
         held (held-by data)
+        kept (kept-for data)
         reads {:tickets tickets :judgments judgments}
         ;; a seat that names no walk and no judgment is narrowed by
         ;; neither, so its cadence alone may bring it to any row
@@ -252,9 +270,10 @@
                       (:action entered) (assoc :by (text (:action entered)))
                       expected (assoc :expected_seconds expected))
              :next (or doors [])
-             :verdict (verdict kind state doors walking for-words age-words held)}
+             :verdict (verdict kind state doors walking for-words age-words held kept)}
       holder (assoc :holder holder)
-      (seq held) (assoc :held_by held))))
+      (seq held) (assoc :held_by held)
+      kept (assoc :note (str "waits on a person's tap: " kept)))))
 
 (defn- born-ticket-id
   "The id of the ticket a row was born from (`born_from` ticket:<id>),
