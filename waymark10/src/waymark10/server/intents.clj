@@ -101,6 +101,7 @@
             [waymark10.server.curtain :as curtain]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
@@ -142,39 +143,11 @@
    :display (let [d (:display principal)]
               (if (str/blank? (str d)) (:id principal) d))})
 
-(defn- member-display
-  "The display on this pid's member row — found by id, or by the bound
-  subject, curtain/member-lookup's own two resolutions. nil when the
-  engine has no member kind, when nobody answers to pid, and when the
-  row is unnamed. A failed read warns and answers nil: a card that
-  names an id is still a card."
-  [eng pid]
-  (when (some? (get (inv/resources eng) :member))
-    (try
-      (let [st (:storage eng)
-            row (store/with-tx st
-                  (fn [tx]
-                    (or (store/load-row st tx :member pid {})
-                        (first (store/query-rows st tx :member
-                                                 {:subject pid}
-                                                 {:limit 1})))))]
-        (some-> (get-in row [:data :display]) str str/trim not-empty))
-      (catch Exception e
-        (warn! "member display read failed - " (ex-message e))
-        nil))))
-
 (defn- named
   "principal, carrying its member row's display when it arrived with
-  none: gate! unions the row's ROLES onto a principal and nothing
-  else, so a member resolved from a credential that names no display
-  would otherwise ride every frame as a bare id. A principal that
-  names itself is believed and costs no read."
+  none — curtain/named, the lookup presence shares."
   [reg principal]
-  (if (str/blank? (str (:display principal)))
-    (if-some [d (member-display (:eng reg) (:id principal))]
-      (assoc principal :display d)
-      principal)
-    principal))
+  (curtain/named (:eng reg) principal))
 
 ;; ── the registry ────────────────────────────────────────────────────
 ;;
@@ -183,8 +156,9 @@
 ;; :published id → public-entry — the merged truth last announced.
 ;; :outcomes  id → outcome — why the next close closes; consumed by
 ;;            each publish! pass (default \"expired\").
-;; public-entry: {:id :principal {…} :self :action :status :question?
-;;                :warnings? :acknowledge? :answer? :at iso :at-ms ms}
+;; public-entry: {:id :principal {…} :self :action :door_label?
+;;                :status :question? :warnings? :acknowledge? :answer?
+;;                :at iso :at-ms ms}
 
 (defn intent-id
   "One card per (principal, action, self) — deterministic, readable,
@@ -205,6 +179,15 @@
            (mapv (fn [w] (p/prune {:name (some-> (:name w) name)
                                    :reason (:reason w)})))))
 
+(defn- door-label
+  "The display label the kind declares for `action` on `self`, or nil.
+  It is declaration, not row data, so every viewer of the card may
+  read it; a failed lookup answers nil and the card says the action's
+  name."
+  [reg self action]
+  (try (presence/door-label (:eng reg) self (name action))
+       (catch Exception _ nil)))
+
 (defn- entry-of [reg iid principal
                  {:keys [self action status question warnings acknowledge]}]
   (p/prune
@@ -212,6 +195,7 @@
     :principal (author-of principal)
     :self self
     :action (name action)
+    :door_label (door-label reg self action)
     :status status
     :question question
     :warnings (normalize-warnings warnings)

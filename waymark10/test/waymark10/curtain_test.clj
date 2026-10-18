@@ -412,6 +412,33 @@
         (intents/stop! reg)
         (curtain/stop! cur)))))
 
+(deftest a-presence-frame-names-the-member
+  ;; the same gap on the presence side: a principal with no display
+  ;; shows in another member's chips by its member row's name.
+  (let [eng (eng!)
+        _ (member! eng "ada" "Maya Okafor" "human")
+        cur (curtain/start! eng {:ttl-ms 0})
+        reg (presence/start! eng {:hb-ms 60000 :curtain cur})
+        sub (presence/subscribe reg nil)]
+    (try
+      (testing "an unnamed principal's join carries its member's display"
+        (presence/report! reg (t/principal {:id "ada"}) "/api/members/ada")
+        (let [f (next-frame sub #(and (= "join" (:event %))
+                                      (= "ada" (get-in % [:principal :id]))))]
+          (is (some? f))
+          (is (= "Maya Okafor" (get-in f [:principal :display])))))
+
+      (testing "a principal no member row answers to keeps its id"
+        (presence/report! reg (t/principal {:id "ghost"}) "/api/members/ada")
+        (let [f (next-frame sub #(and (= "join" (:event %))
+                                      (= "ghost" (get-in % [:principal :id]))))]
+          (is (some? f))
+          (is (= "ghost" (get-in f [:principal :display])))))
+      (finally
+        (presence/unsubscribe reg sub)
+        (presence/stop! reg)
+        (curtain/stop! cur)))))
+
 ;; ── the invalidation wire: no TTL sleep anywhere in this test ───────
 
 (deftest a-committed-draw-invalidates-at-once

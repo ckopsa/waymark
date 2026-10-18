@@ -2415,6 +2415,37 @@
       (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 600))))
       (is (= 2 (count (bench/merge-asks eng)))))))
 
+;; ticket 665fcb50: the engine deploys more often than hourly, so the
+;; wait counts from the row's held_since, not from memory
+(deftest a-restart-does-not-start-the-merge-wait-again
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))
+        hold! (fn [h t] (bench/mark-row! eng :change id
+                                         {:held_head h :held_since (str t)}
+                                         #{}))]
+    (hold! head t0)
+    (is (= 1 (bench/ask-for-merges! eng (atom {}) (minutes-after 61)))
+        "the first pass after a restart asks, the wait already served")
+    (is (= 0 (bench/ask-for-merges! eng (atom {}) (minutes-after 62)))
+        "a second restart does not ask again")
+    (let [waiting (atom {})]
+      (bench/ask-for-merges! eng waiting (minutes-after 63))
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 64)))
+          "nor does a second pass"))
+    (is (= 1 (count (bench/merge-asks eng))))
+    (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
+                 :refuse {:reason "Not this head."}
+                 {:principal approver})
+    (testing "a new head is asked once, after its own wait"
+      (observe! w {:head_sha a-head :mergeable "clean"})
+      (hold! a-head (minutes-after 100))
+      (is (= 0 (bench/ask-for-merges! eng (atom {}) (minutes-after 159)))
+          "its wait counts from its own held_since")
+      (is (= 1 (bench/ask-for-merges! eng (atom {}) (minutes-after 161))))
+      (is (= 0 (bench/ask-for-merges! eng (atom {}) (minutes-after 162))))
+      (is (= 2 (count (bench/merge-asks eng)))))))
+
 ;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
 
 (deftest a-repository-with-no-required-checks-raises-no-merge-ask

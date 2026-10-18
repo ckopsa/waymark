@@ -1,0 +1,3 @@
+;; A fixture org factorykit.conform-test judges: it breaks the suite
+;; three ways on purpose, and in no other.
+{:paths ["src" "resources"]}

@@ -2064,9 +2064,12 @@
 ;; the record: while an ask for the pull request is still held, no
 ;; second one is raised, whatever head it stands at now; and an ask
 ;; that was answered — refused, expired or merged — is never raised
-;; again for the same head. Only the moment a change turned clean lives
-;; in memory, so a restart makes the wait start again, which errs on the
-;; side of asking later rather than twice.
+;; again for the same head. The wait counts from the row's `held_since`
+;; when its `held_head` is the head at hand (ticket 665fcb50): the engine
+;; deploys more often than hourly, so a wait kept only in memory started
+;; again on each deploy and a person-kept change was never asked for. A
+;; row that names no time for this head is timed from the first pass
+;; that sees it clean, in memory, as before.
 
 (def default-merge-wait-seconds
   "How long a green, clean change waits on its person before the house
@@ -2100,6 +2103,14 @@
                                           :caller merge-asker}
                                          {:limit 1000})))))
     []))
+
+(defn- stored-since
+  "The time the change row says the line first held `head`: its
+  `held_since`, when its `held_head` names this head, or nil."
+  [change head]
+  (when (= head (some-> (get-in change [:data :held_head]) str))
+    (try (Instant/parse (str (get-in change [:data :held_since])))
+         (catch Exception _ nil))))
 
 (defn- asked-already?
   "Is there an ask for this pull request still waiting, or one for this
@@ -2179,15 +2190,18 @@
   (`house-merges-change?` is false: the policy does not merge by the
   house, or the change touches a path it keeps for a person, ticket
   15305c4a), that GitHub calls `clean` and is not
-  a draft, is timed from the first pass that saw it clean at this head.
+  a draft, is timed from the row's `held_since` for this head
+  (`stored-since`, so a restart does not start the wait again, ticket
+  665fcb50), or else from the first pass that saw it clean at this head.
   Once it has waited the policy's `merge_wait_seconds`, it raises one
   merge ask unless `asked-already?`. A change whose ticket still waits
   on another to merge (`merge-holds`) is not timed and not asked; its
-  wait starts once nothing holds it. A repository whose policy names no
+  wait starts once nothing holds it, at the pass that sees it free. A repository whose policy names no
   required check is asked nothing (`person-merges-on-github?`): the rig
   would refuse the allowed call, so the tap would merge nothing, and the
   merge pass writes `line_why: person` on the change instead. `waiting`
-  is an atom of change id → {:head :since}. Throws nothing. → the number
+  is an atom of change id → {:head :since}, or {:head :held true} while
+  a merge hold keeps it. Throws nothing. → the number
   of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
@@ -2207,20 +2221,27 @@
                        (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
-                       (not (true? (get-in change [:data :draft])))
-                       (not (get holds (born-ticket change))))]
-      (let [prior (get @waiting id)
-            ^Instant since (if (= head (:head prior)) (:since prior) now)
-            seconds (.getSeconds (Duration/between since now))]
-        (vswap! clean assoc id {:head head :since since})
-        (when (and (<= (merge-wait-of policy) seconds)
-                   (not (asked-already? asks change head)))
-          (try
-            (raise-merge-ask! eng change policy seconds)
-            (vswap! raised inc)
-            (catch Exception e
-              (warn! "the merge ask for " id " did not land ("
-                     (ex-message e) "); the next pass asks again"))))))
+                       (not (true? (get-in change [:data :draft]))))]
+      (if (get holds (born-ticket change))
+        ;; not timed while held; the pass that sees it free starts its
+        ;; wait, not its stored held_since
+        (vswap! clean assoc id {:head head :held true})
+        (let [prior (get @waiting id)
+              ^Instant since (cond
+                               (not= head (:head prior))
+                               (or (stored-since change head) now)
+                               (:held prior) now
+                               :else (:since prior))
+              seconds (.getSeconds (Duration/between since now))]
+          (vswap! clean assoc id {:head head :since since})
+          (when (and (<= (merge-wait-of policy) seconds)
+                     (not (asked-already? asks change head)))
+            (try
+              (raise-merge-ask! eng change policy seconds)
+              (vswap! raised inc)
+              (catch Exception e
+                (warn! "the merge ask for " id " did not land ("
+                       (ex-message e) "); the next pass asks again")))))))
     ;; a change that is no longer clean, or no longer submitted, starts
     ;; its wait again the next time it is
     (reset! waiting @clean)
