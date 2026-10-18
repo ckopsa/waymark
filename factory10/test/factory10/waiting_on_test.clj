@@ -123,6 +123,19 @@
     (is (= {"blocked_by" ["t-0"]} (:held_by w)))
     (is (str/ends-with? (:verdict w) "; held by blocked_by") (:verdict w))))
 
+(deftest a-change-kept-for-a-person-says-why
+  (let [reason "touches terraform/keycloak_users.tf, which this repository's policy keeps for a person"
+        w (read-row :change (conj models (fixture/mayor (main/resources)))
+                    (change {:author "code-seat" :line_why "person" :line_reason reason}))]
+    (is (= (str "waits on a person's tap: " reason) (:note w)))
+    (is (str/ends-with? (:verdict w) (str "; held by line_why; waits on a person's tap: " reason))
+        (:verdict w)))
+  (testing "a line_why that is not person carries no note"
+    (let [w (read-row :change models
+                      (change {:line_why "parked" :line_reason "not mergeable"}))]
+      (is (not (contains? w :note)))
+      (is (not (str/includes? (:verdict w) "person's tap")) (:verdict w)))))
+
 (deftest a-row-at-rest-waits-on-nothing
   (let [w (read-it models (assoc (ticket "ckopsa/waymark" []) :state :done))]
     (is (= [] (:next w)))
