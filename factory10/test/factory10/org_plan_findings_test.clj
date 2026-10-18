@@ -139,6 +139,45 @@
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
 
+(def ^:private red-film
+  {:key "film/invoice/late-payer-chased" :severity "error" :class "film"
+   :subject "invoice" :sentence "In the film no one chased the late invoice."
+   :remedy "Name who chases a late invoice."})
+
+(deftest a-red-film-reopens-a-proposed-plan
+  (let [{:keys [h eng]} (world)
+        id (filed! h)
+        state #(:state (json (req h :get (str "/api/org_plans/" id)
+                                  {:headers person})))
+        propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
+                               {:headers person :body {}}))
+        filmed! #(inv/invoke! eng :org_plan id :record_film_findings
+                              {:head_sha "ddddddd1" :findings [red-film]}
+                              {:principal the-forge})
+        warning (assoc unexplained :severity "warning")]
+    (recorded! eng id "ccccccc1" [warning])
+    (is (= 200 (propose)))
+    (is (= "proposed" (name (state))))
+    (testing "a person does not record the film's findings"
+      (let [no (req h :post (str "/api/org_plans/" id "/-/record_film_findings")
+                    {:headers person
+                     :body {:head_sha "ddddddd1" :findings [red-film]}})]
+        (is (not= 200 (:status no)) (pr-str (json no)))
+        (is (= "proposed" (name (state))))))
+    (testing "the film's red rules land as findings, and the plan drafts again"
+      (filmed!)
+      (let [plan (plan-of h id)]
+        (is (= "drafting" (name (state))))
+        (is (= #{(:key warning) (:key red-film)}
+               (into #{} (map :key) (:findings plan))))
+        (is (= "ddddddd1" (:findings_sha plan)))
+        (is (some? (:next_step plan)) "the walk reopens on the film")))
+    (testing "propose is shut until the finding clears"
+      (is (not= 200 (propose)))
+      (recorded! eng id "ddddddd2" [warning])
+      (is (nil? (:next_step (plan-of h id))))
+      (is (= 200 (propose))))))
+
 (deftest only-the-engine-records-findings
   (let [{:keys [h]} (world)
         id (filed! h)

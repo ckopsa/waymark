@@ -84,16 +84,18 @@
   "One entry of a seed's `:domains` as a loader step: a create through
   the domain door, walked as the owner. Its charter is its `:charter`,
   or its `:label`; its budget is its `:budget_usd_per_week`, or the
-  factory's."
-  [{:keys [name label charter budget_usd_per_week] :as entry}]
+  factory's. Its `:ref`, when given, names the row for a later step's
+  `[:ref …]`, as a seat template's `:domain_id`."
+  [{:keys [name label charter budget_usd_per_week ref] :as entry}]
   (when-not (and (string? name) (seq name))
     (throw (ex-info "The org's seed holds a domain that names no :name."
                     {:waymark10/seed-refused true :entry entry})))
-  {:as :owner :kind :domain
-   :create (merge (select-keys entry [:mayor :owner])
-                  {:name name
-                   :charter (or charter label name)
-                   :budget_usd_per_week (or budget_usd_per_week domain-budget)})})
+  (cond-> {:as :owner :kind :domain
+           :create (merge (select-keys entry [:mayor :owner])
+                          {:name name
+                           :charter (or charter label name)
+                           :budget_usd_per_week (or budget_usd_per_week domain-budget)})}
+    ref (assoc :ref ref)))
 
 (defn loader-seed
   "An org's seed in the loader's grammar: `:live-ok`, with its domains,

@@ -25,6 +25,13 @@
   names the finding, and the way out is to answer the question it
   raised and let the audit run again.
 
+  A RED FILM REOPENS THE PLAN (ticket d52abbf2, for M3d). A film's red
+  rules land on a `proposed` plan as findings through
+  `record_film_findings`, the engine's hand on the judge's answer, and
+  move it back to `drafting`: they join the audit's findings, replacing
+  any with the same key, so the walk reopens on them and propose stays
+  shut until a later run no longer finds them.
+
   THE WALK IS THE FINDINGS, IN A FIXED ORDER (ticket f64c9ce1, M2c).
   The onboarding walk is a computed `next_step` on the plan, not a
   `walkthrough` row: a walkthrough's steps are invitations a person or
@@ -160,6 +167,20 @@
                  (fn [qs]
                    (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
                          qs))))))
+
+(defhandler record-the-film-findings [row inp _ctx]
+  ;; A red film's rules join the audit's findings, a key the film shares
+  ;; with one already on the plan replacing it, and the walk's next step
+  ;; moves to them. The next audit run replaces them all, as ever.
+  (let [film (vec (:findings inp))
+        theirs (into #{} (map :key) film)
+        found (into (vec (remove #(contains? theirs (:key %))
+                                 (get-in row [:data :findings])))
+                    film)]
+    (-> row
+        (assoc-in [:data :findings] found)
+        (assoc-in [:data :findings_sha] (:head_sha inp))
+        (assoc-in [:data :next_step] (next-step found)))))
 
 (defhandler retire-the-plan [row inp _ctx]
   ;; A retired plan says why, because nothing departs `retired`.
@@ -532,6 +553,27 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Findings recorded" :order 7
                :description "The audit's run writes what it found on the org's branch"}}
+
+    ;; A RED FILM (ticket d52abbf2). The film is judged while the plan is
+    ;; up; a red rule is a finding, and the plan goes back to drafting
+    ;; with it. The engine's hand alone, as record_findings is.
+    :record_film_findings
+    {:from #{:proposed} :to :drafting
+     :guards [the-engine-records-the-findings]
+     :handler record-the-film-findings
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The filmed commit"}}
+              [:string {:min 7 :max 64}]]
+             [:findings {:x-display {:hidden true
+                                     :label "The film's red rules"}}
+              [:vector {:min 1 :max 200} finding-schema]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The plan is back in drafting, with the film's red rules among its findings."}
+     :display {:label "Film findings recorded" :order 8
+               :description "The film's red rules reopen the plan to drafting"}}
 
     ;; THE ONE TAP. The merge and the mayor behind it are M2e's.
     :go_live

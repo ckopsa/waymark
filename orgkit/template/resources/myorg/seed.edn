@@ -5,13 +5,14 @@
 {:seed "myorg"
  :version 1
  :org "myorg"
- :domains [{:name "myorg" :label "My Org"}]
+ :domains [{:name "myorg" :label "My Org" :ref :myorg}]
  :cast
  {:owner {:id "owner" :display "The Owner" :type :human :roles ["approver"]}}
  ;; a seat is a factorykit template and its params, or a whole seat
  ;; map under :seat when no template walks the org's kinds
  :seats
- [{:template "mayor" :params {:repos "owner/repo"}}]
+ [{:template "mayor"
+   :params {:repos "owner/repo" :domain "myorg" :domain_id [:ref :myorg]}}]
  ;; a judgment is a factorykit judgment template and its params
  :judgments
  [{:template "sitting" :params {:ticket_repo "owner/repo"}}]

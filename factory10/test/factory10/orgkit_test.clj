@@ -3,15 +3,22 @@
   compile against the kit, every kind passes the defresource gate and
   assembles into a registry beside the kinds the engine enrols, and
   each org's seed reads, names only seat templates factorykit ships,
-  and holds whole :seat maps the seat kind's create door takes. No
-  database, no network."
+  and holds whole :seat maps the seat kind's create door takes; and
+  each org's seed loads whole on a memory engine beside the factory's
+  kinds, so the create guards judge it too. No database, no network."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
+            [factory10.main :as main]
             [waymark10.check :as check]
             [waymark10.schema :as schema]
+            [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
-            [waymark10.server.seats :as seats]))
+            [waymark10.server.org :as org-boot]
+            [waymark10.server.roles :as roles]
+            [waymark10.server.seats :as seats]
+            [waymark10.server.seed :as seed-load]
+            [waymark10.server.store.memory :as memory]))
 
 (def ^:private orgs ["myorg" "example"])
 
@@ -64,3 +71,24 @@
       (is (nil? (seat-create-errors seat)))
       (when-some [walk (:walk seat)]
         (is (contains? kinds walk) (str "it walks " walk ", a kind of the org"))))))
+
+(defn- org-engine
+  "A memory engine as an org boot builds one: the factory's kinds and
+  the org's, with the factory's roles and domain."
+  [org]
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (into (vec (main/resources)) (org-resources org))
+                            :suppress-mirror-refresh true})]
+    (roles/ensure-factory-roles! eng)
+    (domains/ensure-factory! eng)
+    eng))
+
+(deftest every-seed-loads-whole-through-the-doors
+  ;; the create guards (a walked kind's default filter, say) run only
+  ;; on an engine, so the seed is loaded on one, as org/boot! loads it
+  (doseq [org orgs]
+    (testing org
+      (let [out (try (seed-load/load! (org-engine org) (org-boot/loader-seed (seed org)) {})
+                     (catch clojure.lang.ExceptionInfo e
+                       {:refused (ex-message e) :data (ex-data e)}))]
+        (is (true? (:seeded out)) (pr-str out))))))
