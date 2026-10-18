@@ -107,6 +107,21 @@
       (fail! "the config's :mcp :oauth needs a :callback-port, as a positive integer."))
     {:client-id client-id :callback-port (long port)}))
 
+(defn- normalize-headers
+  "The `:mcp` map's optional `:headers`: the identity a run presents at
+  a door with no OIDC — X-Waymark-Principal, X-Waymark-Actor-Type,
+  X-Waymark-Acts-For — written as they are into each run's mcp.json."
+  [h]
+  (when-not (and (map? h) (seq h))
+    (fail! "the config's :mcp :headers must be a non-empty map."))
+  (when-not (every? (fn [[k v]]
+                      (and (or (string? k) (keyword? k))
+                           (not (str/blank? (name k)))
+                           (string? v) (not (str/blank? v))))
+                    h)
+    (fail! "the config's :mcp :headers must map each header name to a non-empty string."))
+  (into {} (map (fn [[k v]] [(name k) v])) h))
+
 (defn- normalize-oidc
   "The optional `:oidc` map (§12): the Keycloak realm a person signs in
   through, and where the sealed tokens live. No secret is in it."
@@ -173,10 +188,16 @@
      :place         place
      :runs-dir      runs
      :claude        (or (some-> (:claude m) str not-empty) "claude")
-     ;; :oauth absent means no oauth block in the run's MCP entry
-     :mcp           (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
-                             :url  (str (:url mcp))}
-                      (some? (:oauth mcp)) (assoc :oauth (normalize-oauth (:oauth mcp))))
+     ;; :oauth absent means no oauth block in the run's MCP entry;
+     ;; :headers absent means no headers block. The two are one or
+     ;; the other: a door signs a run in one way.
+     :mcp           (do
+                      (when (and (some? (:oauth mcp)) (some? (:headers mcp)))
+                        (fail! "the config's :mcp takes :oauth or :headers, not both."))
+                      (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
+                               :url  (str (:url mcp))}
+                        (some? (:oauth mcp))   (assoc :oauth (normalize-oauth (:oauth mcp)))
+                        (some? (:headers mcp)) (assoc :headers (normalize-headers (:headers mcp)))))
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
      ;; R-4.6: how often the credential is probed

@@ -546,3 +546,36 @@
       (runs/write-mcp! f {:name "Waymark" :url door})
       (is (= {"mcpServers" {"Waymark" {"type" "http" "url" door}}}
              (json/read-value (slurp f)))))))
+
+;; ── a header identity at a door with no OIDC ─────────────────────────
+
+(def ^:private identity-headers
+  {"X-Waymark-Principal"  "agent:localfire"
+   "X-Waymark-Actor-Type" "agent"
+   "X-Waymark-Acts-For"   "owner"})
+
+(deftest the-config-takes-optional-identity-headers
+  (testing "the headers are kept"
+    (is (= {:name "Waymark" :url door :headers identity-headers}
+           (:mcp (config/normalize
+                  (assoc-in (oauth-config nil) [:mcp :headers] identity-headers))))))
+  (testing ":headers with :oauth is refused"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not both"
+                          (config/normalize
+                           (assoc-in (oauth-config {:client-id "localfire-claude"
+                                                    :callback-port 8765})
+                                     [:mcp :headers] identity-headers)))))
+  (testing "each bad shape is refused with one sentence"
+    (doseq [h ["X-Waymark-Principal" {} {"X-Waymark-Principal" ""}
+               {"X-Waymark-Principal" 7}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":headers"
+                            (config/normalize
+                             (assoc-in (oauth-config nil) [:mcp :headers] h)))
+          (pr-str h)))))
+
+(deftest write-mcp-carries-the-identity-headers
+  (let [f (io/file (tmpdir "lf-headers-mcp") "mcp.json")]
+    (runs/write-mcp! f {:name "Waymark" :url door :headers identity-headers})
+    (is (= {"mcpServers"
+            {"Waymark" {"type" "http" "url" door "headers" identity-headers}}}
+           (json/read-value (slurp f))))))
