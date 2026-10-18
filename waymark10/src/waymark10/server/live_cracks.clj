@@ -275,7 +275,7 @@
   "The most row ids one hiring gap names, oldest first."
   20)
 
-(defn- row-domain
+(defn row-domain
   "The name of the domain a row is in: its stored `domain`, or what its
   kind's declaration says an absent one counts as, or nil."
   [rdef row]

@@ -381,6 +381,14 @@
     (let [e (refused #(seed/load! eng (org-seed "old") {:org "new"}))]
       (is (= "org_mismatch" (:reason (ex-data e)))))))
 
+(defn- marker-data
+  "The marker's data as the store holds it, the loader's own fields
+  with it."
+  [eng seed-name]
+  (let [st (:storage eng)]
+    (:data (store/with-tx st
+             (fn [tx] (store/load-row st tx :member (str "seed-" seed-name) {}))))))
+
 (deftest an-org-load-that-failed-half-way-resumes
   (let [eng (engine {:name "waymark"})
         half {:seed "half" :version 1 :live-ok true
@@ -392,7 +400,8 @@
     (is (some? (refused #(seed/load! eng half {:org "half"})))
         "the third step names a param the boot does not give")
     (is (= 2 (count (dev/rows eng :chore))))
-    (is (nil? (dev/row eng :member "seed-half")) "and no marker was written")
+    (is (true? (:loading (marker-data eng "half")))
+        "the marker, written first, still says loading")
     (let [out (java.io.StringWriter.)
           again (binding [*out* out]
                   (seed/load! eng half {:org "half" :params {"chore" "Three"}}))]
@@ -401,6 +410,36 @@
       (is (re-find #"resumed half-seeded org half" (str out)))
       (is (= 4 (count (dev/rows eng :chore))) "the two made before are not made again")
       (is (= "half" (get-in (dev/row eng :member "seed-half") [:data :seed_org]))))))
+
+(deftest an-org-load-records-each-step-and-resumes-after-the-last-it-walked
+  (let [eng (engine {:name "waymark"})
+        steps [{:as :owner :kind :chore :create {:title "One"} :ref :c1}
+               {:as :owner :kind :chore :on :c1 :action "finish"}
+               {:as :owner :kind :chore :create {:title [:param :chore]} :ref :c3}
+               {:as :owner :kind :chore :create {:title "Four"} :ref :c4}
+               {:as :owner :kind :chore :create {:title "Five"} :ref :c5}]
+        rec {:seed "rec" :version 1 :live-ok true
+             :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+             :steps steps}
+        key-of #'seed/step-key]
+    (testing "a load that fails at step 3 leaves a marker loading, with steps 1-2 walked"
+      (let [e (refused #(seed/load! eng rec {:org "rec"}))]
+        (is (= 3 (:step (ex-data e)))))
+      (let [data (marker-data eng "rec")]
+        (is (true? (:loading data)))
+        (is (= (set (map key-of (take 2 steps))) (set (:walked_steps data))))))
+    (testing "the next load walks steps 3-5 only and ends loading false"
+      (let [again (binding [*out* (java.io.StringWriter.)]
+                    (seed/load! eng rec {:org "rec" :params {"chore" "Three"}}))
+            c1 (get-in again [:refs :c1 :id])
+            data (marker-data eng "rec")]
+        (is (true? (:resumed again)))
+        (is (= 4 (count (dev/rows eng :chore))))
+        (is (= "done" (name (:state (dev/row eng :chore c1)))))
+        (is (= 1 (count (filter #(= "finish" (name (:action %))) (moves eng :chore c1))))
+            "the action step is not walked twice")
+        (is (false? (:loading data)))
+        (is (= (set (map key-of steps)) (set (:walked_steps data))))))))
 
 (deftest a-live-seed-refuses-a-param-the-boot-does-not-give
   (let [eng (engine {:name "waymark"})

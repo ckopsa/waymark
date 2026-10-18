@@ -72,6 +72,14 @@
   each gained step that needs that ref is skipped while the rest of
   the seed loads.
 
+  AN ORG'S LOAD RECORDS AS IT GOES. Under `:org` the marker is written
+  before the first step, with `walked_steps` empty and `loading true`,
+  each step's key joins `walked_steps` once it is walked, and `loading`
+  is set false at the end of a clean load. A load that finds the marker
+  still `loading` resumes: it skips every step whose key is walked and
+  walks the rest, so an action step is never walked twice. No step is
+  skipped for its row's state.
+
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
   `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
@@ -405,6 +413,30 @@
           (store/update-data! st tx :member mid
                               (assoc-in (:data raw) [:bound_refs (name r)] (str id))
                               (:next-flip-at raw)))))))
+
+(defn- marker-data!
+  "Apply `f` to the marker's data: a maintenance write, in place, as
+  `walk-recorded!` keeps `walked_steps`."
+  [eng seed f]
+  (let [st (:storage eng)
+        id (marker-id seed)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id (f (:data raw))
+                              (:next-flip-at raw)))))))
+
+(defn- loading?
+  "True when the marker an org's load wrote before its first step still
+  says `loading`: that load did not reach its end."
+  [eng seed]
+  (true? (get-in (load-row eng :member (marker-id seed)) [:data :loading])))
+
+(defn- step-walked!
+  "Record that `step` was walked: its key joins the marker's
+  `walked_steps`. The one place a walked step is recorded."
+  [eng seed step]
+  (walk-recorded! eng seed [(step-key step)]))
 
 ;; ── the steps ───────────────────────────────────────────────────────
 
@@ -749,15 +781,21 @@
   already holds is then reused as it is, and the marker records the org.
   Under `:org` a load that finds no marker but finds a row a step is
   born with stopped half-way: it is resumed, additively as over a
-  marker, the marker written at its end, and `:resumed true` said."
+  marker, and `:resumed true` said. An org's load writes its marker
+  before its first step, `loading true`, records each step's key as it
+  is walked, and sets `loading` false at its end; a load that finds the
+  marker still `loading` resumes, skipping the steps it records."
   [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params org] :as opts}]
   (admit! eng seed opts)
-  (let [seeded (seeded? eng seed)
-        org (some-> org str not-empty)
+  (let [org (some-> org str not-empty)
+        loading (boolean (and org (loading? eng seed)))
+        seeded (and (seeded? eng seed) (not loading))
         cast (filled-cast cast (keyed params))
         ;; reused members are expected under :org, so a half-way load
-        ;; is told by the rows its steps made, and resumed, not refused
-        resumed (boolean (and (not seeded) org (half-walked? eng seed)))
+        ;; is told by its marker still loading, or by the rows its steps
+        ;; made, and resumed, not refused
+        resumed (boolean (and (not seeded) org
+                              (or loading (half-walked? eng seed))))
         additive (or seeded resumed)]
     (when (and (not seeded) (not org) (enrolled? eng cast))
       (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
@@ -772,6 +810,11 @@
         (enrol! eng cast who))
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
+      ;; an org's load is marked before its first step, and records
+      ;; each step as it is walked
+      (when (and org (not seeded) (not loading))
+        (mark! eng seed org)
+        (marker-data! eng seed #(assoc % :walked_steps [] :loading true)))
       (let [walked (cond
                      seeded
                      (or (walked-of eng seed)
@@ -780,9 +823,10 @@
                          (let [all (into #{} (map step-key) steps)]
                            (walk-recorded! eng seed all)
                            all))
-                     ;; no marker holds keys yet: each step is found
-                     ;; by its name or its id, or walked
-                     resumed #{})
+                     ;; a marker still loading holds the keys walked;
+                     ;; with none, each step is found by its name or
+                     ;; its id, or walked
+                     resumed (or (walked-of eng seed) #{}))
             bound (when additive (bound-of eng seed))
             {:keys [refs made]}
             (reduce
@@ -803,9 +847,12 @@
                                                           [nil false true]
                                                           (throw e))))]
                                     (when-not (or known? (get walked-step 2))
-                                      (walk-recorded! eng seed [k]))
+                                      (step-walked! eng seed step))
                                     walked-step)
-                                  [(step! ctx step) true])
+                                  (let [walked-step [(step! ctx step) true]]
+                                    (when org
+                                      (step-walked! eng seed step))
+                                    walked-step))
                                 (catch Exception e
                                   (throw (ex-info
                                           (str "The seed's step " (inc i)
@@ -832,9 +879,13 @@
                       (str "This engine already holds the seed's completion marker, so only what the seed gained was added: "
                            (count fresh) " members and " made " steps."))}
           (do
-            ;; last, and only after every step went through
-            (mark! eng seed org)
+            ;; last, and only after every step went through; an org's
+            ;; marker was written first, and is now done loading
+            (when-not org
+              (mark! eng seed org))
             (walk-recorded! eng seed (map step-key steps))
+            (when org
+              (marker-data! eng seed #(assoc % :loading false)))
             (when resumed
               (println (str "resumed half-seeded org " org)))
             (cond-> {:seed (:seed seed) :seeded true

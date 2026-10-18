@@ -723,6 +723,8 @@ jobs:
             | add // []
             | {($org): (($c[0][$org] // []) + .)}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
+              # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
+              + ($c[0]["_live"][$org] // {})
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
           jq -r --arg org "$ORG" '.[$org] | "\(length) finding(s) for \($org)"' "$RUNNER_TEMP/org-findings.json"
       - uses: actions/upload-artifact@v4
