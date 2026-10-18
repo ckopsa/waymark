@@ -17,7 +17,9 @@
   5d62058e, M2b). After each push to the org's branch the audit's run
   replaces the plan's findings with its own, keyed to the head SHA,
   and only the engine's hand takes that door; no create form takes
-  them. A question ties to a finding by its key, and a finding that is
+  them. A proposed plan takes the same run through its twin,
+  `record_findings_proposed` (ticket c4893567), so the plan a person
+  approves is the plan as it stands. A question ties to a finding by its key, and a finding that is
   gone from the next run closes: its question is marked resolved.
 
   `propose` IS REFUSED WHILE AN ERROR FINDING IS OPEN. A plan the
@@ -553,6 +555,27 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Findings recorded" :order 7
                :description "The audit's run writes what it found on the org's branch"}}
+
+    ;; AFTER PROPOSE (ticket c4893567). A push to a proposed plan's
+    ;; branch still lands its findings, so the plan a person approves is
+    ;; the plan as it stands. The same run, the same hand, the same state.
+    :record_findings_proposed
+    {:from #{:proposed} :to :proposed
+     :guards [the-engine-records-the-findings]
+     :handler record-the-findings
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The head commit"}}
+              [:string {:min 7 :max 64}]]
+             [:findings {:x-display {:hidden true
+                                     :label "The run's findings"}}
+              [:vector {:max 200} finding-schema]]]
+     ;; :edit-shape — a run replaces the findings, nobody edits them
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Findings recorded while proposed" :order 9
+               :description "The audit's run writes what it found on a proposed plan's branch"}}
 
     ;; A RED FILM (ticket d52abbf2). The film is judged while the plan is
     ;; up; a red rule is a finding, and the plan goes back to drafting
