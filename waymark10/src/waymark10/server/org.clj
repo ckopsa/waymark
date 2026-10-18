@@ -142,7 +142,7 @@
   ([eng org] (boot! eng org {}))
   ([eng org opts]
    (when-some [s (read-seed org)]
-     (let [opts (cond-> (or opts {})
+     (let [opts (cond-> (assoc (or opts {}) :org (str org))
                   (not (contains? opts :params))
                   (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
            result (seed/load! eng (loader-seed s) opts)]

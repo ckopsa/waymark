@@ -324,6 +324,31 @@
     (is (re-find #"already has members" (str (ex-message e))))
     (is (= 1 (count (dev/rows eng :chore))) "and nothing was written")))
 
+(defn- org-seed [nm]
+  {:seed nm :version 1 :live-ok true
+   :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+   :steps [{:as :owner :kind :chore :create {:title (str "Open " nm)}}]})
+
+(deftest an-orgs-live-seed-loads-on-a-working-engine
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        members (fn [] (count (dev/rows eng :member)))]
+    (testing "alpha's seed loads with :org beside the house's members"
+      (is (true? (:seeded (seed/load! eng (org-seed "alpha") {:org "alpha"}))))
+      (is (some? (dev/row eng :member "lee"))))
+    (testing "gamma's seed, naming the same owner, loads and reuses that member"
+      (let [before (members)]
+        (is (true? (:seeded (seed/load! eng (org-seed "gamma") {:org "gamma"}))))
+        (is (= (inc before) (members)) "only gamma's marker is new")
+        (is (= 3 (count (dev/rows eng :chore))))))
+    (testing "a plain live seed is still refused"
+      (let [e (refused #(seed/load! eng (org-seed "plain") {}))]
+        (is (re-find #"already has members" (str (ex-message e))))))
+    (testing "gamma's seed under another org's name is refused"
+      (let [e (refused #(seed/load! eng (org-seed "gamma") {:org "alpha"}))]
+        (is (= "org_mismatch" (:reason (ex-data e))))
+        (is (= 3 (count (dev/rows eng :chore))) "and nothing was written")))))
+
 (deftest a-live-seed-refuses-a-param-the-boot-does-not-give
   (let [eng (engine {:name "waymark"})
         e (refused #(seed/load! eng live {:params {"chore" "Water the ferns"}}))]
