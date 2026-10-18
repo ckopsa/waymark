@@ -75,9 +75,9 @@
   seat holds or that the seats on it do not keep up with. `open-hire!`
   is that birth, the engine's hand alone: it copies the live plan's
   owner and directory, writes the brief from the gap, and opens one
-  hire plan per gap key. It is a function and not a declared door
-  because a kind has one create verb; the ordinary create keeps
-  `a-person-files-the-plan`, and the engine's birth passes it by.
+  hire plan per gap key. The birth is the declared create door
+  `open_hire`, held `:by #{:engine}` beside the ordinary create, which
+  keeps `a-person-files-the-plan`; `open-hire!` is its thin caller.
 
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
@@ -136,7 +136,7 @@
 (defn hire-brief
   "The hire plan's brief: one sentence written from its gap."
   [{:keys [kind state reason row_ids oldest_since]}]
-  (str kind " rows wait in " state ": " (count row_ids)
+  (str (some-> kind name) " rows wait in " (some-> state name) ": " (count row_ids)
        " past their expected age, oldest since " (or oldest_since "unknown") "; "
        (if (= "pressure" (some-> reason name))
          "more than the seats on it keep up with"
@@ -192,12 +192,10 @@
         :else
         (inv/create! eng :org_plan
                      {:name org
-                      :purpose "hire"
                       :org_dir (get-in live [:data :org_dir])
                       :owner (str (get-in live [:data :owner]))
-                      :gap gap
-                      :brief (hire-brief gap)}
-                     (assoc opts :mint? true))))))
+                      :gap gap}
+                     (assoc opts :action :open_hire))))))
 
 ;; ── the findings walk (M2c) ─────────────────────────────────────────
 
@@ -491,6 +489,23 @@
    [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
    [:key [:string {:min 1 :max 200}]]])
 
+(def ^:private hire-input
+  "The open_hire door's input: the org, the gap, and the live plan's
+  owner and directory, which the engine copies."
+  [:map
+   [:name [:string {:min 1 :max 64}]]
+   [:gap gap-schema]
+   [:org_dir {:optional true} [:maybe [:string {:max 200}]]]
+   [:owner {:optional true :kind :member} [:maybe :waymark/ref]]])
+
+(defn- stamp-the-hire
+  "The open_hire door's birth: a hire plan, its brief written from its
+  gap."
+  [row _ctx]
+  (-> row
+      (assoc-in [:data :purpose] "hire")
+      (assoc-in [:data :brief] (hire-brief (get-in row [:data :gap])))))
+
 (defresource org-plan
   {:kind :org_plan
    :plural "org_plans"
@@ -521,6 +536,12 @@
                 :purpose #{:eq}}
    :on-create stamp-the-owner
    :create-guards [a-person-files-the-plan]
+   ;; the engine's own birth of a hire plan (M4a), beside the create
+   :creates [{:action :open_hire
+              :input hire-input
+              :by #{:engine}
+              :on-create stamp-the-hire
+              :display {:label "Open a hire plan"}}]
    :schema
    [:map
     [:name {:x-display
@@ -616,7 +637,7 @@
                {:label "Purpose"
                 :help "found: the plan stands the org up. hire: the engine opened it on a live org, for one gap its audit found. A plan with none founds its org."}}
      [:maybe [:enum "found" "hire"]]]
-    ;; WRITTEN ONLY BY THE ENGINE'S open-hire!: no create form takes it
+    ;; WRITTEN ONLY BY THE ENGINE'S open_hire door: the create form does not take it
     [:gap {:optional true
            :x-display
            {:label "The gap"
