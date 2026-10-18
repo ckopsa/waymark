@@ -2988,6 +2988,24 @@
                                     30 now))
         "a check that does not say when it was queued is not judged")))
 
+(deftest the-missing-verdict-names-a-required-check-with-no-run
+  (let [now (java.time.Instant/now)
+        since (minutes-ago 45)
+        ran {:check_name "gate" :status "completed" :conclusion "success"
+             :started_at (minutes-ago 40)}]
+    (let [v (forge/missing-verdict ["gate" "lint"] [ran] 30 since now)]
+      (is (= :red (:verdict v)))
+      (is (= 1 (count (:names v))) "only the check with no run")
+      (is (re-matches
+           #"check lint has no run after \d+ minutes; no workflow started it \(check its triggers\)"
+           (str (first (:names v))))))
+    (is (nil? (forge/missing-verdict ["gate" "lint"] [ran] 60 since now))
+        "the policy's own limit, not the default")
+    (is (nil? (forge/missing-verdict ["gate"] [ran] 30 since now))
+        "a check that has a run is not missing")
+    (is (nil? (forge/missing-verdict ["gate" "lint"] [ran] 30 nil now))
+        "a head that does not say since when it waits is not judged")))
+
 ;; ── a parent stranded in review by an early merge (ticket 499bcd72) ─
 
 (defn- force!
