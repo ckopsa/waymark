@@ -45,9 +45,9 @@ jobs:
           set -euo pipefail
           # Replace this with your test command. ONLY is empty on a pull
           # request; on a dispatch it names what to run.
-          read -ra only <<< "$ONLY"
+          read -ra selected <<< "$ONLY"
           if [ -x ./scripts/test ]; then
-            ./scripts/test "${only[@]}"
+            ./scripts/test "${selected[@]}"
           else
             echo "::error::No test command: make ./scripts/test, or put yours in this step."
             exit 1
