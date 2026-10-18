@@ -15,7 +15,9 @@ name: waymark-factory
 
 services:
   postgres:
-    image: public.ecr.aws/docker/library/postgres:17
+    # POSTGRES_IMAGE names another registry's copy of the same image;
+    # the selfhost CI job sets it to mirror.gcr.io's
+    image: ${POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:17}
     restart: unless-stopped
     environment:
       POSTGRES_DB: waymark
