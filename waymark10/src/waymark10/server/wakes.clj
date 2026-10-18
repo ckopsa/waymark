@@ -137,7 +137,8 @@
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every other seat in the house from being woken
   by anything."
-  (:require [waymark10.server.collections :as collections]
+  (:require [clojure.string :as str]
+            [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -559,21 +560,53 @@
   [schedule-row t]
   (boolean (some #{(str (:id t))} (get-in schedule-row [:data :wake_heard]))))
 
+(defn- head-of
+  "The row `t` moved, as [kind/id head], or nil when the row names no
+  `head_sha` (ticket 70aca5e6)."
+  [eng t]
+  (when-some [head (some-> (raw-row eng (:kind t) (:resource-id t))
+                           (get-in [:data :head_sha]) str not-empty)]
+    [(str (name (:kind t)) "/" (:resource-id t)) head]))
+
+(defn- same-head?
+  "Is `t` a self-loop on a row whose head (`head-of`'s `seen`) is the
+  one this seat's wake last heard it at? A forge poll writes
+  observe_failing on a red change every pass, and only a new head is
+  news (ticket 70aca5e6). A row that names no head is never the same."
+  [schedule-row t seen]
+  (and (some? seen)
+       (some? (:from-state t))
+       (= (:from-state t) (:to-state t))
+       (boolean (some #{(str/join " " seen)}
+                      (get-in schedule-row [:data :wake_seen])))))
+
+(defn- with-seen
+  "`data` with `seen` as its row's one entry in `wake_seen`, newest
+  last, at most `heard-cap` rows."
+  [data [row-key :as seen]]
+  (let [kept (remove #(str/starts-with? (str %) (str row-key " "))
+                     (:wake_seen data))]
+    (assoc data :wake_seen
+           (vec (take-last heard-cap (concat kept [(str/join " " seen)]))))))
+
 (defn- remember-heard!
   "Remember that the wake heard `t`, by the same maintenance write as
-  the pending flag. → the row as written, so the writes after this one
-  build on it and do not drop the mark."
-  [eng schedule-row t]
+  the pending flag, and the moved row's head beside it when `seen`
+  names one (`head-of`). → the row as written, so the writes after
+  this one build on it and do not drop the mark."
+  ([eng schedule-row t] (remember-heard! eng schedule-row t nil))
+  ([eng schedule-row t seen]
   (let [heard (->> (conj (vec (get-in schedule-row [:data :wake_heard]))
                          (str (:id t)))
                    (take-last heard-cap)
                    (vec))
-        row (assoc-in schedule-row [:data :wake_heard] heard)]
+        row (cond-> (assoc-in schedule-row [:data :wake_heard] heard)
+              seen (update :data with-seen seen))]
     (store/with-tx (:storage eng)
       (fn [tx]
         (store/update-data! (:storage eng) tx :schedule (:id row)
                             (:data row) (:next-flip-at row))))
-    row))
+    row)))
 
 (defn- first-heard
   "The instant of the FIRST match the waiting settled wake heard, or
@@ -1105,18 +1138,30 @@
   A transition this seat's wake already heard (`heard?`) is the
   drain's replay, and it is silence on every path, the damped one
   included (waymark-fp62.21).
+
+  A self-loop on a row whose head this seat's wake already heard
+  (`same-head?`) is silence too (ticket 70aca5e6): the forge's poll
+  on a red change whose head stands has nothing new for the seat, and
+  firing it started a sitting that walked nothing. A new head wakes
+  it, and a row that names no head is woken as before.
   → true when a fire went out."
   [eng seat t ^Instant at {:keys [text settle max-wait]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
-      (let [row (remember-heard! eng row t)
+      (let [seen (head-of eng t)
+            ;; judged against the heads heard BEFORE this one is kept
+            unmoved (same-head? row t seen)
+            row (remember-heard! eng row t seen)
             ;; when the grace of the row this wake names lifts: asked
             ;; one time, and only by the branch that reads it
             deferred (delay (when (some? text)
                               (seats/fire-deferred-until
                                eng (raw-row eng :seat (:id seat)) text at)))]
        (cond
+        unmoved
+        nil
+
         settle
         ;; the first match of this wake is kept beside the due moment,
         ;; so later matches cannot move it past the cap (8f482592)
