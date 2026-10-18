@@ -12,10 +12,12 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [example.org :as example]
             [factory10.main :as main]
             [waymark10.dev :as dev]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.seed :as seed]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -137,3 +139,30 @@
         (is (= "ckopsa/waymark" (:repo filter)) kind)
         (when (#{"bench.find" "bench.read" "bench.edit"} kind)
           (is (= "orgs/greenleaf/**" (:path filter)) kind))))))
+
+(deftest the-org-mayor-fills-for-orgs-example-and-keeps-to-the-org
+  (let [eng (dev/scratch! (-> (vec (main/resources)) (into (example/resources)) (conj caps/capability))
+                          {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        domain-id (made! h "domains" {:name "example"
+                                      :charter "Example Landscaping"
+                                      :budget_usd_per_week 1000})
+        org-kinds (sort (map (comp name :kind) (example/resources)))
+        seat (seed/filled (:seat (edn-resource "seats/org-mayor.edn"))
+                          {:org "example" :domain "example" :domain_id domain-id
+                           :owner "owner" :budget_usd_per_week 8M
+                           :kinds (mapv (fn [k] {:kind k :actions []}) org-kinds)})]
+    (testing "it fills with no hole left, its budget a decimal"
+      (is (nil? (re-find #"\{\{" (pr-str seat))))
+      (is (= 8M (:budget_usd_per_week seat)))
+      (is (= "example-mayor" (:name seat))))
+    (testing "it creates through the seat door, in the org's domain"
+      (let [made (req h :post "/api/seats" seat)]
+        (is (= 201 (:status made)) (pr-str (json made)))
+        (is (= "example" (get-in (json (req h :get (str "/api/seats/" (id-of made)) nil))
+                                 [:data :in_domain])))))
+    (testing "its scope reads the org's kinds, its domain's seats and the held calls, and holds no door"
+      (is (= (into #{"seat" "held_call"} org-kinds) (set (map :kind (:scope seat)))))
+      (is (every? (comp empty? :actions) (:scope seat)))
+      (is (= {:domain domain-id}
+             (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))))

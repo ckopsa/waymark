@@ -67,7 +67,10 @@
   params name, and creates the seat (or judgment) through its door as
   the cast member the step is `:as`. Its `:with` map, values filled
   the same way, is merged over the filled body: `{:with {:held_for
-  [[:ref :model]]}}` holds the seat for a model the seed made.
+  [[:ref :model]]}}` holds the seat for a model the seed made. A param
+  given a number or a collection fills a string that is that one hole
+  whole as itself, and splices a list into the vector around it: a
+  budget stays a decimal, and an org's kinds join a template's scope.
 
   A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
   :where {:name \"factory\"} :ref :factory}` makes no row and names the
@@ -313,11 +316,44 @@
                              "`, and the classpath holds no seat or judgment template of that name.")
                         {:template n})))))
 
-(defn- hole-text
-  "A param's value as it stands inside the printed body's strings."
+(defn- whole-hole
+  "The param a string is one hole of, whole: `{{budget}}` → :budget."
+  [x]
+  (when (string? x)
+    (some-> (re-matches #"\{\{([a-z_]+)\}\}" x) second keyword)))
+
+(defn- unresolved?
+  "A seed's own `[:ref …]` or `[:param …]`, which only a boot resolves."
   [v]
-  (let [s (pr-str (str v))]
-    (subs s 1 (dec (count s)))))
+  (and (vector? v) (keyword? (first v))))
+
+(defn filled
+  "A template's body with each `{{hole}}` filled from `given`, param
+  keyword → value. A hole inside a string takes the value's text. A
+  string that is one hole whole takes a number or a collection as
+  itself, so a budget stays a decimal; inside a vector it splices a
+  list in, so a template's scope takes an org's own entries beside its
+  fixed ones. A seed's unresolved `[:ref …]` stands as its text. A hole
+  `given` does not name is left."
+  [body given]
+  (let [given (into {} (map (fn [[k v]] [k (if (unresolved? v) (str v) v)])) given)
+        raw (fn [x]
+              (when-some [k (whole-hole x)]
+                (let [v (get given k)]
+                  (when (or (number? v) (coll? v)) v))))]
+    (letfn [(walk [x]
+              (cond
+                (map? x) (into (empty x) (map (fn [[k v]] [k (walk v)])) x)
+                (vector? x) (into [] (mapcat #(let [v (raw %)]
+                                                (if (sequential? v) v [(walk %)])))
+                                  x)
+                (set? x) (into (empty x) (map walk) x)
+                (string? x) (if-some [v (raw x)]
+                              v
+                              (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
+                                         x given))
+                :else x))]
+      (walk body))))
 
 (defn- fill
   "A template's body with each `{{hole}}` its params name filled from
@@ -327,15 +363,12 @@
     (throw (refusal (str "The seed's template `" template-name "` needs the params "
                          (str/join ", " (map name missing)) ", and the step does not give them.")
                     {:template template-name :missing (vec missing)})))
-  (let [text (reduce (fn [s k]
-                       (str/replace s (str "{{" (name k) "}}") (hole-text (get given k))))
-                     (pr-str body)
-                     (keys params))]
-    (when-some [left (re-find #"\{\{[a-z_]+\}\}" text)]
+  (let [made (filled body (select-keys given (keys params)))]
+    (when-some [left (re-find #"\{\{[a-z_]+\}\}" (pr-str made))]
       (throw (refusal (str "The seed's template `" template-name "` has the hole " left
                            ", and no param of the template fills it.")
                       {:template template-name :hole left})))
-    (edn/read-string text)))
+    made))
 
 (defn- kind-of [refs step]
   (cond
