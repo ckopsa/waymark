@@ -31,6 +31,8 @@
     :reason "Classified is where a run rests; reclassify is a person overruling the label."}
    {:kind "ci_run" :state "classified" :crack "silent_person_exit"
     :reason "Classified is where a run rests: reclassify is for the person who already doubts the label."}
+   {:kind "org_plan" :state "live" :crack "person_only"
+    :reason "Live is where an org runs: retiring it is its owner's choice."}
    {:kind "repo_policy" :state "active" :crack "silent_person_exit"
     :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}
    {:kind "repo_policy" :state "retired" :crack "silent_person_exit"
@@ -308,3 +310,17 @@
                                   (:data one-repo) (door-ctx rdefs seats person))]
         (is denied?)
         (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))))
+
+(deftest a-retire-or-merge-is-judged-at-its-own-door
+  (let [rdefs (main/resources)
+        seats (vec (fixture/seats rdefs))
+        person {:id "colton" :type :human}
+        at (fn [door] (assoc (door-ctx rdefs seats person) :door door))]
+    (testing "a retire that takes the only woken seat out is warned, by its door"
+      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat nil
+                                  (at :retire))]
+        (is denied?)
+        (is (re-find #"ticket/" (str why)) why)))
+    (testing "the same empty body at a door that is not a leaving one is no crack"
+      (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
+                                 (:data fixture/code-seat) (at :restate)))))))

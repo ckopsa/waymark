@@ -204,6 +204,42 @@
       (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
       :else (t/deny {:vars {:what (str/join " and " what)}}))))
 
+(defguardfn only-a-person-turns-hosted-ok-on
+  {:reads [:principal :within]
+   :hold true
+   :explain "A restate that turns hosted_ok on is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. hosted_ok widens the house's exception to its rule that CI runs on its own runners, as an added hosted workflow does."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that turns hosted_ok off, or leaves it as it stands, is not held."}
+  ;; ticket d39b224b: the hosted-workflows hold's sibling for the flag
+  ;; ticket 83dd6dc3 added. It is judged against the stored row, so only
+  ;; a move from a stored non-true to true is held; the replay of the
+  ;; call the person allowed is the one agent call this admits.
+  [row inp ctx]
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (true? (get-in row [:data :hosted_ok])) (t/allow)
+    (not (true? (get inp :hosted_ok))) (t/allow)
+    (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+    :else (t/deny)))
+
+(defguardfn only-a-person-frees-the-person-paths
+  {:reads [:principal :within]
+   :hold true
+   :vars [:removed]
+   :explain "Removing {removed} from the person's paths is held for the person's tap: the call is recorded as a held_call, and the person's Allow runs it exactly as written. A change that touches one of those paths is merged only by a person, and a shorter list lets the house merge more."
+   :open "No door clears this one. The call waits as a held_call for the person's tap. A restate that adds entries, or leaves the list as it stands, is not held."}
+  ;; ticket 15305c4a: `only-a-person-widens-the-hosted-workflows` turned
+  ;; over. This list is what the house may NOT merge, so an added entry
+  ;; narrows the house and passes, and a removed one is the person's own
+  ;; yes. Judged against the stored list.
+  [row inp ctx]
+  (let [kept (set (map str (get inp :person_paths)))
+        removed (remove kept (map str (get-in row [:data :person_paths])))]
+    (cond
+      (not= :agent (:type (:principal ctx))) (t/allow)
+      (empty? removed) (t/allow)
+      (holds/approved-hold? ctx :repo_policy :restate (:id row)) (t/allow)
+      :else (t/deny {:vars {:removed (str/join ", " removed)}}))))
+
 (defguardfn the-engine-marks-the-enrolment
   {:reads [:principal]
    :hide true
@@ -666,6 +702,23 @@
                         :label "Workflows allowed on GitHub-hosted runners"
                         :help "Workflow files that may run on GitHub-hosted runners, as paths from the repository root, one for each row. The house runs CI on its own runners. Name a workflow here only when it must not go down with them, such as one that deploys or repairs those runners. Empty means no exception."}}
     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+   ;; the rig's per-repo hosted leave (ticket 83dd6dc3). OPTIONAL: a row
+   ;; without it sends no `hosted_ok`, and the rig keeps its own default.
+   [:hosted_ok {:optional true
+                :examples [true]
+                :x-display
+                {:label "CI may run on GitHub-hosted runners"
+                 :help "Turn this on when this repository's CI runs on GitHub-hosted runners, as a self-hosted factory's own repository does. Leave it empty for the rig's default."}}
+    [:maybe :boolean]]
+   ;; the person's paths (ticket 15305c4a). OPTIONAL: a row without it,
+   ;; or with an empty list, keeps no path for a person.
+   [:person_paths {:optional true
+                   :examples [["terraform/keycloak_*.tf"]]
+                   :x-display
+                   {:raw true
+                    :label "Paths only a person merges"
+                    :help "Globs, one for each row, in the grammar of the paths the bench never serves. A change that touches a path one matches is never merged by the house: once green and clean it waits merge_wait_seconds, then asks a person for the merge. Empty means the house merges every green change as the policy says."}}
+    [:maybe [:vector {:max 50} [:string {:min 1 :max 200}]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
@@ -1056,7 +1109,9 @@
               ;; last, so a call that is held is one the walls above
               ;; would let the person's Allow run
               only-a-person-widens-the-hosted-workflows
-              only-a-person-loosens-the-merge-gate]
+              only-a-person-turns-hosted-ok-on
+              only-a-person-loosens-the-merge-gate
+              only-a-person-frees-the-person-paths]
      :handler restate-the-policy
      :record true
      ;; the form opens on the policy that stands, so a person changes

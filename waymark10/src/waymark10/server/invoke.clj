@@ -1376,8 +1376,13 @@
             ;; ctx without the cross-write door, and without the hand
             ;; on a power (waymark-fp62.7.16): a wall that read mail
             ;; would refuse differently on a day Gate was dark
-            guard-ctx (dissoc ctx :invoke :create :inner-sink :power
-                              :follow-up :follow-sink)]
+            guard-ctx (-> (dissoc ctx :invoke :create :inner-sink :power
+                                  :follow-up :follow-sink)
+                          ;; the door this write stands on (ticket
+                          ;; a77bf705): a guard several doors carry
+                          ;; reads which one judges it from here, and
+                          ;; not from the shape of the body
+                          (assoc :door action-name))]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)

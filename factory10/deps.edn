@@ -5,7 +5,11 @@
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
-                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
+                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}
+                       ;; the org kit's template and its example org, so
+                       ;; factory10.orgkit-test can load both modules
+                       orgkit/template        {:local/root "../orgkit/template"}
+                       orgs/example           {:local/root "../orgs/example"}}
          :main-opts   ["-m" "kaocha.runner"]}
   ;; make check-factory: the declaration-time gate — warnings on
   ;; stdout, exit 1 on a definition error; no database, no env

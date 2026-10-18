@@ -330,12 +330,16 @@
   (ticket 856e825c): the command the bench's check runs after its lint,
   sent only when the row states one. `hosted_workflows` rides the same
   way (ticket 0de73a7a): the workflow files a person allowed on
-  GitHub-hosted runners, sent only when the row names at least one."
+  GitHub-hosted runners, sent only when the row names at least one.
+  `hosted_ok` rides the same way (ticket 83dd6dc3): the rig's per-repo
+  leave to run CI on GitHub-hosted runners, sent only when the row
+  states it."
   [row]
   (let [test-block (get-in row [:data :test])
         check-block (get-in row [:data :check])
         pattern (:select_pattern test-block)
-        hosted (seq (get-in row [:data :hosted_workflows]))]
+        hosted (seq (get-in row [:data :hosted_workflows]))
+        hosted-ok (get-in row [:data :hosted_ok])]
     (cond-> {:repo (str (get-in row [:data :repository]))
              :clone_url (clone-url-of row)
              :default_branch (base-of row)
@@ -345,7 +349,8 @@
                                         (not (str/blank? (str pattern)))
                                         (assoc :select_pattern (str pattern))))
       (some? check-block) (assoc :check (select-keys check-block [:command :timeout]))
-      hosted (assoc :hosted_workflows (vec hosted)))))
+      hosted (assoc :hosted_workflows (vec hosted))
+      (boolean? hosted-ok) (assoc :hosted_ok hosted-ok))))
 
 (defn enrolled
   "The row after the engine offered this repository to the rig (R-2).
@@ -515,15 +520,50 @@
                 (not (house-pass-merges? policy))
                 (empty? (required-checks-of policy)))))
 
+(defn person-path
+  "The first path this change touches that its policy keeps for a person
+  (ticket 15305c4a): a `touched_paths` entry one of the policy's
+  `person_paths` globs matches, in the deny list's grammar
+  (`gate/path-glob-matches?`), or nil."
+  [change policy]
+  (let [globs (keep #(some-> % str not-empty) (get-in policy [:data :person_paths]))]
+    (when (seq globs)
+      (some (fn [path]
+              (when (some #(gate/path-glob-matches? % path) globs)
+                (str path)))
+            (get-in change [:data :touched_paths])))))
+
+(defn house-merges-change?
+  "Does the house's merge pass merge THIS change? Only when its policy
+  `house-pass-merges?` and the change touches no path the policy keeps
+  for a person (`person-path`): such a change is treated as auto_merge
+  false for itself alone, and asks for its merge as a held call."
+  [change policy]
+  (boolean (and (house-pass-merges? policy)
+                (nil? (person-path change policy)))))
+
+(defn person-path-reason
+  "What a change kept for a person says on its row."
+  [path]
+  (str "touches " path ", which this repository's policy keeps for a person"))
+
 (defn person-marks
-  "The mark of every change a person merges on GitHub
-  (`person-merges-on-github?`): change id → {:line_why \"person\"}."
+  "The mark of every change a person merges: one in a repository a
+  person merges on GitHub (`person-merges-on-github?`) → {:line_why
+  \"person\"}, and one in a house-merged repository that touches a path
+  its policy keeps for a person (`person-path`) → the same, with that
+  path in its `line_reason`."
   [changes by-repo]
   (into {}
         (keep (fn [c]
-                (when (person-merges-on-github?
-                       (get by-repo (str (get-in c [:data :repository]))))
-                  [(str (:id c)) {:line_why "person"}])))
+                (let [policy (get by-repo (str (get-in c [:data :repository])))
+                      path (when (house-pass-merges? policy) (person-path c policy))]
+                  (cond
+                    (person-merges-on-github? policy)
+                    [(str (:id c)) {:line_why "person"}]
+                    path
+                    [(str (:id c)) {:line_why "person"
+                                    :line_reason (person-path-reason path)}]))))
         changes))
 
 (defn merge-args
@@ -738,7 +778,7 @@
 (defn merge-lines
   "The changes the house pass offers, as repository → its line in the
   order it is worked. A change needs a number, a head that `seen` has
-  not parked, and a policy `house-pass-merges?`. `priority-of` is
+  not parked, and a policy that merges it (`house-merges-change?`). `priority-of` is
   change → its ticket's priority, or nil."
   [changes by-repo priority-of seen]
   (->> changes
@@ -746,7 +786,7 @@
                  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
                        policy (get by-repo (str (get-in change [:data :repository])))]
                    (and (get-in change [:data :number]) head policy
-                        (house-pass-merges? policy)
+                        (house-merges-change? change policy)
                         (not= head (get seen (str (:id change))))))))
        (group-by #(str (get-in % [:data :repository])))
        (into (sorted-map)
@@ -1389,7 +1429,7 @@
              (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
                    policy (get by-repo (str (get-in change [:data :repository])))]
                (and (get-in change [:data :number]) head policy
-                    (house-pass-merges? policy)
+                    (house-merges-change? change policy)
                     (= head (get seen (str (:id change)))))))
            changes))
 
@@ -1882,8 +1922,8 @@
   repository whose ticket still waits on another to merge (`holds`, as
   `merge-holds` answers it)."
   [changes by-repo holds]
-  (filterv #(and (some-> (get by-repo (str (get-in % [:data :repository])))
-                         house-pass-merges?)
+  (filterv #(and (some->> (get by-repo (str (get-in % [:data :repository])))
+                          (house-merges-change? %))
                  (get holds (born-ticket %)))
            changes))
 
@@ -1944,8 +1984,8 @@
                  eng seen
                  (filterv #(in-scope? repos (get-in % [:data :repository]))
                           (submitted-changes eng)))
-        house? #(some-> (get by-repo (str (get-in % [:data :repository])))
-                        house-pass-merges?)
+        house? #(some->> (get by-repo (str (get-in % [:data :repository])))
+                         (house-merges-change? %))
         holds (merge-holds eng (filter house? changes))
         held (held-changes changes by-repo holds)
         held-ids (into #{} (map #(str (:id %))) held)
@@ -2136,7 +2176,9 @@
 (defn ask-for-merges!
   "One ask pass. Every submitted change with a number and a head, whose
   repository's active policy leaves the merge to a person
-  (`house-pass-merges?` is false), that GitHub calls `clean` and is not
+  (`house-merges-change?` is false: the policy does not merge by the
+  house, or the change touches a path it keeps for a person, ticket
+  15305c4a), that GitHub calls `clean` and is not
   a draft, is timed from the first pass that saw it clean at this head.
   Once it has waited the policy's `merge_wait_seconds`, it raises one
   merge ask unless `asked-already?`. A change whose ticket still waits
@@ -2151,8 +2193,8 @@
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
         changes (submitted-changes eng)
-        person? #(some-> (get by-repo (str (get-in % [:data :repository])))
-                         house-pass-merges? not)
+        person? #(some->> (get by-repo (str (get-in % [:data :repository])))
+                          (house-merges-change? %) not)
         holds (merge-holds eng (filter person? changes))
         raised (volatile! 0)
         clean (volatile! {})]
@@ -2162,7 +2204,7 @@
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
-                       (not (house-pass-merges? policy))
+                       (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))
                        (not (true? (get-in change [:data :draft])))

@@ -38,7 +38,9 @@
 
   IT REFUSES A WORKING ENGINE. The engine's name must begin with
   `demo-` and no IdP may be configured. A step the law refuses throws,
-  and the boot ends.
+  and the boot ends. A seed marked `:live-ok` needs no `demo-` name: it
+  loads on a fresh engine, one that has no member yet, and refuses one
+  that has (a self-hosted factory's first boot).
 
   IT MARKS A WHOLE LOAD. After the last step the loader makes one more
   row through the member door, `seed-<name>`: the completion marker. An
@@ -48,8 +50,29 @@
 
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
-  `[:cast :ada]` is a cast member's id, and `[:days 3]` is a date
-  counted from the boot."
+  `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
+  counted from the boot, and `[:param :repo]` is the boot's param of
+  that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+
+  A CAST MEMBER'S `:id` AND `:display` MAY BE PARAMS TOO:
+  `{:owner {:id [:param :owner] :display [:param :owner_display]}}`,
+  so a live seed makes its owner from the boot. Only those two are
+  filled; `:acts-for` names another cast key, not a value. A secret a
+  step's create needs, such as a pull `runner_link`'s `fire_token`, is
+  a param the same way: `{:fire_token [:param :pull_token]}`.
+
+  A STEP MAY FILL A FACTORY KIT TEMPLATE: `{:template \"code-seat\"
+  :params {:repo [:param :repo]}}` reads `seats/code-seat.edn` (or
+  `judgments/<name>.edn`) from the classpath, fills each `{{hole}}` its
+  params name, and creates the seat (or judgment) through its door as
+  the cast member the step is `:as`. Its `:with` map, values filled
+  the same way, is merged over the filled body: `{:with {:held_for
+  [[:ref :model]]}}` holds the seat for a model the seed made.
+
+  A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
+  :where {:name \"factory\"} :ref :factory}` makes no row and names the
+  first one the query answers, so a later step's `[:ref :factory]` is
+  its id. A query that answers none refuses the seed."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -59,7 +82,8 @@
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [jsonista.core :as json])
   (:import (java.time Instant LocalDate ZoneOffset)))
 
 (set! *warn-on-reflection* true)
@@ -81,22 +105,84 @@
               slurp
               edn/read-string))))
 
+(defn- keyed
+  "A params map with keyword keys, however they were spelled."
+  [m]
+  (into {} (map (fn [[k v]] [(keyword (if (keyword? k) (name k) (str k))) v])) m))
+
+(defn read-params
+  "WAYMARK10_SEED_PARAMS's map, read as JSON or as EDN, with keyword
+  keys; {} when it is blank. Throws for text that is not a map."
+  [text]
+  (if (str/blank? text)
+    {}
+    (let [m (try (json/read-value text)
+                 (catch Exception _
+                   (try (edn/read-string text) (catch Exception _ nil))))]
+      (if (map? m)
+        (keyed m)
+        (throw (refusal "The seed is refused: WAYMARK10_SEED_PARAMS is not a JSON or EDN map."
+                        {}))))))
+
+(declare seeded?)
+
+(defn- members? [eng]
+  (let [st (:storage eng)]
+    (boolean (seq (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :member {} {:limit 1})))))))
+
 (defn admit!
   "Throws unless this engine may be seeded: it is named `demo-…` and
-  has no IdP. A working engine is neither."
-  [eng]
-  (let [n (str (:name eng))]
-    (cond
-      (not (str/starts-with? n "demo-"))
-      (throw (refusal (str "The seed is refused: this engine is named `" n
-                           "`, and a seed loads only on an engine whose name begins with `demo-`.")
-                      {:engine n}))
+  has no IdP. A working engine is neither. A `:live-ok` seed needs no
+  `demo-` name and may load on an engine with an IdP, since a live
+  engine has one; it is refused instead on an engine that already has a
+  member, unless that engine holds the seed's own marker (`load!` then
+  skips it)."
+  ([eng] (admit! eng nil))
+  ([eng seed]
+   (let [n (str (:name eng))
+         demo? (str/starts-with? n "demo-")]
+     (cond
+       (and (not demo?) (not (:live-ok seed)))
+       (throw (refusal (str "The seed is refused: this engine is named `" n
+                            "`, and a seed loads only on an engine whose name begins with `demo-`.")
+                       {:engine n}))
 
-      (some? (:oidc eng))
-      (throw (refusal "The seed is refused: this engine has an identity provider, and a seed loads only on an engine with none."
-                      {:engine n})))))
+       (and (some? (:oidc eng)) (not (:live-ok seed)))
+       (throw (refusal "The seed is refused: this engine has an identity provider, and only a live seed loads on an engine with one."
+                       {:engine n}))
+
+       (and (not demo?) (not (seeded? eng seed)) (members? eng))
+       (throw (refusal (str "The seed is refused: this engine is named `" n
+                            "` and already has members, and a live seed loads only on an engine that has none.")
+                       {:engine n :seed (:seed seed)}))))))
 
 ;; ── the cast ────────────────────────────────────────────────────────
+
+(defn- param-of
+  "A `[:param k]` form's value from the boot's params, or the form
+  itself when it is not one. Throws for a param the boot does not give."
+  [params form]
+  (if (and (vector? form) (= 2 (count form)) (= :param (first form)))
+    (let [k (second form)]
+      (if (contains? params k)
+        (get params k)
+        (throw (refusal (str "The seed names the param `" (name k)
+                             "`, and WAYMARK10_SEED_PARAMS holds none of that name.")
+                        {:param k}))))
+    form))
+
+(defn- filled-cast
+  "The cast with each member's `:id` and `:display` filled from the
+  boot's params, so `member-id`, `principal-of` and `enrol!` read
+  values."
+  [cast params]
+  (into {}
+        (map (fn [[who m]]
+               [who (cond-> m
+                      (contains? m :id) (update :id #(param-of params %))
+                      (contains? m :display) (update :display #(param-of params %)))]))
+        cast))
 
 (defn- member-id [cast who]
   (or (some-> (get-in cast [who :id]) str not-empty)
@@ -184,9 +270,10 @@
 
 (defn- value-of
   "A step's value with its load-time forms filled in."
-  [{:keys [eng cast refs now] :as ctx} form]
+  [{:keys [eng cast refs now params] :as ctx} form]
   (let [[op arg] (when (and (vector? form) (= 2 (count form))) form)]
     (case op
+      :param (param-of params form)
       :ref (:id (ref-of refs arg))
       :self (let [{:keys [kind id]} (ref-of refs arg)]
               (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))
@@ -198,8 +285,59 @@
         (vector? form) (mapv #(value-of ctx %) form)
         :else form))))
 
+;; ── the factory kit's templates ──────────────────────────────────────
+
+(def ^:private template-places
+  "Where a template of a name is looked for on the classpath, and the
+  kind its filled body is created as: the kit's seats, then its
+  judgments."
+  [["seats/" :seat] ["judgments/" :judgment]])
+
+(defn- template-of
+  "The factory kit template a name stands for: {:kind :params :body}.
+  Throws when the classpath holds none of that name."
+  [template-name]
+  (let [n (str template-name)]
+    (or (when (re-matches name-pattern n)
+          (some (fn [[dir kind]]
+                  (when-some [res (io/resource (str dir n ".edn"))]
+                    (let [t (edn/read-string (slurp res))]
+                      {:kind kind
+                       :params (get-in t [:template :params])
+                       :body (get t kind)})))
+                template-places))
+        (throw (refusal (str "The seed names the template `" n
+                             "`, and the classpath holds no seat or judgment template of that name.")
+                        {:template n})))))
+
+(defn- hole-text
+  "A param's value as it stands inside the printed body's strings."
+  [v]
+  (let [s (pr-str (str v))]
+    (subs s 1 (dec (count s)))))
+
+(defn- fill
+  "A template's body with each `{{hole}}` its params name filled from
+  `given`. Throws for a param not given and for a hole left over."
+  [{:keys [params body]} given template-name]
+  (when-some [missing (seq (remove #(contains? given %) (keys params)))]
+    (throw (refusal (str "The seed's template `" template-name "` needs the params "
+                         (str/join ", " (map name missing)) ", and the step does not give them.")
+                    {:template template-name :missing (vec missing)})))
+  (let [text (reduce (fn [s k]
+                       (str/replace s (str "{{" (name k) "}}") (hole-text (get given k))))
+                     (pr-str body)
+                     (keys params))]
+    (when-some [left (re-find #"\{\{[a-z_]+\}\}" text)]
+      (throw (refusal (str "The seed's template `" template-name "` has the hole " left
+                           ", and no param of the template fills it.")
+                      {:template template-name :hole left})))
+    (edn/read-string text)))
+
 (defn- kind-of [refs step]
   (cond
+    (:template step) (:kind (template-of (:template step)))
+    (:find step) (:find step)
     (:hold step) :held_call
     (:grant step) :grant
     (contains? step :create) (:kind step)
@@ -240,6 +378,26 @@
     (:grant step)
     (mint-grant! eng (value-of ctx (:grant step)))
 
+    ;; a factory kit template, filled and created through its kind's door
+    (:template step)
+    (let [t (template-of (:template step))
+          given (keyed (value-of ctx (or (:params step) {})))]
+      (:row (inv/create! eng (:kind t)
+                         (merge (fill t given (:template step))
+                                (value-of ctx (or (:with step) {})))
+                         (hand-of ctx step))))
+
+    ;; a row the boot made before the seed: found, not made
+    (:find step)
+    (let [kind (:find step)
+          where (value-of ctx (or (:where step) {}))
+          st (:storage eng)]
+      (or (first (store/with-tx st
+                   (fn [tx] (store/query-rows st tx kind where {:limit 1}))))
+          (throw (refusal (str "The seed finds a `" (name kind) "` row where "
+                               (pr-str where) ", and this engine holds none.")
+                          {:find kind :where where}))))
+
     (contains? step :create)
     (:row (inv/create! eng (:kind step) (value-of ctx (:create step))
                        (hand-of ctx step)))
@@ -268,20 +426,21 @@
   marker. `:now` is the boot's moment, the engine's clock when absent;
   relative dates count from it. `:wall-url` is the clone's wall: when
   it is given, the seed's `:walled` servers are made at it, and when
-  it is not, none is made."
-  [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url]}]
-  (admit! eng)
+  it is not, none is made. `:params` are the values `[:param k]` reads."
+  [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params]}]
+  (admit! eng seed)
   (cond
     (seeded? eng seed)
     {:seed (:seed seed) :seeded false
      :skipped "This engine already holds the seed's completion marker, so the seed was applied before and is skipped whole."}
 
-    (enrolled? eng cast)
+    (enrolled? eng (filled-cast cast (keyed params)))
     (throw (refusal "The seed is refused: a seed failed half-way on this database; bring the clone down."
                     {:seed (:seed seed) :half-seeded true}))
 
     :else
-    (let [now (or now ((or (:now-fn eng) #(Instant/now))))]
+    (let [now (or now ((or (:now-fn eng) #(Instant/now))))
+          cast (filled-cast cast (keyed params))]
       (register-roles! eng cast)
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
@@ -291,7 +450,8 @@
         (wall-servers! eng walled url))
       (let [refs (reduce
                   (fn [refs [i step]]
-                    (let [ctx {:eng eng :cast cast :refs refs :now now}
+                    (let [ctx {:eng eng :cast cast :refs refs :now now
+                               :params (keyed params)}
                           row (try
                                 (step! ctx step)
                                 (catch Exception e
@@ -318,15 +478,19 @@
   "The boot step behind WAYMARK10_SEED: read the named seed and load
   it, saying what happened. Throws for a name this commit carries no
   seed for, and for everything `load!` throws for. `opts` are
-  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL."
+  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL, and
+  `:params`, when absent, are read from WAYMARK10_SEED_PARAMS."
   ([eng seed-name] (boot! eng seed-name {}))
   ([eng seed-name opts]
-   (admit! eng)
    (let [seed (or (read-seed seed-name)
                   (throw (refusal (str "The seed is refused: this commit carries no seed named `"
                                        seed-name "`.")
                                   {:seed (str seed-name)})))
-         result (load! eng seed (or opts {}))]
+         _ (admit! eng seed)
+         opts (cond-> (or opts {})
+                (not (contains? opts :params))
+                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
+         result (load! eng seed opts)]
      (println (if (:seeded result)
                 (str "waymark10 seed: `" (:seed result) "` loaded, "
                      (:members result) " members and " (:steps result) " steps.")

@@ -19,7 +19,10 @@
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
-                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
+                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}
+                       ;; the org kit's example org, so
+                       ;; workqueue10.org-boot-test can boot it
+                       orgs/example           {:local/root "../orgs/example"}}
          :main-opts   ["-m" "kaocha.runner"]}
   :dev  {:main-opts ["-m" "workqueue10.main"]}
   ;; make check-queue: the declaration-time gate — warnings on

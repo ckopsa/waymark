@@ -62,6 +62,17 @@
                             "classify_this_change" "supersede"]
                   :filter {:state "red"}}]}))
 
+(def onboarding-seat
+  "Works an org_plan with its person: asks the audit's questions, puts
+  the plan up, attaches the film and asks to go live, which is held for
+  the owner (ticket cd22be20)."
+  (seat "onboarding-seat"
+        {:walk "org_plan"
+         :cadence_seconds 3600
+         :scope [{:kind "org_plan"
+                  :actions ["ask" "propose" "attach_film" "go_live"]}]
+         :wake_on [{:kind "org_plan" :actions ["create" "answer" "propose"]}]}))
+
 (defn mayor
   "The seat a person sits in. It holds every door of every kind in
   `rdefs`, so its scope is read from the law and not written here: a
@@ -84,4 +95,4 @@
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."
   [rdefs]
-  [code-seat judge-seat ops-seat (mayor rdefs)])
+  [code-seat judge-seat ops-seat onboarding-seat (mayor rdefs)])
