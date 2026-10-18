@@ -7234,6 +7234,38 @@
     (when (and groom stall (> (long (:id groom)) (long (:id stall))))
       groom)))
 
+(def ^:private queueing-doors
+  "The ticket's doors that put its ask in the queue again: a person's
+  groom, unblock, resume or reopen, or the engine's `return` when
+  GitHub closed the pull request unmerged."
+  #{"groom" "unblock" "resume" "return" "reopen"})
+
+(def ^:private ending-doors
+  "The change's doors that end it unmerged."
+  #{"close" "close_without_pr" "supersede"})
+
+(defn- latest-transition-of
+  "The newest transition of one row through any of `actions`, or nil."
+  [eng kind id actions]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (some (fn [tr] (when (contains? actions (some-> (:action tr) name)) tr))
+              (store/transitions st tx {:kind kind :resource-id (str id)}
+                                 {:newest-first true}))))))
+
+(defn ask-after-close
+  "The ticket's newest groom, unblock, resume, return or reopen when it
+  is newer than the change's newest close, close_without_pr or
+  supersede, or nil (ticket 7e12f1e8): the ask was put in the queue
+  again after the change ended. A ticket never queued answers nil; a
+  change that ended by none of those doors answers the ask alone."
+  [eng change ticket-id]
+  (let [ask (latest-transition-of eng :ticket ticket-id queueing-doors)
+        end (latest-transition-of eng :change (:id change) ending-doors)]
+    (when (and ask (or (nil? end) (> (long (:id ask)) (long (:id end)))))
+      ask)))
+
 (defn stuck-walk-reasons
   "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
