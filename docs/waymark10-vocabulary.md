@@ -570,6 +570,16 @@ every invoke, so a self-judging asker meets the wall's honest 409 rather
 than a mute 404. Neither key is law: `fingerprint-of` names neither, so
 declaring either mints no revision.
 
+`:delegates true` lets a delegate reach the rows its person owns: an agent
+the identity gate marked `:acts-for` (a tool a person signed in to) matches
+a `:by` branch when the branch names any id the agent OR its person answers
+to. It is per kind and never global, so the private kinds — `:self`,
+`:journal` and `:letter` — do not set it, and a tool a person signs in to
+never reads its person's private rows; a kind whose owner is stamped as the
+person a tool acts for (a runner link) opts in. Like `:grantable`, it is
+kept only when it departs from the default, so a kind that says nothing
+hashes as before.
+
 The rule every `:own-surface` follows: **what a principal owns rides beside
 any worn grant; anything that lands in another person's view must be named
 by the grant.** So `:actions` carries the doors an owner moves their own row
