@@ -1,0 +1,100 @@
+;; The factory seed (epic 00680418, T5): a self-hosted factory's first
+;; boot. WAYMARK10_SEED=factory with FACTORY10_ONLY=1, and
+;; WAYMARK10_SEED_PARAMS naming
+;;   owner       the person's member id, as the solo identity gate
+;;               knows them
+;;   repo        the repository the factory builds in: owner/repo
+;;   bench_url   the bench's MCP endpoint
+;;   model       the model the seats are held for, as the harness
+;;               declares it (claude-opus-5)
+;;   pull_token  the token localfire presents when it asks for fires
+;;
+;; It is :live-ok: it loads on a fresh engine and refuses one that
+;; already has members, and the marker skips it on every later boot.
+;; Every step walks a door as the owner, except the :find, which names
+;; domain `factory`: the boot makes that row before the seed runs, and
+;; the mayor and the two judges sit in it.
+{:seed "factory"
+ :version 1
+ :live-ok true
+ :cast
+ {:owner  {:id [:param :owner] :display [:param :owner] :type :human}
+  :claude {:id "claude" :display "Claude" :type :agent :acts-for :owner}}
+ :steps
+ [{:find :domain :where {:name "factory"} :ref :factory}
+  ;; the two starter judgments, promoted: the judges' seats name them
+  {:as :owner :template "draft-ticket" :ref :draft-ticket}
+  {:as :owner :kind :judgment :on :draft-ticket :action "promote"}
+  {:as :owner :template "sitting" :ref :sitting
+   :params {:ticket_repo [:param :repo]}}
+  {:as :owner :kind :judgment :on :sitting :action "promote"}
+  ;; the bench: its powers are the tokens the seats' scopes name. A
+  ;; bench that does not answer yet leaves the row dark, and a person's
+  ;; mark_live brings it up.
+  {:as :owner :kind :mcp_server :ref :bench
+   :create {:name "bench"
+            :transport "http"
+            :url [:param :bench_url]
+            :powers [{:power "bench.find" :tools ["find"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.read" :tools ["read" "prepare" "status"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.symbols" :tools ["symbols" "read_symbol"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.edit" :tools ["edit"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.edit_many" :tools ["edit_many"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.check" :tools ["check"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.test" :tools ["test" "test_result"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.pull" :tools ["pull"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.feedback" :tools ["feedback"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.history" :tools ["history"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.log" :tools ["log"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.rerun" :tools ["rerun"] :why false
+                      :constraints ["repo"]}]}}
+  ;; the repository: what selfhost/repo-kit adds to it is a tests.yml
+  ;; dispatched with an `only` input, one job named `tests`, and
+  ;; docs/orientation.md. No clone_url: a GitHub repository is cloned
+  ;; from https://github.com/<repo>.
+  {:as :owner :kind :repo_policy :ref :policy
+   :create {:repository [:param :repo]
+            :required_checks ["tests"]
+            :test {:workflow "tests.yml" :input "only"}
+            :orientation "docs/orientation.md"}}
+  ;; the pull link localfire asks for fires on, and the model whose
+  ;; seats fire through it. The prices are a frontier model's; restate
+  ;; the model when its vendor's differ.
+  {:as :owner :kind :runner_link :ref :pull
+   :create {:provider "localfire" :delivery "pull"
+            :fire_token [:param :pull_token]}}
+  {:as :owner :kind :model :ref :model
+   :create {:name [:param :model]
+            :display [:param :model]
+            :vendor "anthropic"
+            :tier "frontier"
+            :price_input_per_mtok 5M
+            :price_output_per_mtok 25M
+            :price_cache_read_per_mtok 0.5M
+            :price_cache_write_per_mtok 6.25M
+            :runners [[:ref :pull]]}}
+  ;; the four seats, each held for that model
+  {:as :owner :template "mayor" :ref :mayor
+   :params {:repos [:param :repo] :domain "factory" :domain_id [:ref :factory]}
+   :with {:held_for [[:ref :model]]}}
+  {:as :owner :template "code-seat" :ref :code-seat
+   :params {:repo [:param :repo]}
+   :with {:held_for [[:ref :model]]}}
+  {:as :owner :template "draft-judge" :ref :draft-judge
+   :params {:repos [:param :repo] :judgment [:ref :draft-ticket]
+            :domain "factory" :domain_id [:ref :factory]}
+   :with {:held_for [[:ref :model]]}}
+  {:as :owner :template "sitting-judge" :ref :sitting-judge
+   :params {:judgment [:ref :sitting] :domain "factory" :domain_id [:ref :factory]}
+   :with {:held_for [[:ref :model]]}}]}

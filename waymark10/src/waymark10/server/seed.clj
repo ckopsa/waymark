@@ -65,7 +65,14 @@
   :params {:repo [:param :repo]}}` reads `seats/code-seat.edn` (or
   `judgments/<name>.edn`) from the classpath, fills each `{{hole}}` its
   params name, and creates the seat (or judgment) through its door as
-  the cast member the step is `:as`."
+  the cast member the step is `:as`. Its `:with` map, values filled
+  the same way, is merged over the filled body: `{:with {:held_for
+  [[:ref :model]]}}` holds the seat for a model the seed made.
+
+  A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
+  :where {:name \"factory\"} :ref :factory}` makes no row and names the
+  first one the query answers, so a later step's `[:ref :factory]` is
+  its id. A query that answers none refuses the seed."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -330,6 +337,7 @@
 (defn- kind-of [refs step]
   (cond
     (:template step) (:kind (template-of (:template step)))
+    (:find step) (:find step)
     (:hold step) :held_call
     (:grant step) :grant
     (contains? step :create) (:kind step)
@@ -374,8 +382,21 @@
     (:template step)
     (let [t (template-of (:template step))
           given (keyed (value-of ctx (or (:params step) {})))]
-      (:row (inv/create! eng (:kind t) (fill t given (:template step))
+      (:row (inv/create! eng (:kind t)
+                         (merge (fill t given (:template step))
+                                (value-of ctx (or (:with step) {})))
                          (hand-of ctx step))))
+
+    ;; a row the boot made before the seed: found, not made
+    (:find step)
+    (let [kind (:find step)
+          where (value-of ctx (or (:where step) {}))
+          st (:storage eng)]
+      (or (first (store/with-tx st
+                   (fn [tx] (store/query-rows st tx kind where {:limit 1}))))
+          (throw (refusal (str "The seed finds a `" (name kind) "` row where "
+                               (pr-str where) ", and this engine holds none.")
+                          {:find kind :where where}))))
 
     (contains? step :create)
     (:row (inv/create! eng (:kind step) (value-of ctx (:create step))
