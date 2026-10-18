@@ -1805,10 +1805,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.selfhost
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      WALK_STATE: ${{ runner.temp }}/walk-state.json
     steps:
       - uses: actions/checkout@v4
+
+      # the runner context is not available in jobs.<id>.env, so the
+      # walk's state file is set here for every later step
+      - name: Walk state
+        run: echo "WALK_STATE=$RUNNER_TEMP/walk-state.json" >> "$GITHUB_ENV"
 
       - name: "1. Prerequisites"
         run: docker compose version
