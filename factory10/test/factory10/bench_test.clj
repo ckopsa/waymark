@@ -2409,6 +2409,68 @@
     (is (= 1 (count (calls-of state "bench__merge")))
         "the moved head is not merged under the old yes")))
 
+;; ticket abd12627: a yes carries over to a head the house brought up to
+;; date from base, when the pull request's own diff is unchanged
+(defn- moved-head-world
+  "A waiting merge yes whose change's head then moved to `a-head`, with
+  the rig's compare_heads scripted to answer `compared`."
+  [compared]
+  (let [{:keys [state] :as w} (allowed-waiting-world)]
+    (answer! state "bench__compare_heads" compared)
+    (answer! state "bench__merge" {:state "merged"})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    w))
+
+(deftest a-base-update-with-the-same-own-diff-carries-the-yes
+  (let [{:keys [eng state waiting]}
+        (moved-head-world {:parents [a-commit "b"] :merged_with_base true
+                           :same_own_diff true :carries true})]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [[ask :as asks] (bench/merge-asks eng)]
+      (is (= 1 (count asks)))
+      (is (= :allowed_waiting (:state ask)) "the yes is kept")
+      (is (= a-head (arg (get-in ask [:data :input]) :head_sha)))
+      (is (= a-head (arg (get-in ask [:data :forward]) :head_sha))))
+    (let [args (:arguments (first (calls-of state "bench__compare_heads")))]
+      (is (= a-repository (arg args :repo)))
+      (is (= a-commit (arg args :approved)))
+      (is (= a-head (arg args :head))))
+    (testing "the next pass merges the new head with no new ask"
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 125))))
+      (let [asks (bench/merge-asks eng)]
+        (is (= 1 (count asks)))
+        (is (= :done (:state (first asks)))))
+      (is (= 2 (count (calls-of state "bench__merge"))))
+      (is (= a-head (arg (:arguments (last (calls-of state "bench__merge")))
+                         :head_sha))))))
+
+(defn- asks-again
+  "A moved head the rig answered `compared` for expires its yes with a
+  reason naming `said`, and a fresh ask follows for the new head."
+  [compared said]
+  (let [{:keys [eng state waiting]} (moved-head-world compared)]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [[ask] (bench/merge-asks eng)]
+      (is (= :expired (:state ask)))
+      (is (str/includes? (str (get-in ask [:data :reason])) said)
+          (str (get-in ask [:data :reason]))))
+    (is (= 1 (count (calls-of state "bench__merge")))
+        "the moved head is not merged under the old yes")
+    ;; long past the wait, however the new head's clock was started
+    (is (= 1 (bench/ask-for-merges! eng waiting
+                                    (Instant/parse "2030-01-01T00:00:00Z")))
+        "a fresh ask")
+    (is (some #(and (= :held (:state %))
+                    (= a-head (arg (get-in % [:data :input]) :head_sha)))
+              (bench/merge-asks eng)))))
+
+(deftest a-moved-head-whose-own-diff-changed-asks-again
+  (asks-again {:merged_with_base true :same_own_diff false :carries false}
+              "own diff changed"))
+
+(deftest a-moved-head-the-rig-refuses-to-compare-asks-again
+  (asks-again {:refused "unknown_commit"} "unknown_commit"))
+
 (deftest a-required-check-missing-on-the-head-raises-no-merge-ask
   (let [{:keys [eng] :as w} (clean-world (assoc person-policy
                                                 :required_checks ["test"]))

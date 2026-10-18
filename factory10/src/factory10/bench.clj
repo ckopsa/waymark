@@ -2160,9 +2160,11 @@
                                                {:limit 1000}))))))))
 
 (defn- expire-spent-yeses!
-  "Expire every `allowed_waiting` merge ask whose change has closed or
-  whose head moved from the one the person allowed: the yes was for
-  that head (carrying it over is ticket aa0e9c90's). A change still
+  "Expire every `allowed_waiting` merge ask whose change has closed. One
+  whose head moved from the one the person allowed asks the rig first
+  (`held/carry-or-expire!`, ticket abd12627): a head the house brought
+  up to date from base with the pull request's own diff unchanged keeps
+  the yes, pinned to the new head; any other expires. A change still
   open at that head keeps its yes, green or not."
   [eng asks]
   (doseq [a asks
@@ -2170,13 +2172,20 @@
           :let [change (try (change-of-ask eng a)
                             (catch Exception _ ::unread))]
           :when (not= ::unread change)
-          :when (or (nil? change)
-                    (contains? #{:closed :merged}
-                               (some-> (:state change) name keyword))
+          :let [closed? (or (nil? change)
+                            (contains? #{:closed :merged}
+                                       (some-> (:state change) name keyword)))
+                head (some-> (get-in change [:data :head_sha]) str)]
+          :when (or closed?
                     (not= (str (field-of (get-in a [:data :input]) :head_sha))
-                          (some-> (get-in change [:data :head_sha]) str)))]
+                          head))]
     (try
-      (held/expire! eng a)
+      (if closed?
+        (held/expire! eng a)
+        (held/carry-or-expire! eng a
+                               {:repo (str (get-in change [:data :repository]))
+                                :base (str (get-in change [:data :base_branch]))
+                                :head head}))
       (catch Exception e
         (warn! "the waiting merge " (:id a) " did not expire ("
                (ex-message e) "); the next pass tries again")))))
@@ -2274,7 +2283,9 @@
   tickets 8e809671 and 9f19742e). A person's yes the rig answered
   `waiting` (`allowed_waiting`, ticket 4180a699) is forwarded again,
   with no new ask, by the pass that reads its change green on the same
-  head; one whose change closed or whose head moved is expired. `waiting`
+  head; one whose change closed is expired, and one whose head moved
+  carries over only when the rig says the house brought it up to date
+  from base with its own diff unchanged (ticket abd12627). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
   a merge hold keeps it. Throws nothing. → the number
   of asks raised."
