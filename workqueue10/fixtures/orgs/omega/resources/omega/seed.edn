@@ -1,0 +1,8 @@
+{:seed "omega"
+ :version 1
+ :org "omega"
+ :domains [{:name "omega" :label "Omega"}]
+ :cast {:owner {:id "owner" :display "Owner" :type :human}}
+ :seats []
+ :judgments []
+ :steps []}
