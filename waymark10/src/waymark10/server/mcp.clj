@@ -3868,6 +3868,18 @@
   (str " The row your fire text names, " row-id ", is held by another "
        "open sitting. Walk the row below instead of it."))
 
+(defn- with-failing-change
+  "The walk with the named ticket's row marked (`seats/failing-change-mark`,
+  ticket c91b3af9): the fire named the seat's own failing change, so
+  the row says so, and which change, pull request and head it is."
+  [walk mark ticket-id]
+  (if (and mark ticket-id (seq (get walk "rows")))
+    (update walk "rows"
+            (fn [rows]
+              (mapv #(if (= (str ticket-id) (str (get % "id"))) (merge % mark) %)
+                    rows)))
+    walk))
+
 (def ^:private claim-tries
   "How many times one sit reads its walk again past the rows another
   sit of the seat claimed first."
@@ -3886,6 +3898,9 @@
   → {:walk w :named-held? bool :named-withheld? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
+        ;; a named FAILING change the seat can fix marks its ticket's
+        ;; row, read before the change is read back (ticket c91b3af9)
+        mark (seats/failing-change-mark eng seat named)
         ;; a named change is read back to its ticket (ticket 7af7d506)
         named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
@@ -3911,7 +3926,8 @@
             said (fn [w]
                    {:walk (-> (with-graced-reasons w graced)
                               (with-other-seat-reasons
-                                (seats/other-seats-row-ids eng seat-id)))
+                                (seats/other-seats-row-ids eng seat-id))
+                              (with-failing-change mark named))
                     :named-held? (boolean (and named (contains? seen named)))
                     ;; named, held by nobody, and still not handed: the
                     ;; walk withheld it and the queue's rows stand in
