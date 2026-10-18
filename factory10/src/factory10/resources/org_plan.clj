@@ -25,6 +25,15 @@
   names the finding, and the way out is to answer the question it
   raised and let the audit run again.
 
+  THE WALK IS THE FINDINGS, IN A FIXED ORDER (ticket f64c9ce1, M2c).
+  The onboarding walk is a computed `next_step` on the plan, not a
+  `walkthrough` row: a walkthrough's steps are invitations a person or
+  seat answers, and a finding's step closes only when the audit's next
+  run no longer finds it, never because a hand says so. So
+  `record_findings` writes `next_step`, the first open finding in
+  `walk-order` (ties broken by key), and nil once no error finding is
+  open: the walk is done, and propose opens.
+
   THE LAW PAGE RIDES THE PROPOSAL (ticket 36c70e59). The org's
   directory lives on the pull request's branch, not on the factory's
   classpath, so the factory cannot render it. The onboarding seat runs
@@ -73,6 +82,37 @@
     (str/blank? (str (get-in row [:data :org_dir])))
     (assoc-in [:data :org_dir] (str "orgs/" (get-in row [:data :name])))))
 
+;; ── the findings walk (M2c) ─────────────────────────────────────────
+
+(def walk-order
+  "The rank of each audit class on the onboarding walk: the kinds
+  (do they check), then states and doors, who holds each door (cracks),
+  rules and held doors (sentences), the seats (scope, budget), and lint
+  last. These are factorykit.conform's classes; a class not named here
+  is lint."
+  {"load" 0 "resource" 0 "registry" 0
+   "boot" 1
+   "crack" 2
+   "sentence" 3
+   "seed" 4 "scope" 4 "budget" 4})
+
+(def ^:private lint-rank 5)
+
+(defn walk-steps
+  "The plan's open findings as the walk's steps: by class in
+  walk-order, ties broken by key."
+  [findings]
+  (vec (sort-by (juxt #(get walk-order (str (:class %)) lint-rank)
+                      #(str (:key %)))
+                findings)))
+
+(defn next-step
+  "The walk's next step: its first open finding, or nil when no error
+  finding is open, and the walk is done."
+  [findings]
+  (when (some #(= "error" (str (:severity %))) findings)
+    (first (walk-steps findings))))
+
 ;; ── the doors' writes ───────────────────────────────────────────────
 
 (defhandler ask-the-owner [row inp _ctx]
@@ -104,7 +144,8 @@
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
   ;; same on every run, so an unchanged finding keeps its key; a
-  ;; question whose finding is gone is resolved, once.
+  ;; question whose finding is gone is resolved, once. The walk's next
+  ;; step moves only here, so a step closes when its finding clears.
   (let [found (vec (:findings inp))
         open (into #{} (map :key) found)
         closed? #(and (some? (:finding_key %))
@@ -112,7 +153,8 @@
                       (nil? (:resolved_at %)))]
     (cond-> (-> row
                 (assoc-in [:data :findings] found)
-                (assoc-in [:data :findings_sha] (:head_sha inp)))
+                (assoc-in [:data :findings_sha] (:head_sha inp))
+                (assoc-in [:data :next_step] (next-step found)))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -345,6 +387,12 @@
                      :label "Audited at"
                      :help "The head commit of the org's branch the findings were found on."}}
      [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
+    [:next_step {:optional true
+                 :x-display
+                 {:label "The next step"
+                  :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}}
+     [:maybe finding-schema]]
     [:questions {:optional true
                  :x-display
                  {:label "Questions for the owner"
