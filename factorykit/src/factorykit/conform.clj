@@ -348,20 +348,32 @@
       (sort-by #(.getName ^File %)
                (filter #(.isFile (io/file ^File % "deps.edn")) (.listFiles d))))))
 
+(defn- wire-finding
+  "A finding as org_plan's record_findings takes it: strings throughout."
+  [f]
+  (-> f (update :severity text) (update :class text)))
+
 (defn -main
   "Judge each org named, or each under a directory named. Exit 1 on
-  any error finding, 2 when no org was found."
+  any error finding, 2 when no org was found. `--json` prints one JSON
+  object instead, each org's name to its findings, for the audit's CI
+  job to hand to org_plan's record_findings (ticket 5d62058e)."
   [& args]
-  (let [dirs (mapcat org-dirs (or (seq args) ["."]))
-        errors (reduce
-                (fn [n ^File d]
-                  (let [fs (conform d)]
-                    (println (str (.getName (.getCanonicalFile d)) ": "
-                                  (if (seq fs) (str (count fs) " finding(s)") "conforms")))
-                    (doseq [{:keys [severity key sentence remedy]} fs]
-                      (println (str "  [" (name severity) "] " key " " sentence))
-                      (println (str "      " remedy)))
-                    (+ n (count (filter #(= :error (:severity %)) fs)))))
-                0 dirs)]
+  (let [json? (boolean (some #{"--json"} args))
+        dirs (mapcat org-dirs (or (seq (remove #{"--json"} args)) ["."]))
+        judged (mapv (fn [^File d] [(.getName (.getCanonicalFile d)) (conform d)])
+                     dirs)
+        errors (count (filter #(= :error (:severity %)) (mapcat second judged)))]
+    (if json?
+      (println (wire/write-json
+                (into (sorted-map)
+                      (map (fn [[org fs]] [org (mapv wire-finding fs)]))
+                      judged)))
+      (doseq [[org fs] judged]
+        (println (str org ": "
+                      (if (seq fs) (str (count fs) " finding(s)") "conforms")))
+        (doseq [{:keys [severity key sentence remedy]} fs]
+          (println (str "  [" (name severity) "] " key " " sentence))
+          (println (str "      " remedy)))))
     (shutdown-agents)
     (System/exit (cond (empty? dirs) 2 (pos? (long errors)) 1 :else 0))))

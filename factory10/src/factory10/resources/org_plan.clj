@@ -13,10 +13,12 @@
   first week is attached) → live (merged, and its mayor sits). Any of
   them may be retired, by the owner.
 
-  `findings` IS WRITTEN BY ONE DOOR, AND IT IS NOT HERE YET. The
-  findings door (M2b) writes the audit's findings onto the row; no
-  door of this ticket writes them, and no create form takes them. A
-  question ties to a finding by its key.
+  `findings` IS WRITTEN BY ONE DOOR, `record_findings` (ticket
+  5d62058e, M2b). After each push to the org's branch the audit's run
+  replaces the plan's findings with its own, keyed to the head SHA,
+  and only the engine's hand takes that door; no create form takes
+  them. A question ties to a finding by its key, and a finding that is
+  gone from the next run closes: its question is marked resolved.
 
   `propose` IS REFUSED WHILE AN ERROR FINDING IS OPEN. A plan the
   audit says is broken does not go up as a pull request: the refusal
@@ -99,6 +101,24 @@
 (defhandler attach-the-film [row inp _ctx]
   (assoc-in row [:data :film_url] (:film_url inp)))
 
+(defhandler record-the-findings [row inp ctx]
+  ;; The run's findings replace the plan's. The audit's keys are the
+  ;; same on every run, so an unchanged finding keeps its key; a
+  ;; question whose finding is gone is resolved, once.
+  (let [found (vec (:findings inp))
+        open (into #{} (map :key) found)
+        closed? #(and (some? (:finding_key %))
+                      (not (contains? open (:finding_key %)))
+                      (nil? (:resolved_at %)))]
+    (cond-> (-> row
+                (assoc-in [:data :findings] found)
+                (assoc-in [:data :findings_sha] (:head_sha inp)))
+      (seq (get-in row [:data :questions]))
+      (update-in [:data :questions]
+                 (fn [qs]
+                   (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
+                         qs))))))
+
 (defhandler retire-the-plan [row inp _ctx]
   ;; A retired plan says why, because nothing departs `retired`.
   (assoc-in row [:data :retired_why] (:why inp)))
@@ -145,6 +165,18 @@
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
     :else (t/deny)))
+
+(defguardfn the-engine-records-the-findings
+  {:reads [:principal]
+   :hide true
+   :explain "The audit's run writes the findings. A person and a model read them."}
+  ;; repo_policy's `the-engine-notes-the-source`, one kind over: the
+  ;; forge pass is the only hand that walks this door, and a hidden
+  ;; door answers 404 and says nothing.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
 
 (defguardfn the-question-was-asked
   {:reads []
@@ -255,7 +287,8 @@
    [:question [:string {:min 1 :max 240}]]
    [:answer {:optional true :x-display {:widget "prose"}}
     [:maybe [:string {:max 2000}]]]
-   [:answered_at {:optional true} [:maybe :waymark/instant]]])
+   [:answered_at {:optional true} [:maybe :waymark/instant]]
+   [:resolved_at {:optional true} [:maybe :waymark/instant]]])
 
 (defresource org-plan
   {:kind :org_plan
@@ -306,6 +339,12 @@
                 {:label "What the audit found"
                  :help "The engine's own audit of the plan, one finding a line. An error finding keeps the plan from going up as a pull request."}}
      [:maybe [:vector {:max 200} finding-schema]]]
+    [:findings_sha {:optional true
+                    :x-display
+                    {:raw true
+                     :label "Audited at"
+                     :help "The head commit of the org's branch the findings were found on."}}
+     [:maybe [:string {:max 64}]]]
     [:questions {:optional true
                  :x-display
                  {:label "Questions for the owner"
@@ -424,6 +463,27 @@
               :one-way "The film is on the plan for the owner to watch."}
      :display {:label "Attach the film" :order 4
                :description "Attach the film of the org's simulated first week"}}
+
+    ;; THE AUDIT'S OWN DOOR (M2b). Hidden, and the engine's hand alone,
+    ;; for repo_policy's note_source's reasons. An empty run clears the
+    ;; findings. While drafting: the findings are what keep propose shut.
+    :record_findings
+    {:from #{:drafting} :to :drafting
+     :guards [the-engine-records-the-findings]
+     :handler record-the-findings
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The head commit"}}
+              [:string {:min 7 :max 64}]]
+             [:findings {:x-display {:hidden true
+                                     :label "The run's findings"}}
+              [:vector {:max 200} finding-schema]]]
+     ;; :edit-shape — a run replaces the findings, nobody edits them
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Findings recorded" :order 7
+               :description "The audit's run writes what it found on the org's branch"}}
 
     ;; THE ONE TAP. The merge and the mayor behind it are M2e's.
     :go_live
