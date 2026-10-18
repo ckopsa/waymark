@@ -6,7 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
-(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor"])
+(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor" "onboarding"])
 
 (def ^:private judgment-names ["draft-ticket" "sitting"])
 

@@ -103,3 +103,37 @@
         (let [row (json (req h :get (str "/api/seats/" (id-of made)) nil))]
           (is (= domain-id (get-in row [:data :domain])))
           (is (= "landscaping" (get-in row [:data :in_domain]))))))))
+
+(deftest the-onboarding-seat-reaches-every-door-its-walk-needs-and-nothing-else
+  (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)
+                          {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        t (edn-resource "seats/onboarding.edn")
+        seat (fill t :seat {:org "greenleaf"})
+        vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
+                    (inv/resources eng))
+        kinds (remove #(str/includes? (:kind %) ".") (:scope seat))
+        powers (filter #(str/includes? (:kind %) ".") (:scope seat))]
+    (powers! eng [t])
+    (testing "it fills and creates through the seat door"
+      (let [made (req h :post "/api/seats" seat)]
+        (is (= 201 (:status made)) (pr-str (json made)))))
+    (testing "its walk and every door its scope names are ones the engine serves"
+      (is (contains? vocab (:walk seat)))
+      (doseq [{:keys [kind actions]} kinds
+              a actions]
+        (is (contains? (get vocab kind) a) (str kind "." a))))
+    (testing "it holds the walk's doors and no other"
+      (is (= {"org_plan" #{"ask" "propose"}
+              "change" #{"submit" "stall"}}
+             (into {} (map (juxt :kind (comp set :actions))) kinds)))
+      (is (= {:state "drafting"}
+             (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
+          "the walk is the drafting plans, and propose is its way out"))
+    (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
+      (is (seq powers))
+      (doseq [{:keys [kind filter]} powers]
+        (is (str/starts-with? kind "bench.") kind)
+        (is (= "ckopsa/waymark" (:repo filter)) kind)
+        (when (#{"bench.find" "bench.read" "bench.edit"} kind)
+          (is (= "orgs/greenleaf/**" (:path filter)) kind))))))
