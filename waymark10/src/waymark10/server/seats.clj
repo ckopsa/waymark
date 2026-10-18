@@ -1115,6 +1115,17 @@
 
       :else (not= was asked))))
 
+(g/defguard cast-only-on-a-clone
+  {:judges [:acts_as_cast]
+   :reads [:services.features]
+   :open "No door makes an engine a clone: it is a fact of the boot (WAYMARK10_CLONE=1, which the clone door sets). Off a clone, state the seat without acts_as_cast."
+   :explain "Only a clone seats a cast member: acts_as_cast plays an org's customers and writes rows no real customer filed, and this engine is not a clone (WAYMARK10_CLONE is not 1)."}
+  [_row inp ctx]
+  (if (and (true? (:acts_as_cast inp))
+           (not (contains? (set (map name (:features (:services ctx)))) "clone")))
+    (t/deny)
+    (t/allow)))
+
 (g/defguard step-carries-a-note
   {:judges [:note]
    :explain "A step up or down the ladder is a record: a restate that changes held_for or substitute_for carries a note saying which model it was, which it is now, and why. Everything else about a seat may move silently; the model it is held for may not."}
@@ -1479,7 +1490,7 @@
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
    :release_grace_seconds :health_window :health_alerts :health_breaker
-   :delivers :delegates])
+   :delivers :delegates :acts_as_cast])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -2458,6 +2469,9 @@
        (:walked_nothing_run health-alert-defaults)
        " in a row that walked nothing while rows wait outside its grant."))
 
+(def ^:private acts-as-cast-help
+  "Tick it and this seat plays a seed's cast — the customers, suppliers and callers of an org on a clone. Only a clone takes it: on any other engine the create and the restate refuse it.")
+
 (def ^:private health-breaker-help
   "Tick it and a new breach caps this seat to one sitting at a time until somebody closes the breaker. It does nothing for a seat that runs one sitting at once, and the number the seat states is never lowered.")
 
@@ -3191,6 +3205,11 @@
                  {:label "What it may author"
                   :help delegates-field-help}}
      [:maybe delegates-schema]]
+    [:acts_as_cast {:optional true
+                    :x-display
+                    {:label "Acts as a seed's cast (clones only)"
+                     :help acts-as-cast-help}}
+     [:maybe :boolean]]
     [:delivers {:optional true
                 :x-display
                 {:label "What counts as its delivery"
@@ -3483,6 +3502,11 @@
                  {:label "What it may author"
                   :help delegates-field-help}}
      [:maybe delegates-schema]]
+    [:acts_as_cast {:optional true
+                    :x-display
+                    {:label "Acts as a seed's cast (clones only)"
+                     :help acts-as-cast-help}}
+     [:maybe :boolean]]
     ;; the write fence, named so it can be refused (R-12.12): the
     ;; create door and the restate DECLARE sitter_key only so
     ;; `key-not-written-by-hand` may judge it — a guard judges a field
@@ -3537,6 +3561,7 @@
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    inbox-cues-filter-declared-fields
+                   cast-only-on-a-clone
                    budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
                    delegation/authors-within-the-ceiling
@@ -3703,6 +3728,11 @@
                           {:label "What it may author"
                            :help delegates-field-help}}
               [:maybe delegates-schema]]
+             [:acts_as_cast {:optional true
+                             :x-display
+                             {:label "Acts as a seed's cast (clones only)"
+                              :help acts-as-cast-help}}
+              [:maybe :boolean]]
              ;; THE STEP'S RECORD (R-11.2). A transition input, so the
              ;; log's `inputs` column holds it and no column is added.
              [:note {:optional true
@@ -3739,7 +3769,7 @@
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds :health_window
                       :health_alerts :health_breaker :delivers :delegates
-                      :domain :serves]
+                      :acts_as_cast :domain :serves]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter
@@ -3765,6 +3795,7 @@
               inbox-names-real-actions
               inbox-cues-filter-declared-fields
               step-carries-a-note
+              cast-only-on-a-clone
               budget-fits-the-domain
               delegation/authors-within-the-ceiling
               a-crack-waits-on-the-person]

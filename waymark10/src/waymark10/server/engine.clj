@@ -166,6 +166,14 @@
   maps refuse the boot either way (waymark9's check_state_tokens)."
   [{:keys [storage resources services now-fn deploy-mode modules] :as opts}]
   (let [reg (full-registry resources modules)
+        ;; a clone (docs/spec-demo-clones.md): the :clone? option, else
+        ;; WAYMARK10_CLONE=1, read once at boot and never a name
+        ;; prefix. It rides :services as the "clone" feature, so a
+        ;; guard reads it the way it reads any feature
+        ;; (:services.features) — the seat's acts_as_cast is the first.
+        cloned (if (contains? opts :clone?)
+                 (true? (:clone? opts))
+                 (= "1" (System/getenv "WAYMARK10_CLONE")))
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
                                       :suppress-mirror-refresh :probe-reads
@@ -253,7 +261,9 @@
                     ;; what that selection lends core kinds' envelopes
                     ;; (seams/Linking) — render asks these per row
                     :link-doors (modules/link-doors modules)
-                    :services services
+                    :clone? cloned
+                    :services (cond-> services
+                                cloned (update :features (fnil conj []) "clone"))
                     :now-fn (or now-fn (fn [] (java.time.Instant/now)))
                     :deploy-mode (or deploy-mode :promote)
                     :lifecycle defs/lifecycle
@@ -330,6 +340,11 @@
     (migrate-gate! storage reg opts)
     (defs/boot-revise! eng)
     eng))
+
+(defn clone?
+  "Did this engine boot as a clone (:clone?, else WAYMARK10_CLONE=1)?"
+  [eng]
+  (true? (:clone? eng)))
 
 (defn handler
   "The ring handler for an engine: core's routes plus the assembled
