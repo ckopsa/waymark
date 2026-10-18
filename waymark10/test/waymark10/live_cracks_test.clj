@@ -4,8 +4,17 @@
   twice for one reason, a seat refused out on one guard, and a change
   whose ticket is gone. `find-cracks` is pure over a world of rows, so
   the world here is a map and no engine."
-  (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.live-cracks :as live])
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
+            [waymark10.server.consumers :as consumers]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.live-cracks :as live]
+            [waymark10.server.schedules :as sch]
+            [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t])
   (:import (java.time Instant)))
 
 (def ^:private now (Instant/parse "2026-10-13T12:00:00Z"))
@@ -223,3 +232,155 @@
       (is (= ["k1" "dropped"] ((juxt :ticket :ticket_state) c)))
       (is (= ["closer"] (:seats c)))
       (is (re-find #"\[crack orphan:change:c1\]" (:detail (live/ticket-of c)))))))
+
+;; ── the pass against an engine (ticket 4ff29b4a) ──────────────────────
+;;
+;; `pass!` over a memory engine: the wake goes out with the crack's key
+;; in its recorded text, a second pass reads it back and waits, a
+;; refused fire files the draft, and an open sitting holds the wake.
+
+(def ^:private crack-ticket
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :expected-age {:open 1}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 200}]]
+             [:detail {:optional true} [:string {:max 4000}]]
+             [:type {:optional true} [:string {:max 20}]]
+             [:priority {:optional true} :int]
+             [:repo {:optional true} [:string {:max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:state "open"}
+    :actions {:finish {:from #{:open} :to :done
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Done is done."}}}}))
+
+(def ^:private elena (t/principal {:id "elena" :type :human :display "Elena"}))
+(def ^:private clerk (t/principal {:id "clerk" :type :agent :display "Clerk"}))
+(def ^:private holder-scope [{:kind "ticket" :actions ["finish"]}])
+
+(defn- pass-engine []
+  (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket]})
+         :schedule-adapters {:claude_routine (sch/fake-scheduler)}
+         :fire-adapter (sch/fake-fire)))
+
+(defn- holder!
+  "The one seat that holds an open ticket: it walks tickets and may
+  finish one. Linked, its schedule is minted and carries a person's
+  link, so its `fire` door goes out."
+  [eng linked?]
+  (let [drain! #(consumers/drain-consumer! eng :crack-fires (sch/consumer-fn eng))
+        _ (when linked? (drain!))
+        seat-id (str (:id (:row (inv/create! eng :seat
+                                             {:name "holder"
+                                              :charter "Finish the tickets this house leaves open."
+                                              :scope holder-scope
+                                              :walk "ticket"
+                                              :substitute_drop []
+                                              :held_for []
+                                              :substitute_for []
+                                              :standing_ttl_seconds 604800
+                                              :cadence_seconds 3600
+                                              :budget_usd_per_week 5M
+                                              :sitting_budget_tokens 60000
+                                              :rows_per_firing 20}
+                                             {:principal elena}))))]
+    (when linked?
+      (drain!)
+      (inv/invoke! eng :schedule (str (:id (sch/schedule-for-seat eng seat-id))) :link
+                   {:fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_holder/fire"
+                    :token "rk-test-holder-0123456789abcdef"}
+                   {:principal elena}))
+    seat-id))
+
+(defn- sitting! [eng seat-id]
+  (let [model (inv/create! eng :model
+                           {:name "holder-model" :display "holder-model"
+                            :vendor "anthropic" :tier "strong"
+                            :price_input_per_mtok 3M
+                            :price_output_per_mtok 15M
+                            :price_cache_read_per_mtok 0.3M
+                            :price_cache_write_per_mtok 3.75M}
+                           {:principal elena})
+        grant (inv/create! eng :grant {:audience "clerk" :scope holder-scope}
+                           {:principal elena})]
+    (inv/create! eng :sitting {:seat seat-id
+                               :model (str (get-in model [:row :id]))
+                               :grant (str (get-in grant [:row :id]))}
+                 {:principal clerk})))
+
+(defn- aged-ticket! [eng]
+  (str (:id (:row (inv/create! eng :ticket {:title "Left open"} {:principal elena})))))
+
+(defn- later
+  "The engine ten minutes on, past the open ticket's expected age."
+  [eng]
+  (let [at (.plusSeconds (Instant/now) 600)]
+    (assoc eng :now-fn (constantly at))))
+
+(defn- fires-of [eng seat-id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (filterv #(= "fire" (name (:action %)))
+               (store/transitions (:storage eng) tx
+                                  {:kind :seat :resource-id seat-id} {})))))
+
+(defn- filed-for
+  "The tickets the pass filed for this row's aged crack."
+  [eng row-id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (filterv #(str/includes? (str (get-in % [:data :detail]))
+                               (str "[crack aged:ticket:" row-id "]"))
+               (store/query-rows (:storage eng) tx :ticket {:state :open}
+                                 {:limit 200})))))
+
+(deftest a-pass-wakes-the-seat-that-holds-an-aged-row-and-then-waits
+  ;; on the real clock, which the seat's log records the fire by: the
+  ;; row ages past its one second, and the second pass comes inside
+  ;; one expected age of the fire
+  (let [eng (pass-engine)
+        seat-id (holder! eng true)
+        row-id (aged-ticket! eng)]
+    (Thread/sleep 1500)
+    (live/pass! eng)
+    (testing "the first pass fires the seat once, the crack's key in the recorded text"
+      (let [fires (fires-of eng seat-id)]
+        (is (= 1 (count fires)))
+        (is (str/includes? (str (get-in (first fires) [:inputs :text]))
+                           (str "aged:ticket:" row-id)))))
+    (testing "and files nothing for the row"
+      (is (empty? (filed-for eng row-id))))
+    (testing "a second pass reads the fire back from the seat's log and waits"
+      (live/pass! eng)
+      (is (= 1 (count (fires-of eng seat-id))))
+      (is (empty? (filed-for eng row-id))))))
+
+(deftest a-refused-wake-files-the-draft-saying-the-seat-would-not-be-woken
+  (let [eng (pass-engine)
+        seat-id (holder! eng false)
+        row-id (aged-ticket! eng)
+        eng (later eng)]
+    (live/pass! eng)
+    (is (empty? (fires-of eng seat-id)))
+    (let [filed (filed-for eng row-id)]
+      (is (= 1 (count filed)))
+      (is (re-find #"Seat tried: holder, which would not be woken"
+                   (str (get-in (first filed) [:data :detail])))))))
+
+(deftest an-open-sitting-holds-the-wake-for-a-later-pass
+  (let [eng (pass-engine)
+        seat-id (holder! eng true)
+        _ (sitting! eng seat-id)
+        row-id (aged-ticket! eng)
+        eng (later eng)]
+    (live/pass! eng)
+    (testing "a seat of one slot with a sitting open is not fired a second run"
+      (is (empty? (fires-of eng seat-id))))
+    (testing "and the crack waits rather than reaching the mayor"
+      (is (empty? (filed-for eng row-id))))))

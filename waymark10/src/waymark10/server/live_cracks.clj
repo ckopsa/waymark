@@ -27,7 +27,11 @@
   is the note, written once. The draft for the mayor is filed when no
   seat holds the row, when several do, when the seat would not fire,
   or when the seat was woken and the row is still aged one expected
-  age later; then it says which seat was tried (`route`).
+  age later; then it says which seat was tried (`route`). The wake
+  asks the damper first (`wakes/wake-held`, ticket 4ff29b4a): a seat
+  with a run up or just fired, or a throttled Routine, is not woken a
+  second time, and the crack waits for a later pass; a broken Routine
+  or a spent week waits on a person, so that crack is the mayor's.
 
   AN EXPECTED AGE is declared per kind and state, in seconds, under the
   declaration's `:expected-age`. A state with none takes the default
@@ -44,6 +48,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.wakes :as wakes]
             [waymark10.wire :as wire])
   (:import (java.time Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
@@ -589,20 +594,32 @@
              (:key c) " — " (ex-message e))
       nil)))
 
+(def ^:private waits-for
+  "What `wakes/wake-held` answers that holds a wake for a later pass:
+  the damper (a run is up, or one just went out), a throttled Routine,
+  and a row a run already has. They lift by themselves."
+  #{:damped :throttled :spoken_for})
+
 (defn- send!
   "One crack's note, by `route`: a wake for the seat that holds the row,
-  or the draft ticket. A seat whose door refuses the wake was tried all
-  the same, and the draft says so. → true when a note went out."
+  or the draft ticket. A wake the damper holds (`waits-for`) sends
+  nothing and waits for a later pass. A seat held otherwise, or whose
+  door refuses the wake, was tried all the same, and the draft says
+  so. → true when a note went out."
   [eng c now]
   (let [[door c] (route c (when (:wake c) (woken-at eng c)) now)]
     (case door
       :wait nil
       :file (file! eng c now)
-      :wake (or (wake! eng c)
-                (file! eng
-                       (assoc c :tried (str (get-in c [:wake :name])
-                                            ", which would not be woken"))
-                       now)))))
+      :wake (let [held (wakes/wake-held eng (get-in c [:wake :seat])
+                                        (wake-text c) now)]
+              (cond
+                (contains? waits-for held) nil
+                (and (nil? held) (wake! eng c)) true
+                :else (file! eng
+                             (assoc c :tried (str (get-in c [:wake :name])
+                                                  ", which would not be woken"))
+                             now))))))
 
 (defn pass!
   "One pass: read the rows, find the cracks, and send a note for each
