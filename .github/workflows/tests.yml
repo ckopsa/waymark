@@ -701,6 +701,60 @@ jobs:
           path: ${{ runner.temp }}/org-findings.json
           if-no-files-found: error
 
+  # Each org dir a pull request changes, its law rendered as the page a
+  # person approves (factory10.law-text) and posted on the pull request
+  # as one sticky comment per org, edited in place on every push
+  # (ticket 9020e8f8). Not a gate: `gate` does not need this job. A
+  # fork's token cannot comment, so a fork's pull request skips it.
+  org-law:
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.changes.outputs.orgs != '' && needs.changes.outputs.orgs != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        org: ${{ fromJSON(needs.changes.outputs.orgs) }}
+    env:
+      ORG: ${{ matrix.org }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # The org's own deps.edn puts its namespaces on the classpath,
+      # as factory10's :test alias does for orgs/example.
+      - name: law-text
+        working-directory: factory10
+        run: |
+          set -euo pipefail
+          sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+          {
+            echo "<!-- law-page:$ORG -->"
+            clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG"
+          } > "$RUNNER_TEMP/law.md"
+      - name: post the law page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          marker="<!-- law-page:$ORG -->"
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                 --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+               | head -n 1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/law.md" > /dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/law.md" > /dev/null
+          fi
+
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
