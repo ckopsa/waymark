@@ -48,6 +48,8 @@ it:
   first boot makes each a `domain` row through its create door, as the
   owner and before the seats: its charter is its `:charter` or its
   `:label`, its budget its `:budget_usd_per_week` or the factory's 3600.
+  A `:ref` names the row, so a seat template's `:domain_id` can be
+  `[:ref …]`.
 - `:cast`: the members, as in the demo seed.
 - `:seats`: each a factorykit seat template and its params,
   `{:template "mayor" :params {...}}`, or a whole seat map under
