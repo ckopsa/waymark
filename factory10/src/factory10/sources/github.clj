@@ -706,9 +706,38 @@
    :html_url (:html_url job)
    :details_url (:html_url job)})
 
+(defn rejected-run->check
+  "A workflow run that ended `failure` with no job at all is GitHub's
+  answer to a workflow file it cannot parse: no check run is ever made,
+  so the required checks it would have run stay missing (ticket
+  004188aa). It reads as one red check named for the file, marked
+  `:rejected`, so the change goes failing and its seat is told which
+  file to mend."
+  [sha run]
+  {:id (:id run)
+   :name (or (word (:path run)) (word (:name run))
+             (str "workflow run " (:id run)))
+   :status "completed"
+   :conclusion "failure"
+   :rejected true
+   :head_sha (or (word (:head_sha run)) sha)
+   :started_at (:created_at run)
+   :completed_at (:updated_at run)
+   :html_url (:html_url run)
+   :details_url (:html_url run)})
+
+(defn- run-jobs! [this repo run]
+  (:jobs (call! this "GET"
+                (str "/repos/" repo "/actions/runs/" (:id run) "/jobs")
+                {:params {:per_page page-size}})))
+
+(defn- failed-run? [run]
+  (= "failure" (word (:conclusion run))))
+
 (defn- actions-checks!
   "Every job of every workflow run on the head, as check runs: the read
-  a token without `Checks` can still make."
+  a token without `Checks` can still make. A failed run with no job is
+  a rejected workflow (`rejected-run->check`)."
   [this repo sha]
   (let [runs (:workflow_runs
               (call! this "GET" (str "/repos/" repo "/actions/runs")
@@ -716,11 +745,10 @@
     (into []
           (mapcat
            (fn [run]
-             (map #(settled (job->check sha %))
-                  (:jobs (call! this "GET"
-                                (str "/repos/" repo "/actions/runs/"
-                                     (:id run) "/jobs")
-                                {:params {:per_page page-size}})))))
+             (let [jobs (run-jobs! this repo run)]
+               (if (and (empty? jobs) (failed-run? run))
+                 [(rejected-run->check sha run)]
+                 (map #(settled (job->check sha %)) jobs)))))
           runs)))
 
 (defn- run-job
@@ -803,11 +831,38 @@
     (catch clojure.lang.ExceptionInfo e
       (if (refused? e) [] (throw e)))))
 
+(defn- rejected-runs!
+  "The workflows on the head GitHub rejected, as red checks (ticket
+  004188aa): the latest run of each workflow that ended `failure` with
+  no job. A run whose check suite carries one of `checks` has jobs and
+  is not asked after. A token that may not read Actions answers none."
+  [this repo sha checks]
+  (try
+    (let [suites (into #{} (keep #(some-> (get-in % [:check_suite :id]) str))
+                       checks)
+          runs (:workflow_runs
+                (call! this "GET" (str "/repos/" repo "/actions/runs")
+                       {:params {:head_sha sha :per_page page-size}}))
+          latest (vals (reduce (fn [m run]
+                                 (let [k (str (or (:workflow_id run) (:id run)))]
+                                   (if (contains? m k) m (assoc m k run))))
+                               {}
+                               runs))]
+      (into []
+            (comp (filter failed-run?)
+                  (remove #(contains? suites (str (:check_suite_id %))))
+                  (filter #(empty? (run-jobs! this repo %)))
+                  (map #(rejected-run->check sha %)))
+            latest))
+    (catch clojure.lang.ExceptionInfo e
+      (if (and (refused? e) (not (throttled? e))) [] (throw e)))))
+
 (defn- check-runs!
-  "Every check run on the head, as one page, and every commit status
-  beside them. `filter=latest` is GitHub's own: a check run that ran
-  twice answers once. A repository whose check-runs route refused the
-  token is read through Actions, and stays so for the rest of the pass."
+  "Every check run on the head, as one page, every rejected workflow
+  (`rejected-runs!`) and every commit status beside them.
+  `filter=latest` is GitHub's own: a check run that ran twice answers
+  once. A repository whose check-runs route refused the token is read
+  through Actions, and stays so for the rest of the pass."
   [{:keys [actions-only] :as this} repo sha]
   (into
    (if (contains? @actions-only repo)
@@ -815,8 +870,9 @@
      (try
        (let [resp (call! this "GET"
                          (str "/repos/" repo "/commits/" sha "/check-runs")
-                         {:params {:per_page page-size :filter "latest"}})]
-         (mapv settled (:check_runs resp)))
+                         {:params {:per_page page-size :filter "latest"}})
+             checks (mapv settled (:check_runs resp))]
+         (into checks (rejected-runs! this repo sha checks)))
        (catch clojure.lang.ExceptionInfo e
          (if (refused? e)
            (do (swap! actions-only conj repo)
@@ -1136,11 +1192,12 @@
     ;; pass mints a late red from this same read (ticket 3aca3ae8)
     (mapv (fn [check]
             (with-meta
-              {:check_name (clamp (:name check) 200)
-               :status (word (:status check))
-               :conclusion (word (:conclusion check))
-               :id (:id check)
-               :started_at (word (:started_at check))}
+              (cond-> {:check_name (clamp (:name check) 200)
+                       :status (word (:status check))
+                       :conclusion (word (:conclusion check))
+                       :id (:id check)
+                       :started_at (word (:started_at check))}
+                (:rejected check) (assoc :rejected true))
               {:doc (check->doc repository nil head-sha check)}))
           (check-runs! this repository head-sha)))
 

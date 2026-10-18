@@ -392,6 +392,19 @@
   [required checks]
   (kit/verdict {:forge :github :required required} checks))
 
+(defn rejected-verdict
+  "A workflow the forge rejected on the head (a failed run with no job,
+  read as a check marked `:rejected`, ticket 004188aa) → {:verdict :red
+  :names [its file …]}, else nil. Read only where `check-verdict` says
+  not yet: the checks that workflow would run never come."
+  [checks]
+  (when-some [names (seq (into [] (comp (filter :rejected)
+                                        (keep :check_name)
+                                        (map str)
+                                        (distinct))
+                               checks))]
+    {:verdict :red :names (vec names)}))
+
 (def failing-scan-limit
   "How many rows of each of the two live states one pass reads."
   200)
@@ -1100,7 +1113,8 @@
                    required (bench/required-checks-of policy)
                    checks (when-not landing (read-checks repo head))
                    checked (when-not landing
-                             (check-verdict required checks))
+                             (or (check-verdict required checks)
+                                 (rejected-verdict checks)))
                    ;; a required check nobody runs never concludes, so
                    ;; the wait past the policy's limit is the red, and
                    ;; a check that starts after it clears that red
