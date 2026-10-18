@@ -144,6 +144,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.in-flight :as in-flight]
+            [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp-client :as mcp-client]
@@ -5240,6 +5241,121 @@
      {}
      (map-indexed vector (get-in eng sit-sections-key)))))
 
+;; ── an org mayor's first sit ─────────────────────────────────────────
+
+(def ^:private org-live-page
+  "The most rows of one kind and state an org mayor's first sit reads."
+  500)
+
+(def ^:private org-live-whys
+  "The held calls whose why an org mayor's first sit names."
+  5)
+
+(defn- stored-rows
+  "The stored rows of `kind` under `where`, or [] for a kind this
+  engine does not serve."
+  [eng kind where]
+  (if (contains? (inv/resources eng) kind)
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx] (vec (store/query-rows st tx kind where {:limit org-live-page})))))
+    []))
+
+(defn- decoded-rows [eng kind where]
+  (let [rdef (get (inv/resources eng) kind)]
+    (mapv #(inv/decode-row rdef %) (stored-rows eng kind where))))
+
+(defn- row-reader
+  "`(fn [kind id] → row)`, the read `seats/domain-name-of` takes."
+  [eng]
+  (fn [kind id]
+    (when-some [rdef (get (inv/resources eng) (keyword (name kind)))]
+      (let [st (:storage eng)]
+        (some->> (store/with-tx st
+                   (fn [tx] (store/load-row st tx (:kind rdef) (str id) {})))
+                 (inv/decode-row rdef))))))
+
+(defn- org-live-of
+  "What an org mayor's FIRST sit leads with (ticket 9b16b765), or nil.
+  The seat is an org's when the domain it is in is named by an org_plan
+  that is not retired — read by the kind's name, so an engine serving
+  no org_plan answers nil — and the sitting is its first when it is the
+  seat's only one. The org's held calls are those still held whose
+  caller, or whose door's author, is the sitter of a seat in the org's
+  domain; its aged rows are `live-cracks/aged-rows` over the rows whose
+  domain is the org's."
+  [eng seat sitting now]
+  (let [read' (row-reader eng)
+        org (seats/domain-name-of read' seat)
+        plan (some #(when-not (= "retired" (name (:state %))) %)
+                   (decoded-rows eng :org_plan {:name org}))
+        mine (when plan (stored-rows eng :sitting {:seat (str (:id seat))}))]
+    (when (and plan sitting
+               (= [(str (:id sitting))] (mapv (comp str :id) mine)))
+      (let [seat-rows (decoded-rows eng :seat {:state :active})
+            callers (into #{}
+                          (comp (filter #(= org (seats/domain-name-of read' %)))
+                                (map seats/sitter-id))
+                          seat-rows)
+            held (filterv (fn [row]
+                            (let [d (:data row)
+                                  door (:door d)]
+                              (or (contains? callers (str (:caller d)))
+                                  (contains? callers
+                                             (str (or (get door :author)
+                                                      (get door "author")))))))
+                          (decoded-rows eng :held_call {:state :held}))
+            rdefs (vec (vals (inv/resources eng)))
+            rows (into {}
+                       (keep (fn [rdef]
+                               (let [rs (into []
+                                              (comp (filter #(live-cracks/expected-age rdef %))
+                                                    (mapcat #(stored-rows eng (:kind rdef)
+                                                                          {:state (keyword (name %))}))
+                                                    (filter #(= org (live-cracks/row-domain rdef %))))
+                                              (:states rdef))]
+                                 (when (seq rs) [(keyword (name (:kind rdef))) rs]))))
+                       rdefs)
+            aged (vec (live-cracks/aged-rows rdefs seat-rows rows now))
+            plural (into {} (map (juxt (comp name :kind) :plural)) rdefs)
+            href (fn [kind id] (str "/api/" (get plural (str kind)) "/" id))]
+        {"org" org
+         "line" (str org " is live. Here is what is waiting on you:")
+         "held_calls"
+         {"count" (count held)
+          "first" (mapv (fn [row]
+                          {"id" (str (:id row))
+                           "why" (str (get-in row [:data :why]))
+                           "href" (href "held_call" (:id row))})
+                        (take org-live-whys held))}
+         "aged"
+         {"count" (count aged)
+          "by" (mapv (fn [[[kind state] cs]]
+                       {"kind" kind "state" state "count" (count cs)
+                        "href" (str "/api/" (get plural kind) "?state=" state)})
+                     (sort-by key (group-by (juxt :kind :state) aged)))
+          "rows" (mapv (fn [c]
+                         {"kind" (:kind c) "id" (:id c) "state" (:state c)
+                          "since" (:since c) "href" (href (:kind c) (:id c))})
+                       aged)}}))))
+
+(defn- org-live-note
+  "The live line and what waits, in words, ahead of the sit's note."
+  [live]
+  (let [held (get live "held_calls")
+        aged (get live "aged")]
+    (str (get live "line") " "
+         (get held "count") " held calls"
+         (when-some [ws (seq (map #(get % "why") (get held "first")))]
+           (str " (" (str/join "; " ws) ")"))
+         ", " (get aged "count") " aged rows"
+         (when-some [bs (seq (get aged "by"))]
+           (str " (" (str/join ", " (map #(str (get % "kind") " in " (get % "state")
+                                               ": " (get % "count"))
+                                          bs))
+                ")"))
+         "; `org_live` links each one. ")))
+
 (defn- sit
   "R-12.14, in order, and every refusal is one plain sentence an agent
   can act on.
@@ -5475,7 +5591,11 @@
                    (change-said eng call sitter-sees change))
             ;; i'''' · the app's own sections, after the walk is chosen
             ;; (`sit-sections-key`): nothing for a seat at a wall
-            sections (when-not (or halted held-by) (app-sections eng seat walk))]
+            sections (when-not (or halted held-by) (app-sections eng seat walk))
+            ;; i''''' · an org mayor's first sit leads with the org's
+            ;; live line and what waits on its person (ticket 9b16b765)
+            org-live (when-not (or halted held-by resit)
+                       (org-live-of eng seat sitting now))]
         ;; j · what the firing reads next. The walk rides as the wire
         ;; wrote it — a route's own document, string keys and all —
         ;; so the kebab→snake boundary cannot rewrite a key inside a
@@ -5495,7 +5615,8 @@
                     ;; closes or tallies
                     :mode (or (some-> (get-in seat [:data :mode]) str not-empty)
                               seats/default-mode)
-                    :note (str "You sit in `" named "`. "
+                    :note (str (when org-live (org-live-note org-live))
+                               "You sit in `" named "`. "
                                (cond halted halted-note
                                      held-by (held-by-note held-by)
                                      all-held? every-row-held-note
@@ -5530,6 +5651,7 @@
                     "expires_at" (:expires_at feed)
                     "note" (:note feed)})
             halted (assoc "halted" halted)
+            org-live (assoc "org_live" org-live)
             walk (assoc "walk" walk)
             said (assoc "change" said)
             bench (merge bench)

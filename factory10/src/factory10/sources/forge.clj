@@ -2595,7 +2595,8 @@
   plan's branch still lands, so the plan a person approves is the plan
   as it stands."
   {:drafting :record_findings
-   :proposed :record_findings_proposed})
+   :proposed :record_findings_proposed
+   :simulated :record_findings_simulated})
 
 (defn org-of
   "The org a plan names, as `orgs/<org>` spells it: the last segment of
@@ -2621,8 +2622,26 @@
     (let [page (or (get doc :law_page) (get doc "law_page"))]
       (when (and (string? page) (not (str/blank? page))) page))))
 
+(defn live-of
+  "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
+  conform's `live_flag` for the org's org.edn at that head, and the
+  `mayor` its seed seats, as the findings doors take them; {} when it
+  says neither, which records the head as not flipped."
+  [doc]
+  (if-not (map? doc)
+    {}
+    (let [at #(or (get %1 (keyword %2)) (get %1 %2))
+          flag (at doc "live_flag")
+          mayor (at doc "mayor")
+          budget (when (map? mayor) (at mayor "budget_usd_per_week"))]
+      (cond-> {}
+        (boolean? flag) (assoc :live_flag flag)
+        (and (map? mayor) (some? (at mayor "name")))
+        (assoc :mayor (cond-> {:name (str (at mayor "name"))}
+                        (some? budget) (assoc :budget_usd_per_week (str budget))))))))
+
 (defn findings-pass!
-  "Every drafting or proposed org_plan whose change carries a head its
+  "Every drafting, proposed or simulated org_plan whose change carries a head its
   findings were not recorded at → the artifact
   `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
   written through the door the plan's state affords, with the law page
@@ -2657,7 +2676,8 @@
                                          (str "org-findings-" org "-" head))]
                  (if-some [found (findings-of doc org)]
                    (do (inv/invoke! eng :org_plan (str (:id plan)) door
-                                    (cond-> {:head_sha head :findings found}
+                                    (cond-> (merge {:head_sha head :findings found}
+                                                   (live-of doc))
                                       (law-page-of doc) (assoc :law_page (law-page-of doc)))
                                     (as-opts))
                        (update census :findings (fnil inc 0)))

@@ -44,6 +44,12 @@
     (is (= ["scope/unknown-kind/example-mayor/ticket"]
            (mapv :key (conform/conform (example-with-mayor [{:kind "ticket" :actions []}])))))))
 
+(deftest the-live-report-reads-the-flag-and-the-mayor
+  (is (= {:live_flag false} (conform/live-report "../orgs/example")))
+  (is (= {:live_flag false
+          :mayor {:name "example-mayor" :budget_usd_per_week "8"}}
+         (conform/live-report (example-with-mayor [{:kind "request" :actions []}])))))
+
 (deftest a-broken-org-earns-exactly-its-three-findings
   (let [fs (conform/conform "fixtures/orgs/broken")]
     (is (= ["crack/no_exit/gizmo/stuck"
