@@ -8,7 +8,9 @@
  :domains [{:name "example" :label "Example Landscaping"}]
  :cast
  {:owner {:id "owner" :display "Rosa Delgado" :type :human :roles ["approver"]}
-  :crew  {:id "crew"  :display "Lee Park"     :type :human}}
+  :crew  {:id "crew"  :display "Lee Park"     :type :human}
+  ;; a customer, so a world seat on a clone has one to act as
+  :ana   {:id "ana"   :display "Ana Ruiz"     :type :human}}
  ;; one seat. No factorykit template walks a request, so it is a whole
  ;; seat map under :seat, in the shape a template's :seat takes
  :seats
