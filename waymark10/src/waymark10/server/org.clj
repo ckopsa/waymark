@@ -28,7 +28,13 @@
   WAYMARK10_ORGS_DIR, and `live-resources` and `boot-live!` load each
   one's src and resources through a DynamicClassLoader
   (`with-classpath`), so the house engine serves them with none a
-  deps root."
+  deps root.
+
+  A LIVE ORG THAT FAILS IS SKIPPED, NOT FATAL (ticket 77ad4315).
+  `admit` judges each live org's kinds beside everything admitted
+  before it; an org whose kinds do not load or fail the registry — a
+  kind name the house or an earlier org already serves among them — is
+  left out with a crack naming it, and the engine boots without it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -214,6 +220,29 @@
   [orgs]
   (with-classpath (map :dir orgs)
     #(into [] (mapcat (fn [{:keys [org]}] (resources org))) orgs)))
+
+(defn admit
+  "The live orgs `orgs` folded into `base` one at a time, in order,
+  each judged by `check` (the engine's `full-registry`) over `base`
+  and every org admitted before it. An org whose kinds do not load, or
+  that `check` refuses, is skipped with a crack naming it. → {:resources
+  the kinds to serve :orgs the orgs admitted :cracks [{:org :crack
+  :org_refused :reason sentence}]}."
+  [base orgs check]
+  (with-classpath (map :dir orgs)
+    #(reduce
+      (fn [acc {:keys [org] :as o}]
+        (let [rs (try (let [rs (into (:resources acc) (resources org))]
+                        (check rs)
+                        rs)
+                      (catch Exception e e))]
+          (if (instance? Exception rs)
+            (let [reason (or (ex-message rs) (str rs))]
+              (println (str "waymark10 org: `" org "` skipped, and the engine boots without it: " reason))
+              (update acc :cracks conj {:org org :crack :org_refused :reason reason}))
+            (-> acc (assoc :resources rs) (update :orgs conj o)))))
+      {:resources (vec base) :orgs [] :cracks []}
+      orgs)))
 
 (defn boot-live!
   "The boot step behind WAYMARK10_ORGS_DIR: each live org's seed, read

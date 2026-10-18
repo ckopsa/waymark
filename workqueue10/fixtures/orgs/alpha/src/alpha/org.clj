@@ -10,6 +10,9 @@
    :terminal #{:done}
    :summary "{data.title} · {state}"
    :schema [:map [:title [:string {:min 1 :max 80}]]]
+   :filterable {:state #{:eq :in}}
+   ;; the alpha-mayor seat walks sprockets: its queue is the new ones
+   :default-filters {:state "new"}
    :actions
    {:finish {:from #{:new} :to :done
              :safety {:idempotent true :reversible false :confirm false
