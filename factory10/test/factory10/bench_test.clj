@@ -2675,6 +2675,53 @@
       (is (= ["head_moved"]
              (mapv #(str (or (:key %) (get % "key"))) (get-in row [:data :findings])))))))
 
+;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
+
+(defn- simulated-world
+  "A clean submitted change touching orgs/, whose pull request a plan
+  names that the audit flipped to simulated at the change's head. → w
+  with :plan."
+  []
+  (let [{:keys [eng change state] :as w} (submitted-world orgs-policy)
+        id (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                         {:principal colton}))))
+        as {:principal colton}]
+    (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (inv/invoke! eng :org_plan id :propose {:change (str (:id change))} as)
+    (inv/invoke! eng :org_plan id :attach_film
+                 {:film_url "https://example.com/greenleaf.mp4"} as)
+    (walk/flipped! eng id a-commit)
+    (assoc w :plan id)))
+
+(deftest a-simulated-plans-pull-request-waits-on-go-live
+  (let [{:keys [eng state plan] :as w} (simulated-world)
+        waiting (atom {})]
+    (is (= "simulated" (name (:state (plan-row eng plan)))))
+    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (empty? (calls-of state "bench__merge")))
+    (is (= "org_plan_waits_go_live" (get-in (change-row w) [:data :line_why])))
+    (is (str/includes? (str (get-in (change-row w) [:data :line_reason])) plan))
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "past merge_wait_seconds, no ordinary merge ask")
+    (is (empty? (bench/merge-asks eng)))
+    (inv/invoke! eng :org_plan plan :go_live {} {:principal colton})
+    (is (= 1 (bench/merge-green! eng (atom {}))) "go_live's yes merges it")
+    (is (= 1 (count (calls-of state "bench__merge"))))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (is (empty? (bench/merge-asks eng)) "with no second ask")))
+
+(deftest a-live-plans-pull-request-gets-the-ordinary-ask
+  (let [{:keys [eng plan]} (going-live-world a-commit)
+        waiting (atom {})]
+    (inv/invoke! eng :org_plan plan :mark_live {} walk/the-engine)
+    (is (= "live" (name (:state (plan-row eng plan)))))
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "a live org's change is ordinary again")
+    (is (= 1 (count (bench/merge-asks eng))))))
+
 (deftest an-agents-removed-person-path-waits-for-the-person
   (let [eng (fresh-engine (state))
         both ["terraform/keycloak_*.tf" "terraform/iam_*.tf"]
