@@ -205,14 +205,17 @@
 (defn- enrol!
   "One cast member's row: `members/ensure-sitter!`'s create, with the
   cast's id as the row id, so the dev principal header finds it. The
-  member's `:roles` ride the create, as a provider's claim would."
+  member's `:roles` ride the create, as a provider's claim would, and
+  the row carries the cast marker, so a clone's acts_as_cast seat may
+  act as it (router/cast-principal)."
   [eng cast who]
   (let [{:keys [display type acts-for roles]} (get cast who)
         id (member-id cast who)]
     (inv/create! eng :member
                  (cond-> {:display (str display)
                           :actor_type (name (or type :human))
-                          :subject id}
+                          :subject id
+                          :cast true}
                    acts-for (assoc :acts_for (member-id cast acts-for))
                    (seq roles) (assoc :roles (mapv str roles)))
                  {:principal members/registrar :id id})))

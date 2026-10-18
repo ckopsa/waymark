@@ -189,7 +189,11 @@
 
   `scheduled` is the scheduled action whose run this write is
   (scheduled/runner-of, docs/spec-scheduled-actions.md R-4.2): the hand
-  is the scheduler's, and the log says the clock moved it."
+  is the scheduler's, and the log says the clock moved it.
+
+  `acted_by` is the seat that acted as this cast member on a clone
+  (router/cast-principal, clone guard 2/3): the hand is the cast
+  member's, and the log says whose seat moved it."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
@@ -197,7 +201,8 @@
     grant-id (assoc :grant grant-id)
     (:model principal) (assoc :model (:model principal))
     (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
-    (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))))
+    (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
+    (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes

@@ -131,6 +131,7 @@
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
+            [waymark10.server.roles :as roles]
             [waymark10.server.runtime :as runtime]
             [waymark10.server.scheduled :as scheduled]
             [waymark10.resource :as res]
@@ -378,9 +379,81 @@
                     [(url-decode k) (url-decode (or v ""))]))))
         (some-> (:query-string req) (str/split #"&"))))
 
-(defn- invoke-opts* [req]
+;; ── acting as a cast member (clone guard 2/3) ────────────────────────
+
+(defn- row-by-id [eng kind id]
+  (when (and (some-> id str not-empty) (get (inv/resources eng) kind))
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))))
+
+(defn- calling-seat
+  "The seat row this request sits for: the visibility's seat, else the
+  calling sitting's. Nil for a request no seat makes."
+  [eng req]
+  (row-by-id eng :seat
+             (or (some-> (get-in (visibility-of req) [:seat :id]) str not-empty)
+                 (some-> (row-by-id eng :sitting (counted-sitting-id eng req))
+                         (get-in [:data :seat])))))
+
+(defn- org-owner?
+  "Is this member the engine's solo owner, or the owner of a domain?"
+  [eng member]
+  (let [ids (into #{} (keep #(some-> % str not-empty))
+                  [(:id member) (get-in member [:data :subject])])]
+    (boolean
+     (or (contains? ids (some-> (:solo-owner eng) str))
+         (when (get (inv/resources eng) :domain)
+           (store/with-tx (:storage eng)
+             (fn [tx]
+               (some #(contains? ids (some-> (get-in % [:data :owner]) str))
+                     (store/query-rows (:storage eng) tx :domain {} {:limit 500})))))))))
+
+(defn cast-principal
+  "The principal a seat acts as when its invoke names `as` (clone guard
+  2/3): the seeded cast member's own, marked :acted-by the seat's
+  principal, so the log records both hands. Refused 403 unless all
+  hold: the engine is a clone, `seat` has acts_as_cast, the member
+  carries the seed loader's cast marker, and it is neither the org's
+  owner nor a manager."
+  [eng seat principal as-id]
+  (let [member (row-by-id eng :member as-id)
+        roles' (set (map str (get-in member [:data :roles])))
+        refuse (fn [why]
+                 (throw (p/problem :not-a-cast-member 403 "Not a cast member you may act as"
+                                   {:detail (str "`as` names `" as-id "`, and " why)})))]
+    (cond
+      ;; engine/clone?, read off the map: engine requires this namespace
+      (not (true? (:clone? eng)))
+      (refuse "only a clone lets a seat act as a cast member; this engine is not one.")
+
+      (not (true? (get-in seat [:data :acts_as_cast])))
+      (refuse "only a seat with acts_as_cast acts as a cast member; this request's seat has none.")
+
+      (not (true? (get-in member [:data :cast])))
+      (refuse "that is no member the seed loader made from its cast.")
+
+      (or (org-owner? eng member) (contains? roles' roles/manager))
+      (refuse "that is the org's owner or a manager, whom no seat acts as.")
+
+      :else
+      (assoc (t/principal {:id (str (:id member))
+                           :display (str (get-in member [:data :display]))
+                           :type (keyword (or (get-in member [:data :actor_type]) "human"))
+                           :roles roles'})
+             :acted-by (str (:id principal))))))
+
+(defn- acting-principal
+  "The request's principal, or, when it names `X-Waymark-As`, the cast
+  member its seat acts as (`cast-principal`)."
+  [eng req]
+  (let [principal (principal-of req)]
+    (if-some [as-id (some-> (get-in req [:headers "x-waymark-as"]) str str/trim not-empty)]
+      (cast-principal eng (calling-seat eng req) principal as-id)
+      principal)))
+
+(defn- invoke-opts* [eng req]
   (let [headers (:headers req)]
-    {:principal (principal-of req)
+    {:principal (acting-principal eng req)
      :if-match (get headers "if-match")
      :idempotency-key (get headers "idempotency-key")
      ;; the presented leash, as the GUARDS see it (waymark-sfe): the
@@ -411,9 +484,9 @@
   builds it; the birth, bulk and batch doors do not, because a create
   reads no mail and a fan-out that read one message per item would be
   a fan of Gate calls nobody asked for."
-  ([req] (invoke-opts* req))
-  ([req power]
-   (cond-> (invoke-opts* req)
+  ([eng req] (invoke-opts* eng req))
+  ([eng req power]
+   (cond-> (invoke-opts* eng req)
      power (assoc :power power))))
 
 ;; ── responses ───────────────────────────────────────────────────────
@@ -852,7 +925,7 @@
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
           _ (check-action! req rdef (first (:create-action-names rdef)))
-          opts (invoke-opts req)
+          opts (invoke-opts eng req)
           body (read-body req)
           ;; a birth is a committed transition under the leash that
           ;; presented it, and a walking seat's whole output is births
@@ -1241,7 +1314,7 @@
           ;; request's leash admits (waymark-fp62.7.16): nil for every
           ;; request that wears no live grant, and judged per tool by
           ;; the same `capability-entry` read this door's siblings make
-          opts (invoke-opts req (gate/power-of gate-rpc (visibility-of req)))
+          opts (invoke-opts eng req (gate/power-of gate-rpc (visibility-of req)))
           ;; the intent seams (ephemeral, never law): a dry-run IS a
           ;; considering and a warning wall IS an ask — announced only
           ;; for named principals on a started engine, after the
@@ -1387,7 +1460,7 @@
                                     (:input it)))
               (grants/check-args! (visibility-of req) rdef (keyword action)
                                   (dissoc body :ids :on_error)))
-          opts (invoke-opts req)
+          opts (invoke-opts eng req)
           ;; each row this call moved gets the single door's post-commit
           ;; pass (count-committed!): the sitting counts the transition,
           ;; a person's reversal counts its correction, and a principal
@@ -1469,7 +1542,7 @@
           ;; a denied arg draws on a single invoke
           _ (doseq [inp (:inputs body)]
               (grants/check-args! (visibility-of req) rdef (keyword action) inp))
-          opts (invoke-opts req)
+          opts (invoke-opts eng req)
           ;; each input this call committed gets the single door's
           ;; post-commit pass, as the bulk door's rows do
           result (inv/batch! eng (:kind rdef) id (keyword action) body
