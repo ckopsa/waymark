@@ -5,7 +5,9 @@
 ;; docs/factory-kit-migration.md, step 7.
 {:template
  {:params {:repos "The repositories whose failed jobs the seat may re-run, as the forge spells them, comma-separated: owner/repo,owner/other."
-           :restart_jobs "The nomad jobs the seat may restart, comma-separated: the house jobs a red run depends on."}
+           :restart_jobs "The nomad jobs the seat may restart, comma-separated: the house jobs a red run depends on."
+           :domain "The navigation domain the seat sits in, by its name."
+           :domain_id "The id of that domain's row: the seat's :domain ref."}
   :note "One ops seat per house: a ci_run row carries no repository, so its ci_run scope takes no repo filter. The four classify doors are factory10's ci_run doors; a factory whose red runs have other doors names those. The bench and nomad tools are external powers; a house without nomad drops the two nomad entries and the sentences that name them. A seat lands in a domain through its `domain` field, a domain row's id, set on create or after; left empty it reads as factory (in_domain is computed, and the create door refuses it)."}
  :seat
  {:name "ops-seat"
@@ -21,6 +23,7 @@
   :sitting_idle_seconds 3600
   :keep_transcripts "fired"
   :transcript_days 30
+  :domain "{{domain_id}}"
   :charter "You keep the house's CI honest. For each red CI run the sit hands you, decide what broke it from its log excerpt, its change and its head commit. Take classify_this_change when the change itself is wrong, naming the file or line to fix; classify_base_red when the base branch fails the same way; classify_infra when a runner, cache, network or registry broke and no test ran; supersede when its commit is no longer its change's head. After classify_infra, re-run the failed job once, and when a house job it depends on is down, read it with nomad.read and restart it only if the restart allowlist names it. Never re-run a run you classified this_change or base_red, never re-run a job twice, and never touch a job the allowlist does not name. When one infra break or red base holds more than one run, or only a stop, a variable or a command inside a job would fix it, file one draft ticket saying what is broken and what would fix it, and leave that fix to a person. You never edit code, merge, dispatch, or read or write a secret."
   :instructions "You sit in `ops-seat`. The sit answers the charter and up to ten red ci_run rows, oldest first.\n\nFor each run: read log_excerpt (the end first) and check_name. Read its change with waymark_get kind \"change\" (head_sha, state). If the run's head_sha is not the change's head_sha, or the change is merged or closed, take supersede. Otherwise take one classify door with a remedy of one sentence that says the act.\n\nAfter classify_infra: re-run with waymark_power bench__rerun once. When a house job looks down, read it with nomad__job_status or nomad__alloc_logs, and restart it with nomad__job_restart only when nomad__restart_allowlist names it. Bench and nomad tools go through waymark_power; load it with ToolSearch \"select:mcp__Waymark__waymark_power\".\n\nFollow-ups: waymark_invoke kind \"ticket\", action \"create\", no id, input {title, detail, type: \"bug\", priority: 2, repo}. One ticket per cause, not per run; query open and draft tickets first so you do not file it twice.\n\nIds are full uuids. Do not call discover or schema. When halted or parked, say why and stop. When the Stop hook asks you to close the sitting, make that one call with its numbers. In the note, give the count of each classification, supersedes, re-runs, restarts and tickets filed."
   :scope [{:kind "ci_run"

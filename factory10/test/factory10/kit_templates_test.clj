@@ -57,10 +57,11 @@
   (edn/read-string (slurp (io/resource path))))
 
 (defn- fill
-  "`x` with each hole the template's params name filled from `values`."
-  [{:keys [template]} x]
+  "`x` with each hole the template's params name filled from `values`,
+  and from `more` over them."
+  [{:keys [template]} x & [more]]
   (edn/read-string
-   (reduce (fn [s k] (str/replace s (str "{{" (name k) "}}") (get values k)))
+   (reduce (fn [s k] (str/replace s (str "{{" (name k) "}}") (get (merge values more) k)))
            (pr-str x)
            (keys (:params template)))))
 
@@ -77,5 +78,12 @@
 (deftest the-mayor-template-is-created-through-the-seat-door
   (let [t (template "seats/mayor.edn")
         eng (world)
-        seat (:row (inv/create! eng :seat (fill t (:seat t)) as-person))]
-    (is (= "mayor" (get-in seat [:data :name])))))
+        domain (:row (inv/create! eng :domain {:name "factory"
+                                               :charter "The engine's own work."
+                                               :budget_usd_per_week 40M}
+                                  as-person))
+        seat (:row (inv/create! eng :seat
+                                (fill t (:seat t) {:domain_id (str (:id domain))})
+                                as-person))]
+    (is (= "mayor" (get-in seat [:data :name])))
+    (is (= (str (:id domain)) (str (get-in seat [:data :domain]))))))
