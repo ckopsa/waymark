@@ -23,16 +23,19 @@
 
 (defn going-live!
   "Walk the drafting plan `id` to going_live as `owner`: propose (with
-  `change`, when named), the film, the flip at `head` and the owner's
-  go_live. → the id."
+  `change`, when named), the film handed in and landed by the engine,
+  the flip at `head` and the owner's go_live. → the id."
   ([eng id owner] (going-live! eng id owner {}))
   ([eng id owner {:keys [change head] :or {head a-head}}]
    (let [id (str id)
          as {:principal owner}]
      (inv/invoke! eng :org_plan id :propose
                   (cond-> {} change (assoc :change change)) as)
+     (inv/invoke! eng :org_plan id :hand_in_film
+                  {:film_url "https://example.com/greenleaf.mp4"
+                   :take_report "{}" :head_sha head} as)
      (inv/invoke! eng :org_plan id :attach_film
-                  {:film_url "https://example.com/greenleaf.mp4"} as)
+                  {:film_url "https://example.com/greenleaf.mp4"} the-engine)
      (flipped! eng id head)
      (inv/invoke! eng :org_plan id :go_live {} as)
      id)))
