@@ -1926,9 +1926,11 @@
                   ;; delivery still decides (e2a379e0)
                   (and (empty? delivers)
                        (moved? transitions "verdict" "judge")) "completed"
-                  ;; a sit that handed no rows left no work to cut short
-                  ;; (ticket 70aca5e6): it is idle, however few its turns
-                  (true? (:walked_nothing data)) "idle"
+                  ;; a sit that handed no rows, and a sitting that moved
+                  ;; nothing after, left no work to cut short (ticket
+                  ;; 70aca5e6): it is idle, however few its turns
+                  (and (true? (:walked_nothing data))
+                       (empty? transitions)) "idle"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
