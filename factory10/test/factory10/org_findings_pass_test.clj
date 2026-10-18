@@ -84,6 +84,9 @@
         drafting (a-proposed-plan! eng "greenleaf" (a-change! eng 101 head-1))
         acme-change (a-change! eng 102 head-2)
         proposed (a-proposed-plan! eng "acme" acme-change)
+        _ (inv/invoke! eng :org_plan drafting :hand_in_film
+                       {:film_url "https://films.example.test/greenleaf.mp4"
+                        :take_report "{}" :head_sha "fffffff1"} the-forge)
         _ (inv/invoke! eng :org_plan drafting :record_film_findings
                        {:head_sha "fffffff1" :findings [red-film]} the-forge)
         by-name (atom {(str "org-findings-greenleaf-" head-1) {:greenleaf [gap]}
