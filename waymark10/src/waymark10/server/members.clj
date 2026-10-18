@@ -817,6 +817,14 @@
                                 :label "Seeded cast member"
                                 :help "True when the seed loader made this member from its cast: on a clone, a seat with acts_as_cast may act as it. Written by the seed loader, never by hand."}}
              [:maybe :boolean]]
+            ;; the org a seed's completion marker was loaded for: written
+            ;; by the seed loader (seed/mark!) and read back by
+            ;; seed/marker-org. Hidden: no form or roster shows it.
+            [:seed_org {:optional true
+                        :x-display {:hidden true
+                                    :label "Seeded for org"
+                                    :help "The org a seed's completion marker was loaded for. Written by the seed loader, never by hand."}}
+             [:maybe [:string {:min 1 :max 64}]]]
             ;; the zone this member's own local times are read in
             ;; (docs/spec-scheduled-actions.md R-7.2). The quiet hours
             ;; keep a zone of their own inside :notify; this one is the
