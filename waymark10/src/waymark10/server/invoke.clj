@@ -1030,7 +1030,9 @@
                  :after (decision/after-record rdef (:data advanced))
                  :correlation-id correlation-id
                  :idempotency-key idempotency-key
-                 :summary (:summary advanced)})
+                 :summary (or (when-some [says (:log-says defn)]
+                                (some-> (says advanced inp) str not-empty))
+                              (:summary advanced))})
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
