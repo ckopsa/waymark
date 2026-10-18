@@ -8,6 +8,12 @@ no secrets.
     walk.py link             step 4: the seed's pull link
     walk.py enroll <url>     step 5: the fixture's policy, cloned from <url>
     walk.py ticket           step 7: file, groom as draft-judge, sit as code-seat
+    walk.py submit           step 7: code-seat submits; the pull request opens
+    walk.py mayor            step 7: the mayor's sit names the change, waiting on the merge
+
+submit and mayor need the forge: a real fixture repository on GitHub
+(ticket a01d303d) and FIXTURE_TOKEN, a token scoped to it. Without the
+token the job skips them and says so.
 
 Each stage keeps what the next reads in $WALK_STATE (a JSON file). A
 failed check exits 1 with one `::error::` line naming the stage, so
@@ -39,6 +45,7 @@ OWNER = os.environ["WAYMARK_OWNER"]
 REPO = os.environ["WAYMARK_REPO"]
 PULL_TOKEN = os.environ["WAYMARK_PULL_TOKEN"]
 STATE = os.environ.get("WALK_STATE", "walk-state.json")
+FORGE_TOKEN = os.environ.get("FIXTURE_TOKEN", "")
 STAGE = sys.argv[1] if len(sys.argv) > 1 else ""
 
 AS_OWNER = {"X-Waymark-Principal": OWNER, "X-Waymark-Actor-Type": "human"}
@@ -94,9 +101,14 @@ class Mcp:
     """One MCP session on the engine's Streamable HTTP door, as one
     identity. The session id is what waymark_sit binds."""
 
-    def __init__(self, headers):
+    def __init__(self, headers, session=None):
         self.headers = dict(headers)
         self.n = 0
+        if session:
+            # an earlier stage's session, and the sitting bound to it
+            self.session = session
+            self.headers["Mcp-Session-Id"] = session
+            return
         status, hs, body = self.rpc("initialize", {
             "protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "selfhost-walk", "version": "1"}})
@@ -129,6 +141,18 @@ class Mcp:
         if res.get("isError") and ok:
             fail(f"{tool} {json.dumps(args)[:300]} refused: {text[:800]}")
         return doc, bool(res.get("isError"))
+
+
+def github(path):
+    """GET on GitHub's API with the fixture's token → the parsed body."""
+    req = urllib.request.Request("https://api.github.com" + path)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Authorization", f"Bearer {FORGE_TOKEN}")
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        fail(f"GitHub answered {e.code} for GET {path}: {e.read().decode()[:300]}")
 
 
 def items_of(doc):
@@ -192,6 +216,8 @@ def link():
 # -- step 5 ------------------------------------------------------------
 
 def enroll(clone_url):
+    # empty is a GitHub repository: the bench clones github.com/<REPO>
+    clone_url = clone_url or None
     mcp = Mcp(AS_OWNER)
     bench = named(mcp, "mcp_server", "bench")
     if bench.get("state") != "live":
@@ -216,7 +242,7 @@ def enroll(clone_url):
     data = row.get("data") or {}
     if not data.get("enrolled_at") or data.get("note"):
         fail(f"the bench did not enrol {clone_url}: {data.get('note')}")
-    say(f"{REPO} enrolled from {clone_url}")
+    say(f"{REPO} enrolled from {clone_url or 'GitHub'}")
 
 
 # -- step 7 ------------------------------------------------------------
@@ -310,11 +336,65 @@ def ticket():
         fail(f"code-seat's sit prepared no worktree: {json.dumps(bench)[:600]}")
     if head and bench["head"] != head:
         fail(f"the worktree is at {bench['head']}, not the fixture's {head}")
+    change = (sit.get("change") or {}).get("id")
+    keep(ticket=tid, session=c.session, branch=bench["branch"], change=change)
     say(f"code-seat sits on {tid}; the bench prepared {bench['branch']} at {bench['head']}")
+
+
+def submit():
+    s = load()
+    if not s.get("change"):
+        fail(f"code-seat's sit named no change beside {s.get('ticket')}")
+    c = Mcp(AS_CLAUDE, session=s["session"])
+    # the one-line change, through the bench as the seat's session makes it
+    doc, _ = c.call("waymark_power", {"tool": "bench__read",
+                                     "arguments": {"path": "README.md", "limit": 1}})
+    lines = (doc.get("result") or {}).get("lines") or []
+    if not lines or not lines[0].get("text"):
+        fail(f"bench__read gave no first line of README.md: {json.dumps(doc)[:400]}")
+    first = lines[0]["text"]
+    c.call("waymark_power", {"tool": "bench__edit", "arguments": {
+        "path": "README.md", "old": first, "new": first + "\n\nHello.",
+        "why": "Say hello in the README, as the walk's ticket asks."}})
+    row, _ = c.call("waymark_invoke", {"kind": "change", "id": s["change"], "action": "submit",
+                                       "return": "summary",
+                                       "input": {"why": "Say hello in the README, as the ticket asks."}})
+    if row.get("state") != "submitted":
+        fail(f"the submit left the change {row.get('state')}: {json.dumps(row)[:400]}")
+    say(f"code-seat submitted {s['change']}")
+    owner = REPO.split("/")[0]
+    until = time.time() + 300
+    while time.time() < until:
+        pulls = github(f"/repos/{REPO}/pulls?state=open&head={owner}:{s['branch']}")
+        if pulls:
+            keep(pr=pulls[0]["number"])
+            say(f"{REPO}#{pulls[0]['number']} is open from {s['branch']}")
+            return
+        time.sleep(10)
+    fail(f"the push of {s['branch']} opened no pull request on {REPO} in 300s")
+
+
+def mayor():
+    s = load()
+    owner = Mcp(AS_OWNER)
+    seat = named(owner, "seat", "mayor")
+    key = (seat.get("data") or {}).get("sitter_key")
+    if not key:
+        fail("the owner reads no sitter_key on the mayor seat (SELFHOST.md step 6)")
+    m = Mcp(AS_OWNER)
+    sit, _ = m.call("waymark_sit", {"key": key, "seat": "mayor", "session": m.session})
+    if s["change"] not in json.dumps(sit):
+        fail(f"the mayor's sit does not name the change {s['change']}: {json.dumps(sit)[:600]}")
+    row, _ = owner.call("waymark_get", {"kind": "change", "id": s["change"], "return": "summary"})
+    nxt = (row.get("waiting_on") or {}).get("next") or []
+    if not any(n.get("door") == "merge" and n.get("held_by") == "person" for n in nxt):
+        fail(f"the change does not wait on the person's merge: {json.dumps(row.get('waiting_on'))[:600]}")
+    say(f"the mayor names {s['change']} (#{s.get('pr')}), waiting on the merge")
 
 
 if __name__ == "__main__":
     stages = {"connect": connect, "link": link, "ticket": ticket,
+              "submit": submit, "mayor": mayor,
               "enroll": lambda: enroll(sys.argv[2])}
     if STAGE not in stages:
         sys.exit(f"usage: walk.py {'|'.join(stages)}")
