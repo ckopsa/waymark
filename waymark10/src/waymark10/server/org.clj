@@ -18,12 +18,23 @@
   loader's grammar (`waymark10.server.seed`): each of its `:domains`,
   then its `:seats` and `:judgments`, becomes a step walked as the
   cast's `:owner`, before the org's own `:steps`, and the seed is
-  `:live-ok`, so it loads on a fresh engine and is skipped, by its
-  marker, on every boot after."
+  `:live-ok`, so it loads whole on a fresh engine, and on every boot
+  after it loads additively: by its marker, only the cast members and
+  the steps the seed gained since are added (`seed/load!`).
+
+  OR THE ORG IS ON DISK, AND LIVE (ticket 29f8e07a). Its manifest,
+  `orgs/<org>/org.edn`, says `{:name \"<org>\" :live true}` once it went
+  live. `live-orgs` lists the live org directories under
+  WAYMARK10_ORGS_DIR, and `live-resources` and `boot-live!` load each
+  one's src and resources through a DynamicClassLoader
+  (`with-classpath`), so the house engine serves them with none a
+  deps root."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [waymark10.server.seed :as seed]))
+            [waymark10.server.seed :as seed])
+  (:import (clojure.lang Compiler DynamicClassLoader)
+           (java.io File)))
 
 (set! *warn-on-reflection* true)
 
@@ -110,9 +121,21 @@
                     (into (map made-step) judgments)
                     (into steps))))
 
+(defn boot-line
+  "The line `boot!` prints for an org's `seed/load!` answer: what was
+  seeded, or, on an engine seeded before, `:added` beside the sentence
+  that says what was skipped."
+  [org result]
+  (if (:seeded result)
+    (str "waymark10 org: `" org "` seeded, " (:members result)
+         " members and " (:steps result) " steps.")
+    (str "waymark10 org: `" org "`: :added " (pr-str (:added result))
+         " · " (:skipped result))))
+
 (defn boot!
-  "The boot step behind WAYMARK10_ORG: load the org's seed, or skip it
-  when this engine was seeded with it before, saying which. → `seed/load!`'s
+  "The boot step behind WAYMARK10_ORG: load the org's seed, whole on a
+  fresh engine and additively on one seeded with it before, adding only
+  what the seed gained since, and say what it added. → `seed/load!`'s
   answer; nil for an org that carries no seed. Throws for everything
   `seed/load!` throws for. `opts` are `seed/load!`'s, and `:params`, when
   absent, are read from WAYMARK10_SEED_PARAMS."
@@ -123,8 +146,80 @@
                   (not (contains? opts :params))
                   (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
            result (seed/load! eng (loader-seed s) opts)]
-       (println (if (:seeded result)
-                  (str "waymark10 org: `" org "` seeded, " (:members result)
-                       " members and " (:steps result) " steps.")
-                  (str "waymark10 org: `" org "`: " (:skipped result))))
+       (println (boot-line org result))
        result))))
+
+;; ── live orgs, found on disk ────────────────────────────────────────
+
+(defn manifest
+  "The org's manifest, `<org-dir>/org.edn`: at least `{:name \"<org>\"
+  :live false}`, which the orgkit starter writes and going live flips
+  to `:live true`. nil when the org has none; throws when it does not
+  read."
+  [org-dir]
+  (let [f (io/file org-dir "org.edn")]
+    (when (.isFile f)
+      (edn/read-string (slurp f)))))
+
+(defn live?
+  "True when the org at `org-dir` says it is live: its manifest reads
+  and holds `:live true`. A missing or unreadable manifest is not live."
+  [org-dir]
+  (true? (:live (try (manifest org-dir) (catch Exception _ nil)))))
+
+(def ^:private image-orgs-dir
+  "Where the image copies orgs/, from the engine's working directory
+  (/app/workqueue10 in the image, workqueue10/ in a checkout)."
+  "../orgs")
+
+(defn orgs-dir
+  "The directory a WAYMARK10_ORGS_DIR value names, or the image's orgs
+  path when the value is blank."
+  ^File [value]
+  (io/file (or (some-> value str str/trim not-empty) image-orgs-dir)))
+
+(defn live-orgs
+  "Every live org under `dir`, each `{:org name :dir file}`, sorted by
+  name: a directory whose name is an org's name and whose manifest says
+  it is live. [] when `dir` is no directory."
+  [dir]
+  (->> (.listFiles (io/file dir))
+       (filter (fn [^File d]
+                 (and (.isDirectory d)
+                      (re-matches org-pattern (.getName d))
+                      (live? d))))
+       (map (fn [^File d] {:org (.getName d) :dir d}))
+       (sort-by :org)
+       vec))
+
+(defn with-classpath
+  "Call f with each org directory's src and resources on the classpath,
+  through a DynamicClassLoader over this thread's, so an org on disk
+  need not be a deps root. What f loads stays loaded after."
+  [dirs f]
+  (let [t (Thread/currentThread)
+        prev (.getContextClassLoader t)
+        cl (DynamicClassLoader. prev)]
+    (doseq [d dirs
+            p ["src" "resources"]]
+      (.addURL cl (.toURL (.toURI (io/file d p)))))
+    (.setContextClassLoader t cl)
+    (try
+      (with-bindings {Compiler/LOADER cl} (f))
+      (finally (.setContextClassLoader t prev)))))
+
+(defn live-resources
+  "The kinds of the live orgs `live-orgs` answered, each loaded from its
+  directory: every `<org>.org`'s `resources`, in order."
+  [orgs]
+  (with-classpath (map :dir orgs)
+    #(into [] (mapcat (fn [{:keys [org]}] (resources org))) orgs)))
+
+(defn boot-live!
+  "The boot step behind WAYMARK10_ORGS_DIR: each live org's seed, read
+  from its directory and loaded as `boot!` loads one. → one `boot!`
+  answer per org that carries a seed. Throws for everything `boot!`
+  throws for."
+  [eng orgs opts]
+  (with-classpath (map :dir orgs)
+    #(into [] (keep (fn [{:keys [org]}] (boot! eng org opts))) orgs)))

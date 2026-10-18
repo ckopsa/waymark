@@ -471,7 +471,10 @@
    :nav :system
    ;; A PERSON SAID YES AND THE ENGINE HAS THE CALL is a state of its
    ;; own (`allowed`), and the deviation is recorded below.
-   :states [:held :allowed :done :refused :failed :expired]
+   ;; A YES THE SERVER ONLY ANSWERED `waiting` (ticket 4180a699) is
+   ;; `allowed_waiting`: the merge reached the rig and merged nothing
+   ;; yet, so the person's yes and the forward stay for the next one.
+   :states [:held :allowed :allowed_waiting :done :refused :failed :expired]
    :initial :held
    :terminal #{:done :refused :failed :expired}
    ;; THE CALLER WAITS ON THIS ROW (ticket d9edac4e). `done` carries the
@@ -486,9 +489,11 @@
    ;; and the engine lands, fails or expires it
    :left-by [{:in #{:held} :by :person :via :allow :to :allowed}
              {:in #{:held} :by :person :via :refuse :to :refused}
-             {:in #{:allowed} :by :engine :via :land :to :done}
-             {:in #{:allowed} :by :engine :via :fail :to :failed}
-             {:in #{:held :allowed} :by :engine :via :expire :to :expired}]
+             {:in #{:allowed} :by :engine :via :wait :to :allowed_waiting}
+             {:in #{:allowed :allowed_waiting} :by :engine :via :land :to :done}
+             {:in #{:allowed :allowed_waiting} :by :engine :via :fail :to :failed}
+             {:in #{:held :allowed :allowed_waiting} :by :engine :via :expire
+              :to :expired}]
    :summary "{data.tool} · {data.caller} · {data.shown} · {state}"
    :label-template "{data.tool}"
    ;; THE CALLER READS ITS OWN ROW WITH NO GRANT (R-6). An agent that
@@ -764,7 +769,7 @@
                :description "Stop this call, and say why in one sentence the caller reads"}}
     ;; the two endings the ENGINE writes after a person's yes
     :land
-    {:from #{:allowed} :to :done
+    {:from #{:allowed :allowed_waiting} :to :done
      :input [:map
              [:answer {:optional true :x-display {:hidden true}}
               [:maybe [:string {:max 16384}]]]
@@ -777,8 +782,24 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The call has gone out and the answer is on the row."}
      :display {:label "Answered"}}
+    ;; the call reached its server, which answered that it did nothing
+    ;; yet (a merge whose checks still run): the yes is kept
+    :wait
+    {:from #{:allowed} :to :allowed_waiting
+     :input [:map
+             [:answer {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 16384}]]]
+             [:dropped {:optional true :x-display {:hidden true}}
+              [:maybe [:int {:min 0}]]]]
+     :guards [the-engine-finishes-it]
+     :handler record-answer
+     :edit {:fence false
+            :unfenced-reason "The engine's own landing of a server's 'waiting'. No read preceded it to fence against."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The server answered that it acted on nothing yet; the person's yes stays on the row and the engine forwards the call again when it can act."}
+     :display {:label "Waiting"}}
     :fail
-    {:from #{:allowed} :to :failed
+    {:from #{:allowed :allowed_waiting} :to :failed
      :input [:map
              [:reason {:optional true :x-display {:hidden true}}
               [:maybe [:string {:max 240}]]]]
@@ -790,7 +811,7 @@
               :one-way "The call did not reach its server. Making it again is a new call."}
      :display {:label "Failed"}}
     :expire
-    {:from #{:held :allowed} :to :expired
+    {:from #{:held :allowed :allowed_waiting} :to :expired
      :guards [the-engine-finishes-it]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Nothing runs late: an expired call never goes out, and making it again is a new call."}
@@ -803,7 +824,8 @@
    ["R-1 lists five states and this kind has six. `allowed` stands between the person's tap and the ending, because a handler cannot choose its door's destination and an allow that reaches a server has two honest endings: the answer, and the wire failure. It also keeps a call that may take the client's whole timeout OUT of the transaction that holds the row. The person's tap lands `allowed`; `after-allow!` forwards at the wire boundary and walks `land` or `fail`."
     "R-3 names \"the approver role of the engine's approval_request door\". That door carries the four-eyes wall and no role, so there was no word to borrow: this kind spells `approver` itself (`approver-role`) and a deployment mints the `role` row."
     "R-1 names `input` as the call's arguments. The row carries a second, hidden map, `forward`: what the server would actually receive, prepared by the power door at call time (the filter's `allow` globs, the `why` translated or removed). Without it the allow would have to re-judge a grant at a moment the call was never judged in."
-    "R-7 names the expiry of a HELD call. The sweep also expires a row a stopped engine left `allowed` past its moment, because a call nobody finished must not look like one somebody is about to."]})
+    "R-7 names the expiry of a HELD call. The sweep also expires a row a stopped engine left `allowed` past its moment, because a call nobody finished must not look like one somebody is about to."
+    "R-1 has no state for a call that reached its server and was answered `waiting`. `allowed_waiting` keeps the person's yes for a merge whose checks still run (ticket 4180a699): the sweep leaves it, and the pass that asked for it forwards it again or expires it."]})
 
 ;; ── the mint (R-2) ──────────────────────────────────────────────────
 
@@ -1057,9 +1079,30 @@
             (:content payload))
       (wire/write-json payload)))
 
+(defn- answered-waiting?
+  "Did the server answer that it acted on nothing yet? The rig's
+  `bench__merge` says `state: waiting` while a change's checks run
+  (ticket 4180a699): the call reached it and merged nothing."
+  [row payload]
+  (and (= bench-merge-tool (str (get-in row [:data :tool])))
+       (let [result (or (get-in payload [:structuredContent :result])
+                        (some (fn [part]
+                                (when-some [t (:text part)]
+                                  (try (let [v (wire/read-json (str t))]
+                                         (when (map? v) v))
+                                       (catch Exception _ nil))))
+                              (:content payload)))]
+         (and (map? result)
+              (= "waiting" (some-> (or (:state result) (get result "state"))
+                                   name))))))
+
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
   the tool the row names, with the arguments the row carries.
+
+  AN ANSWER THAT SAYS `waiting` KEEPS THE YES (`answered-waiting?`):
+  the row walks `wait` to `allowed_waiting`, or stays there, and the
+  pass that asked forwards it again (`reforward!`).
 
   AN ANSWER THAT SAYS `isError` IS A FAILURE. The server answered, and
   what it answered is that it did not do the thing: the row lands
@@ -1073,10 +1116,20 @@
         args (or (get-in row [:data :forward]) {})]
     (try
       (let [payload (servers/call! eng tool args)]
-        (if (true? (:isError payload))
+        (cond
+          (true? (:isError payload))
           (let [{:keys [text]} (capped (error-words payload) 240)]
             (finish! eng (:id row) :fail {:reason text})
             :failed)
+
+          (answered-waiting? row payload)
+          (let [{:keys [text dropped]} (capped (wire/write-json payload)
+                                               answer-cap-bytes)]
+            (when (= :allowed (:state row))
+              (finish! eng (:id row) :wait {:answer text :dropped dropped}))
+            :allowed_waiting)
+
+          :else
           (let [{:keys [text dropped]} (capped (wire/write-json payload)
                                                answer-cap-bytes)]
             (finish! eng (:id row) :land {:answer text :dropped dropped})
@@ -1089,6 +1142,23 @@
                                      240)]
           (finish! eng (:id row) :fail {:reason text}))
         :failed))))
+
+(defn reforward!
+  "Forward an `allowed_waiting` tool call again under the person's
+  same yes, with no new ask (ticket 4180a699). → the row's new state,
+  or nil when the row is not waiting."
+  [eng row]
+  (when (and (= :allowed_waiting (:state row))
+             (nil? (get-in row [:data :door])))
+    (forward-tool! eng row)))
+
+(defn expire!
+  "Expire an `allowed_waiting` call whose moment has passed — the
+  change it would merge closed, or its head moved. → the moved row, or
+  nil."
+  [eng row]
+  (when (= :allowed_waiting (:state row))
+    (finish! eng (:id row) :expire {})))
 
 (defn after-allow!
   "THE WIRE-BOUNDARY EFFECT of a person's allow (R-4), called by the
@@ -1140,7 +1210,8 @@
   A row the engine cannot date is left alone: a call it cannot expire
   is a call it must not expire by guessing. A row a stopped engine
   left `allowed` past its moment expires too. The kind's deviations
-  say so."
+  say so. An `allowed_waiting` row is not swept: the pass that asked
+  for it expires it (`expire!`)."
   [eng]
   (if-not (contains? (inv/resources eng) :held_call)
     0

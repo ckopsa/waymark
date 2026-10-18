@@ -1,0 +1,9 @@
+{:seed "alpha"
+ :version 1
+ :org "alpha"
+ :domains [{:name "alpha" :label "Alpha"}]
+ :cast {:owner {:id "owner" :display "Owner" :type :human}}
+ :seats []
+ :judgments []
+ :steps
+ [{:as :owner :kind :sprocket :ref :one :create {:title "One sprocket"}}]}

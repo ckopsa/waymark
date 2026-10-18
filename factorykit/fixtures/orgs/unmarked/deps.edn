@@ -1,0 +1,3 @@
+;; A fixture org factorykit.conform-test judges: it carries no
+;; manifest, org.edn, on purpose.
+{:paths ["src" "resources"]}

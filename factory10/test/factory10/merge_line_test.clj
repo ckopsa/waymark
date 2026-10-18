@@ -416,6 +416,75 @@
                                   :missing_checks ["gate"] :behind_base false)] {})
     (is (= [] (numbers-of r "bench__update_branch")))))
 
+;; ── a behind change missing a check past the wait (ticket 7100a73b) ─
+
+(defn- update-rig
+  "A fake rig whose merge says waiting and whose update_branch answers
+  `update`, an hour after t0; `reds` collects what `:update-red!` is told."
+  [update reds]
+  (let [calls (atom [])]
+    {:calls calls
+     :ctx {:now-fn (constantly (.plusSeconds ^Instant t0 3600))
+           :update-red! (fn [id input] (swap! reds conj [id input]) true)
+           :services
+           {:bench-rpc
+            (fn [_ {tool :name args :arguments}]
+              (swap! calls conj [tool (:number args)])
+              {:structuredContent
+               {:result (if (= tool "bench__merge") {:state "waiting"} update)}})}}}))
+
+(defn- missing-behind
+  "Change `number`, second in line, missing `gate` on its head behind a
+  moved base, held since `since`."
+  [number since & {:as extra}]
+  (let [head (str "head-" number)]
+    (apply a-change "ckopsa/waymark" number number
+           (mapcat identity
+                   (merge {:head_sha head :missing_checks ["gate"]
+                           :missing_checks_head head :behind_base true
+                           :held_head head :held_since since}
+                          extra)))))
+
+(deftest a-behind-change-missing-a-check-past-the-wait-is-updated-once
+  (let [reds (atom [])
+        r (update-rig {:state "updated"} reds)
+        seen (atom {})
+        front (a-change "ckopsa/waymark" 1 0)
+        b (missing-behind 2 "2026-09-28T12:00:00Z")]
+    (pass! r seen [front b] {})
+    (is (= [2] (numbers-of r "bench__update_branch"))
+        "brought up to date though it is not the front")
+    (pass! r seen [front b] {})
+    (is (= [2] (numbers-of r "bench__update_branch")) "once per head")
+    (pass! r seen [front (missing-behind 2 "2026-09-28T12:00:00Z"
+                                         :head_sha "head-2b"
+                                         :missing_checks_head "head-2b"
+                                         :missing_checks [])] {})
+    (is (= [2] (numbers-of r "bench__update_branch"))
+        "its new head has the check, so it is not brought forward again")
+    (is (= [] @reds))))
+
+(deftest a-behind-change-missing-a-check-within-the-wait-is-left-alone
+  (let [reds (atom [])
+        r (update-rig {:state "updated"} reds)]
+    (pass! r (atom {}) [(a-change "ckopsa/waymark" 1 0)
+                        (missing-behind 2 "2026-09-28T12:45:00Z")] {})
+    (is (= [] (numbers-of r "bench__update_branch"))
+        "fifteen minutes is within the default thirty")))
+
+(deftest a-conflicting-update-sends-the-change-failing-naming-the-conflict
+  (let [reds (atom [])
+        r (update-rig {:refused "merge_conflict"
+                       :reason "merge conflict in deps.edn"} reds)
+        seen (atom {})
+        b (missing-behind 2 "2026-09-28T12:00:00Z")]
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0) b] {})
+    (is (= [["change-2" ["merge-conflict"] ["merge conflict in deps.edn"]]]
+           (mapv (fn [[id input]] [id (:failing_checks input) (:conflicts input)])
+                 @reds)))
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0) b] {})
+    (is (= 1 (count @reds)) "once for the head")))
+
 ;; ── a green front that is only behind its base (ticket fc997a92) ─────
 
 (deftest a-lone-green-front-behind-its-base-is-updated-in-one-pass

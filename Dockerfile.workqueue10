@@ -35,6 +35,10 @@ COPY calendar10/ calendar10/
 COPY factory10/ factory10/
 COPY factorykit/ factorykit/
 COPY workqueue10/ workqueue10/
+# The orgs (ticket 29f8e07a): no deps root, read from disk at boot.
+# The engine serves each one whose org.edn says :live true, from
+# WAYMARK10_ORGS_DIR, which is ../orgs from the WORKDIR below unless set.
+COPY orgs/ orgs/
 
 WORKDIR /app/workqueue10
 EXPOSE 8014

@@ -1281,6 +1281,122 @@
         known)
       :else (train-finished! ctx seen repo policy known st))))
 
+;; A BEHIND CHANGE MISSING A REQUIRED CHECK (ticket 7100a73b). A head
+;; that predates the workflow its required check lives in never runs
+;; that check, so it can neither go green nor leave the line, wherever
+;; it stands. Past the policy's `queued_check_minutes`, counted from
+;; `held_since` as the forge counts a missing check (ticket 3520d15b),
+;; the pass brings any such change up to date through the front's own
+;; `update_branch`, once per head (`seen`'s `[:updated id]`), so the
+;; check runs on a new head. The forge leaves that change's missing red
+;; to this pass (`house-brings-forward?`). An update the rig does not
+;; make sends the change to its seat as failing (the ctx's
+;; `:update-red!`): a conflict names `merge-conflict` and what the rig
+;; said, any other refusal names each missing check with the reason.
+
+(def ^:private conflict-reason #"(?i)conflict|not.mergeable")
+
+(defn update-conflict?
+  "Does the rig's `update_branch` answer say the branch conflicts with
+  its base?"
+  [answer]
+  (boolean (when-some [why (refused answer)]
+             (or (= not-mergeable-refusal why)
+                 (re-find conflict-reason (str why " " (:reason answer)))))))
+
+(defn missing-behind?
+  "Did the forge read, at this change's very head, a required check with
+  no run at all and a base that moved?"
+  [change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and head
+          (= head (some-> (get-in change [:data :missing_checks_head]) str))
+          (seq (get-in change [:data :missing_checks]))
+          (true? (get-in change [:data :behind_base]))))))
+
+(defn house-brings-forward?
+  "Will the house pass bring this change up to date for a required check
+  its head never ran? Its policy's house pass merges it, and it is
+  `missing-behind?`."
+  [change policy]
+  (boolean (and policy
+                (house-merges-change? change policy)
+                (missing-behind? change))))
+
+(defn missing-past-wait?
+  "Has this change waited longer than the policy's `queued_check_minutes`
+  since its head was first seen held (`held_since` at `held_head`), at
+  `now`?"
+  [change policy now]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+        since (when (and head (= head (some-> (get-in change [:data :held_head]) str)))
+                (try (Instant/parse (str (get-in change [:data :held_since])))
+                     (catch Exception _ nil)))]
+    (boolean
+     (and since
+          (> (quot (- (inst-ms now) (inst-ms since)) 60000)
+             (queued-check-minutes-of policy))))))
+
+(defn- clipped-to [s n]
+  (let [s (str s)] (subs s 0 (min (long n) (count s)))))
+
+(defn update-red-input
+  "What a change whose update the rig did not make goes failing with:
+  {:failing_checks :conflicts :why}."
+  [change answer]
+  (let [why (reason-of answer)]
+    (if (update-conflict? answer)
+      {:failing_checks ["merge-conflict"]
+       :conflicts (mapv #(clipped-to % 400)
+                        (or (seq (:conflicts answer)) [why]))
+       :why (clipped-to (str "bringing the branch up to date conflicts with"
+                             " its base: " why)
+                        480)}
+      {:failing_checks (mapv #(clipped-to
+                               (str "check " % " has no run after the wait;"
+                                    " the house could not bring the branch"
+                                    " up to date (" why ")")
+                               200)
+                             (get-in change [:data :missing_checks]))
+       :why (clipped-to (str "the house could not bring the branch up to"
+                             " date for its missing checks: " why)
+                        480)})))
+
+(defn- bring-missing-forward!
+  "Bring each change of a line that is `missing-behind?` past the
+  policy's wait up to date, once for its head; one the rig does not
+  update goes to its seat through the ctx's `:update-red!`, and its head
+  is remembered only once that moved it."
+  [ctx seen line policy answers]
+  (let [now (pass-now ctx)
+        red! (or (:update-red! ctx) (constantly false))]
+    (doseq [change line
+            :let [id (str (:id change))
+                  head (str (get-in change [:data :head_sha]))]
+            :when (and (missing-behind? change)
+                       (missing-past-wait? change policy now)
+                       (not (true? (get-in change [:data :draft])))
+                       (not= "merged" (answer-state (get @answers id)))
+                       (not= head (get @seen [:updated id])))]
+      (let [answer (ask ctx :update_branch (update-args change))]
+        (cond
+          (nil? answer)
+          (warn! "the update of " id " had no answer; the next pass asks again")
+
+          (or (refused answer) (nothing-forward? answer))
+          (when (red! id (update-red-input change answer))
+            (swap! seen assoc [:updated id] head)
+            (warn! "the rig did not bring " id " at " head " up to date ("
+                   (reason-of answer) "); it goes back to its seat"))
+
+          :else
+          (do (swap! seen assoc [:updated id] head)
+              (warn! id " at " head " waited past the limit on "
+                     (str/join ", " (map str (get-in change [:data :missing_checks])))
+                     ", which its head never ran; it was brought up to date,"
+                     " once for this head")))))))
+
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
@@ -1327,6 +1443,7 @@
                                (not (get @seen [:train-done repo])))
                       (train-riders line @answers @seen policy))
              built (when (next riders) (build-train! ctx repo policy riders))]
+         (bring-missing-forward! ctx seen line policy answers)
          (warn! repo ": " (or id "nothing") " is the front of the merge line, "
                 (count (remove #(= id (str (:id %))) line)) " wait")
          (cond
@@ -1948,6 +2065,28 @@
           (warn! "the train's red did not move " id " (" (ex-message e)
                  "); it rides again"))))))
 
+(defn- update-red!
+  "Send a change the house could not bring up to date back to its seat,
+  as the forge sends a red head: `fail` naming what the rig said, or
+  `stick` on the policy's last round (ticket 7100a73b). → true when the
+  row moved."
+  [eng changes by-repo id {:keys [failing_checks conflicts why]}]
+  (when-some [row (some #(when (= id (str (:id %))) %) changes)]
+    (let [policy (get by-repo (str (get-in row [:data :repository])))
+          last? (>= (long (or (get-in row [:data :rounds]) 0))
+                    (long (rounds-of policy)))]
+      (try
+        (inv/invoke! eng :change id (if last? :stick :fail)
+                     (cond-> {:failing_checks failing_checks}
+                       (seq conflicts) (assoc :conflicts conflicts)
+                       last? (assoc :why (clip why)))
+                     {:principal mirror/source-principal})
+        true
+        (catch Exception e
+          (warn! "the update's red did not move " id " (" (ex-message e)
+                 "); the next pass tries again")
+          false)))))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -1997,6 +2136,7 @@
         trains (atom {})
         asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
                             :train-red! #(train-red! eng changes by-repo %1 %2)
+                            :update-red! #(update-red! eng changes by-repo %1 %2)
                             :head-of (fn [id]
                                        (some #(when (= id (str (:id %)))
                                                 (get-in % [:data :head_sha]))
@@ -2112,20 +2252,74 @@
     (try (Instant/parse (str (get-in change [:data :held_since])))
          (catch Exception _ nil))))
 
+(defn- same-pull?
+  "Is this ask for this change's pull request?"
+  [ask change]
+  (let [in (get-in ask [:data :input])]
+    (and (= (str (field-of in :repo))
+            (str (get-in change [:data :repository])))
+         (= (str (field-of in :number))
+            (str (get-in change [:data :number]))))))
+
+(defn- ask-state [ask] (some-> (:state ask) name keyword))
+
 (defn- asked-already?
   "Is there an ask for this pull request still waiting, or one for this
   head at all?"
   [asks change head]
   (some (fn [a]
-          (let [in (get-in a [:data :input])]
-            (and (= (str (field-of in :repo))
-                    (str (get-in change [:data :repository])))
-                 (= (str (field-of in :number))
-                    (str (get-in change [:data :number])))
-                 (or (contains? #{:held :allowed}
-                                (some-> (:state a) name keyword))
-                     (= head (str (field-of in :head_sha)))))))
+          (and (same-pull? a change)
+               (or (contains? #{:held :allowed :allowed_waiting} (ask-state a))
+                   (= head (str (field-of (get-in a [:data :input])
+                                          :head_sha))))))
         asks))
+
+(defn- waiting-yes
+  "The person's yes on this pull request at this head that the rig
+  answered `waiting` (`allowed_waiting`, ticket 4180a699), or nil."
+  [asks change head]
+  (some (fn [a]
+          (when (and (= :allowed_waiting (ask-state a))
+                     (same-pull? a change)
+                     (= head (str (field-of (get-in a [:data :input])
+                                            :head_sha))))
+            a))
+        asks))
+
+(defn- change-of-ask
+  "The change row an ask names by repository and number, or nil."
+  [eng ask]
+  (when-some [rd (rdef-of-kind eng :change)]
+    (let [st (:storage eng)
+          in (get-in ask [:data :input])]
+      (some #(when (same-pull? ask %) %)
+            (mapv #(inv/decode-row rd %)
+                  (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :change
+                                               {:repository (str (field-of in :repo))}
+                                               {:limit 1000}))))))))
+
+(defn- expire-spent-yeses!
+  "Expire every `allowed_waiting` merge ask whose change has closed or
+  whose head moved from the one the person allowed: the yes was for
+  that head (carrying it over is ticket aa0e9c90's). A change still
+  open at that head keeps its yes, green or not."
+  [eng asks]
+  (doseq [a asks
+          :when (= :allowed_waiting (ask-state a))
+          :let [change (try (change-of-ask eng a)
+                            (catch Exception _ ::unread))]
+          :when (not= ::unread change)
+          :when (or (nil? change)
+                    (contains? #{:closed :merged}
+                               (some-> (:state change) name keyword))
+                    (not= (str (field-of (get-in a [:data :input]) :head_sha))
+                          (some-> (get-in change [:data :head_sha]) str)))]
+    (try
+      (held/expire! eng a)
+      (catch Exception e
+        (warn! "the waiting merge " (:id a) " did not expire ("
+               (ex-message e) "); the next pass tries again")))))
 
 (defn pull-url [change]
   (or (some-> (get-in change [:data :url]) str not-empty)
@@ -2217,7 +2411,10 @@
   merge pass writes `line_why: person` on the change instead. A head
   the forge pass read with a required check missing or still running is
   not green, so it is neither timed nor asked (`head-not-green?`,
-  tickets 8e809671 and 9f19742e). `waiting`
+  tickets 8e809671 and 9f19742e). A person's yes the rig answered
+  `waiting` (`allowed_waiting`, ticket 4180a699) is forwarded again,
+  with no new ask, by the pass that reads its change green on the same
+  head; one whose change closed or whose head moved is expired. `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
   a merge hold keeps it. Throws nothing. → the number
   of asks raised."
@@ -2253,6 +2450,12 @@
                                :else (:since prior))
               seconds (.getSeconds (Duration/between since now))]
           (vswap! clean assoc id {:head head :since since})
+          (when-some [yes (waiting-yes asks change head)]
+            (try
+              (held/reforward! eng yes)
+              (catch Exception e
+                (warn! "the waiting merge for " id " did not go out ("
+                       (ex-message e) "); the next pass tries again"))))
           (when (and (<= (merge-wait-of policy) seconds)
                      (not (asked-already? asks change head)))
             (try
@@ -2261,6 +2464,7 @@
               (catch Exception e
                 (warn! "the merge ask for " id " did not land ("
                        (ex-message e) "); the next pass asks again")))))))
+    (expire-spent-yeses! eng asks)
     ;; a change that is no longer clean, or no longer submitted, starts
     ;; its wait again the next time it is
     (reset! waiting @clean)

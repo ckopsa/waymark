@@ -1,0 +1,3 @@
+;; A fixture org workqueue10.live-orgs-test finds on disk and passes
+;; over: its manifest says it is not live.
+{:paths ["src" "resources"]}
