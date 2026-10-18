@@ -31,9 +31,12 @@
           :walk "work_order"
           :rows_per_firing 1
           :cadence_seconds 3600
+          :standing_ttl_seconds 604800
           :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
           :charter "You read each scheduled work order. Complete it when its crew has done the work; cancel it when the work will not be done. Say why in one sentence."
-          :scope [{:kind "work_order" :actions ["complete" "cancel"]}]
+          :scope [{:kind "work_order" :actions ["complete" "cancel"]
+                   :filter {:state "scheduled"}}]
           :wake_on [{:kind "work_order" :actions ["create"]}]}}]
  :judgments []
  :steps
