@@ -230,6 +230,10 @@ jobs:
       # the workflows and hooks call — true too whenever there is no
       # diff to read. `actionlint` (and its shellcheck step) runs on it.
       workflows: ${{ steps.detect.outputs.workflows }}
+      # The org dirs under orgs/ a pull request changes, as a JSON array
+      # for `org-findings`'s matrix: [] on a PR that touches no org, and
+      # unset on any other event.
+      orgs: ${{ steps.detect.outputs.orgs }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
       # Why `select` refused a dispatch's `only`, when it did. `gate`
@@ -331,6 +335,7 @@ jobs:
 
           code=false
           workflows=false
+          declare -A orgs=()
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
@@ -343,9 +348,25 @@ jobs:
             esac
             if [ "$EVENT" = pull_request ]; then
               suites_for "$f"
+              case "$f" in
+                orgs/*/*) org=${f#orgs/}; orgs[${org%%/*}]=1 ;;
+              esac
             fi
           done <<< "$files"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+          # The changed orgs still present at the head, for `org-findings`.
+          if [ "$EVENT" = pull_request ]; then
+            org_list=()
+            for o in "${!orgs[@]}"; do
+              [ -d "orgs/$o" ] && org_list+=("$o")
+            done
+            if [ "${#org_list[@]}" -eq 0 ]; then
+              echo "orgs=[]" >> "$GITHUB_OUTPUT"
+            else
+              echo "orgs=$(printf '%s\n' "${org_list[@]}" | sort | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
           if [ "$EVENT" = pull_request ]; then
             # The table decides a pull request: code is whatever it
@@ -599,6 +620,80 @@ jobs:
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-factory
+
+  # Each org dir a pull request changes, through conform --json and
+  # clj-kondo, merged into one {org: [findings]} file in conform's shape
+  # and uploaded as org-findings-<org>-<head sha>, for org_plan's
+  # record_findings (ticket 5050cd3e). Findings do not fail this job:
+  # the conformance gate is test-factory's `orgs` step.
+  org-findings:
+    needs: changes
+    if: needs.changes.outputs.orgs != '' && needs.changes.outputs.orgs != '[]'
+    runs-on: [self-hosted, waymark]
+    strategy:
+      fail-fast: false
+      matrix:
+        org: ${{ fromJSON(needs.changes.outputs.orgs) }}
+    env:
+      ORG: ${{ matrix.org }}
+      KONDO_VERSION: 2024.11.14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: conform --json
+        working-directory: factorykit
+        run: |
+          set -uo pipefail
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out"
+          rc=$?
+          # 1 is "error findings", which this job reports and does not judge.
+          if [ "$rc" -gt 1 ]; then echo "conform exited $rc"; exit "$rc"; fi
+          # The JSON object is the last line conform prints.
+          tail -n 1 "$RUNNER_TEMP/conform.out" > "$RUNNER_TEMP/conform.json"
+          jq -e 'type == "object"' "$RUNNER_TEMP/conform.json" > /dev/null
+      - name: clj-kondo
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in aarch64|arm64) arch=aarch64 ;; *) arch=amd64 ;; esac
+          curl -fsSL -o "$RUNNER_TEMP/kondo.zip" \
+            "https://github.com/clj-kondo/clj-kondo/releases/download/v${KONDO_VERSION}/clj-kondo-${KONDO_VERSION}-linux-${arch}.zip"
+          unzip -q -o "$RUNNER_TEMP/kondo.zip" -d "$RUNNER_TEMP/kondo"
+          rc=0
+          "$RUNNER_TEMP/kondo/clj-kondo" --lint "orgs/$ORG" --config '{:output {:format :json}}' \
+            > "$RUNNER_TEMP/kondo.json" || rc=$?
+          # 2 and 3 are warnings and errors found; anything else is kondo failing.
+          case "$rc" in 0|2|3) ;; *) echo "clj-kondo exited $rc"; exit "$rc" ;; esac
+      # Lint keys leave the line out, so a finding keeps its key when code
+      # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
+      # for repeats of one slug in one file, in line order.
+      - name: merge findings
+        run: |
+          set -euo pipefail
+          jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" '
+            [.findings[]
+             | (.filename | ltrimstr($root)) as $file
+             | {file: $file, type: (.type | tostring), level, message, row, col,
+                slug: (.message | ascii_downcase | gsub("[^a-z0-9]+"; "-") | .[0:60])}]
+            | sort_by(.file, .type, .slug, .row, .col)
+            | group_by([.file, .type, .slug])
+            | map(to_entries | map(.key as $i | .value
+                | {key: ("lint/" + .file + "/" + .type + "/" + .slug
+                         + (if $i > 0 then "-" + ($i + 1 | tostring) else "" end)),
+                   severity: .level, class: "lint", subject: .file,
+                   sentence: .message,
+                   remedy: ("Fix clj-kondo'"'"'s " + .type + " at " + .file + ":"
+                            + (.row | tostring) + ":" + (.col | tostring) + ".")}))
+            | add // []
+            | {($org): (($c[0][$org] // []) + .)}
+          ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
+          jq -r --arg org "$ORG" '.[$org] | "\(length) finding(s) for \($org)"' "$RUNNER_TEMP/org-findings.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: org-findings-${{ matrix.org }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/org-findings.json
+          if-no-files-found: error
 
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is
