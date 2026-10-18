@@ -573,6 +573,13 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
+      # Every org under orgs/ through the org conformance suite (ticket
+      # 86f96963): exit 1 on any error finding.
+      - name: orgs — conformance, every org under orgs/
+        id: conform
+        run: >-
+          bash scripts/jvm-retry.sh "test-factory conform" factorykit "$RUNNER_TEMP/conform.txt"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
@@ -585,6 +592,7 @@ jobs:
           steps.checkout.outcome == 'success' &&
           (failure() || steps.check-factory.outputs.retried == 'true' ||
            steps.factorykit.outputs.retried == 'true' ||
+           steps.conform.outputs.retried == 'true' ||
            steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:

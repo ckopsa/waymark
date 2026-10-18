@@ -48,6 +48,19 @@ Its charter:
 
 > You read each new request. Accept it when its detail says what the work is, and write the work order it becomes; decline it when it is not work this office does. Say why in one sentence.
 
+### crew-lead
+
+Works through the work orders, one at a time. Wakes every hour, and when a work order is created.
+
+It may:
+- complete or cancel a work order (only where state is scheduled)
+
+Spends at most $5.00 a week.
+
+Its charter:
+
+> You read each scheduled work order. Complete it when its crew has done the work; cancel it when the work will not be done. Say why in one sentence.
+
 ## Budget
 
-All seats together spend at most $5.00 a week.
+All seats together spend at most $10.00 a week.

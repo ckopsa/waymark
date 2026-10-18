@@ -200,6 +200,29 @@ refreshCurtain();
    header, so this button can never override anything. Concealment is
    the server's job: a card this viewer may not see never arrives. */
 const INTENTS = new Map();   // intent id → freshest entry
+/* what a card names: a collection self is its kind, a row self its
+   summary line as THIS viewer's own read answers it (rowSummary) — the
+   frame carries no row data, so a field this viewer may not read never
+   rides it. One read per self; the raw path only while discovery is
+   cold or the self names nothing this engine serves. */
+const INTENT_ROWS = new Map();   // row self → its summary, or null
+function intentTarget(self) {
+  if (!wellKnownNow) {
+    wellKnown().then(paintIntents).catch(() => {});
+    return self.replace(/^\/api\//, "");
+  }
+  const kind = kindAtHref(wellKnownNow, self);
+  if (kind) return pretty(kind);
+  const t = addressTarget(wellKnownNow, self);
+  if (!t) return self.replace(/^\/api\//, "");
+  if (!INTENT_ROWS.has(self)) {
+    INTENT_ROWS.set(self, null);
+    rowSummary(t.kind, t.id).then(s => {
+      if (s) { INTENT_ROWS.set(self, s); paintIntents(); }
+    });
+  }
+  return INTENT_ROWS.get(self) || refToken(t.kind, t.id);
+}
 async function answerIntent(id) {
   try {
     const res = await fetch("/api/-/intents/answer", {method: "POST",
@@ -223,9 +246,9 @@ function paintIntents() {
         el("span", {class: "actor-mark " + (i.principal.type || "agent")},
           ACTOR_MARKS[i.principal.type] || "◆"),
         ` ${i.principal.display || i.principal.id} — `,
-        el("b", {}, pretty(i.action)), " on ",
+        el("b", {}, i.door_label || pretty(i.action)), " on ",
         el("a", {href: "#" + i.self, title: i.self},
-          i.self.replace(/^\/api\//, ""))),
+          intentTarget(i.self))),
       i.question ? el("div", {class: "q"}, i.question)
                  : el("div", {class: "muted"}, "considering…"),
       i.status === "asking"

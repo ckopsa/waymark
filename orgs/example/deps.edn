@@ -8,4 +8,6 @@
          factorykit/factorykit {:local/root "../../factorykit"}}
  :aliases
  {;; clojure -M:check: the declaration gate, no database, no env
-  :check {:main-opts ["-m" "waymark10.check" "example.org/check-resources"]}}}
+  :check {:main-opts ["-m" "waymark10.check" "example.org/check-resources"]}
+  ;; clojure -M:conform: the org conformance suite (factorykit.conform)
+  :conform {:main-opts ["-m" "factorykit.conform" "."]}}}
