@@ -445,14 +445,23 @@
   "Walk one step on an engine that holds the seed's marker. A `:find`
   is read as ever. A template or create whose body names a `:name` is
   found when a row of its kind holds that name, and made when none
-  does. Every other step was walked by the first load and is skipped.
+  does. A create's name is read alone, so a found row's body, which may
+  point at a step this load skipped, is not filled. Every other step
+  was walked by the first load and is skipped.
   → [row made?], row nil for a skipped step."
   [{:keys [eng] :as ctx} step]
   (cond
     (:find step) [(step! ctx step) false]
 
-    (or (:template step)
-        (and (contains? step :create) (contains? (:create step) :name)))
+    (and (contains? step :create) (contains? (:create step) :name))
+    (let [kind (:kind step)
+          nm (value-of ctx (:name (:create step)))]
+      (if-some [row (named-row eng kind nm)]
+        [row false]
+        (let [[kind body] (made-body ctx step)]
+          [(:row (inv/create! eng kind body (hand-of ctx step))) true])))
+
+    (:template step)
     (let [[kind body] (made-body ctx step)]
       (if-some [nm (:name body)]
         (if-some [row (named-row eng kind nm)]
