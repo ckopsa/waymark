@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
             [waymark10.types :as t]
@@ -101,6 +102,42 @@
         (testing "the finding that is gone closes: its question is resolved"
           (is (some? (:resolved_at (by-key "q2"))))
           (is (nil? (:resolved_at (by-key "q1")))))))))
+
+(def ^:private seat-outside
+  {:key "scope/outside-owner/crew-seat/quote/approve" :severity "error"
+   :class "scope" :subject "seat crew-seat"
+   :sentence "The seat crew-seat holds quote.approve, which its owner does not."
+   :remedy "Narrow the seat's scope to its owner's, or widen the owner's first."})
+
+(deftest the-walk-takes-the-findings-in-a-fixed-order
+  (let [{:keys [h eng]} (world)
+        id (filed! h)
+        step #(:key (:next_step (plan-of h id)))
+        propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
+                               {:headers person :body {}}))]
+    (recorded! eng id "aaaaaaa1"
+               [seat-outside unexplained quote-approver late-payer])
+    (testing "three classes: cracks before sentences before seats, ties by key"
+      (is (= [(:key late-payer) (:key quote-approver)
+              (:key unexplained) (:key seat-outside)]
+             (map :key (org-plan/walk-steps (:findings (plan-of h id))))))
+      (is (= (:key late-payer) (step))))
+    (testing "the step stays until a later run clears its finding"
+      (recorded! eng id "aaaaaaa2"
+                 [seat-outside unexplained quote-approver late-payer])
+      (is (= (:key late-payer) (step)))
+      (recorded! eng id "bbbbbbb1" [seat-outside unexplained quote-approver])
+      (is (= (:key quote-approver) (step)))
+      (recorded! eng id "bbbbbbb2" [seat-outside unexplained])
+      (is (= (:key unexplained) (step)))
+      (recorded! eng id "bbbbbbb3" [seat-outside])
+      (is (= (:key seat-outside) (step))))
+    (testing "the walk is not done while a finding is open"
+      (is (not= 200 (propose))))
+    (testing "the walk ends when the findings are empty, and propose opens"
+      (recorded! eng id "ccccccc1" [])
+      (is (nil? (:next_step (plan-of h id))))
+      (is (= 200 (propose))))))
 
 (deftest only-the-engine-records-findings
   (let [{:keys [h]} (world)
