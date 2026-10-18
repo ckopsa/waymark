@@ -2542,6 +2542,28 @@
       (is (nil? (get-in row [:data :behind_base]))
           "no compare is made when nothing is missing"))))
 
+(deftest a-rejected-workflow-fails-the-change-it-would-have-checked
+  ;; ticket 004188aa: GitHub answers a workflow file it cannot parse
+  ;; with a failed run that has no job, and no check run at all
+  (let [{:keys [state engine] :as r} (missing-world [])
+        file ".github/workflows/tests.yml"]
+    (gh/seed-run! state repo the-head
+                  {:id 39147178078 :workflow_id 21 :head_sha the-head
+                   :status "completed" :conclusion "failure"
+                   :name file :path file
+                   :html_url (str "https://github.com/" repo
+                                  "/actions/runs/39147178078")})
+    (pass! r)
+    (let [row (the-change engine)]
+      (is (= :failing (:state row))
+          "the change leaves the line rather than waiting on checks that never come")
+      (is (= [file] (get-in row [:data :failing_checks]))
+          "the red name is the workflow file GitHub rejected"))
+    (testing "a failed run with jobs is not a rejected workflow"
+      (is (empty? (forge/rejected-verdict
+                   [{:check_name "gate" :status "completed"
+                     :conclusion "failure"}]))))))
+
 (deftest missing-checks-counts-only-checks-with-no-run
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
@@ -3255,10 +3277,11 @@
       (let [so-far (wire-count state)
             spared (count (gh/unchanged state))
             checks (forge/forge-checks source repo limit-head)]
-        (is (= 2 (- (wire-count state) so-far))
-            "the check runs and the statuses")
-        (is (= 1 (- (count (gh/unchanged state)) spared))
-            "the statuses did not change")
+        (is (= 3 (- (wire-count state) so-far))
+            "the check runs, the workflow runs (ticket 004188aa) and the
+             statuses")
+        (is (= 2 (- (count (gh/unchanged state)) spared))
+            "the workflow runs and the statuses did not change")
         (is (contains? (set (map :check_name checks)) "test10 (shard 3)")
             "the new red check is read")))))
 
