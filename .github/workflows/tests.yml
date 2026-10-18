@@ -354,7 +354,12 @@ jobs:
               .github/workflows/*|selfhost/repo-kit/.github/workflows/*|.github/scripts/*.sh|scripts/*.sh|waymark10/scripts/*.sh|.claude/hooks/*.sh) workflows=true ;;
             esac
             case "$f" in
-              SELFHOST.md|selfhost/*|waymark10/resources/waymark10/factory/*) selfhost=true ;;
+              SELFHOST.md|selfhost/*|waymark10/resources/waymark10/factory/*|.github/workflows/selfhost-acceptance.yml) selfhost=true ;;
+              # the selfhost job itself: only when the diff names it
+              .github/workflows/tests.yml)
+                if git diff "${BASE_SHA}...${HEAD_SHA}" -- "$f" | grep -q '^[-+].*selfhost'; then
+                  selfhost=true
+                fi ;;
             esac
             case "$f" in
               waymark10/*|calendar10/*|workqueue10/*|factory10/*|factorykit/*|orgs/*|orgkit/*|localfire/*|.claude/hooks/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
@@ -1957,6 +1962,7 @@ jobs:
           sed -i \
             -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(fresh)|" \
             -e "s|^WAYMARK_PULL_TOKEN=.*|WAYMARK_PULL_TOKEN=$(fresh)|" \
+            -e "s|^WAYMARK_DATA_KEY=.*|WAYMARK_DATA_KEY=$(openssl rand -base64 32)|" \
             -e "s|^WAYMARK_OWNER=.*|WAYMARK_OWNER=tim|" \
             -e "s|^WAYMARK_REPO=.*|WAYMARK_REPO=$repo|" \
             -e "s|^WAYMARK_MODEL=.*|WAYMARK_MODEL=claude-opus-5|" \
@@ -1964,7 +1970,14 @@ jobs:
             -e "s|^BENCH_GITHUB_TOKEN=.*|BENCH_GITHUB_TOKEN=${FIXTURE_TOKEN}|" \
             selfhost/.env
           docker compose -f selfhost/compose.yml up -d
-          timeout 180 bash -c 'until curl -fsS http://127.0.0.1:8014/api/.well-known/waymark >/dev/null; do sleep 5; done'
+          # on a cold runner the engine's first boot (migrate, seed) is slow;
+          # when it never answers, show why before failing
+          if ! timeout 480 bash -c 'until curl -fsS http://127.0.0.1:8014/api/.well-known/waymark >/dev/null; do sleep 5; done'; then
+            docker compose -f selfhost/compose.yml ps
+            docker compose -f selfhost/compose.yml logs --no-color --tail 200
+            echo "::error title=SELFHOST.md drifted (2)::the engine did not answer in 8 minutes"
+            exit 1
+          fi
           running=$(docker compose -f selfhost/compose.yml ps --status running --services)
           for s in postgres engine bench; do
             grep -qx "$s" <<< "$running" || { echo "::error title=SELFHOST.md drifted (2)::$s is not running"; exit 1; }
