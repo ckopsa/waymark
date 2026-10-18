@@ -12,7 +12,8 @@
            :kind "The kind the world seat knocks on: the one the seed's first create makes, unless named."
            :clone_url "Where the clone of the org is served. An input: this repo starts no clone."
            :head_sha "The commit of the org the clone was made at."}
-  :day_params {:day "The day, 1 to :days." :date "The day's date: day_one plus day-1 days (YYYY-MM-DD)."}
+  :day_params {:day "The day, 1 to :days." :date "The day's date: day_one plus day-1 days (YYYY-MM-DD)."
+               :next_date "The day after :date, where the day's holes end."}
   :days 7
   ;; the arc film rule reads friction, turn, payoff in order: on the
   ;; caption of these days, and on the closing
@@ -27,11 +28,24 @@
            :arguments {:kind "{{kind}}" :return "summary"}}]}
  :opening
  [{:tap {:surface "nav.{{kind}}"} :say "The first week of {{org_display}}."}]
- ;; one day: what came in, what the house did, what it asked the person
+ ;; one day: what came in, what the house did, what it asked the person.
+ ;; Each hole is filled from the clone's rows of that day when the shot
+ ;; plays (docs/spec-scenes.md, Holes in a say).
  :day
  [{:tap {:surface "nav.{{kind}}"}}
   {:hold {:ms 5000}
-   :say "Day {{day}}, {{date}}: what came in, what {{org_display}} did, and what it asked {{owner_display}}."}]
+   :say ["Day {{day}}, {{date}}. In came: "
+         {"$rows" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"}}
+         ". What {{org_display}} did: "
+         {"$rows" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"
+                   :field "updated_at" :none "nothing moved"}}
+         ". What it asked {{owner_display}}: "
+         {"$rows" {:kind "held_call" :since "{{date}}" :until "{{next_date}}"
+                   :none "no held call"}}
+         "; "
+         {"$rows" {:kind "approval_request" :since "{{date}}" :until "{{next_date}}"
+                   :none "no approval request"}}
+         "."]}]
  :closing
  [{:hold {:ms 3000} :role "payoff" :say "That was the week. Merge to make it real."}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}

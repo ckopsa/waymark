@@ -113,6 +113,29 @@ holds that kind. A `$ref` may stand in a call's `arguments`, in `self`,
 after `@`, and in a `value`. One that no earlier call or shot bound is
 refused.
 
+## Holes in a `say`
+
+A `say` is a string, or a list of strings and holes. A hole is
+`{"$rows": {kind, since, until, field, none}}`: the rows of `kind` whose
+`field` (`created_at`, the default, or `updated_at`) falls in
+[`since`, `until`). `since` and `until` are each an RFC 3339 instant or
+a `YYYY-MM-DD` date, read as its first moment in UTC.
+
+```json
+{"hold": {"ms": 5000},
+ "say": ["Day 1. In came: ",
+         {"$rows": {"kind": "chore", "since": "2026-10-19", "until": "2026-10-20"}},
+         "."]}
+```
+
+`check` judges each hole: it is a map of those names and no other, its
+`kind` is one this engine serves, its window is two readable times in
+order, and its `field` is one of the two. The performer fills each hole
+when the shot plays (`fill-say`), from the rows the scene's clone holds
+in that window (`rows-in-window`): their summary lines, oldest first,
+joined with `; `. A hole that finds no rows says its `none`, or
+`nothing came in`, and never the hole itself.
+
 ## `wearing`
 
 `wearing` is a map from a cast id to the grant that cast member wears
