@@ -793,10 +793,12 @@
 (defn with-live-orgs
   "`resources` with the kinds of the live orgs `orgs` names folded in
   (`org-boot/live-orgs` over WAYMARK10_ORGS_DIR, ticket 29f8e07a): each
-  loaded from its directory, none a deps root. The registry judges them
-  with everything else, as `with-org`'s."
+  loaded from its directory, none a deps root, and judged by the
+  registry beside everything before it. An org that fails it is
+  skipped with a crack, and the engine boots (ticket 77ad4315). →
+  `org-boot/admit`'s {:resources :orgs :cracks}; seed only its :orgs."
   [resources orgs]
-  (into (vec resources) (org-boot/live-resources orgs)))
+  (org-boot/admit resources orgs engine/full-registry))
 
 (defn live-orgs-on-boot!
   "Each live org's seed, after WAYMARK10_ORG's and by the same rule:
@@ -1003,24 +1005,27 @@
         ;; drinks them and :services :places asks the same flickr for
         ;; a row's chapters (waymark-z8u4)
         media-srcs (if only? {} (media-sources))
+        ;; the kinds to serve: the live orgs fold in last, and one that
+        ;; fails the registry is skipped with a crack, not fatal
+        admitted (with-live-orgs
+                  (with-org
+                   (if only?
+                     (factory-only-resources)
+                     (resources
+                      (sources ha-src)
+                      media-srcs
+                      (thread-sources)
+                      (calendar-adapter)
+                      (connections/fan-reporter engine-ref)))
+                   org)
+                  live)
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
         eng (clocked-engine (System/getenv "WAYMARK10_SEED")
                             #(mirror/with-push (engine/engine %))
                             {:storage storage
-                             :resources (with-live-orgs
-                                         (with-org
-                                         (if only?
-                                           (factory-only-resources)
-                                           (resources
-                                            (sources ha-src)
-                                            media-srcs
-                                            (thread-sources)
-                                            (calendar-adapter)
-                                            (connections/fan-reporter engine-ref)))
-                                         org)
-                                         live)
+                             :resources (:resources admitted)
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook
@@ -1116,7 +1121,7 @@
         ;; the org's seed, after the demo seed's place: the same rule
         _ (org-on-boot! eng org)
         ;; and each live org's, after it
-        _ (live-orgs-on-boot! eng live)
+        _ (live-orgs-on-boot! eng (:orgs admitted))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before

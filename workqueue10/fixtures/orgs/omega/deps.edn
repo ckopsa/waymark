@@ -1,0 +1,3 @@
+;; A fixture org workqueue10.live-orgs-test finds on disk: live, and
+;; declaring alpha's kind, so it is skipped with a crack.
+{:paths ["src" "resources"]}
