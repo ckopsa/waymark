@@ -343,20 +343,6 @@
     (t/deny)
     (t/allow)))
 
-;; the same fence for a seed marker's org: the seed loader records which
-;; org a load was for, and an org load reads it back to refuse another
-;; org's name (`org_mismatch`), so no hand may write it.
-(g/defguard seed-org-not-written-by-hand
-  {:judges [:seed_org]
-   :reads [:principal]
-   :explain "A seed marker's org is written by the seed loader alone, never by hand — a create may not carry seed_org."
-   :open "No door records a seed's org: the seed loader does, on the marker it writes after an org's load. Create the member without seed_org."}
-  [_row inp ctx]
-  (if (and (contains? inp :seed_org)
-           (not= :system (get-in ctx [:principal :type])))
-    (t/deny)
-    (t/allow)))
-
 ;; the homecoming durable guard (waymark-4zj.8.3, closed): offer_reentry
 ;; had no durable-self guard, so a recovery-admin could mint a way home
 ;; onto a HOLLOW namesake — a knock-born guest row that owns no self, no
@@ -832,8 +818,7 @@
                                 :help "True when the seed loader made this member from its cast: on a clone, a seat with acts_as_cast may act as it. Written by the seed loader, never by hand."}}
              [:maybe :boolean]]
             ;; the org a seed's completion marker was loaded for: written
-            ;; by the seed loader alone (seed/mark!), fenced by
-            ;; seed-org-not-written-by-hand, and read back by
+            ;; by the seed loader (seed/mark!) and read back by
             ;; seed/marker-org. Hidden: no form or roster shows it.
             [:seed_org {:optional true
                         :x-display {:hidden true
@@ -906,8 +891,7 @@
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
                    acts-for-not-written-by-hand
-                   cast-not-written-by-hand
-                   seed-org-not-written-by-hand]
+                   cast-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
