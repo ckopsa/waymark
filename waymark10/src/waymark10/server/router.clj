@@ -212,6 +212,25 @@
       (assoc :acts-for (str/trim (str (get headers "x-waymark-acts-for")))))
     t/anonymous))
 
+(defn- solo-admits
+  "A solo engine's identity wall (:solo-owner, ticket 25266c4f): with
+  no IdP the dev headers ARE the identity, so they resolve only for
+  the owner, or for an agent whose X-Waymark-Acts-For names the owner.
+  Any other named principal answers 401; a request naming nobody stays
+  anonymous. Without :solo-owner it passes everything, as before."
+  [eng principal]
+  (let [owner (:solo-owner eng)]
+    (if (or (nil? owner)
+            (= t/anonymous principal)
+            (= owner (:id principal))
+            (and (= :agent (:type principal))
+                 (= owner (:acts-for principal))))
+      principal
+      (throw (p/problem :unauthenticated 401 "Unauthenticated"
+                        {:detail (str "This engine trusts its owner alone: "
+                                      "X-Waymark-Principal must name the owner, "
+                                      "or an agent whose X-Waymark-Acts-For does.")})))))
+
 (defn principal-of
   "The request's principal, resolved once by wrap-identity; the dev
   headers remain the fallback for a bare handler in tests."
@@ -2198,7 +2217,7 @@
   (fn [req]
     (let [principal (or (oidc/resolve-principal (:oidc eng) (:headers req))
                         (oidc-rp/resolve-session (:oidc eng) req)
-                        (dev-principal (:headers req)))
+                        (solo-admits eng (dev-principal (:headers req))))
           ;; batch B (flagged): a presented invite token rides into the
           ;; gate — first authenticated sight binds an invited member
           principal (members/gate! eng principal

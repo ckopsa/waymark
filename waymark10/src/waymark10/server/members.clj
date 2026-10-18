@@ -1358,6 +1358,32 @@
           (load-member eng (:id candidate))
           (catch Exception _ nil))))))
 
+(def ^:private solo-owner-roles
+  "What a solo engine's owner is born holding (ticket 25266c4f): the
+  factory's manager, and the recovery-admin a first admin otherwise
+  only gets from an identity provider — a solo engine has none."
+  [roles/manager "recovery-admin"])
+
+(defn- ensure-solo-roles!
+  "The role rows a solo owner's birth names, registered when no row
+  spells them yet (roles/ensure-factory-roles!'s shape), so the member
+  create's roles-registered guard admits them. Answers the names that
+  ARE spelled afterwards — a seed that failed drops its name rather
+  than refusing the owner's first request; nil without the role kind."
+  [eng]
+  (when (contains? (inv/resources eng) :role)
+    (let [spelled? (fn [role-name]
+                     (seq (store/with-tx (:storage eng)
+                            (fn [tx] (store/query-rows (:storage eng) tx :role
+                                                       {:name role-name} {:limit 1})))))]
+      (doseq [role-name solo-owner-roles]
+        (try
+          (when-not (spelled? role-name)
+            (inv/create! eng :role {:name role-name}
+                         {:principal roles/seed-actor}))
+          (catch Exception _ nil)))
+      (filterv spelled? solo-owner-roles))))
+
 (defn- provision!
   "First sight: mint the member through the engine — system actor,
   logged like any create. A losing race reloads the winner's row.
@@ -1374,23 +1400,30 @@
   every namespace, without any of them re-deriving this file's
   birth paths."
   [eng principal]
-  (try
-    (:row (inv/create! eng :member
-                       (cond-> {:display (let [d (:display principal)
-                                               d (if (str/blank? d) (:id principal) d)]
-                                           ;; the declared budget, not a 422 on
-                                           ;; every request an IdP's long name makes
-                                           (subs d 0 (min (count d) 80)))
-                                :actor_type (name (:type principal))
-                                :subject (:id principal)}
-                         ;; the delegate's person (spec-connector-door
-                         ;; § 3): the gate is the one writer the fence
-                         ;; admits, and this is the write
-                         (:acts-for principal)
-                         (assoc :acts_for (str (:acts-for principal))))
-                       {:principal registrar :id (:id principal)}))
-    (catch Exception e
-      (or (load-member eng (:id principal)) (throw e)))))
+  (let [solo-roles (when (and (some? (:solo-owner eng))
+                              (= (:solo-owner eng) (:id principal)))
+                     (ensure-solo-roles! eng))]
+    (try
+      (:row (inv/create! eng :member
+                         (cond-> {:display (let [d (:display principal)
+                                                 d (if (str/blank? d) (:id principal) d)]
+                                             ;; the declared budget, not a 422 on
+                                             ;; every request an IdP's long name makes
+                                             (subs d 0 (min (count d) 80)))
+                                  :actor_type (name (:type principal))
+                                  :subject (:id principal)}
+                           ;; the delegate's person (spec-connector-door
+                           ;; § 3): the gate is the one writer the fence
+                           ;; admits, and this is the write
+                           (:acts-for principal)
+                           (assoc :acts_for (str (:acts-for principal)))
+                           ;; the solo owner (ticket 25266c4f) is born
+                           ;; running the engine: there is nobody else
+                           (seq solo-roles)
+                           (assoc :roles solo-roles))
+                         {:principal registrar :id (:id principal)}))
+      (catch Exception e
+        (or (load-member eng (:id principal)) (throw e))))))
 
 (defn ensure-sitter!
   "The seat's sitter row, minted if this is its first sitting
