@@ -484,6 +484,24 @@
                                         {:principal colton})))))
   (is (rl/pull? (row-of (pull-link-id!)))))
 
+(deftest restate-keeps-delivery-and-judges-the-url-as-create-does
+  (testing "restate's input has no delivery"
+    (is (not (contains? (set (map name (keys (:properties (schema/json-schema
+                                                           (get-in rl/runner-link [:actions :restate :input]))))))
+                        "delivery"))))
+  (testing "a pull link's restate refuses a fire_url with create's sentence"
+    (let [id (pull-link-id!)]
+      (is (= :a-pull-link-has-no-url
+             (:guard (refusal #(restate! id {:fire_url a-url} colton)))))
+      (is (= (:explain rl/a-pull-link-has-no-url)
+             (:explain rl/a-restated-pull-link-has-no-url)))
+      (is (rl/pull? (row-of id)))))
+  (testing "a push link's restate may change its fire_url"
+    (let [id (str (:id (make-link! colton)))
+          other "https://api.example.test/v1/routines/trig_02/fire"]
+      (restate! id {:fire_url other} colton)
+      (is (= other (str (get-in (row-of id) [:data :fire_url])))))))
+
 (deftest a-pull-fire-is-held-sealed-not-posted
   (let [id (pull-link-id!)
         n (atom 0)

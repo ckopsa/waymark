@@ -103,15 +103,32 @@
     (t/allow)
     (t/deny)))
 
+(def ^:private push-or-pull
+  "A push link names the fire URL the engine posts each fire to. A pull link names none: a localfire on the person's machine asks the engine for its fires. Give a fire URL with push, and none with pull.")
+
 (g/defguard a-pull-link-has-no-url
   {:judges [:fire_url :delivery]
-   :explain "A push link names the fire URL the engine posts each fire to. A pull link names none: a localfire on the person's machine asks the engine for its fires. Give a fire URL with push, and none with pull."
+   :explain push-or-pull
    :remedies [:runner_link/create]}
   [_row inp _ctx]
   (if (= (= "pull" (some-> (:delivery inp) name))
          (nil? (some-> (:fire_url inp) str not-empty)))
     (t/allow)
     (t/deny)))
+
+;; the same law on restate, whose input has no :delivery: the row's
+;; delivery stands, so a pull link refuses a fire_url, and a push link
+;; that names none keeps the one it holds.
+(g/defguard a-restated-pull-link-has-no-url
+  {:name :a-pull-link-has-no-url
+   :judges [:fire_url]
+   :explain push-or-pull
+   :remedies [:runner_link/restate]}
+  [row inp _ctx]
+  (if (and (= "pull" (some-> (get-in row [:data :delivery]) name))
+           (some? (some-> (:fire_url inp) str not-empty)))
+    (t/deny)
+    (t/allow)))
 
 (g/defguard the-engine-writes-the-fire
   {:reads [:principal]
@@ -337,13 +354,13 @@
               [:maybe [:string {:min 16 :max 400}]]]]
      ;; NOT :record: this input may carry the credential, and a
      ;; recorded action persists its raw inputs into the log.
-     :guards [a-person-writes-the-token]
+     :guards [a-person-writes-the-token a-restated-pull-link-has-no-url]
      :edit {:prefill [:provider :fire_url :cap] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link holds what this restate says; a new token replaces the old one, which is not kept."}
      :handler restate-link
      :display {:label "Restate the link" :order 1
-               :description "Change the fire URL or the cap, or paste a new token"}}
+               :description "Change the fire URL or the cap, or paste a new token. Push or pull stays as the link was made: to change it, retire this link and make a new one"}}
 
     :retire
     {:from #{:live :broken} :to :retired
