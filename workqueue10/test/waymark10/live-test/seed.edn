@@ -1,0 +1,26 @@
+;; A live seed for workqueue10.live-seed-test: marked :live-ok, so it
+;; loads on a fresh engine of any name, and its one step fills the
+;; factory kit's real code-seat template (factorykit/resources/seats/),
+;; which reaches this classpath through factory10. That template's
+;; scope names the bench's powers, and a scope names a power only some
+;; server row declares, so the seed walls a `bench` server first (the
+;; test boots it with a wall url).
+{:seed "live-test"
+ :version 1
+ :live-ok true
+ :cast {:ada {:id "ada" :display "Ada Example" :type :human}}
+ :walled [{:server "bench"
+           :powers [{:power "bench.find" :tools ["find"] :constraints ["repo"]}
+                    {:power "bench.read" :tools ["read"] :constraints ["repo"]}
+                    {:power "bench.symbols" :tools ["symbols"] :constraints ["repo"]}
+                    {:power "bench.edit" :tools ["edit"] :constraints ["repo"]}
+                    {:power "bench.edit_many" :tools ["edit_many"] :constraints ["repo"]}
+                    {:power "bench.check" :tools ["check"] :constraints ["repo"]}
+                    {:power "bench.test" :tools ["test"] :constraints ["repo"]}
+                    {:power "bench.pull" :tools ["pull"] :constraints ["repo"]}
+                    {:power "bench.feedback" :tools ["feedback"] :constraints ["repo"]}
+                    {:power "bench.history" :tools ["history"] :constraints ["repo"]}
+                    {:power "bench.log" :tools ["log"] :constraints ["repo"]}
+                    {:power "bench.rerun" :tools ["rerun"] :constraints ["repo"]}]}]
+ :steps [{:as :ada :template "code-seat"
+          :params {:repo [:param :repo]} :ref :code-seat}]}

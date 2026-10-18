@@ -7,7 +7,9 @@
   that is meant moves the pin with it. Ticket 48f9605b moved it:
   `close_without_pr` leaves `failing` and `stuck` for the kit's sweep
   behind `the-engine-closes-a-stopped-change`, and writes its sentence
-  to `superseded_by`."
+  to `superseded_by`. Ticket 7e12f1e8 moved it: `close_without_pr`'s
+  one-way sentence says the house opens the change again only when its
+  ticket is queued again after the close."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -36,7 +38,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "06cda34a3d640735f65e370e69926b538a17198ec4013f38c0627476c71b9040")
+  "ac59df37bd0985ef7f0d1af5d6b726f11e715baad497468989a93b63d0e24c32")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

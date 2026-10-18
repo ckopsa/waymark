@@ -34,6 +34,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.pull-fires :as pf]
             [waymark10.server.render :as render]
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
@@ -49,7 +50,8 @@
   ["schedules" "seats" "models" "sittings" "definitions" "members" "roles"
    "grants" "approval_requests" "attachments" "subscriptions" "jobs"
    "runner_links" "waymark10_transitions" "waymark10_idempotency"
-   "waymark10_cursors" "waymark10_drafts"])
+   "waymark10_cursors" "waymark10_drafts" "waymark10_pull_fires"
+   "waymark10_pull_polls"])
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *fake* nil)
@@ -492,7 +494,9 @@
              :wake_text
              ;; every waiting fire's text, and the textless wake that
              ;; waits beside them (58573175)
-             :wake_texts :wake_textless}
+             :wake_texts :wake_textless
+             ;; the head each woken row was last heard at (70aca5e6)
+             :wake_seen}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
       (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
@@ -1089,6 +1093,53 @@
       (is (= :linked-for-fire (guard-of bare-id))))
 
     (doseq [s [seat-id bare-id]] (seat-do! s :retire))))
+
+(deftest a-pull-fires-answer-lands-on-the-schedule-row
+  ;; waymark ticket 5850f18e: runner_links_test shows `answer-fire!`
+  ;; hands its answer to `sch/land-pull-answer!`, and a day-old fire to
+  ;; `sch/miss!`, by redefining each; here a seat's fire goes out
+  ;; through a pull link and both land on the schedule row itself.
+  (let [cn :sched-pull-answer
+        _ (drain! cn)
+        chair (model! "claude-chair-pull")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "pull-clerk" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        st (:storage *eng*)
+        p (str (:id (:row (inv/create! *eng* :runner_link
+                                       {:provider "localfire" :delivery "pull"
+                                        :fire_token a-seat-token}
+                                       {:principal elena}))))
+        sid (str (:id (sched-of seat-id)))
+        fire! (fn []
+                (pf/poll! st p (java.time.Instant/now))
+                (fire-seat! seat-id "Walk the pool.")
+                (drain! cn))
+        acted? (fn [action] (some #(= action (:action %)) (log-of :schedule sid)))]
+    (set-runners! :schedule sid {:runners [p]})
+
+    (testing "a taken fire's answer stamps fired, last_runner and last_run_url"
+      (fire!)
+      (let [f (rl/take-fire! *eng* p)]
+        (is (= ["schedule" sid] [(:for_kind f) (:for_id f)]))
+        (is (some? (rl/answer-fire! *eng* (:id f) {:started "https://run/pull-1"}))))
+      (let [row (sched-of seat-id)]
+        (is (acted? :fired))
+        (is (= p (get-in row [:data :last_runner])))
+        (is (= "https://run/pull-1" (get-in row [:data :last_run_url])))
+        (is (some? (get-in row [:data :last_fired_at])))))
+
+    (testing "a fire no localfire took within a day is dropped, and the row says so"
+      (is (not (acted? :throttle)))
+      (fire!)
+      (let [later (.plusSeconds (java.time.Instant/now) (+ pf/keep-seconds 60))]
+        (is (nil? (rl/take-fire! (assoc *eng* :now-fn (constantly later)) p))))
+      (is (empty? (pf/pending st p)) "the missed fire left the queue")
+      (is (acted? :throttle))
+      (is (str/includes? (str (get-in (sched-of seat-id) [:data :note]))
+                         "dropped as missed")))
+
+    (seat-do! seat-id :retire)))
 
 ;; ── 11 · the adapter leaves a pool-only schedule alone (waymark ticket 962e0aeb)
 ;; A schedule whose only way out is a runner pool, its own or its

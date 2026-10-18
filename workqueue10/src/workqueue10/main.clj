@@ -896,28 +896,42 @@
 
 (defonce ^:private dev (atom nil))
 
+(defn- demo-seed?
+  "Whether WAYMARK10_SEED names a demo seed: a name, and not one of a
+  seed marked `:live-ok`. A live seed is a self-hosted engine's first
+  boot, so it gets no demo clock and needs no FACTORY10=1 of its own:
+  its steps are judged by the law, which refuses a kind not served. A
+  name this commit carries no seed for counts as a demo one, and
+  `seed/boot!` refuses it. `seed` is the variable's value."
+  [seed]
+  (boolean
+   (when-some [n (some-> seed str not-empty)]
+     (not (:live-ok (seed/read-seed n))))))
+
 (defn- gate-row-on-boot!
   "The bridge of Gate's deprecation (spec-mcp-servers § 3 step 1): one
   mcp_server row named gate, passthrough, at the Gate
   WORKQUEUE10_GATE_URL names, seeded once and never overwritten. The
   sources and the power door resolve every <rig>__<tool> name through
-  it until each rig has its own row. A demo engine (WAYMARK10_SEED,
-  docs/spec-demo-clones.md § 4) gets none, whatever the url says: a
-  passthrough row answers to every unprefixed tool name, so the seeded
-  held call would be forwarded at Gate's address and not refused with
-  the no-server sentence. `gate-url` and `seed` are the two variables'
-  values as `start!` read them."
+  it until each rig has its own row. A demo engine (a demo seed,
+  `demo-seed?`, docs/spec-demo-clones.md § 4) gets none, whatever the
+  url says: a passthrough row answers to every unprefixed tool name, so
+  the seeded held call would be forwarded at Gate's address and not
+  refused with the no-server sentence. A `:live-ok` seed is a
+  self-hosted engine, not a clone, so it gets the row. `gate-url` and
+  `seed` are the two variables' values as `start!` read them."
   [eng gate-url seed]
-  (when-not (some-> seed str not-empty)
+  (when-not (demo-seed? seed)
     (when-some [url (some-> gate-url str not-empty)]
       (mcp-servers/ensure-gate-row! eng {:url url}))))
 
 (defn- seed-on-boot!
-  "The demo seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED
-  and nothing otherwise. The seed's tickets are rows of a factory
+  "The seed (docs/spec-demo-clones.md § 1), behind WAYMARK10_SEED
+  and nothing otherwise. The demo seed's tickets are rows of a factory
   kind, so a demo engine boots with FACTORY10=1 and this refuses one
-  that does not. `seed/boot!` refuses an engine not named `demo-…` or
-  one with an IdP, and a step the law refuses. Every refusal throws,
+  that does not; a `:live-ok` seed is not asked (`demo-seed?`).
+  `seed/boot!` refuses an engine not named `demo-…` for a seed not
+  `:live-ok`, one with an IdP, and a step the law refuses. Every refusal throws,
   so the boot ends before the server listens. WAYMARK_WALL_URL is the
   clone's wall (§ 4): when it is set the seed's walled servers are
   made at it, so the seeded held call is forwarded to the wall. `seed`,
@@ -925,7 +939,7 @@
   read them."
   [eng seed factory wall-url]
   (when-some [seed-name (some-> seed str not-empty)]
-    (when-not (= "1" factory)
+    (when (and (demo-seed? seed-name) (not= "1" factory))
       (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
                       {:seed seed-name})))
     (seed/boot! eng seed-name
@@ -933,16 +947,17 @@
 
 (defn- clocked-engine
   "The engine `build` makes of `opts`, with the demo clock
-  (docs/spec-agent-demo-walks.md § 7) assembled behind WAYMARK10_SEED
-  and nothing otherwise: the `clock_shift` kind, the `:now-fn` its shifts
-  move, and the offset read back from the rows, so a restarted clone
-  keeps its time. A working engine is built from `opts` as they are: it
-  serves no such kind and has no offset to read. `seed-on-boot!` then
+  (docs/spec-agent-demo-walks.md § 7) assembled behind a demo seed
+  (`demo-seed?`) and nothing otherwise: the `clock_shift` kind, the
+  `:now-fn` its shifts move, and the offset read back from the rows, so
+  a restarted clone keeps its time. A working engine, and one booted
+  with a `:live-ok` seed, is built from `opts` as they are: it serves no
+  such kind and has no offset to read. `seed-on-boot!` then
   refuses a seeded engine not named `demo-…` or one with an IdP, and
   the kind's own guard asks that again at each shift. `seed` is the
   variable's value as `start!` read it."
   [seed build opts]
-  (if (some-> seed str not-empty)
+  (if (demo-seed? seed)
     (clock-shift/install! (build (clock-shift/with-clock opts)))
     (build opts)))
 

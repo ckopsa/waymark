@@ -285,10 +285,11 @@
           (is (= "http://engine.test/api/runner_links/link-1/-/restate" (:url restated)))
           (is (= access-token (:access-token restated)))
           (is (= (people/fire-token (:people w) nm) (get-in restated [:body :token]))))
-        (testing "a revoke marks the link: retired in the engine and here"
+        (testing "a revoke marks the link: broken in the engine, with why, and here"
           (is (= 303 (:status revoke)))
-          (is (= "http://engine.test/api/runner_links/link-1/-/retire" (:url retired)))
-          (is (= {:id "link-1" :retired true} (people/read-link (:people w) subject))))
+          (is (= "http://engine.test/api/runner_links/link-1/-/mark_broken" (:url retired)))
+          (is (= {:note "The person revoked their token."} (:body retired)))
+          (is (= {:id "link-1" :broken true} (people/read-link (:people w) subject))))
         (testing "no call carries the Claude token"
           (is (not (str/includes? (pr-str @calls) claude-token)))))
       (finally (server/stop! w)))))

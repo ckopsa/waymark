@@ -506,6 +506,10 @@
         "a transition after the refusal means it was not refused out")
     (is (= "cut_short" (outcome (assoc a-sat :closed_by "hook" :turns 9) [])))
     (is (= "idle" (outcome (assoc a-sat :closed_by "hook" :turns 10) [])))
+    (is (= "idle" (outcome (assoc a-sat :closed_by "hook" :turns 3
+                                  :walked_nothing true)
+                           []))
+        "a sitting whose sit handed it no rows is idle, not cut short (ticket 70aca5e6)")
     (is (= "completed" (outcome (assoc a-sat :closed_by "hook" :turns 4)
                                 [{:kind :verdict :action :judge :at t0}]))
         "a verdict and a stop is a finished sitting, not a cut-short one")

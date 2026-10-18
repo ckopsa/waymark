@@ -264,7 +264,7 @@
 (def ^:private outcome-help
   (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
-       " turns. idle: none of these; it moved nothing."))
+       " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
 
 (def ^:private flags-help
   (let [{:keys [test-calls read-bytes dropped-share rewalk-sittings
@@ -1926,6 +1926,11 @@
                   ;; delivery still decides (e2a379e0)
                   (and (empty? delivers)
                        (moved? transitions "verdict" "judge")) "completed"
+                  ;; a sit that handed no rows, and a sitting that moved
+                  ;; nothing after, left no work to cut short (ticket
+                  ;; 70aca5e6): it is idle, however few its turns
+                  (and (true? (:walked_nothing data))
+                       (empty? transitions)) "idle"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
@@ -5745,7 +5750,8 @@
 (defn- walked-nothing?
   "Did this sitting end with nothing walked: its sit handed it no rows
   (`stamp-walked-nothing!`) and it moved nothing after. A hook closes
-  such a wake within a few turns, so `cut_short` counts beside `idle`."
+  such a wake within a few turns, and one closed before ticket 70aca5e6
+  reads `cut_short`, so `cut_short` counts beside `idle`."
   [sitting]
   (and (true? (:walked_nothing sitting))
        (contains? #{"idle" "cut_short"} (some-> (:outcome sitting) name))))
@@ -7229,6 +7235,38 @@
         stall (latest-transition eng :change (:id change) "stall")]
     (when (and groom stall (> (long (:id groom)) (long (:id stall))))
       groom)))
+
+(def ^:private queueing-doors
+  "The ticket's doors that put its ask in the queue again: a person's
+  groom, unblock, resume or reopen, or the engine's `return` when
+  GitHub closed the pull request unmerged."
+  #{"groom" "unblock" "resume" "return" "reopen"})
+
+(def ^:private ending-doors
+  "The change's doors that end it unmerged."
+  #{"close" "close_without_pr" "supersede"})
+
+(defn- latest-transition-of
+  "The newest transition of one row through any of `actions`, or nil."
+  [eng kind id actions]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (some (fn [tr] (when (contains? actions (some-> (:action tr) name)) tr))
+              (store/transitions st tx {:kind kind :resource-id (str id)}
+                                 {:newest-first true}))))))
+
+(defn ask-after-close
+  "The ticket's newest groom, unblock, resume, return or reopen when it
+  is newer than the change's newest close, close_without_pr or
+  supersede, or nil (ticket 7e12f1e8): the ask was put in the queue
+  again after the change ended. A ticket never queued answers nil; a
+  change that ended by none of those doors answers the ask alone."
+  [eng change ticket-id]
+  (let [ask (latest-transition-of eng :ticket ticket-id queueing-doors)
+        end (latest-transition-of eng :change (:id change) ending-doors)]
+    (when (and ask (or (nil? end) (> (long (:id ask)) (long (:id end)))))
+      ask)))
 
 (defn stuck-walk-reasons
   "The tickets in a ticket walk whose change is stuck and

@@ -316,10 +316,48 @@
                      :one-way "Filed is filed."}
             :display {:label "File" :style :primary :order 2}}}}))
 
+(def ^:private wake-pr
+  "A row a forge mirrors (ticket 70aca5e6): `observe` is the poll's
+  self-loop on a red pull request, and it writes the head it read."
+  (r/resource
+   {:kind :wake_pr
+    :plural "wake_prs"
+    :states [:failing :closed]
+    :initial :failing
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:examples ["Fix the gate"]
+                      :x-display {:label "What it is"
+                                  :help "One line naming the change."}}
+              [:string {:min 1 :max 80}]]
+             [:head_sha {:optional true
+                         :examples ["0123abcd"]
+                         :x-display {:label "Head"
+                                     :help "The commit the forge last read."}}
+              [:maybe [:string {:max 64}]]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:state "failing"}
+    :actions
+    {:observe {:from #{:failing} :to :failing
+               :input [:map
+                       [:head_sha {:examples ["0123abcd"]
+                                   :x-display {:label "Head"
+                                               :help "The commit the forge read."}}
+                        [:string {:min 1 :max 64}]]]
+               :handler (fn [row inp _ctx]
+                          (update row :data merge (select-keys inp [:head_sha])))
+               :safety {:idempotent true :reversible true :confirm false}
+               :display {:label "Observe" :order 1}}
+     :close {:from #{:failing} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Closed is closed."}
+             :display {:label "Close" :style :primary :order 2}}}}))
+
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["wake_tasks" "wake_items" "wake_memos" "wake_chats" "wake_forms"
+  ["wake_tasks" "wake_items" "wake_memos" "wake_chats" "wake_forms" "wake_prs"
    "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments"
    "subscriptions" "jobs" "invitations" "walkthroughs"
@@ -343,7 +381,7 @@
               eng (engine/engine
                    {:storage st
                     :resources [wake-task wake-item wake-memo wake-chat
-                                wake-form]})]
+                                wake-form wake-pr]})]
           (binding [*eng* (assoc eng
                                  :schedule-adapters {:claude_routine fake}
                                  :fire-adapter fire)
@@ -4311,5 +4349,50 @@
           (is (some #(str/includes? (str %) handed) texts))
           (is (or (some nil? texts)
                   (true? (get-in (sched-of seat) [:data :wake_pending])))))))
+
+    (seat-do! seat :retire)))
+
+;; ── a red head the poll reads again wakes nobody (ticket 70aca5e6) ──
+
+(defn- pr! [title]
+  (:id (:row (inv/create! *eng* :wake_pr {:title title}
+                          {:principal elena}))))
+
+(defn- observe! [id head]
+  (inv/invoke! *eng* :wake_pr (str id) :observe {:head_sha head}
+               {:principal elena}))
+
+(deftest an-observe-on-an-unchanged-head-fires-no-sitting
+  (let [wn :wake-same-head
+        fn' :wake-same-head-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (linked-seat! "sameheadclerk"
+                      {:scope [{:kind "wake_pr" :actions ["observe"]}]
+                       :wake_on [{:kind "wake_pr" :actions ["observe"]}]}
+                      fn')
+        row (pr! "a red pull request")]
+    (observe! row "aaa111")
+    (drain-wakes! wn)
+    (drain-fires! fn')
+    (is (= 1 (count (seat-fires seat)))
+        "the first head the wake hears wakes the seat")
+    (is (= 1 (count (fires-of token))))
+
+    (testing "the poll's next observes on the same head fire nothing"
+      (observe! row "aaa111")
+      (observe! row "aaa111")
+      (drain-wakes! wn)
+      (drain-fires! fn')
+      (is (= 1 (count (seat-fires seat))))
+      (is (not (true? (get-in (sched-of seat) [:data :wake_pending])))
+          "and nothing waits behind the damper either"))
+
+    (testing "a new head wakes the seat again"
+      (observe! row "bbb222")
+      (drain-wakes! wn)
+      (is (or (= 2 (count (seat-fires seat)))
+              (true? (get-in (sched-of seat) [:data :wake_pending])))))
 
     (seat-do! seat :retire)))

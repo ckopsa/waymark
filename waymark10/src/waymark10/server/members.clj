@@ -327,6 +327,22 @@
     (t/deny)
     (t/allow)))
 
+;; the same fence for the cast marker (clone guard 2/3): a member the
+;; seed loader made from its `:cast` is one a clone's acts_as_cast seat
+;; may act as. Hand-set, it would let anyone mark a member a seat may
+;; then speak for, so the registrar, through which the loader creates,
+;; is the one writer allowed through.
+(g/defguard cast-not-written-by-hand
+  {:judges [:cast]
+   :reads [:principal]
+   :explain "A seeded cast member is marked by the seed loader alone, never by hand — a create may not carry cast."
+   :open "No door marks a cast member: the seed loader does, when a seed names the member in its :cast. Create the member without cast."}
+  [_row inp ctx]
+  (if (and (contains? inp :cast)
+           (not= :system (get-in ctx [:principal :type])))
+    (t/deny)
+    (t/allow)))
+
 ;; the homecoming durable guard (waymark-4zj.8.3, closed): offer_reentry
 ;; had no durable-self guard, so a recovery-admin could mint a way home
 ;; onto a HOLLOW namesake — a knock-born guest row that owns no self, no
@@ -791,6 +807,16 @@
                                     :label "Acts for"
                                     :help "The person this agent acts for — the identity a connector's token named when the gate first saw it. Written by the identity gate, never by hand; empty for people and for agents holding their own key."}}
              [:maybe [:string {:max 256}]]]
+            ;; a seeded cast member (clone guard 2/3): written by the
+            ;; seed loader alone, through the registrar, and fenced by
+            ;; cast-not-written-by-hand. On a clone, a seat with
+            ;; acts_as_cast may name this member as `as` on an invoke
+            ;; (router/cast-principal).
+            [:cast {:optional true
+                    :x-display {:raw true
+                                :label "Seeded cast member"
+                                :help "True when the seed loader made this member from its cast: on a clone, a seat with acts_as_cast may act as it. Written by the seed loader, never by hand."}}
+             [:maybe :boolean]]
             ;; the zone this member's own local times are read in
             ;; (docs/spec-scheduled-actions.md R-7.2). The quiet hours
             ;; keep a zone of their own inside :notify; this one is the
@@ -856,7 +882,8 @@
    :sortable {:fields [:display] :default "display"}
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
-                   acts-for-not-written-by-hand]
+                   acts-for-not-written-by-hand
+                   cast-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -1523,6 +1550,44 @@
         row))
     row))
 
+(defn- heal-solo-roles!
+  "The gate's second heal (ticket 2ecadc5f): provision! gives the solo
+  owner its roles only when it MINTS the row, so an owner whose row was
+  already there — the engine ran without :solo-owner first, or the row
+  came from an invite — would never hold them. An :active row whose id
+  or :subject is the solo owner and whose roles lack any of
+  solo-owner-roles gains the missing ones, assigned by the registrar
+  (after ensure-solo-roles!), its other roles kept.
+
+  Cheap and idempotent like heal-subject!: the guard is the missing
+  role itself, so a healed row never writes again. Failure is never
+  fatal — it warns and hands back the row unchanged."
+  [eng row]
+  (let [owner (:solo-owner eng)
+        held (vec (get-in row [:data :roles]))]
+    (if (and (some? owner)
+             (= :active (:state row))
+             (some #{(str owner)}
+                   [(str (:id row)) (str (get-in row [:data :subject]))])
+             (not-every? (set held) solo-owner-roles))
+      (try
+        (let [missing (remove (set held) (ensure-solo-roles! eng))]
+          (if (seq missing)
+            (let [roles (into held missing)]
+              ;; an edit door: fenced on the version read just now, since
+              ;; heal-subject! may have moved it since the gate's load
+              (inv/invoke! eng :member (:id row) :assign_roles {:roles roles}
+                           {:principal registrar
+                            :if-match (inv/etag :member (str (:id row))
+                                                (:version (load-member eng (:id row))))})
+              (assoc-in row [:data :roles] roles))
+            row))
+        (catch Exception e
+          (warn! "solo-owner roles failed for member " (pr-str (:id row))
+                 " — " (ex-message e) "; the request proceeds unhealed")
+          row))
+      row)))
+
 (def knock-shelf-cap
   "Unclaimed self-requested invitations that may stand at once — the
   standing wall: it persists across restarts because it IS the rows."
@@ -1736,13 +1801,16 @@
            ;; :subject (heal-subject!, waymark-tti.10) — resolving by
            ;; id is itself the proof that this row's id is a principal
            ;; id, which is the only fact the stamp records
-           row (or (some->> (load-member eng (:id principal))
-                            (heal-subject! eng))
-                   (member-by-subject eng (:id principal))
-                   (bind! eng principal invite-token)
-                   (when (or (not invited-only?)
-                             (delegate-of-a-member? eng principal))
-                     (provision! eng principal)))]
+           row (some->> (or (some->> (load-member eng (:id principal))
+                                     (heal-subject! eng))
+                            (member-by-subject eng (:id principal))
+                            (bind! eng principal invite-token)
+                            (when (or (not invited-only?)
+                                      (delegate-of-a-member? eng principal))
+                              (provision! eng principal)))
+                        ;; a solo owner's row born before :solo-owner
+                        ;; gains its roles here (heal-solo-roles!)
+                        (heal-solo-roles! eng))]
        (when (nil? row)
          (throw (not-invited (:id principal))))
        (when (= :suspended (:state row))

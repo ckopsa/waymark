@@ -27,7 +27,27 @@
   is the note, written once. The draft for the mayor is filed when no
   seat holds the row, when several do, when the seat would not fire,
   or when the seat was woken and the row is still aged one expected
-  age later; then it says which seat was tried (`route`).
+  age later; then it says which seat was tried (`route`). The wake
+  asks the damper first (`wakes/wake-held`, ticket 4ff29b4a): a seat
+  with a run up or just fired, or a throttled Routine, is not woken a
+  second time, and the crack waits for a later pass; a broken Routine
+  or a spent week waits on a person, so that crack is the mayor's.
+
+  The other cracks are routed the same way (ticket 976606f4):
+
+  several holders  the one with the shortest cadence is woken, ties
+                   going to the first seat name: it is the one that
+                   comes back to the row soonest (`pick`)
+  orphan           the seat whose walk is `change` and holds a door out
+                   of the change's state. A ticket walk does not
+                   qualify: its sit withholds a change whose ticket is
+                   done, while a change walk hands the change as a row
+                   of its own. It waits one expected age of the
+                   change's state, or `default-cadence`
+  silent           the silent seat itself, by its own `fire` door, with
+                   a text that names no row, so its sit walks its whole
+                   queue. It waits one cadence; a seat still silent then
+                   reaches the mayor, saying it was tried
 
   AN EXPECTED AGE is declared per kind and state, in seconds, under the
   declaration's `:expected-age`. A state with none takes the default
@@ -44,6 +64,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.wakes :as wakes]
             [waymark10.wire :as wire])
   (:import (java.time Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
@@ -212,19 +233,26 @@
                      (walk-admits? by-kind {:tickets tickets} seat rdef row))))
              seat-rows)))
 
+(defn- pick
+  "Of several holders, the one woken: the shortest cadence, then the
+  first seat name."
+  [held]
+  (first (sort-by (juxt #(or (get-in % [:data :cadence_seconds]) default-cadence)
+                        seat-name)
+                  held)))
+
 (defn- to-its-holder
-  "An aged crack, naming under `:wake` the ONE seat that holds its row.
-  With no holder, or several, it names none and its note is the
-  mayor's."
+  "An aged or orphan crack, naming under `:wake` the seat that holds its
+  row, `pick`ed when several do. With no holder it names none and its
+  note is the mayor's."
   [by-kind seat-rows rows tickets c]
   (let [kind (keyword (:kind c))
         rdef (get by-kind kind)
         row (some #(when (= (:id c) (str (:id %))) %) (get rows kind))
         held (when (and rdef row) (holders by-kind seat-rows tickets rdef row))]
-    (cond-> c
-      (= 1 (count held))
-      (assoc :wake {:seat (str (:id (first held)))
-                    :name (seat-name (first held))}))))
+    (if-some [seat (pick held)]
+      (assoc c :wake {:seat (str (:id seat)) :name (seat-name seat)})
+      c)))
 
 (defn silent-seats
   "silent: a fired seat with rows in its walk whose schedule shows no
@@ -261,6 +289,9 @@
               :last_fired_at (some-> fired str)
               :last_silent_wake why
               :last_silent_wake_at why-at
+              :since (some-> fired str)
+              :expected_seconds cadence
+              :wake {:seat (str (:id seat)) :name (seat-name seat)}
               :seats [(seat-name seat)]
               :what (str "The seat " (seat-name seat) " has " waiting " " walk
                          " row(s) in its walk and has not fired within "
@@ -334,6 +365,8 @@
                    (contains? closed-states tstate))]
     (crack "orphan" :change (:id row)
            {:state state
+            :since (some-> (inst (:updated-at row)) str)
+            :expected_seconds (or (expected-age change-rdef state) default-cadence)
             :ticket tid
             :ticket_state tstate
             :seats (movers change-rdef seat-rows state)
@@ -356,7 +389,8 @@
                   (silent-seats rdefs seats rows schedules withheld now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
-                  (orphans (:change by-kind) seats (:change rows) tickets)))))
+                  (map #(to-its-holder by-kind seats rows tickets %)
+                       (orphans (:change by-kind) seats (:change rows) tickets))))))
 
 (defn- marker
   "The line a crack's ticket ends in, and what a later pass looks for."
@@ -403,23 +437,27 @@
   "What the fire that wakes a seat on a crack's row carries: the row, as
   a transition wake names one (`wakes/wake-text`), so the session walks
   that row alone, and the crack's key, which a later pass looks for in
-  the seat's log."
+  the seat's log. A silent crack is about the seat, so its text names
+  no row."
   [c]
-  (wire/write-json {:kind (:kind c)
-                    :id (:id c)
-                    :action "crack"
-                    :from (:state c)
-                    :to (:state c)
-                    :crack (:key c)}))
+  (wire/write-json (if (= "seat" (:kind c))
+                     {:action "crack" :crack (:key c)}
+                     {:kind (:kind c)
+                      :id (:id c)
+                      :action "crack"
+                      :from (:state c)
+                      :to (:state c)
+                      :crack (:key c)})))
 
 (defn route
   "Where one unfiled crack's note goes, as [door crack]. `woken` is when
   the seat it names was last woken on it, or nil.
 
-      :file  no one seat holds the row, or the seat was woken and the
-             row is still aged one expected age later; the crack then
+      :file  no seat holds the row, or the seat was woken and the
+             crack still stands one expected age later; the crack then
              says which seat was tried
-      :wake  one seat holds the row and has not been woken on it
+      :wake  a seat holds the row, or is the silent seat, and has not
+             been woken on it
       :wait  the seat was woken less than one expected age ago"
   [c woken now]
   (let [woken (inst woken)]
@@ -428,7 +466,7 @@
       (nil? woken) [:wake c]
       (past? woken (or (:expected_seconds c) 0) now)
       [:file (assoc c :tried (str (get-in c [:wake :name])
-                                  ", woken on the row at " woken))]
+                                  ", woken on it at " woken))]
       :else [:wait c])))
 
 ;; ── the pass ────────────────────────────────────────────────────────
@@ -589,20 +627,32 @@
              (:key c) " — " (ex-message e))
       nil)))
 
+(def ^:private waits-for
+  "What `wakes/wake-held` answers that holds a wake for a later pass:
+  the damper (a run is up, or one just went out), a throttled Routine,
+  and a row a run already has. They lift by themselves."
+  #{:damped :throttled :spoken_for})
+
 (defn- send!
   "One crack's note, by `route`: a wake for the seat that holds the row,
-  or the draft ticket. A seat whose door refuses the wake was tried all
-  the same, and the draft says so. → true when a note went out."
+  or the draft ticket. A wake the damper holds (`waits-for`) sends
+  nothing and waits for a later pass. A seat held otherwise, or whose
+  door refuses the wake, was tried all the same, and the draft says
+  so. → true when a note went out."
   [eng c now]
   (let [[door c] (route c (when (:wake c) (woken-at eng c)) now)]
     (case door
       :wait nil
       :file (file! eng c now)
-      :wake (or (wake! eng c)
-                (file! eng
-                       (assoc c :tried (str (get-in c [:wake :name])
-                                            ", which would not be woken"))
-                       now)))))
+      :wake (let [held (wakes/wake-held eng (get-in c [:wake :seat])
+                                        (wake-text c) now)]
+              (cond
+                (contains? waits-for held) nil
+                (and (nil? held) (wake! eng c)) true
+                :else (file! eng
+                             (assoc c :tried (str (get-in c [:wake :name])
+                                                  ", which would not be woken"))
+                             now))))))
 
 (defn pass!
   "One pass: read the rows, find the cracks, and send a note for each

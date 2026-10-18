@@ -1052,6 +1052,11 @@
                                                 "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
+                   :as {:type "string"
+                        :description (str "On a clone, for a seat with acts_as_cast: "
+                                          "the id of a seeded cast member to act as, "
+                                          "on one row or one create. The row is theirs "
+                                          "and the log records both: acted by you, as them.")}
                    :caption caption-arg
                    :caption_field {:type "string"
                                    :description (str "With caption: one argument of the "
@@ -2306,7 +2311,7 @@
   `waymark_invoke` with no id is where it went rather than a seventh
   tool. `seen`, when given, is shown the route's answer before it is
   read and answers the one to read (`stage-sheet!`)."
-  [call session rdef aname input dry-run warnings return & [seen]]
+  [call session rdef aname input dry-run warnings return as-id & [seen]]
   (let [names (set (map p/wire-key (:create-action-names rdef)))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
@@ -2324,7 +2329,9 @@
                                                       (random-uuid))}
                                    (seq warnings)
                                    (assoc "waymark-acknowledge"
-                                          (str/join "," (map name warnings))))})))
+                                          (str/join "," (map name warnings)))
+                                   ;; the cast member a clone's seat acts as
+                                   as-id (assoc "x-waymark-as" as-id))})))
        return
        #(when (row-doc? %) (invoke-summary aname nil %))))))
 
@@ -2547,9 +2554,18 @@
                                      (when (and id (not (or ids items)))
                                        (str "/" id)))
                                 aname args)
-        args (dissoc args :caption :caption_field)]
+        args (dissoc args :caption :caption_field)
+        ;; `as` (clone guard 2/3) rides one row's or one create's
+        ;; request as X-Waymark-As, and the router judges it
+        as-id (some-> (:as args) str not-empty)]
     (cond
       refused refused
+
+      (and as-id (or (some? at) ids items))
+      (refusal (p/problem :invalid-arguments 422 "Not a call to act as"
+                          {:detail (str "`as` acts as a cast member on one row or "
+                                        "one create, now. Leave out `at`, `ids` "
+                                        "and `items`, or leave out `as`.")}))
 
       ;; a safe collection door answers now and writes nothing, so there
       ;; is no call to store for a later time: `at` is refused here, in
@@ -2632,7 +2648,7 @@
             ;; typed before the write, so a refusal leaves it open
             _ (when (and st (not sheet?)) (stage-dialog! eng st self aname input))
             res (create-row call session rdef aname input dry_run
-                            acknowledge_warnings return
+                            acknowledge_warnings return as-id
                             (when preview?
                               #(stage-sheet! eng call session st goal since %)))]
         ;; staged (§ 2): the create landed, so the form closes
@@ -2683,7 +2699,9 @@
                                                            ;; this read's: an edit door holds
                                                            ;; the write to it (ticket 5120da15)
                                                            (some? if_version)
-                                                           (assoc "if-match" (str if_version)))})
+                                                           (assoc "if-match" (str if_version))
+                                                           as-id
+                                                           (assoc "x-waymark-as" as-id))})
                                       :waymark10/sitting
                                       (bound-sitting eng (:mcp-session-id session))))]
                 ;; staged (§ 2): the write landed, so the form closes
@@ -4621,7 +4639,18 @@
   could not be built again. The sit reads a row that is in the queue,
   so the ask stands, and a change with no pull request number and a
   `change_id` that is still the walk row's has nothing on the forge to
-  disagree. It goes back to `open` through `reopen` with the same
+  disagree.
+
+  ONLY AN ASK AFTER THE CLOSE REOPENS IT (ticket 7e12f1e8). A person's
+  `close_without_pr` leaves the ticket where it stands, so a ticket in
+  the queue is not by itself the ask: the person may have meant the
+  house to stop. The change reopens only when the ticket's newest
+  groom, unblock, resume, return or reopen is newer than the change's
+  newest close, close_without_pr or supersede
+  (`seats/ask-after-close`), as `regroomed-change` asks a groom after
+  a stall. A close with no such move after it stays closed.
+
+  It goes back to `open` through `reopen` with the same
   system hand the mint uses, its rounds at zero, and `rebranched-change`
   mints its branch from the policy's pattern after this.
 
@@ -4632,7 +4661,10 @@
   (or (when (and change
                  (= :closed (some-> (:state change) name keyword))
                  (nil? (get-in change [:data :number]))
-                 (not (forge-owned? (get-in change [:data :change_id]))))
+                 (not (forge-owned? (get-in change [:data :change_id])))
+                 (some? (get (inv/resources eng) :ticket))
+                 (some->> (born-row-id change)
+                          (seats/ask-after-close eng change)))
         (try
           (let [moved (:row (inv/invoke! eng :change (str (:id change))
                                          :reopen {}

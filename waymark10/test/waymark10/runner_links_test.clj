@@ -213,6 +213,31 @@
                                         {:principal colton}))))
       (is (= "live" (name (:state (row-of id))))))))
 
+(deftest an-owner-marks-their-link-broken
+  ;; ticket 44abe17a: localfire marks a link broken when its person
+  ;; revokes their token, and the next restate brings it back
+  (let [dana (t/principal {:id "dana" :display "Dana"})
+        tool (assoc (t/principal {:id "tool:dana" :type :agent
+                                  :display "Dana's tool"})
+                    :acts-for "dana")
+        id (str (:id (make-localfire-link! tool)))
+        vis (grants/visibility *eng* nil tool)]
+    (testing "the door opens to the owner's delegate"
+      (is ((:action-on? vis) :runner_link :mark_broken id)))
+    (testing "an agent acting for nobody may not"
+      (is (some? (refusal #(inv/invoke! *eng* :runner_link id :mark_broken
+                                        {:note "Nope."} {:principal clerk}))))
+      (is (= "live" (name (:state (row-of id))))))
+    (testing "the delegate marks it broken and says why"
+      (inv/invoke! *eng* :runner_link id :mark_broken
+                   {:note "The person revoked their token."} {:principal tool})
+      (is (= "broken" (name (:state (row-of id)))))
+      (is (= "The person revoked their token." (get-in (row-of id) [:data :note]))))
+    (testing "a restate brings it back live and clears the note"
+      (restate! id {:token a-second-token} dana)
+      (is (= "live" (name (:state (row-of id)))))
+      (is (nil? (get-in (row-of id) [:data :note]))))))
+
 (deftest claude-routine-answers-in-three-words
   (let [fake (sch/fake-fire)
         p (sch/claude-routine fake)

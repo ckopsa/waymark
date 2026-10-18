@@ -44,7 +44,10 @@ and `factory10.orgkit-test` loads the template and the example.
 it:
 
 - `:seed`, `:version` and `:org`, the org's name.
-- `:domains`: each `{:name, :label}`; the first is the org's own.
+- `:domains`: each `{:name, :label}`; the first is the org's own. The
+  first boot makes each a `domain` row through its create door, as the
+  owner and before the seats: its charter is its `:charter` or its
+  `:label`, its budget its `:budget_usd_per_week` or the factory's 3600.
 - `:cast`: the members, as in the demo seed. A member may declare
   `:scope`, in a seat's own shape (`[{:kind "request" :actions
   ["accept"]}]`, `"*"` for every action of a kind): its ceiling, what
