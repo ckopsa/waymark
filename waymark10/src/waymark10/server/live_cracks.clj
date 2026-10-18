@@ -55,7 +55,15 @@
   expected age. That is deliberate: a row may rest in `draft`, `done`
   or `active` for as long as it likes.
 
-  `find-cracks`, `unfiled` and `ticket-of` are pure over a world of
+  AN ORG'S HIRING GAPS (`hiring-gaps`, ticket 6a3fac3e) read the same
+  aged rows, for the rows of an org's domains only, grouped by domain,
+  kind and state. A group is a gap when no fired seat in that domain
+  holds a door out of the state for one of its rows (`no_holder`), or
+  when it has `pressure-rows` aged rows and the oldest has sat
+  `pressure-factor` expected ages (`pressure`): a door nobody holds, or
+  a queue its seats cannot keep up with. They are named, not filed.
+
+  `find-cracks`, `hiring-gaps`, `unfiled` and `ticket-of` are pure over a world of
   rows, so a test judges them with no engine. `pass!` reads that world
   and files; nothing in it re-throws."
   (:require [clojure.string :as str]
@@ -253,6 +261,77 @@
     (if-some [seat (pick held)]
       (assoc c :wake {:seat (str (:id seat)) :name (seat-name seat)})
       c)))
+
+(def pressure-rows
+  "An org's state is under pressure from this many aged rows in it."
+  3)
+
+(def pressure-factor
+  "And only when its oldest row has sat this many expected ages there:
+  the queue has stayed behind, not blipped."
+  2)
+
+(def ^:private gap-rows
+  "The most row ids one hiring gap names, oldest first."
+  20)
+
+(defn- row-domain
+  "The name of the domain a row is in: its stored `domain`, or what its
+  kind's declaration says an absent one counts as, or nil."
+  [rdef row]
+  (or (some-> (fget (:data row) "domain") text not-empty)
+      (some-> (get-in rdef [:absent-as :domain]) text not-empty)))
+
+(defn hiring-gaps
+  "An org's hiring gaps in a world of rows (the world `find-cracks`
+  reads, plus :seat-domains, seat id → the name of its domain; a seat
+  absent there is in `seats/default-domain`). `org-domains` names the
+  org's domains; a row is the org's when its domain is one of them. The
+  aged rows of each [domain kind state] are a gap when a row of them is
+  held by no fired seat of that domain (`no_holder`), or else when there
+  are `pressure-rows` of them and the oldest has sat `pressure-factor`
+  expected ages (`pressure`). Sorted by `:key`."
+  [{:keys [rdefs seats rows tickets seat-domains now]} org-domains]
+  (let [orgs (into #{} (map text) org-domains)
+        by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
+        by-id (into {} (for [[kind rs] rows, row rs]
+                         [[(text kind) (str (:id row))] row]))
+        domain-of #(or (some-> (get seat-domains (str (:id %))) text not-empty)
+                       seats/default-domain)
+        aged (keep (fn [c]
+                     (let [rdef (get by-kind (keyword (:kind c)))
+                           row (get by-id [(:kind c) (:id c)])
+                           d (when (and rdef row) (row-domain rdef row))]
+                       (when (contains? orgs d)
+                         (assoc c
+                                :org d
+                                :held (seq (holders by-kind
+                                                    (filterv #(= d (domain-of %)) seats)
+                                                    tickets rdef row))))))
+                   (aged-rows rdefs seats rows now))]
+    (->> (group-by (juxt :org :kind :state) aged)
+         (keep (fn [[[org kind state] cs]]
+                 (let [cs (sort-by (juxt #(inst (:since %)) :id) cs)
+                       oldest (inst (:since (first cs)))
+                       expected (:expected_seconds (first cs))
+                       reason (cond
+                                (some (complement :held) cs) "no_holder"
+                                (and (>= (count cs) pressure-rows)
+                                     (not (.isAfter (.plusSeconds oldest
+                                                                  (long (* pressure-factor expected)))
+                                                    ^Instant now)))
+                                "pressure")]
+                   (when reason
+                     {:org org
+                      :kind kind
+                      :state state
+                      :reason reason
+                      :row_ids (into [] (comp (map :id) (take gap-rows)) cs)
+                      :oldest_since (str oldest)
+                      :expected_seconds expected
+                      :key (str org "/" kind "/" state)}))))
+         (sort-by :key)
+         vec)))
 
 (defn silent-seats
   "silent: a fired seat with rows in its walk whose schedule shows no
