@@ -13,7 +13,8 @@
   factory's :test alias roots orgs/example."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [waymark10.server.seed :as seed]))
 
 (set! *warn-on-reflection* true)
 
@@ -138,16 +139,13 @@
 
 ;; ── the seats ───────────────────────────────────────────────────────
 
-(defn- fill [s params]
-  (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v))) s params))
-
 (defn- seat-of
   "A seed's seat entry as the seat map: a whole :seat, or a factorykit
-  template filled with its params."
+  template filled with its params, as the seed loader fills it."
   [{:keys [template params seat]}]
   (if template
-    (-> (str "seats/" template ".edn") io/resource slurp (fill (or params {}))
-        edn/read-string :seat)
+    (-> (str "seats/" template ".edn") io/resource slurp edn/read-string :seat
+        (seed/filled (or params {})))
     seat))
 
 (defn- scope-line [{:keys [kind actions filter]}]
