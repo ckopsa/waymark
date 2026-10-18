@@ -1,0 +1,76 @@
+# A self-hosted factory (epic 00680418, T8): Postgres, a factory-only
+# engine and the bench, on one machine, for one person.
+#
+#   cp .env.example .env    # fill it in
+#   docker compose up -d
+#
+# All three share compose's default network: the engine reaches
+# Postgres at postgres:5432 and the bench at http://bench:8101/mcp/.
+# Inside their containers they bind 0.0.0.0 as their images do; only
+# the HOST side is restricted. The engine is published on 127.0.0.1
+# and nothing is published on 0.0.0.0 — a solo engine's dev headers
+# are its only identity, so only this machine may present them.
+
+name: waymark-factory
+
+services:
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: waymark
+      POSTGRES_USER: waymark
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U waymark -d waymark"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  engine:
+    image: ${WAYMARK_IMAGE:-ghcr.io/ckopsa/workqueue10:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bench:
+        condition: service_started
+    environment:
+      WORKQUEUE10_DSN: jdbc:postgresql://postgres:5432/waymark?user=waymark&password=${POSTGRES_PASSWORD}
+      WORKQUEUE10_PORT: "8014"
+      # a solo engine binds loopback unless told otherwise, and the
+      # container's loopback is not the host's: the published port
+      # below is what keeps it on this machine
+      WAYMARK10_HOST: 0.0.0.0
+      FACTORY10_ONLY: "1"
+      WAYMARK10_AUTO_MIGRATE: "1"
+      WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:?set WAYMARK_OWNER in .env}
+      WAYMARK10_SEED: factory
+      WAYMARK10_SEED_PARAMS: >-
+        {"owner": "${WAYMARK_OWNER}",
+         "repo": "${WAYMARK_REPO:?set WAYMARK_REPO in .env}",
+         "bench_url": "http://bench:8101/mcp/",
+         "model": "${WAYMARK_MODEL:-claude-opus-5}",
+         "pull_token": "${WAYMARK_PULL_TOKEN:?set WAYMARK_PULL_TOKEN in .env}"}
+    ports:
+      - "127.0.0.1:${WAYMARK_PORT:-8014}:8014"
+
+  bench:
+    image: ${BENCH_IMAGE:-ghcr.io/ckopsa/waymark-bench:latest}
+    restart: unless-stopped
+    # the image runs `bench --http 8101 --config /etc/bench/bench.json`
+    # with BENCH_HOST=0.0.0.0 and data_dir /data. No bench.json is
+    # mounted: repositories arrive from the engine through `enroll` and
+    # persist in /data/repos.json. Not published: the engine is its
+    # only caller.
+    environment:
+      BENCH_GIT_TOKEN: ${BENCH_GIT_TOKEN:?set BENCH_GIT_TOKEN in .env}
+      BENCH_GITHUB_TOKEN: ${BENCH_GITHUB_TOKEN:-${BENCH_GIT_TOKEN}}
+    volumes:
+      - bench:/data
+
+volumes:
+  postgres:
+  bench:
