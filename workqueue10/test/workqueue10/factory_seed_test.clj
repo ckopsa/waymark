@@ -12,10 +12,15 @@
             [waymark10.server.cracks :as cracks]
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seed :as seed]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]
             [workqueue10.main :as main]))
 
 (def ^:private params
@@ -57,6 +62,34 @@
                       :when (seq (:actions entry))]
                   (str (:kind entry))))))
 
+(def ^:private mayor-key
+  "The key the owner offers the seeded mayor: base64url, as a machine
+  mints it."
+  "ZmFjdG9yeS1zZWVkLW1heW9yLWtleS0wMQ")
+
+(defn- sat-as-mayor
+  "The owner offers the seeded mayor a key, their connector sits with
+  it through the real `waymark_sit`, and the answer is the visibility
+  the bound sitter wears — the seat's grant, as every call after the
+  sit is judged by it (ticket_birth_test's `sitter-session`)."
+  [eng]
+  (let [owner (t/principal {:id "tim" :display "Tim"})
+        delegate (assoc (t/principal {:id "connector:tim" :type :agent
+                                      :display "Claude for Tim"})
+                        :acts-for "tim")
+        _ (inv/invoke! eng :seat (:id (named eng :seat "mayor")) :offer_key
+                       {:key mayor-key} {:principal owner})
+        sid (mcp/open-session! eng)
+        r (mcp/call-tool eng (mcp/door eng)
+                         {:principal delegate :mcp-session-id sid}
+                         "waymark_sit" {:key mayor-key})
+        text (str (get-in r [:content 0 :text]))
+        sitter (:sitter (:bound (mcp/touch-session! eng sid)))]
+    (is (false? (:isError r)) text)
+    (is (some? (:grant (wire/read-json text))) text)
+    (is (some? sitter) "waymark_sit bound the session to the mayor's sitter")
+    (grants/worn-visibility eng sitter)))
+
 (def ^:private explained
   "The cracks on the kinds `walked` names that the seed leaves standing,
   each [kind state crack door remedy] with why. The mayor is the
@@ -92,6 +125,40 @@
      ["verdict" "said" "no_exit" nil nil]
      "A said verdict is the judge's record and stays said; the owner reads it."
      ["verdict" nil "remedy_unheld" "create" "judgment/promote"] judgment}))
+
+(def ^:private unheld-off-the-walk
+  "The remedy_unheld cracks on kinds no seeded seat walks, each
+  [kind state crack door remedy] with why. They are named so a new one
+  fails here rather than hiding in `by-crack`'s count: when ticket
+  7215f8fa's grooming doors closed 14 walked cracks, the count fell by
+  12, not 14 (ticket bf5c3ed1). Each remedy is a door that stays the
+  person's by design."
+  (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
+        role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
+        link "Linking a model or a schedule stays the person's by design (money): it names who is paid to sit."
+        runner "A runner link carries a credential, and a credential is the person's by design."]
+    {["domain" "active" "remedy_unheld" "restate" "seat/park"]
+     "Parking a seat stays the person's by design (power and money), as the seat's own cracks say."
+     ["judgment" "draft" "remedy_unheld" "promote" "judgment/revise"] judgment
+     ["judgment" "draft" "remedy_unheld" "revise" "judgment/revise"] judgment
+     ["judgment" nil "remedy_unheld" "create" "judgment/revise"] judgment
+     ["member" "active" "remedy_unheld" "assign_roles" "role/create"] role
+     ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
+     ["member" nil "remedy_unheld" "create" "role/create"] role
+     ["model" nil "remedy_unheld" "create" "model/link"] link
+     ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
+     ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
+     ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
+     ["schedule" "broken" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "broken" "remedy_unheld" "relink_model" "model/link"] link
+     ["schedule" "live" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "live" "remedy_unheld" "relink_model" "model/link"] link
+     ["schedule" "paused" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "paused" "remedy_unheld" "relink_model" "model/link"] link
+     ["schedule" "pending" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "pending" "remedy_unheld" "relink_model" "model/link"] link
+     ["secret" nil "remedy_unheld" "create" "secret/create"]
+     "A secret is a credential, and a credential is the person's by design."}))
 
 (def ^:private by-crack
   "The whole cracks report over the seeded engine, by crack. Beside
@@ -148,8 +215,24 @@
               (pr-str (sort kinds)))
           (testing "and every explained one still stands"
             (is (= #{} (reduce disj (set (keys explained)) found))))))
+      (testing "the remedy_unheld cracks off the walk are the named ones"
+        (let [off (into #{}
+                        (comp (filter #(= "remedy_unheld" (str (:crack %))))
+                              (remove #(contains? kinds (str (:kind %))))
+                              (map (juxt :kind :state :crack :door :remedy)))
+                        (:cracks report))
+              named (set (keys unheld-off-the-walk))]
+          (is (= #{} (reduce disj off named)) "a new one, unnamed")
+          (is (= #{} (reduce disj named off)) "a named one that fell")))
       (testing "and the rest are pinned by count"
         (is (= by-crack (:by_crack report)))))
+    (testing "the seeded mayor's grant acts: the grooming doors are admitted"
+      (let [action? (:action? (sat-as-mayor eng))]
+        (doseq [[kind action] [["ticket" "restate"] ["ticket" "reopen"]
+                               ["ticket" "resume"] ["change" "rework"]]]
+          (is (true? (action? kind action)) (str kind "/" action)))
+        (testing "and the repository's policy stays the person's"
+          (is (false? (action? "repo_policy" "restate"))))))
     (testing "a second load skips it"
       (is (false? (:seeded (seed/load! eng factory {:params params}))))
       (is (= 4 (count (dev/rows eng :seat)))))))
