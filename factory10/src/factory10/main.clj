@@ -33,6 +33,7 @@
   names a ci_run create. A kind is law; a seat is fluid."
   (:require [factory10.resources.change :refer [change]]
             [factory10.resources.ci-run :refer [ci-run]]
+            [factory10.resources.org-plan :refer [org-plan]]
             [factory10.resources.repo-policy :refer [repo-policy]]
             [factory10.resources.ticket :refer [ticket]]
             [waymark10.dsl :refer [in-domain]]))
@@ -43,9 +44,10 @@
   "Every kind this module declares, stamped with the `:factory`
   domain. The `repo_policy` first, because it is the law the bench's
   doors read; then a `ticket`, the ask a seat walks and a `change` is
-  born from; then a `change`, because a `ci_run` points at one."
+  born from; then a `change`, because a `ci_run` points at one; then
+  an `org_plan`, whose pull request is a `change` (ticket cd22be20)."
   []
-  (in-domain :factory [repo-policy ticket change ci-run]))
+  (in-domain :factory [repo-policy ticket change ci-run org-plan]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter.
