@@ -24,6 +24,7 @@
             [waymark10.fixtures :as fx]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.schedules :as schedules]
@@ -910,6 +911,128 @@
         (is (= (:sitting first-sat) (:sitting later)))
         (is (= [(str (:id early))] (mapv :id (get-in later [:walk :rows]))))
         (is (= [(str (:id early))] (walked (:sitting later))))))))
+
+;; ── an org mayor's first sit (ticket 9b16b765) ───────────────────────
+
+(def ^:private org-plan
+  "An org_plan as the sit reads one, by the kind's name: a name and a
+  state."
+  (r/resource
+   {:kind :org_plan
+    :plural "org_plans"
+    :states [:live :retired]
+    :initial :live
+    :terminal #{:retired}
+    :summary "{data.name} · {state}"
+    :schema
+    [:map
+     [:name {:x-display {:label "The org's name"}} [:string {:min 1 :max 64}]]]
+    :filterable {:state #{:eq :in} :name #{:eq}}
+    :actions
+    {:retire {:from #{:live} :to :retired
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A retired plan stays retired."}}}}))
+
+(def ^:private chore
+  "A row of a domain that ages: a second past its last write, it is."
+  (r/resource
+   {:kind :chore
+    :plural "chores"
+    :states [:waiting :done]
+    :initial :waiting
+    :terminal #{:done}
+    :expected-age {:waiting 1}
+    :summary "{data.what} · {state}"
+    :schema
+    [:map
+     [:what {:x-display {:label "What"}} [:string {:min 1 :max 120}]]
+     [:domain {:not-a-ref "The name of a domain: a word, not a row id."
+               :x-display {:label "Domain"}}
+      [:string {:min 1 :max 64}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:finish {:from #{:waiting} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished chore stays finished."}}}}))
+
+(defn- org-house!
+  "A house whose walk clerk sits in the domain `dname`, with one held
+  call its sitter made and, where the kinds are served, one chore of
+  that domain and (when `plan?`) an org_plan naming it. The clock then
+  moves a day on → [h call chore]."
+  [resources dname plan?]
+  (let [clock (atom (java.time.Instant/now))
+        eng (engine/engine {:storage (memory/storage)
+                            :resources resources
+                            :now-fn (fn [] @clock)
+                            :oidc {:issuer issuer :audience audience :jwks jwks
+                                   :app-url "https://app.test/"
+                                   :delegate-clients {"connector" "Claude"}}})
+        d (:row (inv/create! eng :domain {:name dname
+                                          :charter "The org's own work."
+                                          :budget_usd_per_week 40M}
+                             {:principal person}))
+        seat (open-walk-seat! eng {:domain (str (:id d))})
+        _ (when plan?
+            (inv/create! eng :org_plan {:name dname} {:principal person}))
+        call (:row (inv/create! eng :held_call
+                                {:tool "gate__send"
+                                 :why "Send the first quote."
+                                 :caller (seats/sitter-id seat)
+                                 :shown "the quote"}
+                                {:principal held/engine-actor}))
+        job (when (contains? (inv/resources eng) :chore)
+              (:row (inv/create! eng :chore {:what "Chase the late payer"
+                                             :domain dname}
+                                 {:principal person})))]
+    (swap! clock #(.plusSeconds ^java.time.Instant % 86400))
+    [(engine/handler eng) call job]))
+
+(defn- sit-run!
+  "The walk clerk's sit for one harness run → [result answer]."
+  [h run]
+  (let [[sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key walk-key :session run})]
+    [r (doc-of r)]))
+
+(deftest an-org-mayors-first-sit-says-the-org-is-live
+  (let [[h call job] (org-house! [fx/meal post chore org-plan] "greenleaf" true)
+        [r first-sat] (sit-run! h "run-1")
+        live (:org_live first-sat)]
+    (testing "the first sit leads with the live line and what waits"
+      (is (false? (:isError r)) (text-of r))
+      (is (str/starts-with? (str (:note first-sat))
+                            "greenleaf is live. Here is what is waiting on you:")
+          (:note first-sat))
+      (is (= 1 (get-in live [:held_calls :count])))
+      (is (= [(str (:id call))] (mapv :id (get-in live [:held_calls :first]))))
+      (is (= ["Send the first quote."] (mapv :why (get-in live [:held_calls :first]))))
+      (is (= [(str "/api/held_calls/" (:id call))]
+             (mapv :href (get-in live [:held_calls :first]))))
+      (is (= [(str (:id job))] (mapv :id (get-in live [:aged :rows]))))
+      (is (= [{:kind "chore" :state "waiting" :count 1
+               :href "/api/chores?state=waiting"}]
+             (get-in live [:aged :by]))))
+    (testing "a later sitting answers as today"
+      (let [[r again] (sit-run! h "run-2")]
+        (is (false? (:isError r)) (text-of r))
+        (is (not= (:sitting first-sat) (:sitting again)))
+        (is (nil? (:org_live again)))
+        (is (str/starts-with? (str (:note again)) "You sit in `"))))))
+
+(deftest a-seat-of-no-org-sits-as-today
+  (testing "a domain no org_plan names"
+    (let [[h _ _] (org-house! [fx/meal post chore org-plan] "household" false)
+          [r answer] (sit-run! h "run-1")]
+      (is (false? (:isError r)) (text-of r))
+      (is (nil? (:org_live answer)))
+      (is (str/starts-with? (str (:note answer)) "You sit in `"))))
+  (testing "an engine that serves no org_plan"
+    (let [[h _ _] (org-house! [fx/meal post chore] "greenleaf" false)
+          [r answer] (sit-run! h "run-1")]
+      (is (false? (:isError r)) (text-of r))
+      (is (nil? (:org_live answer)))
+      (is (str/starts-with? (str (:note answer)) "You sit in `")))))
 
 (deftest an-apps-sit-section-rides-the-answer-and-a-throwing-one-is-an-error
   (let [deploys (fn [_eng seat rows]
