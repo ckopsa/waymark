@@ -40,7 +40,13 @@
    ;; :replay false takes an in-state door out of invoke's natural
    ;; replay: its handler runs on every call, and the door stays
    ;; idempotent, so a caller needs no Idempotency-Key
-   :replay])
+   :replay
+   ;; what the transition log says of THIS move, where the row's own
+   ;; summary would say nothing (ticket e99ac1f5): a fn of (row inp)
+   ;; → one line or nil, read as the transition is appended, with the
+   ;; row as the write leaves it. Prose, never law; outside the
+   ;; fingerprint's action facet, like :out-of-state-says
+   :log-says])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
