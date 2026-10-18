@@ -1550,6 +1550,44 @@
         row))
     row))
 
+(defn- heal-solo-roles!
+  "The gate's second heal (ticket 2ecadc5f): provision! gives the solo
+  owner its roles only when it MINTS the row, so an owner whose row was
+  already there — the engine ran without :solo-owner first, or the row
+  came from an invite — would never hold them. An :active row whose id
+  or :subject is the solo owner and whose roles lack any of
+  solo-owner-roles gains the missing ones, assigned by the registrar
+  (after ensure-solo-roles!), its other roles kept.
+
+  Cheap and idempotent like heal-subject!: the guard is the missing
+  role itself, so a healed row never writes again. Failure is never
+  fatal — it warns and hands back the row unchanged."
+  [eng row]
+  (let [owner (:solo-owner eng)
+        held (vec (get-in row [:data :roles]))]
+    (if (and (some? owner)
+             (= :active (:state row))
+             (some #{(str owner)}
+                   [(str (:id row)) (str (get-in row [:data :subject]))])
+             (not-every? (set held) solo-owner-roles))
+      (try
+        (let [missing (remove (set held) (ensure-solo-roles! eng))]
+          (if (seq missing)
+            (let [roles (into held missing)]
+              ;; an edit door: fenced on the version read just now, since
+              ;; heal-subject! may have moved it since the gate's load
+              (inv/invoke! eng :member (:id row) :assign_roles {:roles roles}
+                           {:principal registrar
+                            :if-match (inv/etag :member (str (:id row))
+                                                (:version (load-member eng (:id row))))})
+              (assoc-in row [:data :roles] roles))
+            row))
+        (catch Exception e
+          (warn! "solo-owner roles failed for member " (pr-str (:id row))
+                 " — " (ex-message e) "; the request proceeds unhealed")
+          row))
+      row)))
+
 (def knock-shelf-cap
   "Unclaimed self-requested invitations that may stand at once — the
   standing wall: it persists across restarts because it IS the rows."
@@ -1763,13 +1801,16 @@
            ;; :subject (heal-subject!, waymark-tti.10) — resolving by
            ;; id is itself the proof that this row's id is a principal
            ;; id, which is the only fact the stamp records
-           row (or (some->> (load-member eng (:id principal))
-                            (heal-subject! eng))
-                   (member-by-subject eng (:id principal))
-                   (bind! eng principal invite-token)
-                   (when (or (not invited-only?)
-                             (delegate-of-a-member? eng principal))
-                     (provision! eng principal)))]
+           row (some->> (or (some->> (load-member eng (:id principal))
+                                     (heal-subject! eng))
+                            (member-by-subject eng (:id principal))
+                            (bind! eng principal invite-token)
+                            (when (or (not invited-only?)
+                                      (delegate-of-a-member? eng principal))
+                              (provision! eng principal)))
+                        ;; a solo owner's row born before :solo-owner
+                        ;; gains its roles here (heal-solo-roles!)
+                        (heal-solo-roles! eng))]
        (when (nil? row)
          (throw (not-invited (:id principal))))
        (when (= :suspended (:state row))
