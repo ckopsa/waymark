@@ -23,8 +23,9 @@
             its consequence
   boot      a memory engine answers discover, schema, query, get and
             a dry run of each create, for every kind
-  scope     every seat's scope names kinds and actions the booted
-            engine serves; a seat whose seed entry names an :owner
+  scope     every seat's scope, and every cast member's :scope, names
+            kinds and actions the booted engine serves; a seat whose
+            seed entry names an :owner
             names a cast member, and sits inside that member's :scope,
             its ceiling (a member with no :scope holds the whole org)
 
@@ -274,10 +275,33 @@
               (some #{action "*"} (map text (:actions %))))
         entries))
 
+(defn- cast-scope-findings
+  "A cast member's :scope is its seats' ceiling: a kind or action it
+  misnames passes no seat, so it is judged as the seats' scopes are.
+  \"*\" is the ceiling's every-action and is never unknown."
+  [vocab seed]
+  (for [[m {:keys [scope]}] (sort-by (comp text key) (:cast seed))
+        :let [m (text m)]
+        {:keys [kind actions]} scope
+        :let [k (text kind)
+              known (get vocab k)]
+        f (if (nil? known)
+            [(finding :scope ["unknown-kind" "cast" m k] (str "cast member " m)
+                      (str "The cast member " m "'s scope names the kind " k ", which the engine does not serve.")
+                      "Name a kind the org declares or the engine enrols.")]
+            (for [a (map text actions)
+                  :when (and (not= "*" a) (not (contains? known a)))]
+              (finding :scope ["unknown-action" "cast" m k a] (str "cast member " m)
+                       (str "The cast member " m "'s scope names " k "." a ", which " k " does not declare.")
+                       (str "Name one of " k "'s actions: " (str/join ", " known) "."))))]
+    f))
+
 (defn- scope-findings [eng seats seed]
   (let [vocab (into {} (map (fn [[k rd]] [(text k) (inv/action-names rd)]))
                     (inv/resources eng))]
-    (for [{seat :name :keys [scope owner]} seats
+    (concat
+     (cast-scope-findings vocab seed)
+     (for [{seat :name :keys [scope owner]} seats
           :let [member (when owner (get (:cast seed) (keyword (text owner))))
                 ceiling (:scope member)]
           f (concat
@@ -304,7 +328,7 @@
                                             "Narrow the seat's scope to its owner's, or widen the owner's first.")]))]
                          f))]
                f))]
-      f)))
+      f))))
 
 ;; ── the suite ───────────────────────────────────────────────────────
 
