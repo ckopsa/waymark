@@ -1,0 +1,54 @@
+# The test workflow a self-hosted factory's repository holds
+# (selfhost/repo-kit). Copy it to .github/workflows/tests.yml in your
+# repository and put your own test command in the step marked below.
+#
+# The factory seed's repo_policy names three things here: this file,
+# its `only` input, and `tests`, the check its one job reports. Keep
+# the three as they are, or restate the policy to match. Make `tests`
+# a required check on your default branch: it is what the merge waits
+# on.
+#
+# The bench's `test` tool dispatches this workflow with `only` set to
+# what a seat touched, so the seat hears in minutes instead of waiting
+# on the whole pull request run. Empty runs everything, as a pull
+# request does.
+name: tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: >-
+          Narrow this run to the tests named here, in your test
+          runner's own spelling (a file, a module, a test name),
+          several separated by spaces. Empty runs everything.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # The job's id is its check's name. Give it no `name:`, or the check
+  # the policy requires never reports.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Your setup goes here: a toolchain, a cache, a database.
+      - name: run the tests
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          # Replace this with your test command. ONLY is empty on a pull
+          # request; on a dispatch it names what to run.
+          read -ra selected <<< "$ONLY"
+          if [ -x ./scripts/test ]; then
+            ./scripts/test "${selected[@]}"
+          else
+            echo "::error::No test command: make ./scripts/test, or put yours in this step."
+            exit 1
+          fi
