@@ -358,3 +358,63 @@
   (is (= {:repo "acme/garden"} (seed/read-params "{:repo \"acme/garden\"}")))
   (is (= {} (seed/read-params nil)))
   (is (some? (refused #(seed/read-params "[1 2]")))))
+
+(def ^:private pull-step
+  "An unnamed step a later one points at, as the factory seed's `:pull`
+  runner_link is."
+  {:as :ada :kind :chore :create {:title "Pull the weeds"} :ref :pull})
+
+(def ^:private pulled
+  "The seed grown since: a step pointing at `[:ref :pull]`, and one that
+  needs nothing."
+  {:seed "pull" :version 1 :cast (:cast toy)
+   :steps [pull-step
+           {:as :ada :kind :chore :create {:title [:ref :pull]} :ref :link}
+           {:as :ada :kind :chore :create {:title "Rake the leaves"}}]})
+
+(defn- seeded-before-step-ids!
+  "An engine as one seeded before `step-id` holds it: `n` pull chores
+  under random ids, and the `:pull` step's key walked."
+  [eng n]
+  (seed/load! eng {:seed "pull" :version 1 :cast (:cast toy)
+                   :steps (vec (repeat n (dissoc pull-step :ref)))}
+              {})
+  (#'seed/walk-recorded! eng {:seed "pull"} [(#'seed/step-key pull-step)]))
+
+(defn- bound-refs [eng seed-name]
+  (let [st (:storage eng)]
+    (into {} (map (fn [[k v]] [(name k) (str v)]))
+          (get-in (store/with-tx st
+                    (fn [tx] (store/load-row st tx :member (str "seed-" seed-name) {})))
+                  [:data :bound_refs]))))
+
+(deftest a-ref-seeded-before-step-ids-is-bound-by-its-body-once
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 1)
+        pull (str (:id (first (dev/rows eng :chore))))
+        more (seed/load! eng pulled {})]
+    (is (= {:members 0 :steps 2} (:added more)))
+    (is (= pull (get-in more [:refs :pull :id])) "the ref is bound by the body")
+    (is (= pull (get-in (dev/row eng :chore (get-in more [:refs :link :id])) [:data :title]))
+        "and the gained step points at it")
+    (is (= {"pull" pull} (bound-refs eng "pull")) "and the marker keeps the binding")
+    (testing "and the next load reads bound_refs and does not match again"
+      (seed/load! eng {:seed "extra" :version 1
+                       :cast {:bea {:id "bea" :display "Bea Example" :type :human}}
+                       :steps [{:as :bea :kind :chore :create {:title "Pull the weeds"}}]}
+                  {})
+      (let [again (seed/load! eng pulled {})]
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= pull (get-in again [:refs :pull :id])))))))
+
+(deftest a-ref-two-rows-match-skips-the-steps-that-need-it
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 2)
+        err (java.io.StringWriter.)
+        more (binding [*err* err] (seed/load! eng pulled {}))]
+    (is (= {:members 0 :steps 1} (:added more)) "the rest of the seed still loads")
+    (is (nil? (get-in more [:refs :pull])))
+    (is (nil? (get-in more [:refs :link])) "the step that needs it is skipped")
+    (is (= 3 (count (dev/rows eng :chore))))
+    (is (re-find #"seed `pull` binds no row to `:pull`: 2 rows" (str err)))
+    (is (= {} (bound-refs eng "pull")))))
