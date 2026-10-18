@@ -24,3 +24,8 @@
 (deftest a-seat-above-its-owners-ceiling-earns-one-finding
   (is (= ["scope/outside-owner/clerk/gizmo/finish"]
          (mapv :key (conform/conform "fixtures/orgs/overreach")))))
+
+(deftest a-cast-scope-naming-what-the-engine-does-not-serve-earns-its-findings
+  (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
+          "scope/unknown-kind/cast/boss/gadget"]
+         (mapv :key (conform/conform "fixtures/orgs/miscast")))))
