@@ -15,10 +15,11 @@
   registry that fails never boots.
 
   ITS SEED IS A LIVE SEED. `loader-seed` puts the org's seed in the
-  loader's grammar (`waymark10.server.seed`): each of its `:seats` and
-  `:judgments` becomes a step walked as the cast's `:owner`, before the
-  org's own `:steps`, and the seed is `:live-ok`, so it loads on a fresh
-  engine and is skipped, by its marker, on every boot after."
+  loader's grammar (`waymark10.server.seed`): each of its `:domains`,
+  then its `:seats` and `:judgments`, becomes a step walked as the
+  cast's `:owner`, before the org's own `:steps`, and the seed is
+  `:live-ok`, so it loads on a fresh engine and is skipped, by its
+  marker, on every boot after."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -75,13 +76,34 @@
     :else (throw (ex-info "The org's seed holds a seat or judgment that names neither a :template nor a whole :seat or :judgment."
                           {:waymark10/seed-refused true :entry entry}))))
 
+(def ^:private domain-budget
+  "A seed domain's week of fuel when its entry names none: the factory's."
+  3600M)
+
+(defn- made-domain
+  "One entry of a seed's `:domains` as a loader step: a create through
+  the domain door, walked as the owner. Its charter is its `:charter`,
+  or its `:label`; its budget is its `:budget_usd_per_week`, or the
+  factory's."
+  [{:keys [name label charter budget_usd_per_week] :as entry}]
+  (when-not (and (string? name) (seq name))
+    (throw (ex-info "The org's seed holds a domain that names no :name."
+                    {:waymark10/seed-refused true :entry entry})))
+  {:as :owner :kind :domain
+   :create (merge (select-keys entry [:mayor :owner])
+                  {:name name
+                   :charter (or charter label name)
+                   :budget_usd_per_week (or budget_usd_per_week domain-budget)})})
+
 (defn loader-seed
-  "An org's seed in the loader's grammar: `:live-ok`, with its seats and
-  judgments made first, as the owner, and its own steps after."
-  [{:keys [seats judgments steps] :as org-seed}]
+  "An org's seed in the loader's grammar: `:live-ok`, with its domains,
+  then its seats and judgments, made first, as the owner, and its own
+  steps after."
+  [{:keys [domains seats judgments steps] :as org-seed}]
   (assoc org-seed
          :live-ok true
          :steps (-> []
+                    (into (map made-domain) domains)
                     (into (map made-step) seats)
                     (into (map made-step) judgments)
                     (into steps))))

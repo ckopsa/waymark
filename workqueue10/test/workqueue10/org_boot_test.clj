@@ -45,6 +45,8 @@
             (pr-str (sort kinds)))))
     (testing "its seed's seat and rows exist"
       (is (true? (:seeded once)))
+      (is (some #(= "example" (get-in % [:data :name])) (dev/rows eng :domain))
+          "its :domains are domain rows")
       (is (some #(= "office-clerk" (get-in % [:data :name])) (dev/rows eng :seat)))
       (is (= 2 (count (dev/rows eng :request))))
       (is (= 1 (count (dev/rows eng :work_order)))))

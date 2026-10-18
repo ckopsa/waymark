@@ -2,13 +2,16 @@
   "The org kit (docs/orgkit.md): the template and the example org each
   compile against the kit, every kind passes the defresource gate and
   assembles into a registry beside the kinds the engine enrols, and
-  each org's seed reads and names only seat templates factorykit
-  ships. No database, no network."
+  each org's seed reads, names only seat templates factorykit ships,
+  and holds whole :seat maps the seat kind's create door takes. No
+  database, no network."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [waymark10.check :as check]
-            [waymark10.server.engine :as engine]))
+            [waymark10.schema :as schema]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.seats :as seats]))
 
 (def ^:private orgs ["myorg" "example"])
 
@@ -43,3 +46,21 @@
         (is (io/resource (str "judgments/" template ".edn")) template))
       (doseq [{:keys [kind]} (:steps s)]
         (is (contains? kinds (name kind)) (str kind))))))
+
+(defn- seat-create-errors
+  "What the seat kind's create door says of `seat`, as the engine's
+  create judges a body: decoded, defaulted, then judged closed; nil
+  when the door takes it."
+  [seat]
+  (let [model (or (:create-schema seats/seat) (:schema seats/seat))]
+    (schema/closed-errors model (schema/apply-defaults model (schema/decode model seat)))))
+
+(deftest every-seed's-whole-seat-is-one-the-seat-door-takes
+  (doseq [org orgs
+          :let [kinds (set (map (comp name :kind) (org-resources org)))]
+          {:keys [seat]} (:seats (seed org))
+          :when seat]
+    (testing (str org " " (:name seat))
+      (is (nil? (seat-create-errors seat)))
+      (when-some [walk (:walk seat)]
+        (is (contains? kinds walk) (str "it walks " walk ", a kind of the org"))))))
