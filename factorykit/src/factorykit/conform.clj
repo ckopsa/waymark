@@ -38,6 +38,7 @@
             [waymark10.server.cracks :as cracks]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.seed :as seed]
             [waymark10.wire :as wire])
   (:import (clojure.lang Compiler DynamicClassLoader)
            (java.io File))
@@ -98,18 +99,13 @@
 
 ;; ── seed ────────────────────────────────────────────────────────────
 
-(defn- escaped
-  "A param value as it may stand inside an EDN string."
-  [v]
-  (let [s (pr-str (str v))] (subs s 1 (dec (count s)))))
-
-(defn- fill-template [{:keys [template params]}]
+(defn- fill-template
+  "The template's seat filled as the seed loader fills it."
+  [{:keys [template params]}]
   (when-some [res (io/resource (str "seats/" template ".edn"))]
-    (let [s (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (escaped v)))
-                       (pr-str (:seat (edn/read-string (slurp res))))
-                       (or params {}))]
-      {:seat (edn/read-string s)
-       :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" s)))})))
+    (let [seat (seed/filled (:seat (edn/read-string (slurp res))) (or params {}))]
+      {:seat seat
+       :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" (pr-str seat))))})))
 
 (defn- seed-seats
   "The seed's seats as whole seat maps, and what kept any from filling."
