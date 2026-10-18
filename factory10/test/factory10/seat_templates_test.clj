@@ -175,8 +175,11 @@
     (testing "it cannot attach the film"
       (is (not (served? (door "attach_film" {:film_url "https://example.com/g.mp4"}))))
       (is (= "proposed" (state))))
-    (inv/invoke! eng :org_plan id :attach_film {:film_url "https://example.com/g.mp4"}
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/g.mp4" :take_report "{}" :head_sha walk/a-head}
                  {:principal a-person})
+    (inv/invoke! eng :org_plan id :attach_film {:film_url "https://example.com/g.mp4"}
+                 walk/the-engine)
     (walk/flipped! eng id walk/a-head)
     (testing "it cannot mark the plan live"
       (is (not (served? (door "mark_live" {}))))
@@ -213,3 +216,32 @@
       (is (every? (comp empty? :actions) (:scope seat)))
       (is (= {:domain domain-id}
              (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))))
+
+(deftest the-director-seat-hands-in-the-film-and-takes-no-engine-door
+  (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)
+                          {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        t (edn-resource "seats/director.edn")
+        seat (fill t :seat {:clone_power "clone.call" :film_power "clone.render"})
+        vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
+                    (inv/resources eng))
+        kinds (remove #(str/includes? (:kind %) ".") (:scope seat))]
+    (powers! eng [{:seat seat}])
+    (testing "it fills and creates through the seat door"
+      (let [made (req h :post "/api/seats" seat)]
+        (is (= 201 (:status made)) (pr-str (json made)))))
+    (testing "its walk and every door its scope names are ones the engine serves"
+      (is (contains? vocab (:walk seat)))
+      (doseq [{:keys [kind actions]} kinds
+              a actions]
+        (is (contains? (get vocab kind) a) (str kind "." a))))
+    (testing "on a plan it holds the hand-in and neither of the engine's doors"
+      (is (= {"org_plan" #{"hand_in_film"} "change" #{}}
+             (into {} (map (juxt :kind (comp set :actions))) kinds)))
+      (is (= {:state "proposed"}
+             (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
+          "the walk is the proposed plans"))
+    (testing "its powers are the clone and the film the house names"
+      (is (= #{"clone.call" "clone.render"}
+             (into #{} (comp (map :kind) (filter #(str/includes? % ".")))
+                   (:scope seat)))))))
