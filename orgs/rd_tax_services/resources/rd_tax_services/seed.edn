@@ -18,15 +18,11 @@
                     {:kind "invoice" :actions ["mark_paid" "write_off"]}
                     {:kind "referring_cpa" :actions ["retire"]}
                     {:kind "assumption" :actions ["confirm"]}]
-            :wakes [{:kind "prospect" :actions [] :filter {:state "new"} :at_least 1}
-                    {:kind "prospect" :actions [] :filter {:state "qualified"} :at_least 1}
-                    {:kind "study" :actions [] :filter {:state "collecting"} :at_least 1}
-                    {:kind "study" :actions [] :filter {:state "drafting"} :at_least 1}
-                    {:kind "study" :actions [] :filter {:state "review"} :at_least 1}
-                    {:kind "study" :actions [] :filter {:state "signed_off"} :at_least 1}
-                    {:kind "invoice" :actions [] :filter {:state "open"} :at_least 1}
-                    {:kind "referring_cpa" :actions [] :filter {:state "active"} :at_least 1}
-                    {:kind "assumption" :actions [] :filter {:state "open"} :at_least 1}]}}]
+            :wakes [{:kind "prospect" :actions ["create" "qualify"]}
+                    {:kind "study" :actions ["create" "start_drafting" "return" "submit_review" "sign_off"]}
+                    {:kind "invoice" :actions ["create"]}
+                    {:kind "referring_cpa" :actions ["create"]}
+                    {:kind "assumption" :actions ["create"]}]}}]
  :judgments []
  :steps
  [{:as :owner :kind :assumption :ref :fee
