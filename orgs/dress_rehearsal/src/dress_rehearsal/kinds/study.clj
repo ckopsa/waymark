@@ -39,7 +39,7 @@
             [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
-            [:signed_off_by {:optional true} [:maybe [:string {:max 80}]]]]
+            [:signed_off_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :tax_year #{:eq} :preparer #{:eq}}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
