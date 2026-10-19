@@ -7,8 +7,10 @@
   the config localfire long-polls its runner link's fires, starts each
   one through the door a pushed fire goes through (`server/fire!`), and
   posts the answer back. A network error or a 5xx backs off, so a
-  machine that sleeps or changes networks resumes on its own; a 401
-  stops the loop, because no wait mends a wrong or revoked token.
+  machine that sleeps or changes networks resumes on its own; each wait
+  is jittered, so localfires that lost the engine together do not come
+  back together. A 401 waits at the longest step and reads the token
+  again, so a token rotated on the engine is taken up without a restart.
 
   A pulled fire is journaled before its run starts and leaves the
   journal when the engine takes its answer (LP3), so a fire the engine
@@ -20,7 +22,9 @@
   holds neither."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [jsonista.core :as json]
+            [localfire.config :as config]
             [localfire.people :as people]
             [localfire.server :as server])
   (:import [java.net URI URLEncoder]
@@ -43,6 +47,14 @@
   doubled after each failure, never more than `max-ms`."
   [prev first-ms max-ms]
   (if prev (min (long max-ms) (* 2 (long prev))) (long first-ms)))
+
+(defn jittered
+  "The wait drawn from a backoff step (R-13.5): at least half of
+  `step-ms` and at most all of it. `r` is a draw in [0, 1)."
+  [step-ms r]
+  (let [step (long step-ms)
+        half (quot step 2)]
+    (+ half (long (Math/floor (* (double r) (inc (- step half))))))))
 
 (defn- enc [s] (URLEncoder/encode (str s) StandardCharsets/UTF_8))
 
@@ -199,40 +211,54 @@
 
 (defn start!
   "Stand the pull loop up beside the server's `state` (§13), on a thread
-  of its own. `:sleep`, `:first-ms` and `:max-ms` are the tests' seam
-  on the backoff. → {:run :stop}: `:run` is the loop's future, which
-  ends `:unauthorized` on a 401 and `:stopped` after `stop!`."
+  of its own. `token` is the link's token, or a function that reads it:
+  it is read again after every 401, so a rotated token is taken up
+  without a restart. `:sleep`, `:random`, `:first-ms` and `:max-ms` are
+  the tests' seam on the backoff. → {:run :stop}: `:run` is the loop's
+  future, which ends `:stopped` after `stop!`; a 401 does not end it."
   ([state pull token] (start! state pull token {}))
-  ([state pull token {:keys [sleep first-ms max-ms]
+  ([state pull token {:keys [sleep random first-ms max-ms]
                       :or   {sleep    #(Thread/sleep (long %))
+                             random   #(Math/random)
                              first-ms first-backoff-ms
                              max-ms   max-backoff-ms}}]
-   (let [stop (atom false)
-         c    (-> (HttpClient/newBuilder)
-                  (.connectTimeout (Duration/ofSeconds 10))
-                  (.build))
-         run  (future
-                (loop [backoff nil]
+   (let [stop   (atom false)
+         c      (-> (HttpClient/newBuilder)
+                    (.connectTimeout (Duration/ofSeconds 10))
+                    (.build))
+         read   (if (fn? token) token (constantly token))
+         fresh  #(try (read) (catch Exception _ nil))
+         source (or (:token-from pull) (config/pull-token-source pull))
+         wait!  #(sleep (jittered % (random)))
+         run    (future
+                (loop [tok (fresh) backoff nil refused? false]
                   (if @stop
                     :stopped
-                    (let [step (try (take-one! c state pull token)
+                    (let [step (if (str/blank? tok)
+                                 :unauthorized
+                                 (try (take-one! c state pull tok)
                                     (catch Exception e
                                       (if @stop
                                         :stopped
                                         (do (log! "localfire pull poll failed: "
                                                   (.getSimpleName (class e)) " "
                                                   (ex-message e))
-                                            :error))))]
+                                            :error)))))]
                       (case step
                         :stopped      :stopped
-                        :unauthorized (do (log! "localfire pull stopped: the engine answered 401,"
-                                                " so the token in " (or (:token-from pull) (:token-env pull))
-                                                " is wrong or revoked.")
-                                          :unauthorized)
+                        ;; once per refusal, and never the token
+                        :unauthorized (do (when-not refused?
+                                            (log! "localfire pull: the engine refused this link's token;"
+                                                  " waiting for a new one in " source "."))
+                                          (wait! max-ms)
+                                          (recur (fresh) nil true))
                         :error        (let [ms (next-backoff backoff first-ms max-ms)]
-                                        (sleep ms)
-                                        (recur ms))
-                        (recur nil))))))]
+                                        (wait! ms)
+                                        (recur tok ms refused?))
+                        (do (when refused?
+                              (log! "localfire pull: the engine took the token in " source
+                                    "; pulling again."))
+                            (recur tok nil false)))))))]
      {:run run :stop stop})))
 
 (defn stop!
