@@ -60,7 +60,9 @@ def fail(sentence):
 
 
 def say(line):
-    print(f"[{STAGE}] {line}", flush=True)
+    # UTC, so the walk's steps line up with the compose logs
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"{stamp} [{STAGE}] {line}", flush=True)
 
 
 def load():
@@ -262,9 +264,70 @@ def drop_fire(fire):
     say(f"left fire {fire['id']} unanswered")
 
 
-def next_fire(link_id, seat_name, seconds):
+def peek(mcp, tool, args):
+    """A read for the record, never a failure: the doc, or {"error": why}."""
+    try:
+        status, _, body = mcp.rpc("tools/call", {"name": tool, "arguments": args})
+    except Exception as e:  # a timeout or a dropped socket
+        return {"error": repr(e)}
+    if status != 200 or not isinstance(body, dict) or "result" not in body:
+        return {"error": f"{status}: {json.dumps(body)[:300]}"}
+    res = body["result"]
+    text = "".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
+    if res.get("isError"):
+        return {"error": text[:300]}
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {"error": text[:300]}
+
+
+def shown(row, keys):
+    """A row's state and those of `keys` its data carries, for one log line."""
+    if "error" in row and "data" not in row:
+        return f"unread: {row['error']}"
+    data = row.get("data") or {}
+    picked = {k: data[k] for k in keys if k in data}
+    return json.dumps({"id": row.get("id"), "state": row.get("state"), **(picked or data)})[:800]
+
+
+def dump_fire_path(mcp, link_id, seat_name):
+    """What the owner reads on the way to `seat_name`'s fire, so a red run
+    says which held: (a) the seat has no schedule row, (b) the pool skipped
+    the link and the schedule throttled, (c) a fire queued, never handed out."""
+    found = peek(mcp, "waymark_query", {"kind": "seat", "filter": {"name": seat_name},
+                                        "return": "summary"})
+    seat = None
+    for r in items_of(found):
+        row = peek(mcp, "waymark_get", {"kind": "seat", "id": r["id"], "return": "summary"})
+        if (row.get("data") or {}).get("name") == seat_name:
+            seat = row
+            break
+    if not seat:
+        say(f"dump: no seat row named {seat_name} ({found.get('error', 'no match')})")
+    else:
+        say(f"dump: seat {shown(seat, ('model', 'runners', 'cadence_seconds'))}")
+        found = peek(mcp, "waymark_query", {"kind": "schedule", "filter": {"seat": seat["id"]},
+                                            "return": "summary"})
+        rows = items_of(found)
+        if not rows:
+            say(f"dump: (a)? no schedule row for {seat_name} ({found.get('error', 'none')})")
+        model = (seat.get("data") or {}).get("model")
+        for r in rows:
+            row = peek(mcp, "waymark_get", {"kind": "schedule", "id": r["id"], "return": "summary"})
+            say(f"dump: schedule {shown(row, ('note', 'retry_after', 'last_fired_at', 'wake_pending', 'runners', 'model'))}")
+            model = (row.get("data") or {}).get("model") or model
+        if isinstance(model, str):
+            row = peek(mcp, "waymark_get", {"kind": "model", "id": model, "return": "summary"})
+            say(f"dump: model {shown(row, ('name', 'runners'))}")
+    row = peek(mcp, "waymark_get", {"kind": "runner_link", "id": link_id, "return": "summary"})
+    say(f"dump: pull link {shown(row, ('owner', 'puller_seen_at', 'retry_after', 'note'))}")
+
+
+def next_fire(link_id, seat_name, seconds, owner):
     """Poll the pull link until a fire for `seat_name` arrives; answer it
-    as a started run and return (seat id, key)."""
+    as a started run and return (seat id, key). With none, `owner` reads
+    what held it up before the walk fails."""
     until = time.time() + seconds
     while time.time() < until:
         status, _, fire = http("GET", f"/api/-/runner-links/{link_id}/fires",
@@ -287,6 +350,7 @@ def next_fire(link_id, seat_name, seconds):
               "claude_code_session_url": f"http://stub.invalid/{fire['id']}"})
         say(f"{seat_name} fired ({fire['id']})")
         return seat.group(1), key.group(1)
+    dump_fire_path(owner, link_id, seat_name)
     fail(f"no fire for {seat_name} in {seconds}s")
 
 
@@ -313,7 +377,7 @@ def ticket():
     judge = named(owner, "seat", "draft-judge")
     owner.call("waymark_invoke", {"kind": "seat", "id": judge["id"], "action": "fire",
                                   "input": {"text": tid}, "return": "summary"})
-    seat, key = next_fire(link_id, "draft-judge", 180)
+    seat, key = next_fire(link_id, "draft-judge", 180, owner)
     s = Mcp(AS_CLAUDE)
     sit, _ = s.call("waymark_sit", {"key": key, "seat": seat, "session": s.session})
     if not walked(sit, tid):
@@ -329,7 +393,7 @@ def ticket():
     say(f"draft-judge groomed {tid}: open")
 
     # the groom is what wakes code-seat: no fire by hand here
-    seat, key = next_fire(link_id, "code-seat", 300)
+    seat, key = next_fire(link_id, "code-seat", 300, owner)
     c = Mcp(AS_CLAUDE)
     sit, _ = c.call("waymark_sit", {"key": key, "seat": seat, "session": c.session})
     if not walked(sit, tid):
