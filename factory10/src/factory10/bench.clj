@@ -1507,7 +1507,7 @@
 (def line-whys
   "Every word `line_why` may carry."
   ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
-   "person"])
+   "person" "org_plan_waits_go_live"])
 
 (def ^:private reason-chars 500)
 
@@ -2090,21 +2090,80 @@
 
 ;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────
 
-(defn- going-live-plans
-  "Every going_live org_plan, decoded, by the id of the change it names
-  — empty in an engine that declares no org_plan kind."
-  [eng]
+(def ^:private live-change-states
+  "The change states whose pull request is still in play."
+  #{"open" "submitted" "failing" "stuck"})
+
+(defn org-plan-change-id
+  "The id of the change an org_plan names — or, for a plan whose
+  `change` is nil (one minted before the sit wrote it, ticket
+  db8b35bb), of the live change born from `org_plan:<id>`. nil when
+  there is neither."
+  [eng plan]
+  (or (some-> (get-in plan [:data :change]) str not-empty)
+      (when (rdef-of-kind eng :change)
+        (let [st (:storage eng)]
+          (some->> (store/with-tx st
+                     (fn [tx]
+                       (store/query-rows st tx :change
+                                         {:born_from (str "org_plan:" (:id plan))}
+                                         {:limit 20})))
+                   (filter #(contains? live-change-states
+                                       (some-> (:state %) name)))
+                   first
+                   :id
+                   str)))))
+
+(defn- org-plans
+  "Every org_plan in one of `states`, decoded, by the id of the change it
+  names (`org-plan-change-id`) — empty in an engine that declares no
+  org_plan kind."
+  [eng states]
   (if-some [rd (rdef-of-kind eng :org_plan)]
     (let [st (:storage eng)]
       (into {}
             (keep (fn [raw]
                     (let [plan (inv/decode-row rd raw)]
-                      (some-> (get-in plan [:data :change]) str not-empty
+                      (some-> (org-plan-change-id eng plan)
                               (vector plan)))))
             (store/with-tx st
-              (fn [tx] (store/query-rows st tx :org_plan {:state "going_live"}
-                                         {:limit 1000})))))
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :org_plan {:state %}
+                                                 {:limit 1000}))
+                      states)))))
     {}))
+
+(defn- going-live-plans
+  "Every going_live org_plan, decoded, by the id of the change it names."
+  [eng]
+  (org-plans eng ["going_live"]))
+
+(def ^:private go-live-wait-states
+  "Every org_plan state whose pull request merges only on the owner's
+  go_live yes (ticket 7aff6a5c): all but live and retired."
+  ["drafting" "proposed" "simulated" "going_live"])
+
+(defn- go-live-waits
+  "The changes whose pull request an org_plan not yet live names, and
+  that carry no go_live yes (`go-live-yeses!`): change id → that plan.
+  Such a change merges only through go_live — the house does not merge
+  it and no person is asked to (ticket 7aff6a5c). Once its plan is live
+  or retired the change is ordinary again."
+  [eng changes]
+  (let [plans (org-plans eng go-live-wait-states)]
+    (into {}
+          (keep (fn [c]
+                  (let [id (str (:id c))]
+                    (when-some [plan (get plans id)]
+                      (when (nil? (::go-live-yes c)) [id plan])))))
+          changes)))
+
+(defn go-live-wait-reason
+  "What a change waiting on its org_plan's go_live says on its row."
+  [plan]
+  (str "org plan " (:id plan) " is " (some-> (:state plan) name)
+       ": only its owner's go_live merges this pull request"))
 
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
@@ -2166,7 +2225,9 @@
   is offered a merge and no other's marks are written (a woken pass,
   ticket 26a8d561). A change whose pull request a going_live org_plan
   names merges on the owner's go_live yes (`go-live-yeses!`, ticket
-  c8e131fb). Throws nothing.
+  c8e131fb); one an org_plan not yet live names is merged by nothing
+  else, and says `org_plan_waits_go_live` (`go-live-waits`, ticket
+  7aff6a5c). Throws nothing.
   → the number of `merge` calls made."
   ([eng seen] (merge-green! eng seen nil))
   ([eng seen repos]
@@ -2182,7 +2243,8 @@
                          (house-merges-change? %))
         holds (merge-holds eng (filter house? changes))
         held (held-changes changes by-repo holds)
-        held-ids (into #{} (map #(str (:id %))) held)
+        waits (go-live-waits eng changes)
+        held-ids (into (set (keys waits)) (map #(str (:id %))) held)
         offered (remove #(held-ids (str (:id %))) changes)
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
@@ -2236,7 +2298,14 @@
                                          {:line_why "held"
                                           :line_reason (held-reason
                                                         (get holds (born-ticket c)))}]))
-                                 held))
+                                 held)
+                           ;; only go_live merges an org's pull request
+                           ;; (ticket 7aff6a5c)
+                           (into {}
+                                 (map (fn [[id plan]]
+                                        [id {:line_why "org_plan_waits_go_live"
+                                             :line_reason (go-live-wait-reason plan)}]))
+                                 waits))
                    changes repos)
       (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
@@ -2482,7 +2551,9 @@
   carries over only when the rig says the house brought it up to date
   from base with its own diff unchanged (ticket abd12627). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
-  a merge hold keeps it. Throws nothing. → the number
+  a merge hold keeps it. No ask is raised for a change an org_plan not
+  yet live names: only the owner's go_live merges it (`go-live-waits`,
+  ticket 7aff6a5c). Throws nothing. → the number
   of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
@@ -2491,8 +2562,9 @@
         person? #(some->> (get by-repo (str (get-in % [:data :repository])))
                           (house-merges-change? %) not)
         holds (merge-holds eng (filter person? changes))
-        ;; the owner's go_live yes is this pull request's ask (M2e)
-        going-live (going-live-plans eng)
+        ;; the owner's go_live yes is this pull request's ask (M2e,
+        ;; ticket 7aff6a5c)
+        waits (go-live-waits eng changes)
         raised (volatile! 0)
         clean (volatile! {})]
     (doseq [change changes
@@ -2501,7 +2573,7 @@
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
-                       (not (contains? going-live id))
+                       (not (contains? waits id))
                        (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))

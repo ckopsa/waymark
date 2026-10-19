@@ -14,6 +14,7 @@
             [clojure.test :refer [deftest is testing]]
             [example.org :as example]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [waymark10.dev :as dev]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.invoke :as inv]
@@ -111,7 +112,7 @@
                           {:now-fn (constantly t0)})
         h (dev/handler eng)
         t (edn-resource "seats/onboarding.edn")
-        seat (fill t :seat {:org "greenleaf"})
+        seat (fill t :seat {:org "rd_tax_services"})
         vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
                     (inv/resources eng))
         kinds (remove #(str/includes? (:kind %) ".") (:scope seat))
@@ -126,19 +127,84 @@
               a actions]
         (is (contains? (get vocab kind) a) (str kind "." a))))
     (testing "it holds the walk's doors and no other"
-      (is (= {"org_plan" #{"ask" "propose"}
-              "change" #{"submit" "stall"}}
+      (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
+              "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
-      (is (= {:state "drafting"}
+      (is (= {:state "drafting,simulated"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
-          "the walk is the drafting plans, and propose is its way out"))
+          "the walk is the drafting and simulated plans: propose leaves one, go_live's Allow the other"))
     (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
         (is (str/starts-with? kind "bench.") kind)
         (is (= "ckopsa/waymark" (:repo filter)) kind)
-        (when (#{"bench.find" "bench.read" "bench.edit"} kind)
-          (is (= "orgs/greenleaf/**" (:path filter)) kind))))))
+        (when (#{"bench.find" "bench.read"} kind)
+          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-mayor.edn"
+                 (:path filter))
+              kind))
+        (when (= "bench.edit" kind)
+          (is (= "orgs/rd_tax_services/**" (:path filter)) kind)))
+      (is (every? (set (map :kind powers)) ["bench.feedback" "bench.pull"])
+          "it reads red CI and follows main"))
+    (testing "its instructions name only bench tools its scope holds, and stay short"
+      (let [held (set (map :kind powers))]
+        (doseq [[_ tool] (re-seq #"bench__(\w+)" (str (:charter seat) (:instructions seat)))]
+          (is (contains? held (str "bench." tool)) tool)))
+      (is (< (count (:charter seat)) 1200))
+      (is (< (count (:instructions seat)) 2000)))))
+
+(def ^:private agent-headers
+  "The onboarding seat's sitter: an agent acting for its person."
+  {"x-waymark-principal" "onboarding"
+   "x-waymark-actor-type" "agent"
+   "x-waymark-acts-for" "colton"})
+
+(defn- req-as [h method uri headers body]
+  (h (cond-> {:request-method method :uri uri :headers headers}
+       body (assoc :body (wire/write-json body)))))
+
+(defn- served? [resp] (contains? #{200 201 202} (:status resp)))
+
+(deftest the-onboarding-seats-grant-asks-go-live-and-it-comes-back-held
+  (let [eng (dev/scratch! (main/resources) {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        entry (first (filter #(= "org_plan" (:kind %))
+                             (:scope (fill (edn-resource "seats/onboarding.edn") :seat
+                                           {:org "greenleaf"}))))
+        asked (req-as h :post "/api/approval_requests" agent-headers
+                      {:task "Walk greenleaf's plan." :scope [entry]})
+        _ (assert (= 201 (:status asked)) (pr-str (json asked)))
+        approved (req h :post (str "/api/approval_requests/" (id-of asked) "/-/approve") nil)
+        _ (assert (= 200 (:status approved)) (pr-str (json approved)))
+        as (assoc agent-headers "x-waymark-grant" (get-in (json approved) [:data :grant_id]))
+        id (made! h "org_plans" {:name "greenleaf" :brief "A six-person landscaping business."})
+        state #(:state (json (req h :get (str "/api/org_plans/" id) nil)))
+        door #(req-as h :post (str "/api/org_plans/" id "/-/" %1) as %2)]
+    (testing "it files its person's first plan with create"
+      (let [filed (req-as h :post "/api/org_plans" as
+                          {:name "bluefern" :brief "A four-person bakery."})]
+        (is (= 201 (:status filed)) (pr-str (json filed)))))
+    (testing "it cannot record findings"
+      (is (not (served? (door "record_findings" {:findings []}))))
+      (is (= "drafting" (state))))
+    (walk/proposed! eng id a-person)
+    (testing "it cannot attach the film"
+      (is (not (served? (door "attach_film" {:film_url "https://example.com/g.mp4"}))))
+      (is (= "proposed" (state))))
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/g.mp4" :take_report "{}" :head_sha walk/a-head}
+                 {:principal a-person})
+    (inv/invoke! eng :org_plan id :attach_film {:film_url "https://example.com/g.mp4"}
+                 walk/the-engine)
+    (walk/flipped! eng id walk/a-head)
+    (testing "it cannot mark the plan live"
+      (is (not (served? (door "mark_live" {}))))
+      (is (= "simulated" (state))))
+    (testing "its go_live on a simulated plan comes back held, not done"
+      (let [held (door "go_live" {})]
+        (is (= 202 (:status held)) (pr-str (json held)))
+        (is (true? (:held (json held))))
+        (is (= "simulated" (state)))))))
 
 (deftest the-org-mayor-fills-for-orgs-example-and-keeps-to-the-org
   (let [eng (dev/scratch! (-> (vec (main/resources)) (into (example/resources)) (conj caps/capability))
@@ -151,7 +217,8 @@
         seat (seed/filled (:seat (edn-resource "seats/org-mayor.edn"))
                           {:org "example" :domain "example" :domain_id domain-id
                            :owner "owner" :budget_usd_per_week 8M
-                           :kinds (mapv (fn [k] {:kind k :actions []}) org-kinds)})]
+                           :kinds (mapv (fn [k] {:kind k :actions []}) org-kinds)
+                           :wakes []})]
     (testing "it fills with no hole left, its budget a decimal"
       (is (nil? (re-find #"\{\{" (pr-str seat))))
       (is (= 8M (:budget_usd_per_week seat)))
@@ -166,3 +233,36 @@
       (is (every? (comp empty? :actions) (:scope seat)))
       (is (= {:domain domain-id}
              (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))))
+
+(deftest the-director-seat-hands-in-the-film-and-takes-no-engine-door
+  (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)
+                          {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        t (edn-resource "seats/director.edn")
+        seat (fill t :seat {})
+        vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
+                    (inv/resources eng))
+        kinds (remove #(str/includes? (:kind %) ".") (:scope seat))]
+    (powers! eng [{:seat seat}])
+    (testing "it fills and creates through the seat door"
+      (let [made (req h :post "/api/seats" seat)]
+        (is (= 201 (:status made)) (pr-str (json made)))))
+    (testing "its walk and every door its scope names are ones the engine serves"
+      (is (contains? vocab (:walk seat)))
+      (doseq [{:keys [kind actions]} kinds
+              a actions]
+        (is (contains? (get vocab kind) a) (str kind "." a))))
+    (testing "on a plan it holds the hand-in and neither of the engine's doors"
+      (is (= {"org_plan" #{"hand_in_film"} "change" #{}}
+             (into {} (map (juxt :kind (comp set :actions))) kinds)))
+      (is (= {:state "proposed"}
+             (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
+          "the walk is the proposed plans"))
+    (testing "its powers are the clone door's four"
+      (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"}
+             (into #{} (comp (map :kind) (filter #(str/includes? % ".")))
+                   (:scope seat)))))
+    (testing "its instructions name only the tools its scope holds"
+      (let [named (into #{} (map (fn [[_ k a]] (str k "." a)))
+                        (re-seq #"\b([a-z]+)__([a-z_]+)" (:instructions seat)))]
+        (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"} named))))))

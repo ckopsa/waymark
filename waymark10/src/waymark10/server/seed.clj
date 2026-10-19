@@ -78,8 +78,15 @@
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
   `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
-  counted from the boot, and `[:param :repo]` is the boot's param of
-  that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+  counted from the boot's day one, and `[:param :repo]` is the boot's
+  param of that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+
+  THE DAY ONE IS THE SCENE'S WHEN IT IS GIVEN (ticket bbf1f253). A
+  clone stood up to film a first-week scene is booted with the scene's
+  `day_one` (WAYMARK10_SEED_DAY_ONE, YYYY-MM-DD), and `[:days n]` counts
+  from it, so the rows the seed dates fall on the days the scene's
+  captions read, however many days later the clone is stood up. With
+  none, it counts from the day of the boot, as before.
 
   A CAST MEMBER'S `:id` AND `:display` MAY BE PARAMS TOO:
   `{:owner {:id [:param :owner] :display [:param :owner_display]}}`,
@@ -452,7 +459,7 @@
 
 (defn- value-of
   "A step's value with its load-time forms filled in."
-  [{:keys [eng cast refs now params] :as ctx} form]
+  [{:keys [eng cast refs now day-one params] :as ctx} form]
   (let [[op arg] (when (and (vector? form) (= 2 (count form))) form)]
     (case op
       :param (param-of params form)
@@ -460,7 +467,8 @@
       :self (let [{:keys [kind id]} (ref-of refs arg)]
               (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))
       :cast (member-id cast arg)
-      :days (str (.plusDays (LocalDate/ofInstant ^Instant now ZoneOffset/UTC)
+      :days (str (.plusDays ^LocalDate (or day-one
+                                           (LocalDate/ofInstant ^Instant now ZoneOffset/UTC))
                             (long arg)))
       (cond
         (map? form) (into {} (map (fn [[k v]] [k (value-of ctx v)])) form)
@@ -722,6 +730,18 @@
   (let [kind (if (:on step) (:kind (get refs (:on step))) (kind-of refs step))]
     (if (and id kind) {:kind kind :id id} {:unkept true})))
 
+(defn- day-one-of
+  "The day one a boot was given, YYYY-MM-DD or a LocalDate, as a
+  LocalDate, or nil when none was given. Throws for one that is not a
+  date."
+  ^LocalDate [day-one]
+  (when-some [s (some-> day-one str str/trim not-empty)]
+    (try (LocalDate/parse s)
+         (catch java.time.format.DateTimeParseException _
+           (throw (refusal (str "The seed is refused: its day one `" s
+                                "` is not a date (YYYY-MM-DD).")
+                           {:day-one s}))))))
+
 (defn load!
   "Seed this engine: enrol the cast, walk the steps in order, then
   write the completion marker.
@@ -732,7 +752,9 @@
   in the marker's `walked_steps`. Throws on an engine
   `admit!` refuses, on the first step the law refuses, and on an engine
   that holds a cast member and no marker. `:now` is the boot's moment,
-  the engine's clock when absent; relative dates count from it. `:wall-url` is the clone's wall: when
+  the engine's clock when absent; relative dates count from it, unless
+  `:day-one` (YYYY-MM-DD) is given: then `[:days n]` counts from that
+  day, the scene's day one the clone was stood up with. `:wall-url` is the clone's wall: when
   it is given, the seed's `:walled` servers are made at it, and when
   it is not, none is made. `:params` are the values `[:param k]` reads.
   `:org` is the org boot's alone (`admit!`): a cast member the engine
@@ -743,9 +765,10 @@
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
   marker still `loading` resumes, skipping the steps it records."
-  [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params org] :as opts}]
+  [eng {:keys [cast steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
   (admit! eng seed opts)
-  (let [org (some-> org str not-empty)
+  (let [day-one (day-one-of day-one)
+        org (some-> org str not-empty)
         loading (boolean (and org (loading? eng seed)))
         seeded (and (seeded? eng seed) (not loading))
         cast (filled-cast cast (keyed params))
@@ -790,6 +813,7 @@
             (reduce
                   (fn [{:keys [refs] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
+                               :day-one day-one
                                :params (keyed params) :seed (:seed seed)}
                           [row made? bound]
                           (try
@@ -854,8 +878,10 @@
   "The boot step behind WAYMARK10_SEED: read the named seed and load
   it, saying what happened. Throws for a name this commit carries no
   seed for, and for everything `load!` throws for. `opts` are
-  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL, and
-  `:params`, when absent, are read from WAYMARK10_SEED_PARAMS."
+  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL,
+  `:params`, when absent, are read from WAYMARK10_SEED_PARAMS, and
+  `:day-one`, when absent, from WAYMARK10_SEED_DAY_ONE: the scene's
+  day one the clone was stood up with."
   ([eng seed-name] (boot! eng seed-name {}))
   ([eng seed-name opts]
    (let [seed (or (read-seed seed-name)
@@ -865,7 +891,9 @@
          _ (admit! eng seed)
          opts (cond-> (or opts {})
                 (not (contains? opts :params))
-                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
+                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
+                (not (contains? opts :day-one))
+                (assoc :day-one (System/getenv "WAYMARK10_SEED_DAY_ONE")))
          result (load! eng seed opts)]
      (println (if (:seeded result)
                 (str "waymark10 seed: `" (:seed result) "` loaded, "

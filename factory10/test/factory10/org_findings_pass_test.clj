@@ -28,6 +28,9 @@
 
 (def ^:private the-forge {:principal mirror/source-principal})
 
+(def ^:private a-director
+  (t/principal {:id "director" :type :agent :display "director"}))
+
 (def ^:private gap
   {:key "crack/quote/person_only" :severity "warning" :class "crack"
    :subject "quote" :sentence "No one approves a quote over $5k."
@@ -55,14 +58,22 @@
                                the-forge)))))
 
 (defn- a-proposed-plan!
-  "A plan its owner filed, audited clean and put up with `change`."
+  "A plan its owner filed, audited clean at its change's first head
+  (`0000000`) and put up with `change`, which is then pushed to the head
+  it was made with: propose opens only at an audited head (ticket
+  db8b35bb)."
   [eng org change]
-  (let [id (str (:id (:row (inv/create! eng :org_plan {:name org}
+  (let [st (:storage eng)
+        head (get-in (store/with-tx st (fn [tx] (store/load-row st tx :change change {})))
+                     [:data :head_sha])
+        id (str (:id (:row (inv/create! eng :org_plan {:name org}
                                         {:principal the-owner}))))]
+    (inv/invoke! eng :change change :observe {:head_sha "0000000"} the-forge)
     (inv/invoke! eng :org_plan id :record_findings
                  {:head_sha "0000000" :findings []} the-forge)
     (inv/invoke! eng :org_plan id :propose {:change change}
                  {:principal the-owner})
+    (inv/invoke! eng :change change :observe {:head_sha head} the-forge)
     id))
 
 (defn- plan [eng id]
@@ -84,6 +95,9 @@
         drafting (a-proposed-plan! eng "greenleaf" (a-change! eng 101 head-1))
         acme-change (a-change! eng 102 head-2)
         proposed (a-proposed-plan! eng "acme" acme-change)
+        _ (inv/invoke! eng :org_plan drafting :hand_in_film
+                       {:film_url "https://films.example.test/greenleaf.mp4"
+                        :take_report "{}" :head_sha "fffffff1"} the-forge)
         _ (inv/invoke! eng :org_plan drafting :record_film_findings
                        {:head_sha "fffffff1" :findings [red-film]} the-forge)
         by-name (atom {(str "org-findings-greenleaf-" head-1) {:greenleaf [gap]}
@@ -148,6 +162,99 @@
       (is (= head-3 (:findings_sha (data))))
       (is (= [(:key lint)] (mapv :key (:findings (data)))))
       (is (= "# The law of acme, again" (:law_page (data)))))))
+
+(def ^:private the-film "https://films.example.test/take.mp4")
+
+(defn- filming!
+  "The plan `id` with the director's take of `sha` handed in."
+  [eng id sha]
+  (inv/invoke! eng :org_plan id :hand_in_film
+               {:film_url the-film :take_report "{}" :head_sha sha}
+               the-forge))
+
+(deftest a-new-head-voids-the-take-waiting-to-be-judged
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (a-change! eng 102 head-2)
+        id (a-proposed-plan! eng "acme" change)
+        by-name (atom {})
+        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                     (fn [& _] nil))
+        data #(:data (plan eng id))
+        state #(name (:state (plan eng id)))]
+    (filming! eng id head-2)
+    (testing "a take of the change's head is left for the film pass"
+      (is (nil? (:voided (pass!))))
+      (is (= "filming" (state))))
+    (testing "the director's hand cannot void a take"
+      (try (inv/invoke! eng :org_plan id :void_take {:head_sha head-3}
+                        {:principal a-director})
+           (catch clojure.lang.ExceptionInfo _ nil))
+      (is (= "filming" (state)))
+      (is (= head-2 (:take_sha (data)))))
+    (testing "a new head voids the take and the plan is proposed again"
+      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (is (= 1 (:voided (pass!))))
+      (is (= "proposed" (state)))
+      (is (some #(= "take_voided" (:key %)) (:findings (data))))
+      (is (every? nil? (map (data) [:film_url :take_film_url :take_report
+                                    :take_sha :take_landed_at]))))
+    (testing "the new head's findings land on the next pass, as for any proposed plan"
+      (swap! by-name assoc (str "org-findings-acme-" head-3) {:acme []})
+      (is (= 1 (:findings (pass!))))
+      (is (= head-3 (:findings_sha (data))))
+      (is (= [] (mapv :key (:findings (data))))))))
+
+(deftest the-film-pass-voids-a-stale-take-and-lands-a-current-one
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        pass! #(forge/film-pass! eng {} (fn [& _] nil) (fn [_ _] {:rules []}))
+        moved (a-change! eng 101 head-1)
+        stale (a-proposed-plan! eng "greenleaf" moved)
+        current (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
+        state #(name (:state (plan eng %)))]
+    (filming! eng stale head-1)
+    (filming! eng current head-2)
+    (inv/invoke! eng :change moved :observe {:head_sha head-3} the-forge)
+    (let [census (pass!)]
+      (is (= 1 (:voided census)))
+      (is (= 1 (:films census))))
+    (testing "the stale take is voided, not attached"
+      (is (= "proposed" (state stale)))
+      (is (nil? (get-in (plan eng stale) [:data :film_url])))
+      (is (nil? (get-in (plan eng stale) [:data :take_sha]))))
+    (testing "a take whose head still matches lands as before"
+      (is (= "simulated" (state current)))
+      (is (= the-film (get-in (plan eng current) [:data :film_url]))))))
+
+(deftest the-pass-lands-the-first-week-scene-with-its-head
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (a-change! eng 102 head-2)
+        id (a-proposed-plan! eng "acme" change)
+        by-name (atom {(str "org-findings-acme-" head-2)
+                       {:acme [gap] :first_week_scene "{:scene {:seed \"acme\"}}"}})
+        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                     (fn [& _] nil))
+        data #(:data (plan eng id))]
+    (testing "the pass writes the scene and the head it was rendered at"
+      (is (= 1 (:findings (pass!))))
+      (is (= "{:scene {:seed \"acme\"}}" (:first_week_scene (data))))
+      (is (= head-2 (:first_week_scene_sha (data))))
+      (is (= "proposed" (name (:state (plan eng id))))))
+    (testing "a later head replaces both"
+      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-3)
+             {:acme [] :first_week_scene "{:scene {:seed \"acme\" :day 2}}"})
+      (is (= 1 (:findings (pass!))))
+      (is (= "{:scene {:seed \"acme\" :day 2}}" (:first_week_scene (data))))
+      (is (= head-3 (:first_week_scene_sha (data)))))
+    (testing "a head whose artifact carries none keeps the scene of the head it names"
+      (inv/invoke! eng :change change :observe {:head_sha head-1} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-1) {:acme []})
+      (is (= 1 (:findings (pass!))))
+      (is (= head-1 (:findings_sha (data))))
+      (is (= head-3 (:first_week_scene_sha (data)))))))
 
 (deftest a-source-without-artifacts-records-nothing
   (let [eng (engine/engine {:storage (memory/storage)

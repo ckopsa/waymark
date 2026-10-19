@@ -911,7 +911,8 @@
                                       :owner owner
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
-                                      :why (:detail d)})
+                                      :why (:detail d)
+                                      :shown (get-in d [:evidence :shown])})
             doc {:held true
                  :held_call (str (:id row))
                  :note held/held-note
