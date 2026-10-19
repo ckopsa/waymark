@@ -13,7 +13,7 @@
 
 (def top-level-keys
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
-    :schema :create-schema :fields :shape :upcasts
+    :schema :create-schema :create-safety :fields :shape :upcasts
     :flow :actions :create-guards :create-action-names :allow-dead :renames
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
