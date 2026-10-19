@@ -38,12 +38,14 @@
  :opening_bare
  [{:tap {:surface "nav.{{kind}}"} :say "{{org_display}}."}]
  ;; one day: its weekday, then the org's day in one sentence, filled from
- ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say).
+ ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say):
+ ;; what moved since the last day caption, for a clone runs no seats and
+ ;; its week is played live by meanwhile shots. The weekday is a label.
  :day
  [{:tap {:surface "nav.{{kind}}"}}
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
-         {"$day" {:since "{{date}}" :until "{{next_date}}" :domain "{{seed}}"}}]}]
+         {"$day" {:window "shot" :domain "{{seed}}"}}]}]
  ;; the week's numbers: each kind's rows that ended the week finished,
  ;; then the held calls it asked the person
  :closing_kind

@@ -424,6 +424,35 @@
         (is (= "A person was asked to finish Acme's study; Acme's study went to done."
                (said day)))))))
 
+(deftest a-shot-window-day-hole-reads-since-the-last-day-caption
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        run (scenes/take-run)
+        caption {"$day" {:window "shot" :domain "acme"}}
+        said #(scenes/fill-say [caption] (constantly []) (constantly [])
+                               (fn [w] (scenes/day-in-window eng w)) run)
+        pause #(Thread/sleep 5)]
+    (pause)
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the first reads what came before it, since the take began"
+      (let [s (said)]
+        (is (str/includes? s "Acme's study was written") s)))
+    (pause)
+    ;; a meanwhile create between the two captions
+    (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the second reads that create only"
+      (let [s (said)]
+        (is (str/includes? s "Acme's invoice was written") s)
+        (is (not (str/includes? s "Acme's study")) s)))
+    (pause)
+    (testing "an empty window answers its none"
+      (is (= "A quiet day." (said)))
+      (is (= "Nothing." (scenes/fill-say [(assoc-in caption ["$day" :none] "Nothing.")]
+                                         (constantly []) (constantly [])
+                                         (fn [w] (scenes/day-in-window eng w)) run))))))
+
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]
     (testing "a say with a hole checks ready"
