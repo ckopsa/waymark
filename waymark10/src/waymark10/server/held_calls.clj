@@ -1093,8 +1093,13 @@
   [row]
   (let [caller (str (get-in row [:data :caller]))
         owner (some-> (get-in row [:data :owner]) str not-empty)
-        {:keys [kind id]} (get-in row [:data :door])]
-    (if (and owner (#{"grant" "member"} (str kind)) (nil? (some-> id str not-empty)))
+        {:keys [kind action id]} (get-in row [:data :door])]
+    (if (and owner
+             (or (and (#{"grant" "member"} (str kind)) (nil? (some-> id str not-empty)))
+                 ;; HC2 (ticket bed1f2f6): an agent's member suspend or
+                 ;; reinstate is the person's own, the same way
+                 (and (= "member" (str kind)) (some-> id str not-empty)
+                      (contains? #{"suspend" "reinstate"} (str action)))))
       ;; HC1 (ticket b83e690d): an agent's grant create past its leash
       ;; is the person's own create. The hand is the person's, so the
       ;; guards judge it as they judge that person's direct create, and
