@@ -3796,6 +3796,25 @@
             "The queue held no rows under the walk's filter and the seat's grant.")]
     (subs s 0 (min 480 (count s)))))
 
+(defn- may-create-first-note
+  "The sentence an interactive seat on an empty walk is told when its
+  scope holds the walked kind's create door (ticket c09893b1): a
+  person's first sitting starts before any row exists, and `walk-note`
+  over no rows read as nothing to do. nil when the walk handed or held
+  a row, when its filter left rows out, and for any other seat."
+  [eng call session seat walk]
+  (let [kind (some-> (get walk "kind") str not-empty)
+        rdef (when kind (get (inv/resources eng) (keyword kind)))
+        creates (set (map name (or (:create-action-names rdef) #{:create})))]
+    (when (and rdef
+               (= "interactive" (some-> (get-in seat [:data :mode]) str))
+               (empty? (get walk "rows"))
+               (empty? (get walk "withheld"))
+               (not (some-> (get walk "total") pos?))
+               (some creates (seats/walk-doors seat))
+               (nil? (walk-filter-left-out eng call session seat walk)))
+      (str " Nothing to walk yet: this seat may create the first " kind "."))))
+
 (def ^:private graced-reason
   "a sitting of this seat closed within the seat's release grace (release_grace_seconds) and still holds it")
 
@@ -5644,6 +5663,8 @@
                                  (named-row-withheld-note named-row))
                                (when (get walk "judgment")
                                  judgment-walk-note)
+                               (when-not (or halted held-by all-held?)
+                                 (may-create-first-note eng call sitter-sees seat walk))
                                (when said change-beside-the-walk-note)
                                (when (get bench "bench") bench-filled-note))})
             transcript-key

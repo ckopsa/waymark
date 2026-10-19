@@ -1116,6 +1116,32 @@
       (is (true? (get-in (sitting-row eng (:sitting handed-nothing))
                          [:data :walked_nothing]))))))
 
+(deftest an-interactive-seat-that-may-create-its-walks-first-row-is-told-so
+  ;; ticket c09893b1: an onboarding seat's first sitting starts before
+  ;; its person has filed a plan, and "your rows are below" over no rows
+  ;; read as nothing to do
+  (let [told "Nothing to walk yet: this seat may create the first post."
+        creating [{:kind "post" :actions ["file" "drop" "create"]
+                   :filter {:box "house"}}]
+        note-of (fn [extra rows]
+                  (let [eng (fresh-engine [fx/meal post])
+                        h (engine/handler eng)]
+                    (open-walk-seat! eng extra)
+                    (doseq [s rows] (post! eng s "house" "2026-09-18T07:00:00Z"))
+                    (str (:note (second (sit-walk! h))))))]
+    (testing "an interactive seat holding the create door, on an empty walk"
+      (let [note (note-of {:mode "interactive" :scope creating} [])]
+        (is (str/includes? note told) note)))
+    (testing "not when the walk hands a row"
+      (let [note (note-of {:mode "interactive" :scope creating} ["The gas bill"])]
+        (is (not (str/includes? note told)) note)))
+    (testing "not when the seat holds no create door"
+      (let [note (note-of {:mode "interactive"} [])]
+        (is (not (str/includes? note told)) note)))
+    (testing "not for a seat a Routine sits"
+      (let [note (note-of {:scope creating} [])]
+        (is (not (str/includes? note told)) note)))))
+
 (deftest a-seat-at-a-wall-answers-no-rows
   ;; R-5.2's third wall, and the cheapest one to stand up: a seat
   ;; whose week's fuel is zero is at the wall from its first request.
