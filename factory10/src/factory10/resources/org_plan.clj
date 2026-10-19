@@ -794,6 +794,17 @@
                 (or (not-empty (snake-name value)) "rd_tax_services")))}
     name-pattern]])
 
+(defguardfn the-name-is-snake-case
+  {:reads []
+   :explain "This plan's name predates the snake_case rule (lowercase letters, digits and underscores, starting with a letter): retire it and file it again under a snake_case name."
+   :open "Retire this plan and file it again under a snake_case name."}
+  [row _inp _ctx]
+  ;; ticket 4d243311: a name filed before d4750bf9 is read and retired,
+  ;; and no other door builds an org from it
+  (if (re-matches (re-pattern name-pattern) (str (get-in row [:data :name])))
+    (t/allow)
+    (t/deny)))
+
 (def ^:private entry-schema
   "One entry of a hired seat's scope or wake_on: a kind, the doors on it
   and, when the entry narrows, the field it filters by."
@@ -926,7 +937,9 @@
     [:name {:x-display
             {:label "The org's name"
              :help "A short name for the org, as its directory spells it: greenleaf, or acme_landscaping."}}
-     name-schema]
+     ;; a stored name may predate the snake_case rule (ticket 4d243311):
+     ;; create-schema judges a new one, the-name-is-snake-case the doors
+     [:string {:min 1 :max 64}]]
     [:brief {:optional true
              :x-display
              {:widget "prose"
@@ -1103,6 +1116,7 @@
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
+     :guards [the-name-is-snake-case]
      :handler ask-the-owner
      :input [:map
              [:key {:x-display {:raw true :label "The question's key"
@@ -1141,7 +1155,7 @@
 
     :propose
     {:from #{:drafting} :to :proposed
-     :guards [no-error-finding-is-open a-hire-names-its-seat
+     :guards [the-name-is-snake-case no-error-finding-is-open a-hire-names-its-seat
               the-plan-was-audited-at-its-head]
      :handler put-the-pull-request-up
      :input [:map
@@ -1273,7 +1287,7 @@
     ;; merges the plan's pull request at the approved head.
     :go_live
     {:from #{:simulated} :to :going_live
-     :guards [not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
