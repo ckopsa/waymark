@@ -47,7 +47,7 @@
             [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
             [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
-            [:records_confirmed_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:records_confirmed_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
             [:missing_records {:optional true} [:maybe [:string {:max 500}]]]
             [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
             [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
