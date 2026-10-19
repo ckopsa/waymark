@@ -14,6 +14,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [org.httpkit.server :as server]
+            [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.wire :as wire])
@@ -139,9 +140,10 @@
 (defn- login-then-callback
   "Drive the whole dance: /auth/login for the stash + state, the
   scripted IdP answer, /auth/callback with the stash cookie."
-  [& [{:keys [state-override cookie-override]}]]
+  [& [{:keys [state-override cookie-override login-query]}]]
   (let [a (app)
-        login-resp (a (get-req "/auth/login" {:query "return-to=/api/payouts"}))
+        login-resp (a (get-req "/auth/login"
+                               {:query (or login-query "return-to=/api/payouts")}))
         state (get (loc-params login-resp) "state")
         stash (get (cookie-of login-resp) "waymark_auth")]
     (a (get-req "/auth/callback"
@@ -172,6 +174,35 @@
         (is (= "Alice" (:display p)))))
     (testing "the stash cookie is cleared"
       (is (= "" (get (cookie-of resp) "waymark_auth"))))))
+
+(deftest callback-binds-the-invite-the-login-carried
+  ;; the welcome link's browser path: /auth/login?invite= → IdP →
+  ;; callback hands the token to the gate's bind, as the
+  ;; X-Waymark-Invite header would have
+  (reset! idp-response
+          {:status 200 :headers {"Content-Type" "application/json"}
+           :body (wire/write-json
+                  {:access_token (mint-access {:sub "bea" :name "Bea"})})})
+  (let [saw (atom [])]
+    (with-redefs [members/gate! (fn [_eng principal token]
+                                  (swap! saw conj [(:id principal) token])
+                                  principal)]
+      (testing "the invite rides the stash and binds at the callback"
+        (let [resp (login-then-callback
+                    {:login-query "invite=tok-123&return-to=%2F"})]
+          (is (= 302 (:status resp)))
+          (is (= "/" (location resp)))
+          (is (= [["bea" "tok-123"]] @saw))
+          (is (seq (get (cookie-of resp) "waymark_session")))))
+      (testing "no invite, no bind"
+        (reset! saw [])
+        (is (= 302 (:status (login-then-callback))))
+        (is (= [] @saw))))
+    (testing "a refused bind still mints the session"
+      (with-redefs [members/gate! (fn [& _] (throw (ex-info "spent" {})))]
+        (let [resp (login-then-callback {:login-query "invite=spent"})]
+          (is (= 302 (:status resp)))
+          (is (seq (get (cookie-of resp) "waymark_session"))))))))
 
 (deftest callback-refuses-a-state-mismatch
   (reset! idp-response nil)
