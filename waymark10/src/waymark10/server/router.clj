@@ -713,7 +713,20 @@
                                            (res/decision r)
                                            (assoc :decision
                                                   {:by (some-> (res/decision r)
-                                                               :by name)}))]))
+                                                               :by name)})
+                                           ;; each extra create door, and
+                                           ;; who holds it: engine, or
+                                           ;; whoever the grant admits
+                                           (seq (:creates r))
+                                           (assoc :creates
+                                                  (mapv (fn [d]
+                                                          {:action (name (:action d))
+                                                           :href (str "/api/" (:plural r)
+                                                                      "/-/" (name (:action d)))
+                                                           :by (if (contains? (:by d) :engine)
+                                                                 "engine"
+                                                                 "grant")})
+                                                        (:creates r))))]))
                                  resources)}
          ;; when the engine ends (engine's :expires-at, a demo clone's
          ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).
@@ -921,11 +934,18 @@
         (json-response 202 doc media-type
                        {"Location" (:self doc)})))))
 
-(defn- create [eng]
+(defn- create
+  "POST /api/{plural}: the kind's ordinary create. With `door`, one of
+  the extra create doors the kind declares under :creates, served at
+  POST /api/{plural}/-/{door} (collection-action): the same algorithm,
+  and the log row names the door."
+  ([eng] (create eng nil))
+  ([eng door]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
-          _ (check-action! req rdef (first (:create-action-names rdef)))
+          aname (or door (first (:create-action-names rdef)))
+          _ (check-action! req rdef aname)
           opts (invoke-opts eng req)
           body (read-body req)
           ;; a birth is a committed transition under the leash that
@@ -938,14 +958,15 @@
                     ;; held call minted out here (scheduled/after-write!,
                     ;; docs/spec-scheduled-actions.md R-4.3)
                     (scheduled/after-write!
-                     eng rdef (first (:create-action-names rdef))
+                     eng rdef aname
                      (inv/create! eng (:kind rdef) body
-                                  (select-keys opts [:principal :acknowledged
-                                                     :idempotency-key :dry-run
-                                                     :grant]))))
+                                  (cond-> (select-keys opts [:principal :acknowledged
+                                                             :idempotency-key :dry-run
+                                                             :grant])
+                                    door (assoc :action door)))))
                    (catch clojure.lang.ExceptionInfo e
                      (if-some [resp (held-instead eng opts (:kind rdef)
-                                                  (first (:create-action-names rdef))
+                                                  aname
                                                   nil body e)]
                        {::held resp}
                        (do
@@ -960,7 +981,7 @@
                            (walks/record-refused!
                             eng (principal-of req) (visibility-of req)
                             {:self (str "/api/" plural)
-                             :action (first (:create-action-names rdef))}
+                             :action aname}
                             e))
                          (throw e)))))]
       (cond
@@ -974,7 +995,7 @@
         (do (when (true? (:dry-run opts))
               (announce-considering!
                eng req (str "/api/" plural)
-               (name (first (:create-action-names rdef))) result))
+               (name aname) result))
             (dry-run-response result))
 
         (= :idempotency (:replayed? result))
@@ -989,7 +1010,7 @@
         :else
         (let [row (:row result)]
           (envelope-response eng rdef row req 201
-                             {"Location" (str "/api/" plural "/" (:id row))}))))))
+                             {"Location" (str "/api/" plural "/" (:id row))})))))))
 
 (defn- depth-of
   "The GET's depth= parameter: absent/\"full\" → the whole envelope;
@@ -2462,9 +2483,15 @@
     (fn [{{:keys [plural action]} :path-params :as req}]
       (let [rdef (rdef-by-plural eng plural)
             dname (keyword action)]
-        (if (contains? (:collection-doors rdef) dname)
+        (cond
+          (contains? (:collection-doors rdef) dname)
           (collection-door eng req rdef dname)
-          (bulk req))))))
+
+          ;; an extra create door (:creates) births a row here
+          (inv/create-door rdef dname)
+          ((create eng dname) req)
+
+          :else (bulk req))))))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the

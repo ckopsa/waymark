@@ -183,6 +183,10 @@
     (boolean (seq (store/with-tx st
                     (fn [tx] (store/query-rows st tx :member {} {:limit 1})))))))
 
+(def ^:private seed-org-max
+  "The longest org name the marker's `seed_org` holds (members.clj)."
+  64)
+
 (defn admit!
   "Throws unless this engine may be seeded: it is named `demo-…` and
   has no IdP. A working engine is neither. A `:live-ok` seed needs no
@@ -194,7 +198,9 @@
   An org's seed, loaded by the org boot with `{:org name}` in `opts`,
   is not refused for the engine's other members: a working house
   engine always has some. It is refused instead when the seed's marker
-  records another org (`org_mismatch`)."
+  records another org (`org_mismatch`), and when its name is longer
+  than the marker's `seed_org` holds (`org_too_long`), since `mark!`
+  would fail only after every step was walked."
   ([eng] (admit! eng nil))
   ([eng seed] (admit! eng seed nil))
   ([eng seed {:keys [org]}]
@@ -203,6 +209,12 @@
          org (some-> org str not-empty)
          had (when (and org (:live-ok seed)) (marker-org eng seed))]
      (cond
+       (and org (> (count org) seed-org-max))
+       (throw (refusal (str "The seed is refused: the org name is " (count org)
+                            " characters long, and an org's seed marker holds at most "
+                            seed-org-max ".")
+                       {:engine n :seed (:seed seed) :org org :reason "org_too_long"}))
+
        (and (not demo?) (not (:live-ok seed)))
        (throw (refusal (str "The seed is refused: this engine is named `" n
                             "`, and a seed loads only on an engine whose name begins with `demo-`.")

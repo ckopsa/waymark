@@ -1912,6 +1912,35 @@
                  (true? (:delegates os)) (assoc :delegates true)))))
     rmap))
 
+(defn- normalize-creates
+  "The extra create doors (:creates): a vector of {:action :input :by
+  :guards :on-create :display}, each BESIDE the kind's ordinary create
+  and never instead of it. A door names its own action, takes its own
+  malli input, and `:by #{:engine}` keeps it the engine's own hand."
+  [kind rmap]
+  (if-some [cs (:creates rmap)]
+    (let [err #(throw (t/definition-error (str kind ": " %)))]
+      (when-not (vector? cs)
+        (err ":creates is a vector of create doors"))
+      (assoc rmap :creates
+             (mapv (fn [{:keys [action input by guards] :as d}]
+                     (when-not (keyword? action)
+                       (err "a :creates door names its :action as a keyword"))
+                     (when (or (contains? (set (:create-action-names rmap)) action)
+                               (contains? (:actions rmap) action))
+                       (err (str "the create door " (name action)
+                                 " shares its name with another door")))
+                     (when (nil? input)
+                       (err (str "the create door " (name action)
+                                 " declares its :input")))
+                     (when-not (every? #{:engine} by)
+                       (err (str "the create door " (name action)
+                                 " is held :by #{:engine} or by whoever the grant admits")))
+                     (cond-> (assoc d :guards (vec (or guards [])))
+                       (seq by) (assoc :by (set by))))
+                   cs)))
+    rmap))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -1994,6 +2023,7 @@
         verify-undo-pointers
         (update :create-guards #(vec (or % [])))
         (update :create-action-names #(or % #{:create}))
+        (as-> r (normalize-creates kind r))
         (update :adoption #(or % :immediate))
         (update :nav #(or % :primary))
         (update :shape #(or % 1))

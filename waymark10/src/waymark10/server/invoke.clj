@@ -238,6 +238,7 @@
   (into (sorted-set)
         (map name)
         (concat (keys (:actions rdef)) (:create-action-names rdef)
+                (map :action (:creates rdef))
                 (when (:mirror rdef) [:resync :discover]))))
 
 (defn upcast-row
@@ -2174,6 +2175,54 @@
     (cond-> (vec (:create-guards rdef))
       (seq refs) (conj (g/names-a-row-that-stands refs)))))
 
+(def ^:private engine-only-door
+  "The wall in front of a create door held `:by #{:engine}`: only a
+  :system principal walks it, under any grant."
+  (g/guard
+   {:name :not_yours
+    :explain "This door is the engine's own: only the engine's hand walks it."
+    :reads [:principal]
+    :check (with-meta
+             (fn [_ _ ctx]
+               (if (= :system (:type (:principal ctx)))
+                 (t/allow)
+                 (t/deny)))
+             {:waymark10/form '(fn [row inp ctx]
+                                 (= :system (:type (:principal ctx))))})}))
+
+(defn create-door
+  "The extra create door named `action` among the kind's :creates, or
+  nil — nil too for the kind's ordinary create verb."
+  [rdef action]
+  (when (some? action)
+    (let [a (keyword (name action))]
+      (some #(when (= a (:action %)) %) (:creates rdef)))))
+
+(defn- create-spec
+  "What one create door births with: {:action :model :guards
+  :on-create}. No `action`, or one of the kind's create verbs, is the
+  ordinary create; an action :creates declares is that door, with its
+  own input, guards and :on-create, and its `:by #{:engine}` walled in
+  front of its guards. Any other name is a caller's mistake."
+  [rdef action mint?]
+  (if-some [door (create-door rdef action)]
+    {:action (:action door)
+     :model (:input door)
+     :guards (cond->> (vec (:guards door))
+               (contains? (:by door) :engine) (into [engine-only-door]))
+     :on-create (:on-create door)}
+    (let [a (some-> action name keyword)]
+      (when (and a (not (contains? (:create-action-names rdef) a)))
+        (throw (t/definition-error
+                (str (name (:kind rdef)) " declares no create door named "
+                     (name a)))))
+      {:action (or a (first (:create-action-names rdef)))
+       :model (if mint?
+                (:schema rdef)
+                (or (:create-schema rdef) (:schema rdef)))
+       :guards (if mint? [] (create-walled-guards rdef))
+       :on-create (:on-create rdef)})))
+
 (defn- create-guard-pass
   "The create-time guard grading (design E9), ONE reduce for the real
   path, the full rehearsal, and the partial rehearsal — so the three
@@ -2227,14 +2276,14 @@
   mode): provided entries schema-checked, fully covered guard leaves
   judged, the rest :awaiting — on the verdict, and on a judged leaf's
   409 exactly as partial-verdict names them."
-  [engine rdef model body principal acknowledged mode grant]
+  [engine guards model body principal acknowledged mode grant]
   (let [partial? (= :partial mode)
         inp (schema/decode model (or body {}))
         errors (cond-> (schema/closed-errors model inp)
                  partial? (-> (select-keys (keys (or body {})))
                               not-empty))]
     (when errors (throw (p/schema-invalid :create errors)))
-    (if (empty? (create-walled-guards rdef))
+    (if (empty? guards)
       (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
       (store/with-tx (:storage engine)
         (fn [tx]
@@ -2244,7 +2293,7 @@
           (let [ctx (make-ctx engine tx :dry-run principal {:grant grant})]
             (if partial?
               (let [{:keys [judged awaiting]}
-                    (split-leaves (create-walled-guards rdef)
+                    (split-leaves guards
                                   (set (keys (or body {}))))
                     {:keys [warned]}
                     (try
@@ -2263,8 +2312,7 @@
                  :awaiting (mapv :name awaiting)
                  :warnings (not-empty warned)})
               (let [{:keys [warned]}
-                    (create-guard-pass (create-walled-guards rdef) inp ctx
-                                       acknowledged)]
+                    (create-guard-pass guards inp ctx acknowledged)]
                 {:valid? true :warnings (not-empty warned)}))))))))
 
 (defn create!
@@ -2291,17 +2339,19 @@
   the body validates against the full :schema rather than the
   author's :create-schema, and the author's create guards are not
   consulted — they judge the create-schema's vocabulary, which a
-  mint doesn't speak. Never set from a request path."
-  [engine kind body {:keys [principal acknowledged dry-run mint? grant]
+  mint doesn't speak. Never set from a request path.
+
+  :action names the create door (default: the kind's create verb). An
+  extra door the kind declares under :creates validates against its own
+  :input, runs its own guards and :on-create, and the log row names it."
+  [engine kind body {:keys [principal acknowledged dry-run mint? grant action]
                      :or {acknowledged #{}}
                      :as opts}]
   (let [rdef (rdef-of engine kind)
-        model (if mint?
-                (:schema rdef)
-                (or (:create-schema rdef) (:schema rdef)))
-        create-action (first (:create-action-names rdef))]
+        {model :model create-action :action guards :guards}
+        (create-spec rdef action mint?)]
     (if dry-run
-      (let [verdict (create-dry-run! engine rdef model body principal
+      (let [verdict (create-dry-run! engine guards model body principal
                                      acknowledged dry-run grant)
             ;; a kind that declares :on-rehearse says what the create
             ;; would make: asked of the full rehearsal alone, after the
@@ -2405,13 +2455,12 @@
   child's full create algorithm — its own :on-create may birth
   grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
-                               idempotency-key mint? depth within grant]
+                               idempotency-key mint? depth within grant
+                               action]
                         :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
-        model (if mint?
-                (:schema rdef)
-                (or (:create-schema rdef) (:schema rdef)))
-        create-action (first (:create-action-names rdef))
+        {model :model create-action :action door-guards :guards
+         on-create :on-create} (create-spec rdef action mint?)
         digest (body-digest body)]
     (if-some [hit (when idempotency-key
                     (store/idempotency-lookup (:storage engine) tx
@@ -2433,9 +2482,7 @@
                            :grant grant
                            :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
-            (create-guard-pass (if mint?
-                                 []
-                                 (create-walled-guards rdef))
+            (create-guard-pass door-guards
                                inp (dissoc ctx :invoke :create :inner-sink
                                            :power :follow-up :follow-sink)
                                acknowledged
@@ -2482,7 +2529,7 @@
                             (swap! births conj {:kind target-kind
                                                 :body body :opts opts})
                             nil))
-              row (if-some [oc (:on-create rdef)] (oc row octx) row)
+              row (if-some [oc on-create] (oc row octx) row)
               ;; ref labels + one-of at birth too: before nil, every
               ;; set ref is newly set
               row (update row :data
