@@ -137,7 +137,12 @@ joined with `; `. A hole that finds no rows says its `none`, or
 `nothing came in`, and never the hole itself. With `"terminal": true`
 it reads only the rows in one of the kind's terminal states, and with
 `"count": true` it says how many rows it read instead of their lines;
-`check` judges each as true or false.
+`check` judges each as true or false. With `"state"`, one of the
+kind's states, it reads only the rows in that state. A counting hole
+may name `one` and `many`, together: it then says `<n> <one>` or
+`<n> <many>` by its count, and a zero count says its `none` when it
+names one, or drops its clause, the hole and the string after it, when
+it does not (`"3 prospects engaged, "`).
 
 A `$moves` hole, `{"$moves": {kind, since, until, by, none}}`, reads the
 log instead: the transitions on rows of `kind` logged in

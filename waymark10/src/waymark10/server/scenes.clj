@@ -405,7 +405,8 @@
 (defn- hole-problem
   "Why one `$rows` hole cannot be filled; nil when it can."
   [h rdef-of]
-  (or (window-problem "$rows" ["kind" "since" "until" "field" "terminal" "count" "none"]
+  (or (window-problem "$rows" ["kind" "since" "until" "field" "terminal" "state" "count"
+                               "one" "many" "none"]
                       h rdef-of)
       (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
         (str (tick (get h "field")) " is not a field a hole reads; the fields are "
@@ -413,7 +414,19 @@
       (some (fn [k]
               (when (and (contains? h k) (not (boolean? (get h k))))
                 (str "a `$rows` hole's `" k "` is true or false.")))
-            ["terminal" "count"])))
+            ["terminal" "count"])
+      (when (and (contains? h "state")
+                 (not (some #{(str (get h "state"))}
+                            (map name (:states (rdef-of (str (get h "kind"))))))))
+        (str (tick (get h "state")) " is not a state of " (tick (get h "kind")) "."))
+      (when (not= (contains? h "one") (contains? h "many"))
+        "a `$rows` hole names `one` and `many` together.")
+      (when (and (contains? h "one") (not (true? (get h "count"))))
+        "a `$rows` hole's `one` and `many` word a count: it names `count` true.")
+      (some (fn [k]
+              (when (and (contains? h k) (not (string? (get h k))))
+                (str "a `$rows` hole's `" k "` is a string.")))
+            ["one" "many"])))
 
 (defn- moves-problem
   "Why one `$moves` hole cannot be filled; nil when it can."
@@ -481,8 +494,11 @@
   rows `rows-of` answers for it, joined with `; `, or by its `none`
   (`nothing came in` unless it names one) when there are none; with
   `count` true, by how many rows there are instead, and with `terminal`
-  true it reads only rows in a terminal state. `rows-of` is a fn of
-  {:kind :since :until :field :terminal} to summary lines; the performer
+  true it reads only rows in a terminal state, with `state` only rows in
+  that state. A count with `one` and `many` says `<n> <one>` or `<n>
+  <many>`; at zero it says its `none`, or without one drops its clause:
+  the hole and the string after it. `rows-of` is a fn of
+  {:kind :since :until :field :terminal :state} to summary lines; the performer
   passes `rows-in-window` over the scene's clone. Each `$moves` hole is
   replaced the same way by the lines `moves-of` answers, a fn of
   {:kind :since :until :by} (`moves-in-window`), or by its `none`
@@ -503,45 +519,67 @@
                     (str (get h "none" none))))]
      (if-not (sequential? say)
        (str say)
-       (apply str
-              (for [part say]
-                (if-some [h (hole-of part)]
-                  (let [lines (rows-of {:kind (str (get h "kind"))
-                                        :since (instant-of (get h "since"))
-                                        :until (instant-of (get h "until"))
-                                        :field (get h "field" "created_at")
-                                        :terminal (true? (get h "terminal"))})]
-                    (if (true? (get h "count"))
-                      (str (count lines))
-                      (spoken lines h nothing)))
-                  (if-some [h (moves-hole-of part)]
-                    (spoken (moves-of {:kind (str (get h "kind"))
-                                       :since (instant-of (get h "since"))
-                                       :until (instant-of (get h "until"))
-                                       :by (get h "by" "seats")})
-                            h no-moves)
-                    (if-some [h (day-hole-of part)]
-                      (or (day-of (if (= "shot" (get h "window"))
-                                    (let [now (Instant/now)
-                                          [was] (swap-vals! run assoc :day-filled now)]
-                                      {:since (:day-filled was) :until now
-                                       :domain (str (get h "domain"))})
-                                    {:since (instant-of (get h "since"))
+       (loop [parts (seq say) out []]
+         (if-not parts
+           (apply str out)
+           (let [part (first parts)]
+             (if-some [h (hole-of part)]
+               (let [lines (rows-of {:kind (str (get h "kind"))
+                                     :since (instant-of (get h "since"))
                                      :until (instant-of (get h "until"))
-                                     :domain (str (get h "domain"))}))
-                          (str (get h "none" quiet-day)))
-                      (str part))))))))))
+                                     :field (get h "field" "created_at")
+                                     :terminal (true? (get h "terminal"))
+                                     :state (some-> (get h "state") str)})
+                     n (count lines)]
+                 (cond
+                   (not (true? (get h "count")))
+                   (recur (next parts) (conj out (spoken lines h nothing)))
+
+                   (not (contains? h "one"))
+                   (recur (next parts) (conj out (str n)))
+
+                   (pos? n)
+                   (recur (next parts) (conj out (str n " " (get h (if (= 1 n) "one" "many")))))
+
+                   (contains? h "none")
+                   (recur (next parts) (conj out (str (get h "none"))))
+
+                   ;; a zero count drops its clause: the hole and the string after it
+                   :else
+                   (recur (cond-> (next parts) (string? (second parts)) next) out)))
+               (recur (next parts)
+                      (conj out
+                            (if-some [h (moves-hole-of part)]
+                              (spoken (moves-of {:kind (str (get h "kind"))
+                                                 :since (instant-of (get h "since"))
+                                                 :until (instant-of (get h "until"))
+                                                 :by (get h "by" "seats")})
+                                      h no-moves)
+                              (if-some [h (day-hole-of part)]
+                                (or (day-of (if (= "shot" (get h "window"))
+                                              (let [now (Instant/now)
+                                                    [was] (swap-vals! run assoc :day-filled now)]
+                                                {:since (:day-filled was) :until now
+                                                 :domain (str (get h "domain"))})
+                                              {:since (instant-of (get h "since"))
+                                               :until (instant-of (get h "until"))
+                                               :domain (str (get h "domain"))}))
+                                    (str (get h "none" quiet-day)))
+                                (str part)))))))))))))
 
 (defn rows-in-window
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
   (created_at, or updated_at) falls in [since, until), oldest first;
-  with `terminal`, only those in one of the kind's terminal states.
-  None for a kind the engine does not serve."
-  [eng {:keys [kind since until field terminal]}]
+  with `terminal`, only those in one of the kind's terminal states, and
+  with `state`, only those in that state. None for a kind the engine
+  does not serve."
+  [eng {:keys [kind since until field terminal state]}]
   (let [st (:storage eng)
         rdef (get (inv/resources eng) (keyword kind))
         ended (into #{} (map name) (:terminal rdef))
-        ended? (fn [row] (or (not terminal) (contains? ended (some-> (:state row) name))))
+        ended? (fn [row]
+                 (and (or (not terminal) (contains? ended (some-> (:state row) name)))
+                      (or (nil? state) (= state (some-> (:state row) name)))))
         at (if (= "updated_at" field) :updated-at :created-at)
         within? (fn [row]
                   (let [t (get row at)]
