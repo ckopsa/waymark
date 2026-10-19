@@ -1,0 +1,33 @@
+;; dress_rehearsal's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+;; Seats come later, one per question the plan's findings raise; the
+;; org's mayor is added last.
+{:seed "dress_rehearsal"
+ :version 1
+ :org "dress_rehearsal"
+ :domains [{:name "dress_rehearsal" :label "R&D Tax Studies" :ref :dress_rehearsal}]
+ ;; on the house, the :owner :id is the plan owner's member id
+ :cast
+ {:owner      {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}
+  :specialist {:id "specialist" :display "The Tax Specialist" :type :human}
+  :cpa        {:id "cpa" :display "Dana Whitfield, CPA" :type :human}}
+ :seats []
+ :judgments []
+ :steps
+ [{:as :owner :kind :assumption :ref :fee
+   :create {:topic "fee" :guess "20% of the credit, $5,000 minimum, invoiced at delivery, due in 30 days."}}
+  {:as :owner :kind :assumption :ref :team
+   :create {:topic "team" :guess "The principal and one tax specialist; the principal signs off every study."}}
+  {:as :owner :kind :assumption :ref :tools
+   :create {:topic "tools" :guess "Records arrive by email, shared folder or an upload link."}}
+  {:as :owner :kind :assumption :ref :reminders
+   :create {:topic "reminders" :guess "Missing documents are chased twice before the principal is told; an unpaid invoice gets a reminder at 15 days late and a call at 30."}}
+  {:as :owner :kind :referrer :ref :dana
+   :create {:name "Dana Whitfield" :firm "Whitfield & Co. CPAs" :referral_fee_pct 10}}
+  {:as :owner :kind :engagement :ref :acme
+   :create {:client "Acme Robotics" :source "referral" :estimated_credit_usd 60000}}
+  {:as :owner :kind :engagement :on :acme :action "send_letter"}
+  {:as :owner :kind :study :ref :acme-2025
+   :create {:client "Acme Robotics" :tax_year 2025 :preparer "specialist"}}
+  {:as :owner :kind :document_request :ref :acme-payroll
+   :create {:title "2025 payroll register" :category "payroll" :channel "upload_link"}}]}
