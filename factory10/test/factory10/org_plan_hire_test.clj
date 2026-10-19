@@ -9,7 +9,9 @@
 
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
+            [factory10.law-text]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
@@ -46,13 +48,7 @@
 (defn- live!
   "A found plan the owner walked to live. → its id."
   [eng]
-  (let [id (str (:id (filed! eng)))]
-    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
-    (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/greenleaf.mp4"}
-                 {:principal the-owner})
-    (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
-    id))
+  (walk/live! eng (:id (filed! eng)) the-owner))
 
 (defn- hire! [eng who]
   (org-plan/open-hire! eng {:name "greenleaf" :gap gap} {:principal who}))
@@ -96,6 +92,33 @@
     (live! eng)
     (is (= :engine_only (:refused (hire! eng an-agent))))
     (is (= :engine_only (:refused (hire! eng the-owner))))))
+
+(deftest open-hire-is-a-declared-create-door
+  (let [eng (engine)
+        rdef (get (inv/resources eng) :org_plan)]
+    (testing "discover's vocabulary and the law page name it"
+      (is (contains? (inv/action-names rdef) "open_hire"))
+      (is (contains? (inv/action-names rdef) "create"))
+      (let [page (apply str (interpose "\n" (#'factory10.law-text/kind-section rdef)))]
+        (is (re-find #"\*\*open_hire\*\*" page) page)
+        (is (re-find #"Only the engine walks it" page) page)))
+    (testing "the engine's call births a hire plan, and the log says open_hire"
+      (live! eng)
+      (let [made (hire! eng the-engine)]
+        (is (= "open_hire" (some-> made :transition :action name)) (pr-str made))
+        (is (= "hire" (org-plan/purpose-of (:row made))))))
+    (testing "an agent's call at the door is refused not_yours"
+      (let [e (try (inv/create! eng :org_plan
+                                {:name "greenleaf" :gap (assoc gap :key "greenleaf/x/y")}
+                                {:principal an-agent :action :open_hire})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (some? e))
+        (is (= :not_yours (some-> (:guard (ex-data e)) name keyword)))))
+    (testing "the ordinary create is unchanged"
+      (let [made (inv/create! eng :org_plan {:name "acme"} {:principal the-owner})]
+        (is (= "create" (some-> made :transition :action name)))
+        (is (= "found" (org-plan/purpose-of (:row made))))))))
 
 (deftest a-plan-without-purpose-reads-as-found
   (is (= "found" (org-plan/purpose-of {:data {:name "greenleaf"}})))

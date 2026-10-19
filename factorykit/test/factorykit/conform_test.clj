@@ -14,6 +14,17 @@
 (deftest the-example-org-conforms
   (is (= [] (conform/conform "../orgs/example"))))
 
+(deftest the-orgkit-template-conforms-as-a-new-org
+  (let [src (io/file "../orgkit/template")
+        dir (io/file (str (Files/createTempDirectory "orgkit" (make-array FileAttribute 0)))
+                     "myorg")]
+    (doseq [^File f (file-seq src)
+            :when (.isFile f)
+            :let [to (io/file dir (str (.relativize (.toPath src) (.toPath f))))]]
+      (io/make-parents to)
+      (io/copy f to))
+    (is (= [] (filterv #(= :error (:severity %)) (conform/conform (str dir)))))))
+
 (defn- example-with-mayor
   "A copy of orgs/example whose seed holds the org-mayor template,
   filled with `kinds`, as the onboarding seat writes it. → its dir."
@@ -34,7 +45,7 @@
                               {:template "org-mayor"
                                :params {:org "example" :domain "example"
                                         :domain_id [:ref :example] :owner "owner"
-                                        :budget_usd_per_week 8M :kinds kinds}}))))
+                                        :budget_usd_per_week 8M :kinds kinds :wakes []}}))))
     (str dir)))
 
 (deftest the-example-org-conforms-with-its-mayor-in-the-seed
@@ -43,6 +54,12 @@
   (testing "and a mayor naming a kind the org does not serve earns its finding"
     (is (= ["scope/unknown-kind/example-mayor/ticket"]
            (mapv :key (conform/conform (example-with-mayor [{:kind "ticket" :actions []}])))))))
+
+(deftest the-live-report-reads-the-flag-and-the-mayor
+  (is (= {:live_flag false} (conform/live-report "../orgs/example")))
+  (is (= {:live_flag false
+          :mayor {:name "example-mayor" :budget_usd_per_week "8"}}
+         (conform/live-report (example-with-mayor [{:kind "request" :actions []}])))))
 
 (deftest a-broken-org-earns-exactly-its-three-findings
   (let [fs (conform/conform "fixtures/orgs/broken")]
@@ -59,6 +76,17 @@
 (deftest a-seat-above-its-owners-ceiling-earns-one-finding
   (is (= ["scope/outside-owner/clerk/gizmo/finish"]
          (mapv :key (conform/conform "fixtures/orgs/overreach")))))
+
+(deftest an-org-whose-name-is-not-snake-case-earns-a-finding
+  (let [dir (io/file (str (Files/createTempDirectory "orgs" (make-array FileAttribute 0)))
+                     "bad-name")
+        _ (.mkdirs dir)
+        [f] (conform/conform (str dir))]
+    (is (= "org_name_not_snake_case/bad-name" (:key f)))
+    (is (= :error (:severity f)))
+    (is (re-find #"bad-name" (:sentence f))))
+  (is (not-any? #(= :org_name_not_snake_case (:class %))
+                (conform/conform "fixtures/orgs/unmarked"))))
 
 (deftest an-org-with-no-manifest-earns-a-finding-naming-it
   (let [[f] (conform/conform "fixtures/orgs/unmarked")]

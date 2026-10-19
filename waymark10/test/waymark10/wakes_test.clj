@@ -3464,6 +3464,57 @@
         (close-sitting! s)
         (seat-do! seat :retire)))))
 
+;; A fire a pull link holds is a run in flight until a localfire takes
+;; it, however long it waits; once taken, the window runs from the take;
+;; once the keep sweep drops its key, the slot is free. A push fire is
+;; read by its fire alone, for `in-flight-seconds` (ticket 56d104f0).
+
+(deftest an-untaken-pull-fire-holds-its-slot-until-taken-or-dropped
+  (let [seat (seat! "pullslotclerk" {:max_open_sittings 2})
+        st (:storage *eng*)
+        keys! (fn [entries]
+                (store/with-tx st
+                  (fn [tx]
+                    (let [row (store/load-row st tx :seat (str seat)
+                                              {:for-update true})]
+                      (store/update-data! st tx :seat (str seat)
+                                          (assoc (:data row) :fire_keys entries)
+                                          (:next-flip-at row))))))
+        now (Instant/now)
+        at (.plusSeconds now 900)
+        entry (fn [h extra]
+                (merge {:hash h
+                        :expires_at (str (.plusSeconds now 86400))
+                        :fired_at (str now)}
+                       extra))
+        flying #(#'wakes/in-flight *eng* (str seat) at)]
+    (try
+      (testing "a pull fire queued untaken for 15 min still holds one slot of two"
+        (keys! [(entry "pull-one" {:pull_fire "pf-1"})])
+        (is (= 1 (flying))
+            "one slot left, so a second wake fires at most once more"))
+
+      (testing "a push fire's key older than the window holds no slot"
+        (keys! [(entry "pull-one" {:pull_fire "pf-1"})
+                (entry "push-one" {})])
+        (is (= 1 (flying))))
+
+      (testing "once taken, the window runs from the take"
+        (keys! [(entry "pull-one" {:pull_fire "pf-1"
+                                   :taken_at (str (.plusSeconds now 600))})])
+        (is (= 1 (flying)) "taken 300s ago: still on its way to a sit")
+        (keys! [(entry "pull-one" {:pull_fire "pf-1"
+                                   :taken_at (str (.plusSeconds now 200))})])
+        (is (= 0 (flying)) "taken 700s ago: the window has passed"))
+
+      (testing "once the keep sweep drops its key the slot is free"
+        (keys! [(entry "pull-one" {:pull_fire "pf-1"})])
+        (is (= 1 (flying)))
+        (seats/revoke-fire-key! *eng* {:seat (str seat) :hash "pull-one"})
+        (is (= 0 (flying))))
+      (finally
+        (seat-do! seat :retire)))))
+
 ;; A sit that found every row held is stamped `walked_nothing` and stays
 ;; open until the hook closes it with its spend. It holds no slot while
 ;; it waits (ticket cc2f8e7f).

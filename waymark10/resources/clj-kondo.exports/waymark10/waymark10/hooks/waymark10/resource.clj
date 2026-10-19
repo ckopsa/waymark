@@ -14,7 +14,7 @@
 (def top-level-keys
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
     :schema :create-schema :fields :shape :upcasts
-    :flow :actions :create-guards :create-action-names :allow-dead :renames
+    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
@@ -30,7 +30,7 @@
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :engine
-    :out-of-state-says :replay})
+    :out-of-state-says :replay :log-says})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display
