@@ -137,6 +137,14 @@ A 401 from the engine means the pull token differs from `.env`. A
 network error naming `engine` means the network name is wrong:
 `docker network ls` shows compose's.
 
+### localfire on another machine
+
+A laptop, or any machine off compose's network, runs localfire with
+one command and no `localfire.edn`: make a pull link for it, export its
+token as `LOCALFIRE_PULL_TOKEN`, and run
+`localfire pull --engine <engine URL> --link <link id>`. The steps and
+the flags are in `localfire/README.md`, "Run it on a laptop (pull)".
+
 ## 5. The repo kit
 
 The factory tests and orients in the person's repository through what

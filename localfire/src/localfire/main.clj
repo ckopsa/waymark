@@ -1,5 +1,6 @@
 (ns localfire.main
-  "`clojure -M:serve` (R-4.1).
+  "`clojure -M:serve [config.edn]` (R-4.1), or `clojure -M:serve pull
+  --engine <url> --link <id>` with no file (§13).
 
   It does four things and then blocks: read the config, refuse to start
   without a token, name the runs that were in flight at the last stop,
@@ -20,9 +21,16 @@
   (binding [*out* *err*] (println msg))
   (System/exit 2))
 
+(defn- load-config
+  "`localfire pull --engine <url> --link <id>` builds its config from
+  the flags (§13); anything else names an EDN file."
+  [args]
+  (if (= "pull" (first args))
+    (config/normalize (config/pull-config-map (rest args)))
+    (config/load-config (config/config-path args))))
+
 (defn -main [& args]
-  (let [path       (config/config-path args)
-        cfg        (try (config/load-config path)
+  (let [cfg        (try (load-config args)
                         (catch clojure.lang.ExceptionInfo e
                           (die! (str "localfire: " (ex-message e)))))
         token      (config/token)
