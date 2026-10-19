@@ -527,7 +527,8 @@
   (`gate/path-glob-matches?`), or nil."
   [change policy]
   (let [globs (keep #(some-> % str not-empty) (get-in policy [:data :person_paths]))]
-    (when (seq globs)
+    ;; the owner's go_live yes for this head is a person's (`go-live-yeses!`)
+    (when (and (seq globs) (nil? (::go-live-yes change)))
       (some (fn [path]
               (when (some #(gate/path-glob-matches? % path) globs)
                 (str path)))
@@ -1506,7 +1507,7 @@
 (def line-whys
   "Every word `line_why` may carry."
   ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
-   "person"])
+   "person" "org_plan_waits_go_live"])
 
 (def ^:private reason-chars 500)
 
@@ -2087,6 +2088,90 @@
                  "); the next pass tries again")
           false)))))
 
+;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────
+
+(defn- org-plans
+  "Every org_plan in one of `states`, decoded, by the id of the change it
+  names — empty in an engine that declares no org_plan kind."
+  [eng states]
+  (if-some [rd (rdef-of-kind eng :org_plan)]
+    (let [st (:storage eng)]
+      (into {}
+            (keep (fn [raw]
+                    (let [plan (inv/decode-row rd raw)]
+                      (some-> (get-in plan [:data :change]) str not-empty
+                              (vector plan)))))
+            (store/with-tx st
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :org_plan {:state %}
+                                                 {:limit 1000}))
+                      states)))))
+    {}))
+
+(defn- going-live-plans
+  "Every going_live org_plan, decoded, by the id of the change it names."
+  [eng]
+  (org-plans eng ["going_live"]))
+
+(def ^:private go-live-wait-states
+  "Every org_plan state whose pull request merges only on the owner's
+  go_live yes (ticket 7aff6a5c): all but live and retired."
+  ["drafting" "proposed" "simulated" "going_live"])
+
+(defn- go-live-waits
+  "The changes whose pull request an org_plan not yet live names, and
+  that carry no go_live yes (`go-live-yeses!`): change id → that plan.
+  Such a change merges only through go_live — the house does not merge
+  it and no person is asked to (ticket 7aff6a5c). Once its plan is live
+  or retired the change is ordinary again."
+  [eng changes]
+  (let [plans (org-plans eng go-live-wait-states)]
+    (into {}
+          (keep (fn [c]
+                  (let [id (str (:id c))]
+                    (when-some [plan (get plans id)]
+                      (when (nil? (::go-live-yes c)) [id plan])))))
+          changes)))
+
+(defn go-live-wait-reason
+  "What a change waiting on its org_plan's go_live says on its row."
+  [plan]
+  (str "org plan " (:id plan) " is " (some-> (:state plan) name)
+       ": only its owner's go_live merges this pull request"))
+
+(defn- go-live-yeses!
+  "The pass's changes, each whose pull request a going_live org_plan
+  names marked with the owner's go_live yes when its head is the plan's
+  `approved_head`, or one the rig's compare_heads says carries from it:
+  that yes is the person's merge yes, so `person-path` keeps nothing of
+  it for a person and the house merges it with no second ask. Any other
+  head is not merged: the plan's `head_moved` retires the yes and sends
+  it back to simulated."
+  [eng changes]
+  (let [plans (going-live-plans eng)]
+    (mapv (fn [change]
+            (if-some [plan (get plans (str (:id change)))]
+              (let [approved (some-> (get-in plan [:data :approved_head]) str not-empty)
+                    head (some-> (get-in change [:data :head_sha]) str not-empty)]
+                (if (and approved head
+                         (or (= approved head)
+                             (:carries (held/compared
+                                        eng {:repo (str (get-in change [:data :repository]))
+                                             :base (str (get-in change [:data :base_branch]))
+                                             :approved approved :head head}))))
+                  (assoc change ::go-live-yes approved)
+                  (do (try
+                        (inv/invoke! eng :org_plan (str (:id plan)) :head_moved
+                                     {:head_sha (str head)}
+                                     {:principal mirror/source-principal})
+                        (catch Exception e
+                          (warn! "the moved head of " (:id plan) " did not send it back ("
+                                 (ex-message e) "); the next pass tries again")))
+                      change)))
+              change))
+          changes)))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -2113,21 +2198,28 @@
   deployed (`deploy-held`) is offered nothing. With `repos`, a set of
   repository names, the pass works only those repositories: no other
   is offered a merge and no other's marks are written (a woken pass,
-  ticket 26a8d561). Throws nothing.
+  ticket 26a8d561). A change whose pull request a going_live org_plan
+  names merges on the owner's go_live yes (`go-live-yeses!`, ticket
+  c8e131fb); one an org_plan not yet live names is merged by nothing
+  else, and says `org_plan_waits_go_live` (`go-live-waits`, ticket
+  7aff6a5c). Throws nothing.
   → the number of `merge` calls made."
   ([eng seen] (merge-green! eng seen nil))
   ([eng seen repos]
   (let [by-repo (into {} (filter #(in-scope? repos (key %))) (policies-by-repo eng))
         deploy-holds (deploy-held eng by-repo)
-        changes (review-parked-conflicts!
-                 eng seen
-                 (filterv #(in-scope? repos (get-in % [:data :repository]))
-                          (submitted-changes eng)))
+        changes (go-live-yeses!
+                 eng
+                 (review-parked-conflicts!
+                  eng seen
+                  (filterv #(in-scope? repos (get-in % [:data :repository]))
+                           (submitted-changes eng))))
         house? #(some->> (get by-repo (str (get-in % [:data :repository])))
                          (house-merges-change? %))
         holds (merge-holds eng (filter house? changes))
         held (held-changes changes by-repo holds)
-        held-ids (into #{} (map #(str (:id %))) held)
+        waits (go-live-waits eng changes)
+        held-ids (into (set (keys waits)) (map #(str (:id %))) held)
         offered (remove #(held-ids (str (:id %))) changes)
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
@@ -2181,7 +2273,14 @@
                                          {:line_why "held"
                                           :line_reason (held-reason
                                                         (get holds (born-ticket c)))}]))
-                                 held))
+                                 held)
+                           ;; only go_live merges an org's pull request
+                           ;; (ticket 7aff6a5c)
+                           (into {}
+                                 (map (fn [[id plan]]
+                                        [id {:line_why "org_plan_waits_go_live"
+                                             :line_reason (go-live-wait-reason plan)}]))
+                                 waits))
                    changes repos)
       (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
@@ -2427,7 +2526,9 @@
   carries over only when the rig says the house brought it up to date
   from base with its own diff unchanged (ticket abd12627). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
-  a merge hold keeps it. Throws nothing. → the number
+  a merge hold keeps it. No ask is raised for a change an org_plan not
+  yet live names: only the owner's go_live merges it (`go-live-waits`,
+  ticket 7aff6a5c). Throws nothing. → the number
   of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
@@ -2436,6 +2537,9 @@
         person? #(some->> (get by-repo (str (get-in % [:data :repository])))
                           (house-merges-change? %) not)
         holds (merge-holds eng (filter person? changes))
+        ;; the owner's go_live yes is this pull request's ask (M2e,
+        ;; ticket 7aff6a5c)
+        waits (go-live-waits eng changes)
         raised (volatile! 0)
         clean (volatile! {})]
     (doseq [change changes
@@ -2444,6 +2548,7 @@
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
+                       (not (contains? waits id))
                        (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))

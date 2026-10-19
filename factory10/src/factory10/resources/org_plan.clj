@@ -10,8 +10,9 @@
 
   THE MACHINE IS THE WALK. drafting → proposed (the pull request is
   up and no error finding is open) → simulated (a film of the org's
-  first week is attached) → live (merged, and its mayor sits). Any of
-  them may be retired, by the owner.
+  first week is attached) → going_live (the owner allowed the merge of
+  one head) → live (merged, and its mayor sits). Any of them may be
+  retired, by the owner.
 
   `findings` IS WRITTEN BY ONE DOOR, `record_findings` (ticket
   5d62058e, M2b). After each push to the org's branch the audit's run
@@ -28,11 +29,20 @@
   raised and let the audit run again.
 
   A RED FILM REOPENS THE PLAN (ticket d52abbf2, for M3d). A film's red
-  rules land on a `proposed` plan as findings through
+  rules land on a `filming` plan as findings through
   `record_film_findings`, the engine's hand on the judge's answer, and
   move it back to `drafting`: they join the audit's findings, replacing
   any with the same key, so the walk reopens on them and propose stays
   shut until a later run no longer finds them.
+
+  THE DIRECTOR HANDS IN THE FILM; THE ENGINE JUDGES IT (ticket
+  e552de65). The director seat films a proposed plan's head on a clone
+  and hands in the film and its take report through `hand_in_film`,
+  which keeps the take, moves the plan to `filming` and decides
+  nothing. The forge's film pass,
+  the engine's hand, judges the take against the film rules once and
+  lands it through `attach_film` or `record_film_findings`; both are
+  the engine's doors alone.
 
   THE WALK IS THE FINDINGS, IN A FIXED ORDER (ticket f64c9ce1, M2c).
   The onboarding walk is a computed `next_step` on the plan, not a
@@ -57,7 +67,20 @@
   person who owns the plan, so only that person answers it, or an
   agent acting for them whose answer is held for their tap. `go_live`
   is the one tap: an agent's go_live is HELD, and the owner's Allow
-  runs it. The merge and the mayor's sitting behind it are M2e's.
+  runs it.
+
+  THE ONE TAP IS THE MERGE'S YES (ticket c8e131fb, M2e). The flip
+  happens on the branch before the tap: the onboarding seat sets
+  `:live true` in the org's org.edn, and the audit's run reports it as
+  `live_flag`, with the `mayor` the seed seats, for that head. go_live
+  is refused `not-flipped` until the latest head says live; its held
+  call names the org, the mayor and the budget; and the Allow writes
+  `approved_head` and moves the plan to going_live. The house's merge
+  pass takes that yes as the person's for that head (factory10.bench),
+  and a moved head sends the plan back to simulated through
+  `head_moved`. `mark_live` is the engine's step to live: the pass in
+  `factory10.org-live` takes it once the house serves the org's domain
+  and its mayor's seat is active there, and writes `mayor_seat`.
 
   A PLAN CAN BE A HIRE PLAN (ticket 78f11fa7, M4a). `purpose` is
   `found` (the plan that stands an org up; a plan born before the field
@@ -122,7 +145,7 @@
 (def ^:private standing-hire-states
   "The states a hire plan blocks another for its gap in. A retired or
   live one does not."
-  #{"drafting" "proposed" "simulated"})
+  #{"drafting" "proposed" "filming" "simulated" "going_live"})
 
 (defn hire-brief
   "The hire plan's brief: one sentence written from its gap."
@@ -147,14 +170,14 @@
           (store/with-tx st
             (fn [tx]
               (mapcat #(store/query-rows st tx :org_plan {:state %} {:limit 1000})
-                      ["live" "drafting" "proposed" "simulated"]))))))
+                      ["live" "drafting" "proposed" "filming" "simulated" "going_live"]))))))
 
 (defn open-hire!
   "The engine opens a hire plan for the org `name` on one `gap`. →
   inv/create!'s answer, or {:refused <reason> :why <sentence>}:
   `engine_only` when the hand is not the engine's, `no_live_org` when
   the org has no live found plan, and `hire_open` when a hire plan for
-  the same gap key stands in drafting, proposed or simulated. The plan
+  the same gap key stands in drafting, proposed, filming or simulated. The plan
   is born in drafting with the live plan's owner and directory, and
   the brief written from the gap."
   [eng {org :name gap :gap} {:keys [principal] :as opts}]
@@ -224,6 +247,8 @@
   [findings]
   (first (walk-steps (filter #(= "error" (str (:severity %))) findings))))
 
+(defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
+
 ;; ── the doors' writes ───────────────────────────────────────────────
 
 (defhandler ask-the-owner [row inp _ctx]
@@ -249,14 +274,28 @@
     (some? (:change inp)) (assoc-in [:data :change] (:change inp))
     (some? (:law_page inp)) (assoc-in [:data :law_page] (:law_page inp))))
 
-(defhandler attach-the-film [row inp _ctx]
-  (assoc-in row [:data :film_url] (:film_url inp)))
+(defhandler hand-in-the-film [row inp _ctx]
+  ;; The director's take, kept for the engine's film pass to judge. It
+  ;; decides nothing; a new take is judged anew.
+  (-> row
+      (assoc-in [:data :take_film_url] (:film_url inp))
+      (assoc-in [:data :take_report] (:take_report inp))
+      (assoc-in [:data :take_sha] (:head_sha inp))
+      (assoc-in [:data :take_landed_at] nil)))
+
+(defhandler attach-the-film [row inp ctx]
+  ;; The take is landed: the film pass does not judge it again.
+  (-> row
+      (assoc-in [:data :film_url] (:film_url inp))
+      (assoc-in [:data :take_landed_at] (:now ctx))))
 
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
   ;; same on every run, so an unchanged finding keeps its key; a
   ;; question whose finding is gone is resolved, once. The walk's next
   ;; step moves only here, so a step closes when its finding clears.
+  ;; The run also says whether org.edn is live at its head and who the
+  ;; mayor is (M2e): a run that says nothing is not flipped.
   (let [found (vec (:findings inp))
         open (into #{} (map :key) found)
         closed? #(and (some? (:finding_key %))
@@ -265,6 +304,8 @@
     (cond-> (-> row
                 (assoc-in [:data :findings] found)
                 (assoc-in [:data :findings_sha] (:head_sha inp))
+                (assoc-in [:data :live_flag] (true? (:live_flag inp)))
+                (assoc-in [:data :mayor] (:mayor inp))
                 (assoc-in [:data :next_step] (next-step found)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
@@ -274,7 +315,7 @@
                    (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
                          qs))))))
 
-(defhandler record-the-film-findings [row inp _ctx]
+(defhandler record-the-film-findings [row inp ctx]
   ;; A red film's rules join the audit's findings, a key the film shares
   ;; with one already on the plan replacing it, and the walk's next step
   ;; moves to them. The next audit run replaces them all, as ever.
@@ -286,11 +327,40 @@
     (-> row
         (assoc-in [:data :findings] found)
         (assoc-in [:data :findings_sha] (:head_sha inp))
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :next_step] (next-step found))
+        (assoc-in [:data :take_landed_at] (:now ctx)))))
 
 (defhandler retire-the-plan [row inp _ctx]
   ;; A retired plan says why, because nothing departs `retired`.
   (assoc-in row [:data :retired_why] (:why inp)))
+
+(defhandler approve-the-head [row _inp _ctx]
+  ;; The owner's yes is for the head the audit last read: the house's
+  ;; merge pass merges that head, or one the rig says carries from it.
+  (assoc-in row [:data :approved_head] (get-in row [:data :findings_sha])))
+
+(defhandler seat-the-mayor [row inp _ctx]
+  ;; The org is live because its mayor sits: the plan names that seat.
+  (cond-> row
+    (some? (:mayor_seat inp)) (assoc-in [:data :mayor_seat] (:mayor_seat inp))))
+
+(defhandler the-head-moved [row inp _ctx]
+  ;; The yes is retired, and the moved head is a finding the next run
+  ;; at that head replaces.
+  (let [moved {:key "head_moved" :severity "error" :class "merge"
+               :subject "pull request"
+               :sentence (str "The pull request's head moved to " (short-sha (:head_sha inp))
+                              " after the owner allowed "
+                              (short-sha (get-in row [:data :approved_head]))
+                              ", so it was not merged.")
+               :remedy "Let the audit read the new head, then ask go_live again: the owner's yes names the head it merges."}
+        found (conj (vec (remove #(= "head_moved" (str (:key %)))
+                                 (get-in row [:data :findings])))
+                    moved)]
+    (-> row
+        (assoc-in [:data :approved_head] nil)
+        (assoc-in [:data :findings] found)
+        (assoc-in [:data :next_step] (next-step found)))))
 
 ;; ── the walls ───────────────────────────────────────────────────────
 
@@ -324,16 +394,34 @@
     (holds/approved-hold? ctx :org_plan :answer (:id row)) (t/allow)
     :else (t/deny)))
 
+(defguardfn not-flipped
+  {:reads []
+   :explain "The org's branch does not say it is live: org.edn's :live is not true at the head the audit last read, so there is nothing to merge yet."
+   :open "Set :live true in the org's org.edn on the plan's branch, push, and let the audit run again."}
+  [row _inp _ctx]
+  (if (true? (get-in row [:data :live_flag])) (t/allow) (t/deny)))
+
+(defn- go-live-vars
+  "What the owner reads in go_live's held call: the org, its mayor and
+  the mayor's weekly budget, and the head the Allow merges."
+  [row]
+  (let [d (:data row)]
+    {:org (str (:name d))
+     :mayor (or (some-> (get-in d [:mayor :name]) str not-empty) "unnamed")
+     :budget (or (some-> (get-in d [:mayor :budget_usd_per_week]) str not-empty) "?")
+     :head (short-sha (:findings_sha d))}))
+
 (defguardfn only-a-person-goes-live
   {:reads [:principal :within]
    :hold true
-   :explain "Going live merges the org and seats its mayor, so it is the owner's one tap: an agent's go_live is held as a held_call, and the owner's Allow runs it exactly as written."
-   :open "No door clears this one. The call waits as a held_call for the owner's tap."}
+   :vars [:org :mayor :budget :head]
+   :explain "Make {org} live? Its mayor {mayor} will sit at ${budget}/week. Allow merges the org's pull request at {head}."
+   :open "No door clears this one. The call waits as a held_call for the owner's tap, and the owner's Allow runs it exactly as written."}
   [row _inp ctx]
   (cond
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
-    :else (t/deny)))
+    :else (t/deny {:vars (go-live-vars row)})))
 
 (defguardfn the-engine-records-the-findings
   {:reads [:principal]
@@ -382,6 +470,12 @@
    :sentence "No one approves a quote over $5k."
    :remedy "Name who approves a quote over $5k."})
 
+(def ^:private a-flipped-plan
+  (assoc a-plan :film_url "https://example.com/greenleaf.mp4"
+         :findings_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
+         :live_flag true
+         :mayor {:name "greenleaf-mayor" :budget_usd_per_week "8"}))
+
 (defscenario an-open-error-keeps-the-plan-down
   "A plan the audit says is broken does not go up as a pull request."
   {:kind    :org_plan
@@ -425,7 +519,7 @@
   {:kind    :org_plan
    :attempt :go_live
    :row     {:state :simulated
-             :data (assoc a-plan :film_url "https://example.com/greenleaf.mp4")}
+             :data a-flipped-plan}
    :as      {:id "onboarding" :type :agent}
    :expect  {:refused :only-a-person-goes-live}})
 
@@ -434,9 +528,18 @@
   {:kind    :org_plan
    :attempt :go_live
    :row     {:state :simulated
-             :data (assoc a-plan :film_url "https://example.com/greenleaf.mp4")}
+             :data a-flipped-plan}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
+
+(defscenario an-unflipped-org-does-not-go-live
+  "Nothing goes live until the org's branch says so: org.edn's :live is
+   true at the head the audit last read."
+  {:kind    :org_plan
+   :attempt :go_live
+   :row     {:state :simulated :data (assoc a-flipped-plan :live_flag false)}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :not-flipped}})
 
 ;; ── :org_plan ───────────────────────────────────────────────────────
 
@@ -469,12 +572,42 @@
    [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
    [:key [:string {:min 1 :max 200}]]])
 
+(def ^:private mayor-schema
+  [:map
+   [:name [:string {:min 1 :max 64}]]
+   [:budget_usd_per_week {:optional true} [:maybe [:string {:max 32}]]]])
+
+(def ^:private findings-input
+  "What the audit's run hands every findings door: the head, its
+  findings and law page, and what go_live reads (M2e): whether org.edn
+  says live at that head, and the mayor the seed seats."
+  [:map
+   [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+               :x-display {:hidden true :raw true
+                           :label "The head commit"}}
+    [:string {:min 7 :max 64}]]
+   [:findings {:x-display {:hidden true
+                           :label "The run's findings"}}
+    [:vector {:max 200} finding-schema]]
+   [:law_page {:optional true
+               :x-display {:hidden true
+                           :label "The run's law page"}}
+    [:maybe [:string {:max 40000}]]]
+   [:live_flag {:optional true
+                :x-display {:hidden true
+                            :label "The branch says live"}}
+    [:maybe :boolean]]
+   [:mayor {:optional true
+            :x-display {:hidden true
+                        :label "The seed's mayor"}}
+    [:maybe mayor-schema]]])
+
 (defresource org-plan
   {:kind :org_plan
    :plural "org_plans"
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
-   :states [:drafting :proposed :simulated :live :retired]
+   :states [:drafting :proposed :filming :simulated :going_live :live :retired]
    :initial :drafting
    :terminal #{:retired}
    ;; THE CRACKS LAW. At `simulated` the onboarding seat's go_live is
@@ -484,8 +617,16 @@
             :waiter "the onboarding seat, whose go_live waits on the owner's tap"
             :outcomes {:done :release :refused :return
                        :failed :return :expired :return}}]
-   :left-by [{:in #{:simulated} :by :engine :via :go_live :to :live}]
-   :expected-age {:drafting 86400 :proposed 21600 :simulated 604800}
+   ;; At `filming` the forge's film pass holds the next move: it judges
+   ;; the director's take and lands it (ticket e552de65).
+   :left-by [{:in #{:simulated} :by :engine :via :go_live :to :going_live}
+             {:in #{:going_live} :by :engine :via :mark_live :to :live}
+             {:in #{:going_live} :by :engine :via :head_moved :to :simulated}
+             {:in #{:filming} :by :engine :via :attach_film :to :simulated}
+             {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}]
+   ;; going_live waits a day at most on the merge and the mayor's seat
+   :expected-age {:drafting 86400 :proposed 21600 :filming 3600 :simulated 604800
+                  :going_live 86400}
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
    :display {:title "{data.name}"}
@@ -525,6 +666,31 @@
                      :label "Audited at"
                      :help "The head commit of the org's branch the findings were found on."}}
      [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS, for that head (M2e)
+    [:live_flag {:optional true
+                 :x-display
+                 {:label "The branch says live"
+                  :help "Whether the org's org.edn says :live true at the head the audit last read. go_live waits until it does."}}
+     [:maybe :boolean]]
+    [:mayor {:optional true
+             :x-display
+             {:label "The mayor"
+              :help "The mayor the org's seed seats, and its weekly budget, as the audit last read them."}}
+     [:maybe mayor-schema]]
+    ;; WRITTEN ONLY BY go_live: the head the owner's yes merges
+    [:approved_head {:optional true
+                     :x-display
+                     {:raw true
+                      :label "Allowed at"
+                      :help "The head of the org's branch the owner's go_live allowed: the house merges the pull request at that head, and no other."}}
+     [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY mark_live: the seat the live org's mayor sits in (M2e-4)
+    [:mayor_seat {:optional true
+                  :x-display
+                  {:raw true
+                   :label "Its mayor's seat"
+                   :help "The seat the org's mayor sits in, in the org's own domain: the engine writes it when it marks the org live."}}
+     [:maybe [:string {:max 64}]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
     [:next_step {:optional true
                  :x-display
@@ -553,6 +719,32 @@
                  :label "The film"
                  :help "The film of the org's simulated first week, for the owner to watch before going live."}}
      [:maybe [:string {:max 500}]]]
+    ;; WRITTEN BY hand_in_film: the director's take, which the engine's
+    ;; film pass judges once (ticket e552de65)
+    [:take_film_url {:optional true
+                     :x-display
+                     {:raw true
+                      :label "The film handed in"
+                      :help "The film the director handed in, before the film rules judged it."}}
+     [:maybe [:string {:max 500}]]]
+    [:take_report {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The take report"
+                    :help "The report of the film handed in, as JSON: what the film rules judge."}}
+     [:maybe [:string {:max 40000}]]]
+    [:take_sha {:optional true
+                :x-display
+                {:raw true
+                 :label "Filmed at"
+                 :help "The head commit of the org's branch the film handed in was made at."}}
+     [:maybe [:string {:max 64}]]]
+    ;; WRITTEN BY attach_film and record_film_findings: the take is landed
+    [:take_landed_at {:optional true
+                      :x-display
+                      {:label "The take landed"
+                       :help "When the engine judged the film handed in and landed it. Empty while it waits to be judged."}}
+     [:maybe :waymark/instant]]
     [:retired_why {:optional true
                    :x-display
                    {:label "Why it was retired"
@@ -650,8 +842,36 @@
      :display {:label "Propose" :order 3
                :description "Put the plan up as a pull request"}}
 
+    ;; THE DIRECTOR'S HAND-IN (ticket e552de65). It keeps the take and
+    ;; decides nothing: the plan waits in `filming` for the engine's film
+    ;; pass to judge it and land it.
+    :hand_in_film
+    {:from #{:proposed} :to :filming
+     :handler hand-in-the-film
+     :input [:map
+             [:film_url {:x-display {:raw true :label "The film"
+                                     :help "Where the film of the org's simulated first week is served."}}
+              [:string {:min 1 :max 500}]]
+             [:take_report {:examples ["{\"film\": {\"chrome_leaks\": 0, \"dead_air_s\": 0.4}}"]
+                            :x-display {:raw true :label "The take report"
+                                        :help "The film's take report, as JSON, as the tool that filmed it wrote it: the film rules judge it."}}
+              [:string {:min 2 :max 40000}]]
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:raw true :label "The filmed commit"
+                                     :help "The head commit of the org's branch the film was made at."}}
+              [:string {:min 7 :max 64}]]]
+     ;; :edit-shape — a take replaces the last one, nobody edits it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take is the engine's to judge: the plan waits in filming until the film pass lands it."}
+     :display {:label "Hand in the film" :order 10
+               :description "Hand in the film of the plan's head and its take report, for the engine to judge"}}
+
+    ;; THE ENGINE'S HAND ALONE (ticket e552de65): the film pass lands a
+    ;; green take here, as record_film_findings takes a red one.
     :attach_film
-    {:from #{:proposed} :to :simulated
+    {:from #{:filming} :to :simulated
+     :guards [the-engine-records-the-findings]
      :handler attach-the-film
      :input [:map
              [:film_url {:x-display {:raw true :label "The film"
@@ -670,18 +890,7 @@
     {:from #{:drafting} :to :drafting
      :guards [the-engine-records-the-findings]
      :handler record-the-findings
-     :input [:map
-             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
-                         :x-display {:hidden true :raw true
-                                     :label "The head commit"}}
-              [:string {:min 7 :max 64}]]
-             [:findings {:x-display {:hidden true
-                                     :label "The run's findings"}}
-              [:vector {:max 200} finding-schema]]
-             [:law_page {:optional true
-                         :x-display {:hidden true
-                                     :label "The run's law page"}}
-              [:maybe [:string {:max 40000}]]]]
+     :input findings-input
      ;; :edit-shape — a run replaces the findings, nobody edits them
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
@@ -695,29 +904,32 @@
     {:from #{:proposed} :to :proposed
      :guards [the-engine-records-the-findings]
      :handler record-the-findings
-     :input [:map
-             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
-                         :x-display {:hidden true :raw true
-                                     :label "The head commit"}}
-              [:string {:min 7 :max 64}]]
-             [:findings {:x-display {:hidden true
-                                     :label "The run's findings"}}
-              [:vector {:max 200} finding-schema]]
-             [:law_page {:optional true
-                         :x-display {:hidden true
-                                     :label "The run's law page"}}
-              [:maybe [:string {:max 40000}]]]]
+     :input findings-input
      ;; :edit-shape — a run replaces the findings, nobody edits them
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Findings recorded while proposed" :order 9
                :description "The audit's run writes what it found on a proposed plan's branch"}}
 
+    ;; AFTER THE FILM (M2e). The onboarding seat's flip of org.edn is a
+    ;; push to a simulated plan's branch: its run lands here, and says
+    ;; whether the head go_live would merge is live.
+    :record_findings_simulated
+    {:from #{:simulated} :to :simulated
+     :guards [the-engine-records-the-findings]
+     :handler record-the-findings
+     :input findings-input
+     ;; :edit-shape — a run replaces the findings, nobody edits them
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Findings recorded while simulated" :order 12
+               :description "The audit's run writes what it found on a simulated plan's branch"}}
+
     ;; A RED FILM (ticket d52abbf2). The film is judged while the plan is
     ;; up; a red rule is a finding, and the plan goes back to drafting
     ;; with it. The engine's hand alone, as record_findings is.
     :record_film_findings
-    {:from #{:proposed} :to :drafting
+    {:from #{:filming} :to :drafting
      :guards [the-engine-records-the-findings]
      :handler record-the-film-findings
      :input [:map
@@ -734,17 +946,53 @@
      :display {:label "Film findings recorded" :order 8
                :description "The film's red rules reopen the plan to drafting"}}
 
-    ;; THE ONE TAP. The merge and the mayor behind it are M2e's.
+    ;; THE ONE TAP (M2e). The owner's yes is the merge's: the house
+    ;; merges the plan's pull request at the approved head.
     :go_live
-    {:from #{:simulated} :to :live
-     :guards [only-a-person-goes-live only-the-owner-decides]
+    {:from #{:simulated} :to :going_live
+     :guards [not-flipped only-a-person-goes-live only-the-owner-decides]
+     :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The org is live: it is merged and its mayor sits. The way back is retire."}
+              :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
      :display {:label "Go live" :order 5
                :description "Merge to make it real"}}
 
+    ;; THE ENGINE'S STEP TO LIVE, once the org's domain and its mayor's
+    ;; seat stand (M2e-4's pass takes it). The engine's hand alone.
+    :mark_live
+    {:from #{:going_live} :to :live
+     :guards [the-engine-records-the-findings]
+     :handler seat-the-mayor
+     :input [:map
+             [:mayor_seat {:optional true
+                           :x-display {:hidden true :raw true
+                                       :label "The mayor's seat"}}
+              [:string {:min 1 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The org is live: it is merged and its mayor sits. The way back is retire."}
+     :display {:label "Live" :order 10
+               :description "The engine marks the merged org live"}}
+
+    ;; A HEAD THE OWNER DID NOT ALLOW. The house's merge pass does not
+    ;; merge it: the yes is retired, and the plan is simulated again.
+    :head_moved
+    {:from #{:going_live} :to :simulated
+     :guards [the-engine-records-the-findings]
+     :handler the-head-moved
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The moved head"}}
+              [:string {:min 7 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The owner's yes is retired: the plan is simulated again, with the moved head among its findings."}
+     :display {:label "Head moved" :order 11
+               :description "The pull request's head moved after the owner's yes"}}
+
     :retire
-    {:from #{:drafting :proposed :simulated :live} :to :retired
+    {:from #{:drafting :proposed :filming :simulated :going_live :live} :to :retired
      :guards [only-the-owner-decides]
      :handler retire-the-plan
      :input [:map
@@ -761,4 +1009,5 @@
                the-owner-answers
                a-stranger-does-not-answer
                an-agent-does-not-go-live-alone
-               the-owner-goes-live]})
+               the-owner-goes-live
+               an-unflipped-org-does-not-go-live]})

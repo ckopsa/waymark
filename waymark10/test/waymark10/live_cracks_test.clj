@@ -534,3 +534,32 @@
       (live/pass! eng)
       (is (= 1 (count (filed-for eng row-id))))
       (is (empty? (fires-of eng seat-id))))))
+
+(deftest a-pull-link-away-a-day-with-a-fire-due-is-filed-once
+  (let [link (fn [seen]
+               {:id "link-1" :state :live :created-at (ago 999999)
+                :data (cond-> {:delivery "pull" :provider "localfire" :owner "sam"}
+                        seen (assoc :puller_seen_at (str seen)))})
+        due {:id "sched-1" :state :live :data {:retry_after (str now)}}
+        idle {:id "sched-2" :state :live :data {}}
+        world (fn [l sched]
+                {:rdefs [] :seats [] :rows {} :links [l]
+                 :pools {"s1" ["link-1"]} :schedules {"s1" sched} :now now})
+        cracks (fn [w] (of (live/find-cracks w) "puller_away"))]
+    (testing "a day away with a fire due is one crack naming the link, its owner and when"
+      (let [[c :as cs] (cracks (world (link (ago 90000)) due))]
+        (is (= 1 (count cs)))
+        (is (= ["runner_link" "link-1"] ((juxt :kind :id) c)))
+        (is (str/includes? (:what c) "sam"))
+        (is (str/includes? (:what c) (str (ago 90000))))))
+    (testing "never connected, the link a day old, is a crack too"
+      (is (= 1 (count (cracks (world (link nil) due))))))
+    (testing "an hour away, or no fire due, is none"
+      (is (empty? (cracks (world (link (ago 3600)) due))))
+      (is (empty? (cracks (world (link (ago 90000)) idle)))))
+    (testing "the same absence is not filed twice"
+      (let [w (world (link (ago 90000)) due)
+            [c] (live/unfiled (live/find-cracks w) [])
+            filed {:id "t" :state :draft :data (live/ticket-of c)}]
+        (is (= "puller_away" (:crack c)))
+        (is (empty? (of (live/unfiled (live/find-cracks w) [filed]) "puller_away")))))))

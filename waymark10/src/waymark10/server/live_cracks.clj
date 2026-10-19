@@ -1,7 +1,7 @@
 (ns waymark10.server.live-cracks
   "The live cracks audit (ticket 26e51658, part 2 of epic 400609cf): a
   scheduled pass over ROWS, where `waymark10.server.cracks` reads
-  declarations. It names five ways work has stopped with nobody told:
+  declarations. It names six ways work has stopped with nobody told:
 
   aged          a row whose state has an expected age and that no
                 write has touched for longer
@@ -12,6 +12,9 @@
                 cut short on one guard
   orphan        a change open or submitted whose ticket is done or
                 dropped
+  puller_away   a pull runner link whose localfire has been away a day
+                while a seat on it has a fire due (LP2). No seat can
+                end it, so it goes to the mayor naming the link's owner
 
   Each is filed ONCE, as a draft ticket naming the row, the crack and
   the seats the static audit says can move it (`cracks/movers`). The
@@ -284,7 +287,7 @@
   "The most row ids one hiring gap names, oldest first."
   20)
 
-(defn- row-domain
+(defn row-domain
   "The name of the domain a row is in: its stored `domain`, or what its
   kind's declaration says an absent one counts as, or nil."
   [rdef row]
@@ -461,15 +464,61 @@
             :what (str "It is " state " and the ticket it was born from, " tid
                        ", is " tstate ": nothing will merge or close it.")})))
 
+(def ^:private away-seconds
+  "How long a pull link's localfire may stay away, while a seat on it has
+  a fire due, before the mayor hears of it (LP2)."
+  86400)
+
+(defn- fire-due?
+  "Does this schedule hold a fire that has not gone out: a wake waiting,
+  or a throttle's retry still set?"
+  [sched]
+  (boolean (and sched
+                (or (true? (get-in sched [:data :wake_pending]))
+                    (some? (inst (get-in sched [:data :retry_after])))))))
+
+(defn away-links
+  "puller_away: a live pull link whose localfire was last seen more than
+  `away-seconds` ago — or never, and the link is that old — while a seat
+  whose pool holds it has a fire due. `links` are the live pull links,
+  `pools` seat id → the link ids its fire goes out through
+  (`schedules/pool-of`), `schedules` seat id → its schedule row. The key
+  carries when the link was last seen, so one absence is filed once and
+  the next absence again."
+  [links pools schedules now]
+  (for [link links
+        :let [id (str (:id link))
+              seen (inst (get-in link [:data :puller_seen_at]))
+              from (or seen (inst (:created-at link)))
+              owner (some-> (get-in link [:data :owner]) str not-empty)
+              due (sort (keep (fn [[seat-id ids]]
+                                (when (and (some #{id} (map str ids))
+                                           (fire-due? (get schedules seat-id)))
+                                  seat-id))
+                              pools))]
+        :when (and from (seq due) (past? from away-seconds now))]
+    (crack "puller_away" :runner_link id
+           {:key (str "puller_away:runner_link:" id ":" (if seen (str seen) "never"))
+            :state (text (:state link))
+            :since (some-> seen str)
+            :owner owner
+            :seats [(if owner (str "the link's owner, " owner) "nobody: a house link")]
+            :what (str "The pull link " id " has had no localfire "
+                       (if seen (str "since " seen) "since it was made: it never connected")
+                       ", and a fire is due for the seat(s) " (str/join ", " due)
+                       ". Its owner is " (or owner "nobody (a house link)")
+                       "; the fire waits until a localfire on their machine asks for it.")})))
+
 (defn find-cracks
   "Every live crack in a world of rows, in a stable order. The world:
-  :rdefs, :seats (the ACTIVE seat rows), :rows (kind → rows),
+  :rdefs, :seats (the ACTIVE seat rows), :rows (kind → rows), :links
+  (the live pull runner links), :pools (seat id → its pool's link ids),
   :schedules (seat id → schedule row), :sittings (seat id → closed
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
   tickets), :withheld (seat id → the walk row ids its sit would not
   hand) and :now."
-  [{:keys [rdefs seats rows schedules sittings shelvings tickets withheld now]}]
+  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
@@ -478,7 +527,8 @@
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
                   (map #(to-its-holder by-kind seats rows tickets %)
-                       (orphans (:change by-kind) seats (:change rows) tickets))))))
+                       (orphans (:change by-kind) seats (:change rows) tickets))
+                  (away-links links pools schedules now)))))
 
 (defn- marker
   "The line a crack's ticket ends in, and what a later pass looks for."
@@ -589,6 +639,13 @@
   [eng]
   (let [resources (inv/resources eng)
         seat-rows (rows-in eng :seat {:state :active} {})
+        scheds (if (serves? eng :schedule)
+                 (into {}
+                       (keep (fn [seat]
+                               (when-some [s (schedules/schedule-for-seat eng (:id seat))]
+                                 [(str (:id seat)) s])))
+                       seat-rows)
+                 {})
         whole (into #{:ticket :change}
                     (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
                     seat-rows)
@@ -611,13 +668,16 @@
     {:rdefs (vec (vals resources))
      :seats seat-rows
      :rows rows
-     :schedules (if (serves? eng :schedule)
-                  (into {}
-                        (keep (fn [seat]
-                                (when-some [s (schedules/schedule-for-seat eng (:id seat))]
-                                  [(str (:id seat)) s])))
-                        seat-rows)
-                  {})
+     :schedules scheds
+     :links (into []
+                  (filter #(= "pull" (some-> (get-in % [:data :delivery]) text)))
+                  (rows-in eng :runner_link {:state :live} {}))
+     :pools (into {}
+                  (keep (fn [seat]
+                          (let [s (get scheds (str (:id seat)))]
+                            (when-some [ids (when s (seq (schedules/pool-of eng s seat)))]
+                              [(str (:id seat)) (mapv str ids)]))))
+                  seat-rows)
      :sittings (into {}
                      (map (fn [seat]
                             [(str (:id seat))
