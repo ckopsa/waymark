@@ -16,7 +16,7 @@
   tapped. Where a kind is not known, the kind's own law is not judged.
 
   A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
-  `{\"$rows\": {kind, since, until, field, none}}` and
+  `{\"$rows\": {kind, since, until, field, terminal, count, none}}` and
   `{\"$moves\": {kind, since, until, by, none}}` holes, and
   `{\"$day\": {since, until, domain, none}}`. `check` judges each hole;
   the performer fills it when the shot plays (`fill-say`), from the rows
@@ -403,10 +403,15 @@
 (defn- hole-problem
   "Why one `$rows` hole cannot be filled; nil when it can."
   [h rdef-of]
-  (or (window-problem "$rows" ["kind" "since" "until" "field" "none"] h rdef-of)
+  (or (window-problem "$rows" ["kind" "since" "until" "field" "terminal" "count" "none"]
+                      h rdef-of)
       (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
         (str (tick (get h "field")) " is not a field a hole reads; the fields are "
-             (str/join ", " hole-fields) "."))))
+             (str/join ", " hole-fields) "."))
+      (some (fn [k]
+              (when (and (contains? h k) (not (boolean? (get h k))))
+                (str "a `$rows` hole's `" k "` is true or false.")))
+            ["terminal" "count"])))
 
 (defn- moves-problem
   "Why one `$moves` hole cannot be filled; nil when it can."
@@ -456,8 +461,10 @@
   "A shot's `say` as the film speaks it. A string stays as written; a
   list is joined, each `$rows` hole replaced by the summary lines of the
   rows `rows-of` answers for it, joined with `; `, or by its `none`
-  (`nothing came in` unless it names one) when there are none. `rows-of`
-  is a fn of {:kind :since :until :field} to summary lines; the performer
+  (`nothing came in` unless it names one) when there are none; with
+  `count` true, by how many rows there are instead, and with `terminal`
+  true it reads only rows in a terminal state. `rows-of` is a fn of
+  {:kind :since :until :field :terminal} to summary lines; the performer
   passes `rows-in-window` over the scene's clone. Each `$moves` hole is
   replaced the same way by the lines `moves-of` answers, a fn of
   {:kind :since :until :by} (`moves-in-window`), or by its `none`
@@ -477,11 +484,14 @@
        (apply str
               (for [part say]
                 (if-some [h (hole-of part)]
-                  (spoken (rows-of {:kind (str (get h "kind"))
-                                    :since (instant-of (get h "since"))
-                                    :until (instant-of (get h "until"))
-                                    :field (get h "field" "created_at")})
-                          h nothing)
+                  (let [lines (rows-of {:kind (str (get h "kind"))
+                                        :since (instant-of (get h "since"))
+                                        :until (instant-of (get h "until"))
+                                        :field (get h "field" "created_at")
+                                        :terminal (true? (get h "terminal"))})]
+                    (if (true? (get h "count"))
+                      (str (count lines))
+                      (spoken lines h nothing)))
                   (if-some [h (moves-hole-of part)]
                     (spoken (moves-of {:kind (str (get h "kind"))
                                        :since (instant-of (get h "since"))
@@ -497,11 +507,14 @@
 
 (defn rows-in-window
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
-  (created_at, or updated_at) falls in [since, until), oldest first.
+  (created_at, or updated_at) falls in [since, until), oldest first;
+  with `terminal`, only those in one of the kind's terminal states.
   None for a kind the engine does not serve."
-  [eng {:keys [kind since until field]}]
+  [eng {:keys [kind since until field terminal]}]
   (let [st (:storage eng)
         rdef (get (inv/resources eng) (keyword kind))
+        ended (into #{} (map name) (:terminal rdef))
+        ended? (fn [row] (or (not terminal) (contains? ended (some-> (:state row) name))))
         at (if (= "updated_at" field) :updated-at :created-at)
         within? (fn [row]
                   (let [t (get row at)]
@@ -514,6 +527,7 @@
         (fn [tx]
           (->> (store/query-rows st tx (keyword kind) {} {})
                (filter within?)
+               (filter ended?)
                (sort-by #(inst-ms (get % at)))
                (mapv #(summary/line rdef (assoc (inv/decode-row rdef %)
                                                 :kind (:kind rdef))))))))))
