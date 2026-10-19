@@ -116,6 +116,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
@@ -682,6 +683,77 @@
                :x-display {:label "Zone" :help "The time zone the times are read in, e.g. America/Denver; UTC when empty."}}
         [:maybe [:string {:max 64}]]]]]]]])
 
+;; ── an agent's invite waits on its person (HC3, ticket a052edca) ────
+;;
+;; An agent proposes an invite (a member create with `invite` true);
+;; it is its manager person's to make. The call waits as a held_call,
+;; and the person's Allow replays it AS THE PERSON
+;; (held-calls/door-principal): the engine mints the token, the
+;; invitee's grant is born beside the row, and the sign-in link rides
+;; the person's Allow answer alone (held-calls/after-allow!).
+
+(defn- invite-holder
+  "The person an agent's invite waits on, or nil: the agent's person
+  (delegation/hold-owner) when that person holds the manager role.
+  Only an agent's create with `invite` true is asked."
+  [inp ctx]
+  (when (and (true? (:invite inp))
+             (= :agent (get-in ctx [:principal :type])))
+    (when-some [owner (delegation/hold-owner ctx)]
+      (when (roles/manager?
+             (assoc ctx :principal (t/principal {:id owner :display owner})))
+        owner))))
+
+(defn- scope-said
+  "One scope entry as a person reads it: `read member`, `create/edit ticket`."
+  [e]
+  (let [acts (seq (map name (:actions e)))]
+    (str (if acts (str/join "/" acts) "read") " " (name (:kind e)))))
+
+(defn- invite-shown
+  "What a held invite says to the person, in plain words: who is
+  invited, and what they will be able to see and do."
+  [inp]
+  (let [{:keys [scope expires_at]} (:grant inp)
+        roles' (seq (:roles inp))]
+    (str "Invite " (:display inp) " as a member"
+         (when roles' (str " holding " (str/join ", " roles')))
+         (if (seq scope)
+           (str ", who may " (str/join "; " (map scope-said scope))
+                (if expires_at (str " until " expires_at) " with no end"))
+           (when-not roles' ", with no access until one is given")))))
+
+(defn- mint-invite-token
+  "A fresh invite credential, minted by the engine: 32 random bytes,
+  base64url. The agent that proposed the invite never holds it."
+  []
+  (let [b (byte-array 32)]
+    (.nextBytes (java.security.SecureRandom.) b)
+    (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder)) b)))
+
+(g/defguard agents-invite-through-a-manager
+  {:judges [:invite]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :open "An agent's invite waits on its person only when that person holds the manager role; a manager makes the invite, or holds the agent's person."
+   :explain "An invite is your person's to make, and your person holds no manager role, so it cannot wait on them."}
+  [_row inp ctx]
+  (if (and (true? (:invite inp))
+           (= :agent (get-in ctx [:principal :type]))
+           (nil? (invite-holder inp ctx)))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard an-agents-invite-waits-on-its-person
+  {:hold true
+   :judges [:invite]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :open "No door clears this one. The invite waits as a held_call for the agent's person, and the person's Allow makes it as the person; the engine mints the token and shows the sign-in link to the person alone."
+   :explain "Held for your person's tap. An invite is your person's to make: the call is recorded as a held_call, and their Allow creates it as them."}
+  [_row inp ctx]
+  (if (invite-holder inp ctx)
+    (t/deny {:evidence {:shown (invite-shown inp)}})
+    (t/allow)))
+
 (defresource member
   {:kind :member
    :plural "members"
@@ -773,6 +845,26 @@
             ;; by the principal the row will bind to
             [:bind_token {:optional true :secret true}
              [:maybe [:string {:min 8 :max 128}]]]
+            ;; an invite the engine mints (HC3, ticket a052edca):
+            ;; `invite` asks for the token, and `grant` is the
+            ;; invitee's standing grant. Neither is kept: :on-create
+            ;; spends both
+            [:invite {:optional true
+                      :x-display {:label "Mint the invite"
+                                  :help "True has the engine mint the invite's token; the sign-in link is shown once, to the person who makes the invite."}}
+             [:maybe :boolean]]
+            [:grant {:optional true
+                     :x-display {:label "Their grant"
+                                 :help "The invitee's standing grant, as grant create takes it: its scope, and expires_at when it ends. It is made beside the invite, by the inviter."}}
+             [:maybe [:map
+                      [:scope {:x-display {:label "What it opens"
+                                           :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — as grant create takes it, so each entry is typed by hand."
+                                           :help "The leash, entry by entry: a kind and the actions allowed on it. Everything not named here stays shut."}}
+                       [:vector [:map-of :keyword :any]]]
+                      [:expires_at {:optional true
+                                    :x-display {:label "Ends at"
+                                                :help "When the invitee's grant stops opening anything. Leave it empty for a grant that does not end on its own."}}
+                       [:maybe :waymark/instant]]]]]
             ;; the homecoming credential (waymark-4zj.8): a one-shot
             ;; re-entry token for an ACTIVE agent member, minted by
             ;; :offer_reentry, spent by the /auth/agent door. :min 22
@@ -898,7 +990,9 @@
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
                    acts-for-not-written-by-hand
-                   cast-not-written-by-hand]
+                   cast-not-written-by-hand
+                   agents-invite-through-a-manager
+                   an-agents-invite-waits-on-its-person]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -910,13 +1004,25 @@
    ;; a knock row lands "knock" and KEEPS it across its later bind
    ;; (bind/bind-agent! do not touch provenance).
    :on-create (fn [row ctx]
-                (let [tok (get-in row [:data :bind_token])
+                (let [{:keys [invite grant]} (:data row)
+                      ;; `invite` true: the engine mints the token
+                      row (cond-> (update row :data dissoc :invite :grant)
+                            (and (true? invite)
+                                 (nil? (get-in row [:data :bind_token])))
+                            (assoc-in [:data :bind_token] (mint-invite-token)))
+                      tok (get-in row [:data :bind_token])
                       inviter (get-in ctx [:principal :id])
                       provenance (cond
                                    (and tok (= inviter (:id registrar))) "knock"
                                    tok "invite"
                                    :else "idp")
                       row (assoc-in row [:data :provenance] provenance)]
+                  ;; the invitee's grant is born beside the row, the
+                  ;; inviter's own create, judged by grant create's guards
+                  (when (and (seq (:scope grant)) (:create ctx))
+                    ((:create ctx) :grant
+                     (cond-> {:audience (str (:id row)) :scope (:scope grant)}
+                       (:expires_at grant) (assoc :expires_at (:expires_at grant)))))
                   (if tok
                     (-> row
                         (assoc :state :invited)
