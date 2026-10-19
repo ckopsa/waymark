@@ -618,13 +618,17 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
-      # Every org under orgs/ through the org conformance suite (ticket
-      # 86f96963): exit 1 on any error finding.
-      - name: orgs — conformance, every org under orgs/
+      # The live orgs under orgs/ and orgs/example through the org
+      # conformance suite (ticket 86f96963): exit 1 on any error finding.
+      # A drafting org (:live absent or false) has error findings by
+      # design, the onboarding walk's steps, so only org-findings reports
+      # it (ticket 7310836f); go_live's head sets :live true and is
+      # judged here in full.
+      - name: orgs — conformance, the live orgs and the example
         id: conform
         run: >-
           bash scripts/jvm-retry.sh "test-factory conform" factorykit "$RUNNER_TEMP/conform.txt"
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --live ../orgs ../orgs/example
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
@@ -2031,7 +2035,10 @@ jobs:
             echo "::error title=SELFHOST.md drifted (5)::the token GitHub received cannot read $FIXTURE_REPO/contents/README.md (HTTP $readme_status): give SELFHOST_FIXTURE_TOKEN contents access to $FIXTURE_REPO and re-save it as an Actions repository secret"
             exit 1
           fi
-          head=$(git ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
+          # actions/checkout leaves http.https://github.com/.extraheader (the job's
+          # GITHUB_TOKEN) in this workspace's git config, and it wins over the URL's
+          # credentials: clear it, or GitHub sees a token that cannot read the fixture.
+          head=$(git -c http.https://github.com/.extraheader= ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
           [ -n "$head" ] || { echo "::error title=SELFHOST.md drifted (5)::$FIXTURE_REPO has no main"; exit 1; }
           echo "FIXTURE_HEAD=$head" >> "$GITHUB_ENV"
           python3 selfhost/ci/walk.py enroll ""
