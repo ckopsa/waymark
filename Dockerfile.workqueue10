@@ -26,7 +26,11 @@ COPY calendar10/deps.edn calendar10/deps.edn
 COPY factory10/deps.edn factory10/deps.edn
 COPY factorykit/deps.edn factorykit/deps.edn
 COPY workqueue10/deps.edn workqueue10/deps.edn
-RUN cd workqueue10 && clojure -P -M:dev
+# The classpath is resolved HERE and written to /app/classpath, so the
+# CMD below never runs tools.deps: a clone's engine sits behind the
+# cage wall with no internet, and `clojure -M:dev` at boot could reach
+# for Maven (a cache it judged stale, another HOME) and die there.
+RUN cd workqueue10 && clojure -P -M:dev && clojure -Spath -M:dev > /app/classpath
 
 # Sources: the framework and the app, run from source (a home-cluster
 # app; JVM boot beats maintaining a build pipeline).
@@ -49,4 +53,9 @@ EXPOSE 8014
 # WAYMARK10_AUTO_MIGRATE stays unset — boot REFUSES on schema drift
 # and names the plan; the deploy gate runs `clojure -M:migrate`
 # (APPLY=1) before rolling.
-CMD ["clojure", "-M:dev"]
+# A plain JVM on the baked classpath — the :dev alias's main, with no
+# download at start. clojure.main.report=stderr puts a fatal boot
+# error's whole report on stderr, where the job's log reads it, not in
+# a /tmp file that dies with the container. The heap follows the
+# job's memory limit instead of the JVM's quarter-of-RAM default.
+CMD ["sh", "-c", "exec java -XX:MaxRAMPercentage=75 -Dclojure.main.report=stderr -cp \"$(cat /app/classpath)\" clojure.main -m workqueue10.main"]
