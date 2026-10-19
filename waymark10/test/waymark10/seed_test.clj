@@ -147,6 +147,29 @@
     (is (= "2026-10-04" (due :later)))
     (is (= "2026-09-29" (due :earlier)))))
 
+(deftest a-relative-date-counts-from-the-day-one-the-clone-was-given
+  ;; ticket bbf1f253: the scene's day_one is the clone's day one, though
+  ;; the clone is stood up days later
+  (let [week (assoc toy :steps
+                    [{:as :ada :kind :chore :ref :first
+                      :create {:title "Day 1" :due [:days 0]}}
+                     {:as :ada :kind :chore :ref :last
+                      :create {:title "Day 7" :due [:days 6]}}])
+        later (Instant/parse "2026-10-23T09:00:00Z")
+        dues (fn [opts]
+               (let [eng (engine)
+                     result (seed/load! eng week (assoc opts :now later))]
+                 (mapv #(str (get-in (dev/row eng :chore (get-in result [:refs % :id]))
+                                     [:data :due]))
+                       [:first :last])))]
+    (testing "with a day one, [:days n] counts from it, not from the boot"
+      (is (= ["2026-10-19" "2026-10-25"] (dues {:day-one "2026-10-19"}))))
+    (testing "without one, from the boot, as before"
+      (is (= ["2026-10-23" "2026-10-29"] (dues {})))
+      (is (= ["2026-10-23" "2026-10-29"] (dues {:day-one ""}))))
+    (testing "one that is not a date refuses the seed"
+      (is (some? (refused #(seed/load! (engine) week {:day-one "next tuesday"})))))))
+
 ;; ── a live seed ─────────────────────────────────────────────────────
 
 ;; Its values are the boot's params, and its second step fills a seat
@@ -304,6 +327,63 @@
     (is (= (get-in once [:refs :c1 :id])
            (get-in (dev/row eng :seat (get-in more [:refs :s3 :id])) [:data :charter]))
         "and the gained seat points at it")))
+
+(def ^:private granted
+  "The live seed with a grant step: a step that makes no named row."
+  (update live :steps conj
+          {:grant {:audience [:cast :plan]
+                   :scope [{:kind "chore" :actions ["finish"]}]}
+           :ref :g1}))
+
+(def ^:private pointing
+  "A gained step that points at the grant an earlier load made."
+  {:as :ada :kind :chore :create {:title [:ref :g1]} :ref :c9})
+
+(defn- kept-refs [eng seed-name]
+  (into {} (map (fn [[k v]] [(keyword (name k)) (str v)]))
+        (get-in (dev/row eng :member (str "seed-" seed-name)) [:data :walked_refs])))
+
+(defn- strip-refs!
+  "The marker as an engine seeded before refs were kept holds it."
+  [eng seed-name]
+  (let [st (:storage eng)
+        id (str "seed-" seed-name)]
+    (store/with-tx st
+      (fn [tx]
+        (let [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id (dissoc (:data raw) :walked_refs)
+                              (:next-flip-at raw)))))))
+
+(deftest walking-a-step-records-its-ref
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})]
+    (is (= (get-in once [:refs :g1 :id]) (:g1 (kept-refs eng "live"))))
+    (is (= (get-in once [:refs :c1 :id]) (:c1 (kept-refs eng "live"))))
+    (testing "and a gained step's ref is recorded as it is walked"
+      (let [more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+        (is (= (get-in more [:refs :c9 :id]) (:c9 (kept-refs eng "live"))))))))
+
+(deftest a-gained-step-may-point-at-a-grant-an-earlier-load-made
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})
+        more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+    (is (= {:members 0 :steps 1} (:added more)))
+    (is (= (get-in once [:refs :g1]) (get-in more [:refs :g1]))
+        "the skipped grant step is bound from the marker")
+    (is (= (get-in once [:refs :g1 :id])
+           (get-in (dev/row eng :chore (get-in more [:refs :c9 :id])) [:data :title]))
+        "and the gained chore points at that same grant")))
+
+(deftest a-gained-step-pointing-at-a-ref-walked-before-refs-were-kept-refuses
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng granted {:params params})
+        _ (strip-refs! eng "live")
+        chores (count (dev/rows eng :chore))
+        e (refused #(seed/load! eng (update granted :steps conj pointing) {:params params}))]
+    (is (some? e))
+    (is (re-find #"`:g1`.*walked before the seed's marker kept refs"
+                 (str (ex-message e))))
+    (is (= chores (count (dev/rows eng :chore))) "and nothing was made")))
 
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
@@ -475,3 +555,63 @@
   (is (= {:repo "acme/garden"} (seed/read-params "{:repo \"acme/garden\"}")))
   (is (= {} (seed/read-params nil)))
   (is (some? (refused #(seed/read-params "[1 2]")))))
+
+(def ^:private pull-step
+  "An unnamed step a later one points at, as the factory seed's `:pull`
+  runner_link is."
+  {:as :ada :kind :chore :create {:title "Pull the weeds"} :ref :pull})
+
+(def ^:private pulled
+  "The seed grown since: a step pointing at `[:ref :pull]`, and one that
+  needs nothing."
+  {:seed "pull" :version 1 :cast (:cast toy)
+   :steps [pull-step
+           {:as :ada :kind :chore :create {:title [:ref :pull]} :ref :link}
+           {:as :ada :kind :chore :create {:title "Rake the leaves"}}]})
+
+(defn- seeded-before-step-ids!
+  "An engine as one seeded before `step-id` holds it: `n` pull chores
+  under random ids, and the `:pull` step's key walked."
+  [eng n]
+  (seed/load! eng {:seed "pull" :version 1 :cast (:cast toy)
+                   :steps (vec (repeat n (dissoc pull-step :ref)))}
+              {})
+  (#'seed/walk-recorded! eng {:seed "pull"} [(#'seed/step-key pull-step)]))
+
+(defn- bound-refs [eng seed-name]
+  (let [st (:storage eng)]
+    (into {} (map (fn [[k v]] [(name k) (str v)]))
+          (get-in (store/with-tx st
+                    (fn [tx] (store/load-row st tx :member (str "seed-" seed-name) {})))
+                  [:data :bound_refs]))))
+
+(deftest a-ref-seeded-before-step-ids-is-bound-by-its-body-once
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 1)
+        pull (str (:id (first (dev/rows eng :chore))))
+        more (seed/load! eng pulled {})]
+    (is (= {:members 0 :steps 2} (:added more)))
+    (is (= pull (get-in more [:refs :pull :id])) "the ref is bound by the body")
+    (is (= pull (get-in (dev/row eng :chore (get-in more [:refs :link :id])) [:data :title]))
+        "and the gained step points at it")
+    (is (= {"pull" pull} (bound-refs eng "pull")) "and the marker keeps the binding")
+    (testing "and the next load reads bound_refs and does not match again"
+      (seed/load! eng {:seed "extra" :version 1
+                       :cast {:bea {:id "bea" :display "Bea Example" :type :human}}
+                       :steps [{:as :bea :kind :chore :create {:title "Pull the weeds"}}]}
+                  {})
+      (let [again (seed/load! eng pulled {})]
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= pull (get-in again [:refs :pull :id])))))))
+
+(deftest a-ref-two-rows-match-skips-the-steps-that-need-it
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 2)
+        err (java.io.StringWriter.)
+        more (binding [*err* err] (seed/load! eng pulled {}))]
+    (is (= {:members 0 :steps 1} (:added more)) "the rest of the seed still loads")
+    (is (nil? (get-in more [:refs :pull])))
+    (is (nil? (get-in more [:refs :link])) "the step that needs it is skipped")
+    (is (= 3 (count (dev/rows eng :chore))))
+    (is (re-find #"seed `pull` binds no row to `:pull`: 2 rows" (str err)))
+    (is (= {} (bound-refs eng "pull")))))

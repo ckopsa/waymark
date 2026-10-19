@@ -53,13 +53,30 @@
   goes through; `:find` steps are read as ever. A step that makes a
   named row (a `:name` in the body) is skipped too while a row of that
   kind and name is there, so an edited step makes no second row, and a
-  known one still names its row for the steps after it. A marker with
+  known one still names its row for the steps after it. Beside the
+  keys the marker keeps `walked_refs`: for each walked step with a
+  `:ref`, the id of the row it made, so a known step the load skips
+  still binds its ref, and a gained step may point at a hold, a grant
+  or an unnamed row an earlier load made. A step walked before refs
+  were kept has no id there, and a step that points at it refuses
+  saying so: the loader does not guess. A marker with
   no `walked_steps`, written before keys were kept, takes the keys of
   every step the seed holds now and walks none of them on that load. So
   a boot over a seeded org changes nothing, and a seed that gained a
   step or a cast member adds only those. An engine that
   holds a member of the cast and no marker stopped half-way through a
   seed, and the load refuses.
+
+  AN UNNAMED STEP SEEDED BEFORE STEP IDS IS FOUND BY ITS BODY, ONCE. A
+  create or template step with a `:ref` is born with an id drawn from
+  the seed and the ref (`step-id`); an engine seeded before that holds
+  its row under a random id. A known step whose id finds no row looks,
+  once, for the rows of its kind whose data holds every field its
+  filled body sets: one is bound, and kept in the marker's
+  `bound_refs`, ref → id, so a later load reads it and never matches
+  again; none or several bind nothing, one line on *err* says so, and
+  each gained step that needs that ref is skipped while the rest of
+  the seed loads.
 
   AN ORG'S LOAD RECORDS AS IT GOES. Under `:org` the marker is written
   before the first step, with `walked_steps` empty and `loading true`,
@@ -72,8 +89,15 @@
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
   `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
-  counted from the boot, and `[:param :repo]` is the boot's param of
-  that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+  counted from the boot's day one, and `[:param :repo]` is the boot's
+  param of that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+
+  THE DAY ONE IS THE SCENE'S WHEN IT IS GIVEN (ticket bbf1f253). A
+  clone stood up to film a first-week scene is booted with the scene's
+  `day_one` (WAYMARK10_SEED_DAY_ONE, YYYY-MM-DD), and `[:days n]` counts
+  from it, so the rows the seed dates fall on the days the scene's
+  captions read, however many days later the clone is stood up. With
+  none, it counts from the day of the boot, as before.
 
   A CAST MEMBER'S `:id` AND `:display` MAY BE PARAMS TOO:
   `{:owner {:id [:param :owner] :display [:param :owner_display]}}`,
@@ -368,19 +392,59 @@
   (some->> (get-in (load-row eng :member (marker-id seed)) [:data :walked_steps])
            (into #{} (map str))))
 
+(defn- ref-name
+  "A step's ref as the marker keeps it: :c1 → \"c1\"."
+  [k]
+  (if (keyword? k) (subs (str k) 1) (str k)))
+
+(defn- refs-kept
+  "The marker's `walked_refs` as its data reads back: ref name → id."
+  [m]
+  (into {} (map (fn [[k v]] [(ref-name k) (str v)])) m))
+
+(defn- walked-refs-of
+  "The ids the marker keeps for the refs of the steps it walked: ref
+  name → id, empty for a marker written before refs were kept."
+  [eng seed]
+  (refs-kept (get-in (load-row eng :member (marker-id seed)) [:data :walked_refs])))
+
 (defn- walk-recorded!
-  "Add `ks` to the marker's `walked_steps`: a maintenance write, in
-  place, as the engine keeps its other bookkeeping on a member row."
-  [eng seed ks]
+  "Add `ks` to the marker's `walked_steps`, and `rs`, ref name → id, to
+  its `walked_refs`: a maintenance write, in place, as the engine keeps
+  its other bookkeeping on a member row."
+  ([eng seed ks] (walk-recorded! eng seed ks nil))
+  ([eng seed ks rs]
+   (let [st (:storage eng)
+         id (marker-id seed)]
+     (store/with-tx st
+       (fn [tx]
+         (when-some [raw (store/load-row st tx :member id {:for-update true})]
+           (store/update-data! st tx :member id
+                               (cond-> (assoc (:data raw) :walked_steps
+                                              (vec (sort (into (set (map str (get-in raw [:data :walked_steps])))
+                                                               ks))))
+                                 (seq rs) (assoc :walked_refs
+                                                 (into (refs-kept (get-in raw [:data :walked_refs])) rs)))
+                               (:next-flip-at raw))))))))
+
+(defn- bound-of
+  "The refs the marker's `bound_refs` binds by a body match (`rebound`):
+  ref name → row id, {} for a marker that holds none."
+  [eng seed]
+  (into {} (map (fn [[k v]] [(name k) (str v)]))
+        (get-in (load-row eng :member (marker-id seed)) [:data :bound_refs])))
+
+(defn- bound-recorded!
+  "Add `r` → `id` to the marker's `bound_refs`, in place, as
+  `walk-recorded!` keeps its keys."
+  [eng seed-name r id]
   (let [st (:storage eng)
-        id (marker-id seed)]
+        mid (marker-id {:seed seed-name})]
     (store/with-tx st
       (fn [tx]
-        (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data! st tx :member id
-                              (assoc (:data raw) :walked_steps
-                                     (vec (sort (into (set (map str (get-in raw [:data :walked_steps])))
-                                                      ks))))
+        (when-some [raw (store/load-row st tx :member mid {:for-update true})]
+          (store/update-data! st tx :member mid
+                              (assoc-in (:data raw) [:bound_refs (name r)] (str id))
                               (:next-flip-at raw)))))))
 
 (defn- marker-data!
@@ -403,20 +467,30 @@
 
 (defn- step-walked!
   "Record that `step` was walked: its key joins the marker's
-  `walked_steps`. The one place a walked step is recorded."
-  [eng seed step]
-  (walk-recorded! eng seed [(step-key step)]))
+  `walked_steps`, and the id of `row`, the row it went through with,
+  joins its `walked_refs` under the step's ref. The one place a walked
+  step is recorded."
+  [eng seed step row]
+  (let [rn (some-> (:ref step) ref-name)
+        id (some-> row :id str)]
+    (walk-recorded! eng seed [(step-key step)] (when (and rn id) {rn id}))))
 
 ;; ── the steps ───────────────────────────────────────────────────────
 
 (defn- ref-of [refs k]
-  (or (get refs k)
+  (let [r (get refs k)]
+    (cond
+      (:id r) r
+      (:unkept r)
+      (throw (refusal (str "The seed points at `" k "`, and the step that made it was walked before the seed's marker kept refs, so its row is not known.")
+                      {:ref k :unkept true}))
+      :else
       (throw (refusal (str "The seed points at `" k "`, and no earlier step made a row of that name.")
-                      {:ref k}))))
+                      {:ref k})))))
 
 (defn- value-of
   "A step's value with its load-time forms filled in."
-  [{:keys [eng cast refs now params] :as ctx} form]
+  [{:keys [eng cast refs now day-one params] :as ctx} form]
   (let [[op arg] (when (and (vector? form) (= 2 (count form))) form)]
     (case op
       :param (param-of params form)
@@ -424,7 +498,8 @@
       :self (let [{:keys [kind id]} (ref-of refs arg)]
               (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))
       :cast (member-id cast arg)
-      :days (str (.plusDays (LocalDate/ofInstant ^Instant now ZoneOffset/UTC)
+      :days (str (.plusDays ^LocalDate (or day-one
+                                           (LocalDate/ofInstant ^Instant now ZoneOffset/UTC))
                             (long arg)))
       (cond
         (map? form) (into {} (map (fn [[k v]] [k (value-of ctx v)])) form)
@@ -583,6 +658,52 @@
   (cond-> (hand-of ctx step)
     (step-id ctx step) (assoc :id (step-id ctx step))))
 
+(defn- plain
+  "A value as a stored row's data gives it back: a keyword as its text,
+  a number by its value."
+  [v]
+  (walk/postwalk (fn [x]
+                   (cond
+                     (keyword? x) (subs (str x) 1)
+                     (number? x) (.stripTrailingZeros ^java.math.BigDecimal (bigdec x))
+                     :else x))
+                 v))
+
+(defn- body-matches
+  "The rows of `kind` whose data holds every field `body` sets, each
+  equal."
+  [eng kind body]
+  (let [st (:storage eng)
+        want (plain body)]
+    (filterv (fn [row]
+               (let [have (plain (:data row))]
+                 (every? (fn [[k v]] (= v (get have k))) want)))
+             (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {}))))))
+
+(defn- rebound
+  "The row a known unnamed step's `:ref` names on an engine seeded
+  before `step-id`, which holds it under a random id: the one the
+  marker's `bound_refs` names, or else the one row of its kind whose
+  data holds every field the step's filled body sets, then kept in
+  `bound_refs` so a later load never matches again. Zero or several
+  bind nothing and say so on *err*. → [row false], or [nil false true]
+  for a ref no row was bound to."
+  [{:keys [eng seed bound] :as ctx} step]
+  (let [r (:ref step)
+        [kind body] (made-body ctx step)]
+    (if-some [row (some->> (get bound (name r)) (load-row eng kind))]
+      [row false]
+      (let [found (body-matches eng kind body)]
+        (if (= 1 (count found))
+          (let [row (first found)]
+            (bound-recorded! eng seed r (:id row))
+            [row false])
+          (do (binding [*out* *err*]
+                (println (str "seed `" seed "` binds no row to `" r "`: " (count found)
+                              " rows of `" (name kind) "` match its step's body, so each"
+                              " gained step that needs it is skipped.")))
+              [nil false true]))))))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
   [{:keys [eng refs] :as ctx} step]
@@ -640,8 +761,11 @@
   filled. An unnamed create or template is found, known or not, by the
   id `step-id` gave it, and an action step a known one binds its `:ref`
   to the row it moved, its `:on`, so a gained step may point at either.
-  Any other step is walked when it is not known, and skipped when it
-  is. → [row made?], row nil for a skipped step."
+  A known unnamed one whose id finds no row was seeded before
+  `step-id`, and is bound by its body (`rebound`). Any other step is
+  walked when it is not known, and skipped when it is. → [row made?
+  lost?], row nil for a skipped step, lost? true for a `:ref` that
+  binds no row."
   [{:keys [eng refs] :as ctx} step known?]
   (cond
     (:find step) [(step! ctx step) false]
@@ -664,19 +788,45 @@
           :else [(:row (inv/create! eng kind body (made-opts ctx step))) true])
         (if-some [row (some->> (step-id ctx step) (load-row eng kind))]
           [row false]
-          (if known? [nil false] [(step! ctx step) true]))))
+          (cond
+            (and known? (:ref step)) (rebound ctx step)
+            known? [nil false]
+            :else [(step! ctx step) true]))))
 
     (contains? step :create)
     (if-some [row (some->> (step-id ctx step) (load-row eng (:kind step)))]
       [row false]
-      (if known? [nil false] [(step! ctx step) true]))
+      (cond
+        (and known? (:ref step)) (rebound ctx step)
+        known? [nil false]
+        :else [(step! ctx step) true]))
 
-    (and known? (:ref step) (:on step) (get refs (:on step)))
+    (and known? (:ref step) (:on step) (:id (get refs (:on step))))
     [(get refs (:on step)) false]
 
     known? [nil false]
 
     :else [(step! ctx step) true]))
+
+(defn- recalled
+  "The ref a known step the load skipped binds, from the id the marker
+  kept for it. {:unkept true} when it kept none, the step walked before
+  refs were kept, so a step that points at it refuses saying so."
+  [refs step id]
+  (let [kind (if (:on step) (:kind (get refs (:on step))) (kind-of refs step))]
+    (if (and id kind) {:kind kind :id id} {:unkept true})))
+
+(defn- day-one-of
+  "The day one a boot was given, YYYY-MM-DD or a LocalDate, as a
+  LocalDate, or nil when none was given. Throws for one that is not a
+  date."
+  ^LocalDate [day-one]
+  (when-some [s (some-> day-one str str/trim not-empty)]
+    (try (LocalDate/parse s)
+         (catch java.time.format.DateTimeParseException _
+           (throw (refusal (str "The seed is refused: its day one `" s
+                                "` is not a date (YYYY-MM-DD).")
+                           {:day-one s}))))))
 
 (defn load!
   "Seed this engine: enrol the cast, walk the steps in order, then
@@ -688,7 +838,9 @@
   in the marker's `walked_steps`. Throws on an engine
   `admit!` refuses, on the first step the law refuses, and on an engine
   that holds a cast member and no marker. `:now` is the boot's moment,
-  the engine's clock when absent; relative dates count from it. `:wall-url` is the clone's wall: when
+  the engine's clock when absent; relative dates count from it, unless
+  `:day-one` (YYYY-MM-DD) is given: then `[:days n]` counts from that
+  day, the scene's day one the clone was stood up with. `:wall-url` is the clone's wall: when
   it is given, the seed's `:walled` servers are made at it, and when
   it is not, none is made. `:params` are the values `[:param k]` reads.
   `:org` is the org boot's alone (`admit!`): a cast member the engine
@@ -699,9 +851,10 @@
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
   marker still `loading` resumes, skipping the steps it records."
-  [eng {:keys [cast steps walled] :as seed} {:keys [now wall-url params org] :as opts}]
+  [eng {:keys [cast steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
   (admit! eng seed opts)
-  (let [org (some-> org str not-empty)
+  (let [day-one (day-one-of day-one)
+        org (some-> org str not-empty)
         loading (boolean (and org (loading? eng seed)))
         seeded (and (seeded? eng seed) (not loading))
         cast (filled-cast cast (keyed params))
@@ -741,23 +894,43 @@
                      ;; with none, each step is found by its name or
                      ;; its id, or walked
                      resumed (or (walked-of eng seed) #{}))
+            kept (when additive (walked-refs-of eng seed))
+            bound (when additive (bound-of eng seed))
             {:keys [refs made]}
             (reduce
-                  (fn [{:keys [refs] :as acc} [i step]]
+                  (fn [{:keys [refs lost] :as acc} [i step]]
                     (let [ctx {:eng eng :cast cast :refs refs :now now
-                               :params (keyed params) :seed (:seed seed)}
-                          [row made?] (try
+                               :day-one day-one
+                               :params (keyed params) :seed (:seed seed)
+                               :bound bound}
+                          [row made? lost? recall]
+                          (try
                                 (if additive
                                   (let [k (step-key step)
                                         known? (contains? walked k)
-                                        walked-step (gain! ctx step known?)]
-                                    (when-not known?
-                                      (step-walked! eng seed step))
-                                    walked-step)
-                                  (let [walked-step [(step! ctx step) true]]
+                                        [row made? lost?]
+                                        (try
+                                          (gain! ctx step known?)
+                                          ;; a step that needs a ref no row was
+                                          ;; bound to is skipped, and not walked
+                                          (catch clojure.lang.ExceptionInfo e
+                                            (if (contains? lost (:ref (ex-data e)))
+                                              [nil false true]
+                                              (throw e))))
+                                        rn (some-> (:ref step) ref-name)
+                                        id (some-> row :id str)]
+                                    ;; the key as the step goes through, and
+                                    ;; its ref's id beside it
+                                    (when (and (not lost?)
+                                               (or (not known?) (and rn id (not= id (get kept rn)))))
+                                      (step-walked! eng seed step row))
+                                    [row made? lost?
+                                     (when (and known? rn (nil? row) (not lost?))
+                                       (recalled refs step (get kept rn)))])
+                                  (let [row (step! ctx step)]
                                     (when org
-                                      (step-walked! eng seed step))
-                                    walked-step))
+                                      (step-walked! eng seed step row))
+                                    [row true nil]))
                                 (catch Exception e
                                   (throw (ex-info
                                           (str "The seed's step " (inc i)
@@ -769,12 +942,15 @@
                                           e))))]
                       (cond-> acc
                         made? (update :made inc)
+                        recall (assoc-in [:refs (:ref step)] recall)
+                        (and lost? (:ref step)) (update :lost conj (:ref step))
                         (and row (:ref step))
                         (assoc-in [:refs (:ref step)]
                                   {:kind (kind-of refs step)
                                    :id (str (:id row))}))))
-                  {:refs {} :made 0}
-                  (map-indexed vector steps))]
+                  {:refs {} :made 0 :lost #{}}
+                  (map-indexed vector steps))
+            refs (into {} (filter (comp :id val)) refs)]
         (if seeded
           {:seed (:seed seed) :seeded false
            :added {:members (count fresh) :steps made} :refs refs
@@ -787,7 +963,8 @@
             ;; marker was written first, and is now done loading
             (when-not org
               (mark! eng seed org))
-            (walk-recorded! eng seed (map step-key steps))
+            (walk-recorded! eng seed (map step-key steps)
+                            (into {} (map (fn [[k v]] [(ref-name k) (:id v)])) refs))
             (when org
               (marker-data! eng seed #(assoc % :loading false)))
             (when resumed
@@ -800,8 +977,10 @@
   "The boot step behind WAYMARK10_SEED: read the named seed and load
   it, saying what happened. Throws for a name this commit carries no
   seed for, and for everything `load!` throws for. `opts` are
-  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL, and
-  `:params`, when absent, are read from WAYMARK10_SEED_PARAMS."
+  `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL,
+  `:params`, when absent, are read from WAYMARK10_SEED_PARAMS, and
+  `:day-one`, when absent, from WAYMARK10_SEED_DAY_ONE: the scene's
+  day one the clone was stood up with."
   ([eng seed-name] (boot! eng seed-name {}))
   ([eng seed-name opts]
    (let [seed (or (read-seed seed-name)
@@ -811,7 +990,9 @@
          _ (admit! eng seed)
          opts (cond-> (or opts {})
                 (not (contains? opts :params))
-                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
+                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
+                (not (contains? opts :day-one))
+                (assoc :day-one (System/getenv "WAYMARK10_SEED_DAY_ONE")))
          result (load! eng seed opts)]
      (println (if (:seeded result)
                 (str "waymark10 seed: `" (:seed result) "` loaded, "
