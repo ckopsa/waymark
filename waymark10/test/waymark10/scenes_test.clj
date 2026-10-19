@@ -422,6 +422,13 @@
       (testing "a held call and two moves: the held call first, two clauses at most"
         (is (= "A person was asked to finish Acme's study; Acme's study went to done."
                (said day))))
+      (testing "a caller who sees the org's kinds whole but not held_call hears no held call"
+        (let [as (fn [sees] (scenes/fill-say-as eng [day] (scenes/take-run) sees))
+              s (as #{:study :invoice :note})]
+          (is (str/starts-with? s "Acme's study went to done") s)
+          (is (not (str/includes? s "A person was asked")) s)
+          (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+                 (as #{:study :invoice :note :held_call})))))
       (testing "another domain's day is quiet, or says its none"
         (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
         (is (= "Nothing." (said (update day "$day" assoc :domain "elsewhere"
