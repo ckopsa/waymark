@@ -45,7 +45,7 @@ No door here asks for a confirmation before it acts.
 
 ### office-clerk
 
-Works through the requests, one at a time. Wakes every hour, and when a request is created.
+Works through the requests, one at a time. Wakes every hour, and when a request is written.
 
 It may:
 - accept or decline a request
@@ -59,7 +59,7 @@ Its charter:
 
 ### crew-lead
 
-Works through the work orders, one at a time. Wakes every hour, and when a work order is created.
+Works through the work orders, one at a time. Wakes every hour, and when a work order is written.
 
 It may:
 - complete or cancel a work order (only where state is scheduled)

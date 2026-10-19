@@ -31,8 +31,9 @@
                  that ends the awaited row that way, or a cadence
   silent_person_exit
                  every exit from the state is held for a person's tap
-                 (a confirm door, or a guard declared `:hold true`,
-                 which is how a held call and a delegation ceiling
+                 (a confirm door, or a guard declared `:hold true`;
+                 one declared `:hold :agents` holds only an agent and
+                 leaves the door its ordinary holders), which is how a held call and a delegation ceiling
                  are both spoken), and nothing tells the person a row
                  arrived: no notice rule, no subscription, no cue in
                  the inbox of a seat a person sits in (ticket
@@ -453,12 +454,14 @@
   "Why only a person can take this exit, as the words the answer
   prints: confirm (the door wants its consequence sentence), hold (a
   guard of it is declared `:hold true`). Empty is a door a seat takes
-  alone."
+  alone. A guard declared `:hold :agents` holds only an agent's call,
+  so the door is read as if it were absent."
   [rdef action]
   (cond-> []
     (get-in action [:safety :confirm]) (conj "confirm")
     (some (fn [{:keys [door guard]}]
             (and (= (:name action) door)
+                 (not= :agents (:hold guard))
                  (or (true? (:hold guard)) (holds/hold? (:name guard)))))
           (checks/guard-sites rdef))
     (conj "hold")))

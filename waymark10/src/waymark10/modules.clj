@@ -176,6 +176,7 @@
             [waymark10.server.routes.mirror :as mirror-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
+            [waymark10.server.routes.scenes :as scene-routes]
             [waymark10.server.routes.seasons :as seasons-routes]
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
@@ -784,6 +785,11 @@
    ;; (server/gate-proxy). An engine without it has no hypermedia door
    ;; to the powers; the MCP door's two power tools still answer.
    {:module :gate :routes gate-routes/routes}
+
+   ;; the scene's wire door (docs/spec-scenes.md, Holes in a say): the
+   ;; performer's fill of a shot's say, over the scene and take kinds
+   ;; core enrols. A route and nothing else.
+   {:module :scenes :routes scene-routes/routes}
 
    ;; the seat, the model and the sitting (docs/spec-seat.md, leg 1 of
    ;; waymark-fp62): the office an agent sits in, the price list its

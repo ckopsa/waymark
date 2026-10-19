@@ -18,7 +18,7 @@
   whoever may make one may restate its `output` and `unless`. Only a
   person retires one.
 
-  `ensure-seed-rules!` is the boot seed: the eight rules the scorecard
+  `ensure-seed-rules!` is the boot seed: the eleven rules the scorecard
   starts with, each made once by its name. The engine's own start runs
   it (`engine/start-runtime!`), so every application that enrolls the
   kind has them. A seed row made before `output` and `unless` existed
@@ -51,7 +51,10 @@
    ["chrome_leaks" "film.chrome_leaks"]
    ["arc" "shot.role in order, and the last shot's goal_state"]
    ["runtime_s" "film.runtime_s"]
-   ["frame_match_min" "the lowest run.frame_match"]])
+   ["frame_match_min" "the lowest run.frame_match"]
+   ["bare_lists" "the day captions (a shot.caption that opens with a weekday) that list three or more things and say no verb"]
+   ["quiet_days" "the day captions that end in 'A quiet day.'"]
+   ["asked_person" "the day captions that say 'was asked'"]])
 
 (def metric-names (mapv first metrics))
 
@@ -118,6 +121,46 @@
     1
     0))
 
+;; The first week (FS2) draws one shot per day, its caption the weekday
+;; and the `$day` phrasing of what happened (scenes): `Monday. Acme's
+;; study went to review.`, `A quiet day.` for a day with nothing to
+;; tell, `a person was asked to ...` for a held call or an approval.
+
+(def ^:private weekday
+  #"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b")
+
+(def ^:private day-verb
+  "A verb of the `$day` phrasing: a caption that says one tells what
+  happened, not only what there was."
+  #"(?i)\b(went|was|were|came|chased|signed|sent|asked|paid)\b")
+
+(defn- day-captions
+  "The captions of `shots` that open with a weekday name, in order."
+  [shots]
+  (filterv #(re-find weekday %) (filter string? (map :caption shots))))
+
+(defn- bare-list?
+  "True when `caption` lists three or more things, by ', ', and says no
+  verb of the `$day` phrasing."
+  [caption]
+  (and (<= 3 (count (str/split caption #", ")))
+       (not (re-find day-verb caption))))
+
+(defn- days-that
+  "How many of the day captions of the take `tk` hold `pred`."
+  [pred tk]
+  (count (filter pred (day-captions (:shots tk)))))
+
+(def ^:private week-metrics
+  "The metrics read from the first week's day captions. They judge only
+  a take whose shots carry the arc's roles."
+  #{"bare_lists" "quiet_days" "asked_person"})
+
+(defn- first-week?
+  "True when a shot of `shots` carries one of the arc's roles."
+  [shots]
+  (boolean (some (set roles) (map (comp word :role) shots))))
+
 (def ^:private film-readers
   "Metric → how it is read from the whole take."
   {"frame_fill" (fn [{:keys [film]}]
@@ -125,7 +168,10 @@
    "dead_air_s" (fn [tk] (get-in tk [:film :dead_air_s]))
    "chrome_leaks" (fn [tk] (get-in tk [:film :chrome_leaks]))
    "arc" (fn [tk] (arc (:shots tk)))
-   "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))})
+   "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
+   "bare_lists" (partial days-that bare-list?)
+   "quiet_days" (partial days-that #(str/ends-with? % "A quiet day."))
+   "asked_person" (partial days-that #(str/includes? % "was asked"))})
 
 (def ^:private shot-readers
   "Metric → how it is read from one shot of the take."
@@ -513,6 +559,9 @@
   [m]
   (boolean (some-> (area m) pos?)))
 
+(def ^:private day-needs
+  [["shot.caption" #(some? (seq (day-captions (:shots %))))]])
+
 (def ^:private film-needs
   "Metric → the fields of the take it is read from, each with how to
   tell that the take carries it."
@@ -526,7 +575,10 @@
                            (some (comp word :role) (:shots %)))]
           ["shot.goal_state" #(or (empty? (:shots %))
                                  (word (:goal_state (last (:shots %)))))]]
-   "runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]})
+   "runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]
+   "bare_lists" day-needs
+   "quiet_days" day-needs
+   "asked_person" day-needs})
 
 (def ^:private shot-needs
   "Metric → the fields of one shot it is read from, each with how to
@@ -657,6 +709,8 @@
      (cond
        ;; the output filter is the film's, so it is judged before any shot
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
+       ;; the week's rules judge the takes the arc's roles mark
+       (and (week-metrics metric) (not (first-week? (:shots tk)))) {:verdict "unscored"}
        (contains? shot-readers metric) (judge-shots rule tk)
        (contains? film-readers metric) (judge-film rule tk)
        (contains? run-readers metric) (judge-runs rule tk)
@@ -743,7 +797,19 @@
    {:name "arc" :metric "arc" :op "=" :threshold 1M
     :scope "film" :severity "fail"
     :why "When the scene declares roles, the shots run friction, turn, payoff, and the last shot's goal is done."
-    :origin "craft"}])
+    :origin "craft"}
+   {:name "caption-not-list" :metric "bare_lists" :op "=" :threshold 0M
+    :scope "film" :severity "fail"
+    :why "Each day of the first week says what happened, not a bare list of things."
+    :origin "FS4, the mayor's restatement of 2026-10-19"}
+   {:name "quiet-days" :metric "quiet_days" :op "<=" :threshold 2M
+    :scope "film" :severity "fail"
+    :why "At most two days of the first week are quiet: the house moves on most days."
+    :origin "FS4, the mayor's restatement of 2026-10-19"}
+   {:name "asked-person" :metric "asked_person" :op ">=" :threshold 1M
+    :scope "film" :severity "fail"
+    :why "On at least one day of the first week the person is asked: the film shows where they come in."
+    :origin "FS4, the mayor's restatement of 2026-10-19"}])
 
 (defn- rows-of [eng where]
   (store/with-tx (:storage eng)

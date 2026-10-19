@@ -134,7 +134,15 @@ order, and its `field` is one of the two. The performer fills each hole
 when the shot plays (`fill-say`), from the rows the scene's clone holds
 in that window (`rows-in-window`): their summary lines, oldest first,
 joined with `; `. A hole that finds no rows says its `none`, or
-`nothing came in`, and never the hole itself.
+`nothing came in`, and never the hole itself. With `"terminal": true`
+it reads only the rows in one of the kind's terminal states, and with
+`"count": true` it says how many rows it read instead of their lines;
+`check` judges each as true or false. With `"state"`, one of the
+kind's states, it reads only the rows in that state. A counting hole
+may name `one` and `many`, together: it then says `<n> <one>` or
+`<n> <many>` by its count, and a zero count says its `none` when it
+names one, or drops its clause, the hole and the string after it, when
+it does not (`"3 prospects engaged, "`).
 
 A `$moves` hole, `{"$moves": {kind, since, until, by, none}}`, reads the
 log instead: the transitions on rows of `kind` logged in
@@ -164,6 +172,40 @@ Acme's study`.
 `domain` and a window two readable times in order; it does not judge
 the domain itself, and a domain no kind names plays as a quiet day. A
 day with nothing to tell says its `none`, or `A quiet day.`
+
+In place of `since` and `until`, a `$day` hole may say
+`"window": "shot"`: it reads the transitions and held calls born since
+the previous `$day` hole of this take was filled (the first one: since
+the take began), up to the moment the performer fills it, ranked,
+phrased and `none`d as above. The performer keeps the previous fill's
+instant on the take's run (`take-run`). `check` refuses any other
+`window`, and a `window` beside a `since` or an `until`.
+
+```json
+{"say": ["Tuesday. ", {"$day": {"window": "shot", "domain": "acme"}}]}
+```
+
+The performer has the engine fill a say over the wire:
+`POST /api/-/scenes/say` with `{"say": <the shot's say, as the scene
+holds it>, "take": <a string the performer names the take by>}` answers
+`{"text": <the filled string>}`. Any named principal may call it;
+anonymous gets the concealment 404, and a say `check` would refuse
+answers 422 with its reason. The holes are filled through the caller's
+grant: a `$rows` or `$moves` hole reads its kind only when the grant
+sees that kind whole, and a `$day` hole its domain only when the grant
+sees every kind of it; otherwise the hole says its `none`. The engine
+keeps one take run per caller and `take` (`take-run-of`): the first
+call for a take begins it, later calls reuse it, so a
+`window: "shot"` hole reads since that take's previous `$day`; a run
+is dropped two hours after it began.
+
+A filmed week is played this way. A clone runs no seats (clone-mcp
+strips every fire key) and every seed row on it is born the day it
+boots, so a dated `$day` would put the whole week on day 1. Instead the
+director writes each day's events as `meanwhile` shots before that
+day's caption, and the caption's `{"window": "shot"}` reads what those
+calls did. factorykit's `scenes/first-week.edn` does so; its weekday
+words are labels.
 
 ## `wearing`
 

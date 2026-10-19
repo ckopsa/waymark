@@ -856,6 +856,18 @@ metric is read from one field of the take:
 | `arc` | 1 when the shot roles run friction, turn, payoff and the last shot's goal state is done; else 0. | `shot.role` in order, and the last shot's `goal_state` |
 | `runtime_s` | The film's length in seconds. | `film.runtime_s` |
 | `frame_match_min` | The lowest score of a film frame against the still of the beat its caption is for, over every caption run. | the lowest `run.frame_match` |
+| `bare_lists` | The day captions that list three or more things, split by `, `, and say no verb of the day phrasing (`went`, `was`, `were`, `came`, `chased`, `signed`, `sent`, `asked`, `paid`). | the day captions |
+| `quiet_days` | The day captions that end in `A quiet day.` | the day captions |
+| `asked_person` | The day captions that say `was asked`. | the day captions |
+
+The last three are the first week's metrics. A day caption is a
+`shot.caption` that opens with a weekday name (`Monday` to `Sunday`),
+and each of the three counts the day captions of the take that hold
+it. They judge only a take whose shots carry the arc's roles: a rule on
+one of them is `unscored` on a take where no shot's `role` is
+`friction`, `turn` or `payoff`, and `unmeasured`, with `missing`
+naming `shot.caption`, on a take whose shots carry those roles and no
+day caption.
 
 A take is a map with `film`, the fields read once, `shots`, one
 map per shot in order, and `runs`, one map per caption run in order. A
@@ -905,14 +917,17 @@ this answer; it holds no operator, filter or exemption of its own.
 
 The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
 starts (`engine/start-runtime!`), in every application, because the
-kind is enrolled in every one. It makes eight rules,
+kind is enrolled in every one. It makes eleven rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
 (`type_px >= 28` per shot, `output: phone`, warn), `read-time`
 (`read_time_ratio >= 1.2` per shot, warn), `dead-air`
 (`dead_air_s <= 0.8`, warn), `one-surface` (`surfaces_changed <= 1`
 per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
-`unless: zoom`, warn) and `arc` (`arc = 1`, fail). The seed makes a
+`unless: zoom`, warn), `arc` (`arc = 1`, fail), and the first week's
+three: `caption-not-list` (`bare_lists = 0`, fail), `quiet-days`
+(`quiet_days <= 2`, fail) and `asked-person` (`asked_person >= 1`,
+fail). The seed makes a
 rule only when none carries its name. An active `type-size` or
 `focus-share` row made before these fields existed gains the field
 the seed names at the next boot, through `restate`; a value a row

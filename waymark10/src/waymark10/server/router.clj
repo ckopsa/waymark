@@ -414,8 +414,10 @@
   2/3): the seeded cast member's own, marked :acted-by the seat's
   principal, so the log records both hands. Refused 403 unless all
   hold: the engine is a clone, `seat` has acts_as_cast, the member
-  carries the seed loader's cast marker, and it is neither the org's
-  owner nor a manager."
+  carries the seed loader's cast marker, and it is no manager. The
+  org's owner is allowed: only a clone gets this far, a clone is a
+  throwaway copy of seeded rows, and its films are of the owner's week
+  (a live engine refuses every `as`, the owner's included)."
   [eng seat principal as-id]
   (let [member (row-by-id eng :member as-id)
         roles' (set (map str (get-in member [:data :roles])))
@@ -433,8 +435,8 @@
       (not (true? (get-in member [:data :cast])))
       (refuse "that is no member the seed loader made from its cast.")
 
-      (or (org-owner? eng member) (contains? roles' roles/manager))
-      (refuse "that is the org's owner or a manager, whom no seat acts as.")
+      (and (contains? roles' roles/manager) (not (org-owner? eng member)))
+      (refuse "that is a manager, whom no seat acts as.")
 
       :else
       (assoc (t/principal {:id (str (:id member))
@@ -800,7 +802,21 @@
                              ;; its own key before it spends one. Absent
                              ;; when the principal acts for nobody.
                              (not (str/blank? (str (:acts-for principal ""))))
-                             (assoc :acts_for (str (:acts-for principal))))))))))
+                             (assoc :acts_for (str (:acts-for principal)))
+                             ;; the grant this identity WEARS with no
+                             ;; header presented (ticket 152ff81d's
+                             ;; decision 3): a person's standing grant, a
+                             ;; guest's session grant — its id and the
+                             ;; kinds it scopes, so the UI's grant chip
+                             ;; can name it. A presented header is the
+                             ;; UI's own choice, and its chip shows that.
+                             (and (get-in vis [:grant :id])
+                                  (str/blank? (get-in req [:headers "x-waymark-grant"])))
+                             (assoc :worn_grant
+                                    {:id (str (get-in vis [:grant :id]))
+                                     :kinds (->> (keys (inv/resources eng))
+                                                 (filter (:kind? vis))
+                                                 (map name) sort vec)}))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
@@ -1462,6 +1478,16 @@
         (:valid? result)
         (dry-run-response result)
 
+        ;; HC3 (ticket a052edca): the person's Allow of an agent's
+        ;; invite answers the sign-in link beside the held call, to
+        ;; them alone; it is stored nowhere, so a replay lacks it
+        (:invite-link result)
+        (let [env (render/envelope rdef (:row result) (render-opts eng req))]
+          (json-response 200 (assoc env "invite_link" (:invite-link result))
+                         media-type
+                         {"ETag" (get-in env ["meta" "etag"])
+                          "Cache-Control" "no-store"}))
+
         :else
         (envelope-response eng rdef (:row result) req 200 nil))))))
 
@@ -1831,10 +1857,14 @@
   Own by construction: the audience IS the reader. A seat grant omits
   its scope (the seat's is read fresh at every request), so it answers
   the seat it cites and that seat's scope; any other grant reads as it
-  always did."
-  [eng pid]
+  always did. A person bound by subject holds the grant on their
+  member row (ticket 36fce73d): `aud` is that row's id, read when
+  nothing stands for `pid` itself."
+  [eng pid aud]
   (when (get (inv/resources eng) :grant)
-    (when-some [g (grants/standing-grant-for eng pid)]
+    (when-some [g (or (grants/standing-grant-for eng pid)
+                      (when (and aud (not= (str aud) (str pid)))
+                        (grants/standing-grant-for eng aud)))]
       (let [seat (grants/seat-of-grant eng g)]
         (cond-> {:href (str "/api/grants/" (:id g))
                  :id (:id g)
@@ -1914,7 +1944,7 @@
     (let [pid (:id principal)
           self (home-self eng pid)
           journal (home-journal eng pid)
-          grant (home-grant eng pid)
+          grant (home-grant eng pid (grants/member-audience eng principal))
           letters (home-letters eng pid)
           ;; the greeting counts the WHOLE shelf, not the ten that fit
           ;; in the document — a capped list must not shrink the news
@@ -2147,7 +2177,14 @@
                             "token to send back as a Cookie header on "
                             "every request; one use, the same link. "
                             "Prefer this over the bind header when you "
-                            "hold nothing else.")}))))))
+                            "hold nothing else.")}
+                :sign_in {:href (str "/auth/login?invite=" token
+                                     "&return-to=/")
+                          :method "GET"
+                          :note (str "a person in a browser: sign in "
+                                     "here — the invite rides the sign-in "
+                                     "and binds to the account you sign "
+                                     "in with; one use")}))))))
 
 ;; ── the grant-introspection door (waymark-44h) ──────────────────────
 

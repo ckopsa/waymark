@@ -24,7 +24,9 @@
   router table stays untouched):
 
     GET /auth/login?return-to=/          302 → the IdP; state + PKCE
-        verifier ride a short-lived signed cookie — no server state
+        verifier ride a short-lived signed cookie — no server state;
+        an ?invite=TOKEN (the welcome doc's sign_in link) rides it too
+        and binds at the callback
     GET /auth/callback?code=…&state=…    code exchange, the access
         token verified through the SAME JWKS path as bearer
         (oidc/verify), session cookie minted
@@ -181,10 +183,15 @@
   (let [rp (:rp oidc)
         state (rand-token)
         verifier (rand-token)
-        stash (jwt/sign {:state state :verifier verifier
-                         :return-to (sanitize-return-to
-                                     (get (query-params req) "return-to"))
-                         :exp (+ (now-secs) 300)}
+        query (query-params req)
+        invite (get query "invite")
+        stash (jwt/sign (cond-> {:state state :verifier verifier
+                                 :return-to (sanitize-return-to
+                                             (get query "return-to"))
+                                 :exp (+ (now-secs) 300)}
+                          ;; a welcome link's invite survives the IdP
+                          ;; round trip on the stash, nowhere else
+                          (not (str/blank? invite)) (assoc :invite invite))
                         (:session-secret rp) {:alg :hs256})]
     {:status 302
      :headers {"Location"
@@ -278,7 +285,20 @@
                          (:model principal) (assoc :model (:model principal)))
                        (:session-secret rp) {:alg :hs256})})))
 
-(defn- callback [oidc req]
+(defn- bind-carried-invite!
+  "The invite a welcome link carried through /auth/login binds HERE, at
+  first sight of the IdP-verified principal — the browser cannot send
+  X-Waymark-Invite, so without this an invited person signing in on an
+  invited-only engine met the gate's 403 on their first request. The
+  bind is the gate's own (members/gate! with the token). A refusal (a
+  spent token) is not the callback's to answer: the session still
+  mints, and the first gated request answers with the gate's 403."
+  [eng principal invite]
+  (when-not (str/blank? (str invite))
+    (try (members/gate! eng principal invite)
+         (catch Exception _ nil))))
+
+(defn- callback [eng oidc req]
   (let [rp (:rp oidc)
         {:strs [code state]} (query-params req)
         stash (unstash rp req)]
@@ -296,6 +316,7 @@
         (try
           (let [{:keys [principal]} (oidc/verify oidc (:access_token tokens))
                 {:keys [exp token]} (mint-session rp principal)]
+            (bind-carried-invite! eng principal (:invite stash))
             {:status 302
              :headers {"Location" (:return-to stash)
                        "Set-Cookie" [(set-cookie rp (:cookie-name rp) token
@@ -697,7 +718,7 @@
                 post? (= :post (:request-method req))]
             (cond
               (and get? (= (:uri req) "/auth/login")) (login oidc req)
-              (and get? (= (:uri req) "/auth/callback")) (callback oidc req)
+              (and get? (= (:uri req) "/auth/callback")) (callback eng oidc req)
               (and get? (= (:uri req) "/auth/logout")) (logout oidc req)
 
               ;; the agent doors: an invite link is the whole key, and
