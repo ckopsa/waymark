@@ -1864,6 +1864,17 @@ fallback: `{:members :invited-only}` → one 403 problem
 (`membership-invited`); default → auto-provision unchanged. Binding
 works under either mode.
 
+The production engine (workqueue10) runs `{:members :invited-only}`
+(`workqueue10.main/membership`): an unknown sign-in, a Google account
+the IdP admitted, is refused 403 and no member row is written. A
+person joins by invite: an admin creates a member with `bind_token`
+(born `invited`), hands the person the welcome link
+`/api/-/welcome?invite=<token>`, and their first sign-in presenting
+that token binds the row to their subject and lands it `active`.
+Existing members, found by id or bound subject, are unaffected, and a
+delegate of an active member (spec-connector-door § 3) is still
+provisioned, so the person's connector sessions keep working.
+
 **Recorded:** no email, no outbox — the token travels out of band;
 `bind_token` renders like any field to an unscoped members reader
 (waymark9's SECRET_FIELDS owner-gating unported, beside the
