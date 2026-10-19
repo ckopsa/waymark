@@ -708,13 +708,19 @@
 
 (defn- entry-said
   "One scope entry as a door a person reads: `read org_plan named
-  tax_desk`, `finish ticket where repo bench`."
+  tax_desk`, `finish ticket where repo bench`. A dotted power with no
+  actions reads `use bench.edit where path ...`, never `read`: a power
+  may write or run (ticket 50722c43)."
   [e]
   (let [acts (seq (map name (:actions e)))
+        k (name (:kind e))
         f (:filter e)
         nm (or (get f :name) (get f "name"))
         others (dissoc f :name "name")]
-    (str (if acts (str/join "/" acts) "read") " " (name (:kind e))
+    (str (cond acts (str/join "/" acts)
+               (str/includes? k ".") "use"
+               :else "read")
+         " " k
          (when (nonblank nm) (str " named " nm))
          (when (seq others)
            (str " where " (str/join ", " (map (fn [[k v]] (str (name k) " " v))
