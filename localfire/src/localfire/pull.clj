@@ -223,6 +223,13 @@
                              first-ms first-backoff-ms
                              max-ms   max-backoff-ms}}]
    (let [stop   (atom false)
+         ;; one line when the engine answers, one when it stops
+         ;; answering, not one per poll
+         seen   (atom nil)
+         say!   (fn [now & parts]
+                  (when (not= now @seen)
+                    (reset! seen now)
+                    (apply log! parts)))
          c      (-> (HttpClient/newBuilder)
                     (.connectTimeout (Duration/ofSeconds 10))
                     (.build))
@@ -253,11 +260,16 @@
                                           (wait! max-ms)
                                           (recur (fresh) nil true))
                         :error        (let [ms (next-backoff backoff first-ms max-ms)]
+                                        (say! :waiting "localfire pull waiting: " (:engine-url pull)
+                                              " is not answering for link=" (:link-id pull)
+                                              "; it keeps trying.")
                                         (wait! ms)
                                         (recur tok ms refused?))
                         (do (when refused?
                               (log! "localfire pull: the engine took the token in " source
                                     "; pulling again."))
+                            (say! :connected "localfire pull connected to " (:engine-url pull)
+                                  " link=" (:link-id pull) " routine=" (:routine pull))
                             (recur tok nil false)))))))]
      {:run run :stop stop})))
 
