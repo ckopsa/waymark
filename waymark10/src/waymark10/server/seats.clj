@@ -792,11 +792,14 @@
                    " judgment — narrow the entry with a filter, or name a"
                    " judgment whose queue narrows it"))
 
+            ;; an any-of filter ("drafting,simulated") is judged state by
+            ;; state: each one the walk covers needs its own way out
             state
-            (when-not (leaves-the-state? rdef (:actions entry) state)
-              (str "no door this seat may take moves a " state " " walk
-                   " out of " state " — add a door of " walk
-                   " that leaves " state " to that scope entry's actions,"
+            (when-some [stuck (first (remove #(leaves-the-state? rdef (:actions entry) %)
+                                             (map str/trim (str/split state #","))))]
+              (str "no door this seat may take moves a " stuck " " walk
+                   " out of " stuck " — add a door of " walk
+                   " that leaves " stuck " to that scope entry's actions,"
                    " or filter the entry by a state one of its doors"
                    " leaves"))
 
