@@ -114,7 +114,12 @@ jobs:
       tag: ${{ steps.tag.outputs.sha }}
 
     steps:
+      # On a pull_request the default checkout is the merge commit, whose
+      # sha names nothing a clone can ask for. The PR's head is the commit
+      # the director names, so the image is built and tagged at it.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Tag
         id: tag
@@ -132,11 +137,13 @@ jobs:
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
-      # Skipped on pull_request: a fork's PR has no write token, and a
-      # PR's job here is to prove the image still builds, not to publish
-      # one. Login would be the step that fails, so it does not run.
+      # Skipped on a fork's pull_request: it has no write token, and its
+      # job here is to prove the image still builds, not to publish one.
+      # Login would be the step that fails, so it does not run. A PR from
+      # a branch of this repository (bench/*, an org's PR) publishes, so
+      # an org can be cloned and filmed before it merges.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -181,7 +188,7 @@ jobs:
           build-args: |
             BASE=${{ steps.base.outputs.image }}
           platforms: linux/${{ matrix.arch }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # The dependency layer (`clojure -P -M:dev`) downloads the
@@ -217,10 +224,13 @@ jobs:
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
-      # Skipped on pull_request for the legs' reason: nothing was pushed,
-      # so there is nothing to join. The job still answers success.
+      # Skipped on a fork's pull_request for the legs' reason: nothing was
+      # pushed, so there is nothing to join. The job still answers
+      # success. A same-repo PR joins its legs under the bare short sha of
+      # its head, as main does; `latest` stays main's alone, and no job
+      # below runs on a pull_request, so it never migrates or rolls.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -228,7 +238,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Join the architectures into one index
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/workqueue10
           TAG: ${{ needs.arch.outputs.tag }}
