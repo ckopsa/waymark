@@ -234,7 +234,7 @@
                           {:now-fn (constantly t0)})
         h (dev/handler eng)
         t (edn-resource "seats/director.edn")
-        seat (fill t :seat {:clone_power "clone.call" :film_power "clone.render"})
+        seat (fill t :seat {})
         vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
                     (inv/resources eng))
         kinds (remove #(str/includes? (:kind %) ".") (:scope seat))]
@@ -253,7 +253,11 @@
       (is (= {:state "proposed"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
           "the walk is the proposed plans"))
-    (testing "its powers are the clone and the film the house names"
-      (is (= #{"clone.call" "clone.render"}
+    (testing "its powers are the clone door's four"
+      (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"}
              (into #{} (comp (map :kind) (filter #(str/includes? % ".")))
-                   (:scope seat)))))))
+                   (:scope seat)))))
+    (testing "its instructions name only the tools its scope holds"
+      (let [named (into #{} (map (fn [[_ k a]] (str k "." a)))
+                        (re-seq #"\b([a-z]+)__([a-z_]+)" (:instructions seat)))]
+        (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"} named))))))
