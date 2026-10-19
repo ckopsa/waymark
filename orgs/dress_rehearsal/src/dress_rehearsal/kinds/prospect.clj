@@ -1,4 +1,4 @@
-(ns dress_rehearsal.kinds.prospect
+(ns dress-rehearsal.kinds.prospect
   "A prospect: a company that may qualify for the R&D credit, sent by
   its CPA or found through the website. The qualification call says
   whether it likely passes the four-part test; nothing starts until it

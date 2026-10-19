@@ -1,4 +1,4 @@
-(ns dress_rehearsal.org
+(ns dress-rehearsal.org
   "dress_rehearsal: the org's module. `resources` is the whole of what
   this org declares, stamped with its domain; the engine boots it, the
   conformance suite judges it. Nothing here is engine code.
@@ -7,9 +7,9 @@
   an engagement letter, each client gets one `study` per tax year that
   a specialist prepares and the principal signs off, and a delivered
   study is billed with an `invoice`."
-  (:require [dress_rehearsal.kinds.prospect :refer [prospect]]
-            [dress_rehearsal.kinds.study :refer [study]]
-            [dress_rehearsal.kinds.invoice :refer [invoice]]
+  (:require [dress-rehearsal.kinds.prospect :refer [prospect]]
+            [dress-rehearsal.kinds.study :refer [study]]
+            [dress-rehearsal.kinds.invoice :refer [invoice]]
             [waymark10.dsl :refer [in-domain]]))
 
 (set! *warn-on-reflection* true)
