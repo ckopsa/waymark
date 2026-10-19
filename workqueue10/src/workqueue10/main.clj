@@ -969,6 +969,15 @@
     (seed/boot! eng seed-name
                 {:wall-url (some-> wall-url str not-empty)})))
 
+(def membership
+  "Who the serving engine admits (ticket c157a094): invited members
+  only. An unknown principal is refused 403 (members `not-invited`)
+  and no member row is written; an existing member, a presented
+  invite token and a delegate of an active member (spec-connector-door
+  § 3) still pass. The IdP admits any Google account, so first sight
+  is no invitation."
+  :invited-only)
+
 (defn- clocked-engine
   "The engine `build` makes of `opts`, with the demo clock
   (docs/spec-agent-demo-walks.md § 7) assembled behind a demo seed
@@ -1051,6 +1060,8 @@
                              ;; (WAYMARK10_OIDC_*); absent env = the
                              ;; dev-header resolver, unchanged
                              :oidc (oidc/from-env)
+                             ;; invited members only: see `membership`
+                             :members membership
                              ;; what handlers and guards may read of the
                              ;; wiring: the home_assistant feature token
                              ;; and the caller behind it (waymark-i89n.4),
