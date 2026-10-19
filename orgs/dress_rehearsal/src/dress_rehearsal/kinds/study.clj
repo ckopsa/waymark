@@ -1,4 +1,4 @@
-(ns dress-rehearsal.kinds.study
+(ns dress_rehearsal.kinds.study
   "A study: one client's R&D credit study for one tax year. Records are
   collected, the AI drafts each project's narrative and the specialist
   confirms it with the client's engineering lead, the specialist

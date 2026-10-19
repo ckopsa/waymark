@@ -1,4 +1,4 @@
-(ns dress-rehearsal.kinds.invoice
+(ns dress_rehearsal.kinds.invoice
   "An invoice: the fee for one delivered study, a share of the credit
   with a fixed minimum, due in 30 days. It names its study by id."
   (:require [waymark10.dsl :refer [defguard defresource refuse]]))
