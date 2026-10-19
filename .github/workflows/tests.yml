@@ -618,13 +618,17 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
-      # Every org under orgs/ through the org conformance suite (ticket
-      # 86f96963): exit 1 on any error finding.
-      - name: orgs — conformance, every org under orgs/
+      # The live orgs under orgs/ and orgs/example through the org
+      # conformance suite (ticket 86f96963): exit 1 on any error finding.
+      # A drafting org (:live absent or false) has error findings by
+      # design, the onboarding walk's steps, so only org-findings reports
+      # it (ticket 7310836f); go_live's head sets :live true and is
+      # judged here in full.
+      - name: orgs — conformance, the live orgs and the example
         id: conform
         run: >-
           bash scripts/jvm-retry.sh "test-factory conform" factorykit "$RUNNER_TEMP/conform.txt"
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --live ../orgs ../orgs/example
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
