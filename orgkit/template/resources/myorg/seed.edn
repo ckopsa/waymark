@@ -10,9 +10,14 @@
  {:owner {:id "owner" :display "The Owner" :type :human :roles ["approver"]}}
  ;; a seat is a factorykit template and its params, or a whole seat
  ;; map under :seat when no template walks the org's kinds
+ ;; the org's mayor holds item's doors out of open, so an open item has
+ ;; a leaver; its scope names only the org's own kinds
  :seats
- [{:template "mayor"
-   :params {:repos "owner/repo" :domain "myorg" :domain_id [:ref :myorg]}}]
+ [{:template "org-mayor"
+   :params {:org "myorg" :domain "myorg" :domain_id [:ref :myorg]
+            :owner "owner" :budget_usd_per_week 8M
+            :kinds [{:kind "item" :actions ["complete" "drop"]}]
+            :wakes [{:kind "item" :actions ["create"]}]}}]
  ;; a judgment is a factorykit judgment template and its params
  :judgments
  [{:template "sitting" :params {:ticket_repo "owner/repo"}}]

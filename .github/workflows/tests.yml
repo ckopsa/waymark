@@ -625,6 +625,14 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory conform" factorykit "$RUNNER_TEMP/conform.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs
+      # The orgkit template, copied where a new org starts (ticket
+      # 70e377e7): every org drafted from it starts from a base that passes.
+      - name: orgs — conformance, orgkit/template as orgs/myorg
+        id: conform-template
+        run: >-
+          cp -r orgkit/template orgs/myorg &&
+          bash scripts/jvm-retry.sh "test-factory conform-template" factorykit "$RUNNER_TEMP/conform-template.txt"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs/myorg
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
@@ -638,6 +646,7 @@ jobs:
           (failure() || steps.check-factory.outputs.retried == 'true' ||
            steps.factorykit.outputs.retried == 'true' ||
            steps.conform.outputs.retried == 'true' ||
+           steps.conform-template.outputs.retried == 'true' ||
            steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
