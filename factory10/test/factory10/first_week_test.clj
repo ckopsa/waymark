@@ -56,12 +56,12 @@
         shots))
 
 (defn- day-captions
-  "What `captions` answers for days 2026-10-19 on, named `weekdays`."
+  "What `captions` answers for days named `weekdays`: each reads since
+  the last day caption."
   [weekdays]
-  (map (fn [weekday d]
-         [(str weekday ". ")
-          {:since (str "2026-10-" d) :until (str "2026-10-" (inc d)) :domain "example"}])
-       weekdays (range 19 26)))
+  (map (fn [weekday]
+         [(str weekday ". ") {:window "shot" :domain "example"}])
+       weekdays))
 
 (defn- counts
   "The `$rows` holes of a shot's say."
@@ -79,7 +79,7 @@
     (testing "the opening says the business and its brief's first sentence"
       (is (= "Example Landscaping: A six-person landscaping business in Provo."
              (:say (first shots)))))
-    (testing "seven day shots, each its weekday and a `$day` hole of its date"
+    (testing "seven day shots, each its weekday and a `$day` hole of the shot's window"
       (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
              (captions shots))))
     (testing "the closing counts each kind's finished rows over the week, then the taps"
