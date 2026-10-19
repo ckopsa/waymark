@@ -328,6 +328,63 @@
            (get-in (dev/row eng :seat (get-in more [:refs :s3 :id])) [:data :charter]))
         "and the gained seat points at it")))
 
+(def ^:private granted
+  "The live seed with a grant step: a step that makes no named row."
+  (update live :steps conj
+          {:grant {:audience [:cast :plan]
+                   :scope [{:kind "chore" :actions ["finish"]}]}
+           :ref :g1}))
+
+(def ^:private pointing
+  "A gained step that points at the grant an earlier load made."
+  {:as :ada :kind :chore :create {:title [:ref :g1]} :ref :c9})
+
+(defn- kept-refs [eng seed-name]
+  (into {} (map (fn [[k v]] [(keyword (name k)) (str v)]))
+        (get-in (dev/row eng :member (str "seed-" seed-name)) [:data :walked_refs])))
+
+(defn- strip-refs!
+  "The marker as an engine seeded before refs were kept holds it."
+  [eng seed-name]
+  (let [st (:storage eng)
+        id (str "seed-" seed-name)]
+    (store/with-tx st
+      (fn [tx]
+        (let [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id (dissoc (:data raw) :walked_refs)
+                              (:next-flip-at raw)))))))
+
+(deftest walking-a-step-records-its-ref
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})]
+    (is (= (get-in once [:refs :g1 :id]) (:g1 (kept-refs eng "live"))))
+    (is (= (get-in once [:refs :c1 :id]) (:c1 (kept-refs eng "live"))))
+    (testing "and a gained step's ref is recorded as it is walked"
+      (let [more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+        (is (= (get-in more [:refs :c9 :id]) (:c9 (kept-refs eng "live"))))))))
+
+(deftest a-gained-step-may-point-at-a-grant-an-earlier-load-made
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})
+        more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+    (is (= {:members 0 :steps 1} (:added more)))
+    (is (= (get-in once [:refs :g1]) (get-in more [:refs :g1]))
+        "the skipped grant step is bound from the marker")
+    (is (= (get-in once [:refs :g1 :id])
+           (get-in (dev/row eng :chore (get-in more [:refs :c9 :id])) [:data :title]))
+        "and the gained chore points at that same grant")))
+
+(deftest a-gained-step-pointing-at-a-ref-walked-before-refs-were-kept-refuses
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng granted {:params params})
+        _ (strip-refs! eng "live")
+        chores (count (dev/rows eng :chore))
+        e (refused #(seed/load! eng (update granted :steps conj pointing) {:params params}))]
+    (is (some? e))
+    (is (re-find #"`:g1`.*walked before the seed's marker kept refs"
+                 (str (ex-message e))))
+    (is (= chores (count (dev/rows eng :chore))) "and nothing was made")))
+
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
         once (seed/load! eng live {:params params})]
