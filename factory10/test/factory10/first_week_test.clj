@@ -21,6 +21,12 @@
 (def ^:private seed
   (edn/read-string (slurp (io/resource "example/seed.edn"))))
 
+(defn- example-dir
+  "orgs/example, found from its seed at <org-dir>/resources/example/seed.edn."
+  []
+  (.getPath (.getParentFile (.getParentFile (.getParentFile
+                                             (io/file (io/resource "example/seed.edn")))))))
+
 (def ^:private filmed-on
   {:clone_url "https://clone.example.test/example"
    :head_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
@@ -76,6 +82,18 @@
             done (inv/invoke! e :scene id :check {}
                               (assoc opts :idempotency-key (str (random-uuid))))]
         (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
+(deftest the-audit-renders-the-example-org's-scene-at-its-head
+  (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
+                                   (:day_one filmed-on))
+        {:keys [scene clone]} (edn/read-string text)]
+    (testing "it is the scene the seed renders, as edn text"
+      (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""))) scene)))
+    (testing "at the head it names, on no clone yet"
+      (is (= {:url "" :head_sha (:head_sha filmed-on)} clone)))
+    (testing "with no hole left and within the plan's field"
+      (is (not (str/includes? text "{{")))
+      (is (<= (count text) 65536)))))
 
 (def ^:private rules
   [{:name "chrome-leaks" :metric "chrome_leaks" :op "=" :threshold 0

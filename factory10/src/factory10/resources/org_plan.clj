@@ -62,6 +62,10 @@
   the org-findings artifact beside the findings (ticket 4ab34d18), and
   `record_findings` writes it for that head, so the page always matches
   the latest head; a propose without one keeps the recorded page.
+  The same run renders the org's first-week scene (ticket 4dbb8243),
+  which the findings doors write as `first_week_scene` with the head it
+  was rendered at as `first_week_scene_sha`: the director plays it only
+  when that is the change's head.
 
   `answer` AND `go_live` ARE THE OWNER'S. A question is asked of the
   person who owns the plan, so only that person answers it, or an
@@ -309,6 +313,9 @@
                 (assoc-in [:data :next_step] (next-step found)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
+      (some? (:first_week_scene inp))
+      (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
+          (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -593,6 +600,10 @@
                :x-display {:hidden true
                            :label "The run's law page"}}
     [:maybe [:string {:max 40000}]]]
+   [:first_week_scene {:optional true
+                       :x-display {:hidden true
+                                   :label "The run's first-week scene"}}
+    [:maybe [:string {:max 65536}]]]
    [:live_flag {:optional true
                 :x-display {:hidden true
                             :label "The branch says live"}}
@@ -713,6 +724,20 @@
                  :label "The law"
                  :help "The org's law in sentences, as the pull request carries it: what the person approves when it merges."}}
      [:maybe [:string {:max 40000}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the scene the audit's run
+    ;; rendered for that head, which the director plays (ticket 4dbb8243)
+    [:first_week_scene {:optional true
+                        :x-display
+                        {:raw true
+                         :label "The first-week scene"
+                         :help "The script of the org's simulated first week, rendered by the audit from the org's seed: what the director plays on a clone."}}
+     [:maybe [:string {:max 65536}]]]
+    [:first_week_scene_sha {:optional true
+                            :x-display
+                            {:raw true
+                             :label "Scene rendered at"
+                             :help "The head commit of the org's branch the first-week scene was rendered at."}}
+     [:maybe [:string {:max 64}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true

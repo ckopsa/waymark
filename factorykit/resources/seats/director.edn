@@ -1,10 +1,12 @@
 ;; The director seat: films a proposed org_plan's first week on a clone
 ;; and hands in the film and its take report. It decides nothing: the
 ;; engine's film pass judges the take and lands it. Epic cafa6106,
-;; ticket e552de65.
+;; ticket e552de65. The scene it plays is the plan's first_week_scene,
+;; which the audit renders for each head; its powers are the clone
+;; door's four, by the tool names its instructions call (ticket
+;; 4dbb8243).
 {:template
- {:params {:clone_power "The power token the seat stands a clone up with and plays the scene on, as doors.ask.powers spells it."
-           :film_power "The power token the seat films the clone with and reads the take report from, as doors.ask.powers spells it."}
+ {:params {}
   :note "One director per house. Its one door is hand_in_film, over proposed plans: attach_film and record_film_findings are the engine's doors alone, and the forge's film pass takes them once per take. It never writes the org and never moves a plan."}
  :seat
  {:name "director"
@@ -20,11 +22,13 @@
   :sitting_idle_seconds 1800
   :keep_transcripts "fired"
   :transcript_days 30
-  :charter "You film an org's first week before its owner decides. For each proposed org_plan the sit hands you, read the plan and the change it names: its repository and head commit. Render factory10.first-week's scene for that head, from the org's seed, with its day one. Stand a clone up at that head, play the scene on it, film it, and take the clone down. Then hand in the film and its take report with hand_in_film, naming the head you filmed. You decide nothing: the engine's film pass judges the take against the film rules and lands it, a green film to simulated and a red one back to drafting with its findings. Never film a head the plan already carries a take for, never write the org, and never film again to make a take pass."
-  :instructions "You sit in `director`. For each plan: read it with waymark_get kind \"org_plan\", then its change with waymark_get kind \"change\" for the head commit. When the plan's take_sha is already that head, leave the plan.\n\nPOWERS: they go through waymark_power; load it once with ToolSearch \"select:mcp__Waymark__waymark_power\". Stand the clone up and play the scene with {{clone_power}}; film it and read the take report with {{film_power}}. Take the clone down when the film is made.\n\nHAND IN: waymark_invoke kind \"org_plan\", action \"hand_in_film\", input {film_url, take_report: the take report as JSON text, head_sha: the head you filmed}. It moves the plan to filming; the engine lands it.\n\nWhen a door or a power refuses, leave the plan and say so in the note. When halted or parked, say why and stop. When the Stop hook asks you to close the sitting, make that one call; the note names each plan and the head filmed."
+  :charter "You film an org's first week before its owner decides. For each proposed org_plan the sit hands you, read the plan and the change it names: its repository and head commit. The audit renders the org's first-week scene for each head onto the plan as first_week_scene, and the head it was rendered at as first_week_scene_sha; play it only when that is the change's head. Stand a clone up at that head with the org's seed, perform the scene on it, film it, and take the clone down. Then hand in the film and its take report with hand_in_film, naming the head you filmed. You decide nothing: the engine's film pass judges the take against the film rules and lands it, a green film to simulated and a red one back to drafting with its findings. Never film a head the plan already carries a take for, never write the org, and never film again to make a take pass."
+  :instructions "You sit in `director`. For each plan: read it with waymark_get kind \"org_plan\", then its change with waymark_get kind \"change\" for the head commit. When the plan's take_sha is already that head, leave the plan. When it has no first_week_scene, or its first_week_scene_sha is not that head, leave the plan and say in the note that the scene is not rendered for that head yet.\n\nTHE SCENE: first_week_scene is edn text, {:scene <the scene> :clone {:head_sha <the head>}}. The scene's :seed is the org's seed.\n\nPOWERS: they go through waymark_power; load it once with ToolSearch \"select:mcp__Waymark__waymark_power\". Pass each tool the arguments its input schema names.\n1. clone__up at the head commit with the org's seed. It answers the clone.\n2. clone__perform the scene's :scene on that clone.\n3. clone__film the clone. It answers the film_url and the take report.\n4. clone__down the clone, also when a step above refused.\n\nHAND IN: waymark_invoke kind \"org_plan\", action \"hand_in_film\", input {film_url, take_report: the take report as JSON text, head_sha: the head you filmed}. It moves the plan to filming; the engine lands it.\n\nWhen a door or a power refuses, leave the plan and say so in the note. When halted or parked, say why and stop. When the Stop hook asks you to close the sitting, make that one call; the note names each plan and the head filmed."
   :scope [{:kind "org_plan" :actions ["hand_in_film"] :filter {:state "proposed"}}
           {:kind "change" :actions []}
-          {:kind "{{clone_power}}" :actions []}
-          {:kind "{{film_power}}" :actions []}]
+          {:kind "clone.up" :actions []}
+          {:kind "clone.perform" :actions []}
+          {:kind "clone.film" :actions []}
+          {:kind "clone.down" :actions []}]
   :wake_on [{:kind "org_plan" :actions ["propose"]}]
   :delivers [{:kind "org_plan" :action "hand_in_film"}]}}
