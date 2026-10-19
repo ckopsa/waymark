@@ -493,6 +493,19 @@ function secretDialog({heading, note, value, copyOk, copyFallback,
   field.select();     /* selected on open — Ctrl-C works before the first tick */
   return dlg;
 }
+/* HC3 (ticket a052edca): the person's Allow of an agent's invite
+   answers `invite_link` beside the held call, once, with no-store; it
+   is stored nowhere, so this dialog is the one place it is shown */
+function inviteLinkDialog(link) {
+  const url = link.startsWith("/") ? location.origin + link : link;
+  return secretDialog({
+    heading: "The invite's sign-in link",
+    note: "Shown once: it is stored nowhere, so copy it now and send it " +
+          "to the one you invited.",
+    value: url,
+    copyOk: "sign-in link copied",
+    copyFallback: "copy blocked by the browser — the link is selected, press Ctrl-C"});
+}
 async function renderAccess(view, seq) {
   let w = null;
   try { w = await wellKnown(); } catch { /* the asks stay empty */ }
