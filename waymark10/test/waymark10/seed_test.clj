@@ -442,6 +442,18 @@
       (let [e (refused #(seed/load! eng (org-seed nm) {:org "other"}))]
         (is (= "org_mismatch" (:reason (ex-data e))))))))
 
+(deftest an-org-name-longer-than-the-marker-holds-is-refused-before-any-step
+  (let [eng (engine {:name "waymark"})
+        too-long (apply str (repeat 65 "o"))
+        e (refused #(seed/load! eng (org-seed "long") {:org too-long}))]
+    (is (= "org_too_long" (:reason (ex-data e))))
+    (is (re-find #"65 characters" (str (ex-message e))))
+    (is (empty? (dev/rows eng :chore)) "and no step was walked")
+    (is (nil? (dev/row eng :member "seed-long")) "and no marker was written")
+    (testing "a name of exactly 64 characters loads"
+      (let [at-cap (apply str (repeat 64 "o"))]
+        (is (true? (:seeded (seed/load! eng (org-seed "long") {:org at-cap}))))))))
+
 (deftest an-old-marker-with-its-org-in-the-display-is-read-and-rewritten
   (let [eng (engine {:name "waymark"})
         st (:storage eng)
