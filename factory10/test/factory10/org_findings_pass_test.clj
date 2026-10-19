@@ -256,6 +256,47 @@
       (is (= head-1 (:findings_sha (data))))
       (is (= head-3 (:first_week_scene_sha (data)))))))
 
+(deftest the-pass-fits-an-over-long-artifact-to-the-plan
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (a-change! eng 101 head-1)
+        id (a-proposed-plan! eng "greenleaf" change)
+        _ (filming! eng id "fffffff1")
+        _ (inv/invoke! eng :org_plan id :record_film_findings
+                       {:head_sha "fffffff1" :findings [red-film]} the-forge)
+        long-key (subs (apply str "lint/src/dress_rehearsal/kinds/study.clj/"
+                              (repeat 120 "x"))
+                       0 120)
+        long-one (assoc lint :key long-key :sentence (apply str (repeat 400 "s")))
+        found (vec (concat [long-one]
+                           (for [n (range 248)] (assoc lint :key (str "lint/quote/" n)))
+                           [red-film]))
+        by-name (atom {(str "org-findings-greenleaf-" head-1) {:greenleaf found}})
+        logged (atom [])
+        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                     (fn [& xs] (swap! logged conj (apply str xs))))
+        recorded #(get-in (plan eng id) [:data :findings])]
+    (is (= 250 (count found)))
+    (is (= "drafting" (name (:state (plan eng id)))))
+    (testing "the over-long artifact records, fitted to the caps"
+      (is (= 1 (:findings (pass!))) (pr-str @logged))
+      (is (= head-1 (get-in (plan eng id) [:data :findings_sha])))
+      (is (= 200 (count (recorded))))
+      (is (= (:key red-film) (:key (first (recorded)))) "the errors first")
+      (let [{k :key sentence :sentence} (second (recorded))]
+        (is (= 64 (count k)))
+        (is (re-matches #".{55}~[0-9a-f]{8}" k))
+        (is (= (subs long-key 0 55) (subs k 0 55)))
+        (is (= 240 (count sentence)))
+        (is (= "…" (subs sentence 239)))))
+    (testing "the key is the same on the next pass"
+      (let [k (:key (second (recorded)))]
+        (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+        (swap! by-name assoc (str "org-findings-greenleaf-" head-3) {:greenleaf found})
+        (is (= 1 (:findings (pass!))) (pr-str @logged))
+        (is (= head-3 (get-in (plan eng id) [:data :findings_sha])))
+        (is (= k (:key (second (recorded)))))))))
+
 (deftest a-source-without-artifacts-records-nothing
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
