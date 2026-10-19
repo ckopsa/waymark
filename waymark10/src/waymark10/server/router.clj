@@ -1476,6 +1476,16 @@
         (:valid? result)
         (dry-run-response result)
 
+        ;; HC3 (ticket a052edca): the person's Allow of an agent's
+        ;; invite answers the sign-in link beside the held call, to
+        ;; them alone; it is stored nowhere, so a replay lacks it
+        (:invite-link result)
+        (let [env (render/envelope rdef (:row result) (render-opts eng req))]
+          (json-response 200 (assoc env "invite_link" (:invite-link result))
+                         media-type
+                         {"ETag" (get-in env ["meta" "etag"])
+                          "Cache-Control" "no-store"}))
+
         :else
         (envelope-response eng rdef (:row result) req 200 nil))))))
 

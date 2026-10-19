@@ -1095,7 +1095,7 @@
         owner (some-> (get-in row [:data :owner]) str not-empty)
         {:keys [kind action id]} (get-in row [:data :door])]
     (if (and owner
-             (or (and (= "grant" (str kind)) (nil? (some-> id str not-empty)))
+             (or (and (#{"grant" "member"} (str kind)) (nil? (some-> id str not-empty)))
                  ;; HC2 (ticket bed1f2f6): an agent's member suspend or
                  ;; reinstate is the person's own, the same way
                  (and (= "member" (str kind)) (some-> id str not-empty)
@@ -1103,12 +1103,22 @@
       ;; HC1 (ticket b83e690d): an agent's grant create past its leash
       ;; is the person's own create. The hand is the person's, so the
       ;; guards judge it as they judge that person's direct create, and
-      ;; the log names the agent that asked as `requested_by`
+      ;; the log names the agent that asked as `requested_by`. HC3
+      ;; (ticket a052edca): an agent's invite is the same
       (assoc (t/principal {:id owner :display owner}) :requested-by caller)
       (cond-> (t/principal {:id caller :type :agent :display caller})
         owner (assoc :acts-for owner)
         (some-> (get-in row [:data :decided_by]) str not-empty)
         (assoc :allowed-by (str (get-in row [:data :decided_by])))))))
+
+(defn- invite-link
+  "The sign-in link of an invite a replay just made (HC3, ticket
+  a052edca), or nil. It is answered to the allowing person once and
+  written nowhere: not to the held call, not to a log."
+  [kind written]
+  (when (and (= :member kind) (= :invited (:state written)))
+    (some->> (get-in written [:data :bind_token]) str not-empty
+             (str "/auth/login?invite="))))
 
 (defn- forward-door!
   "Replay one ALLOWED held seat call at its door, once (server/
@@ -1122,8 +1132,11 @@
   keeps `prefill_digests`, the row is read again: if none of those
   fields moved, the replay runs once more at the row's current etag;
   if some did, it fails naming them. A door with no digests keeps the
-  strict version fence."
-  [eng row]
+  strict version fence.
+
+  `sink`, when given, is an atom that receives an invite's sign-in
+  link (`invite-link`)."
+  [eng row sink]
   (let [{:keys [kind action id if_match prefill_digests]} (get-in row [:data :door])
         kind (keyword (str kind))
         action (keyword (str action))
@@ -1159,6 +1172,8 @@
                       (attempt (assoc opts :if-match (refence e)))
                       (throw e))))
             written (:row res)]
+        (when-some [link (when sink (invite-link kind written))]
+          (reset! sink link))
         (finish! eng (:id row) :land
                  {:answer (wire/write-json
                            (cond-> {:kind (name kind) :action (name action)}
@@ -1187,12 +1202,15 @@
   `isError`: the tool refused, so the call did not do what the person
   allowed. Nothing here throws: the person's tap
   already committed, and a wire failure is a fact about the call, not
-  about the tap."
-  [eng row]
-  (when (= :allowed (:state row))
-    (if (some? (get-in row [:data :door]))
-      (forward-door! eng row)
-      (forward-tool! eng row))))
+  about the tap.
+
+  `sink`, when given, receives an invite's sign-in link (HC3)."
+  ([eng row] (forward! eng row nil))
+  ([eng row sink]
+   (when (= :allowed (:state row))
+     (if (some? (get-in row [:data :door]))
+       (forward-door! eng row sink)
+       (forward-tool! eng row)))))
 
 (defn- error-words
   "What a tool that answered `isError` said: its first text part, or the
@@ -1390,18 +1408,22 @@
   person's one yes, which is the whole thing this kind exists to
   prevent."
   [eng rdef action out]
-  (when (and (= :held_call (:kind rdef))
-             (= :allow action)
-             (map? out)
-             (:transition out)
-             (nil? (:replayed? out))
-             (= :allowed (:state (:row out))))
-    (try
-      (forward! eng (:row out))
-      (catch Exception e
-        (warn! "the forward of held call " (:id (:row out)) " failed ("
-               (ex-message e) ")"))))
-  out)
+  (if (and (= :held_call (:kind rdef))
+           (= :allow action)
+           (map? out)
+           (:transition out)
+           (nil? (:replayed? out))
+           (= :allowed (:state (:row out))))
+    (let [link (atom nil)]
+      (try
+        (forward! eng (:row out) link)
+        (catch Exception e
+          (warn! "the forward of held call " (:id (:row out)) " failed ("
+                 (ex-message e) ")")))
+      ;; HC3 (ticket a052edca): an invite's sign-in link rides this
+      ;; answer alone, the allowing person's; no row keeps it
+      (cond-> out @link (assoc :invite-link @link)))
+    out))
 
 ;; ── the expiry sweep (R-7) ──────────────────────────────────────────
 
