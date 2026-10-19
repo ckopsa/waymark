@@ -18,7 +18,9 @@
   A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
   `{\"$rows\": {kind, since, until, field, terminal, count, none}}` and
   `{\"$moves\": {kind, since, until, by, none}}` holes, and
-  `{\"$day\": {since, until, domain, none}}`. `check` judges each hole;
+  `{\"$day\": {since, until, domain, none}}`, whose window may instead be
+  `window: \"shot\"`: since the take's last `$day` was filled (`take-run`).
+  `check` judges each hole;
   the performer fills it when the shot plays (`fill-say`), from the rows
   the scene's clone holds in that window (`rows-in-window`), the
   transitions its log holds there (`moves-in-window`), or one sentence
@@ -438,9 +440,9 @@
   "Why one `$day` hole cannot be filled; nil when it can. Its `domain`
   is judged for shape only: a domain no kind names plays a quiet day."
   [h]
-  (let [names ["since" "until" "domain" "none"]]
+  (let [names ["since" "until" "window" "domain" "none"]]
     (if-not (map? h)
-      "a `$day` hole is a map of `since`, `until` and `domain`."
+      "a `$day` hole is a map of `since`, `until` and `domain`, or of `window` and `domain`."
       (let [stray (remove (set names) (keys h))]
         (cond
           (seq stray)
@@ -449,6 +451,15 @@
 
           (str/blank? (some-> (get h "domain") str))
           "a `$day` hole names a `domain`."
+
+          (contains? h "window")
+          (cond
+            (not= "shot" (get h "window"))
+            (str "a `$day` hole's `window` is \"shot\", and this one is "
+                 (tick (get h "window")) ".")
+
+            (or (contains? h "since") (contains? h "until"))
+            "a `$day` hole with a `window` takes no `since` or `until`.")
 
           :else (span-problem "$day" h))))))
 
@@ -470,6 +481,13 @@
                     :else say-shape))
                 say)))
 
+(defn take-run
+  "One take as the performer plays it: an atom holding the instant the
+  take's last `$day` hole of `window: \"shot\"` was filled, and before
+  the first, the instant the take began (`began`, now unless given)."
+  ([] (take-run (Instant/now)))
+  ([^Instant began] (atom {:day-filled began})))
+
 (defn fill-say
   "A shot's `say` as the film speaks it. A string stays as written; a
   list is joined, each `$rows` hole replaced by the summary lines of the
@@ -486,10 +504,14 @@
   {:kind :since :until :by} (`moves-in-window`), or by its `none`
   (`nothing moved`). Each `$day` hole is replaced by the sentence
   `day-of` answers, a fn of {:since :until :domain} (`day-in-window`),
-  or by its `none` (`A quiet day.`) when it answers nil."
+  or by its `none` (`A quiet day.`) when it answers nil. A `$day` hole of
+  `window: \"shot\"` reads [the instant `run` holds, now), and leaves now
+  on `run` for the next one; `run` is the take's `take-run`, a fresh one
+  unless given."
   ([say rows-of] (fill-say say rows-of (constantly [])))
   ([say rows-of moves-of] (fill-say say rows-of moves-of (constantly nil)))
-  ([say rows-of moves-of day-of]
+  ([say rows-of moves-of day-of] (fill-say say rows-of moves-of day-of (take-run)))
+  ([say rows-of moves-of day-of run]
    (let [say (plain say)
          spoken (fn [lines h none]
                   (if (seq lines)
@@ -534,9 +556,14 @@
                                                  :by (get h "by" "seats")})
                                       h no-moves)
                               (if-some [h (day-hole-of part)]
-                                (or (day-of {:since (instant-of (get h "since"))
-                                             :until (instant-of (get h "until"))
-                                             :domain (str (get h "domain"))})
+                                (or (day-of (if (= "shot" (get h "window"))
+                                              (let [now (Instant/now)
+                                                    [was] (swap-vals! run assoc :day-filled now)]
+                                                {:since (:day-filled was) :until now
+                                                 :domain (str (get h "domain"))})
+                                              {:since (instant-of (get h "since"))
+                                               :until (instant-of (get h "until"))
+                                               :domain (str (get h "domain"))}))
                                     (str (get h "none" quiet-day)))
                                 (str part)))))))))))))
 

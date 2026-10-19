@@ -173,6 +173,26 @@ Acme's study`.
 the domain itself, and a domain no kind names plays as a quiet day. A
 day with nothing to tell says its `none`, or `A quiet day.`
 
+In place of `since` and `until`, a `$day` hole may say
+`"window": "shot"`: it reads the transitions and held calls born since
+the previous `$day` hole of this take was filled (the first one: since
+the take began), up to the moment the performer fills it, ranked,
+phrased and `none`d as above. The performer keeps the previous fill's
+instant on the take's run (`take-run`). `check` refuses any other
+`window`, and a `window` beside a `since` or an `until`.
+
+```json
+{"say": ["Tuesday. ", {"$day": {"window": "shot", "domain": "acme"}}]}
+```
+
+A filmed week is played this way. A clone runs no seats (clone-mcp
+strips every fire key) and every seed row on it is born the day it
+boots, so a dated `$day` would put the whole week on day 1. Instead the
+director writes each day's events as `meanwhile` shots before that
+day's caption, and the caption's `{"window": "shot"}` reads what those
+calls did. factorykit's `scenes/first-week.edn` does so; its weekday
+words are labels.
+
 ## `wearing`
 
 `wearing` is a map from a cast id to the grant that cast member wears
