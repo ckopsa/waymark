@@ -316,6 +316,12 @@
       (is (= "In came: nothing came in."
              (scenes/fill-say ["In came: " (hole "2026-01-01" "2026-01-02") "."]
                               rows-of))))
+    (testing "a counting hole says how many, of the terminal ones when it asks"
+      (let [counted (assoc-in (hole (.minusSeconds now 3600) (.plusSeconds now 3600))
+                              ["$rows" :count] true)]
+        (is (= "2 in." (scenes/fill-say [counted " in."] rows-of)))
+        (is (= "0 in." (scenes/fill-say [(assoc-in counted ["$rows" :terminal] true) " in."]
+                                        rows-of)))))
     (testing "a string say is spoken as written"
       (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
 

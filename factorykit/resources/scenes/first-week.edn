@@ -2,17 +2,24 @@
 ;; the director makes of an org's simulated first week on a clone,
 ;; before the person merges it. Epic cafa6106, M3d. factory10.first-week
 ;; renders it from the org's seed: :opening, then :day once for each of
-;; the :days the world seat plays (seats/world.edn), then :closing. The
-;; holds come to 38 seconds; with the taps, about 45.
+;; the :days the world seat plays (seats/world.edn), then :closing, its
+;; {{kinds}} part :closing_kind once for each kind the seed's steps make.
+;; The opening is :opening_bare when the org has no brief. The holes come
+;; to 38 seconds; with the taps, about 45.
 {:template
  {:params {:seed "The org's seed name, its seed.edn's :seed."
            :org_display "The org's name as a person reads it: its first domain's :label."
+           :brief_line "The first sentence of the org's brief, cut at 140 characters."
+           :day_one "Day 1's date (YYYY-MM-DD)."
+           :week_end "The day after the last day, where the week's holes end."
+           :each_kind "In :closing_kind: one kind the seed's steps make rows of."
            :owner "The cast id of the person filmed: the seed's approver, or its first cast member."
            :owner_display "That person's :display."
            :kind "The kind the world seat knocks on: the one the seed's first create makes, unless named."
            :clone_url "Where the clone of the org is served. An input: this repo starts no clone."
            :head_sha "The commit of the org the clone was made at."}
   :day_params {:day "The day, 1 to :days." :date "The day's date: day_one plus day-1 days (YYYY-MM-DD)."
+               :weekday "The date's day name: Monday."
                :next_date "The day after :date, where the day's holes end."}
   :days 7
   ;; the arc film rule reads friction, turn, payoff in order: on the
@@ -27,25 +34,26 @@
   :given [{:as "{{owner}}" :tool "waymark_query" :bind "week"
            :arguments {:kind "{{kind}}" :return "summary"}}]}
  :opening
- [{:tap {:surface "nav.{{kind}}"} :say "The first week of {{org_display}}."}]
- ;; one day: what came in, what the house did, what it asked the person.
- ;; Each hole is filled from the clone's rows of that day when the shot
- ;; plays (docs/spec-scenes.md, Holes in a say).
+ [{:tap {:surface "nav.{{kind}}"} :say "{{org_display}}: {{brief_line}}"}]
+ :opening_bare
+ [{:tap {:surface "nav.{{kind}}"} :say "{{org_display}}."}]
+ ;; one day: its weekday, then the org's day in one sentence, filled from
+ ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say).
  :day
  [{:tap {:surface "nav.{{kind}}"}}
   {:hold {:ms 5000}
-   :say ["Day {{day}}, {{date}}. In came: "
-         {"$rows" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"}}
-         ". What {{org_display}} did: "
-         {"$moves" {:kind "{{kind}}" :since "{{date}}" :until "{{next_date}}"
-                    :by "seats" :none "nothing moved"}}
-         ". What it asked {{owner_display}}: "
-         {"$rows" {:kind "held_call" :since "{{date}}" :until "{{next_date}}"
-                   :none "no held call"}}
-         "; "
-         {"$rows" {:kind "approval_request" :since "{{date}}" :until "{{next_date}}"
-                   :none "no approval request"}}
-         "."]}]
+   :say ["{{weekday}}. "
+         {"$day" {:since "{{date}}" :until "{{next_date}}" :domain "{{seed}}"}}]}]
+ ;; the week's numbers: each kind's rows that ended the week finished,
+ ;; then the held calls it asked the person
+ :closing_kind
+ [{"$rows" {:kind "{{each_kind}}" :since "{{day_one}}" :until "{{week_end}}"
+            :field "updated_at" :terminal true :count true}}
+  " {{each_kind}} finished, "]
  :closing
- [{:hold {:ms 3000} :role "payoff" :say "That was the week. Merge to make it real."}]
+ [{:hold {:ms 3000} :role "payoff"
+   :say ["That was the week: "
+         "{{kinds}}"
+         {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}" :count true}}
+         " taps from you. Merge to make it real."]}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}

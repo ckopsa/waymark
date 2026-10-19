@@ -134,7 +134,10 @@ order, and its `field` is one of the two. The performer fills each hole
 when the shot plays (`fill-say`), from the rows the scene's clone holds
 in that window (`rows-in-window`): their summary lines, oldest first,
 joined with `; `. A hole that finds no rows says its `none`, or
-`nothing came in`, and never the hole itself.
+`nothing came in`, and never the hole itself. With `"terminal": true`
+it reads only the rows in one of the kind's terminal states, and with
+`"count": true` it says how many rows it read instead of their lines;
+`check` judges each as true or false.
 
 A `$moves` hole, `{"$moves": {kind, since, until, by, none}}`, reads the
 log instead: the transitions on rows of `kind` logged in
