@@ -62,6 +62,10 @@
   the org-findings artifact beside the findings (ticket 4ab34d18), and
   `record_findings` writes it for that head, so the page always matches
   the latest head; a propose without one keeps the recorded page.
+  The same run renders the org's first-week scene (ticket 4dbb8243),
+  which the findings doors write as `first_week_scene` with the head it
+  was rendered at as `first_week_scene_sha`: the director plays it only
+  when that is the change's head.
 
   `answer` AND `go_live` ARE THE OWNER'S. A question is asked of the
   person who owns the plan, so only that person answers it, or an
@@ -362,6 +366,9 @@
                 (assoc-in [:data :next_step] (next-step found)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
+      (some? (:first_week_scene inp))
+      (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
+          (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -787,6 +794,17 @@
                 (or (not-empty (snake-name value)) "rd_tax_services")))}
     name-pattern]])
 
+(defguardfn the-name-is-snake-case
+  {:reads []
+   :explain "This plan's name predates the snake_case rule (lowercase letters, digits and underscores, starting with a letter): retire it and file it again under a snake_case name."
+   :open "Retire this plan and file it again under a snake_case name."}
+  [row _inp _ctx]
+  ;; ticket 4d243311: a name filed before d4750bf9 is read and retired,
+  ;; and no other door builds an org from it
+  (if (re-matches (re-pattern name-pattern) (str (get-in row [:data :name])))
+    (t/allow)
+    (t/deny)))
+
 (def ^:private entry-schema
   "One entry of a hired seat's scope or wake_on: a kind, the doors on it
   and, when the entry narrows, the field it filters by."
@@ -866,6 +884,10 @@
                :x-display {:hidden true
                            :label "The run's law page"}}
     [:maybe [:string {:max 40000}]]]
+   [:first_week_scene {:optional true
+                       :x-display {:hidden true
+                                   :label "The run's first-week scene"}}
+    [:maybe [:string {:max 65536}]]]
    [:live_flag {:optional true
                 :x-display {:hidden true
                             :label "The branch says live"}}
@@ -915,7 +937,9 @@
     [:name {:x-display
             {:label "The org's name"
              :help "A short name for the org, as its directory spells it: greenleaf, or acme_landscaping."}}
-     name-schema]
+     ;; a stored name may predate the snake_case rule (ticket 4d243311):
+     ;; create-schema judges a new one, the-name-is-snake-case the doors
+     [:string {:min 1 :max 64}]]
     [:brief {:optional true
              :x-display
              {:widget "prose"
@@ -1006,6 +1030,20 @@
                  :label "The law"
                  :help "The org's law in sentences, as the pull request carries it: what the person approves when it merges."}}
      [:maybe [:string {:max 40000}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the scene the audit's run
+    ;; rendered for that head, which the director plays (ticket 4dbb8243)
+    [:first_week_scene {:optional true
+                        :x-display
+                        {:raw true
+                         :label "The first-week scene"
+                         :help "The script of the org's simulated first week, rendered by the audit from the org's seed: what the director plays on a clone."}}
+     [:maybe [:string {:max 65536}]]]
+    [:first_week_scene_sha {:optional true
+                            :x-display
+                            {:raw true
+                             :label "Scene rendered at"
+                             :help "The head commit of the org's branch the first-week scene was rendered at."}}
+     [:maybe [:string {:max 64}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true
@@ -1078,6 +1116,7 @@
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
+     :guards [the-name-is-snake-case]
      :handler ask-the-owner
      :input [:map
              [:key {:x-display {:raw true :label "The question's key"
@@ -1116,7 +1155,7 @@
 
     :propose
     {:from #{:drafting} :to :proposed
-     :guards [no-error-finding-is-open a-hire-names-its-seat
+     :guards [the-name-is-snake-case no-error-finding-is-open a-hire-names-its-seat
               the-plan-was-audited-at-its-head]
      :handler put-the-pull-request-up
      :input [:map
@@ -1248,7 +1287,7 @@
     ;; merges the plan's pull request at the approved head.
     :go_live
     {:from #{:simulated} :to :going_live
-     :guards [not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}

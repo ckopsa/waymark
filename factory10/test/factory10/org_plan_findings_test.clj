@@ -15,6 +15,7 @@
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -245,3 +246,40 @@
   (is (= "acme_landscaping" (org-plan/snake-name "  Acme Landscaping!")))
   (is (= "a_b" (org-plan/snake-name "a//b")))
   (is (= "org_9lives" (org-plan/snake-name "9lives"))))
+
+;; ticket 4d243311: a plan filed before the rule keeps its name, is read
+;; and retired, and takes no other door.
+(defn- stored-name!
+  "The plan stores `nm`, as a filing before d4750bf9 left it."
+  [eng id nm]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :org_plan id {})]
+          (store/save-row! st tx :org_plan
+                           (-> (assoc-in row [:data :name] nm)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(deftest a-name-before-the-rule-is-read-and-retired
+  (let [{:keys [h eng]} (world)
+        id (id-of (file-named h "rd_tax_services"))
+        _ (stored-name! eng id "rd-tax-services")
+        row-of #(json (req h :get (str "/api/org_plans/" id) {:headers person}))]
+    (testing "it is read"
+      (let [got (req h :get (str "/api/org_plans/" id) {:headers person})]
+        (is (= 200 (:status got)) (pr-str (json got)))
+        (is (= "rd-tax-services" (get-in (json got) [:data :name])))))
+    (testing "propose refuses, naming the rule and the way out"
+      (let [no (req h :post (str "/api/org_plans/" id "/-/propose")
+                    {:headers person :body {}})
+            said (pr-str (json no))]
+        (is (not= 200 (:status no)) said)
+        (is (str/includes? said "snake_case rule") said)
+        (is (str/includes? said "retire it and file it again") said)
+        (is (= "drafting" (:state (row-of))))))
+    (testing "retire moves it to retired"
+      (let [ok (req h :post (str "/api/org_plans/" id "/-/retire")
+                    {:headers person :body {:why "Filed before the snake_case rule."}})]
+        (is (= 200 (:status ok)) (pr-str (json ok)))
+        (is (= "retired" (:state (row-of))))))))
