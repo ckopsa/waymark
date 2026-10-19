@@ -398,14 +398,24 @@
         org (.getName dir)]
     (into (vec (manifest-findings dir org)) (judged dir org))))
 
+(defn- live?
+  "Whether the org at `dir` says :live true in its manifest."
+  [^File dir]
+  (let [m (try (org-boot/manifest dir) (catch Throwable _ nil))]
+    (true? (when (map? m) (:live m)))))
+
 (defn- org-dirs
-  "An org directory as itself; any other directory as the orgs in it."
-  [arg]
+  "An org directory as itself; any other directory as the orgs in it,
+  only the live ones when `live-only?` (ticket 7310836f): a drafting
+  org's error findings are its onboarding walk's steps, not a red gate."
+  [live-only? arg]
   (let [d (io/file arg)]
     (if (.isFile (io/file d "deps.edn"))
       [d]
       (sort-by #(.getName ^File %)
-               (filter #(.isFile (io/file ^File % "deps.edn")) (.listFiles d))))))
+               (filter #(and (.isFile (io/file ^File % "deps.edn"))
+                             (or (not live-only?) (live? %)))
+                       (.listFiles d))))))
 
 (defn- wire-finding
   "A finding as org_plan's record_findings takes it: strings throughout."
@@ -437,10 +447,16 @@
   any error finding, 2 when no org was found. `--json` prints one JSON
   object instead, each org's name to its findings, for the audit's CI
   job to hand to org_plan's record_findings (ticket 5d62058e), and under
-  `_live` each org's `live-report` (ticket c8e131fb)."
+  `_live` each org's `live-report` (ticket c8e131fb). `--live` judges,
+  of a directory named, only the orgs whose manifest says :live true;
+  an org named itself is judged whatever it says (ticket 7310836f)."
   [& args]
   (let [json? (boolean (some #{"--json"} args))
-        dirs (mapcat org-dirs (or (seq (remove #{"--json"} args)) ["."]))
+        live-only? (boolean (some #{"--live"} args))
+        dirs (->> (or (seq (remove #{"--json" "--live"} args)) ["."])
+                  (mapcat (partial org-dirs live-only?))
+                  (map #(.getCanonicalFile ^File %))
+                  distinct)
         judged (mapv (fn [^File d] [(.getName (.getCanonicalFile d)) (conform d)])
                      dirs)
         errors (count (filter #(= :error (:severity %)) (mapcat second judged)))]
