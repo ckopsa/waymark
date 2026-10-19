@@ -8,6 +8,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
+            [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -138,3 +139,15 @@
     (let [after (held-row eng hid)]
       (is (= "failed" (some-> (:state after) name)) (pr-str (:data after))))
     (is (empty? (rows-of eng :grant {:audience "guest-3"})))))
+
+(deftest a-held-grant-names-a-power-by-use-not-read
+  (let [shown (#'grants/mint-shown
+               {:audience "carson"
+                :scope [{:kind "bench.edit" :actions []
+                         :filter {:path "orgs/tax_desk/**"}}
+                        {:kind "org_plan" :actions []
+                         :filter {:name "tax_desk"}}]}
+               {})]
+    (is (str/includes? shown "use bench.edit where path orgs/tax_desk/**") shown)
+    (is (str/includes? shown "read org_plan named tax_desk") shown)
+    (is (not (str/includes? shown "read bench.edit")) shown)))
