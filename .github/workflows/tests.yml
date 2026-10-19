@@ -2138,6 +2138,43 @@ jobs:
           fi
           echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
 
+      # The engine is built from this checkout, not pulled as :latest:
+      # a walk step that needs an engine change in the same pull request
+      # would otherwise meet main's last published engine and fail until
+      # that change shipped (ticket 67e07956). Built the way image.yml
+      # builds it, reading that workflow's amd64 layer cache and loaded
+      # into the runner's docker, never pushed.
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Engine base image
+        id: engine-base
+        env:
+          TAG: clojure:temurin-21-tools-deps-bookworm-slim
+        run: |
+          base="mirror.gcr.io/library/$TAG"
+          if ! docker buildx imagetools inspect "$base" >/dev/null; then
+            echo "::warning::$base did not answer; the base image comes from public.ecr.aws"
+            base="public.ecr.aws/docker/library/$TAG"
+          fi
+          echo "image=$base" >> "$GITHUB_OUTPUT"
+
+      - name: The engine, built from this checkout
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.workqueue10
+          build-args: |
+            BASE=${{ steps.engine-base.outputs.image }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: waymark-selfhost-engine:ci
+          cache-from: type=gha,scope=workqueue10-amd64
+          provenance: false
+
+      - name: Point compose at the built engine
+        run: echo "WAYMARK_IMAGE=waymark-selfhost-engine:ci" >> "$GITHUB_ENV"
+
       - name: "2. The engine, the database and the bench"
         run: |
           set -euo pipefail
@@ -2159,6 +2196,7 @@ jobs:
             -e "s|^WAYMARK_MODEL=.*|WAYMARK_MODEL=claude-opus-5|" \
             -e "s|^BENCH_GIT_TOKEN=.*|BENCH_GIT_TOKEN=$git_token|" \
             -e "s|^BENCH_GITHUB_TOKEN=.*|BENCH_GITHUB_TOKEN=${FIXTURE_TOKEN}|" \
+            -e "s|^WAYMARK_IMAGE=.*|WAYMARK_IMAGE=$WAYMARK_IMAGE|" \
             selfhost/.env
           docker compose -f selfhost/compose.yml up -d
           # on a cold runner the engine's first boot (migrate, seed) is slow;
