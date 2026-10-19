@@ -3526,6 +3526,40 @@
          {:kind "change" :id (get-in (:answer w) [:change :id])
           :action action :input input}))
 
+;; AN ONBOARDING SEAT WALKS ONLY ITS OWN PLAN (ticket a2d5ee38). One
+;; person owns two drafting plans; beta is the older, so a walk that read
+;; only the state would hand it first, and the sit would mint beta's
+;; change for alpha's seat. The org_plan entry names its org, as
+;; onboarding.edn's does once filled.
+
+(deftest an-onboarding-seat-walks-and-links-only-its-own-orgs-plan
+  (let [eng (fresh-engine (state))
+        _ (a-policy! eng {})
+        filed! (fn [n] (str (:id (:row (inv/create! eng :org_plan {:name n}
+                                                    {:principal person})))))
+        beta (filed! "beta")
+        alpha (filed! "alpha")
+        _ (open-seat! eng {:walk "org_plan"
+                           :scope (into [{:kind "org_plan"
+                                          :actions ["create" "ask" "propose" "go_live" "retire"]
+                                          :filter {:state "drafting,simulated" :name "alpha"}}]
+                                        (rest ticket-scope))})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        change (some-> (get-in answer [:change :id]) str)]
+    (testing "the walk hands alpha's plan and not beta's"
+      (is (= [alpha] (mapv (comp str :id) (get-in answer [:walk :rows]))) (pr-str answer)))
+    (testing "the sit mints alpha's change and links it to alpha alone"
+      (is (some? change) (pr-str answer))
+      (is (= (str "org_plan:" alpha) (get-in answer [:change :data :born_from])))
+      (is (= change (some-> (get-in (plan-row eng alpha) [:data :change]) str)))
+      (is (nil? (get-in (plan-row eng beta) [:data :change]))))))
+
 ;; A PRIORITY TIE IS BROKEN BY ARRIVAL (ticket c944fd8c). An id is
 ;; random, so five tickets at one priority are filed here: by id they
 ;; would come in filing order one time in a hundred and twenty.
