@@ -208,7 +208,7 @@ def link():
     if status not in (200, 204):
         fail(f"the pull link refused its own token: {status} {body}")
     if status == 200:
-        refuse_fire(link_id, body)
+        drop_fire(body)
     keep(link_id=link_id)
     say(f"pull link {link_id} answers its token")
 
@@ -251,11 +251,13 @@ SEAT_LINE = re.compile(r"^Seat: (\S+) \(([^)]+)\)\.$", re.M)
 KEY_LINE = re.compile(r"^Key: (\S+)$", re.M)
 
 
-def refuse_fire(link_id, fire):
+def drop_fire(fire):
     """A fire this walk does not stand in for (a cadence wake of another
-    seat): answered as a throttle, so it waits and starts nothing."""
-    http("POST", f"/api/-/runner-links/{link_id}/fires/{fire['id']}",
-         {"Waymark-Runner-Token": PULL_TOKEN}, {"status": 429, "retry_after": 3600})
+    seat): left unanswered, so it starts nothing and its lease (300 s)
+    keeps it off the next polls. Not answered 429: the engine reads a
+    429 as a throttle on the whole link, and fires nothing through it
+    for an hour, the walk's own seats' fires with the rest."""
+    say(f"left fire {fire['id']} unanswered")
 
 
 def next_fire(link_id, seat_name, seconds):
@@ -273,7 +275,7 @@ def next_fire(link_id, seat_name, seconds):
         seat, key = SEAT_LINE.search(text), KEY_LINE.search(text)
         if not seat or seat.group(2) != seat_name:
             say(f"a fire for {seat.group(2) if seat else 'no seat'}; not this walk's")
-            refuse_fire(link_id, fire)
+            drop_fire(fire)
             continue
         if not key:
             fail(f"{seat_name}'s fire carries no Key: line")
