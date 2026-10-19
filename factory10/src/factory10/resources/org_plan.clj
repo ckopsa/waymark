@@ -93,6 +93,18 @@
   because a kind has one create verb; the ordinary create keeps
   `a-person-files-the-plan`, and the engine's birth passes it by.
 
+  A HIRE ARRIVES AS ONE HELD CALL (ticket 7116068f, M4b). propose on a
+  hire plan names `hire_seat`, the seed step factorykit.hire drafted on
+  the plan's branch. An agent's go_live on it is held as the found
+  plan's is, but its `why` is the offer the engine writes from the plan
+  (`hire-offer`): the gap, the seat, its weekly cost and its doors in
+  words, and its `shown` the seat, the cost and the gap key. The Allow
+  is the same merge; then `factory10.org-live` opens the seat in the
+  org's domain as the plan's owner and marks the plan live with
+  `hired_seat`. A refused or expired offer retires the plan through
+  `decline_hire` with `quiet_until` a week on, and open-hire! refuses
+  `hire_quiet` for that gap until then.
+
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
   (:require [clojure.string :as str]
@@ -101,7 +113,8 @@
             [waymark10.holds :as holds]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -172,12 +185,33 @@
               (mapcat #(store/query-rows st tx :org_plan {:state %} {:limit 1000})
                       ["live" "drafting" "proposed" "filming" "simulated" "going_live"]))))))
 
+(def ^:private quiet-seconds
+  "How long a refused hire keeps its gap quiet: a week."
+  604800)
+
+(defn- instant-of ^Instant [v]
+  (cond (instance? Instant v) v
+        (some? v) (try (Instant/parse (str v)) (catch Exception _ nil))))
+
+(defn- retired-hires-of
+  "Every retired hire plan of the org `org`, decoded."
+  [eng org]
+  (let [st (:storage eng)
+        rd (get (inv/resources eng) :org_plan)]
+    (into []
+          (comp (map #(inv/decode-row rd %))
+                (filter #(and (= org (str (get-in % [:data :name])))
+                              (= "hire" (purpose-of %)))))
+          (store/with-tx st
+            (fn [tx] (store/query-rows st tx :org_plan {:state "retired"} {:limit 1000}))))))
+
 (defn open-hire!
   "The engine opens a hire plan for the org `name` on one `gap`. →
   inv/create!'s answer, or {:refused <reason> :why <sentence>}:
   `engine_only` when the hand is not the engine's, `no_live_org` when
-  the org has no live found plan, and `hire_open` when a hire plan for
-  the same gap key stands in drafting, proposed, filming or simulated. The plan
+  the org has no live found plan, `hire_open` when a hire plan for
+  the same gap key stands in drafting, proposed, filming or simulated,
+  and `hire_quiet` while a retired one for it is quiet (M4b). The plan
   is born in drafting with the live plan's owner and directory, and
   the brief written from the gap."
   [eng {org :name gap :gap} {:keys [principal] :as opts}]
@@ -192,7 +226,14 @@
                                     (contains? standing-hire-states (state-name %))
                                     (= (str (:key gap))
                                        (str (get-in % [:data :gap :key]))))
-                              plans))]
+                              plans))
+          now (or (:now opts) (some-> (:now-fn eng) (apply [])) (Instant/now))
+          quiet (when-not (or (nil? live) (some? open))
+                  (first (filter #(and (= (str (:key gap))
+                                          (str (get-in % [:data :gap :key])))
+                                       (some-> (instant-of (get-in % [:data :quiet_until]))
+                                               (.isAfter ^Instant now)))
+                                 (retired-hires-of eng org))))]
       (cond
         (nil? live)
         {:refused :no_live_org
@@ -202,6 +243,12 @@
         {:refused :hire_open
          :hire (str (:id open))
          :why (str "A hire plan for " (:key gap) " stands already, in " (state-name open) ".")}
+
+        (some? quiet)
+        {:refused :hire_quiet
+         :hire (str (:id quiet))
+         :why (str "The owner turned down a hire for " (:key gap) ": it is quiet until "
+                   (instant-of (get-in quiet [:data :quiet_until])) ".")}
 
         :else
         (inv/create! eng :org_plan
@@ -272,6 +319,7 @@
 (defhandler put-the-pull-request-up [row inp _ctx]
   (cond-> row
     (some? (:change inp)) (assoc-in [:data :change] (:change inp))
+    (some? (:hire_seat inp)) (assoc-in [:data :hire_seat] (:hire_seat inp))
     (some? (:law_page inp)) (assoc-in [:data :law_page] (:law_page inp))))
 
 (defhandler hand-in-the-film [row inp _ctx]
@@ -334,6 +382,13 @@
   ;; A retired plan says why, because nothing departs `retired`.
   (assoc-in row [:data :retired_why] (:why inp)))
 
+(defhandler decline-the-hire [row inp ctx]
+  ;; The owner said no to the offer, or let it lapse: the gap is quiet
+  ;; for a week, and open-hire! reads `quiet_until`.
+  (-> row
+      (assoc-in [:data :retired_why] (:why inp))
+      (assoc-in [:data :quiet_until] (.plusSeconds ^Instant (instant-of (:now ctx)) quiet-seconds))))
+
 (defhandler approve-the-head [row _inp _ctx]
   ;; The owner's yes is for the head the audit last read: the house's
   ;; merge pass merges that head, or one the rig says carries from it.
@@ -342,7 +397,8 @@
 (defhandler seat-the-mayor [row inp _ctx]
   ;; The org is live because its mayor sits: the plan names that seat.
   (cond-> row
-    (some? (:mayor_seat inp)) (assoc-in [:data :mayor_seat] (:mayor_seat inp))))
+    (some? (:mayor_seat inp)) (assoc-in [:data :mayor_seat] (:mayor_seat inp))
+    (some? (:hired_seat inp)) (assoc-in [:data :hired_seat] (:hired_seat inp))))
 
 (defhandler the-head-moved [row inp _ctx]
   ;; The yes is retired, and the moved head is a finding the next run
@@ -419,9 +475,79 @@
    :open "No door clears this one. The call waits as a held_call for the owner's tap, and the owner's Allow runs it exactly as written."}
   [row _inp ctx]
   (cond
+    ;; a hire plan's go_live is held by only-a-person-hires, with the offer
+    (= "hire" (purpose-of row)) (t/allow)
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
     :else (t/deny {:vars (go-live-vars row)})))
+
+(defn- cut [s n]
+  (let [s (str s)] (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn- dollars [b]
+  (or (try (.toPlainString (.stripTrailingZeros ^BigDecimal (bigdec b)))
+           (catch Exception _ nil))
+      "?"))
+
+(defn- doors-said [doors]
+  (if (next doors)
+    (str (str/join ", " (butlast doors)) " or " (last doors))
+    (first doors)))
+
+(defn- scope-said
+  "A seat's scope as verbs: each entry's doors on its kind's rows, or
+  `read` for an entry that holds none."
+  [scope]
+  (str/join "; "
+            (for [{:keys [kind actions] :as e} scope
+                  :let [f (:filter e)
+                        state (some-> (or (get f :state) (get f "state")) str not-empty)
+                        rows (str kind " rows" (when state (str " in " state)))]]
+              (if (seq actions)
+                (str (doors-said (mapv str actions)) " " rows)
+                (str "read " rows)))))
+
+(defn hire-offer
+  "What the owner reads in a hire plan's held go_live: `vars` for
+  only-a-person-hires' sentence — the gap sentence from the brief, the
+  seat, its weekly dollars and its doors in words — and `shown`, the
+  seat, its cost and the gap key."
+  [row]
+  (let [d (:data row)
+        hs (:hire_seat d)
+        seat (or (some-> (:name hs) str not-empty) "unnamed")
+        budget (dollars (:budget_usd_per_week hs))
+        gap (-> (str (:brief d)) str/trim (str/replace #"\.+$" ""))]
+    {:vars {:gap (cut (if (seq gap) (str (str/upper-case (subs gap 0 1)) (subs gap 1)) "A gap") 400)
+            :hire seat
+            :budget budget
+            :can (cut (or (not-empty (scope-said (:scope hs))) "do nothing") 400)}
+     :shown (str seat " · $" budget "/wk · " (get-in d [:gap :key]))}))
+
+(defguardfn only-a-person-hires
+  {:reads [:principal :within]
+   :hold true
+   :vars [:gap :hire :budget :can]
+   :explain "{gap}. Add {hire} at ${budget}/week? It can {can}; it cannot take any other door, or touch any other kind."
+   :open "No door clears this one. The offer waits as a held_call for the owner's tap: Allow merges the hire and opens the seat, and Refuse keeps this gap quiet for a week."}
+  [row _inp ctx]
+  (cond
+    (not= "hire" (purpose-of row)) (t/allow)
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
+    :else (let [{:keys [vars shown]} (hire-offer row)]
+            (t/deny {:vars vars :evidence {:shown shown}}))))
+
+(defguardfn a-hire-names-its-seat
+  {:reads []
+   :explain "A hire plan goes up with the seat it hires: propose names it as hire_seat, the seed step factorykit.hire drafted on the plan's branch."
+   :open "Propose again with hire_seat: the seat's name, charter, scope and weekly budget."}
+  [row inp _ctx]
+  (if (and (= "hire" (purpose-of row))
+           (nil? (:hire_seat inp))
+           (nil? (get-in row [:data :hire_seat])))
+    (t/deny)
+    (t/allow)))
 
 (defguardfn the-engine-records-the-findings
   {:reads [:principal]
@@ -578,35 +704,102 @@
    [:budget_usd_per_week {:optional true} [:maybe [:string {:max 32}]]]])
 
 (def name-pattern
-  "An org's name becomes a directory (`orgs/<name>`), a branch
-  (`bench/org-<name>`), a domain and a seed org (ticket d4750bf9), so
-  it is a slug: lowercase letters and digits, joined by single hyphens.
-  A string, so the published schema's `pattern` spells it as written."
-  "^[a-z0-9]+(-[a-z0-9]+)*$")
+  "An org's name becomes its directory (`orgs/<name>`), namespace, domain
+  and seed org (ticket d4750bf9), and live-orgs boots only a snake_case
+  one (waymark10.server.org, docs/orgkit.md § Naming rules): lowercase
+  letters, digits and underscores, starting with a letter. A string, so
+  the published schema's `pattern` spells it as written."
+  "^[a-z][a-z0-9_]*$")
 
-(defn slug
+(defn snake-name
   "What `typed` reads as a name: lowercased, `&` dropped, every other run
-  of what is not a letter or a digit one hyphen, none at either end, at
-  most 64 long. `r&d-tax-services` reads as `rd-tax-services`."
+  of what is not a letter or a digit one underscore, none at either end,
+  `org_` before a leading digit, at most 64 long. `r&d-tax-services`
+  reads as `rd_tax_services`."
   [typed]
   (let [s (-> (str/lower-case (str typed))
               (str/replace "&" "")
-              (str/replace #"[^a-z0-9]+" "-")
-              (str/replace #"^-+" ""))]
-    (str/replace (subs s 0 (min 64 (count s))) #"-+$" "")))
+              (str/replace #"[^a-z0-9]+" "_")
+              (str/replace #"^_+" "")
+              (str/replace #"_+$" ""))
+        s (if (re-find #"^[0-9]" s) (str "org_" s) s)]
+    (str/replace (subs s 0 (min 64 (count s))) #"_+$" "")))
 
 (def ^:private name-schema
-  "The create form's name: the refusal suggests the slug of what was
-  typed, so the retry is right the first time. It publishes as ONE
+  "The create form's name: the refusal suggests the snake_case of what
+  was typed, so the retry is right the first time. It publishes as ONE
   string schema, not an allOf, so every form offers it as a box."
   [:and {:json-schema {:type "string" :minLength 1 :maxLength 64
                        :pattern name-pattern}}
    [:string {:min 1 :max 64}]
    [:re {:error/fn
          (fn [{:keys [value]} _]
-           (str "should be lowercase letters, digits and hyphens only, like "
-                (or (not-empty (slug value)) "rd-tax-services")))}
+           (str "should be lowercase letters, digits and underscores, starting with a letter, like "
+                (or (not-empty (snake-name value)) "rd_tax_services")))}
     name-pattern]])
+
+(def ^:private entry-schema
+  "One entry of a hired seat's scope or wake_on: a kind, the doors on it
+  and, when the entry narrows, the field it filters by."
+  [:vector {:max 50}
+   [:map
+    [:kind {:x-display {:label "Kind"
+                        :help "One kind the org serves."}}
+     [:string {:min 1 :max 64}]]
+    [:actions {:x-display {:label "Doors"
+                           :help "The doors on that kind, by name. None is a read."}}
+     [:vector {:max 50} [:string {:min 1 :max 64}]]]
+    [:filter {:optional true
+              :x-display {:label "Only rows where"
+                          :spelled-by-hand "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal."
+                          :help "A field name, and the value it must equal: state, or a field the kind filters by."}}
+     [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]]])
+
+(def ^:private hire-seat-schema
+  "The seat a hire plan hires, as factorykit.hire's seed step drafts it
+  (M4b): what the engine opens in the org's domain once the hire merges."
+  [:map
+   [:name {:x-display {:label "Its name"
+                       :help "The seat's name in the org: the org, the kind and a number."}}
+    [:string {:min 1 :max 64}]]
+   [:charter {:x-display {:widget "prose" :label "Its charter"
+                          :help "What the seat does, in the words its sitter reads."}}
+    [:string {:min 1 :max 4000}]]
+   [:scope {:x-display {:label "Its doors"
+                        :help "What the seat may walk, entry by entry."}}
+    entry-schema]
+   [:budget_usd_per_week {:x-display {:label "Its weekly dollars"
+                                      :help "What the seat may spend in a rolling week."}}
+    [:decimal {:min 0 :max 100000}]]
+   [:mode {:optional true
+           :x-display {:label "How it is fired"
+                       :help "fired, as the seed step drafts it."}}
+    [:maybe [:string {:max 32}]]]
+   [:walk {:optional true
+           :not-a-ref "It holds the name of the kind the seat walks, never a row id."
+           :x-display {:label "The queue it walks"
+                       :help "The kind the seat works through, a row at a time."}}
+    [:maybe [:string {:max 64}]]]
+   [:rows_per_firing {:optional true
+                      :x-display {:label "Rows a firing"
+                                  :help "How many rows one firing takes."}}
+    [:maybe [:int {:min 1 :max 100}]]]
+   [:cadence_seconds {:optional true
+                      :x-display {:label "How often it wakes, in seconds"
+                                  :help "The interval its schedule fires it at."}}
+    [:maybe [:int {:min 300 :max 2592000}]]]
+   [:standing_ttl_seconds {:optional true
+                           :x-display {:label "Longest leash, in seconds"
+                                       :help "The longest grant a sitter of the seat may ask for."}}
+    [:maybe [:int {:min 60 :max 31536000}]]]
+   [:sitting_budget_tokens {:optional true
+                            :x-display {:label "Tokens a sitting"
+                                        :help "What one sitting may read and write."}}
+    [:maybe [:int {:min 1 :max 10000000}]]]
+   [:wake_on {:optional true
+              :x-display {:label "What wakes it"
+                          :help "The doors on a kind that wake the seat, entry by entry."}}
+    [:maybe entry-schema]]])
 
 (def ^:private findings-input
   "What the audit's run hands every findings door: the head, its
@@ -651,6 +844,7 @@
    ;; At `filming` the forge's film pass holds the next move: it judges
    ;; the director's take and lands it (ticket e552de65).
    :left-by [{:in #{:simulated} :by :engine :via :go_live :to :going_live}
+             {:in #{:simulated} :by :engine :via :decline_hire :to :retired}
              {:in #{:going_live} :by :engine :via :mark_live :to :live}
              {:in #{:going_live} :by :engine :via :head_moved :to :simulated}
              {:in #{:filming} :by :engine :via :attach_film :to :simulated}
@@ -671,8 +865,8 @@
    [:map
     [:name {:x-display
             {:label "The org's name"
-             :help "A short name for the org, as its directory spells it: greenleaf, or acme-landscaping."}}
-     [:string {:min 1 :max 64}]]
+             :help "A short name for the org, as its directory spells it: greenleaf, or acme_landscaping."}}
+     name-schema]
     [:brief {:optional true
              :x-display
              {:widget "prose"
@@ -722,6 +916,25 @@
                    :label "Its mayor's seat"
                    :help "The seat the org's mayor sits in, in the org's own domain: the engine writes it when it marks the org live."}}
      [:maybe [:string {:max 64}]]]
+    ;; WRITTEN BY propose on a hire plan (M4b): the seat the offer names
+    [:hire_seat {:optional true
+                 :x-display
+                 {:label "The seat it hires"
+                  :help "The seat a hire plan adds, as the seed step on its branch drafts it: its name, charter, scope and weekly budget. The engine opens it when the owner allows the hire."}}
+     [:maybe hire-seat-schema]]
+    ;; WRITTEN ONLY BY mark_live on a hire plan: the seat it opened (M4b)
+    [:hired_seat {:optional true
+                  :x-display
+                  {:raw true
+                   :label "The seat it opened"
+                   :help "The seat the engine opened in the org's domain when the hire went live."}}
+     [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY decline_hire: the gap is quiet until then (M4b)
+    [:quiet_until {:optional true
+                   :x-display
+                   {:label "Quiet until"
+                    :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
+     [:maybe :waymark/instant]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
     [:next_step {:optional true
                  :x-display
@@ -802,7 +1015,7 @@
    :create-schema
    [:map
     [:name {:x-display {:label "The org's name"
-                        :help "A short name for the org, as its directory and branch spell it: lowercase letters, digits and hyphens, like rd-tax-services."}}
+                        :help "A short name for the org, as its directory spells it: lowercase letters, digits and underscores, starting with a letter, like rd_tax_services."}}
      name-schema]
     [:brief {:optional true
              :examples ["A six-person landscaping business. I want the house to run quotes, crew scheduling, invoicing and late payers."]
@@ -854,12 +1067,16 @@
 
     :propose
     {:from #{:drafting} :to :proposed
-     :guards [no-error-finding-is-open]
+     :guards [no-error-finding-is-open a-hire-names-its-seat]
      :handler put-the-pull-request-up
      :input [:map
              [:change {:optional true :kind :change
                        :x-display {:label "The pull request"}}
               [:maybe :waymark/ref]]
+             [:hire_seat {:optional true
+                          :x-display {:label "The seat it hires"
+                                      :help "For a hire plan, and required for it: the seed step factorykit.hire drafted on the plan's branch."}}
+              [:maybe hire-seat-schema]]
              [:law_page {:optional true
                          :examples ["# The law of greenleaf\n\nThis is what you approve when you merge: each kind of record this org keeps, how it moves, what each move asks first, which moves wait for a person, and which seats work here and what they may spend."]
                          :x-display {:widget "prose" :label "The law"
@@ -981,7 +1198,7 @@
     ;; merges the plan's pull request at the approved head.
     :go_live
     {:from #{:simulated} :to :going_live
-     :guards [not-flipped only-a-person-goes-live only-the-owner-decides]
+     :guards [not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
@@ -998,6 +1215,10 @@
              [:mayor_seat {:optional true
                            :x-display {:hidden true :raw true
                                        :label "The mayor's seat"}}
+              [:string {:min 1 :max 64}]]
+             [:hired_seat {:optional true
+                           :x-display {:hidden true :raw true
+                                       :label "The hired seat"}}
               [:string {:min 1 :max 64}]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
@@ -1021,6 +1242,22 @@
               :one-way "The owner's yes is retired: the plan is simulated again, with the moved head among its findings."}
      :display {:label "Head moved" :order 11
                :description "The pull request's head moved after the owner's yes"}}
+
+    ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
+    ;; expired: the engine retires the plan, and its gap is quiet a week.
+    :decline_hire
+    {:from #{:simulated} :to :retired
+     :guards [the-engine-records-the-findings]
+     :handler decline-the-hire
+     :input [:map
+             [:why {:x-display {:hidden true
+                                :label "Why"}}
+              [:string {:min 1 :max 240}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The hire plan is retired, and no hire plan opens for its gap for a week."}
+     :display {:label "Hire declined" :order 13
+               :description "The owner refused the offer, or let it lapse"}}
 
     :retire
     {:from #{:drafting :proposed :filming :simulated :going_live :live} :to :retired

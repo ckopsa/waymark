@@ -1163,8 +1163,9 @@
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
                            "held" "Its ticket merges after tickets that are not done yet"
-                           "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"}}}
-     [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person"]]]
+                           "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"
+                           "org_plan_waits_go_live" "An org plan not yet live names it: only its owner's go_live merges it"}}}
+     [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person" "org_plan_waits_go_live"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display

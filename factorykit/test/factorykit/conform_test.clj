@@ -66,6 +66,17 @@
   (is (= ["scope/outside-owner/clerk/gizmo/finish"]
          (mapv :key (conform/conform "fixtures/orgs/overreach")))))
 
+(deftest an-org-whose-name-is-not-snake-case-earns-a-finding
+  (let [dir (io/file (str (Files/createTempDirectory "orgs" (make-array FileAttribute 0)))
+                     "bad-name")
+        _ (.mkdirs dir)
+        [f] (conform/conform (str dir))]
+    (is (= "org_name_not_snake_case/bad-name" (:key f)))
+    (is (= :error (:severity f)))
+    (is (re-find #"bad-name" (:sentence f))))
+  (is (not-any? #(= :org_name_not_snake_case (:class %))
+                (conform/conform "fixtures/orgs/unmarked"))))
+
 (deftest an-org-with-no-manifest-earns-a-finding-naming-it
   (let [[f] (conform/conform "fixtures/orgs/unmarked")]
     (is (= "manifest/missing/unmarked" (:key f)))
