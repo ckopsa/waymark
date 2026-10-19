@@ -51,6 +51,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.checks :as checks]
+            [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
@@ -554,7 +555,14 @@
                                           (into (schema/engine-written-fields
                                                  (:schema rdef)))))
                :effect {:to (name (:initial rdef))}
-               :safety {:idempotent false :reversible false :confirm false}}
+               ;; a confirm create advertises its sentence as the
+               ;; template its input fills; a fn's sentence is only
+               ;; known once the input is, and the refusal names it
+               :safety (let [c (get-in rdef [:create-safety :consequence])]
+                         (cond-> {:idempotent false :reversible false
+                                  :confirm (confirm/create-confirm? rdef)}
+                           (and (confirm/create-confirm? rdef) (string? c))
+                           (assoc :consequence c)))}
       :query {:method "GET"
               :href base
               :input (query-input-schema rdef)}}
