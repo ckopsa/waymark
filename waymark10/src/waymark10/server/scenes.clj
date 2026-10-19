@@ -755,6 +755,57 @@
           (when-not (str/blank? said)
             (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
 
+;; ── the say over the wire (POST /api/-/scenes/say) ───────────────────
+
+(def take-run-ttl-ms
+  "How long the engine keeps a take's run after the take began: two
+  hours, longer than any film plays."
+  (* 2 60 60 1000))
+
+(defonce ^:private take-runs
+  ;; take key → {:began Instant :run (take-run)}
+  (atom {}))
+
+(defn take-run-of
+  "The run of the take keyed `k`: the first call for a key makes one
+  (`take-run`, begun `now`), a later one reuses it, and every run begun
+  `take-run-ttl-ms` or more before `now` is dropped first."
+  ([k] (take-run-of k (Instant/now)))
+  ([k ^Instant now]
+   (let [lo (- (inst-ms now) (long take-run-ttl-ms))]
+     (-> (swap! take-runs
+                (fn [runs]
+                  (let [runs (into {} (filter #(< lo (inst-ms (:began (val %))))) runs)]
+                    (cond-> runs
+                      (not (contains? runs k)) (assoc k {:began now :run (take-run now)})))))
+         (get-in [k :run])))))
+
+(defn say-refusal
+  "Why `say` cannot be filled on engine `eng`, as `check` says it of a
+  shot; nil when it can."
+  [eng say]
+  (let [rdefs (inv/resources eng)]
+    (say-problem (plain say) #(get rdefs (keyword %)))))
+
+(defn fill-say-as
+  "`fill-say` over engine `eng` for one caller: a `$rows` or `$moves`
+  hole reads its kind only when `sees?` (a fn of a kind keyword) says
+  the caller sees it whole, and a `$day` hole its domain only when the
+  caller sees every kind of it; otherwise the hole finds nothing and
+  says its `none`. `run` is the take's run (`take-run-of`)."
+  [eng say run sees?]
+  (let [rdefs (inv/resources eng)
+        kind-ok? #(boolean (sees? (keyword %)))]
+    (fill-say say
+              #(if (kind-ok? (:kind %)) (rows-in-window eng %) [])
+              #(if (kind-ok? (:kind %)) (moves-in-window eng %) [])
+              (fn [w]
+                (when (every? sees? (keep #(when (= (:domain w) (some-> (:domain %) name))
+                                             (:kind %))
+                                          (vals rdefs)))
+                  (day-in-window eng w)))
+              run)))
+
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."
   [shot st people rdef-of]
