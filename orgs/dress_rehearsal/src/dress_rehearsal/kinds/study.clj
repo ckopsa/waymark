@@ -3,12 +3,22 @@
   collected, the AI drafts each project's narrative and the specialist
   confirms it with the client's engineering lead, the specialist
   calculates the credit, the principal signs it off, and it goes to the
-  client's CPA, who files it. We never file returns ourselves."
+  client's CPA, who files it. We never file returns ourselves.
+
+  While a study is collecting, the AI drafts each project's narrative as
+  its engineering records arrive. The specialist, not the AI, decides
+  when the cost records are complete, and that is what moves the study
+  to drafting. A missing document is chased twice; after the second
+  chase the principal is told."
   (:require [waymark10.dsl :refer [defguard defresource refuse]]))
 
 (defguard records-complete
-  (refuse "Drafting starts once every record the study needs is in; say when the last one came.")
+  (refuse "Drafting starts once the cost records are complete; say when the last one came.")
   '(present? :records_complete_on))
+
+(defguard records-confirmed
+  (refuse "The specialist decides the cost records are complete; name who confirmed them.")
+  '(present? :records_confirmed_by))
 
 (defguard has-preparer
   (refuse "A study goes to review with the name of who prepared it.")
@@ -37,13 +47,17 @@
             [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
             [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
+            [:records_confirmed_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:missing_records {:optional true} [:maybe [:string {:max 500}]]]
+            [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
+            [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
             [:signed_off_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :tax_year #{:eq} :preparer #{:eq}}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
-                 :guards [records-complete]
+                 :guards [records-complete records-confirmed]
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review

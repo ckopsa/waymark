@@ -9,9 +9,20 @@
  ;; the :owner :id is the plan owner's member id
  :cast
  {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}}
- ;; no seats yet: the audit's findings say which doors need a holder,
- ;; and the org's mayor is added when the walk empties
- :seats []
+ ;; the org's mayor, sat by the principal at $8 a week: it holds every
+ ;; door out of each kind's open states, so no prospect, study or
+ ;; invoice is left without a leaver; its scope names only the org's
+ ;; own kinds
+ :seats
+ [{:template "org-mayor"
+   :params {:org "dress_rehearsal" :domain "dress_rehearsal" :domain_id [:ref :dress_rehearsal]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
+                    {:kind "study" :actions ["records_in" "submit" "send_back" "sign_off" "deliver"]}
+                    {:kind "invoice" :actions ["pay" "write_off"]}]
+            :wakes [{:kind "prospect" :actions ["create"]}
+                    {:kind "study" :actions ["create"]}
+                    {:kind "invoice" :actions ["create"]}]}}]
  :judgments []
  :steps
  [{:as :owner :kind :prospect :ref :acme
