@@ -2107,6 +2107,12 @@ async function accessStory() {
                 "the completion line under the grant", 15000);
   ok("under a grant finish shows Quest complete with the title",
      await evaljs(`window.__granted === true`));
+  /* a person wears a standing grant with no header too (ticket
+     152ff81d): revoke the quest grant so priya reads unscoped again */
+  ok("the quest grant to priya is revoked",
+     (await qPost("/api/grants/" + gId + "/-/revoke", {},
+       {...sys, "waymark-confirm":
+        "The link goes dead immediately and for good; the audience keeps nothing."})).status < 400);
   await evaljs(`localStorage.removeItem("wm10.grant"); location.reload(); true`);
   await sleep(1200);
 

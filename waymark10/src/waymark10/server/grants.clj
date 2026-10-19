@@ -2943,24 +2943,47 @@
   [eng principal]
   (assoc (visibility eng nil principal) :vocabulary-open? true))
 
-(defn- requester-member
-  "The member row of the person `principal` is, when that row holds the
-  `requester` role: the row of that id, or the row a binding stamped
-  with it as `subject`. nil for an agent, a system actor, anyone else,
-  and on an engine that serves no tickets."
+(defn- person-member
+  "The member row of the person `principal` is: the row of that id, or
+  the row a binding stamped with it as `subject`. nil for an agent, a
+  system actor, anyone without a member row, and on an engine that
+  serves no members."
   [eng principal]
-  (when (and (not (contains? #{:agent :system} (:type principal)))
-             (contains? (inv/resources eng) :ticket))
+  (when-not (contains? #{:agent :system} (:type principal))
     (when-some [pid (some-> (:id principal) str not-empty)]
       (when-some [rdef (get (inv/resources eng) :member)]
-        (when-some [m (or (load-decoded eng :member pid)
-                          (some->> (first (store/with-tx (:storage eng)
-                                            (fn [tx]
-                                              (store/query-rows (:storage eng) tx :member
-                                                                {:subject pid} {:limit 1}))))
-                                   (inv/decode-row rdef)))]
-          (when (contains? (set (get-in m [:data :roles])) roles/requester)
-            m))))))
+        (or (load-decoded eng :member pid)
+            (some->> (first (store/with-tx (:storage eng)
+                              (fn [tx]
+                                (store/query-rows (:storage eng) tx :member
+                                                  {:subject pid} {:limit 1}))))
+                     (inv/decode-row rdef)))))))
+
+(defn- requester-member
+  "The member row of the person `principal` is, when that row holds the
+  `requester` role. nil for an agent, a system actor, anyone else, and
+  on an engine that serves no tickets."
+  [eng principal]
+  (when (contains? (inv/resources eng) :ticket)
+    (when-some [m (person-member eng principal)]
+      (when (contains? (set (get-in m [:data :roles])) roles/requester)
+        m))))
+
+(def ^:private never-narrowed-roles
+  "The roles whose holder a standing grant never narrows (ticket
+  152ff81d): the owner must not lock themselves out by being the
+  audience of some grant. `approver` is held_calls' `approver-role`,
+  spelled here because grants sits below that namespace."
+  #{"approver" "recovery-admin"})
+
+(defn- never-narrowed?
+  "Does the person `principal` hold a role `never-narrowed-roles`
+  names — on the principal itself, or on their member row?"
+  [eng principal]
+  (boolean
+   (or (some never-narrowed-roles (:roles principal))
+       (some never-narrowed-roles
+             (get-in (person-member eng principal) [:data :roles])))))
 
 (defn requester-visibility
   "What a person holding `requester` sees (epic 46831b3c, R-3.4): the
@@ -3009,14 +3032,37 @@
   falls to the bootstrap surface when nothing stands. Any other agent
   can present the header, so it must; waymark-rci's meaning for them
   is untouched. The rule lives here, in the one expression, for the
-  reason the paragraph above gives."
+  reason the paragraph above gives.
+
+  A PERSON WITH A STANDING GRANT WEARS IT (ticket 152ff81d): a human
+  the owner scoped with a grant arrives with `worn-visibility`, exactly
+  as a delegate does — accepted on first arrival when it stands
+  :offered — whichever door they signed in through. A grant on a
+  person is no longer ignored. A person with no standing grant is
+  unchanged (unscoped, or a requester's own tickets), and a person
+  holding `approver` or `recovery-admin` is never narrowed this way:
+  they keep today's sight unless they present the header. The rule
+  reads the member row: a member whose `actor_type` is agent, named
+  without the actor-type header (a seed's agent driven through a
+  clone door), is not a person and keeps today's sight. The cost is
+  one grant query per request a person makes."
   [eng principal]
-  (if (= :agent (:type principal))
+  (cond
+    (= :agent (:type principal))
     (or (when (:acts-for principal)
           (worn-visibility eng principal))
         (bootstrap-visibility eng principal))
-    (when-some [m (requester-member eng principal)]
-      (requester-visibility eng principal m))))
+
+    (= :system (:type principal))
+    nil
+
+    :else
+    (or (when-some [m (person-member eng principal)]
+          (when (and (not= "agent" (get-in m [:data :actor_type]))
+                     (not (never-narrowed? eng principal)))
+            (worn-visibility eng principal)))
+        (when-some [m (requester-member eng principal)]
+          (requester-visibility eng principal m)))))
 
 (defn capability-entry
   "The live surface entry a PRESENTED grant confers for one dotted
