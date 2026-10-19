@@ -43,6 +43,9 @@ No live org is a deps root of the engine.
 - The org name is the namespace root and the domain name: org
   `example` is `example.org`, `example.kinds.*`, `resources/example/`
   and the domain `:example`. It is snake_case: `[a-z][a-z0-9_]*`.
+  The namespace root is the org's name exactly, underscores included:
+  org `two_words` is `(ns two_words.org)` and `two_words.kinds.*`,
+  never `two-words.org`.
 - A kind name is the org's to choose, but it may not be one the
   engine already enrols (`job`, `member`, `grant`, `seat`, `ticket`
   and the rest of `waymark10.modules/inventory`): the registry holds
