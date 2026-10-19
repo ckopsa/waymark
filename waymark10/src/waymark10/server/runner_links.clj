@@ -821,6 +821,11 @@
       (contains? answer :transient)
       nil
 
+      ;; the localfire cannot say whether the run started: not the
+      ;; link's fault either, and no throttle (ticket 734b3ecd)
+      (contains? answer :not-started)
+      nil
+
       :else
       (let [reason (or (not-empty (str (:bad-link answer)))
                        "The provider refused the link.")]
@@ -1098,12 +1103,18 @@
   "Land what a localfire answered (the Provider's four words) for the
   fire `fire-id` it took. The fire leaves the queue; the link and its
   provider row record the answer as `fire-link!` records a push answer,
-  and the schedule it was for lands it as `sch/fire!` lands one. → the
+  and the schedule it was for lands it as `sch/fire!` lands one. A
+  not-started answer also writes down the sitting the fire's key would
+  have opened, when no run spent it (`wakes/record-not-started!`). → the
   fire, or nil when no such fire waits."
   [eng fire-id answer]
   (when-some [f (pf/finish! (:storage eng) (str fire-id))]
     (when-some [link (get (links-by-id eng) (:link_id f))]
       (land-on-link! eng link answer))
+    (when (contains? answer :not-started)
+      ((requiring-resolve 'waymark10.server.wakes/record-not-started!)
+       eng (seats/fire-key-of-text (at-rest/open (:text f)))
+       (:not-started answer)))
     (when (= "schedule" (:for_kind f))
       (sch/land-pull-answer! eng (:for_id f) answer (now-of eng) (:link_id f)))
     f))

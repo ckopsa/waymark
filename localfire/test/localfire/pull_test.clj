@@ -170,8 +170,9 @@
       (let [ps (posts seen)]
         (is (= 2 (count ps)) "tried from the journal, then answered when handed out")
         (is (every? #(= "/api/-/runner-links/link-1/fires/fire-4" (:uri %)) ps))
-        (is (= 400 (get-in (last ps) [:body "status"])))
-        (is (false? (get-in (last ps) [:body "started"]))))
+        (is (= {"started" false "reason" (:reason pull/unknown-answer)}
+               (:body (last ps)))
+            "not started, with the reason, and no status"))
       (is (empty? @(:calls world)) "never run")
       (finally
         (pull/stop! p)

@@ -134,9 +134,9 @@
 (def unknown-answer
   "The answer of a journaled fire localfire cannot vouch for: it stopped
   between journaling the fire and learning what its run answered. Not
-  started, and a 400, which the engine reads as a transient miss."
-  {:status  400
-   :started false
+  started, with the reason: the engine closes the fire as not started
+  and neither pauses nor throttles anything (ticket 734b3ecd)."
+  {:started false
    :reason  "localfire stopped before it knew whether the run started, and does not start a fire twice."})
 
 (defn- answer!

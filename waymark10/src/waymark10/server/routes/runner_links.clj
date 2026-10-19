@@ -16,7 +16,8 @@
 
   Nothing here logs: not the header, not the fire's text, which
   carries a one-time Key."
-  (:require [waymark10.server.problems :as p]
+  (:require [clojure.string :as str]
+            [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
@@ -91,15 +92,30 @@
                   (recur))
               {:status 204 :headers {}})))))))
 
+(def not-started-reason-cap
+  "The most characters a not-started answer's `reason` may carry."
+  500)
+
 (defn answer-of
   "The posted body as the Provider's four words: the push wire's 200
   body (`claude_code_session_id`, `claude_code_session_url`) is a
   started run; `{status, retry_after}` is a 429 throttle, a 400 paused
-  Routine (transient) or a 401 bad link. nil for anything else."
+  Routine (transient) or a 401 bad link. `{started: false, reason}`,
+  with or without a status, is the engine's own fifth word: the
+  localfire cannot say the run started and will not start it twice
+  (ticket 734b3ecd), so the fire closes as not started and nothing is
+  paused or throttled. nil for anything else, a not-started body with
+  no reason or a reason over `not-started-reason-cap` too."
   [body]
   (let [status (:status body)
-        retry (some-> (:retry_after body) str not-empty)]
+        retry (some-> (:retry_after body) str not-empty)
+        reason (:reason body)]
     (cond
+      (false? (:started body))
+      (when (and (string? reason) (not (str/blank? reason))
+                 (<= (count reason) (long not-started-reason-cap)))
+        {:not-started reason})
+
       (and (nil? status)
            (or (contains? body :claude_code_session_id)
                (contains? body :claude_code_session_url)))
@@ -121,7 +137,7 @@
     (let [answer (answer-of (router/read-body req))]
       (when-not answer
         (throw (p/problem :invalid 422 "Invalid body"
-                          {:detail "Send the run's claude_code_session_id and claude_code_session_url, or {\"status\": 401|400|429, \"retry_after\": n}."})))
+                          {:detail "Send the run's claude_code_session_id and claude_code_session_url, {\"status\": 401|400|429, \"retry_after\": n}, or {\"started\": false, \"reason\": \"...\"} with a reason of at most 500 characters."})))
       (when-not (some #(= (str fire) (:id %)) (pf/pending (:storage eng) (str id)))
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "This runner link holds no such fire."})))

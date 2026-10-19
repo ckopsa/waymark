@@ -20,6 +20,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -636,6 +637,47 @@
            (rlr/answer-of {:status 400})))
     (is (= {:bad-link "The Routine refused the token." :status 401}
            (rlr/answer-of {:status 401})))))
+
+(deftest a-not-started-answer-closes-the-fire-and-pauses-nothing
+  (let [id (pull-link-id!)
+        {:keys [queued]} (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                        {:kind "schedule" :id "s-unknown"})
+        reason "localfire stopped before it knew whether the run started, and does not start a fire twice."
+        landed (atom [])
+        written (atom [])]
+    (testing "it is read with or without a status"
+      (is (= {:not-started reason} (rlr/answer-of {:started false :reason reason})))
+      (is (= {:not-started reason}
+             (rlr/answer-of {:status 400 :started false :reason reason}))))
+    (testing "with no reason, a blank one or one too long, it is refused 422"
+      (is (= 422 (:status (refusal #(answer id queued a-token {:started false})))))
+      (is (= 422 (:status (refusal #(answer id queued a-token
+                                            {:status 400 :started false :reason "  "})))))
+      (is (= 422 (:status (refusal #(answer id queued a-token
+                                            {:started false
+                                             :reason (apply str (repeat 501 "x"))}))))))
+    (with-redefs [sch/land-pull-answer! (fn [_eng sid ans _at _runner]
+                                          (swap! landed conj [sid ans]))
+                  wakes/record-not-started! (fn [_eng held why]
+                                              (swap! written conj [held why])
+                                              true)]
+      (is (= 200 (:status (answer id queued a-token {:started false :reason reason})))))
+    (is (empty? (pf/pending (:storage *eng*) id)) "the fire is closed")
+    (is (= [["s-unknown" {:not-started reason}]] @landed))
+    (is (= [[(seats/fire-key-of-text a-fire-text) reason]] @written)
+        "the sitting the key would have opened is written down")
+    (is (nil? (get-in (row-of id) [:data :retry_after])) "the link is not throttled")
+    (is (nil? (get-in (row-of id) [:data :note])) "nor broken")
+    (testing "the sitting reads the localfire's sentence"
+      (is (= (str "localfire stopped before it knew whether the run started: " reason)
+             (wakes/not-started-note reason))))
+    (testing "the Routine is neither paused nor throttled"
+      (let [acts (atom [])]
+        (with-redefs [sch/try-act! (fn [& args] (swap! acts conj (nth args 2)))
+                      sch/act! (fn [& args] (swap! acts conj (nth args 2)))]
+          (sch/land-answer! *eng* {:id "s-unknown" :state :live :data {}}
+                            {:not-started reason} (java.time.Instant/now)))
+        (is (empty? @acts))))))
 
 (deftest no-token-or-fire-text-reaches-a-log
   (let [id (pull-link-id!)
