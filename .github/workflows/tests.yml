@@ -2031,7 +2031,10 @@ jobs:
             echo "::error title=SELFHOST.md drifted (5)::the token GitHub received cannot read $FIXTURE_REPO/contents/README.md (HTTP $readme_status): give SELFHOST_FIXTURE_TOKEN contents access to $FIXTURE_REPO and re-save it as an Actions repository secret"
             exit 1
           fi
-          head=$(git ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
+          # actions/checkout leaves http.https://github.com/.extraheader (the job's
+          # GITHUB_TOKEN) in this workspace's git config, and it wins over the URL's
+          # credentials: clear it, or GitHub sees a token that cannot read the fixture.
+          head=$(git -c http.https://github.com/.extraheader= ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
           [ -n "$head" ] || { echo "::error title=SELFHOST.md drifted (5)::$FIXTURE_REPO has no main"; exit 1; }
           echo "FIXTURE_HEAD=$head" >> "$GITHUB_ENV"
           python3 selfhost/ci/walk.py enroll ""
