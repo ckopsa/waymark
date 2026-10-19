@@ -90,7 +90,7 @@
         {:keys [scene clone day_one]} (edn/read-string text)]
     (testing "it names its day one, the day the clone's seed counts [:days 0] from"
       (is (= (:day_one filmed-on) day_one))
-      (is (some #(= {:since day_one} (select-keys % [:since]))
+      (is (some #(and (map? %) (= day_one (:since %)))
                 (tree-seq coll? seq (:shots scene)))))
     (testing "it is the scene the seed renders, as edn text"
       (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""))) scene)))
