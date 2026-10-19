@@ -1,0 +1,20 @@
+;; dress_rehearsal's seed: what a fresh engine holds the moment it
+;; boots this org. The grammar is docs/orgkit.md § The seed: the demo
+;; seed's :cast and :steps (docs/spec-demo-clones.md § 1) under the
+;; org's :domains, :seats and :judgments.
+{:seed "dress_rehearsal"
+ :version 1
+ :org "dress_rehearsal"
+ :domains [{:name "dress_rehearsal" :label "R&D Tax Studies" :ref :dress_rehearsal}]
+ ;; the :owner :id is the plan owner's member id
+ :cast
+ {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}}
+ ;; no seats yet: the audit's findings say which doors need a holder,
+ ;; and the org's mayor is added when the walk empties
+ :seats []
+ :judgments []
+ :steps
+ [{:as :owner :kind :prospect :ref :acme
+   :create {:company "Acme Robotics" :source "cpa_referral" :referring_cpa "Jordan Lee, CPA"}}
+  {:as :owner :kind :study :ref :acme-2025
+   :create {:client "Acme Robotics" :tax_year 2025 :cpa "Jordan Lee, CPA"}}]}
