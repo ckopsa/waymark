@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.sources.forge :as forge]
             [waymark10.dev :as dev]
             [waymark10.server.film-rules :as film-rules]
@@ -67,7 +68,7 @@
                   {:headers person :body {:name org}})
         _ (assert (= 201 (:status made)) (pr-str (json made)))
         id (id-of made)]
-    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+    (walk/proposed! eng id the-owner)
     id))
 
 (defn- director!
@@ -137,7 +138,7 @@
       (is (nil? (get-in (plan red) [:data :film_url]))))
     (testing "a landed take is not judged again"
       (inv/invoke! eng :org_plan red :record_findings
-                   {:head_sha "ddddddd2" :findings []} {:principal the-forge})
+                   {:head_sha head :findings []} {:principal the-forge})
       (inv/invoke! eng :org_plan red :propose {} {:principal the-owner})
       (is (= "proposed" (state red)))
       (is (nil? (:films (pass!))))

@@ -45,6 +45,44 @@
     (is (= 200 (:status resp)))
     (set (:kinds (wire/read-json (if (string? body) body (slurp body)))))))
 
+(defn- refused-org
+  "An org on disk, `delta`, whose seed the loader refuses: its one
+  domain names no :name."
+  []
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "orgs-" (random-uuid)) "delta")
+        seed (io/file dir "resources" "delta" "seed.edn")]
+    (io/make-parents seed)
+    (spit seed (pr-str {:seed "delta" :version 1 :org "delta"
+                        :domains [{:label "Delta"}]
+                        :cast {:owner {:id "owner" :display "Owner" :type :human}}}))
+    {:org "delta" :dir dir}))
+
+(deftest one-org's-seed-refusal-is-a-crack-not-a-crashed-boot
+  (let [alpha (filterv #(= "alpha" (:org %)) (org/live-orgs (org/orgs-dir fixtures)))
+        {:keys [resources orgs]} (main/with-live-orgs (main/factory-only-resources) alpha)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources resources
+                            :suppress-mirror-refresh true})
+        once (atom nil)
+        out (with-out-str
+              (reset! once (main/live-orgs-on-boot! eng (into [(refused-org)] orgs)
+                                                    {:params {}})))
+        cracks (filter :crack @once)]
+    (testing "the boot goes on: the clean org after it loads"
+      (is (= [true] (mapv :seeded (remove :crack @once))) (pr-str @once))
+      (is (contains? (names eng :domain) "alpha")))
+    (testing "the refused org is skipped with a crack naming it and its sentence"
+      (is (= ["delta"] (mapv :org cracks)))
+      (is (= :org_refused (:crack (first cracks))))
+      (is (re-find #"names no :name" (str (:reason (first cracks)))) (pr-str cracks)))
+    (testing "the skip is logged with the org's name"
+      (is (re-find #"`delta` did not load at boot" out) out))
+    (testing "and a draft ticket says so"
+      (is (some #(re-find #"^org delta did not load at boot: " (str (get-in % [:data :title])))
+                (dev/rows eng :ticket))
+          (pr-str (map #(get-in % [:data :title]) (dev/rows eng :ticket)))))))
+
 (deftest the-orgs-dir-is-the-variable-or-the-image's-orgs
   (is (= (io/file fixtures) (org/orgs-dir fixtures)))
   (is (= (io/file "../orgs") (org/orgs-dir nil)))

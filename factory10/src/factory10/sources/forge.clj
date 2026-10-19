@@ -2593,9 +2593,11 @@
 (def findings-doors
   "The findings door each plan state affords. A push to a proposed
   plan's branch still lands, so the plan a person approves is the plan
-  as it stands."
+  as it stands; a push to a filming plan's branch voids its take
+  (ticket 4d9311f1)."
   {:drafting :record_findings
    :proposed :record_findings_proposed
+   :filming :void_take
    :simulated :record_findings_simulated})
 
 (defn org-of
@@ -2622,6 +2624,15 @@
     (let [page (or (get doc :law_page) (get doc "law_page"))]
       (when (and (string? page) (not (str/blank? page))) page))))
 
+(defn first-week-scene-of
+  "The first-week scene the artifact's JSON carries beside the findings,
+  its `first_week_scene` as edn text (ticket 4dbb8243), or nil when it
+  carries none."
+  [doc]
+  (when (map? doc)
+    (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
+      (when (and (string? scene) (not (str/blank? scene))) scene))))
+
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
   conform's `live_flag` for the org's org.edn at that head, and the
@@ -2640,16 +2651,112 @@
         (assoc :mayor (cond-> {:name (str (at mayor "name"))}
                         (some? budget) (assoc :budget_usd_per_week (str budget))))))))
 
+(def ^:private finding-caps
+  "org_plan's caps on a finding's text fields (ticket 78f79ec1). A field
+  past its cap is cut to one under it and ends in an ellipsis; the key
+  is not cut but hashed, by `capped-key`."
+  {:sentence 240 :remedy 240 :subject 200 :class 64 :severity 32})
+
+(def ^:private key-cap 64)
+(def ^:private findings-cap 200)
+(def ^:private law-page-cap 40000)
+(def ^:private first-week-scene-cap 65536)
+
+(defn- sha1-hex [^String s]
+  (let [md (java.security.MessageDigest/getInstance "SHA-1")]
+    (apply str (map #(format "%02x" %) (.digest md (.getBytes s "UTF-8"))))))
+
+(defn- clip [s cap]
+  (let [s (str s)]
+    (if (> (count s) cap) (str (subs s 0 (dec cap)) "…") s)))
+
+(defn- capped-key
+  "A key past its cap → its first 55 characters, `~` and the first 8 hex
+  of the SHA-1 of the whole key: the same on every pass, and still unique."
+  [k]
+  (let [k (str k)]
+    (if (> (count k) key-cap)
+      (str (subs k 0 55) "~" (subs (sha1-hex k) 0 8))
+      k)))
+
+(defn- capped-finding [f]
+  (if-not (map? f)
+    f
+    (let [f (into {} (map (fn [[k v]] [(keyword (name k)) v])) f)]
+      (reduce-kv (fn [f field cap]
+                   (if (string? (get f field)) (update f field clip cap) f))
+                 (cond-> f (string? (:key f)) (update :key capped-key))
+                 finding-caps))))
+
+(defn capped-findings
+  "The artifact's findings fitted to org_plan's caps (ticket 78f79ec1),
+  so one over-long field from a lint does not refuse the whole record:
+  each finding's fields capped, and past 200 findings the errors first,
+  then the rest in artifact order, cut at 200."
+  [findings]
+  (let [found (mapv capped-finding findings)
+        error? #(and (map? %) (= "error" (str (:severity %))))]
+    (if (<= (count found) findings-cap)
+      found
+      (vec (take findings-cap (concat (filter error? found) (remove error? found)))))))
+
+(defn- within-cap
+  "`text` when it fits `cap`, else nil with one log line: a page past its
+  cap is dropped, not cut."
+  [log-fn org field cap text]
+  (if (and text (> (count text) cap))
+    (do (log-fn "the " field " of " org " is " (count text)
+                " characters, past its cap of " cap "; dropped")
+        nil)
+    text))
+
+(defn- refused-fields
+  "The fields a schema refusal names, each with what it said, or \"\"."
+  [e]
+  (let [errors (:errors (ex-data e))]
+    (if (and (map? errors) (seq errors))
+      (clip (str "; refused: "
+                 (str/join "; " (map (fn [[k v]]
+                                       (str (if (keyword? k) (name k) (str k))
+                                            " " (pr-str v)))
+                                     errors)))
+            2000)
+      "")))
+
+(defn- void-stale-take!
+  "The filming plan whose take is not of `head`, its change's head now →
+  `void_take` as the engine's hand (ticket 4d9311f1): the film must be
+  of the head the owner approves. A take of `head`, or none, is left
+  for the film pass. A door the engine refuses costs that plan one pass.
+  → the census, with `:voided` counted."
+  [eng plan head census log-fn]
+  (let [take-sha (str (get-in plan [:data :take_sha]))]
+    (if (or (str/blank? take-sha) (= head take-sha))
+      census
+      (try
+        (inv/invoke! eng :org_plan (str (:id plan)) :void_take
+                     {:head_sha head} (as-opts))
+        (update census :voided (fnil inc 0))
+        (catch Exception e
+          (log-fn "the take of " (org-of plan) " at " take-sha
+                  " was not voided (" (ex-message e) ")")
+          census)))))
+
 (defn findings-pass!
   "Every drafting, proposed or simulated org_plan whose change carries a head its
   findings were not recorded at → the artifact
   `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
   written through the door the plan's state affords, with the law page
-  the same artifact carries (ticket 4ab34d18). Once per head: a
+  the same artifact carries (ticket 4ab34d18) and its first-week scene,
+  rendered at that head (ticket 4dbb8243). Once per head: a
   plan whose `findings_sha` is its change's head is not read, and an
   artifact not there yet is tried on the next pass. A forge that does
   not answer, or a door the engine refuses, costs that plan one pass and
-  nothing else. → the census, with `:findings` counted."
+  nothing else. A filming plan whose change carries a head its take was
+  not made at has the take voided, `:voided` counted, and its findings
+  land on a later pass. The findings are fitted to the plan's caps first
+  (`capped-findings`), and a law page or scene past its cap is dropped
+  (ticket 78f79ec1). → the census, with `:findings` counted."
   [eng source census log-fn]
   (if-not (satisfies? ForgeArtifact source)
     census
@@ -2664,27 +2771,39 @@
       (reduce
        (fn [census plan]
          (let [door (get findings-doors (state-of plan))
-               change (row-by-id eng :change (get-in plan [:data :change]))
+               change (row-by-id eng :change (bench/org-plan-change-id eng plan))
                repo (some-> (get-in change [:data :repository]) str not-empty)
                head (some-> (get-in change [:data :head_sha]) str not-empty)
                org (org-of plan)]
-           (if (or (nil? door) (nil? repo) (nil? head) (nil? org)
-                   (= head (str (get-in plan [:data :findings_sha]))))
+           (cond
+             (or (nil? door) (nil? head)) census
+             (= :void_take door) (void-stale-take! eng plan head census log-fn)
+             (or (nil? repo) (nil? org)
+                 (= head (str (get-in plan [:data :findings_sha]))))
              census
+             :else
              (try
                (let [doc (forge-artifact source repo
                                          (str "org-findings-" org "-" head))]
                  (if-some [found (findings-of doc org)]
-                   (do (inv/invoke! eng :org_plan (str (:id plan)) door
-                                    (cond-> (merge {:head_sha head :findings found}
-                                                   (live-of doc))
-                                      (law-page-of doc) (assoc :law_page (law-page-of doc)))
-                                    (as-opts))
-                       (update census :findings (fnil inc 0)))
+                   (let [page (within-cap log-fn org "law_page" law-page-cap
+                                          (law-page-of doc))
+                         scene (within-cap log-fn org "first_week_scene"
+                                           first-week-scene-cap
+                                           (first-week-scene-of doc))]
+                     (inv/invoke! eng :org_plan (str (:id plan)) door
+                                  (cond-> (merge {:head_sha head
+                                                  :findings (capped-findings found)}
+                                                 (live-of doc))
+                                    page (assoc :law_page page)
+                                    scene (assoc :first_week_scene scene))
+                                  (as-opts))
+                     (update census :findings (fnil inc 0)))
                    census))
                (catch Exception e
                  (log-fn "the findings of " org " at " head
-                         " were not recorded (" (ex-message e) ")")
+                         " were not recorded (" (ex-message e) ")"
+                         (refused-fields e))
                  census)))))
        census
        plans))))
@@ -2703,7 +2822,9 @@
   `first-week/land!` as the engine's hand: no fail rule missed attaches
   the film and the plan is simulated; a fail rule missed records its
   findings and the plan drafts again. Once per take: the landing stamps
-  `take_landed_at`, and a plan with it is not read. A report that does
+  `take_landed_at`, and a plan with it is not read. A take whose head
+  the plan's change has left is voided instead (ticket 4d9311f1),
+  `:voided` counted. A report that does
   not read, or a door the engine refuses, costs that plan one pass and
   nothing else. `judge` is (fn [eng take]) → the answer, the active
   rules unless said. → the census, with `:films` counted."
@@ -2717,12 +2838,18 @@
      (reduce
       (fn [census plan]
         (let [{:keys [take_film_url take_report take_sha take_landed_at]}
-              (:data plan)]
-          (if (or (some? take_landed_at)
-                  (str/blank? (str take_film_url))
-                  (str/blank? (str take_report))
-                  (str/blank? (str take_sha)))
+              (:data plan)
+              head (some-> (row-by-id eng :change (get-in plan [:data :change]))
+                           (get-in [:data :head_sha]) str not-empty)]
+          (cond
+            (or (some? take_landed_at)
+                (str/blank? (str take_film_url))
+                (str/blank? (str take_report))
+                (str/blank? (str take_sha)))
             census
+            (and (some? head) (not= head (str take_sha)))
+            (void-stale-take! eng plan head census log-fn)
+            :else
             (try
               (first-week/land! eng (str (:id plan))
                                 (judge eng (wire/read-json (str take_report)))

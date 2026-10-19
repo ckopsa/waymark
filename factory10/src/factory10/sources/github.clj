@@ -1031,11 +1031,16 @@
        (not (str/starts-with? (str body) "PK"))))
 
 (defn- unzip-json
-  "The first entry of a zip archive, read as JSON, or nil."
+  "The first .json entry of a zip archive, read as JSON, or nil: an
+  artifact may carry other files beside it, as org-findings carries
+  first_week_scene.edn (ticket 4dbb8243)."
   [^bytes archive]
   (with-open [zin (ZipInputStream. (ByteArrayInputStream. archive))]
-    (when (.getNextEntry zin)
-      (wire/read-json (String. (.readAllBytes zin) StandardCharsets/UTF_8)))))
+    (loop []
+      (when-some [^java.util.zip.ZipEntry entry (.getNextEntry zin)]
+        (if (str/ends-with? (.getName entry) ".json")
+          (wire/read-json (String. (.readAllBytes zin) StandardCharsets/UTF_8))
+          (recur))))))
 
 (defn- artifact!
   "The newest unexpired artifact of this name, read as JSON (ticket

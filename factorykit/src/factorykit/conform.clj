@@ -12,6 +12,10 @@
 
   The classes, in the order they are judged:
 
+  org_name_not_snake_case
+            the org's directory name is snake_case, or live-orgs never
+            boots it (ticket d4750bf9)
+  manifest  org.edn is there, a map, naming the org and its :live
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
             names fills with no hole left
@@ -96,7 +100,7 @@
       (catch Throwable e
         {:findings [(finding :load [org] module
                              (str module " did not load: " (root-message e))
-                             (str "Make src/" org "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
+                             (str "Make src/" (munge org) "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
 
 ;; ── seed ────────────────────────────────────────────────────────────
 
@@ -329,6 +333,16 @@
 
 ;; ── the suite ───────────────────────────────────────────────────────
 
+(defn- name-findings
+  "The org's name, its directory's: snake_case, as live-orgs boots only
+  such an org (waymark10.server.org, docs/orgkit.md § Naming rules), so a
+  wrong one shows before go_live."
+  [org]
+  (when-not (re-matches #"[a-z][a-z0-9_]*" org)
+    [(finding :org_name_not_snake_case [org] org
+              (str "The org's name " org " is not snake_case, so live-orgs skips orgs/" org " and it never boots.")
+              "Rename the org's directory, manifest :name and seed :org to lowercase letters, digits and underscores, starting with a letter, as docs/orgkit.md § Naming rules says.")]))
+
 (defn- manifest-findings
   "The org's manifest, org.edn (ticket 29f8e07a): there, readable, a
   map naming the org and saying whether it is live."
@@ -391,21 +405,32 @@
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its
-  manifest's first; [] when it conforms. The directory's name is the
-  org's name."
+  name's and manifest's first; [] when it conforms. The directory's name
+  is the org's name."
   [org-dir]
   (let [dir (.getCanonicalFile (io/file org-dir))
         org (.getName dir)]
-    (into (vec (manifest-findings dir org)) (judged dir org))))
+    (into (vec (concat (name-findings org) (manifest-findings dir org)))
+          (judged dir org))))
+
+(defn- live?
+  "Whether the org at `dir` says :live true in its manifest."
+  [^File dir]
+  (let [m (try (org-boot/manifest dir) (catch Throwable _ nil))]
+    (true? (when (map? m) (:live m)))))
 
 (defn- org-dirs
-  "An org directory as itself; any other directory as the orgs in it."
-  [arg]
+  "An org directory as itself; any other directory as the orgs in it,
+  only the live ones when `live-only?` (ticket 7310836f): a drafting
+  org's error findings are its onboarding walk's steps, not a red gate."
+  [live-only? arg]
   (let [d (io/file arg)]
     (if (.isFile (io/file d "deps.edn"))
       [d]
       (sort-by #(.getName ^File %)
-               (filter #(.isFile (io/file ^File % "deps.edn")) (.listFiles d))))))
+               (filter #(and (.isFile (io/file ^File % "deps.edn"))
+                             (or (not live-only?) (live? %)))
+                       (.listFiles d))))))
 
 (defn- wire-finding
   "A finding as org_plan's record_findings takes it: strings throughout."
@@ -437,10 +462,16 @@
   any error finding, 2 when no org was found. `--json` prints one JSON
   object instead, each org's name to its findings, for the audit's CI
   job to hand to org_plan's record_findings (ticket 5d62058e), and under
-  `_live` each org's `live-report` (ticket c8e131fb)."
+  `_live` each org's `live-report` (ticket c8e131fb). `--live` judges,
+  of a directory named, only the orgs whose manifest says :live true;
+  an org named itself is judged whatever it says (ticket 7310836f)."
   [& args]
   (let [json? (boolean (some #{"--json"} args))
-        dirs (mapcat org-dirs (or (seq (remove #{"--json"} args)) ["."]))
+        live-only? (boolean (some #{"--live"} args))
+        dirs (->> (or (seq (remove #{"--json" "--live"} args)) ["."])
+                  (mapcat (partial org-dirs live-only?))
+                  (map #(.getCanonicalFile ^File %))
+                  distinct)
         judged (mapv (fn [^File d] [(.getName (.getCanonicalFile d)) (conform d)])
                      dirs)
         errors (count (filter #(= :error (:severity %)) (mapcat second judged)))]

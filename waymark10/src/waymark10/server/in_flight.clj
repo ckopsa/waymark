@@ -204,10 +204,8 @@
         [seat-rows pages]
         (store/with-tx st
           (fn [tx]
-            [(if (contains? resources :seat)
-               (vec (store/query-rows st tx :seat {:state :active}
-                                      {:limit seat-page}))
-               [])
+            [(vec (store/query-rows st tx :seat {:state :active}
+                                    {:limit seat-page}))
              ;; one row past the page tells a capped state from a full one
              (vec (for [[k rdef states] kinds
                         s states

@@ -34,11 +34,17 @@
   `admit` judges each live org's kinds beside everything admitted
   before it; an org whose kinds do not load or fail the registry — a
   kind name the house or an earlier org already serves among them — is
-  left out with a crack naming it, and the engine boots without it."
+  left out with a crack naming it, and the engine boots without it.
+  So is one whose seed is refused at boot (ticket 087753c1):
+  `boot-live!` skips it with a line and a draft ticket, and the boot
+  goes on."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [waymark10.server.seed :as seed])
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.schedules :as schedules]
+            [waymark10.server.seed :as seed]
+            [waymark10.server.store :as store])
   (:import (clojure.lang Compiler DynamicClassLoader)
            (java.io File)))
 
@@ -244,11 +250,49 @@
       {:resources (vec base) :orgs [] :cracks []}
       orgs)))
 
+(defn- crack-ticket!
+  "The draft ticket an org skipped at boot earns, filed as the engine for
+  the mayor to groom: one per org and sentence, so a boot refused the
+  same way again files nothing new. Best effort: a ticket that will not
+  file is a line, and the boot goes on. → true when one was filed."
+  [eng org reason]
+  (when (contains? (inv/resources eng) :ticket)
+    (let [st (:storage eng)
+          k (str "org-crack:" org ":" (hash reason))
+          title (str "org " org " did not load at boot: " reason)]
+      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+        (try
+          (inv/create! eng :ticket
+                       {:title (subs title 0 (min 140 (count title)))
+                        :detail (str "The live org `" org "`'s seed was refused at boot,"
+                                     " so the house booted without it.\n\n" reason)
+                        :repo "ckopsa/waymark"
+                        :type "bug"
+                        :priority 1}
+                       {:principal schedules/system-actor
+                        :idempotency-key k})
+          true
+          (catch Exception e
+            (println (str "waymark10 org: the crack ticket for `" org
+                          "` would not file — " (ex-message e)))
+            nil))))))
+
 (defn boot-live!
   "The boot step behind WAYMARK10_ORGS_DIR: each live org's seed, read
-  from its directory and loaded as `boot!` loads one. → one `boot!`
-  answer per org that carries a seed. Throws for everything `boot!`
-  throws for."
+  from its directory and loaded as `boot!` loads one. → per org that
+  carries a seed, its `boot!` answer, or, when its seed is refused,
+  {:org :crack :org_refused :reason sentence}: that org is skipped with
+  a line and a draft ticket (`crack-ticket!`), and the orgs after it
+  load (ticket 087753c1). One org's refusal never ends the boot."
   [eng orgs opts]
   (with-classpath (map :dir orgs)
-    #(into [] (keep (fn [{:keys [org]}] (boot! eng org opts))) orgs)))
+    #(into []
+           (keep (fn [{:keys [org]}]
+                   (try
+                     (boot! eng org opts)
+                     (catch Exception e
+                       (let [reason (or (ex-message e) (str e))]
+                         (println (str "waymark10 org: `" org "` did not load at boot, and the engine boots without it: " reason))
+                         (crack-ticket! eng org reason)
+                         {:org org :crack :org_refused :reason reason})))))
+           orgs)))

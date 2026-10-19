@@ -34,7 +34,10 @@
   asks the damper first (`wakes/wake-held`, ticket 4ff29b4a): a seat
   with a run up or just fired, or a throttled Routine, is not woken a
   second time, and the crack waits for a later pass; a broken Routine
-  or a spent week waits on a person, so that crack is the mayor's.
+  or a spent week waits on a person, so that crack is the mayor's. A
+  wake still held once the row has been aged `held-ages` expected ages
+  reaches the mayor all the same, naming the seat tried and the hold
+  (ticket 14b45884): a sitting left open for good holds nothing forever.
 
   The other cracks are routed the same way (ticket 976606f4):
 
@@ -89,6 +92,12 @@
    "submitted" 86400
    "in_review" 86400
    "blocked" 604800})
+
+(def held-ages
+  "How many expected ages, counted from the row's last write, a crack
+  may wait while `wakes/wake-held` holds its seat's wake. Past it the
+  draft goes to the mayor, naming the hold (ticket 14b45884)."
+  3)
 
 (def ^:private default-cadence
   "Seconds a seat that states no cadence may go without a fire while
@@ -772,10 +781,37 @@
   and a row a run already has. They lift by themselves."
   #{:damped :throttled :spoken_for})
 
+(defn- held-too-long?
+  "Has this crack's row been aged `held-ages` expected ages by `now`?"
+  [c now]
+  (let [since (inst (:since c))
+        age (:expected_seconds c)]
+    (boolean (and since age (past? since (* (long held-ages) (long age)) now)))))
+
+(defn- hold-text
+  "The seat tried and what held its wake, for the draft: the keyword
+  `wakes/wake-held` answered and, when the damper held it, the open
+  sitting and how long it has been open, or the gap after a fire."
+  [eng c held ^Instant now]
+  (let [s (when (= :damped held)
+            (seats/open-sitting-for-seat eng (get-in c [:wake :seat])))
+        opened (some-> s :created-at inst)]
+    (str (get-in c [:wake :name]) ", whose wake was held as " (text held)
+         (cond
+           s (str " by an open sitting, " (:id s)
+                  (when opened
+                    (str ", open " (quot (- (.toEpochMilli now) (.toEpochMilli opened)) 1000)
+                         " seconds")))
+           (= :damped held) " by the gap after its last fire"
+           :else "")
+         ", past " held-ages " expected ages")))
+
 (defn- send!
   "One crack's note, by `route`: a wake for the seat that holds the row,
   or the draft ticket. A wake the damper holds (`waits-for`) sends
-  nothing and waits for a later pass. A seat held otherwise, or whose
+  nothing and waits for a later pass, until the row has been aged
+  `held-ages` expected ages: then the draft names the hold. The marker
+  files it once. A seat held otherwise, or whose
   door refuses the wake, was tried all the same, and the draft says
   so. → true when a note went out."
   [eng c now]
@@ -786,7 +822,9 @@
       :wake (let [held (wakes/wake-held eng (get-in c [:wake :seat])
                                         (wake-text c) now)]
               (cond
-                (contains? waits-for held) nil
+                (contains? waits-for held)
+                (when (held-too-long? c now)
+                  (file! eng (assoc c :tried (hold-text eng c held now)) now))
                 (and (nil? held) (wake! eng c)) true
                 :else (file! eng
                              (assoc c :tried (str (get-in c [:wake :name])

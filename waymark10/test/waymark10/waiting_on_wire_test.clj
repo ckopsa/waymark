@@ -191,18 +191,3 @@
           (is (not (str/includes? (:verdict w) "held_reason"))
               "nor does the verdict")
           (is (not (str/includes? (:verdict w) "the vendor"))))))))
-
-;; ── no seat kind, no block ──────────────────────────────────────────
-
-(deftest an-engine-with-no-seat-kind-serves-no-block
-  (let [eng (boot)
-        id (open-errand! eng)]
-    ;; the seat is core's and always enrolled, so the engine is booted
-    ;; whole and then made to serve no seat kind
-    (swap! (:registry eng) update :kinds dissoc :seat)
-    (is (not (contains? (inv/resources eng) :seat)))
-    (let [{:keys [status parsed]} (route-get eng (str "/api/wo_errands/" id) nil)]
-      (is (= 200 status))
-      (is (= "open" (:state parsed)))
-      (is (contains? parsed :actions) "the envelope is served whole")
-      (is (not (contains? parsed :waiting_on))))))

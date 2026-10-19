@@ -1667,7 +1667,8 @@
                         (schema/json-schema (:input a))
                         (when-some [arg? (:arg? vis)]
                           #(arg? (:kind rdef) (:name a) %)))
-                       (render/edit-input-js a)))]
+                       (render/edit-input-js a)
+                       (render/engine-written-js a rdef)))]
     (cond-> {:name (name (:name a))
              :from (mapv name (sort (:from a)))
              :to (name (:to a))
@@ -2313,16 +2314,23 @@
   tool. `seen`, when given, is shown the route's answer before it is
   read and answers the one to read (`stage-sheet!`)."
   [call session rdef aname input dry-run warnings return as-id & [seen]]
-  (let [names (set (map p/wire-key (:create-action-names rdef)))]
+  (let [door (inv/create-door rdef aname)
+        verbs (into (mapv name (:create-action-names rdef))
+                    (map (comp name :action))
+                    (:creates rdef))
+        names (set (map p/wire-key verbs))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
                           {:detail (str "No id was given, so this is a create — "
                                         "but " (name (:kind rdef)) " creates with "
-                                        (pr-str (mapv name (:create-action-names rdef)))
+                                        (pr-str verbs)
                                         ", not " (pr-str (name aname)) ".")}))
       (answer
        ((or seen identity)
-        (call (request session :post (str "/api/" (:plural rdef))
+        (call (request session :post (str "/api/" (:plural rdef)
+                                          ;; an extra create door's own route
+                                          (when door
+                                            (str "/-/" (name (:action door)))))
                        {:body (or input {})
                         :query (when dry-run "dry_run=1")
                         :headers (cond-> {"idempotency-key"
@@ -3796,6 +3804,25 @@
             "The queue held no rows under the walk's filter and the seat's grant.")]
     (subs s 0 (min 480 (count s)))))
 
+(defn- may-create-first-note
+  "The sentence an interactive seat on an empty walk is told when its
+  scope holds the walked kind's create door (ticket c09893b1): a
+  person's first sitting starts before any row exists, and `walk-note`
+  over no rows read as nothing to do. nil when the walk handed or held
+  a row, when its filter left rows out, and for any other seat."
+  [eng call session seat walk]
+  (let [kind (some-> (get walk "kind") str not-empty)
+        rdef (when kind (get (inv/resources eng) (keyword kind)))
+        creates (set (map name (or (:create-action-names rdef) #{:create})))]
+    (when (and rdef
+               (= "interactive" (some-> (get-in seat [:data :mode]) str))
+               (empty? (get walk "rows"))
+               (empty? (get walk "withheld"))
+               (not (some-> (get walk "total") pos?))
+               (some creates (seats/walk-doors seat))
+               (nil? (walk-filter-left-out eng call session seat walk)))
+      (str " Nothing to walk yet: this seat may create the first " kind "."))))
+
 (def ^:private graced-reason
   "a sitting of this seat closed within the seat's release grace (release_grace_seconds) and still holds it")
 
@@ -4427,6 +4454,24 @@
       said
       (pattern-branch policy row-id))))
 
+(defn- linked-change!
+  "The walk row learns the change the sit found or minted for it
+  (ticket db8b35bb): a kind that declares a `link_change` door is
+  walked through it with the engine's hand, so the row names its
+  change without a door of the seat's own. The door's guard decides
+  whether the row takes it — factory10's org_plan only when it names
+  none or names a closed one — and its refusal is the ordinary answer
+  once the row names it, so it is swallowed. → change."
+  [eng walk change]
+  (let [kind (keyword (str (get walk "kind")))
+        id (some-> (get-in walk ["rows" 0 "id"]) str not-empty)]
+    (when (and id (get-in (inv/resources eng) [kind :actions :link_change]))
+      (try
+        (inv/invoke! eng kind id :link_change {:change (str (:id change))}
+                     {:principal seat-change-principal})
+        (catch Exception _ nil)))
+    change))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -4790,7 +4835,8 @@
                                 (reopened-change eng)
                                 (regroomed-change eng)
                                 (rehomed-change eng seat row)
-                                (rebranched-change eng row))
+                                (rebranched-change eng row)
+                                (linked-change! eng walk))
                 repo (first (walk-home seat row))]
             [change
              (or note
@@ -5297,8 +5343,9 @@
   that is not retired — read by the kind's name, so an engine serving
   no org_plan answers nil — and the sitting is its first when it is the
   seat's only one. The org's held calls are those still held whose
-  caller, or whose door's author, is the sitter of a seat in the org's
-  domain; its aged rows are `live-cracks/aged-rows` over the rows whose
+  stamped `domain` is the org's, or, for a call that stores none (held
+  before the stamp, ticket afcce783), whose caller or door's author is
+  the sitter of a seat in the org's domain; its aged rows are `live-cracks/aged-rows` over the rows whose
   domain is the org's."
   [eng seat sitting now]
   (let [read' (row-reader eng)
@@ -5316,10 +5363,12 @@
             held (filterv (fn [row]
                             (let [d (:data row)
                                   door (:door d)]
-                              (or (contains? callers (str (:caller d)))
-                                  (contains? callers
-                                             (str (or (get door :author)
-                                                      (get door "author")))))))
+                              (if-some [dom (some-> (:domain d) str not-empty)]
+                                (= org dom)
+                                (or (contains? callers (str (:caller d)))
+                                    (contains? callers
+                                               (str (or (get door :author)
+                                                        (get door "author"))))))))
                           (decoded-rows eng :held_call {:state :held}))
             rdefs (vec (vals (inv/resources eng)))
             rows (into {}
@@ -5644,6 +5693,8 @@
                                  (named-row-withheld-note named-row))
                                (when (get walk "judgment")
                                  judgment-walk-note)
+                               (when-not (or halted held-by all-held?)
+                                 (may-create-first-note eng call sitter-sees seat walk))
                                (when said change-beside-the-walk-note)
                                (when (get bench "bench") bench-filled-note))})
             transcript-key
