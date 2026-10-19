@@ -16,6 +16,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
 
@@ -68,13 +69,29 @@
   [shot]
   (keep #(when (map? %) (get % "$rows")) (:say shot)))
 
+(defn- example-kinds []
+  ((requiring-resolve 'example.org/resources)))
+
 (def ^:private three-kind-seed
-  (update seed :steps conj {:as :owner :kind :invoice :ref :hedge-bill
-                            :create {:title "Front hedge"}}))
+  (assoc seed :steps [{:as :owner :kind :prospect :ref :p :create {:title "Hedge lead"}}
+                      {:as :owner :kind :study :ref :s :create {:title "Yard study"}}
+                      {:as :owner :kind :invoice :ref :i :create {:title "Front hedge"}}]))
+
+(def ^:private three-kinds
+  "The fixture's declarations, as far as the closing reads them."
+  [{:kind :prospect :states [:new :engaged :declined] :terminal #{:engaged :declined}}
+   {:kind :study :states [:drafted :delivered :dropped] :terminal #{:delivered :dropped}}
+   {:kind :invoice :states [:sent :paid :written_off] :terminal #{:paid :written_off}}])
+
+(defn- spoken
+  "The closing's say as the performer speaks it, each kind's count in `n`."
+  [closing n]
+  (scenes/fill-say (:say closing) (fn [{:keys [kind]}] (repeat (get n kind 0) "row"))))
 
 (deftest a-three-kind-seed-renders-its-week
   (let [brief "A six-person landscaping business in Provo. It trims hedges."
-        shots (:shots (:scene (first-week/scene three-kind-seed (assoc filmed-on :brief brief))))
+        shots (:shots (:scene (first-week/scene three-kind-seed
+                                                (assoc filmed-on :brief brief :resources three-kinds))))
         closing (last shots)]
     (testing "the opening says the business and its brief's first sentence"
       (is (= "Example Landscaping: A six-person landscaping business in Provo."
@@ -82,20 +99,32 @@
     (testing "seven day shots, each its weekday and a `$day` hole of its date"
       (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
              (captions shots))))
-    (testing "the closing counts each kind's finished rows over the week, then the taps"
-      (is (= [["request" true true] ["work_order" true true] ["invoice" true true]
-              ["held_call" true nil]]
-             (map (juxt :kind :count :terminal) (counts closing))))
+    (testing "the closing counts each kind's success ends over the week, then the taps"
+      (is (= [["prospect" "engaged" "prospect engaged" "prospects engaged"]
+              ["study" "delivered" "study delivered" "studies delivered"]
+              ["invoice" "paid" "invoice paid" "invoices paid"]
+              ["held_call" nil "tap from you" "taps from you"]]
+             (map (juxt :kind :state :one :many) (counts closing))))
       (is (every? #(= {:since "2026-10-19" :until "2026-10-26"} (select-keys % [:since :until]))
                   (counts closing)))
       (is (str/ends-with? (last (:say closing)) "Merge to make it real.")))
+    (testing "it reads each count by its noun and end, a zero dropping its clause"
+      (is (= "That was the week: 3 prospects engaged, 1 study delivered, 1 invoice paid, 2 taps from you. Merge to make it real."
+             (spoken closing {"prospect" 3 "study" 1 "invoice" 1 "held_call" 2})))
+      (is (= "That was the week: 1 prospect engaged, 2 invoices paid, 1 tap from you. Merge to make it real."
+             (spoken closing {"prospect" 1 "invoice" 2 "held_call" 1})))
+      (is (= "That was the week: 0 taps from you. Merge to make it real."
+             (spoken closing {}))))
+    (testing "a noun's plural"
+      (is (= ["prospects" "studies" "days" "work orders" "glass"]
+             (map first-week/plural ["prospect" "study" "day" "work order" "glass"]))))
     (testing "the arc film rule still reads friction, turn, payoff in order"
       (is (= ["friction" "turn" "payoff"] (keep :role shots))))
     (testing "a brief's first sentence is cut at 140 characters"
       (is (= 140 (count (first-week/brief-line (apply str (repeat 200 "a")))))))))
 
 (deftest the-template-renders-for-the-example-org
-  (let [{:keys [scene clone]} (first-week/scene seed filmed-on)
+  (let [{:keys [scene clone]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)))
         says (keep :say (:shots scene))]
     (testing "the clone is the one it was given"
       (is (= {:url (:clone_url filmed-on) :head_sha (:head_sha filmed-on)} clone)))
@@ -109,9 +138,10 @@
     (testing "a caption per day, day 1 on day_one to day 7: its weekday and its `$day`"
       (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
              (captions (:shots scene)))))
-    (testing "the closing counts each kind the seed makes, then the taps asked"
-      (is (= [["request" true true] ["work_order" true true] ["held_call" true nil]]
-             (map (juxt :kind :count :terminal) (counts (last (:shots scene)))))))
+    (testing "the closing counts each kind's success ends, no loss, then the taps asked"
+      (is (= [["request" "accepted" "requests accepted"] ["work_order" "done" "work orders done"]
+              ["held_call" nil "taps from you"]]
+             (map (juxt :kind :state :many) (counts (last (:shots scene)))))))
     (testing "the arc runs friction, turn, payoff"
       (is (= ["friction" "turn" "payoff"] (keep :role (:shots scene)))))
     (testing "about 45 seconds"
@@ -133,7 +163,9 @@
       (is (some #(and (map? %) (= day_one (:since %)))
                 (tree-seq coll? seq (:shots scene)))))
     (testing "it is the scene the seed renders, as edn text"
-      (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""))) scene)))
+      (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""
+                                                   :resources (example-kinds))))
+             scene)))
     (testing "at the head it names, on no clone yet"
       (is (= {:url "" :head_sha (:head_sha filmed-on)} clone)))
     (testing "with no hole left and within the plan's field"

@@ -80,9 +80,10 @@
 
 ;; ── load ────────────────────────────────────────────────────────────
 
-(defn- with-org-classpath
+(defn with-org-classpath
   "Call f with the org's src and resources on the classpath, so an org
-  directory need not be a dep of whoever runs the suite."
+  directory need not be a dep of whoever runs the suite. The first-week
+  scene loads an org's kinds the same way."
   [^File dir f]
   (let [t (Thread/currentThread)
         prev (.getContextClassLoader t)
