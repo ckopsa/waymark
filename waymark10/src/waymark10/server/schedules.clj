@@ -2199,6 +2199,12 @@
       (contains? answer :throttled)
       (throttle! eng schedule-row (:throttled answer) (:body answer))
 
+      ;; a localfire that cannot say whether the run started: the fire
+      ;; is closed, nothing is paused or throttled, and the next cadence
+      ;; wake fires as usual (ticket 734b3ecd)
+      (contains? answer :not-started)
+      nil
+
       ;; a paused Routine is not a bad link: a live row says so as a
       ;; state, a paused row already does, and any other row keeps
       ;; trying until it is live enough to pause
