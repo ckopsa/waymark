@@ -2312,14 +2312,24 @@
   `waymark_invoke` with no id is where it went rather than a seventh
   tool. `seen`, when given, is shown the route's answer before it is
   read and answers the one to read (`stage-sheet!`)."
-  [call session rdef aname input dry-run warnings return as-id & [seen]]
-  (let [names (set (map p/wire-key (:create-action-names rdef)))]
-    (if-not (contains? names (p/wire-key aname))
+  [call session rdef aname input dry-run warnings acknowledge return as-id & [seen]]
+  (let [names (set (map p/wire-key (:create-action-names rdef)))
+        confirm? (confirm/create-confirm? rdef)
+        sentence (when confirm? (confirm/create-consequence rdef input))]
+    (cond
+      (not (contains? names (p/wire-key aname)))
       (refusal (p/problem :no-such-action 404 "Not found"
                           {:detail (str "No id was given, so this is a create — "
                                         "but " (name (:kind rdef)) " creates with "
                                         (pr-str (mapv name (:create-action-names rdef)))
                                         ", not " (pr-str (name aname)) ".")}))
+
+      ;; a create's confirm gate (ticket 13e3b323): the sentence is
+      ;; filled from THIS input, as the row door's is read off its row
+      (and confirm? (not= acknowledge sentence))
+      (refusal (confirm-refusal aname sentence acknowledge))
+
+      :else
       (answer
        ((or seen identity)
         (call (request session :post (str "/api/" (:plural rdef))
@@ -2331,6 +2341,8 @@
                                    (seq warnings)
                                    (assoc "waymark-acknowledge"
                                           (str/join "," (map name warnings)))
+                                   ;; the router's create gate reads the echo
+                                   confirm? (assoc "waymark-confirm" acknowledge)
                                    ;; the cast member a clone's seat acts as
                                    as-id (assoc "x-waymark-as" as-id))})))
        return
@@ -2649,7 +2661,7 @@
             ;; typed before the write, so a refusal leaves it open
             _ (when (and st (not sheet?)) (stage-dialog! eng st self aname input))
             res (create-row call session rdef aname input dry_run
-                            acknowledge_warnings return as-id
+                            acknowledge_warnings acknowledge return as-id
                             (when preview?
                               #(stage-sheet! eng call session st goal since %)))]
         ;; staged (§ 2): the create landed, so the form closes

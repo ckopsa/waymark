@@ -70,6 +70,11 @@
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
    :flow :actions :create-guards :create-action-names :allow-dead :renames
+   ;; the create door's own safety (ticket 13e3b323): {:confirm true
+   ;; :consequence <fn of input, or a {field} template>} — the create
+   ;; refuses until its caller echoes the sentence its input fills
+   ;; (waymark10.confirm/create-consequence)
+   :create-safety
    ;; the doors licensed to depart a TERMINAL state (docs/spec-undo.md).
    ;; check-terminal-no-exit's flat rule — no action leaves a tomb — is
    ;; right about every door that CONTINUES a story and wrong about the

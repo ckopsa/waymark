@@ -114,6 +114,7 @@
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.checks :as checks]
+            [waymark10.confirm :as confirm]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
@@ -921,6 +922,25 @@
         (json-response 202 doc media-type
                        {"Location" (:self doc)})))))
 
+(defn- check-create-confirm!
+  "A create door that declares safety.confirm (:create-safety) refuses
+  until the `waymark-confirm` header carries the consequence sentence
+  its own body fills — the row doors' confirm gate at the birth door,
+  so the HTTP door holds what the MCP create path checks (ticket
+  13e3b323)."
+  [req rdef body]
+  (when (confirm/create-confirm? rdef)
+    (let [sentence (confirm/create-consequence rdef body)
+          aname (name (first (:create-action-names rdef)))]
+      (when (not= sentence (get-in req [:headers "waymark-confirm"]))
+        (throw (p/problem :confirm-required 409 "Confirmation required"
+                          {:detail (str "safety.confirm is true for " aname
+                                        " — send its consequence sentence as the"
+                                        " waymark-confirm header, exactly as written.")
+                           :action aname
+                           :consequence sentence
+                           :acknowledge {:header "waymark-confirm" :value sentence}}))))))
+
 (defn- create [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
@@ -928,6 +948,7 @@
           _ (check-action! req rdef (first (:create-action-names rdef)))
           opts (invoke-opts eng req)
           body (read-body req)
+          _ (check-create-confirm! req rdef body)
           ;; a birth is a committed transition under the leash that
           ;; presented it, and a walking seat's whole output is births
           ;; (R-10.6, R-12.9)
