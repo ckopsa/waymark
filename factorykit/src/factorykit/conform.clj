@@ -108,7 +108,8 @@
   "The template's seat filled as the seed loader fills it."
   [{:keys [template params]}]
   (when-some [res (io/resource (str "seats/" template ".edn"))]
-    (let [seat (seed/filled (:seat (edn/read-string (slurp res))) (or params {}))]
+    (let [t (edn/read-string (slurp res))
+          seat (seed/filled (:seat t) (or params {}) (:template t))]
       {:seat seat
        :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" (pr-str seat))))})))
 
