@@ -69,7 +69,7 @@
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
-   :flow :actions :create-guards :create-action-names :allow-dead :renames
+   :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
    ;; the doors licensed to depart a TERMINAL state (docs/spec-undo.md).
    ;; check-terminal-no-exit's flat rule — no action leaves a tomb — is
    ;; right about every door that CONTINUES a story and wrong about the

@@ -2313,16 +2313,23 @@
   tool. `seen`, when given, is shown the route's answer before it is
   read and answers the one to read (`stage-sheet!`)."
   [call session rdef aname input dry-run warnings return as-id & [seen]]
-  (let [names (set (map p/wire-key (:create-action-names rdef)))]
+  (let [door (inv/create-door rdef aname)
+        verbs (into (mapv name (:create-action-names rdef))
+                    (map (comp name :action))
+                    (:creates rdef))
+        names (set (map p/wire-key verbs))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
                           {:detail (str "No id was given, so this is a create — "
                                         "but " (name (:kind rdef)) " creates with "
-                                        (pr-str (mapv name (:create-action-names rdef)))
+                                        (pr-str verbs)
                                         ", not " (pr-str (name aname)) ".")}))
       (answer
        ((or seen identity)
-        (call (request session :post (str "/api/" (:plural rdef))
+        (call (request session :post (str "/api/" (:plural rdef)
+                                          ;; an extra create door's own route
+                                          (when door
+                                            (str "/-/" (name (:action door)))))
                        {:body (or input {})
                         :query (when dry-run "dry_run=1")
                         :headers (cond-> {"idempotency-key"
