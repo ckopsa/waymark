@@ -7,7 +7,26 @@
  :cast
  {:owner      {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}
   :specialist {:id "specialist" :display "Tax Specialist" :type :human}}
- :seats []
+ ;; the org's mayor, sat by the principal at the budget he named: it
+ ;; holds the doors out of every state a row waits in, and wakes on each
+ :seats
+ [{:template "org-mayor"
+   :params {:org "rd_tax_services" :domain "rd_tax_services" :domain_id [:ref :rd_tax_services]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
+                    {:kind "study" :actions ["start_drafting" "submit_review" "return" "sign_off" "deliver"]}
+                    {:kind "invoice" :actions ["mark_paid" "write_off"]}
+                    {:kind "referring_cpa" :actions ["retire"]}
+                    {:kind "assumption" :actions ["confirm"]}]
+            :wakes [{:kind "prospect" :actions [] :filter {:state "new"} :at_least 1}
+                    {:kind "prospect" :actions [] :filter {:state "qualified"} :at_least 1}
+                    {:kind "study" :actions [] :filter {:state "collecting"} :at_least 1}
+                    {:kind "study" :actions [] :filter {:state "drafting"} :at_least 1}
+                    {:kind "study" :actions [] :filter {:state "review"} :at_least 1}
+                    {:kind "study" :actions [] :filter {:state "signed_off"} :at_least 1}
+                    {:kind "invoice" :actions [] :filter {:state "open"} :at_least 1}
+                    {:kind "referring_cpa" :actions [] :filter {:state "active"} :at_least 1}
+                    {:kind "assumption" :actions [] :filter {:state "open"} :at_least 1}]}}]
  :judgments []
  :steps
  [{:as :owner :kind :assumption :ref :fee
