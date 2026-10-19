@@ -1750,3 +1750,21 @@
     (testing "no waiver of the sweep is left on the kind"
       (is (not (str/includes? (pr-str (:schema held/held-call)) "swept by")))
       (is (not (str/includes? (pr-str (:create-schema held/held-call)) "swept by"))))))
+
+(deftest carry-takes-its-heads-as-lower-case-hex-and-publishes-the-pattern
+  ;; ticket 9c8711ac
+  (let [input (get-in held/held-call [:actions :carry :input])
+        carry #(schema/validate input {:head_sha % :from_head %
+                                       :compared {:carries true}})]
+    (is (carry "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"))
+    (doseq [bad ["1F0C2D3E4A5B60718293A4B5C6D7E8F901234567"
+                 "1f0c2d3e4a5b60718293a4b5c6d7e8f90123456g"
+                 "head-1b" "abc12"]]
+      (is (not (carry bad)) bad))
+    (testing "the projected input schema carries the pattern"
+      (let [js (schema/json-schema input)]
+        (doseq [f [:head_sha :from_head]]
+          (is (= "^[0-9a-f]{7,64}$" (get-in js [:properties f :pattern])) (name f)))))
+    (testing "a regex literal projects as its source string"
+      (is (= "^a+$" (get-in (schema/json-schema [:map [:x [:re #"^a+$"]]])
+                            [:properties :x :pattern]))))))

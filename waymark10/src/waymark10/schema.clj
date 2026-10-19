@@ -143,6 +143,14 @@
 
 (def options {:registry registry})
 
+(def commit-sha
+  "A commit sha, as every door that takes a head spells one (ticket
+  9c8711ac): lower-case hex, 7 to 64 characters — a short sha up to a
+  SHA-256 object name. One spelling, so a head is judged the same at
+  every door, and the projection publishes it as `pattern`."
+  [:re {:error/message "should be a commit sha: 7 to 64 lower-case hex characters"}
+   "^[0-9a-f]{7,64}$"])
+
 (defn schema
   "Compile a schema form against the waymark registry."
   [form]
@@ -752,6 +760,19 @@
            x))
        (dissoc js :definitions)))))
 
+(defn- patterns-as-strings
+  "A malli `:re` projects its regex as `pattern`. Declared as a literal
+  (#\"…\") that is a java Pattern, which JSON has no spelling for; the
+  published pattern is its source, however it was declared (ticket
+  9c8711ac)."
+  [js]
+  (clojure.walk/postwalk
+   (fn [x]
+     (if (and (map? x) (instance? java.util.regex.Pattern (:pattern x)))
+       (update x :pattern str)
+       x))
+   js))
+
 (defn json-schema
   "The published JSON Schema of a schema form. Waymark types carry
   their formats inline; declaration properties surface as x-* keys."
@@ -760,6 +781,7 @@
       (m/schema options)
       (json-schema/transform options)
       inline-definitions
+      patterns-as-strings
       ref-items))
 
 (defn with-computed
