@@ -412,7 +412,17 @@
       (testing "another domain's day is quiet, or says its none"
         (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
         (is (= "Nothing." (said (update day "$day" assoc :domain "elsewhere"
-                                        :none "Nothing."))))))))
+                                        :none "Nothing.")))))
+      (inv/create! eng :approval_request
+                   {:task "read the pantry."
+                    :scope [{:kind "study" :actions ["finish"]}]}
+                   {:principal (t/principal {:id "agent-ari" :type :agent
+                                             :display "agent-ari"})})
+      (testing "an ask from no seat's domain is the factory's, told first"
+        (let [s (said (assoc-in day ["$day" :domain] "factory"))]
+          (is (str/starts-with? s "A person was asked to approve access to read the pantry") s))
+        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+               (said day)))))))
 
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]

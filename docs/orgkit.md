@@ -98,10 +98,53 @@ registry checks, the cracks audit over the kinds and the seed's seats,
 the sentence checks on guards and confirm doors, a memory engine's
 discover, schema, query, get and dry-run create for every kind, and
 the seats' scopes against the kinds the engine serves and against
-each owner's ceiling.
+each owner's ceiling, and the person's business questions (the
+`decision` class, below).
 `clojure -M:conform` runs it in an org's directory, and
 `clojure -M:conform ../orgs` in `factorykit/` runs it over every org;
 CI runs the latter.
+
+## Decisions
+
+The `decision` class is the questions only the org's person can
+answer. Each finding's sentence is the question, put to the person in
+their words; the onboarding seat asks it and writes the answer into
+the code, and the finding clears on the next run. It reads only the
+declarations and the seed's seats:
+
+- `decision/unheld_final/<kind>`: a door with `:safety {:reversible
+  false}` that a seed seat no person sits holds, with no guard that
+  holds it. "Should the AI do this on its own, or wait for a tap?"
+- `decision/no_wait_limit/<kind>/<state>`: a state that is not
+  terminal and has no expected age. "How long may a row stay here
+  before someone is told, and who?"
+- `decision/money_unbounded/<kind>/<action>`: a door a model seat
+  holds whose input names money (`amount`, `fee`, `price`, a field
+  ending `_cents` or `_usd`) that none of its guards reads, with no
+  guard that holds it. "Above what amount should this wait for you?"
+
+Each clears in code, one of two ways. Either the law says it:
+
+- a guard with `:hold true` on the door, so its refusal is held for
+  the person's tap (unheld_final, money_unbounded; for money, the
+  guard reads the amount and holds above the line);
+- the kind's `:expected-age {<state> <seconds>}` (no_wait_limit).
+
+Or the person's answer is written down as `:decided`, a sentence in
+their own words:
+
+- on an action, `:decided "The mayor marks an item done on its own
+  once its assignee has done the work."` (unheld_final,
+  money_unbounded);
+- at a kind's top level, `:decided {<state> "sentence"}`, as
+  `:decided {:open "An item may stay open for a week; past that, the
+  mayor tells the owner."}` (no_wait_limit).
+
+`:decided` is prose, never law: the engine does not enforce it.
+`factory10.law-text` renders every one under "What you decided", a
+kind's states first and then its doors, so the person reads back what
+they said. `orgkit/template/` and `orgs/example/` answer theirs this
+way.
 
 ## What an org may not do
 

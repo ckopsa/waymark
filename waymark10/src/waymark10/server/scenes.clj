@@ -631,13 +631,26 @@
            (first-part (summary/line (get rdefs :held_call)
                                      (assoc row :kind :held_call)))))))
 
+(defn- ask-phrase
+  "One approval_request, as the ask it puts to a person: the access its
+  task is for, else the row's summary."
+  [rdef row]
+  (if-some [task (some-> (get-in row [:data :task]) str str/trim
+                         (str/replace #"[.]+$" "") not-empty)]
+    (str "a person was asked to approve access to " task)
+    (str "a person was asked to approve "
+         (first-part (summary/line rdef (assoc row :kind :approval_request))))))
+
 (defn day-in-window
   "One plain sentence of the day [since, until) of the org whose kinds
   name `domain`, or nil when nothing happened in it. It reads that
-  window's transitions on every kind of the domain and the domain's
-  held calls, ranks a held call first, then a door that cannot be
-  undone, then another seat's move, then a create (oldest first within
-  each), and tells the first two as clauses joined with `; `."
+  window's transitions on every kind of the domain, the domain's held
+  calls and the approval requests born in it (an ask's domain is the
+  one born-ask stamps from its requester's seat, else the kind's
+  :absent-as), ranks a held call or an ask first, then a door that
+  cannot be undone, then another seat's move, then a create (oldest
+  first within each), and tells the first two as clauses joined with
+  `; `."
   [eng {:keys [since until domain]}]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
@@ -645,7 +658,8 @@
         hi (inst-ms until)
         within (fn [t] (when-some [ms (ms-of t)] (when (and (<= lo ms) (< ms hi)) ms)))
         kinds (filter #(= (str domain) (some-> (:domain %) name)) (vals rdefs))
-        held-rdef (get rdefs :held_call)]
+        held-rdef (get rdefs :held_call)
+        ask-rdef (get rdefs :approval_request)]
     (store/with-tx st
       (fn [tx]
         (let [held (when held-rdef
@@ -654,13 +668,21 @@
                                  row (when ms (inv/decode-row held-rdef raw))]
                            :when (and row (= (str domain) (str (get-in row [:data :domain]))))]
                        [0 ms (held-phrase st tx rdefs row)]))
+              asks (when ask-rdef
+                     (for [raw (store/query-rows st tx :approval_request {} {:limit 100000})
+                           :let [ms (within (:created-at raw))
+                                 row (when ms (inv/decode-row ask-rdef raw))]
+                           :when (and row (= (str domain)
+                                             (str (or (some-> (get-in row [:data :domain]) str not-empty)
+                                                      (get-in ask-rdef [:absent-as :domain])))))]
+                       [0 ms (ask-phrase ask-rdef row)]))
               moves (for [rdef kinds
                           t (store/transitions st tx {:kind (:kind rdef)} {:limit 100000})
                           :let [ms (within (:at t))
                                 rank (when ms (move-rank rdef t))]
                           :when rank]
                       [rank ms (move-phrase t)])
-              said (->> (concat held moves)
+              said (->> (concat held asks moves)
                         (sort-by (juxt first second))
                         (map peek)
                         (take 2)
