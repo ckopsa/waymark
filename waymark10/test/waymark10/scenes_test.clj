@@ -13,7 +13,8 @@
             [waymark10.server.scenes :as scenes]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:private chore
   "The row the shots act on: one door with two arguments, one without."
@@ -452,6 +453,67 @@
       (is (= "Nothing." (scenes/fill-say [(assoc-in caption ["$day" :none] "Nothing.")]
                                          (constantly []) (constantly [])
                                          (fn [w] (scenes/day-in-window eng w)) run))))))
+
+(defn- say! [h headers body]
+  (let [resp (h {:request-method :post :uri "/api/-/scenes/say"
+                 :headers (merge {"content-type" "application/json"} headers)
+                 :body (wire/write-json body)})]
+    (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+
+(deftest the-say-door-fills-a-say-on-the-wire
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        h (engine/handler eng)
+        as-mayor {"x-waymark-principal" "mayor"}
+        now (java.time.Instant/now)
+        take-a (str "take-a-" (random-uuid))
+        take-b (str "take-b-" (random-uuid))
+        day {"$day" {:window "shot" :domain "acme"}}
+        said (fn [take-name say]
+               (:text (:parsed (say! h as-mayor {:take take-name :say say}))))
+        pause #(Thread/sleep 5)]
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "a `$rows` hole answers the filled text"
+      (let [{:keys [status parsed]}
+            (say! h as-mayor {:take take-b
+                              :say ["In came: "
+                                    {"$rows" {:kind "study"
+                                              :since (str (.minusSeconds now 3600))
+                                              :until (str (.plusSeconds now 3600))}}
+                                    "."]})]
+        (is (= 200 status))
+        (is (str/starts-with? (:text parsed) "In came: Acme's study") (:text parsed))))
+    (testing "a plain string stays as written"
+      (is (= "Hello." (said take-a "Hello."))))
+    (pause)
+    (testing "the take's first `$day` reads since the take began"
+      (is (= "A quiet day." (said take-a [day]))))
+    (pause)
+    (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the second `$day` of the same take names the create between them"
+      (let [s (said take-a [day])]
+        (is (str/includes? s "Acme's invoice was written") s)
+        (is (not (str/includes? s "Acme's study")) s)))
+    (testing "another take keeps its own window"
+      (let [s (said take-b [day])]
+        (is (str/includes? s "Acme's invoice was written") s)))
+    (testing "a say `check` refuses is refused with its reason"
+      (let [{:keys [status]} (say! h as-mayor {:take take-a
+                                               :say [{"$day" {:window "week" :domain "acme"}}]})]
+        (is (= 422 status))))
+    (testing "a call with no take is refused"
+      (is (= 422 (:status (say! h as-mayor {:say "Hello."})))))
+    (testing "an anonymous call is refused"
+      (is (= 404 (:status (say! h {} {:take take-a :say "Hello."})))))))
+
+(deftest a-take-run-is-kept-two-hours
+  (let [k (str "take-" (random-uuid))
+        t0 (java.time.Instant/now)
+        run (scenes/take-run-of k t0)]
+    (is (identical? run (scenes/take-run-of k (.plusSeconds t0 60))))
+    (is (not (identical? run (scenes/take-run-of k (.plusSeconds t0 (* 3 3600))))))))
 
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]

@@ -180,6 +180,20 @@ instant on the take's run (`take-run`). `check` refuses any other
 {"say": ["Tuesday. ", {"$day": {"window": "shot", "domain": "acme"}}]}
 ```
 
+The performer has the engine fill a say over the wire:
+`POST /api/-/scenes/say` with `{"say": <the shot's say, as the scene
+holds it>, "take": <a string the performer names the take by>}` answers
+`{"text": <the filled string>}`. Any named principal may call it;
+anonymous gets the concealment 404, and a say `check` would refuse
+answers 422 with its reason. The holes are filled through the caller's
+grant: a `$rows` or `$moves` hole reads its kind only when the grant
+sees that kind whole, and a `$day` hole its domain only when the grant
+sees every kind of it; otherwise the hole says its `none`. The engine
+keeps one take run per caller and `take` (`take-run-of`): the first
+call for a take begins it, later calls reuse it, so a
+`window: "shot"` hole reads since that take's previous `$day`; a run
+is dropped two hours after it began.
+
 A filmed week is played this way. A clone runs no seats (clone-mcp
 strips every fire key) and every seed row on it is born the day it
 boots, so a dated `$day` would put the whole week on day 1. Instead the
