@@ -271,7 +271,7 @@ jobs:
           #   changed path      suites that run
           #   ----------------  ------------------------------------------
           #   docs/**, *.md     none: the gate answers from the diff alone
-          #   localfire/**      localfire
+          #   localfire/**      localfire, waymark10 (localfire_pull_test)
           #   calendar10/**     calendar10, workqueue10
           #   factory10/**      factory10, workqueue10
           #   factorykit/**     factory10, workqueue10
@@ -286,7 +286,9 @@ jobs:
           # calendar10 and factory10 need waymark10. localfire reaches
           # waymark10 only through its :test alias, for the one round trip
           # of R-9.2, and a waymark10 PR leaves it out on purpose — main
-          # runs it on the merge.
+          # runs it on the merge. waymark10 reaches localfire's src
+          # through ITS :test alias, for localfire_pull_test (LP5), so a
+          # localfire PR runs waymark10 too: that test needs Postgres.
           #
           # "workqueue10" is check-queue in `quick` plus the test-queue
           # matrix; "calendar10" and "localfire" are steps of `quick`.
@@ -299,7 +301,7 @@ jobs:
           suites_for () {
             case "$1" in
               docs/*|*.md)    ;;
-              localfire/*)    reach[localfire]=1 ;;
+              localfire/*)    reach[localfire]=1; reach[waymark10]=1 ;;
               calendar10/*)   reach[calendar10]=1; reach[workqueue10]=1 ;;
               factory10/*|factorykit/*)
                               reach[factory10]=1; reach[workqueue10]=1 ;;
