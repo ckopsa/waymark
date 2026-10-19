@@ -8,6 +8,12 @@
   The clone's URL and head SHA are inputs: this repo starts no clone.
   It answers a scene's create input beside that clone.
 
+  THE AUDIT RENDERS IT FOR EACH HEAD (ticket 4dbb8243). The org-findings
+  job of tests.yml runs `-main` on the org's directory at the pull
+  request's head and uploads the text as `first_week_scene.edn`; the
+  forge's findings pass writes it onto the plan as `first_week_scene`,
+  at that head. The director plays it on the clone it stands up.
+
   THE FILM LANDS ON THE PLAN. `landing` reads the film rules' answer
   (film-rules/judge). With no fail rule missed, the film is attached and
   the plan moves to simulated. A red film's missed fail rules become
@@ -84,6 +90,35 @@
                                        (mapcat day (range 1 (inc (get-in t [:template :days]))))
                                        (fill (:closing t) values))))
      :clone (fill (:clone t) values)}))
+
+(defn- read-seed
+  "The seed of the org at `org-dir`: <org-dir>/resources/<org>/seed.edn."
+  [org-dir]
+  (let [f (->> (.listFiles (io/file org-dir "resources"))
+               (sort)
+               (map #(io/file % "seed.edn"))
+               (filter #(.isFile ^java.io.File %))
+               first)]
+    (when-not f
+      (throw (ex-info (str "no seed under " org-dir "/resources/<org>/seed.edn")
+                      {:org-dir (str org-dir)})))
+    (edn/read-string (slurp f))))
+
+(defn org-scene
+  "The first-week scene of the org at `org-dir`, at `head-sha`, its day 1
+  on `day-one`, as the edn text the org-findings artifact carries. The
+  audit's run stands up no clone, so the clone's url is empty: the
+  director plays the scene on the clone it stands up at that head."
+  [org-dir head-sha day-one]
+  (pr-str (scene (read-seed org-dir)
+                 {:clone_url "" :head_sha head-sha :day_one day-one})))
+
+(defn -main
+  "Print the first-week scene of the org at `org-dir` at `head-sha`, its
+  day 1 on `day-one` (YYYY-MM-DD), else today."
+  [org-dir head-sha & [day-one]]
+  (print (org-scene org-dir head-sha (or day-one (str (LocalDate/now)))))
+  (flush))
 
 ;; ── the film's landing ──────────────────────────────────────────────
 

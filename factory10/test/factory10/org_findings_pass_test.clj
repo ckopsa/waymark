@@ -152,6 +152,35 @@
       (is (= [(:key lint)] (mapv :key (:findings (data)))))
       (is (= "# The law of acme, again" (:law_page (data)))))))
 
+(deftest the-pass-lands-the-first-week-scene-with-its-head
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (a-change! eng 102 head-2)
+        id (a-proposed-plan! eng "acme" change)
+        by-name (atom {(str "org-findings-acme-" head-2)
+                       {:acme [gap] :first_week_scene "{:scene {:seed \"acme\"}}"}})
+        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                     (fn [& _] nil))
+        data #(:data (plan eng id))]
+    (testing "the pass writes the scene and the head it was rendered at"
+      (is (= 1 (:findings (pass!))))
+      (is (= "{:scene {:seed \"acme\"}}" (:first_week_scene (data))))
+      (is (= head-2 (:first_week_scene_sha (data))))
+      (is (= "proposed" (name (:state (plan eng id))))))
+    (testing "a later head replaces both"
+      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-3)
+             {:acme [] :first_week_scene "{:scene {:seed \"acme\" :day 2}}"})
+      (is (= 1 (:findings (pass!))))
+      (is (= "{:scene {:seed \"acme\" :day 2}}" (:first_week_scene (data))))
+      (is (= head-3 (:first_week_scene_sha (data)))))
+    (testing "a head whose artifact carries none keeps the scene of the head it names"
+      (inv/invoke! eng :change change :observe {:head_sha head-1} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-1) {:acme []})
+      (is (= 1 (:findings (pass!))))
+      (is (= head-1 (:findings_sha (data))))
+      (is (= head-3 (:first_week_scene_sha (data)))))))
+
 (deftest a-source-without-artifacts-records-nothing
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
