@@ -135,6 +135,27 @@
             held
             ["No door here waits for a person's tap: every door opens on its rules alone."]))))
 
+(defn- decided-section
+  "The person's answers to the org audit's questions (ticket e1ed02c7):
+  each :decided sentence, a kind's states first, then its doors."
+  [rs]
+  (let [said (for [r rs
+                   :let [k (words (:kind r))
+                         ds (when (map? (:decided r)) (:decided r))]
+                   line (concat
+                         (for [s (:states r)
+                               :let [d (some (fn [[st d]] (when (= (name s) (name st)) d)) ds)]
+                               :when d]
+                           (str "- " k ", while " (words s) ": " d))
+                         (for [[aname a] (:actions r)
+                               :when (:decided a)]
+                           (str "- " k " **" (name aname) "**: " (:decided a))))]
+               line)]
+    (into ["## What you decided" ""]
+          (if (seq said)
+            said
+            ["Nothing here is written down as decided yet."]))))
+
 (defn- confirm-section [rs]
   (let [asks (for [r rs
                    [aname a] (:actions r)
@@ -258,6 +279,7 @@
                           "and which seats work here and what they may spend.")]]
                    (map kind-section rs)
                    [(held-section rs)
+                    (decided-section rs)
                     (confirm-section rs)
                     (seats-section rs seats)
                     (budget-section seats)]))))

@@ -284,15 +284,25 @@
    "crack" 2
    "sentence" 3
    "seed" 4 "scope" 4 "budget" 4
-   "film" 5})
+   "decision" 5
+   "film" 6})
 
-(def ^:private lint-rank 6)
+(def ^:private lint-rank 7)
+
+(def ^:private decision-order
+  "The decision class's questions in the order the person meets them
+  (ticket e1ed02c7): a final step, a wait, an amount."
+  ["decision/unheld_final/" "decision/no_wait_limit/" "decision/money_unbounded/"])
+
+(defn- question-rank [k]
+  (or (first (keep-indexed #(when (str/starts-with? (str k) %2) %1) decision-order)) 0))
 
 (defn walk-steps
   "The plan's open findings as the walk's steps: by class in
   walk-order, ties broken by key."
   [findings]
   (vec (sort-by (juxt #(get walk-order (str (:class %)) lint-rank)
+                      #(question-rank (:key %))
                       #(str (:key %)))
                 findings)))
 
