@@ -144,6 +144,27 @@ org's seats), `people`, or `anyone`. `check` judges it as it judges a
 the clone's log (`moves-in-window`): each move as `<summary>: <action>`,
 oldest first, joined with `; `, or its `none`, or `nothing moved`.
 
+A `$day` hole, `{"$day": {since, until, domain, none}}`, says one day of
+an org in one plain sentence. It reads the transitions logged in
+[`since`, `until`) on every kind whose `domain` is `domain`, and the
+held calls of that domain born in the window (`day-in-window`). It ranks
+a held call first, then a move through a door that cannot be undone,
+then another seat's move, then a create, oldest first within each, and
+tells at most two of them as clauses joined with `; `. A clause names
+the row by its summary line's first part (before ` · `) and phrases the
+move as `factory10.law-text` phrases the door: `Acme's study was
+written`, `Acme's study went to review`, `a person was asked to sign off
+Acme's study`.
+
+```json
+{"say": [{"$day": {"since": "2026-10-19", "until": "2026-10-20", "domain": "acme"}}]}
+```
+
+`check` judges it as a map of those names and no other, with a
+`domain` and a window two readable times in order; it does not judge
+the domain itself, and a domain no kind names plays as a quiet day. A
+day with nothing to tell says its `none`, or `A quiet day.`
+
 ## `wearing`
 
 `wearing` is a map from a cast id to the grant that cast member wears

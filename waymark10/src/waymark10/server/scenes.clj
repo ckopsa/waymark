@@ -17,11 +17,13 @@
 
   A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
   `{\"$rows\": {kind, since, until, field, none}}` and
-  `{\"$moves\": {kind, since, until, by, none}}` holes. `check` judges
-  each hole; the performer fills it when the shot plays (`fill-say`),
-  from the rows the scene's clone holds in that window
-  (`rows-in-window`) or the transitions its log holds there
-  (`moves-in-window`), and a hole that finds none says so plainly.
+  `{\"$moves\": {kind, since, until, by, none}}` holes, and
+  `{\"$day\": {since, until, domain, none}}`. `check` judges each hole;
+  the performer fills it when the shot plays (`fill-say`), from the rows
+  the scene's clone holds in that window (`rows-in-window`), the
+  transitions its log holds there (`moves-in-window`), or one sentence
+  of an org's day (`day-in-window`), and a hole that finds none says so
+  plainly.
 
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
@@ -329,8 +331,13 @@
   its own `none`."
   "nothing moved")
 
+(def quiet-day
+  "What a `$day` hole says of a day with nothing in it, unless it names
+  its own `none`."
+  "A quiet day.")
+
 (def ^:private say-shape
-  "`say` is a string, or a list of strings and `$rows` or `$moves` holes.")
+  "`say` is a string, or a list of strings and `$rows`, `$moves` or `$day` holes.")
 
 (defn- instant-of
   "An RFC 3339 instant, or a YYYY-MM-DD date read as its first moment in
@@ -351,6 +358,28 @@
   [part]
   (when (map? part) (get part "$moves")))
 
+(defn- day-hole-of
+  "The `$day` map a say part holds; nil when the part is no such hole."
+  [part]
+  (when (map? part) (get part "$day")))
+
+(defn- span-problem
+  "Why a hole named `hole` cannot read [since, until); nil when it can."
+  [hole h]
+  (let [since (instant-of (get h "since"))
+        until (instant-of (get h "until"))]
+    (cond
+      (nil? since)
+      (str "a `" hole "` hole's `since` is a date or an instant, and this one is "
+           (tick (get h "since")) ".")
+
+      (nil? until)
+      (str "a `" hole "` hole's `until` is a date or an instant, and this one is "
+           (tick (get h "until")) ".")
+
+      (not (.isBefore since until))
+      (str "a `" hole "` hole's `since` comes before its `until`."))))
+
 (defn- window-problem
   "Why one hole named `hole` (`$rows`, `$moves`) cannot read its window:
   its shape, its `kind` and its [since, until). `names` are the keys it
@@ -359,9 +388,7 @@
   (if-not (map? h)
     (str "a `" hole "` hole is a map of `kind`, `since` and `until`.")
     (let [k (some-> (get h "kind") str)
-          stray (remove (set names) (keys h))
-          since (instant-of (get h "since"))
-          until (instant-of (get h "until"))]
+          stray (remove (set names) (keys h))]
       (cond
         (seq stray)
         (str "a `" hole "` hole takes " (str/join ", " (butlast names))
@@ -371,16 +398,7 @@
 
         (nil? (rdef-of k)) (str (tick k) " is not a kind this engine serves.")
 
-        (nil? since)
-        (str "a `" hole "` hole's `since` is a date or an instant, and this one is "
-             (tick (get h "since")) ".")
-
-        (nil? until)
-        (str "a `" hole "` hole's `until` is a date or an instant, and this one is "
-             (tick (get h "until")) ".")
-
-        (not (.isBefore since until))
-        (str "a `" hole "` hole's `since` comes before its `until`.")))))
+        :else (span-problem hole h)))))
 
 (defn- hole-problem
   "Why one `$rows` hole cannot be filled; nil when it can."
@@ -398,6 +416,24 @@
         (str (tick (get h "by")) " is not whose moves a hole reads; it reads "
              (str/join ", " move-actors) "."))))
 
+(defn- day-problem
+  "Why one `$day` hole cannot be filled; nil when it can. Its `domain`
+  is judged for shape only: a domain no kind names plays a quiet day."
+  [h]
+  (let [names ["since" "until" "domain" "none"]]
+    (if-not (map? h)
+      "a `$day` hole is a map of `since`, `until` and `domain`."
+      (let [stray (remove (set names) (keys h))]
+        (cond
+          (seq stray)
+          (str "a `$day` hole takes " (str/join ", " (butlast names))
+               " and " (last names) ", not " (tick (first stray)) ".")
+
+          (str/blank? (some-> (get h "domain") str))
+          "a `$day` hole names a `domain`."
+
+          :else (span-problem "$day" h))))))
+
 (defn- say-problem
   "Why a shot's `say` cannot be spoken; nil when it can."
   [say rdef-of]
@@ -411,6 +447,8 @@
                     (hole-problem (hole-of part) rdef-of)
                     (and (map? part) (contains? part "$moves"))
                     (moves-problem (moves-hole-of part) rdef-of)
+                    (and (map? part) (contains? part "$day"))
+                    (day-problem (day-hole-of part))
                     :else say-shape))
                 say)))
 
@@ -423,9 +461,12 @@
   passes `rows-in-window` over the scene's clone. Each `$moves` hole is
   replaced the same way by the lines `moves-of` answers, a fn of
   {:kind :since :until :by} (`moves-in-window`), or by its `none`
-  (`nothing moved`)."
+  (`nothing moved`). Each `$day` hole is replaced by the sentence
+  `day-of` answers, a fn of {:since :until :domain} (`day-in-window`),
+  or by its `none` (`A quiet day.`) when it answers nil."
   ([say rows-of] (fill-say say rows-of (constantly [])))
-  ([say rows-of moves-of]
+  ([say rows-of moves-of] (fill-say say rows-of moves-of (constantly nil)))
+  ([say rows-of moves-of day-of]
    (let [say (plain say)
          spoken (fn [lines h none]
                   (if (seq lines)
@@ -447,7 +488,12 @@
                                        :until (instant-of (get h "until"))
                                        :by (get h "by" "seats")})
                             h no-moves)
-                    (str part)))))))))
+                    (if-some [h (day-hole-of part)]
+                      (or (day-of {:since (instant-of (get h "since"))
+                                   :until (instant-of (get h "until"))
+                                   :domain (str (get h "domain"))})
+                          (str (get h "none" quiet-day)))
+                      (str part))))))))))
 
 (defn rows-in-window
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
@@ -512,6 +558,101 @@
            (mapv (fn [[_ t]]
                    (str (or (not-empty (str (:summary t))) (:resource-id t))
                         ": " (name (:action t)))))))))
+
+(defn- first-part
+  "A summary line's first part, before its first ` · `."
+  [line]
+  (first (str/split (str line) #" · " 2)))
+
+(defn- words [s] (str/replace (name s) "_" " "))
+
+(defn- past [verb]
+  (if (str/ends-with? verb "e") (str verb "d") (str verb "ed")))
+
+(defn- move-rank
+  "Where one logged move of a row of `rdef` stands in a `$day` sentence:
+  1 for a door that cannot be undone, 2 for another seat's move, 3 for a
+  create; nil for a move the day does not tell."
+  [rdef t]
+  (cond
+    (nil? (:from-state t)) 3
+    (false? (get-in rdef [:actions (keyword (name (:action t))) :safety :reversible])) 1
+    (moved-by? "seats" (:actor t)) 2))
+
+(defn- move-phrase
+  "One logged move, phrased as factory10.law-text phrases its door: the
+  row was written, went to its new state, moved on, or was the door's
+  verb. The row is named by its summary's first part."
+  [t]
+  (let [who (first-part (or (not-empty (str (:summary t))) (:resource-id t)))
+        from (some-> (:from-state t) name)
+        to (some-> (:to-state t) name)]
+    (cond
+      (nil? from) (str who " was written")
+      (nil? to) (str who " moved on")
+      (not= from to) (str who " went to " (words to))
+      :else (str who " was " (past (words (:action t)))))))
+
+(defn- door-field [door k]
+  (some-> (or (get door k) (get door (name k))) str not-empty))
+
+(defn- held-phrase
+  "One held call, as the ask it puts to a person: the door it would
+  walk and the row it would walk it on, else the tool it would call."
+  [st tx rdefs row]
+  (let [door (get-in row [:data :door])
+        k (door-field door :kind)
+        id (door-field door :id)
+        action (door-field door :action)
+        rdef (some->> k keyword (get rdefs))
+        target (when (and rdef id)
+                 (some->> (store/load-row st tx (:kind rdef) id {})
+                          (inv/decode-row rdef)
+                          (#(assoc % :kind (:kind rdef)))
+                          (summary/line rdef)
+                          first-part))]
+    (if (and action target)
+      (str "a person was asked to " (words action) " " target)
+      (str "a person was asked to allow "
+           (first-part (summary/line (get rdefs :held_call)
+                                     (assoc row :kind :held_call)))))))
+
+(defn day-in-window
+  "One plain sentence of the day [since, until) of the org whose kinds
+  name `domain`, or nil when nothing happened in it. It reads that
+  window's transitions on every kind of the domain and the domain's
+  held calls, ranks a held call first, then a door that cannot be
+  undone, then another seat's move, then a create (oldest first within
+  each), and tells the first two as clauses joined with `; `."
+  [eng {:keys [since until domain]}]
+  (let [st (:storage eng)
+        rdefs (inv/resources eng)
+        lo (inst-ms since)
+        hi (inst-ms until)
+        within (fn [t] (when-some [ms (ms-of t)] (when (and (<= lo ms) (< ms hi)) ms)))
+        kinds (filter #(= (str domain) (some-> (:domain %) name)) (vals rdefs))
+        held-rdef (get rdefs :held_call)]
+    (store/with-tx st
+      (fn [tx]
+        (let [held (when held-rdef
+                     (for [raw (store/query-rows st tx :held_call {} {:limit 100000})
+                           :let [ms (within (:created-at raw))
+                                 row (when ms (inv/decode-row held-rdef raw))]
+                           :when (and row (= (str domain) (str (get-in row [:data :domain]))))]
+                       [0 ms (held-phrase st tx rdefs row)]))
+              moves (for [rdef kinds
+                          t (store/transitions st tx {:kind (:kind rdef)} {:limit 100000})
+                          :let [ms (within (:at t))
+                                rank (when ms (move-rank rdef t))]
+                          :when rank]
+                      [rank ms (move-phrase t)])
+              said (->> (concat held moves)
+                        (sort-by (juxt first second))
+                        (map peek)
+                        (take 2)
+                        (str/join "; "))]
+          (when-not (str/blank? said)
+            (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
 
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."

@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.scenes :as scenes]
@@ -341,6 +342,71 @@
         (is (not (str/includes? s "Sweep the porch")) s)))
     (testing "none in the window: the plain sentence"
       (is (= "Did: nothing moved." (said (moves "anyone" "2026-01-01" "2026-01-02")))))))
+
+(defn- org-kind
+  "One of the fixture org's three kinds, all of domain `acme`: a row is
+  sent to review, and finished through a door that cannot be undone."
+  [k]
+  (r/resource
+   {:kind k
+    :plural (str (name k) "s")
+    :domain :acme
+    :states [:open :review :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+     [:domain {:optional true :x-display {:label "Domain"}
+               :not-a-ref "The name of a domain: a word, not a row id."}
+      [:maybe [:string {:max 40}]]]]
+    :actions
+    {:send {:from #{:open} :to :review
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Send" :order 1}}
+     :recall {:from #{:review} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Recall" :order 3}}
+     :finish {:from #{:open :review} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "It is done and stays done."}
+              :display {:label "Finish" :order 2}}}}))
+
+(deftest a-day-hole-says-one-day-of-an-org-in-one-sentence
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        now (java.time.Instant/now)
+        day {"$day" {:since (str (.minusSeconds now 3600))
+                     :until (str (.plusSeconds now 3600)) :domain "acme"}}
+        said (fn [hole] (scenes/fill-say [hole] (constantly []) (constantly [])
+                                         #(scenes/day-in-window eng %)))]
+    (testing "an empty day: a quiet day"
+      (is (= "A quiet day." (said day))))
+    (let [study (:row (inv/create! eng :study {:title "Acme's study" :domain "acme"}
+                                   {:principal mayor}))
+          _ (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"}
+                         {:principal mayor})]
+      (testing "a day of creates only: it names them"
+        (let [s (said day)]
+          (is (str/includes? s "Acme's study was written") s)
+          (is (str/includes? s "Acme's invoice was written") s)
+          (is (str/ends-with? s ".") s)))
+      (inv/invoke! eng :study (str (:id study)) :send {} {:principal seat})
+      (inv/invoke! eng :study (str (:id study)) :finish {} {:principal seat})
+      (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
+                                   :caller "seat:s1" :shown "the study"
+                                   :door {:kind "study" :id (str (:id study))
+                                          :action "finish" :author "seat:s1"}}
+                   {:principal held/engine-actor})
+      (testing "a held call and two moves: the held call first, two clauses at most"
+        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+               (said day))))
+      (testing "another domain's day is quiet, or says its none"
+        (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
+        (is (= "Nothing." (said (update day "$day" assoc :domain "elsewhere"
+                                        :none "Nothing."))))))))
 
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]
