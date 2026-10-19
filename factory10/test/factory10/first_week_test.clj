@@ -12,6 +12,7 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.first-week :as first-week]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [waymark10.server.engine :as engine]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
@@ -90,7 +91,7 @@
                                          {:name "example"
                                           :brief "A six-person landscaping business."}
                                          {:principal the-owner}))))]
-    (inv/invoke! e :org_plan id :propose {} {:principal the-owner})
+    (walk/proposed! e id the-owner)
     (inv/invoke! e :org_plan id :hand_in_film
                  {:film_url "https://films.example.test/example-week.mp4"
                   :take_report "{}" :head_sha (:head_sha filmed-on)}

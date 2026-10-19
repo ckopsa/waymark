@@ -55,14 +55,22 @@
                                the-forge)))))
 
 (defn- a-proposed-plan!
-  "A plan its owner filed, audited clean and put up with `change`."
+  "A plan its owner filed, audited clean at its change's first head
+  (`0000000`) and put up with `change`, which is then pushed to the head
+  it was made with: propose opens only at an audited head (ticket
+  db8b35bb)."
   [eng org change]
-  (let [id (str (:id (:row (inv/create! eng :org_plan {:name org}
+  (let [st (:storage eng)
+        head (get-in (store/with-tx st (fn [tx] (store/load-row st tx :change change {})))
+                     [:data :head_sha])
+        id (str (:id (:row (inv/create! eng :org_plan {:name org}
                                         {:principal the-owner}))))]
+    (inv/invoke! eng :change change :observe {:head_sha "0000000"} the-forge)
     (inv/invoke! eng :org_plan id :record_findings
                  {:head_sha "0000000" :findings []} the-forge)
     (inv/invoke! eng :org_plan id :propose {:change change}
                  {:principal the-owner})
+    (inv/invoke! eng :change change :observe {:head_sha head} the-forge)
     id))
 
 (defn- plan [eng id]

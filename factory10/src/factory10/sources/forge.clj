@@ -2664,7 +2664,7 @@
       (reduce
        (fn [census plan]
          (let [door (get findings-doors (state-of plan))
-               change (row-by-id eng :change (get-in plan [:data :change]))
+               change (row-by-id eng :change (bench/org-plan-change-id eng plan))
                repo (some-> (get-in change [:data :repository]) str not-empty)
                head (some-> (get-in change [:data :head_sha]) str not-empty)
                org (org-of plan)]
