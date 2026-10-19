@@ -2304,11 +2304,17 @@
       transient
       (throttle! eng schedule-row nil nil transient)
 
+      ;; a pool whose localfires are all away waits for one (LP2): the
+      ;; note names the link and when it was last seen
       retry-at
-      (try-act! eng schedule-row :throttle
-                {:note (clip (str "Every runner link in this pool is waiting; the wake goes out at "
-                                  retry-at "." why))
-                 :retry_after (str retry-at)})
+      (let [away ((requiring-resolve 'waymark10.server.runner-links/pool-away)
+                  eng ids at)]
+        (try-act! eng schedule-row :throttle
+                  {:note (clip (if away
+                                 (str away "; the wake goes out once it does." why)
+                                 (str "Every runner link in this pool is waiting; the wake goes out at "
+                                      retry-at "." why)))
+                   :retry_after (str retry-at)}))
 
       :else
       (note! eng schedule-row

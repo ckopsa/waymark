@@ -2651,6 +2651,36 @@
   [row ctx]
   (domain-name-of (:read ctx) row))
 
+(defn pull-wait
+  "Why this seat waits rather than fails (LP2): while every live link of
+  the pool its fire goes out through is a pull link whose localfire is
+  away, the sentence naming the first (`runner-links/away-sentence`);
+  nil for a seat with a link of its own, no pool, or a link connected.
+  The schedule is read through `find'`, the chair and the links through
+  `read'`. The pool is `schedules/pool-of`'s, spelled as
+  `linked-for-fire` spells it: this file cannot require that one, nor
+  runner-links, which require it."
+  [read' find' row now]
+  (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
+        own #(some-> (get-in % [:data :fire_url]) str not-empty)
+        runners-of #(some->> (get-in % [:data :runners])
+                             (keep (fn [r] (some-> r str not-empty)))
+                             seq)
+        pool (or (runners-of sched)
+                 (when-not (own sched)
+                   (some->> (chair-of row) (read' :model) runners-of)))]
+    (when pool
+      ((requiring-resolve 'waymark10.server.runner-links/away-sentence)
+       (keep #(read' :runner_link %) pool) now))))
+
+(defn- held-reason-field
+  "The seat's :computed `held_reason`: `pull-wait` over the reads the
+  render ctx lends, at its clock. waiting_on reads it as a hold field,
+  so the seat's verdict says it waits."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (pull-wait (:read ctx) find' row (:now ctx))))
+
 (defn spend-by-domain
   "The dollars this seat's sittings of the last seven days cost, by the
   domain each was worked for (epic aff24e84, piece 5): a map from the
@@ -2946,7 +2976,16 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
-   :computed {:in_domain
+   :computed {:held_reason
+              {:schema :string
+               :x-display
+               {:label "Waiting for its localfire"
+                :help "While every live link this seat fires through is a pull link whose localfire is away, the sentence naming it and when it was last seen, worked out at read time. A wait, not a failure: the fire goes out once the localfire asks for it, and the seat's health does not count it."}
+               ;; it reads the schedule and the links: with no :read it
+               ;; is absent, never a false wait
+               :reads? true
+               :fn held-reason-field}
+              :in_domain
               {:schema :string
                :x-display
                {:label "In domain"
