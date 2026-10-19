@@ -328,6 +328,7 @@
     seeded-from-field]
    :filterable {:state #{:eq :in}
                 :provider #{:eq :in}
+                :delivery #{:eq}
                 :seeded_from #{:eq}
                 :puller_seen_at #{:after :before :range}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}

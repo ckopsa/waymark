@@ -196,9 +196,11 @@ def connect():
 
 def link():
     mcp = Mcp(AS_OWNER)
-    doc, _ = mcp.call("waymark_query", {"kind": "runner_link", "filter": {"delivery": "pull"},
+    # filter by delivery here, not in the query: the published engine image
+    # this walk pulls may predate runner_link's delivery filter
+    doc, _ = mcp.call("waymark_query", {"kind": "runner_link", "fields": ["delivery"],
                                         "return": "summary"})
-    rows = items_of(doc)
+    rows = [r for r in items_of(doc) if (r.get("fields") or {}).get("delivery") == "pull"]
     if len(rows) != 1:
         fail(f"runner_link with delivery pull answered {len(rows)} rows, not one")
     link_id = rows[0]["id"]

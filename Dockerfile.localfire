@@ -66,5 +66,8 @@ ENV HOME=/data
 EXPOSE 8112
 
 # /etc/localfire/localfire.edn comes from the Nomad job's template;
-# LOCALFIRE_TOKEN from its environment.
-ENTRYPOINT ["clojure", "-M:serve", "/etc/localfire/localfire.edn"]
+# LOCALFIRE_TOKEN from its environment. Arguments replace the config
+# path: `docker run ... localfire pull --engine <url> --link <id>`
+# needs no file (localfire/README.md).
+ENTRYPOINT ["clojure", "-M:serve"]
+CMD ["/etc/localfire/localfire.edn"]

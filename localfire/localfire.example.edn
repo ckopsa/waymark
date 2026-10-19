@@ -78,6 +78,17 @@
  ;;        ;; person's routine there as their own runner link
  ;;        :engine-url "https://work.kopsa.info"}
 
+ ;; optional (spec-local-fire.md §13): ask the engine for fires over
+ ;; one connection out, for a machine the engine cannot POST to. The
+ ;; link's token is read from the variable :token-env names (default
+ ;; LOCALFIRE_PULL_TOKEN), never from this file. :routine must be one
+ ;; under :routines. `localfire pull --engine <url> --link <id>` builds
+ ;; the same block from its flags with no file (README.md).
+ ;; :pull {:engine-url "https://work.kopsa.info"
+ ;;        :link-id    "<the pull runner link's id>"
+ ;;        :routine    "opus"
+ ;;        :token-env  "LOCALFIRE_PULL_TOKEN"}
+
  ;; one routine per CLI model — the local copy of "one Routine for each
  ;; model" (docs/routines/ci-classifier.md). :model is required;
  ;; :max-concurrent defaults to 1, :max-run-seconds to 3600, and
