@@ -27,6 +27,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.pull-fires :as pf]
             [waymark10.server.routes.runner-links :as rlr]
+            [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -46,7 +47,7 @@
    "grants" "approval_requests" "attachments" "subscriptions" "jobs"
    "runner_links" "runner_providers" "waymark10_transitions"
    "waymark10_idempotency" "waymark10_cursors" "waymark10_drafts"
-   "waymark10_pull_fires" "waymark10_pull_polls"])
+   "waymark10_pull_fires"])
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *base* nil)
@@ -137,6 +138,15 @@
     seat-id))
 
 (defn- sched-of [seat-id] (sch/schedule-for-seat *eng* seat-id))
+
+(defn- seen-of
+  "The pull link's `puller_seen_at`: when a localfire last polled it."
+  [link-id]
+  (let [st (:storage *eng*)]
+    (store/with-tx st
+      (fn [tx]
+        (get-in (store/load-row st tx :runner_link (str link-id) {})
+                [:data :puller_seen_at])))))
 
 (defn- fire-seat!
   "A person's fire, with its own idempotency key, then the drain that
@@ -245,14 +255,14 @@
     (try
       (testing "no localfire has ever polled: nothing is queued and the schedule reads waiting"
         (fire-seat! cn seat-id "Walk the pool.")
-        (is (nil? (pf/last-poll st p)))
+        (is (nil? (seen-of p)))
         (is (empty? (pf/pending st p)))
         (is (str/includes? (str (get-in (sched-of seat-id) [:data :note])) "waiting"))
         (is (empty? @(:calls lfs)) "no run started"))
 
       (testing "the loop connects over HTTP, and the next fire runs on it once"
         (reset! running (pull/start! lfs (pull-of p) token))
-        (is (eventually 10000 #(pf/last-poll st p)) "the loop's poll was recorded")
+        (is (eventually 10000 #(seen-of p)) "the loop's poll was recorded")
         (fire-seat! cn seat-id "Walk the pool.")
         ;; queueing already stamps `fired` with last_runner; the answer
         ;; is what writes the run's URL
@@ -296,7 +306,7 @@
         running (atom nil)]
     (try
       (testing "a localfire takes the fire and drops before it answers"
-        (pf/poll! st p (Instant/now))
+        (rl/seen! *eng* p (Instant/now))
         (fire-seat! cn seat-id "Walk the pool.")
         (is (= 200 (take-by-hand! p token)))
         (is (empty? @(:calls lfs))))
