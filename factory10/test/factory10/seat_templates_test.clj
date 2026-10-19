@@ -181,6 +181,10 @@
         id (made! h "org_plans" {:name "greenleaf" :brief "A six-person landscaping business."})
         state #(:state (json (req h :get (str "/api/org_plans/" id) nil)))
         door #(req-as h :post (str "/api/org_plans/" id "/-/" %1) as %2)]
+    (testing "it files its person's first plan with create"
+      (let [filed (req-as h :post "/api/org_plans" as
+                          {:name "bluefern" :brief "A four-person bakery."})]
+        (is (= 201 (:status filed)) (pr-str (json filed)))))
     (testing "it cannot record findings"
       (is (not (served? (door "record_findings" {:findings []}))))
       (is (= "drafting" (state))))

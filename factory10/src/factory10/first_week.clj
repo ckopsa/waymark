@@ -64,8 +64,10 @@
   "The first-week scene of the org whose seed is `seed`, filmed on the
   clone at `clone_url`, made at `head_sha`, its day 1 on `day_one`
   (YYYY-MM-DD): {:scene <a scene's create input>, :clone {:url
-  :head_sha}}. `kind` names the kind the world knocks on, when the
-  seed's first create is not it."
+  :head_sha}, :day_one}. `kind` names the kind the world knocks on, when
+  the seed's first create is not it. `:day_one` is the day the clone is
+  stood up with (clone__up's `day_one`), so its seed's [:days n] count
+  from the day the captions' holes read (ticket bbf1f253)."
   [seed {:keys [clone_url head_sha day_one kind]}]
   (let [t (template)
         owner (the-owner seed)
@@ -89,7 +91,8 @@
                    :shots (vec (concat (fill (:opening t) values)
                                        (mapcat day (range 1 (inc (get-in t [:template :days]))))
                                        (fill (:closing t) values))))
-     :clone (fill (:clone t) values)}))
+     :clone (fill (:clone t) values)
+     :day_one (str day-one)}))
 
 (defn- read-seed
   "The seed of the org at `org-dir`: <org-dir>/resources/<org>/seed.edn."

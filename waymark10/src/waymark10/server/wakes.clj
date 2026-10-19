@@ -831,13 +831,20 @@
   counted open sittings alone would read every slot free and fire past
   the ceiling. The fires of the last `in-flight-seconds` are paired,
   oldest first, with the sittings born after them, and a fire no
-  sitting took is a run still starting."
+  sitting took is a run still starting.
+
+  A fire held on a pull link (`:pull_fire`, ticket 56d104f0) is a run in
+  flight until a localfire takes it, however long it waits, and then
+  for `in-flight-seconds` from `:taken_at`; the keep sweep's drop, or
+  the sit that spends it, takes its key off the row. Its key entry is
+  what is read once its fire is older than the window: an entry still
+  on the row is a run that has not sat, so it pairs with no sitting."
   [eng seat-id ^Instant at]
   (let [st (:storage eng)
         cut (.minusSeconds at (long in-flight-seconds))
         recent (fn [v] (when-some [i (instant-of v)]
                          (when (.isAfter ^Instant i cut) i)))
-        [fires starts]
+        [fires starts held]
         (store/with-tx st
           (fn [tx]
             [(->> (store/transitions st tx {:kind :seat
@@ -855,15 +862,27 @@
                   (remove #(true? (get-in % [:data :missed])))
                   (keep #(recent (or (:created-at %)
                                      (get-in % [:data :started_at]))))
-                  (sort))]))]
-    (loop [fs fires ss starts]
-      (cond
-        (empty? fs) nil
-        (empty? ss) fs
-        ;; a sitting born before the oldest fire left took none of them
-        (.isBefore ^Instant (first ss) ^Instant (:at (first fs)))
-        (recur fs (rest ss))
-        :else (recur (rest fs) (rest ss))))))
+                  (sort))
+             ;; pull fires older than the window: untaken, or taken
+             ;; within it; a fire inside the window is in `fires` already
+             (->> (get-in (store/load-row st tx :seat (str seat-id) {})
+                          [:data :fire_keys])
+                  (keep #(when-some [fired (instant-of (:fired_at %))]
+                           (when (and (:pull_fire %)
+                                      (not (recent (:fired_at %)))
+                                      (or (nil? (:taken_at %))
+                                          (recent (:taken_at %))))
+                             {:at fired :text nil}))))]))
+        flying (loop [fs fires ss starts]
+                 (cond
+                   (empty? fs) nil
+                   (empty? ss) fs
+                   ;; a sitting born before the oldest fire left took none of them
+                   (.isBefore ^Instant (first ss) ^Instant (:at (first fs)))
+                   (recur fs (rest ss))
+                   :else (recur (rest fs) (rest ss))))]
+    (when-some [all (seq (concat held flying))]
+      (sort-by :at all))))
 
 (defn- in-flight
   "How many fires of this seat are runs that have not sat yet
