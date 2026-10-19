@@ -11,7 +11,8 @@
 
   Pure: no server namespace is required here, so the client and every
   server namespace may require it and none of them has to require
-  another to reach it.")
+  another to reach it."
+  (:require [clojure.string :as str]))
 
 (set! *warn-on-reflection* true)
 
@@ -29,3 +30,37 @@
   (or (get-in entry [:display :description])
       (get-in entry [:display :label])
       fallback))
+
+;; ── the create door (ticket 13e3b323) ─────────────────────────────────
+
+(defn create-confirm?
+  "Does this kind's create door declare safety.confirm? A create has no
+  row to render an entry on, so the declaration's :create-safety is
+  read directly."
+  [rdef]
+  (boolean (get-in rdef [:create-safety :confirm])))
+
+(defn- fill
+  "A template's {field} holes filled from the create's input. A hole the
+  input does not answer stays as written, so the sentence shows what
+  was not given rather than reading as if it were."
+  [template input]
+  (str/replace template #"\{([^{}]+)\}"
+               (fn [[hole k]]
+                 (let [v (if (contains? input (keyword k))
+                           (get input (keyword k))
+                           (get input k))]
+                   (if (some? v) (str v) hole)))))
+
+(defn create-consequence
+  "The sentence a confirm create owes, filled from ITS input: the
+  declaration's :create-safety :consequence is a fn of the input (keyword
+  keys) → one sentence, or a string template whose {field} holes the
+  input fills. `fallback` when it is neither."
+  [rdef input]
+  (let [c (get-in rdef [:create-safety :consequence])
+        input (or input {})]
+    (cond
+      (string? c) (fill c input)
+      (fn? c) (or (c input) fallback)
+      :else fallback)))
