@@ -14,6 +14,17 @@
 (deftest the-example-org-conforms
   (is (= [] (conform/conform "../orgs/example"))))
 
+(deftest the-orgkit-template-conforms-as-a-new-org
+  (let [src (io/file "../orgkit/template")
+        dir (io/file (str (Files/createTempDirectory "orgkit" (make-array FileAttribute 0)))
+                     "myorg")]
+    (doseq [^File f (file-seq src)
+            :when (.isFile f)
+            :let [to (io/file dir (str (.relativize (.toPath src) (.toPath f))))]]
+      (io/make-parents to)
+      (io/copy f to))
+    (is (= [] (filterv #(= :error (:severity %)) (conform/conform (str dir)))))))
+
 (defn- example-with-mayor
   "A copy of orgs/example whose seed holds the org-mayor template,
   filled with `kinds`, as the onboarding seat writes it. → its dir."
@@ -34,7 +45,7 @@
                               {:template "org-mayor"
                                :params {:org "example" :domain "example"
                                         :domain_id [:ref :example] :owner "owner"
-                                        :budget_usd_per_week 8M :kinds kinds}}))))
+                                        :budget_usd_per_week 8M :kinds kinds :wakes []}}))))
     (str dir)))
 
 (deftest the-example-org-conforms-with-its-mayor-in-the-seed
@@ -65,6 +76,17 @@
 (deftest a-seat-above-its-owners-ceiling-earns-one-finding
   (is (= ["scope/outside-owner/clerk/gizmo/finish"]
          (mapv :key (conform/conform "fixtures/orgs/overreach")))))
+
+(deftest an-org-whose-name-is-not-snake-case-earns-a-finding
+  (let [dir (io/file (str (Files/createTempDirectory "orgs" (make-array FileAttribute 0)))
+                     "bad-name")
+        _ (.mkdirs dir)
+        [f] (conform/conform (str dir))]
+    (is (= "org_name_not_snake_case/bad-name" (:key f)))
+    (is (= :error (:severity f)))
+    (is (re-find #"bad-name" (:sentence f))))
+  (is (not-any? #(= :org_name_not_snake_case (:class %))
+                (conform/conform "fixtures/orgs/unmarked"))))
 
 (deftest an-org-with-no-manifest-earns-a-finding-naming-it
   (let [[f] (conform/conform "fixtures/orgs/unmarked")]

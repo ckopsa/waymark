@@ -8,7 +8,9 @@
   while the engine is unreachable and resumes when it is back, each wait
   jittered between half and the whole of its step; a 401 does not stop
   it, and a new token written to the token file is taken up without a
-  restart; and the token is in no file and no log."
+  restart; and the token is in no file and no log. And (LP3) a fire is
+  journaled before its run: after a crash, or handed out again, it is
+  answered from the journal and never run twice."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -26,29 +28,38 @@
 (defn stub-engine
   "The engine's two pull routes on `port`. `answers` is a queue of what
   the GET answers in turn, a fire map or a status; once it is empty the
-  GET answers 204 after a short wait. `seen` collects every request."
-  [port answers seen]
-  (hk/run-server
-   (fn [req]
-     (let [body (some-> (:body req) slurp)]
-       (swap! seen conj {:method        (:request-method req)
-                         :uri           (:uri req)
-                         :token         (get-in req [:headers "waymark-runner-token"])
-                         :authorization (get-in req [:headers "authorization"])
-                         :body          (when (seq body) (json/read-value body))}))
-     (if (= :post (:request-method req))
-       {:status 200 :headers {"content-type" "application/json"} :body "{}"}
-       (let [a (first (first (swap-vals! answers #(vec (rest %)))))]
-         (cond
-           (map? a) {:status 200 :headers {"content-type" "application/json"}
-                     :body (json/write-value-as-string a)}
-           (int? a) {:status a :body ""}
-           :else    (do (Thread/sleep 50) {:status 204 :body ""})))))
-   {:port port :legacy-return-value? false}))
+  GET answers 204 after a short wait. `post-statuses` is a queue of what
+  the POST answers in turn; once it is empty the POST answers 200.
+  `seen` collects every request."
+  ([port answers seen] (stub-engine port answers seen (atom [])))
+  ([port answers seen post-statuses]
+   (hk/run-server
+    (fn [req]
+      (let [body (some-> (:body req) slurp)]
+        (swap! seen conj {:method        (:request-method req)
+                          :uri           (:uri req)
+                          :token         (get-in req [:headers "waymark-runner-token"])
+                          :authorization (get-in req [:headers "authorization"])
+                          :body          (when (seq body) (json/read-value body))}))
+      (if (= :post (:request-method req))
+        (if-let [s (first (first (swap-vals! post-statuses #(vec (rest %)))))]
+          {:status s :body ""}
+          {:status 200 :headers {"content-type" "application/json"} :body "{}"})
+        (let [a (first (first (swap-vals! answers #(vec (rest %)))))]
+          (cond
+            (map? a) {:status 200 :headers {"content-type" "application/json"}
+                      :body (json/write-value-as-string a)}
+            (int? a) {:status a :body ""}
+            :else    (do (Thread/sleep 50) {:status 204 :body ""})))))
+    {:port port :legacy-return-value? false})))
 
-(defn pull-cfg [port]
+(defn pull-cfg
+  "A pull map on `port`, with a journal of its own under the temp dir."
+  [port]
   {:engine-url (str "http://127.0.0.1:" port) :link-id "link-1"
-   :routine "sonnet" :token-env "LF_PULL_TOKEN"})
+   :routine "sonnet" :token-env "LF_PULL_TOKEN"
+   :journal (str (io/file (System/getProperty "java.io.tmpdir")
+                          (str "lf-journal-" (random-uuid)) "pull-journal.edn"))})
 
 (defn- posts [seen] (filter #(= :post (:method %)) @seen))
 
@@ -64,7 +75,8 @@
         eng     (stub-engine port answers seen)
         world   (w/world)
         err     (StringWriter.)
-        p       (binding [*err* err] (pull/start! world (pull-cfg port) secret))]
+        cfg     (pull-cfg port)
+        p       (binding [*err* err] (pull/start! world cfg secret))]
     (try
       (is (w/wait-for #(seq (posts seen))))
       (let [poll   (first @seen)
@@ -90,7 +102,77 @@
           (is (w/wait-for #(= 1 (count @(:closes world)))))
           (is (empty? (files-holding (:runs world) secret)))
           (is (not (str/includes? (str err) secret)))
-          (is (not (str/includes? (str err) "k-123")))))
+          (is (not (str/includes? (str err) "k-123"))))
+        (testing "a fire whose answer landed leaves the journal empty"
+          (is (w/wait-for #(= {} (pull/read-journal (:journal cfg)))))
+          (is (empty? (files-holding (.getParentFile (io/file (:journal cfg))) "k-123")))))
+      (finally
+        (pull/stop! p)
+        (hk/server-stop! eng)
+        (server/stop! world)))))
+
+(deftest a-crash-before-the-answer-lands-is-answered-from-the-journal
+  (let [port  (w/free-port)
+        cfg   (pull-cfg port)
+        seen  (atom [])
+        ;; the run starts, but the engine takes no answer before the lid closes
+        eng   (stub-engine port (atom [{:id "fire-3" :text "before the lid closed"}])
+                           seen (atom (vec (repeat 100 503))))
+        world (w/world)
+        quiet {:sleep (fn [_] (Thread/sleep 20))}
+        p     (binding [*err* (StringWriter.)] (pull/start! world cfg secret quiet))]
+    (try
+      (is (w/wait-for #(seq (posts seen))) "the answer is tried and fails")
+      (is (w/wait-for #(= 1 (count @(:calls world)))))
+      ;; the crash: the loop and the engine it reached are gone
+      (pull/stop! p)
+      (hk/server-stop! eng)
+      (let [held   (get (pull/read-journal (:journal cfg)) "fire-3")
+            run-id (get-in held [:answer :claude_code_session_id])
+            port2  (w/free-port)
+            seen2  (atom [])
+            eng2   (stub-engine port2 (atom []) seen2)
+            p2     (binding [*err* (StringWriter.)]
+                     (pull/start! world (assoc cfg :engine-url (str "http://127.0.0.1:" port2))
+                                  secret quiet))]
+        (try
+          (is (= "link-1" (:link held)))
+          (is (string? run-id) "the journal holds what the run answered")
+          (is (w/wait-for #(seq (posts seen2))) "the restarted loop answers it first")
+          (let [post (first (posts seen2))]
+            (is (= "/api/-/runner-links/link-1/fires/fire-3" (:uri post)))
+            (is (= run-id (get-in post [:body "claude_code_session_id"]))))
+          (is (w/wait-for #(= {} (pull/read-journal (:journal cfg)))))
+          (is (= 1 (count @(:calls world))) "and does not run it again")
+          (finally
+            (pull/stop! p2)
+            (hk/server-stop! eng2))))
+      (finally
+        (pull/stop! p)
+        (server/stop! world)))))
+
+(deftest a-journaled-fire-handed-out-again-is-answered-not-run
+  (let [port  (w/free-port)
+        cfg   (pull-cfg port)
+        _     (io/make-parents (io/file (:journal cfg)))
+        ;; localfire stopped before it knew what fire-4's run answered;
+        ;; fire-9 is another link's
+        _     (spit (:journal cfg) (pr-str {"fire-4" {:link "link-1"}
+                                            "fire-9" {:link "link-9"}}))
+        seen  (atom [])
+        ;; the first answer fails, and the lease has run out: fire-4 is handed out again
+        eng   (stub-engine port (atom [{:id "fire-4" :text "again"}]) seen (atom [503]))
+        world (w/world)
+        p     (binding [*err* (StringWriter.)]
+                (pull/start! world cfg secret {:sleep (fn [_] (Thread/sleep 20))}))]
+    (try
+      (is (w/wait-for #(= {"fire-9" {:link "link-9"}} (pull/read-journal (:journal cfg)))))
+      (let [ps (posts seen)]
+        (is (= 2 (count ps)) "tried from the journal, then answered when handed out")
+        (is (every? #(= "/api/-/runner-links/link-1/fires/fire-4" (:uri %)) ps))
+        (is (= 400 (get-in (last ps) [:body "status"])))
+        (is (false? (get-in (last ps) [:body "started"]))))
+      (is (empty? @(:calls world)) "never run")
       (finally
         (pull/stop! p)
         (hk/server-stop! eng)

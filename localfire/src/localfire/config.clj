@@ -91,7 +91,9 @@
              :routine    routine
              :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}
       ;; the file wins over the variable when both are named
-      file (assoc :token-file file))))
+      file (assoc :token-file file)
+      ;; LP3: where the pull journal lives; the state dir's file without it
+      (some-> (:journal p) str not-empty) (assoc :journal (str (:journal p))))))
 
 (defn- normalize-routine [nm r]
   (when-not (map? r)

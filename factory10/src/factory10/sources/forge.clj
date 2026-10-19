@@ -99,14 +99,17 @@
   consumer is recorded as the cheaper beat, not as a punt."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
+            [factory10.first-week :as first-week]
             [factory10.mirror :as mirror]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
             [factorykit.change :as change-kit]
             [factorykit.forge :as kit]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
@@ -2619,6 +2622,15 @@
     (let [page (or (get doc :law_page) (get doc "law_page"))]
       (when (and (string? page) (not (str/blank? page))) page))))
 
+(defn first-week-scene-of
+  "The first-week scene the artifact's JSON carries beside the findings,
+  its `first_week_scene` as edn text (ticket 4dbb8243), or nil when it
+  carries none."
+  [doc]
+  (when (map? doc)
+    (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
+      (when (and (string? scene) (not (str/blank? scene))) scene))))
+
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
   conform's `live_flag` for the org's org.edn at that head, and the
@@ -2642,7 +2654,8 @@
   findings were not recorded at → the artifact
   `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
   written through the door the plan's state affords, with the law page
-  the same artifact carries (ticket 4ab34d18). Once per head: a
+  the same artifact carries (ticket 4ab34d18) and its first-week scene,
+  rendered at that head (ticket 4dbb8243). Once per head: a
   plan whose `findings_sha` is its change's head is not read, and an
   artifact not there yet is tried on the next pass. A forge that does
   not answer, or a door the engine refuses, costs that plan one pass and
@@ -2661,7 +2674,7 @@
       (reduce
        (fn [census plan]
          (let [door (get findings-doors (state-of plan))
-               change (row-by-id eng :change (get-in plan [:data :change]))
+               change (row-by-id eng :change (bench/org-plan-change-id eng plan))
                repo (some-> (get-in change [:data :repository]) str not-empty)
                head (some-> (get-in change [:data :head_sha]) str not-empty)
                org (org-of plan)]
@@ -2675,7 +2688,9 @@
                    (do (inv/invoke! eng :org_plan (str (:id plan)) door
                                     (cond-> (merge {:head_sha head :findings found}
                                                    (live-of doc))
-                                      (law-page-of doc) (assoc :law_page (law-page-of doc)))
+                                      (law-page-of doc) (assoc :law_page (law-page-of doc))
+                                      (first-week-scene-of doc)
+                                      (assoc :first_week_scene (first-week-scene-of doc)))
                                     (as-opts))
                        (update census :findings (fnil inc 0)))
                    census))
@@ -2685,6 +2700,54 @@
                  census)))))
        census
        plans))))
+
+;; ── the org's film (ticket e552de65) ─────────────────────────────────
+
+(defn- judge-the-take
+  "The take `tk` scored against every active film rule: the engine's
+  hand reads them all."
+  [eng tk]
+  (film-rules/judge-take eng tk nil))
+
+(defn film-pass!
+  "Every filming org_plan whose director handed in a take not yet
+  landed → the film rules' answer over its take report, landed through
+  `first-week/land!` as the engine's hand: no fail rule missed attaches
+  the film and the plan is simulated; a fail rule missed records its
+  findings and the plan drafts again. Once per take: the landing stamps
+  `take_landed_at`, and a plan with it is not read. A report that does
+  not read, or a door the engine refuses, costs that plan one pass and
+  nothing else. `judge` is (fn [eng take]) → the answer, the active
+  rules unless said. → the census, with `:films` counted."
+  ([eng census log-fn] (film-pass! eng census log-fn judge-the-take))
+  ([eng census log-fn judge]
+   (let [st (:storage eng)
+         plans (store/with-tx st
+                 (fn [tx]
+                   (vec (store/query-rows st tx :org_plan {:state "filming"}
+                                          {:limit findings-scan-limit}))))]
+     (reduce
+      (fn [census plan]
+        (let [{:keys [take_film_url take_report take_sha take_landed_at]}
+              (:data plan)]
+          (if (or (some? take_landed_at)
+                  (str/blank? (str take_film_url))
+                  (str/blank? (str take_report))
+                  (str/blank? (str take_sha)))
+            census
+            (try
+              (first-week/land! eng (str (:id plan))
+                                (judge eng (wire/read-json (str take_report)))
+                                {:film_url (str take_film_url)
+                                 :head_sha (str take_sha)}
+                                (as-opts))
+              (update census :films (fnil inc 0))
+              (catch Exception e
+                (log-fn "the film of " (org-of plan) " at " take_sha
+                        " was not landed (" (ex-message e) ")")
+                census)))))
+      census
+      plans))))
 
 (defn- stamp-pass!
   "The pass's own clock on the policy of each repository it ran over,
@@ -2752,7 +2815,8 @@
         (let [census (staleness-pass! eng source read-checks census
                                       log-fn)
               census (adoption-note-pass! eng source census log-fn)
-              census (findings-pass! eng source census log-fn)]
+              census (findings-pass! eng source census log-fn)
+              census (film-pass! eng census log-fn)]
           (sweep-reader-changes! eng log-fn)
           census))
       ;; the base pass runs whatever a pass before it did (ticket

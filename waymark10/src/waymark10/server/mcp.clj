@@ -3868,6 +3868,18 @@
   (str " The row your fire text names, " row-id ", is held by another "
        "open sitting. Walk the row below instead of it."))
 
+(defn- with-failing-change
+  "The walk with the named ticket's row marked (`seats/failing-change-mark`,
+  ticket c91b3af9): the fire named the seat's own failing change, so
+  the row says so, and which change, pull request and head it is."
+  [walk mark ticket-id]
+  (if (and mark ticket-id (seq (get walk "rows")))
+    (update walk "rows"
+            (fn [rows]
+              (mapv #(if (= (str ticket-id) (str (get % "id"))) (merge % mark) %)
+                    rows)))
+    walk))
+
 (def ^:private claim-tries
   "How many times one sit reads its walk again past the rows another
   sit of the seat claimed first."
@@ -3886,6 +3898,9 @@
   → {:walk w :named-held? bool :named-withheld? bool :all-held? bool}."
   [eng call sitter-sees seat sitting named]
   (let [seat-id (str (:id seat))
+        ;; a named FAILING change the seat can fix marks its ticket's
+        ;; row, read before the change is read back (ticket c91b3af9)
+        mark (seats/failing-change-mark eng seat named)
         ;; a named change is read back to its ticket (ticket 7af7d506)
         named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
@@ -3911,7 +3926,8 @@
             said (fn [w]
                    {:walk (-> (with-graced-reasons w graced)
                               (with-other-seat-reasons
-                                (seats/other-seats-row-ids eng seat-id)))
+                                (seats/other-seats-row-ids eng seat-id))
+                              (with-failing-change mark named))
                     :named-held? (boolean (and named (contains? seen named)))
                     ;; named, held by nobody, and still not handed: the
                     ;; walk withheld it and the queue's rows stand in
@@ -4411,6 +4427,24 @@
       said
       (pattern-branch policy row-id))))
 
+(defn- linked-change!
+  "The walk row learns the change the sit found or minted for it
+  (ticket db8b35bb): a kind that declares a `link_change` door is
+  walked through it with the engine's hand, so the row names its
+  change without a door of the seat's own. The door's guard decides
+  whether the row takes it — factory10's org_plan only when it names
+  none or names a closed one — and its refusal is the ordinary answer
+  once the row names it, so it is swallowed. → change."
+  [eng walk change]
+  (let [kind (keyword (str (get walk "kind")))
+        id (some-> (get-in walk ["rows" 0 "id"]) str not-empty)]
+    (when (and id (get-in (inv/resources eng) [kind :actions :link_change]))
+      (try
+        (inv/invoke! eng kind id :link_change {:change (str (:id change))}
+                     {:principal seat-change-principal})
+        (catch Exception _ nil)))
+    change))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -4774,7 +4808,8 @@
                                 (reopened-change eng)
                                 (regroomed-change eng)
                                 (rehomed-change eng seat row)
-                                (rebranched-change eng row))
+                                (rebranched-change eng row)
+                                (linked-change! eng walk))
                 repo (first (walk-home seat row))]
             [change
              (or note
@@ -5281,8 +5316,9 @@
   that is not retired — read by the kind's name, so an engine serving
   no org_plan answers nil — and the sitting is its first when it is the
   seat's only one. The org's held calls are those still held whose
-  caller, or whose door's author, is the sitter of a seat in the org's
-  domain; its aged rows are `live-cracks/aged-rows` over the rows whose
+  stamped `domain` is the org's, or, for a call that stores none (held
+  before the stamp, ticket afcce783), whose caller or door's author is
+  the sitter of a seat in the org's domain; its aged rows are `live-cracks/aged-rows` over the rows whose
   domain is the org's."
   [eng seat sitting now]
   (let [read' (row-reader eng)
@@ -5300,10 +5336,12 @@
             held (filterv (fn [row]
                             (let [d (:data row)
                                   door (:door d)]
-                              (or (contains? callers (str (:caller d)))
-                                  (contains? callers
-                                             (str (or (get door :author)
-                                                      (get door "author")))))))
+                              (if-some [dom (some-> (:domain d) str not-empty)]
+                                (= org dom)
+                                (or (contains? callers (str (:caller d)))
+                                    (contains? callers
+                                               (str (or (get door :author)
+                                                        (get door "author"))))))))
                           (decoded-rows eng :held_call {:state :held}))
             rdefs (vec (vals (inv/resources eng)))
             rows (into {}

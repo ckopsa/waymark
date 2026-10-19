@@ -91,6 +91,8 @@
             ;; the day job's kinds, folded in behind FACTORY10=1 — see
             ;; `factory-resources` below
             [factory10.main :as factory]
+            ;; the going_live plans the boot's orgs make live (M2e-4)
+            [factory10.org-live :as org-live]
             ;; …and the source that fills them, behind the same switch
             ;; plus a token — see `factory-source` below
             [factory10.sources.forge :as forge]
@@ -801,9 +803,10 @@
   (org-boot/admit resources orgs engine/full-registry))
 
 (defn live-orgs-on-boot!
-  "Each live org's seed, after WAYMARK10_ORG's and by the same rule:
-  loaded on a fresh engine, skipped on one that holds its marker, and a
-  refusal throws. `opts` are `org-boot/boot!`'s."
+  "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
+  engine and skipped on one that holds its marker. A refusal skips that
+  org with a line and a draft ticket, and the house boots (ticket
+  087753c1). `opts` are `org-boot/boot!`'s."
   ([eng orgs] (live-orgs-on-boot! eng orgs {}))
   ([eng orgs opts]
    (org-boot/boot-live! eng orgs opts)))
@@ -1122,6 +1125,12 @@
         _ (org-on-boot! eng org)
         ;; and each live org's, after it
         _ (live-orgs-on-boot! eng (:orgs admitted))
+        ;; a going_live org_plan whose domain the boot just loaded,
+        ;; with its mayor's seat, reads live (ticket 25c1520b, M2e-4)
+        _ (when (factory-on?)
+            (org-live/mark-live-plans! eng)
+            ;; and a hire the owner refused retires, quiet a week (M4b)
+            (org-live/decline-refused-hires! eng))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
