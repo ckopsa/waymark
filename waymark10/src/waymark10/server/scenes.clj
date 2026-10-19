@@ -715,16 +715,18 @@
   :absent-as), ranks a held call or an ask first, then a door that
   cannot be undone, then another seat's move, then a create (oldest
   first within each), and tells the first two as clauses joined with
-  `; `."
-  [eng {:keys [since until domain]}]
+  `; `. `opts` :held? and :asks? false leave the held calls or the asks
+  out, unsaid, for a caller who does not see that kind whole."
+  ([eng w] (day-in-window eng w {}))
+  ([eng {:keys [since until domain]} {:keys [held? asks?] :or {held? true asks? true}}]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
         lo (inst-ms since)
         hi (inst-ms until)
         within (fn [t] (when-some [ms (ms-of t)] (when (and (<= lo ms) (< ms hi)) ms)))
         kinds (filter #(= (str domain) (some-> (:domain %) name)) (vals rdefs))
-        held-rdef (get rdefs :held_call)
-        ask-rdef (get rdefs :approval_request)]
+        held-rdef (when held? (get rdefs :held_call))
+        ask-rdef (when asks? (get rdefs :approval_request))]
     (store/with-tx st
       (fn [tx]
         (let [held (when held-rdef
@@ -753,7 +755,7 @@
                         (take 2)
                         (str/join "; "))]
           (when-not (str/blank? said)
-            (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
+            (str (str/upper-case (subs said 0 1)) (subs said 1) "."))))))))
 
 ;; ── the say over the wire (POST /api/-/scenes/say) ───────────────────
 
@@ -792,7 +794,10 @@
   hole reads its kind only when `sees?` (a fn of a kind keyword) says
   the caller sees it whole, and a `$day` hole its domain only when the
   caller sees every kind of it; otherwise the hole finds nothing and
-  says its `none`. `run` is the take's run (`take-run-of`)."
+  says its `none`. A `$day` tells held calls only when the caller sees
+  held_call whole, and asks only when it sees approval_request whole;
+  otherwise those clauses are left out, unsaid. `run` is the take's run
+  (`take-run-of`)."
   [eng say run sees?]
   (let [rdefs (inv/resources eng)
         kind-ok? #(boolean (sees? (keyword %)))]
@@ -803,7 +808,8 @@
                 (when (every? sees? (keep #(when (= (:domain w) (some-> (:domain %) name))
                                              (:kind %))
                                           (vals rdefs)))
-                  (day-in-window eng w)))
+                  (day-in-window eng w {:held? (boolean (sees? :held_call))
+                                        :asks? (boolean (sees? :approval_request))})))
               run)))
 
 (defn- shot-step
