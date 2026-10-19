@@ -16,13 +16,16 @@
    :terminal #{:done}
    :summary "{data.title} · {state}"
    :schema [:map [:title [:string {:min 1 :max 80}]]]
+   :decided {:new "A new gizmo waits a day." :stuck "A stuck gizmo waits a day."}
    :actions
    {:start  {:from #{:new} :to :stuck
              :guards [unsaid]
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "A started gizmo stays started."}}
+                      :one-way "A started gizmo stays started."}
+             :decided "The clerk starts a gizmo on its own."}
     :finish {:from #{:stuck} :to :done
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "A done gizmo stays done."}}}})
+                      :one-way "A done gizmo stays done."}
+             :decided "The clerk finishes a gizmo on its own."}}})
 
 (defn resources [] (in-domain :broken [gizmo]))
