@@ -414,8 +414,10 @@
   2/3): the seeded cast member's own, marked :acted-by the seat's
   principal, so the log records both hands. Refused 403 unless all
   hold: the engine is a clone, `seat` has acts_as_cast, the member
-  carries the seed loader's cast marker, and it is neither the org's
-  owner nor a manager."
+  carries the seed loader's cast marker, and it is no manager. The
+  org's owner is allowed: only a clone gets this far, a clone is a
+  throwaway copy of seeded rows, and its films are of the owner's week
+  (a live engine refuses every `as`, the owner's included)."
   [eng seat principal as-id]
   (let [member (row-by-id eng :member as-id)
         roles' (set (map str (get-in member [:data :roles])))
@@ -433,8 +435,8 @@
       (not (true? (get-in member [:data :cast])))
       (refuse "that is no member the seed loader made from its cast.")
 
-      (or (org-owner? eng member) (contains? roles' roles/manager))
-      (refuse "that is the org's owner or a manager, whom no seat acts as.")
+      (and (contains? roles' roles/manager) (not (org-owner? eng member)))
+      (refuse "that is a manager, whom no seat acts as.")
 
       :else
       (assoc (t/principal {:id (str (:id member))
