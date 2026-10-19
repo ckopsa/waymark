@@ -139,7 +139,7 @@
         (is (str/starts-with? kind "bench.") kind)
         (is (= "ckopsa/waymark" (:repo filter)) kind)
         (when (#{"bench.find" "bench.read"} kind)
-          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-mayor.edn"
+          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-*.edn"
                  (:path filter))
               kind))
         (when (= "bench.edit" kind)
@@ -151,6 +151,7 @@
         (doseq [[_ tool] (re-seq #"bench__(\w+)" (str (:charter seat) (:instructions seat)))]
           (is (contains? held (str "bench." tool)) tool)))
       (is (< (count (:charter seat)) 1200))
+      (is (<= (count (:charter seat)) 1150) "filled for rd_tax_services, it leaves room under the cap")
       (is (< (count (:instructions seat)) 2000)))))
 
 (def ^:private agent-headers
@@ -228,6 +229,33 @@
       (is (every? (comp empty? :actions) (:scope seat)))
       (is (= {:domain domain-id}
              (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))))
+
+(deftest the-org-seat-fills-for-orgs-example-and-holds-only-the-hired-doors
+  (let [eng (dev/scratch! (-> (vec (main/resources)) (into (example/resources)) (conj caps/capability))
+                          {:now-fn (constantly t0)})
+        h (dev/handler eng)
+        domain-id (made! h "domains" {:name "example"
+                                      :charter "Example Landscaping"
+                                      :budget_usd_per_week 1000})
+        seat (seed/filled (:seat (edn-resource "seats/org-seat.edn"))
+                          {:org "example" :domain "example" :domain_id domain-id
+                           :owner "owner" :budget_usd_per_week 5M
+                           :gap_kind "request" :gap_state "new"
+                           :kinds [{:kind "request" :actions ["accept"]}]
+                           :charter "You accept each new request whose detail says what the work is."})]
+    (testing "it fills with no hole left, its budget a decimal"
+      (is (nil? (re-find #"\{\{" (pr-str seat))))
+      (is (= 5M (:budget_usd_per_week seat)))
+      (is (= "example-request-new" (:name seat))))
+    (testing "it creates through the seat door, in the org's domain"
+      (let [made (req h :post "/api/seats" seat)]
+        (is (= 201 (:status made)) (pr-str (json made)))
+        (is (= "example" (get-in (json (req h :get (str "/api/seats/" (id-of made)) nil))
+                                 [:data :in_domain])))))
+    (testing "its scope is exactly the hired kinds, and it wakes on the gap's state"
+      (is (= [{:kind "request" :actions ["accept"]}] (:scope seat)))
+      (is (= [{:kind "request" :actions [] :filter {:state "new"} :at_least 1}]
+             (:wake_on seat))))))
 
 (deftest the-director-seat-hands-in-the-film-and-takes-no-engine-door
   (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)

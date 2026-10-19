@@ -14,12 +14,12 @@
 (deftest the-example-org-conforms
   (is (= [] (conform/conform "../orgs/example"))))
 
-(defn- example-with-mayor
-  "A copy of orgs/example whose seed holds the org-mayor template,
-  filled with `kinds`, as the onboarding seat writes it. → its dir."
-  [kinds]
+(defn- example-with-seat
+  "A copy of orgs/example whose seed holds the seat `entry` beside its
+  own, as the onboarding seat writes it. → its dir."
+  [entry]
   (let [src (io/file "../orgs/example")
-        dir (io/file (str (Files/createTempDirectory "org-mayor" (make-array FileAttribute 0)))
+        dir (io/file (str (Files/createTempDirectory "org-seat" (make-array FileAttribute 0)))
                      "example")
         seed-file (io/file dir "resources" "example" "seed.edn")]
     (doseq [^File f (file-seq src)
@@ -30,12 +30,27 @@
     (spit seed-file
           (pr-str (-> (edn/read-string (slurp seed-file))
                       (update :domains (partial mapv #(assoc % :ref :example)))
-                      (update :seats conj
-                              {:template "org-mayor"
-                               :params {:org "example" :domain "example"
-                                        :domain_id [:ref :example] :owner "owner"
-                                        :budget_usd_per_week 8M :kinds kinds}}))))
+                      (update :seats conj entry))))
     (str dir)))
+
+(defn- example-with-mayor
+  "orgs/example with the org-mayor template, filled with `kinds`, in
+  its seed. → its dir."
+  [kinds]
+  (example-with-seat {:template "org-mayor"
+                      :params {:org "example" :domain "example"
+                               :domain_id [:ref :example] :owner "owner"
+                               :budget_usd_per_week 8M :kinds kinds}}))
+
+(deftest the-example-org-conforms-with-a-hired-seat-in-the-seed
+  (is (= [] (conform/conform
+             (example-with-seat {:template "org-seat"
+                                 :params {:org "example" :domain "example"
+                                          :domain_id [:ref :example] :owner "owner"
+                                          :budget_usd_per_week 5M
+                                          :gap_kind "request" :gap_state "new"
+                                          :kinds [{:kind "request" :actions ["accept"]}]
+                                          :charter "You accept each new request whose detail says what the work is."}})))))
 
 (deftest the-example-org-conforms-with-its-mayor-in-the-seed
   (is (= [] (conform/conform (example-with-mayor [{:kind "request" :actions []}
