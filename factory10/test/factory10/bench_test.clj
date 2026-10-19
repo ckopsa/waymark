@@ -2734,6 +2734,45 @@
       (is (= ["head_moved"]
              (mapv #(str (or (:key %) (get % "key"))) (get-in row [:data :findings])))))))
 
+;; ── the onboarding sit names the plan's change (ticket 64f5cb42) ───────
+
+(def ^:private onboarding-scope
+  "The onboarding seat's scope, as factorykit's seat spells it: the plan
+  doors on drafting and simulated plans, submit, and the bench powers
+  on one repository."
+  (into [{:kind "org_plan" :actions ["ask" "propose" "go_live"]
+          :filter {:state "drafting,simulated"}}
+         {:kind "change" :actions ["submit"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo a-repository}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(deftest an-onboarding-sit-names-the-plans-change-once
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        plan (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                          {:principal colton}))))
+        _ (open-seat! eng {:scope onboarding-scope :walk "org_plan"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        minted (some-> (get-in answer [:change :id]) str)]
+    (testing "the sit mints the plan's change and names it on the plan"
+      (is (some? minted) "the sit answers a change beside the plan")
+      (is (= (str "org_plan:" plan)
+             (some-> (get-in answer [:change :data :born_from]) str)))
+      (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str))))
+    (testing "a second sit leaves the plan's change as it was"
+      (let [again (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+        (is (= minted (some-> (get-in again [:change :id]) str)))
+        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))
+        (is (= "drafting" (name (:state (plan-row eng plan)))))))))
+
 ;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
 
 (defn- simulated-world
