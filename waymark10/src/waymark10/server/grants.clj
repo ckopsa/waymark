@@ -174,6 +174,10 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            ;; hold-owner: the person an agent's mint past its leash
+            ;; waits on (HC1). delegation requires nothing that
+            ;; requires grants
+            [waymark10.server.delegation :as delegation]
             ;; the powers vocabulary a dotted scope entry is judged
             ;; against (waymark-fp62.10.4). One-directional: mcp-servers
             ;; knows nothing of grants, so this require cannot close a
@@ -669,29 +673,95 @@
            (empty? (:hashed sk))
            (empty? (:args sk))))))
 
-(g/defguard agents-mint-within-their-leash
-  {:judges [:scope]
-   :reads [:principal :now :grant]
-   :vars [:kind]
-   :open "Delegation attenuates: an agent hands out only slices of the leash it holds — hold it first (an approved ask), then mint within it."
-   :explain "An agent mints only within its own live leash: no grant you hold covers the {kind} entry as asked (kind, every action, every id, and at least your own filter must all fit inside one grant you hold)."}
-  [_row inp ctx]
+(defn- leash-gap
+  "The first entry of an agent's mint that no live grant it holds
+  covers, as {:kind}, or nil. nil for every other principal, and for a
+  probe ctx with no :find hook — decline to guess."
+  [inp ctx]
   (let [p (:principal ctx)]
-    (if (or (not= :agent (:type p))
-            (nil? (:find ctx)))          ; probe ctx — decline to guess
-      (t/allow)
+    (when (and (= :agent (:type p)) (:find ctx))
       (let [now (:now ctx)
             live (filter (fn [g]
                            (and (= :accepted (:state g))
                                 (let [exp (get-in g [:data :expires_at])]
                                   (or (nil? exp) (neg? (compare now exp))))))
                          ((:find ctx) :grant {:audience (:id p)} {:limit 100}))
-            surfaces (map surface-of live)
-            bad (first (for [e (:scope inp)
-                             :when (not (some #(entry-within-surface? e %)
-                                              surfaces))]
-                         {:kind (str (:kind e))}))]
-        (if bad (t/deny {:vars bad}) (t/allow))))))
+            surfaces (map surface-of live)]
+        (first (for [e (:scope inp)
+                     :when (not (some #(entry-within-surface? e %)
+                                      surfaces))]
+                 {:kind (str (:kind e))}))))))
+
+(defn- leash-holder
+  "The person an agent's mint past its leash waits on, or nil (HC1,
+  ticket b83e690d): the agent's person (delegation/hold-owner — the
+  seat's owner, or a delegate's person) when that person holds the
+  manager role. Never for a grant whose audience is the asking agent
+  itself: widening itself stays a seat restate."
+  [inp ctx]
+  (let [p (:principal ctx)]
+    (when (not= (nonblank (:audience inp)) (nonblank (:id p)))
+      (when-some [owner (delegation/hold-owner ctx)]
+        (when (roles/manager?
+               (assoc ctx :principal (t/principal {:id owner :display owner})))
+          owner)))))
+
+(defn- entry-said
+  "One scope entry as a door a person reads: `read org_plan named
+  tax_desk`, `finish ticket where repo bench`."
+  [e]
+  (let [acts (seq (map name (:actions e)))
+        f (:filter e)
+        nm (or (get f :name) (get f "name"))
+        others (dissoc f :name "name")]
+    (str (if acts (str/join "/" acts) "read") " " (name (:kind e))
+         (when (nonblank nm) (str " named " nm))
+         (when (seq others)
+           (str " where " (str/join ", " (map (fn [[k v]] (str (name k) " " v))
+                                              (sort-by (comp name key) others)))))
+         (when (seq (:ids e)) (str " rows " (str/join ", " (map str (:ids e))))))))
+
+(defn- mint-shown
+  "What a held mint says to the person, in plain words: who gets what,
+  and until when."
+  [inp ctx]
+  (let [aud (str (:audience inp))
+        who (or (some-> (:read ctx) (apply [:member aud])
+                        (get-in [:data :display]) nonblank)
+                aud)
+        until (nonblank (:expires_at inp))]
+    (str "Give " who ": " (str/join "; " (map entry-said (:scope inp)))
+         (if until (str " · until " until) " · no end"))))
+
+(g/defguard agents-mint-within-their-leash
+  {:judges [:scope]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :vars [:kind]
+   :open "Delegation attenuates: an agent hands out only slices of the leash it holds — hold it first (an approved ask), then mint within it."
+   :explain "An agent mints only within its own live leash: no grant you hold covers the {kind} entry as asked (kind, every action, every id, and at least your own filter must all fit inside one grant you hold)."}
+  [_row inp ctx]
+  ;; a gap whose agent has a manager behind it is not refused here:
+  ;; `a-mint-past-the-leash-waits-on-its-person` holds it instead
+  (if-some [gap (leash-gap inp ctx)]
+    (if (leash-holder inp ctx) (t/allow) (t/deny {:vars gap}))
+    (t/allow)))
+
+(g/defguard a-mint-past-the-leash-waits-on-its-person
+  {:hold true
+   :judges [:scope]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :vars [:kind]
+   :open "No door clears this one. The mint waits as a held_call for the agent's person, and the person's Allow makes the grant as the person, judged as the person's own create."
+   :explain "Held for your person's tap. No grant you hold covers the {kind} entry, so this grant is your person's to make: the call is recorded as a held_call, and their Allow creates it as them."}
+  [_row inp ctx]
+  ;; HC1 (ticket b83e690d). The Allow replays as the PERSON
+  ;; (held-calls/door-principal), who is no agent, so no gap is met
+  ;; on the replay and the person's own guards judge it
+  (if-some [gap (leash-gap inp ctx)]
+    (if (leash-holder inp ctx)
+      (t/deny {:vars gap :evidence {:shown (mint-shown inp ctx)}})
+      (t/allow))
+    (t/allow)))
 
 (g/defguard approval-route-only
   {:reads [:principal]
@@ -1041,7 +1111,8 @@
                    scope-filters-are-filterable
                    scope-omits-private-kinds
                    scope-ends-are-stated
-                   agents-mint-within-their-leash]
+                   agents-mint-within-their-leash
+                   a-mint-past-the-leash-waits-on-its-person]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]

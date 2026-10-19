@@ -187,6 +187,10 @@
   the hand stays the author's and the log still says whose yes it was;
   the correction count reads it (store/corrections-by-model).
 
+  `requested_by` is the agent whose held grant create the person's
+  Allow ran as the person (held-calls/door-principal, HC1): the hand
+  is the person's, and the log still says which agent asked.
+
   `scheduled` is the scheduled action whose run this write is
   (scheduled/runner-of, docs/spec-scheduled-actions.md R-4.2): the hand
   is the scheduler's, and the log says the clock moved it.
@@ -201,6 +205,7 @@
     grant-id (assoc :grant grant-id)
     (:model principal) (assoc :model (:model principal))
     (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
+    (:requested-by principal) (assoc :requested_by (str (:requested-by principal)))
     (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
     (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))))
 

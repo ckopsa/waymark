@@ -1091,12 +1091,19 @@
   (invoke/actor-map). The correction count reads that mark: a write a
   person allowed is that person's word, never the seat's own."
   [row]
-  (let [caller (str (get-in row [:data :caller]))]
-    (cond-> (t/principal {:id caller :type :agent :display caller})
-      (some-> (get-in row [:data :owner]) str not-empty)
-      (assoc :acts-for (str (get-in row [:data :owner])))
-      (some-> (get-in row [:data :decided_by]) str not-empty)
-      (assoc :allowed-by (str (get-in row [:data :decided_by]))))))
+  (let [caller (str (get-in row [:data :caller]))
+        owner (some-> (get-in row [:data :owner]) str not-empty)
+        {:keys [kind id]} (get-in row [:data :door])]
+    (if (and owner (= "grant" (str kind)) (nil? (some-> id str not-empty)))
+      ;; HC1 (ticket b83e690d): an agent's grant create past its leash
+      ;; is the person's own create. The hand is the person's, so the
+      ;; guards judge it as they judge that person's direct create, and
+      ;; the log names the agent that asked as `requested_by`
+      (assoc (t/principal {:id owner :display owner}) :requested-by caller)
+      (cond-> (t/principal {:id caller :type :agent :display caller})
+        owner (assoc :acts-for owner)
+        (some-> (get-in row [:data :decided_by]) str not-empty)
+        (assoc :allowed-by (str (get-in row [:data :decided_by])))))))
 
 (defn- forward-door!
   "Replay one ALLOWED held seat call at its door, once (server/
