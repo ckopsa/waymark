@@ -683,8 +683,8 @@ jobs:
         working-directory: factorykit
         run: |
           set -uo pipefail
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out"
-          rc=$?
+          rc=0
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out" || rc=$?
           # 1 is "error findings", which this job reports and does not judge.
           if [ "$rc" -gt 1 ]; then echo "conform exited $rc"; exit "$rc"; fi
           # The JSON object is the last line conform prints.
