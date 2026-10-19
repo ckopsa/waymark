@@ -2308,7 +2308,7 @@
       ;; note names the link and when it was last seen
       retry-at
       (let [away ((requiring-resolve 'waymark10.server.runner-links/pool-away)
-                  eng ids at)]
+                  eng ids at owner)]
         (try-act! eng schedule-row :throttle
                   {:note (clip (if away
                                  (str away "; the wake goes out once it does." why)

@@ -73,13 +73,12 @@
 (defn- fires-get
   "GET /api/-/runner-links/{id}/fires — the oldest fire nobody holds,
   leased to this localfire, or 204 when none comes within `*wait-ms*`.
-  Every poll is recorded first: it is what keeps the link out of
-  waiting. It also stamps the link's `puller_seen_at`, at most once in
-  `rl/seen-every` seconds (LP2)."
+  Every poll first stamps the link's `puller_seen_at`, at most once in
+  `rl/seen-every` seconds (LP2): it is what keeps the link out of
+  waiting."
   [eng]
   (fn [{{:keys [id]} :path-params :as req}]
     (pull-link! eng req id)
-    (pf/poll! (:storage eng) (str id) (now-of eng))
     (rl/seen! eng id (now-of eng))
     (let [deadline (+ (System/currentTimeMillis) (long *wait-ms*))]
       (loop []
