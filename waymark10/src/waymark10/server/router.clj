@@ -1845,10 +1845,14 @@
   Own by construction: the audience IS the reader. A seat grant omits
   its scope (the seat's is read fresh at every request), so it answers
   the seat it cites and that seat's scope; any other grant reads as it
-  always did."
-  [eng pid]
+  always did. A person bound by subject holds the grant on their
+  member row (ticket 36fce73d): `aud` is that row's id, read when
+  nothing stands for `pid` itself."
+  [eng pid aud]
   (when (get (inv/resources eng) :grant)
-    (when-some [g (grants/standing-grant-for eng pid)]
+    (when-some [g (or (grants/standing-grant-for eng pid)
+                      (when (and aud (not= (str aud) (str pid)))
+                        (grants/standing-grant-for eng aud)))]
       (let [seat (grants/seat-of-grant eng g)]
         (cond-> {:href (str "/api/grants/" (:id g))
                  :id (:id g)
@@ -1928,7 +1932,7 @@
     (let [pid (:id principal)
           self (home-self eng pid)
           journal (home-journal eng pid)
-          grant (home-grant eng pid)
+          grant (home-grant eng pid (grants/member-audience eng principal))
           letters (home-letters eng pid)
           ;; the greeting counts the WHOLE shelf, not the ten that fit
           ;; in the document — a capped list must not shrink the news
