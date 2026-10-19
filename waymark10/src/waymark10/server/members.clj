@@ -857,8 +857,14 @@
                      :x-display {:label "Their grant"
                                  :help "The invitee's standing grant, as grant create takes it: its scope, and expires_at when it ends. It is made beside the invite, by the inviter."}}
              [:maybe [:map
-                      [:scope [:vector [:map-of :keyword :any]]]
-                      [:expires_at {:optional true} [:maybe :waymark/instant]]]]]
+                      [:scope {:x-display {:label "What it opens"
+                                           :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — as grant create takes it, so each entry is typed by hand."
+                                           :help "The leash, entry by entry: a kind and the actions allowed on it. Everything not named here stays shut."}}
+                       [:vector [:map-of :keyword :any]]]
+                      [:expires_at {:optional true
+                                    :x-display {:label "Ends at"
+                                                :help "When the invitee's grant stops opening anything. Leave it empty for a grant that does not end on its own."}}
+                       [:maybe :waymark/instant]]]]]
             ;; the homecoming credential (waymark-4zj.8): a one-shot
             ;; re-entry token for an ACTIVE agent member, minted by
             ;; :offer_reentry, spent by the /auth/agent door. :min 22
