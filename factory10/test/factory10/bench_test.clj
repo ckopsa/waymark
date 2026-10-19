@@ -2748,8 +2748,11 @@
     (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
     (answer! state "bench__merge" {:state "merged"})
     (inv/invoke! eng :org_plan id :propose {:change (str (:id change))} as)
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/greenleaf.mp4"
+                  :take_report "{}" :head_sha a-commit} as)
     (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/greenleaf.mp4"} as)
+                 {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
     (walk/flipped! eng id a-commit)
     (assoc w :plan id)))
 
