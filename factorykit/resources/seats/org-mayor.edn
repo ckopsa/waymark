@@ -13,7 +13,8 @@
            :domain_id "The id of that domain's row: the seat's :domain ref, and the domain of the seats it reads. In a seed, [:ref <the domain's :ref>]."
            :owner "The member id of the person the mayor sits with: the org's owner."
            :budget_usd_per_week "The mayor's fuel for seven days, in dollars, as a decimal: 8M."
-           :kinds "The org's own kinds as scope entries, one for each: {:kind \"request\" :actions []}. Name only the doors the org's seed gives the mayor; none reads the kind."}
+           :kinds "The org's own kinds as scope entries, one for each: {:kind \"request\" :actions []}. Name only the doors the org's seed gives the mayor; none reads the kind."
+           :wakes "The wake_on entries that bring the mayor to the rows it leaves, one for each kind whose doors it holds: {:kind \"item\" :actions [\"create\"]}. [] when it holds none."}
   :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's."}
  :seat
  {:name "{{org}}-mayor"
@@ -28,4 +29,5 @@
   :instructions "You sit in `{{org}}-mayor`, an interactive seat: the person beside you owns {{org}}, across as many turns as the work takes.\n\nStart with waymark_in_flight {domain: \"{{domain}}\"} and tell the person first what waits on their tap, then what is stuck and for how long.\n\n- Rows: read one with waymark_get, its kind and full id; take a door only when your scope names it and the person agrees.\n- Held calls: read each held_call that waits; say what it would do and who asked, and let the person allow or refuse it.\n- Seats: read the seats in {{domain}} with waymark_query kind \"seat\"; when one's charter or scope no longer fits its work, tell the person what to restate.\n\nIds are full uuids. Before a confirm door, say its consequence sentence to the person and wait for their yes. At the end of a sitting, tell the person what moved and what waits on their tap."
   :scope ["{{kinds}}"
           {:kind "seat" :actions [] :filter {:domain "{{domain_id}}"}}
-          {:kind "held_call" :actions []}]}}
+          {:kind "held_call" :actions []}]
+  :wake_on ["{{wakes}}"]}}

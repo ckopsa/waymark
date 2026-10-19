@@ -629,6 +629,14 @@ jobs:
         run: >-
           bash scripts/jvm-retry.sh "test-factory conform" factorykit "$RUNNER_TEMP/conform.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --live ../orgs ../orgs/example
+      # The orgkit template, copied where a new org starts (ticket
+      # 70e377e7): every org drafted from it starts from a base that passes.
+      - name: orgs — conformance, orgkit/template as orgs/myorg
+        id: conform-template
+        run: >-
+          cp -r orgkit/template orgs/myorg &&
+          bash scripts/jvm-retry.sh "test-factory conform-template" factorykit "$RUNNER_TEMP/conform-template.txt"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs/myorg
       - name: factory10 — the change family, no database or network
         id: factory10
         run: >-
@@ -642,6 +650,7 @@ jobs:
           (failure() || steps.check-factory.outputs.retried == 'true' ||
            steps.factorykit.outputs.retried == 'true' ||
            steps.conform.outputs.retried == 'true' ||
+           steps.conform-template.outputs.retried == 'true' ||
            steps.factory10.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
@@ -703,6 +712,19 @@ jobs:
           sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
           clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG" > "$RUNNER_TEMP/law.md" \
             || { echo "law-text exited $?; the artifact carries no law page"; : > "$RUNNER_TEMP/law.md"; }
+      # The org's first-week scene at this head rides the same artifact,
+      # as first_week_scene.edn and as `first_week_scene` in the JSON, for
+      # the forge pass to write onto the org_plan for the director to
+      # play (ticket 4dbb8243). A scene that does not render costs the
+      # scene, not the findings.
+      - name: first-week scene
+        working-directory: factory10
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
+            || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
       # Lint keys leave the line out, so a finding keeps its key when code
       # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
       # for repeats of one slug in one file, in line order.
@@ -710,7 +732,7 @@ jobs:
         run: |
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
-             --rawfile law "$RUNNER_TEMP/law.md" '
+             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -727,6 +749,7 @@ jobs:
             | add // []
             | {($org): (($c[0][$org] // []) + .)}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
+              + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
@@ -734,7 +757,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: org-findings-${{ matrix.org }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/org-findings.json
+          path: |
+            ${{ runner.temp }}/org-findings.json
+            ${{ runner.temp }}/first_week_scene.edn
           if-no-files-found: error
 
   # Each org dir a pull request changes, its law rendered as the page a
