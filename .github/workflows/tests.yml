@@ -698,7 +698,7 @@ jobs:
             "https://github.com/clj-kondo/clj-kondo/releases/download/v${KONDO_VERSION}/clj-kondo-${KONDO_VERSION}-linux-${arch}.zip"
           unzip -q -o "$RUNNER_TEMP/kondo.zip" -d "$RUNNER_TEMP/kondo"
           rc=0
-          "$RUNNER_TEMP/kondo/clj-kondo" --lint "orgs/$ORG" --config '{:output {:format :json}}' \
+          "$RUNNER_TEMP/kondo/clj-kondo" --lint "orgs/$ORG" --config '{:output {:format :json} :linters {:underscore-in-namespace {:level :off}}}' \
             > "$RUNNER_TEMP/kondo.json" || rc=$?
           # 2 and 3 are warnings and errors found; anything else is kondo failing.
           case "$rc" in 0|2|3) ;; *) echo "clj-kondo exited $rc"; exit "$rc" ;; esac

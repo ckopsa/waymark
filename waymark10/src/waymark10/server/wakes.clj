@@ -1925,7 +1925,7 @@
   under the usual damper. The seat row is read FOR UPDATE, so a sit
   that spends the key at the same moment wins or loses whole.
   → true when this call wrote the sitting."
-  [eng seat-row entry ^Instant now deadline rearm?]
+  [eng seat-row entry ^Instant now deadline rearm? & [note]]
   (let [st (:storage eng)
         seat-id (str (:id seat-row))
         schedule (schedules/schedule-for-seat eng seat-id)
@@ -1962,7 +1962,7 @@
                            ;; here — a fire nobody sat in never sat
                            :outcome "never_sat"
                            :flags []
-                           :note (missed-note fired deadline schedule)}
+                           :note (or note (missed-note fired deadline schedule))}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})
                  (when (and rearm? (not again?) schedule)
@@ -2009,6 +2009,35 @@
         0
         (concat (rows-where eng :seat {:state :active} missed-seat-page)
                 (rows-where eng :seat {:state :parked} missed-seat-page)))))))
+
+;; ── the fire a localfire cannot vouch for (ticket 734b3ecd) ─────────
+
+(defn not-started-note
+  "The sentence a not-started pull fire's sitting carries."
+  [reason]
+  (let [s (str "localfire stopped before it knew whether the run started: "
+               reason)]
+    (subs s 0 (min (count s) (long missed-note-cap)))))
+
+(defn record-not-started!
+  "A pull fire whose localfire stopped before it knew whether the run
+  started, `held` ({:seat :hash}) its key: when no run spent the key, it
+  leaves the seat row and a closed sitting says so with `reason`, as
+  `record-missed!` writes one. No wake is armed: the seat's next cadence
+  wake fires as usual. → true when this call wrote the sitting."
+  [eng {:keys [seat hash]} reason]
+  (boolean
+   (when (and seat hash (serves? eng :seat) (serves? eng :sitting))
+     (let [st (:storage eng)
+           seat-row (store/with-tx st
+                      (fn [tx] (store/load-row st tx :seat (str seat) {})))
+           entry (some #(when (= (str (:hash %)) (str hash)) %)
+                       (get-in seat-row [:data :fire_keys]))]
+       (when (and entry
+                  (record-missed! eng seat-row entry (now eng) 0 false
+                                  (not-started-note reason)))
+         (seats/roll-health! eng (:id seat-row))
+         true)))))
 
 ;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────
 ;;
