@@ -683,8 +683,8 @@ jobs:
         working-directory: factorykit
         run: |
           set -uo pipefail
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out"
-          rc=$?
+          rc=0
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out" || rc=$?
           # 1 is "error findings", which this job reports and does not judge.
           if [ "$rc" -gt 1 ]; then echo "conform exited $rc"; exit "$rc"; fi
           # The JSON object is the last line conform prints.
@@ -1731,20 +1731,170 @@ jobs:
         env:
           SHOTS: ${{ runner.temp }}/ui-access-shots
         run: node waymark10/scripts/ui-drive.mjs access
-      # the quest flow again at 390x844 with touch, live and as a film,
-      # against the same engine
-      - name: Drive the quest flow on a phone
-        env:
-          SHOTS: ${{ runner.temp }}/ui-access-shots
-        run: node waymark10/scripts/ui-drive.mjs quest-phone
-      # the drives' screenshots ("Accept as quest": the offer, the tracker;
-      # phone-quest-*: the same on a phone)
+      # the drive's screenshots ("Accept as quest": the offer, the tracker)
       - name: Upload the drive's screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ui-access-shots
           path: ${{ runner.temp }}/ui-access-shots
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Engine log
+        if: failure()
+        run: cat "$RUNNER_TEMP/access-dev.log" || true
+
+  # ── THE PHONE QUEST DRIVE ────────────────────────────────────────────
+  #
+  # ui-drive.mjs's `quest-phone` mode: the quest flow at 390x844 with
+  # touch, live and as a film, against the access engine. Its own job
+  # beside ui-access, on a VM of its own, so the two drives run in
+  # parallel and neither waits on the other. The setup steps are
+  # ui-access's, copied.
+  #
+  # Not on a dispatch narrowed by `only`, as ui-access.
+  ui-quest-phone:
+    needs: changes
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.only == '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # test10's "Start postgres", word for word, as in ui-access.
+      - name: Start postgres
+        id: postgres
+        env:
+          POSTGRES_DB: waymark10_ui_test
+          PUBLISH: '5432:5432'
+        run: |
+          set -euo pipefail
+          images=(
+            public.ecr.aws/docker/library/postgres:16
+            mirror.gcr.io/library/postgres:16
+            docker.io/library/postgres:16
+          )
+          image=""
+          for wait in 0 5 15 30 60; do
+            if [ "$wait" != "0" ]; then
+              echo "no registry gave the image; waiting ${wait}s"
+              sleep "$wait"
+            fi
+            for candidate in "${images[@]}"; do
+              if docker pull -q "$candidate"; then
+                image="$candidate"
+                break 2
+              fi
+              echo "::warning::pull of ${candidate} failed"
+            done
+          done
+          # A stale postgres:16 from an earlier job runs the suite as well.
+          if [ -z "$image" ]; then
+            for candidate in "${images[@]}"; do
+              if docker image inspect "$candidate" >/dev/null 2>&1; then
+                image="$candidate"
+                echo "::warning::no registry gave the image; using the host's copy of ${image}"
+                break
+              fi
+            done
+          fi
+          if [ -z "$image" ]; then
+            echo "::error::no registry gave postgres:16 and the host holds no copy"
+            exit 1
+          fi
+          cid="$(docker run -d --label waymark-ci=postgres \
+            -e POSTGRES_USER=ckopsa -e POSTGRES_DB="$POSTGRES_DB" \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -p "$PUBLISH" "$image")"
+          echo "POSTGRES_CONTAINER=${cid}" >> "$GITHUB_ENV"
+          for i in $(seq 1 120); do
+            if docker exec "$cid" pg_isready -q -h 127.0.0.1 -U ckopsa -d "$POSTGRES_DB"; then
+              echo "postgres ready after ${i} attempt(s), from ${image}"
+              break
+            fi
+            if [ "$i" = "120" ]; then
+              docker logs "$cid" || true
+              echo "::error::postgres never became ready"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          port="$(docker port "$cid" 5432/tcp | head -n 1)"
+          port="${port##*:}"
+          if [ -z "$port" ]; then
+            echo "::error::docker published no host port for postgres"
+            exit 1
+          fi
+          echo "port=${port}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Boot the access engine
+        working-directory: waymark10
+        env:
+          WAYMARK10_TEST_DSN: jdbc:postgresql://localhost:5432/waymark10_ui_test?user=ckopsa
+        run: |
+          # -Sthreads 1, as in ui-access: one thread builds the classpath.
+          sdeps="${CLJ_SDEPS%\}} :aliases {:fx {:extra-paths [\"test\"]}}}"
+          nohup clojure -Sthreads 1 -Sdeps "$sdeps" -M:fx -e \
+            "(do ((requiring-resolve 'waymark10.access-dev/start!) 8124) nil) @(promise)" \
+            > "$RUNNER_TEMP/access-dev.log" 2>&1 &
+          for _ in $(seq 1 120); do
+            if curl -fsS http://localhost:8124/api/-/ui > /dev/null 2>&1; then
+              cat "$RUNNER_TEMP/access-dev.log"
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/access-dev.log"
+          echo "the access engine never answered on 8124"
+          exit 1
+      - name: Start headless chromium
+        run: |
+          # Three attempts, as in ui-access.
+          for attempt in 1 2 3; do
+            log="$RUNNER_TEMP/chrome-$attempt.log"
+            nohup google-chrome --headless=new --remote-debugging-port=9223 \
+              --no-sandbox --user-data-dir="$RUNNER_TEMP/chrome-$attempt" about:blank \
+              > "$log" 2>&1 &
+            pid=$!
+            launched=$SECONDS
+            for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:9223/json/version > /dev/null 2>&1; then
+                echo "chromium answered on 9223 at attempt $attempt, $((SECONDS - launched)) s after its launch and $SECONDS s into the step"
+                exit 0
+              fi
+              if ! kill -0 "$pid" 2> /dev/null; then break; fi
+              sleep 1
+            done
+            if kill -0 "$pid" 2> /dev/null; then
+              echo "attempt $attempt: chromium ran 30 s and never answered on 9223; it is killed"
+              kill "$pid" 2> /dev/null || true
+              wait "$pid" 2> /dev/null || true
+            else
+              status=0
+              wait "$pid" || status=$?
+              echo "attempt $attempt: chromium exited with status $status before it answered on 9223"
+            fi
+            cat "$log"
+            sleep 2
+          done
+          echo "chromium never answered on 9223 in 3 attempts"
+          exit 1
+      # the quest flow at 390x844 with touch, live and as a film
+      - name: Drive the quest flow on a phone
+        env:
+          SHOTS: ${{ runner.temp }}/ui-quest-phone-shots
+        run: node waymark10/scripts/ui-drive.mjs quest-phone
+      # the drive's screenshots (phone-quest-*)
+      - name: Upload the drive's screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-quest-phone-shots
+          path: ${{ runner.temp }}/ui-quest-phone-shots
           if-no-files-found: ignore
           retention-days: 7
       - name: Engine log
@@ -2141,7 +2291,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access, ui-guided]
+    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2154,6 +2304,7 @@ jobs:
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
           UI_ACCESS: ${{ needs.ui-access.result }}
+          UI_QUEST_PHONE: ${{ needs.ui-quest-phone.result }}
           UI_GUIDED: ${{ needs.ui-guided.result }}
           DISCOVER: ${{ needs.discover.result }}
           ONLY: ${{ inputs.only }}
@@ -2212,6 +2363,7 @@ jobs:
                      "test10 $TEST10 ${RUN_WAYMARK10:-}" \
                      "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
                      "ui-access $UI_ACCESS ${RUN_WAYMARK10:-}" \
+                     "ui-quest-phone $UI_QUEST_PHONE ${RUN_WAYMARK10:-}" \
                      "ui-guided $UI_GUIDED ${RUN_WAYMARK10:-}"; do
             read -r name r selected <<< "$job"
             if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
@@ -2222,7 +2374,7 @@ jobs:
               continue
             fi
             if [ "$r" != "success" ]; then
-              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS ui-guided=$UI_GUIDED)."
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS ui-quest-phone=$UI_QUEST_PHONE ui-guided=$UI_GUIDED)."
               exit 1
             fi
           done

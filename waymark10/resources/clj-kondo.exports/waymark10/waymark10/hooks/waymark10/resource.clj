@@ -14,7 +14,7 @@
 (def top-level-keys
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
     :schema :create-schema :fields :shape :upcasts
-    :flow :actions :create-guards :create-action-names :allow-dead :renames
+    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
