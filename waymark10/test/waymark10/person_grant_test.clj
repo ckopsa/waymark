@@ -12,7 +12,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:private close
   {:from #{:open} :to :closed
@@ -81,6 +82,25 @@
         (is (not ((:row? vis) :org_plan "plan-y"))))
       (testing "and no other kind"
         (is (not ((:row? vis) :other_kind "other-1")))))))
+
+(deftest well-known-names-the-grant-a-person-wears
+  (let [eng (eng!)
+        h (engine/handler eng)
+        whoami (fn [who]
+                 (some-> (:body (h {:request-method :get
+                                    :uri "/api/.well-known/waymark"
+                                    :headers {"x-waymark-principal" who}}))
+                         wire/read-json :principal))]
+    (member! eng "brother" nil)
+    (member! eng "sister" nil)
+    (grant! eng "grant-brother" "brother")
+    (testing "the UI's grant chip reads the worn grant's id and scope"
+      (let [worn (:worn_grant (whoami "brother"))]
+        (is (= "grant-brother" (:id worn)))
+        (is (some #{"org_plan"} (:kinds worn)))
+        (is (not (some #{"other_kind"} (:kinds worn))))))
+    (testing "a person wearing nothing has no worn grant to show"
+      (is (nil? (:worn_grant (whoami "sister")))))))
 
 (deftest a-person-with-no-grant-is-unscoped-as-today
   (let [eng (eng!)]
