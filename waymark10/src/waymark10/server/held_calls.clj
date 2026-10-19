@@ -966,7 +966,7 @@
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner author why if-match]}]
+  [eng {:keys [kind action id body caller owner author why if-match] said :shown}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
@@ -990,9 +990,12 @@
                   (not-empty (patch/changes (:data now)
                                             (patch/resolve-input edit (:data now) body)
                                             named)))
-        shown (str action " " kind (when what (str " " what))
-                   (when changes
-                     (str " · " (str/join ", " (map name (keys changes))))))
+        ;; a hold guard may say what the call is, as its evidence's
+        ;; `shown` (org_plan's hire offer, M4b)
+        shown (or (some-> said str not-empty)
+                  (str action " " kind (when what (str " " what))
+                       (when changes
+                         (str " · " (str/join ", " (map name (keys changes)))))))
         kept (kept-why (or (some-> why str not-empty)
                            "Held for the person's tap."))]
     (:row (inv/create!
