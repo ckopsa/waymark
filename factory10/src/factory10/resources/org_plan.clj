@@ -577,6 +577,37 @@
    [:name [:string {:min 1 :max 64}]]
    [:budget_usd_per_week {:optional true} [:maybe [:string {:max 32}]]]])
 
+(def name-pattern
+  "An org's name becomes a directory (`orgs/<name>`), a branch
+  (`bench/org-<name>`), a domain and a seed org (ticket d4750bf9), so
+  it is a slug: lowercase letters and digits, joined by single hyphens.
+  A string, so the published schema's `pattern` spells it as written."
+  "^[a-z0-9]+(-[a-z0-9]+)*$")
+
+(defn slug
+  "What `typed` reads as a name: lowercased, `&` dropped, every other run
+  of what is not a letter or a digit one hyphen, none at either end, at
+  most 64 long. `r&d-tax-services` reads as `rd-tax-services`."
+  [typed]
+  (let [s (-> (str/lower-case (str typed))
+              (str/replace "&" "")
+              (str/replace #"[^a-z0-9]+" "-")
+              (str/replace #"^-+" ""))]
+    (str/replace (subs s 0 (min 64 (count s))) #"-+$" "")))
+
+(def ^:private name-schema
+  "The create form's name: the refusal suggests the slug of what was
+  typed, so the retry is right the first time. It publishes as ONE
+  string schema, not an allOf, so every form offers it as a box."
+  [:and {:json-schema {:type "string" :minLength 1 :maxLength 64
+                       :pattern name-pattern}}
+   [:string {:min 1 :max 64}]
+   [:re {:error/fn
+         (fn [{:keys [value]} _]
+           (str "should be lowercase letters, digits and hyphens only, like "
+                (or (not-empty (slug value)) "rd-tax-services")))}
+    name-pattern]])
+
 (def ^:private findings-input
   "What the audit's run hands every findings door: the head, its
   findings and law page, and what go_live reads (M2e): whether org.edn
@@ -771,8 +802,8 @@
    :create-schema
    [:map
     [:name {:x-display {:label "The org's name"
-                        :help "A short name for the org, as its directory spells it: greenleaf, or acme-landscaping."}}
-     [:string {:min 1 :max 64}]]
+                        :help "A short name for the org, as its directory and branch spell it: lowercase letters, digits and hyphens, like rd-tax-services."}}
+     name-schema]
     [:brief {:optional true
              :examples ["A six-person landscaping business. I want the house to run quotes, crew scheduling, invoicing and late payers."]
              :x-display {:widget "prose" :label "The brief"

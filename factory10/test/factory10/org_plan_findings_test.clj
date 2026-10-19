@@ -210,3 +210,30 @@
                  :body {:head_sha "aaaaaaa1" :findings [quote-approver]}})]
     (is (not= 200 (:status no)) (pr-str (json no)))
     (is (empty? (:findings (plan-of h id))))))
+
+;; ticket d4750bf9: the name becomes a directory, a branch and a domain.
+(defn- file-named [h org]
+  (req h :post "/api/org_plans" {:headers person :body {:name org}}))
+
+(deftest a-name-is-a-slug
+  (let [{:keys [h]} (world)]
+    (testing "r&d-tax-services is refused, naming the field and the slug"
+      (let [no (file-named h "r&d-tax-services")
+            said (pr-str (json no))]
+        (is (= 422 (:status no)) said)
+        (is (re-find #"\bname\b" said) said)
+        (is (str/includes? said "rd-tax-services") said)))
+    (testing "rd-tax-services is accepted"
+      (is (= 201 (:status (file-named h "rd-tax-services")))))
+    (testing "capitals, spaces and slashes are refused"
+      (doseq [bad ["Greenleaf" "green leaf" "orgs/greenleaf" "-greenleaf" "green--leaf"]]
+        (is (= 422 (:status (file-named h bad))) bad)))
+    (testing "the projected create schema shows the pattern"
+      (let [doc (json (req h :get "/api/org_plans" {:headers person}))]
+        (is (some #(and (map? %) (= org-plan/name-pattern (:pattern %)))
+                  (tree-seq coll? seq doc)))))))
+
+(deftest the-slug-of-what-was-typed
+  (is (= "rd-tax-services" (org-plan/slug "r&d-tax-services")))
+  (is (= "acme-landscaping" (org-plan/slug "  Acme Landscaping!")))
+  (is (= "a-b" (org-plan/slug "a//b"))))
