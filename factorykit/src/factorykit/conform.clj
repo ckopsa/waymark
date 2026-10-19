@@ -12,6 +12,10 @@
 
   The classes, in the order they are judged:
 
+  org_name_not_snake_case
+            the org's directory name is snake_case, or live-orgs never
+            boots it (ticket d4750bf9)
+  manifest  org.edn is there, a map, naming the org and its :live
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
             names fills with no hole left
@@ -96,7 +100,7 @@
       (catch Throwable e
         {:findings [(finding :load [org] module
                              (str module " did not load: " (root-message e))
-                             (str "Make src/" org "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
+                             (str "Make src/" (munge org) "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
 
 ;; ── seed ────────────────────────────────────────────────────────────
 
@@ -329,6 +333,16 @@
 
 ;; ── the suite ───────────────────────────────────────────────────────
 
+(defn- name-findings
+  "The org's name, its directory's: snake_case, as live-orgs boots only
+  such an org (waymark10.server.org, docs/orgkit.md § Naming rules), so a
+  wrong one shows before go_live."
+  [org]
+  (when-not (re-matches #"[a-z][a-z0-9_]*" org)
+    [(finding :org_name_not_snake_case [org] org
+              (str "The org's name " org " is not snake_case, so live-orgs skips orgs/" org " and it never boots.")
+              "Rename the org's directory, manifest :name and seed :org to lowercase letters, digits and underscores, starting with a letter, as docs/orgkit.md § Naming rules says.")]))
+
 (defn- manifest-findings
   "The org's manifest, org.edn (ticket 29f8e07a): there, readable, a
   map naming the org and saying whether it is live."
@@ -391,12 +405,13 @@
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its
-  manifest's first; [] when it conforms. The directory's name is the
-  org's name."
+  name's and manifest's first; [] when it conforms. The directory's name
+  is the org's name."
   [org-dir]
   (let [dir (.getCanonicalFile (io/file org-dir))
         org (.getName dir)]
-    (into (vec (manifest-findings dir org)) (judged dir org))))
+    (into (vec (concat (name-findings org) (manifest-findings dir org)))
+          (judged dir org))))
 
 (defn- live?
   "Whether the org at `dir` says :live true in its manifest."
