@@ -910,8 +910,8 @@
     :carry
     {:from #{:allowed_waiting} :to :allowed_waiting
      :input [:map
-             [:head_sha {:x-display {:hidden true}} [:string {:min 7 :max 64}]]
-             [:from_head {:x-display {:hidden true}} [:string {:min 7 :max 64}]]
+             [:head_sha {:x-display {:hidden true}} schema/commit-sha]
+             [:from_head {:x-display {:hidden true}} schema/commit-sha]
              [:compared {:x-display {:hidden true}}
               [:map
                [:base_parent {:optional true} [:maybe [:string {:max 64}]]]
