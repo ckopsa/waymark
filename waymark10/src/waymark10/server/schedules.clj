@@ -2277,6 +2277,22 @@
         ;; a contributor's seat (b7572409) says which links it passed by
         why (when skipped (str " Skipped — " skipped "."))]
     (cond
+      ;; a pull link already holds a fire for this seat nobody took
+      ;; (ticket a25950b4): no second one went out, and the row says
+      ;; which fire waits, one maintenance write
+      (:waiting answer)
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (when-some [row (store/load-row (:storage eng) tx :schedule
+                                          (str (:id schedule-row))
+                                          {:for-update true})]
+            (store/update-data! (:storage eng) tx :schedule (str (:id schedule-row))
+                                (assoc (:data row) :note
+                                       (clip (str "A fire for this seat already waits on pull runner link "
+                                                  runner " for a localfire to take it (fire "
+                                                  (:queued answer) "); no second fire was queued.")))
+                                (:next-flip-at row)))))
+
       runner
       (try-act! eng schedule-row :fired
                 (cond-> {:last_fired_at (str (or (instant-of at) (now eng)))
