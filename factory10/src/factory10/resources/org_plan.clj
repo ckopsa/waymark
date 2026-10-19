@@ -703,6 +703,41 @@
    [:name [:string {:min 1 :max 64}]]
    [:budget_usd_per_week {:optional true} [:maybe [:string {:max 32}]]]])
 
+(def name-pattern
+  "An org's name becomes its directory (`orgs/<name>`), namespace, domain
+  and seed org (ticket d4750bf9), and live-orgs boots only a snake_case
+  one (waymark10.server.org, docs/orgkit.md § Naming rules): lowercase
+  letters, digits and underscores, starting with a letter. A string, so
+  the published schema's `pattern` spells it as written."
+  "^[a-z][a-z0-9_]*$")
+
+(defn snake-name
+  "What `typed` reads as a name: lowercased, `&` dropped, every other run
+  of what is not a letter or a digit one underscore, none at either end,
+  `org_` before a leading digit, at most 64 long. `r&d-tax-services`
+  reads as `rd_tax_services`."
+  [typed]
+  (let [s (-> (str/lower-case (str typed))
+              (str/replace "&" "")
+              (str/replace #"[^a-z0-9]+" "_")
+              (str/replace #"^_+" "")
+              (str/replace #"_+$" ""))
+        s (if (re-find #"^[0-9]" s) (str "org_" s) s)]
+    (str/replace (subs s 0 (min 64 (count s))) #"_+$" "")))
+
+(def ^:private name-schema
+  "The create form's name: the refusal suggests the snake_case of what
+  was typed, so the retry is right the first time. It publishes as ONE
+  string schema, not an allOf, so every form offers it as a box."
+  [:and {:json-schema {:type "string" :minLength 1 :maxLength 64
+                       :pattern name-pattern}}
+   [:string {:min 1 :max 64}]
+   [:re {:error/fn
+         (fn [{:keys [value]} _]
+           (str "should be lowercase letters, digits and underscores, starting with a letter, like "
+                (or (not-empty (snake-name value)) "rd_tax_services")))}
+    name-pattern]])
+
 (def ^:private entry-schema
   "One entry of a hired seat's scope or wake_on: a kind, the doors on it
   and, when the entry narrows, the field it filters by."
@@ -830,8 +865,8 @@
    [:map
     [:name {:x-display
             {:label "The org's name"
-             :help "A short name for the org, as its directory spells it: greenleaf, or acme-landscaping."}}
-     [:string {:min 1 :max 64}]]
+             :help "A short name for the org, as its directory spells it: greenleaf, or acme_landscaping."}}
+     name-schema]
     [:brief {:optional true
              :x-display
              {:widget "prose"
@@ -980,8 +1015,8 @@
    :create-schema
    [:map
     [:name {:x-display {:label "The org's name"
-                        :help "A short name for the org, as its directory spells it: greenleaf, or acme-landscaping."}}
-     [:string {:min 1 :max 64}]]
+                        :help "A short name for the org, as its directory spells it: lowercase letters, digits and underscores, starting with a letter, like rd_tax_services."}}
+     name-schema]
     [:brief {:optional true
              :examples ["A six-person landscaping business. I want the house to run quotes, crew scheduling, invoicing and late payers."]
              :x-display {:widget "prose" :label "The brief"
