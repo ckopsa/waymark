@@ -10,9 +10,12 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
+            [waymark10.server.collections :as coll]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org]
             [waymark10.server.seed :as seed]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.types :as t])
   (:import (clojure.lang ExceptionInfo)
            (java.time Instant)))
 
@@ -146,6 +149,29 @@
                            [:data :due])))]
     (is (= "2026-10-04" (due :later)))
     (is (= "2026-09-29" (due :earlier)))))
+
+(deftest a-relative-date-counts-from-the-day-one-the-clone-was-given
+  ;; ticket bbf1f253: the scene's day_one is the clone's day one, though
+  ;; the clone is stood up days later
+  (let [week (assoc toy :steps
+                    [{:as :ada :kind :chore :ref :first
+                      :create {:title "Day 1" :due [:days 0]}}
+                     {:as :ada :kind :chore :ref :last
+                      :create {:title "Day 7" :due [:days 6]}}])
+        later (Instant/parse "2026-10-23T09:00:00Z")
+        dues (fn [opts]
+               (let [eng (engine)
+                     result (seed/load! eng week (assoc opts :now later))]
+                 (mapv #(str (get-in (dev/row eng :chore (get-in result [:refs % :id]))
+                                     [:data :due]))
+                       [:first :last])))]
+    (testing "with a day one, [:days n] counts from it, not from the boot"
+      (is (= ["2026-10-19" "2026-10-25"] (dues {:day-one "2026-10-19"}))))
+    (testing "without one, from the boot, as before"
+      (is (= ["2026-10-23" "2026-10-29"] (dues {})))
+      (is (= ["2026-10-23" "2026-10-29"] (dues {:day-one ""}))))
+    (testing "one that is not a date refuses the seed"
+      (is (some? (refused #(seed/load! (engine) week {:day-one "next tuesday"})))))))
 
 ;; ── a live seed ─────────────────────────────────────────────────────
 
@@ -305,6 +331,63 @@
            (get-in (dev/row eng :seat (get-in more [:refs :s3 :id])) [:data :charter]))
         "and the gained seat points at it")))
 
+(def ^:private granted
+  "The live seed with a grant step: a step that makes no named row."
+  (update live :steps conj
+          {:grant {:audience [:cast :plan]
+                   :scope [{:kind "chore" :actions ["finish"]}]}
+           :ref :g1}))
+
+(def ^:private pointing
+  "A gained step that points at the grant an earlier load made."
+  {:as :ada :kind :chore :create {:title [:ref :g1]} :ref :c9})
+
+(defn- kept-refs [eng seed-name]
+  (into {} (map (fn [[k v]] [(keyword (name k)) (str v)]))
+        (get-in (dev/row eng :member (str "seed-" seed-name)) [:data :walked_refs])))
+
+(defn- strip-refs!
+  "The marker as an engine seeded before refs were kept holds it."
+  [eng seed-name]
+  (let [st (:storage eng)
+        id (str "seed-" seed-name)]
+    (store/with-tx st
+      (fn [tx]
+        (let [raw (store/load-row st tx :member id {:for-update true})]
+          (store/update-data! st tx :member id (dissoc (:data raw) :walked_refs)
+                              (:next-flip-at raw)))))))
+
+(deftest walking-a-step-records-its-ref
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})]
+    (is (= (get-in once [:refs :g1 :id]) (:g1 (kept-refs eng "live"))))
+    (is (= (get-in once [:refs :c1 :id]) (:c1 (kept-refs eng "live"))))
+    (testing "and a gained step's ref is recorded as it is walked"
+      (let [more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+        (is (= (get-in more [:refs :c9 :id]) (:c9 (kept-refs eng "live"))))))))
+
+(deftest a-gained-step-may-point-at-a-grant-an-earlier-load-made
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng granted {:params params})
+        more (seed/load! eng (update granted :steps conj pointing) {:params params})]
+    (is (= {:members 0 :steps 1} (:added more)))
+    (is (= (get-in once [:refs :g1]) (get-in more [:refs :g1]))
+        "the skipped grant step is bound from the marker")
+    (is (= (get-in once [:refs :g1 :id])
+           (get-in (dev/row eng :chore (get-in more [:refs :c9 :id])) [:data :title]))
+        "and the gained chore points at that same grant")))
+
+(deftest a-gained-step-pointing-at-a-ref-walked-before-refs-were-kept-refuses
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng granted {:params params})
+        _ (strip-refs! eng "live")
+        chores (count (dev/rows eng :chore))
+        e (refused #(seed/load! eng (update granted :steps conj pointing) {:params params}))]
+    (is (some? e))
+    (is (re-find #"`:g1`.*walked before the seed's marker kept refs"
+                 (str (ex-message e))))
+    (is (= chores (count (dev/rows eng :chore))) "and nothing was made")))
+
 (deftest a-live-seed-loads-on-an-engine-with-an-idp
   (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
         once (seed/load! eng live {:params params})]
@@ -323,6 +406,157 @@
     (is (some? e))
     (is (re-find #"already has members" (str (ex-message e))))
     (is (= 1 (count (dev/rows eng :chore))) "and nothing was written")))
+
+(defn- org-seed [nm]
+  {:seed nm :version 1 :live-ok true
+   :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+   :steps [{:as :owner :kind :chore :create {:title (str "Open " nm)}}]})
+
+(deftest an-orgs-live-seed-loads-on-a-working-engine
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        members (fn [] (count (dev/rows eng :member)))]
+    (testing "alpha's seed loads with :org beside the house's members"
+      (is (true? (:seeded (seed/load! eng (org-seed "alpha") {:org "alpha"}))))
+      (is (some? (dev/row eng :member "lee"))))
+    (testing "gamma's seed, naming the same owner, loads and reuses that member"
+      (let [before (members)]
+        (is (true? (:seeded (seed/load! eng (org-seed "gamma") {:org "gamma"}))))
+        (is (= (inc before) (members)) "only gamma's marker is new")
+        (is (= 3 (count (dev/rows eng :chore))))))
+    (testing "a plain live seed is still refused"
+      (let [e (refused #(seed/load! eng (org-seed "plain") {}))]
+        (is (re-find #"already has members" (str (ex-message e))))))
+    (testing "gamma's seed under another org's name is refused"
+      (let [e (refused #(seed/load! eng (org-seed "gamma") {:org "alpha"}))]
+        (is (= "org_mismatch" (:reason (ex-data e))))
+        (is (= 3 (count (dev/rows eng :chore))) "and nothing was written")))))
+
+(deftest an-orgs-marker-records-its-org-in-a-field-of-its-own
+  (let [eng (engine {:name "waymark"})
+        nm (apply str (repeat 50 "s"))
+        org-name (apply str (repeat 50 "o"))]
+    (testing "a seed and org whose names come to 100 characters load"
+      (is (true? (:seeded (seed/load! eng (org-seed nm) {:org org-name}))))
+      (let [marker (dev/row eng :member (str "seed-" nm))]
+        (is (= org-name (get-in marker [:data :seed_org])))
+        (is (= (str "Seed `" nm "`") (get-in marker [:data :display])))))
+    (testing "and another org's name is refused by the field"
+      (let [e (refused #(seed/load! eng (org-seed nm) {:org "other"}))]
+        (is (= "org_mismatch" (:reason (ex-data e))))))))
+
+(deftest seed-org-is-written-by-the-engine-alone
+  (let [eng (engine {:name "waymark"})
+        ada (t/principal {:id "ada" :type :human :display "Ada Example"})
+        body {:display "Ada Example" :actor_type "human" :subject "ada"}]
+    (testing ":system's seed load still writes seed_org"
+      (is (true? (:seeded (seed/load! eng (org-seed "sys") {:org "sys"}))))
+      (is (= "sys" (get-in (dev/row eng :member "seed-sys") [:data :seed_org]))))
+    (testing "a hand-written member create carrying seed_org is refused, naming the field"
+      (let [e (refused #(inv/create! eng :member (assoc body :seed_org "sys")
+                                     {:principal ada :id "ada"}))]
+        (is (= :schema-invalid (:waymark10/problem (ex-data e))))
+        (is (contains? (:errors (ex-data e)) :seed_org))
+        (is (nil? (dev/row eng :member "ada")) "and nothing was written")))
+    (testing "the same create without it passes"
+      (is (nil? (refused #(inv/create! eng :member body {:principal ada :id "ada"}))))
+      (is (some? (dev/row eng :member "ada"))))
+    (testing "the member create door's projected input schema does not list seed_org"
+      (let [props (get-in (coll/create-affordance (get (inv/resources eng) :member) nil)
+                          [:input :properties])]
+        (is (contains? props :display))
+        (is (not (contains? props :seed_org)))))))
+
+(deftest an-org-name-longer-than-the-marker-holds-is-refused-before-any-step
+  (let [eng (engine {:name "waymark"})
+        too-long (apply str (repeat 65 "o"))
+        e (refused #(seed/load! eng (org-seed "long") {:org too-long}))]
+    (is (= "org_too_long" (:reason (ex-data e))))
+    (is (re-find #"65 characters" (str (ex-message e))))
+    (is (empty? (dev/rows eng :chore)) "and no step was walked")
+    (is (nil? (dev/row eng :member "seed-long")) "and no marker was written")
+    (testing "a name of exactly 64 characters loads"
+      (let [at-cap (apply str (repeat 64 "o"))]
+        (is (true? (:seeded (seed/load! eng (org-seed "long") {:org at-cap}))))))))
+
+(deftest an-old-marker-with-its-org-in-the-display-is-read-and-rewritten
+  (let [eng (engine {:name "waymark"})
+        st (:storage eng)
+        _ (seed/load! eng (org-seed "old") {:org "old"})
+        _ (store/with-tx st
+            (fn [tx]
+              (let [raw (store/load-row st tx :member "seed-old" {:for-update true})]
+                (store/update-data! st tx :member "seed-old"
+                                    (-> (:data raw)
+                                        (dissoc :seed_org)
+                                        (assoc :display "Seed `old` for org `old`"))
+                                    (:next-flip-at raw)))))]
+    (is (nil? (get-in (dev/row eng :member "seed-old") [:data :seed_org])))
+    (is (false? (:seeded (seed/load! eng (org-seed "old") {:org "old"}))))
+    (is (= "old" (get-in (dev/row eng :member "seed-old") [:data :seed_org]))
+        "the org read from the display is written to the field")
+    (let [e (refused #(seed/load! eng (org-seed "old") {:org "new"}))]
+      (is (= "org_mismatch" (:reason (ex-data e)))))))
+
+(defn- marker-data
+  "The marker's data as the store holds it, the loader's own fields
+  with it."
+  [eng seed-name]
+  (let [st (:storage eng)]
+    (:data (store/with-tx st
+             (fn [tx] (store/load-row st tx :member (str "seed-" seed-name) {}))))))
+
+(deftest an-org-load-that-failed-half-way-resumes
+  (let [eng (engine {:name "waymark"})
+        half {:seed "half" :version 1 :live-ok true
+              :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+              :steps [{:as :owner :kind :chore :create {:title "One"} :ref :c1}
+                      {:as :owner :kind :chore :create {:title "Two"} :ref :c2}
+                      {:as :owner :kind :chore :create {:title [:param :chore]} :ref :c3}
+                      {:as :owner :kind :chore :create {:title "Four"} :ref :c4}]}]
+    (is (some? (refused #(seed/load! eng half {:org "half"})))
+        "the third step names a param the boot does not give")
+    (is (= 2 (count (dev/rows eng :chore))))
+    (is (true? (:loading (marker-data eng "half")))
+        "the marker, written first, still says loading")
+    (let [out (java.io.StringWriter.)
+          again (binding [*out* out]
+                  (seed/load! eng half {:org "half" :params {"chore" "Three"}}))]
+      (is (true? (:seeded again)))
+      (is (true? (:resumed again)))
+      (is (re-find #"resumed half-seeded org half" (str out)))
+      (is (= 4 (count (dev/rows eng :chore))) "the two made before are not made again")
+      (is (= "half" (get-in (dev/row eng :member "seed-half") [:data :seed_org]))))))
+
+(deftest an-org-load-records-each-step-and-resumes-after-the-last-it-walked
+  (let [eng (engine {:name "waymark"})
+        steps [{:as :owner :kind :chore :create {:title "One"} :ref :c1}
+               {:as :owner :kind :chore :on :c1 :action "finish"}
+               {:as :owner :kind :chore :create {:title [:param :chore]} :ref :c3}
+               {:as :owner :kind :chore :create {:title "Four"} :ref :c4}
+               {:as :owner :kind :chore :create {:title "Five"} :ref :c5}]
+        rec {:seed "rec" :version 1 :live-ok true
+             :cast {:owner {:id "lee" :display "Lee Example" :type :human}}
+             :steps steps}
+        key-of #'seed/step-key]
+    (testing "a load that fails at step 3 leaves a marker loading, with steps 1-2 walked"
+      (let [e (refused #(seed/load! eng rec {:org "rec"}))]
+        (is (= 3 (:step (ex-data e)))))
+      (let [data (marker-data eng "rec")]
+        (is (true? (:loading data)))
+        (is (= (set (map key-of (take 2 steps))) (set (:walked_steps data))))))
+    (testing "the next load walks steps 3-5 only and ends loading false"
+      (let [again (binding [*out* (java.io.StringWriter.)]
+                    (seed/load! eng rec {:org "rec" :params {"chore" "Three"}}))
+            c1 (get-in again [:refs :c1 :id])
+            data (marker-data eng "rec")]
+        (is (true? (:resumed again)))
+        (is (= 4 (count (dev/rows eng :chore))))
+        (is (= "done" (name (:state (dev/row eng :chore c1)))))
+        (is (= 1 (count (filter #(= "finish" (name (:action %))) (moves eng :chore c1))))
+            "the action step is not walked twice")
+        (is (false? (:loading data)))
+        (is (= (set (map key-of steps)) (set (:walked_steps data))))))))
 
 (deftest a-live-seed-refuses-a-param-the-boot-does-not-give
   (let [eng (engine {:name "waymark"})
@@ -358,3 +592,63 @@
   (is (= {:repo "acme/garden"} (seed/read-params "{:repo \"acme/garden\"}")))
   (is (= {} (seed/read-params nil)))
   (is (some? (refused #(seed/read-params "[1 2]")))))
+
+(def ^:private pull-step
+  "An unnamed step a later one points at, as the factory seed's `:pull`
+  runner_link is."
+  {:as :ada :kind :chore :create {:title "Pull the weeds"} :ref :pull})
+
+(def ^:private pulled
+  "The seed grown since: a step pointing at `[:ref :pull]`, and one that
+  needs nothing."
+  {:seed "pull" :version 1 :cast (:cast toy)
+   :steps [pull-step
+           {:as :ada :kind :chore :create {:title [:ref :pull]} :ref :link}
+           {:as :ada :kind :chore :create {:title "Rake the leaves"}}]})
+
+(defn- seeded-before-step-ids!
+  "An engine as one seeded before `step-id` holds it: `n` pull chores
+  under random ids, and the `:pull` step's key walked."
+  [eng n]
+  (seed/load! eng {:seed "pull" :version 1 :cast (:cast toy)
+                   :steps (vec (repeat n (dissoc pull-step :ref)))}
+              {})
+  (#'seed/walk-recorded! eng {:seed "pull"} [(#'seed/step-key pull-step)]))
+
+(defn- bound-refs [eng seed-name]
+  (let [st (:storage eng)]
+    (into {} (map (fn [[k v]] [(name k) (str v)]))
+          (get-in (store/with-tx st
+                    (fn [tx] (store/load-row st tx :member (str "seed-" seed-name) {})))
+                  [:data :bound_refs]))))
+
+(deftest a-ref-seeded-before-step-ids-is-bound-by-its-body-once
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 1)
+        pull (str (:id (first (dev/rows eng :chore))))
+        more (seed/load! eng pulled {})]
+    (is (= {:members 0 :steps 2} (:added more)))
+    (is (= pull (get-in more [:refs :pull :id])) "the ref is bound by the body")
+    (is (= pull (get-in (dev/row eng :chore (get-in more [:refs :link :id])) [:data :title]))
+        "and the gained step points at it")
+    (is (= {"pull" pull} (bound-refs eng "pull")) "and the marker keeps the binding")
+    (testing "and the next load reads bound_refs and does not match again"
+      (seed/load! eng {:seed "extra" :version 1
+                       :cast {:bea {:id "bea" :display "Bea Example" :type :human}}
+                       :steps [{:as :bea :kind :chore :create {:title "Pull the weeds"}}]}
+                  {})
+      (let [again (seed/load! eng pulled {})]
+        (is (= {:members 0 :steps 0} (:added again)))
+        (is (= pull (get-in again [:refs :pull :id])))))))
+
+(deftest a-ref-two-rows-match-skips-the-steps-that-need-it
+  (let [eng (engine)
+        _ (seeded-before-step-ids! eng 2)
+        err (java.io.StringWriter.)
+        more (binding [*err* err] (seed/load! eng pulled {}))]
+    (is (= {:members 0 :steps 1} (:added more)) "the rest of the seed still loads")
+    (is (nil? (get-in more [:refs :pull])))
+    (is (nil? (get-in more [:refs :link])) "the step that needs it is skipped")
+    (is (= 3 (count (dev/rows eng :chore))))
+    (is (re-find #"seed `pull` binds no row to `:pull`: 2 rows" (str err)))
+    (is (= {} (bound-refs eng "pull")))))

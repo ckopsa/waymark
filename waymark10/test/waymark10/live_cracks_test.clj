@@ -300,6 +300,60 @@
       (is (= ["closer"] (:seats c)))
       (is (re-find #"\[crack orphan:change:c1\]" (:detail (live/ticket-of c)))))))
 
+;; ── an org's hiring gaps (ticket 6a3fac3e) ─────────────────────────────
+
+(def ^:private clerk-seat
+  (seat "clerk" {:walk "task" :scope [{:kind "task" :actions ["finish"]}]}))
+
+(defn- gaps [seats seat-domains rows]
+  (live/hiring-gaps {:rdefs [task] :seats seats :seat-domains seat-domains
+                     :rows {:task rows} :now now}
+                    #{"acme" "beta"}))
+
+(defn- open-row [id domain seconds]
+  {:id id :state :open :updated-at (ago seconds) :data {:domain domain}})
+
+(deftest an-orgs-hiring-gaps-are-a-door-nobody-holds-or-a-queue-behind
+  (testing "one aged row in a state nobody in the org holds is a no_holder gap"
+    (let [[g :as all] (gaps [] {} [(open-row "t1" "acme" 4000)])]
+      (is (= 1 (count all)))
+      (is (= {:org "acme" :kind "task" :state "open" :reason "no_holder"
+              :row_ids ["t1"] :oldest_since (str (ago 4000))
+              :expected_seconds 3600 :key "acme/task/open"}
+             g))
+      (testing "and a seat that holds it in another domain does not fill it"
+        (is (= ["no_holder"]
+               (map :reason (gaps [clerk-seat] {"clerk" "beta"}
+                                  [(open-row "t1" "acme" 4000)])))))))
+  (testing "three held rows, the oldest at 2.5 expected ages, are a pressure gap"
+    (let [rows [(open-row "t3" "acme" 4000)
+                (open-row "t1" "acme" 9000)
+                (open-row "t2" "acme" 5000)]
+          [g :as all] (gaps [clerk-seat] {"clerk" "acme"} rows)]
+      (is (= 1 (count all)))
+      (is (= "pressure" (:reason g)))
+      (is (= ["t1" "t2" "t3"] (:row_ids g)))
+      (is (= (str (ago 9000)) (:oldest_since g)))))
+  (testing "three held rows, the oldest at 1.5 expected ages, are no gap"
+    (is (= [] (gaps [clerk-seat] {"clerk" "acme"}
+                    [(open-row "t1" "acme" 5400)
+                     (open-row "t2" "acme" 4000)
+                     (open-row "t3" "acme" 4000)]))))
+  (testing "two held rows at five expected ages are no gap"
+    (is (= [] (gaps [clerk-seat] {"clerk" "acme"}
+                    [(open-row "t1" "acme" 18000)
+                     (open-row "t2" "acme" 18000)]))))
+  (testing "the same rows outside the org's domains are never gaps"
+    (is (= [] (gaps [] {} [(open-row "t1" "elsewhere" 4000)])))
+    (is (= [] (gaps [clerk-seat] {"clerk" "elsewhere"}
+                    [(open-row "t1" "elsewhere" 9000)
+                     (open-row "t2" "elsewhere" 9000)
+                     (open-row "t3" "elsewhere" 9000)]))))
+  (testing "keys and order are stable, whatever order the rows come in"
+    (let [rows [(open-row "b1" "beta" 4000) (open-row "a1" "acme" 4000)]]
+      (is (= ["acme/task/open" "beta/task/open"] (map :key (gaps [] {} rows))))
+      (is (= (gaps [] {} rows) (gaps [] {} (reverse rows)))))))
+
 ;; ── the pass against an engine (ticket 4ff29b4a) ──────────────────────
 ;;
 ;; `pass!` over a memory engine: the wake goes out with the crack's key
@@ -440,14 +494,72 @@
       (is (re-find #"Seat tried: holder, which would not be woken"
                    (str (get-in (first filed) [:data :detail])))))))
 
+(defn- at-clock
+  "The engine at `seconds` past `t0`."
+  [eng ^Instant t0 seconds]
+  (assoc eng :now-fn (constantly (.plusMillis t0 (long (* 1000 seconds))))))
+
 (deftest an-open-sitting-holds-the-wake-for-a-later-pass
+  ;; the open ticket's expected age is one second, so 2.5 seconds after
+  ;; its write the row is aged and still under `held-ages` of them
   (let [eng (pass-engine)
         seat-id (holder! eng true)
         _ (sitting! eng seat-id)
+        t0 (Instant/now)
         row-id (aged-ticket! eng)
-        eng (later eng)]
+        eng (at-clock eng t0 2.5)]
     (live/pass! eng)
     (testing "a seat of one slot with a sitting open is not fired a second run"
       (is (empty? (fires-of eng seat-id))))
     (testing "and the crack waits rather than reaching the mayor"
       (is (empty? (filed-for eng row-id))))))
+
+(deftest a-wake-held-past-three-expected-ages-reaches-the-mayor-naming-the-hold
+  (let [eng (pass-engine)
+        seat-id (holder! eng true)
+        sitting-id (str (get-in (sitting! eng seat-id) [:row :id]))
+        row-id (aged-ticket! eng)
+        eng (later eng)]
+    (live/pass! eng)
+    (testing "the held seat is still not fired"
+      (is (empty? (fires-of eng seat-id))))
+    (testing "the draft is filed, naming the seat, the hold and the sitting"
+      (let [filed (filed-for eng row-id)
+            detail (str (get-in (first filed) [:data :detail]))]
+        (is (= 1 (count filed)))
+        (is (re-find #"Seat tried: holder, whose wake was held as damped" detail))
+        (is (str/includes? detail (str "by an open sitting, " sitting-id)))
+        (is (re-find #"open \d+ seconds" detail))))
+    (testing "a second pass does not file it again"
+      (live/pass! eng)
+      (is (= 1 (count (filed-for eng row-id))))
+      (is (empty? (fires-of eng seat-id))))))
+
+(deftest a-pull-link-away-a-day-with-a-fire-due-is-filed-once
+  (let [link (fn [seen]
+               {:id "link-1" :state :live :created-at (ago 999999)
+                :data (cond-> {:delivery "pull" :provider "localfire" :owner "sam"}
+                        seen (assoc :puller_seen_at (str seen)))})
+        due {:id "sched-1" :state :live :data {:retry_after (str now)}}
+        idle {:id "sched-2" :state :live :data {}}
+        world (fn [l sched]
+                {:rdefs [] :seats [] :rows {} :links [l]
+                 :pools {"s1" ["link-1"]} :schedules {"s1" sched} :now now})
+        cracks (fn [w] (of (live/find-cracks w) "puller_away"))]
+    (testing "a day away with a fire due is one crack naming the link, its owner and when"
+      (let [[c :as cs] (cracks (world (link (ago 90000)) due))]
+        (is (= 1 (count cs)))
+        (is (= ["runner_link" "link-1"] ((juxt :kind :id) c)))
+        (is (str/includes? (:what c) "sam"))
+        (is (str/includes? (:what c) (str (ago 90000))))))
+    (testing "never connected, the link a day old, is a crack too"
+      (is (= 1 (count (cracks (world (link nil) due))))))
+    (testing "an hour away, or no fire due, is none"
+      (is (empty? (cracks (world (link (ago 3600)) due))))
+      (is (empty? (cracks (world (link (ago 90000)) idle)))))
+    (testing "the same absence is not filed twice"
+      (let [w (world (link (ago 90000)) due)
+            [c] (live/unfiled (live/find-cracks w) [])
+            filed {:id "t" :state :draft :data (live/ticket-of c)}]
+        (is (= "puller_away" (:crack c)))
+        (is (empty? (of (live/unfiled (live/find-cracks w) [filed]) "puller_away")))))))

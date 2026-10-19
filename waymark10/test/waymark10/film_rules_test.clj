@@ -147,7 +147,7 @@
     (fn [tx] (jdbc/execute! tx ["DELETE FROM film_rules"])))
   (engine/start-runtime! *eng*)
   (try
-    (is (= 8 (count film-rules/seed-rules)))
+    (is (= 11 (count film-rules/seed-rules)))
     (doseq [{:keys [name]} film-rules/seed-rules]
       (testing name
         (is (= 1 (count (rows-of {:name name}))))))
@@ -458,11 +458,15 @@
 
 (def ^:private a-good-take
   "a-take on a phone, with the turn held for its words and changing one
-  surface: it passes every seed rule."
+  surface, and two days that tell what happened, one of them asking the
+  person: it passes every seed rule."
   (-> a-take
       (assoc-in [:film :output] "phone")
+      (assoc-in [:shots 0 :caption] "Monday. Acme's study went to review.")
       (update-in [:shots 1] assoc
-                 :caption "The turn" :hold_s 5 :surfaces_changed 1)))
+                 :caption "The turn" :hold_s 5 :surfaces_changed 1)
+      (assoc-in [:shots 2 :caption]
+                "Tuesday. A person was asked to sign off; Acme's study went to done.")))
 
 (def ^:private grey-corner
   "The phone film whose content sits in the top left of a grey frame."
@@ -537,6 +541,67 @@
       (is (= "warn" (:verdict answer)))
       (is (= "miss" (:verdict surface)))
       (is (= {:index 1 :caption "The turn" :value 2} (:worst surface))))))
+
+(def ^:private good-week
+  "Seven day captions that tell a first week: no bare list, two quiet
+  days, and the person asked once."
+  ["Monday. Hedge lead came in, Yard study was drawn, Front hedge was sent."
+   "Tuesday. A quiet day."
+   "Wednesday. Yard study was written."
+   "Thursday. A person was asked to sign off on Yard study."
+   "Friday. Front hedge's invoice was sent."
+   "Saturday. A quiet day."
+   "Sunday. Front hedge's invoice was paid."])
+
+(defn- week-take
+  "A take of the first week: an opening, a shot for each of `days` and a
+  closing, running the arc's roles."
+  ([days] (week-take days true))
+  ([days roles?]
+   (let [role #(when roles? %)]
+     {:film {:output "phone"}
+      :shots (-> [{:role (role "friction")
+                   :caption "Example Landscaping: A six-person landscaping business."}]
+                 (into (map (fn [c] {:role (role "turn") :caption c}) days))
+                 (conj {:role (role "payoff") :goal_state "done"
+                        :caption "That was the week."}))})))
+
+(def ^:private week-rules
+  (filter #(#{"caption-not-list" "quiet-days" "asked-person"} (:name %))
+          film-rules/seed-rules))
+
+(deftest the-first-week-is-judged-from-its-day-captions
+  (let [judged-week #(film-rules/judge week-rules (week-take %))
+        missed #(mapv :name (filter (comp #{"miss"} :verdict) (:rules %)))]
+    (testing "a week whose seven days tell what happened passes all three"
+      (let [answer (judged-week good-week)]
+        (is (= "green" (:verdict answer)))
+        (is (= [] (:unmeasured answer)))
+        (is (= ["pass" "pass" "pass"] (mapv :verdict (:rules answer))))))
+    (testing "a day that is a bare list fails caption-not-list"
+      (let [answer (judged-week (assoc good-week 0 "Monday. Hedge lead, Yard study, Front hedge."))]
+        (is (= "red" (:verdict answer)))
+        (is (= ["caption-not-list"] (missed answer)))
+        (is (== 1 (:value (rule-in answer "caption-not-list"))))))
+    (testing "a third quiet day fails quiet-days"
+      (let [answer (judged-week (assoc good-week 2 "Wednesday. A quiet day."))]
+        (is (= "red" (:verdict answer)))
+        (is (= ["quiet-days"] (missed answer)))
+        (is (== 3 (:value (rule-in answer "quiet-days"))))))
+    (testing "a week that never asks the person fails asked-person"
+      (let [answer (judged-week (assoc good-week 3 "Thursday. Yard study went to review."))]
+        (is (= "red" (:verdict answer)))
+        (is (= ["asked-person"] (missed answer)))
+        (is (== 0 (:value (rule-in answer "asked-person"))))))
+    (testing "a scene whose shots carry no role, as LP7's, is not judged by them"
+      (let [answer (film-rules/judge week-rules
+                                     (week-take ["Monday. Hedge lead, Yard study, Front hedge."] false))]
+        (is (= "green" (:verdict answer)))
+        (is (= ["unscored" "unscored" "unscored"] (mapv :verdict (:rules answer))))))
+    (testing "a take with the roles and no day caption is unmeasured, not passed"
+      (let [answer (film-rules/judge week-rules (week-take []))]
+        (is (= ["asked-person" "caption-not-list" "quiet-days"] (:unmeasured answer)))
+        (is (= ["shot.caption"] (:missing (rule-in answer "asked-person"))))))))
 
 (deftest a-take-is-judged-on-the-frame-under-each-caption
   (let [made (make-rule! {:name "frame-shows-beat" :metric "frame_match_min"

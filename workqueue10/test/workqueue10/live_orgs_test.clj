@@ -1,7 +1,10 @@
 (ns workqueue10.live-orgs-test
-  "WAYMARK10_ORGS_DIR (ticket 29f8e07a): an orgs dir holding two orgs,
-  one whose manifest says live, serves and seeds only that one, and
-  neither is a deps root. No database: the in-memory twin.
+  "WAYMARK10_ORGS_DIR (tickets 29f8e07a, 77ad4315): an orgs dir holding
+  four orgs serves and seeds the two live ones (alpha, gamma) in a
+  domain each, with their seats; leaves beta, not live, alone; and
+  skips omega, whose kind name collides with alpha's, with a crack,
+  while the engine boots. None is a deps root. No database: the
+  in-memory twin.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.live-orgs-test"
   (:require [clojure.java.io :as io]
@@ -14,17 +17,24 @@
             [workqueue10.main :as main]))
 
 (def ^:private fixtures
-  "What WAYMARK10_ORGS_DIR would say: alpha is live, beta is not."
+  "What WAYMARK10_ORGS_DIR would say: alpha, gamma and omega are live,
+  beta is not."
   "fixtures/orgs")
 
 (defn- boot
   "An engine over `storage` as `start!` builds one with FACTORY10_ONLY=1
-  and the live orgs `live`, and their seeds' answers."
+  and the live orgs `live`, the admitted orgs' seeds' answers, and the
+  cracks of the orgs skipped."
   [storage live]
-  (let [eng (engine/engine {:storage storage
-                            :resources (main/with-live-orgs (main/factory-only-resources) live)
+  (let [{:keys [resources orgs cracks]}
+        (main/with-live-orgs (main/factory-only-resources) live)
+        eng (engine/engine {:storage storage
+                            :resources resources
                             :suppress-mirror-refresh true})]
-    [eng (main/live-orgs-on-boot! eng live {:params {}})]))
+    [eng (main/live-orgs-on-boot! eng orgs {:params {}}) cracks]))
+
+(defn- names [eng kind]
+  (set (keep #(get-in % [:data :name]) (dev/rows eng kind))))
 
 (defn- discovered-kinds [eng]
   (let [resp ((engine/handler eng)
@@ -34,6 +44,44 @@
         body (:body resp)]
     (is (= 200 (:status resp)))
     (set (:kinds (wire/read-json (if (string? body) body (slurp body)))))))
+
+(defn- refused-org
+  "An org on disk, `delta`, whose seed the loader refuses: its one
+  domain names no :name."
+  []
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "orgs-" (random-uuid)) "delta")
+        seed (io/file dir "resources" "delta" "seed.edn")]
+    (io/make-parents seed)
+    (spit seed (pr-str {:seed "delta" :version 1 :org "delta"
+                        :domains [{:label "Delta"}]
+                        :cast {:owner {:id "owner" :display "Owner" :type :human}}}))
+    {:org "delta" :dir dir}))
+
+(deftest one-org's-seed-refusal-is-a-crack-not-a-crashed-boot
+  (let [alpha (filterv #(= "alpha" (:org %)) (org/live-orgs (org/orgs-dir fixtures)))
+        {:keys [resources orgs]} (main/with-live-orgs (main/factory-only-resources) alpha)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources resources
+                            :suppress-mirror-refresh true})
+        once (atom nil)
+        out (with-out-str
+              (reset! once (main/live-orgs-on-boot! eng (into [(refused-org)] orgs)
+                                                    {:params {}})))
+        cracks (filter :crack @once)]
+    (testing "the boot goes on: the clean org after it loads"
+      (is (= [true] (mapv :seeded (remove :crack @once))) (pr-str @once))
+      (is (contains? (names eng :domain) "alpha")))
+    (testing "the refused org is skipped with a crack naming it and its sentence"
+      (is (= ["delta"] (mapv :org cracks)))
+      (is (= :org_refused (:crack (first cracks))))
+      (is (re-find #"names no :name" (str (:reason (first cracks)))) (pr-str cracks)))
+    (testing "the skip is logged with the org's name"
+      (is (re-find #"`delta` did not load at boot" out) out))
+    (testing "and a draft ticket says so"
+      (is (some #(re-find #"^org delta did not load at boot: " (str (get-in % [:data :title])))
+                (dev/rows eng :ticket))
+          (pr-str (map #(get-in % [:data :title]) (dev/rows eng :ticket)))))))
 
 (deftest the-orgs-dir-is-the-variable-or-the-image's-orgs
   (is (= (io/file fixtures) (org/orgs-dir fixtures)))
@@ -50,17 +98,29 @@
     (is (false? (org/live? (io/file fixtures "beta")))))
   (let [live (org/live-orgs (org/orgs-dir fixtures))
         st (memory/storage)
-        [eng once] (boot st live)]
-    (is (= ["alpha"] (mapv :org live)))
-    (testing "the live org's kind is served, the other's is not"
+        [eng once cracks] (boot st live)]
+    (is (= ["alpha" "gamma" "omega"] (mapv :org live)))
+    (testing "the live orgs' kinds are served, the not-live one's is not"
       (let [kinds (discovered-kinds eng)]
         (is (contains? kinds "sprocket") (pr-str (sort kinds)))
+        (is (contains? kinds "gear") (pr-str (sort kinds)))
         (is (not (contains? kinds "cog")))))
-    (testing "its seed ran"
-      (is (= [true] (mapv :seeded once)))
-      (is (some #(= "alpha" (get-in % [:data :name])) (dev/rows eng :domain)))
-      (is (= 1 (count (dev/rows eng :sprocket)))))
-    (testing "a second boot skips the seed"
+    (testing "the colliding org is skipped with a crack naming it, and the engine boots"
+      (is (= ["omega"] (mapv :org cracks)))
+      (is (= :org_refused (:crack (first cracks))))
+      (is (re-find #"sprocket" (str (:reason (first cracks)))) (pr-str cracks))
+      (is (not (contains? (names eng :domain) "omega"))))
+    (testing "each admitted org's seed ran, into its own domain, with its seat"
+      (is (= [true true] (mapv :seeded once)))
+      (is (every? (names eng :domain) ["alpha" "gamma"]))
+      (is (every? (names eng :seat) ["alpha-mayor" "gamma-mayor"]))
+      (is (= 1 (count (dev/rows eng :sprocket))))
+      (is (= 1 (count (dev/rows eng :gear)))))
+    (testing "a second boot adds nothing"
       (let [[eng2 twice] (boot st live)]
-        (is (= [false] (mapv :seeded twice)))
-        (is (= 1 (count (dev/rows eng2 :sprocket))) "no second row")))))
+        (is (= [false false] (mapv :seeded twice)))
+        (is (every? #(zero? (get-in % [:added :steps] 0)) twice) (pr-str twice))
+        (is (= 1 (count (dev/rows eng2 :sprocket))) "no second row")
+        (is (= 1 (count (dev/rows eng2 :gear))) "no second row")
+        (is (= 2 (count (filter #{"alpha-mayor" "gamma-mayor"}
+                                (keep #(get-in % [:data :name]) (dev/rows eng2 :seat))))))))))

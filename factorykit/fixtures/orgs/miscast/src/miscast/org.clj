@@ -12,12 +12,15 @@
    :terminal #{:done}
    :summary "{data.title} · {state}"
    :schema [:map [:title [:string {:min 1 :max 80}]]]
+   :decided {:new "A new gizmo waits a day." :started "A started gizmo waits a day."}
    :actions
    {:start  {:from #{:new} :to :started
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "A started gizmo stays started."}}
+                      :one-way "A started gizmo stays started."}
+             :decided "A seat starts a gizmo on its own."}
     :finish {:from #{:started} :to :done
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "A done gizmo stays done."}}}})
+                      :one-way "A done gizmo stays done."}
+             :decided "A seat finishes a gizmo on its own."}}})
 
 (defn resources [] (in-domain :miscast [gizmo]))

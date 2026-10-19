@@ -13,8 +13,8 @@
 
 (def top-level-keys
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
-    :schema :create-schema :fields :shape :upcasts
-    :flow :actions :create-guards :create-action-names :allow-dead :renames
+    :schema :create-schema :create-safety :fields :shape :upcasts
+    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
     :allow-undo
     :derived :computed :one-of :unique :part-scopes
     :filterable :sortable :faceted :worksheet :default-filters :views
@@ -24,13 +24,13 @@
     :on-create :mirror :at-rest-migrate :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
-    :waits :left-by :reached-by :expected-age
+    :waits :left-by :reached-by :expected-age :decided
     :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :engine
-    :out-of-state-says :replay})
+    :out-of-state-says :replay :log-says :decided})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

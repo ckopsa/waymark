@@ -1,7 +1,7 @@
 (ns waymark10.server.live-cracks
   "The live cracks audit (ticket 26e51658, part 2 of epic 400609cf): a
   scheduled pass over ROWS, where `waymark10.server.cracks` reads
-  declarations. It names five ways work has stopped with nobody told:
+  declarations. It names six ways work has stopped with nobody told:
 
   aged          a row whose state has an expected age and that no
                 write has touched for longer
@@ -12,6 +12,9 @@
                 cut short on one guard
   orphan        a change open or submitted whose ticket is done or
                 dropped
+  puller_away   a pull runner link whose localfire has been away a day
+                while a seat on it has a fire due (LP2). No seat can
+                end it, so it goes to the mayor naming the link's owner
 
   Each is filed ONCE, as a draft ticket naming the row, the crack and
   the seats the static audit says can move it (`cracks/movers`). The
@@ -31,7 +34,10 @@
   asks the damper first (`wakes/wake-held`, ticket 4ff29b4a): a seat
   with a run up or just fired, or a throttled Routine, is not woken a
   second time, and the crack waits for a later pass; a broken Routine
-  or a spent week waits on a person, so that crack is the mayor's.
+  or a spent week waits on a person, so that crack is the mayor's. A
+  wake still held once the row has been aged `held-ages` expected ages
+  reaches the mayor all the same, naming the seat tried and the hold
+  (ticket 14b45884): a sitting left open for good holds nothing forever.
 
   The other cracks are routed the same way (ticket 976606f4):
 
@@ -55,7 +61,15 @@
   expected age. That is deliberate: a row may rest in `draft`, `done`
   or `active` for as long as it likes.
 
-  `find-cracks`, `unfiled` and `ticket-of` are pure over a world of
+  AN ORG'S HIRING GAPS (`hiring-gaps`, ticket 6a3fac3e) read the same
+  aged rows, for the rows of an org's domains only, grouped by domain,
+  kind and state. A group is a gap when no fired seat in that domain
+  holds a door out of the state for one of its rows (`no_holder`), or
+  when it has `pressure-rows` aged rows and the oldest has sat
+  `pressure-factor` expected ages (`pressure`): a door nobody holds, or
+  a queue its seats cannot keep up with. They are named, not filed.
+
+  `find-cracks`, `hiring-gaps`, `unfiled` and `ticket-of` are pure over a world of
   rows, so a test judges them with no engine. `pass!` reads that world
   and files; nothing in it re-throws."
   (:require [clojure.string :as str]
@@ -78,6 +92,12 @@
    "submitted" 86400
    "in_review" 86400
    "blocked" 604800})
+
+(def held-ages
+  "How many expected ages, counted from the row's last write, a crack
+  may wait while `wakes/wake-held` holds its seat's wake. Past it the
+  draft goes to the mayor, naming the hold (ticket 14b45884)."
+  3)
 
 (def ^:private default-cadence
   "Seconds a seat that states no cadence may go without a fire while
@@ -254,6 +274,77 @@
       (assoc c :wake {:seat (str (:id seat)) :name (seat-name seat)})
       c)))
 
+(def pressure-rows
+  "An org's state is under pressure from this many aged rows in it."
+  3)
+
+(def pressure-factor
+  "And only when its oldest row has sat this many expected ages there:
+  the queue has stayed behind, not blipped."
+  2)
+
+(def ^:private gap-rows
+  "The most row ids one hiring gap names, oldest first."
+  20)
+
+(defn row-domain
+  "The name of the domain a row is in: its stored `domain`, or what its
+  kind's declaration says an absent one counts as, or nil."
+  [rdef row]
+  (or (some-> (fget (:data row) "domain") text not-empty)
+      (some-> (get-in rdef [:absent-as :domain]) text not-empty)))
+
+(defn hiring-gaps
+  "An org's hiring gaps in a world of rows (the world `find-cracks`
+  reads, plus :seat-domains, seat id → the name of its domain; a seat
+  absent there is in `seats/default-domain`). `org-domains` names the
+  org's domains; a row is the org's when its domain is one of them. The
+  aged rows of each [domain kind state] are a gap when a row of them is
+  held by no fired seat of that domain (`no_holder`), or else when there
+  are `pressure-rows` of them and the oldest has sat `pressure-factor`
+  expected ages (`pressure`). Sorted by `:key`."
+  [{:keys [rdefs seats rows tickets seat-domains now]} org-domains]
+  (let [orgs (into #{} (map text) org-domains)
+        by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
+        by-id (into {} (for [[kind rs] rows, row rs]
+                         [[(text kind) (str (:id row))] row]))
+        domain-of #(or (some-> (get seat-domains (str (:id %))) text not-empty)
+                       seats/default-domain)
+        aged (keep (fn [c]
+                     (let [rdef (get by-kind (keyword (:kind c)))
+                           row (get by-id [(:kind c) (:id c)])
+                           d (when (and rdef row) (row-domain rdef row))]
+                       (when (contains? orgs d)
+                         (assoc c
+                                :org d
+                                :held (seq (holders by-kind
+                                                    (filterv #(= d (domain-of %)) seats)
+                                                    tickets rdef row))))))
+                   (aged-rows rdefs seats rows now))]
+    (->> (group-by (juxt :org :kind :state) aged)
+         (keep (fn [[[org kind state] cs]]
+                 (let [cs (sort-by (juxt #(inst (:since %)) :id) cs)
+                       oldest (inst (:since (first cs)))
+                       expected (:expected_seconds (first cs))
+                       reason (cond
+                                (some (complement :held) cs) "no_holder"
+                                (and (>= (count cs) pressure-rows)
+                                     (not (.isAfter (.plusSeconds oldest
+                                                                  (long (* pressure-factor expected)))
+                                                    ^Instant now)))
+                                "pressure")]
+                   (when reason
+                     {:org org
+                      :kind kind
+                      :state state
+                      :reason reason
+                      :row_ids (into [] (comp (map :id) (take gap-rows)) cs)
+                      :oldest_since (str oldest)
+                      :expected_seconds expected
+                      :key (str org "/" kind "/" state)}))))
+         (sort-by :key)
+         vec)))
+
 (defn silent-seats
   "silent: a fired seat with rows in its walk whose schedule shows no
   fire within its cadence. A seat a person sits in, and one that walks
@@ -373,15 +464,61 @@
             :what (str "It is " state " and the ticket it was born from, " tid
                        ", is " tstate ": nothing will merge or close it.")})))
 
+(def ^:private away-seconds
+  "How long a pull link's localfire may stay away, while a seat on it has
+  a fire due, before the mayor hears of it (LP2)."
+  86400)
+
+(defn- fire-due?
+  "Does this schedule hold a fire that has not gone out: a wake waiting,
+  or a throttle's retry still set?"
+  [sched]
+  (boolean (and sched
+                (or (true? (get-in sched [:data :wake_pending]))
+                    (some? (inst (get-in sched [:data :retry_after])))))))
+
+(defn away-links
+  "puller_away: a live pull link whose localfire was last seen more than
+  `away-seconds` ago — or never, and the link is that old — while a seat
+  whose pool holds it has a fire due. `links` are the live pull links,
+  `pools` seat id → the link ids its fire goes out through
+  (`schedules/pool-of`), `schedules` seat id → its schedule row. The key
+  carries when the link was last seen, so one absence is filed once and
+  the next absence again."
+  [links pools schedules now]
+  (for [link links
+        :let [id (str (:id link))
+              seen (inst (get-in link [:data :puller_seen_at]))
+              from (or seen (inst (:created-at link)))
+              owner (some-> (get-in link [:data :owner]) str not-empty)
+              due (sort (keep (fn [[seat-id ids]]
+                                (when (and (some #{id} (map str ids))
+                                           (fire-due? (get schedules seat-id)))
+                                  seat-id))
+                              pools))]
+        :when (and from (seq due) (past? from away-seconds now))]
+    (crack "puller_away" :runner_link id
+           {:key (str "puller_away:runner_link:" id ":" (if seen (str seen) "never"))
+            :state (text (:state link))
+            :since (some-> seen str)
+            :owner owner
+            :seats [(if owner (str "the link's owner, " owner) "nobody: a house link")]
+            :what (str "The pull link " id " has had no localfire "
+                       (if seen (str "since " seen) "since it was made: it never connected")
+                       ", and a fire is due for the seat(s) " (str/join ", " due)
+                       ". Its owner is " (or owner "nobody (a house link)")
+                       "; the fire waits until a localfire on their machine asks for it.")})))
+
 (defn find-cracks
   "Every live crack in a world of rows, in a stable order. The world:
-  :rdefs, :seats (the ACTIVE seat rows), :rows (kind → rows),
+  :rdefs, :seats (the ACTIVE seat rows), :rows (kind → rows), :links
+  (the live pull runner links), :pools (seat id → its pool's link ids),
   :schedules (seat id → schedule row), :sittings (seat id → closed
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
   tickets), :withheld (seat id → the walk row ids its sit would not
   hand) and :now."
-  [{:keys [rdefs seats rows schedules sittings shelvings tickets withheld now]}]
+  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
@@ -390,7 +527,8 @@
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
                   (map #(to-its-holder by-kind seats rows tickets %)
-                       (orphans (:change by-kind) seats (:change rows) tickets))))))
+                       (orphans (:change by-kind) seats (:change rows) tickets))
+                  (away-links links pools schedules now)))))
 
 (defn- marker
   "The line a crack's ticket ends in, and what a later pass looks for."
@@ -501,6 +639,13 @@
   [eng]
   (let [resources (inv/resources eng)
         seat-rows (rows-in eng :seat {:state :active} {})
+        scheds (if (serves? eng :schedule)
+                 (into {}
+                       (keep (fn [seat]
+                               (when-some [s (schedules/schedule-for-seat eng (:id seat))]
+                                 [(str (:id seat)) s])))
+                       seat-rows)
+                 {})
         whole (into #{:ticket :change}
                     (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
                     seat-rows)
@@ -523,13 +668,16 @@
     {:rdefs (vec (vals resources))
      :seats seat-rows
      :rows rows
-     :schedules (if (serves? eng :schedule)
-                  (into {}
-                        (keep (fn [seat]
-                                (when-some [s (schedules/schedule-for-seat eng (:id seat))]
-                                  [(str (:id seat)) s])))
-                        seat-rows)
-                  {})
+     :schedules scheds
+     :links (into []
+                  (filter #(= "pull" (some-> (get-in % [:data :delivery]) text)))
+                  (rows-in eng :runner_link {:state :live} {}))
+     :pools (into {}
+                  (keep (fn [seat]
+                          (let [s (get scheds (str (:id seat)))]
+                            (when-some [ids (when s (seq (schedules/pool-of eng s seat)))]
+                              [(str (:id seat)) (mapv str ids)]))))
+                  seat-rows)
      :sittings (into {}
                      (map (fn [seat]
                             [(str (:id seat))
@@ -633,10 +781,37 @@
   and a row a run already has. They lift by themselves."
   #{:damped :throttled :spoken_for})
 
+(defn- held-too-long?
+  "Has this crack's row been aged `held-ages` expected ages by `now`?"
+  [c now]
+  (let [since (inst (:since c))
+        age (:expected_seconds c)]
+    (boolean (and since age (past? since (* (long held-ages) (long age)) now)))))
+
+(defn- hold-text
+  "The seat tried and what held its wake, for the draft: the keyword
+  `wakes/wake-held` answered and, when the damper held it, the open
+  sitting and how long it has been open, or the gap after a fire."
+  [eng c held ^Instant now]
+  (let [s (when (= :damped held)
+            (seats/open-sitting-for-seat eng (get-in c [:wake :seat])))
+        opened (some-> s :created-at inst)]
+    (str (get-in c [:wake :name]) ", whose wake was held as " (text held)
+         (cond
+           s (str " by an open sitting, " (:id s)
+                  (when opened
+                    (str ", open " (quot (- (.toEpochMilli now) (.toEpochMilli opened)) 1000)
+                         " seconds")))
+           (= :damped held) " by the gap after its last fire"
+           :else "")
+         ", past " held-ages " expected ages")))
+
 (defn- send!
   "One crack's note, by `route`: a wake for the seat that holds the row,
   or the draft ticket. A wake the damper holds (`waits-for`) sends
-  nothing and waits for a later pass. A seat held otherwise, or whose
+  nothing and waits for a later pass, until the row has been aged
+  `held-ages` expected ages: then the draft names the hold. The marker
+  files it once. A seat held otherwise, or whose
   door refuses the wake, was tried all the same, and the draft says
   so. → true when a note went out."
   [eng c now]
@@ -647,7 +822,9 @@
       :wake (let [held (wakes/wake-held eng (get-in c [:wake :seat])
                                         (wake-text c) now)]
               (cond
-                (contains? waits-for held) nil
+                (contains? waits-for held)
+                (when (held-too-long? c now)
+                  (file! eng (assoc c :tried (hold-text eng c held now)) now))
                 (and (nil? held) (wake! eng c)) true
                 :else (file! eng
                              (assoc c :tried (str (get-in c [:wake :name])

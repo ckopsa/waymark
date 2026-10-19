@@ -12,14 +12,22 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.first-week :as first-week]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [waymark10.server.engine :as engine]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
 
 (def ^:private seed
   (edn/read-string (slurp (io/resource "example/seed.edn"))))
+
+(defn- example-dir
+  "orgs/example, found from its seed at <org-dir>/resources/example/seed.edn."
+  []
+  (.getPath (.getParentFile (.getParentFile (.getParentFile
+                                             (io/file (io/resource "example/seed.edn")))))))
 
 (def ^:private filmed-on
   {:clone_url "https://clone.example.test/example"
@@ -40,8 +48,83 @@
   (t/principal {:id "factory10-source" :type :system
                 :display "factory10-source"}))
 
+(defn- captions
+  "Each day shot's say as [its first part, its `$day` hole]."
+  [shots]
+  (keep (fn [{:keys [say]}]
+          (when-some [h (when (sequential? say) (some #(when (map? %) (get % "$day")) say))]
+            [(first say) h]))
+        shots))
+
+(defn- day-captions
+  "What `captions` answers for days named `weekdays`: each reads since
+  the last day caption."
+  [weekdays]
+  (map (fn [weekday]
+         [(str weekday ". ") {:window "shot" :domain "example"}])
+       weekdays))
+
+(defn- counts
+  "The `$rows` holes of a shot's say."
+  [shot]
+  (keep #(when (map? %) (get % "$rows")) (:say shot)))
+
+(defn- example-kinds []
+  ((requiring-resolve 'example.org/resources)))
+
+(def ^:private three-kind-seed
+  (assoc seed :steps [{:as :owner :kind :prospect :ref :p :create {:title "Hedge lead"}}
+                      {:as :owner :kind :study :ref :s :create {:title "Yard study"}}
+                      {:as :owner :kind :invoice :ref :i :create {:title "Front hedge"}}]))
+
+(def ^:private three-kinds
+  "The fixture's declarations, as far as the closing reads them."
+  [{:kind :prospect :states [:new :engaged :declined] :terminal #{:engaged :declined}}
+   {:kind :study :states [:drafted :delivered :dropped] :terminal #{:delivered :dropped}}
+   {:kind :invoice :states [:sent :paid :written_off] :terminal #{:paid :written_off}}])
+
+(defn- spoken
+  "The closing's say as the performer speaks it, each kind's count in `n`."
+  [closing n]
+  (scenes/fill-say (:say closing) (fn [{:keys [kind]}] (repeat (get n kind 0) "row"))))
+
+(deftest a-three-kind-seed-renders-its-week
+  (let [brief "A six-person landscaping business in Provo. It trims hedges."
+        shots (:shots (:scene (first-week/scene three-kind-seed
+                                                (assoc filmed-on :brief brief :resources three-kinds))))
+        closing (last shots)]
+    (testing "the opening says the business and its brief's first sentence"
+      (is (= "Example Landscaping: A six-person landscaping business in Provo."
+             (:say (first shots)))))
+    (testing "seven day shots, each its weekday and a `$day` hole of the shot's window"
+      (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
+             (captions shots))))
+    (testing "the closing counts each kind's success ends over the week, then the taps"
+      (is (= [["prospect" "engaged" "prospect engaged" "prospects engaged"]
+              ["study" "delivered" "study delivered" "studies delivered"]
+              ["invoice" "paid" "invoice paid" "invoices paid"]
+              ["held_call" nil "tap from you" "taps from you"]]
+             (map (juxt :kind :state :one :many) (counts closing))))
+      (is (every? #(= {:since "2026-10-19" :until "2026-10-26"} (select-keys % [:since :until]))
+                  (counts closing)))
+      (is (str/ends-with? (last (:say closing)) "Merge to make it real.")))
+    (testing "it reads each count by its noun and end, a zero dropping its clause"
+      (is (= "That was the week: 3 prospects engaged, 1 study delivered, 1 invoice paid, 2 taps from you. Merge to make it real."
+             (spoken closing {"prospect" 3 "study" 1 "invoice" 1 "held_call" 2})))
+      (is (= "That was the week: 1 prospect engaged, 2 invoices paid, 1 tap from you. Merge to make it real."
+             (spoken closing {"prospect" 1 "invoice" 2 "held_call" 1})))
+      (is (= "That was the week: 0 taps from you. Merge to make it real."
+             (spoken closing {}))))
+    (testing "a noun's plural"
+      (is (= ["prospects" "studies" "days" "work orders" "glass"]
+             (map first-week/plural ["prospect" "study" "day" "work order" "glass"]))))
+    (testing "the arc film rule still reads friction, turn, payoff in order"
+      (is (= ["friction" "turn" "payoff"] (keep :role shots))))
+    (testing "a brief's first sentence is cut at 140 characters"
+      (is (= 140 (count (first-week/brief-line (apply str (repeat 200 "a")))))))))
+
 (deftest the-template-renders-for-the-example-org
-  (let [{:keys [scene clone]} (first-week/scene seed filmed-on)
+  (let [{:keys [scene clone]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)))
         says (keep :say (:shots scene))]
     (testing "the clone is the one it was given"
       (is (= {:url (:clone_url filmed-on) :head_sha (:head_sha filmed-on)} clone)))
@@ -50,21 +133,15 @@
       (is (= "example" (:seed scene)))
       (is (= ["owner"] (:cast scene)))
       (is (= "The first week of Example Landscaping" (:title scene))))
-    (testing "a caption per day, day 1 on day_one to day 7, with holes for the day's rows"
-      (let [days (filter #(and (sequential? %) (str/starts-with? (first %) "Day ")) says)
-            holes (fn [say] (keep #(get % "$rows") say))]
-        (is (= 7 (count days)))
-        (is (str/starts-with? (first (first days)) "Day 1, 2026-10-19"))
-        (is (str/starts-with? (first (last days)) "Day 7, 2026-10-25"))
-        (is (every? #(str/includes? (apply str (filter string? %)) "Rosa Delgado") days))
-        (testing "each hole reads its own day"
-          (is (every? #(= {:since "2026-10-19" :until "2026-10-20"}
-                          (select-keys % [:since :until]))
-                      (holes (first days))))
-          (is (every? #(= "2026-10-26" (:until %)) (holes (last days)))))
-        (testing "what came in, what the house did, and what it asked"
-          (is (= #{"approval_request" "held_call" (:kind (first (holes (first days))))}
-                 (set (map :kind (holes (first days)))))))))
+    (testing "with no brief, the opening is the business alone"
+      (is (= "Example Landscaping." (first says))))
+    (testing "a caption per day, day 1 on day_one to day 7: its weekday and its `$day`"
+      (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
+             (captions (:shots scene)))))
+    (testing "the closing counts each kind's success ends, no loss, then the taps asked"
+      (is (= [["request" "accepted" "requests accepted"] ["work_order" "done" "work orders done"]
+              ["held_call" nil "taps from you"]]
+             (map (juxt :kind :state :many) (counts (last (:shots scene)))))))
     (testing "the arc runs friction, turn, payoff"
       (is (= ["friction" "turn" "payoff"] (keep :role (:shots scene)))))
     (testing "about 45 seconds"
@@ -76,6 +153,24 @@
             done (inv/invoke! e :scene id :check {}
                               (assoc opts :idempotency-key (str (random-uuid))))]
         (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
+(deftest the-audit-renders-the-example-org's-scene-at-its-head
+  (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
+                                   (:day_one filmed-on))
+        {:keys [scene clone day_one]} (edn/read-string text)]
+    (testing "it names its day one, the day the clone's seed counts [:days 0] from"
+      (is (= (:day_one filmed-on) day_one))
+      (is (some #(and (map? %) (= day_one (:since %)))
+                (tree-seq coll? seq (:shots scene)))))
+    (testing "it is the scene the seed renders, as edn text"
+      (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""
+                                                   :resources (example-kinds))))
+             scene)))
+    (testing "at the head it names, on no clone yet"
+      (is (= {:url "" :head_sha (:head_sha filmed-on)} clone)))
+    (testing "with no hole left and within the plan's field"
+      (is (not (str/includes? text "{{")))
+      (is (<= (count text) 65536)))))
 
 (def ^:private rules
   [{:name "chrome-leaks" :metric "chrome_leaks" :op "=" :threshold 0
@@ -90,7 +185,11 @@
                                          {:name "example"
                                           :brief "A six-person landscaping business."}
                                          {:principal the-owner}))))]
-    (inv/invoke! e :org_plan id :propose {} {:principal the-owner})
+    (walk/proposed! e id the-owner)
+    (inv/invoke! e :org_plan id :hand_in_film
+                 {:film_url "https://films.example.test/example-week.mp4"
+                  :take_report "{}" :head_sha (:head_sha filmed-on)}
+                 {:principal the-owner})
     id))
 
 (def ^:private film

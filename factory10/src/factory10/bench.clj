@@ -527,7 +527,8 @@
   (`gate/path-glob-matches?`), or nil."
   [change policy]
   (let [globs (keep #(some-> % str not-empty) (get-in policy [:data :person_paths]))]
-    (when (seq globs)
+    ;; the owner's go_live yes for this head is a person's (`go-live-yeses!`)
+    (when (and (seq globs) (nil? (::go-live-yes change)))
       (some (fn [path]
               (when (some #(gate/path-glob-matches? % path) globs)
                 (str path)))
@@ -1397,6 +1398,80 @@
                      ", which its head never ran; it was brought up to date,"
                      " once for this head")))))))
 
+;; A CHANGE HELD ONLY FOR BEING BEHIND ITS BASE (ticket 6add57e9). The
+;; line brings only its front forward, and only a change the house
+;; merges stands in a line: one a person merges, one an org_plan not yet
+;; live names, one whose ticket waits on another, would sit green and
+;; behind for good, and its seat may have no round left to move it. So
+;; each submitted change outside the lines whose head the mirror read
+;; green (`green_head`) and behind its base (`behind_base` at
+;; `held_head`) is brought up to date with the rig's `update_branch` —
+;; a merge commit, as a system act that spends no round — once per head,
+;; so at most once per base move. A conflict is not resolved: it is
+;; written on the row as `conflicts` through the ctx's
+;; `:held-conflict!`, and the change stays held.
+
+(defn held-only-behind?
+  "Is this change held only for being behind its base? Its head is the
+  one the mirror read green (`green_head`) and behind (`behind_base` at
+  `held_head`), and it is neither a draft nor conflicted."
+  [change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and head
+          (= head (some-> (get-in change [:data :green_head]) str))
+          (= head (some-> (get-in change [:data :held_head]) str))
+          (true? (get-in change [:data :behind_base]))
+          (not (true? (get-in change [:data :draft])))
+          (not (conflicted-change? change))))))
+
+(defn bring-held-forward!
+  "Bring each of `changes` that is `held-only-behind?` up to date with
+  the rig's `update_branch`, once for its head (`seen` keeps it under
+  `[:updated id]`). A conflict goes to the ctx's `:held-conflict!` as
+  id, conflicts; no answer or a missing power is not remembered, so the
+  next pass asks again. → the number of `update_branch` calls made."
+  [ctx seen changes]
+  (let [conflict! (or (:held-conflict! ctx) (constantly false))
+        asked (volatile! 0)]
+    (doseq [change changes
+            :let [id (str (:id change))
+                  head (str (get-in change [:data :head_sha]))]
+            :when (and (held-only-behind? change)
+                       (not= head (get @seen [:updated id])))]
+      (vswap! asked inc)
+      (let [answer (ask ctx :update_branch (update-args change))
+            why (refused answer)]
+        (cond
+          (nil? answer)
+          (warn! "the update of " id " had no answer; the next pass asks again")
+
+          (contains? missing-power-refusals why)
+          (warn! "the rig has no update_branch yet (" why
+                 "); the next pass asks again")
+
+          :else
+          (do (swap! seen assoc [:updated id] head)
+              (cond
+                (update-conflict? answer)
+                (do (conflict! id (:conflicts (update-red-input change answer)))
+                    (warn! id " at " head " is held behind its base and conflicts"
+                           " with it (" (reason-of answer) "); it stays held"))
+
+                (nothing-forward? answer)
+                (do (swap! seen assoc [:current id] head)
+                    (warn! id " at " head " already holds its base ("
+                           (reason-of answer) ")"))
+
+                why
+                (warn! "the rig refused to update " id " at " head " ("
+                       (reason-of answer) ")")
+
+                :else
+                (warn! id " at " head " was held only behind its base; it was"
+                       " brought up to date, spending no round"))))))
+    @asked))
+
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
@@ -1506,7 +1581,7 @@
 (def line-whys
   "Every word `line_why` may carry."
   ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
-   "person"])
+   "person" "org_plan_waits_go_live"])
 
 (def ^:private reason-chars 500)
 
@@ -2087,6 +2162,115 @@
                  "); the next pass tries again")
           false)))))
 
+;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────
+
+(def ^:private live-change-states
+  "The change states whose pull request is still in play."
+  #{"open" "submitted" "failing" "stuck"})
+
+(defn org-plan-change-id
+  "The id of the change an org_plan names — or, for a plan whose
+  `change` is nil (one minted before the sit wrote it, ticket
+  db8b35bb), of the live change born from `org_plan:<id>`. nil when
+  there is neither."
+  [eng plan]
+  (or (some-> (get-in plan [:data :change]) str not-empty)
+      (when (rdef-of-kind eng :change)
+        (let [st (:storage eng)]
+          (some->> (store/with-tx st
+                     (fn [tx]
+                       (store/query-rows st tx :change
+                                         {:born_from (str "org_plan:" (:id plan))}
+                                         {:limit 20})))
+                   (filter #(contains? live-change-states
+                                       (some-> (:state %) name)))
+                   first
+                   :id
+                   str)))))
+
+(defn- org-plans
+  "Every org_plan in one of `states`, decoded, by the id of the change it
+  names (`org-plan-change-id`) — empty in an engine that declares no
+  org_plan kind."
+  [eng states]
+  (if-some [rd (rdef-of-kind eng :org_plan)]
+    (let [st (:storage eng)]
+      (into {}
+            (keep (fn [raw]
+                    (let [plan (inv/decode-row rd raw)]
+                      (some-> (org-plan-change-id eng plan)
+                              (vector plan)))))
+            (store/with-tx st
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :org_plan {:state %}
+                                                 {:limit 1000}))
+                      states)))))
+    {}))
+
+(defn- going-live-plans
+  "Every going_live org_plan, decoded, by the id of the change it names."
+  [eng]
+  (org-plans eng ["going_live"]))
+
+(def ^:private go-live-wait-states
+  "Every org_plan state whose pull request merges only on the owner's
+  go_live yes (ticket 7aff6a5c): all but live and retired."
+  ["drafting" "proposed" "simulated" "going_live"])
+
+(defn- go-live-waits
+  "The changes whose pull request an org_plan not yet live names, and
+  that carry no go_live yes (`go-live-yeses!`): change id → that plan.
+  Such a change merges only through go_live — the house does not merge
+  it and no person is asked to (ticket 7aff6a5c). Once its plan is live
+  or retired the change is ordinary again."
+  [eng changes]
+  (let [plans (org-plans eng go-live-wait-states)]
+    (into {}
+          (keep (fn [c]
+                  (let [id (str (:id c))]
+                    (when-some [plan (get plans id)]
+                      (when (nil? (::go-live-yes c)) [id plan])))))
+          changes)))
+
+(defn go-live-wait-reason
+  "What a change waiting on its org_plan's go_live says on its row."
+  [plan]
+  (str "org plan " (:id plan) " is " (some-> (:state plan) name)
+       ": only its owner's go_live merges this pull request"))
+
+(defn- go-live-yeses!
+  "The pass's changes, each whose pull request a going_live org_plan
+  names marked with the owner's go_live yes when its head is the plan's
+  `approved_head`, or one the rig's compare_heads says carries from it:
+  that yes is the person's merge yes, so `person-path` keeps nothing of
+  it for a person and the house merges it with no second ask. Any other
+  head is not merged: the plan's `head_moved` retires the yes and sends
+  it back to simulated."
+  [eng changes]
+  (let [plans (going-live-plans eng)]
+    (mapv (fn [change]
+            (if-some [plan (get plans (str (:id change)))]
+              (let [approved (some-> (get-in plan [:data :approved_head]) str not-empty)
+                    head (some-> (get-in change [:data :head_sha]) str not-empty)]
+                (if (and approved head
+                         (or (= approved head)
+                             (:carries (held/compared
+                                        eng {:repo (str (get-in change [:data :repository]))
+                                             :base (str (get-in change [:data :base_branch]))
+                                             :approved approved :head head}))))
+                  (assoc change ::go-live-yes approved)
+                  (do (try
+                        (inv/invoke! eng :org_plan (str (:id plan)) :head_moved
+                                     {:head_sha (str head)}
+                                     {:principal mirror/source-principal})
+                        (catch Exception e
+                          (warn! "the moved head of " (:id plan) " did not send it back ("
+                                 (ex-message e) "); the next pass tries again")))
+                      change)))
+              change))
+          changes)))
+
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
@@ -2099,7 +2283,9 @@
   (`review-parked-conflicts!`). A branch the rig says is behind its base is
   brought up to date with `update_branch` only when it is the front of
   its repository's line (`merge-lines`), once per head (`seen` keeps
-  that under `[:updated id]`). `merged` needs nothing here, because the
+  that under `[:updated id]`); a green change held behind outside every
+  line is brought up to date the same way (`bring-held-forward!`, ticket
+  6add57e9). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks; a refusal that says the pull request is not
@@ -2113,21 +2299,28 @@
   deployed (`deploy-held`) is offered nothing. With `repos`, a set of
   repository names, the pass works only those repositories: no other
   is offered a merge and no other's marks are written (a woken pass,
-  ticket 26a8d561). Throws nothing.
+  ticket 26a8d561). A change whose pull request a going_live org_plan
+  names merges on the owner's go_live yes (`go-live-yeses!`, ticket
+  c8e131fb); one an org_plan not yet live names is merged by nothing
+  else, and says `org_plan_waits_go_live` (`go-live-waits`, ticket
+  7aff6a5c). Throws nothing.
   → the number of `merge` calls made."
   ([eng seen] (merge-green! eng seen nil))
   ([eng seen repos]
   (let [by-repo (into {} (filter #(in-scope? repos (key %))) (policies-by-repo eng))
         deploy-holds (deploy-held eng by-repo)
-        changes (review-parked-conflicts!
-                 eng seen
-                 (filterv #(in-scope? repos (get-in % [:data :repository]))
-                          (submitted-changes eng)))
+        changes (go-live-yeses!
+                 eng
+                 (review-parked-conflicts!
+                  eng seen
+                  (filterv #(in-scope? repos (get-in % [:data :repository]))
+                           (submitted-changes eng))))
         house? #(some->> (get by-repo (str (get-in % [:data :repository])))
                          (house-merges-change? %))
         holds (merge-holds eng (filter house? changes))
         held (held-changes changes by-repo holds)
-        held-ids (into #{} (map #(str (:id %))) held)
+        waits (go-live-waits eng changes)
+        held-ids (into (set (keys waits)) (map #(str (:id %))) held)
         offered (remove #(held-ids (str (:id %))) changes)
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
@@ -2151,6 +2344,13 @@
                               by-repo)
                         @trains)]
     (try
+      (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)]
+        (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
+                              :held-conflict! (fn [id conflicts]
+                                                (mark-row! eng :change id
+                                                           {:conflicts conflicts} #{}))}
+                             seen
+                             (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (mark-conflicts! eng @answers)
       (doseq [[repo t] @trains]
@@ -2181,7 +2381,14 @@
                                          {:line_why "held"
                                           :line_reason (held-reason
                                                         (get holds (born-ticket c)))}]))
-                                 held))
+                                 held)
+                           ;; only go_live merges an org's pull request
+                           ;; (ticket 7aff6a5c)
+                           (into {}
+                                 (map (fn [[id plan]]
+                                        [id {:line_why "org_plan_waits_go_live"
+                                             :line_reason (go-live-wait-reason plan)}]))
+                                 waits))
                    changes repos)
       (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
@@ -2300,9 +2507,11 @@
                                                {:limit 1000}))))))))
 
 (defn- expire-spent-yeses!
-  "Expire every `allowed_waiting` merge ask whose change has closed or
-  whose head moved from the one the person allowed: the yes was for
-  that head (carrying it over is ticket aa0e9c90's). A change still
+  "Expire every `allowed_waiting` merge ask whose change has closed. One
+  whose head moved from the one the person allowed asks the rig first
+  (`held/carry-or-expire!`, ticket abd12627): a head the house brought
+  up to date from base with the pull request's own diff unchanged keeps
+  the yes, pinned to the new head; any other expires. A change still
   open at that head keeps its yes, green or not."
   [eng asks]
   (doseq [a asks
@@ -2310,13 +2519,20 @@
           :let [change (try (change-of-ask eng a)
                             (catch Exception _ ::unread))]
           :when (not= ::unread change)
-          :when (or (nil? change)
-                    (contains? #{:closed :merged}
-                               (some-> (:state change) name keyword))
+          :let [closed? (or (nil? change)
+                            (contains? #{:closed :merged}
+                                       (some-> (:state change) name keyword)))
+                head (some-> (get-in change [:data :head_sha]) str)]
+          :when (or closed?
                     (not= (str (field-of (get-in a [:data :input]) :head_sha))
-                          (some-> (get-in change [:data :head_sha]) str)))]
+                          head))]
     (try
-      (held/expire! eng a)
+      (if closed?
+        (held/expire! eng a)
+        (held/carry-or-expire! eng a
+                               {:repo (str (get-in change [:data :repository]))
+                                :base (str (get-in change [:data :base_branch]))
+                                :head head}))
       (catch Exception e
         (warn! "the waiting merge " (:id a) " did not expire ("
                (ex-message e) "); the next pass tries again")))))
@@ -2414,9 +2630,13 @@
   tickets 8e809671 and 9f19742e). A person's yes the rig answered
   `waiting` (`allowed_waiting`, ticket 4180a699) is forwarded again,
   with no new ask, by the pass that reads its change green on the same
-  head; one whose change closed or whose head moved is expired. `waiting`
+  head; one whose change closed is expired, and one whose head moved
+  carries over only when the rig says the house brought it up to date
+  from base with its own diff unchanged (ticket abd12627). `waiting`
   is an atom of change id → {:head :since}, or {:head :held true} while
-  a merge hold keeps it. Throws nothing. → the number
+  a merge hold keeps it. No ask is raised for a change an org_plan not
+  yet live names: only the owner's go_live merges it (`go-live-waits`,
+  ticket 7aff6a5c). Throws nothing. → the number
   of asks raised."
   [eng waiting ^Instant now]
   (let [by-repo (policies-by-repo eng)
@@ -2425,6 +2645,9 @@
         person? #(some->> (get by-repo (str (get-in % [:data :repository])))
                           (house-merges-change? %) not)
         holds (merge-holds eng (filter person? changes))
+        ;; the owner's go_live yes is this pull request's ask (M2e,
+        ;; ticket 7aff6a5c)
+        waits (go-live-waits eng changes)
         raised (volatile! 0)
         clean (volatile! {})]
     (doseq [change changes
@@ -2433,6 +2656,7 @@
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
                   policy (get by-repo (str (get-in change [:data :repository])))]
             :when (and number head policy
+                       (not (contains? waits id))
                        (not (house-merges-change? change policy))
                        (not (person-merges-on-github? policy))
                        (= "clean" (str (get-in change [:data :mergeable])))

@@ -94,10 +94,10 @@ Make a long-lived token for the person's Claude account:
     claude setup-token
 
 and keep what it prints as `CLAUDE_CODE_OAUTH_TOKEN`. Find the pull
-link the seed made: `delivery` is not a filterable field of
-`runner_link`, so `waymark_query` kind `runner_link` with no filter,
-and keep the one row whose `delivery` (read with `waymark_get`) is
-`pull`; its id is the link id.
+link the seed made: `waymark_query` kind `runner_link` with
+`fields: ["delivery"]` and no filter (the published engine image may
+predate the `delivery` filter), and keep the one row whose `delivery`
+is `pull`; its id is the link id.
 
 Write `selfhost/localfire.edn` (it holds no secret):
 
@@ -139,6 +139,14 @@ A 401 from the engine means the pull token differs from `.env`. A
 network error naming `engine` means the network name is wrong:
 `docker network ls` shows compose's.
 
+### localfire on another machine
+
+A laptop, or any machine off compose's network, runs localfire with
+one command and no `localfire.edn`: make a pull link for it, export its
+token as `LOCALFIRE_PULL_TOKEN`, and run
+`localfire pull --engine <engine URL> --link <link id>`. The steps and
+the flags are in `localfire/README.md`, "Run it on a laptop (pull)".
+
 ## 5. The repo kit
 
 The factory tests and orients in the person's repository through what
@@ -165,6 +173,12 @@ on `main`.
 When it did not: a red `tests` is the test command, not the factory;
 fix it in their repository. A missing `gh` is fine: open the pull
 request from the URL `git push` prints.
+
+This repository's own selfhost walk, before it reads the fixture
+repository, prints the fixture token's kind (from its prefix), its
+length, whether whitespace surrounded it, and the HTTP status GitHub's
+API answers it for the repository and its README, never the token; a
+status other than 200 there fails the step naming that status.
 
 ## 6. The mayor folder
 

@@ -2,7 +2,8 @@
   "The RP browser flow without a browser: a locally-minted RSA
   keypair as the IdP's signing key (static JWKS), a local http-kit
   stub as its token endpoint, and the wrap composed over a marker
-  handler. No engine, no database.
+  handler — or, for the welcome link's bind, over a memory-backed
+  invited-only engine. No database.
 
   Covered: the login redirect's shape (state, PKCE, the stash
   cookie), the full code→session round trip and the session
@@ -14,8 +15,14 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [org.httpkit.server :as server]
+            [waymark10.fixtures :as fx]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as rp]
+            [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
 
@@ -139,9 +146,10 @@
 (defn- login-then-callback
   "Drive the whole dance: /auth/login for the stash + state, the
   scripted IdP answer, /auth/callback with the stash cookie."
-  [& [{:keys [state-override cookie-override]}]]
+  [& [{:keys [state-override cookie-override login-query]}]]
   (let [a (app)
-        login-resp (a (get-req "/auth/login" {:query "return-to=/api/payouts"}))
+        login-resp (a (get-req "/auth/login"
+                               {:query (or login-query "return-to=/api/payouts")}))
         state (get (loc-params login-resp) "state")
         stash (get (cookie-of login-resp) "waymark_auth")]
     (a (get-req "/auth/callback"
@@ -172,6 +180,127 @@
         (is (= "Alice" (:display p)))))
     (testing "the stash cookie is cleared"
       (is (= "" (get (cookie-of resp) "waymark_auth"))))))
+
+(deftest callback-binds-the-invite-the-login-carried
+  ;; the welcome link's browser path: /auth/login?invite= → IdP →
+  ;; callback hands the token to the gate's bind, as the
+  ;; X-Waymark-Invite header would have
+  (reset! idp-response
+          {:status 200 :headers {"Content-Type" "application/json"}
+           :body (wire/write-json
+                  {:access_token (mint-access {:sub "bea" :name "Bea"})})})
+  (let [saw (atom [])]
+    (with-redefs [members/gate! (fn [_eng principal token]
+                                  (swap! saw conj [(:id principal) token])
+                                  principal)]
+      (testing "the invite rides the stash and binds at the callback"
+        (let [resp (login-then-callback
+                    {:login-query "invite=tok-123&return-to=%2F"})]
+          (is (= 302 (:status resp)))
+          (is (= "/" (location resp)))
+          (is (= [["bea" "tok-123"]] @saw))
+          (is (seq (get (cookie-of resp) "waymark_session")))))
+      (testing "no invite, no bind"
+        (reset! saw [])
+        (is (= 302 (:status (login-then-callback))))
+        (is (= [] @saw))))
+    (testing "a refused bind still mints the session"
+      (with-redefs [members/gate! (fn [& _] (throw (ex-info "spent" {})))]
+        (let [resp (login-then-callback {:login-query "invite=spent"})]
+          (is (= 302 (:status resp)))
+          (is (seq (get (cookie-of resp) "waymark_session"))))))))
+
+;; ── the same bind over a real engine, invited-only ──────────────────
+
+(defn- engine-oidc
+  "The engine's :oidc opts: the test IdP, and the :rp browser flow
+  unless no-rp? says otherwise."
+  [& [no-rp?]]
+  (cond-> {:issuer issuer :audience audience :jwks jwks
+           :roles-claim [:realm_access :roles]}
+    (not no-rp?) (assoc :rp {:client-id "rp-test"
+                             :client-secret "shh"
+                             :app-url "http://app.test"
+                             :session-secret session-secret
+                             :token-endpoint *token-endpoint*})))
+
+(defn- invited-engine
+  "A memory-backed {:members :invited-only} engine with one
+  invitation standing under tok."
+  [oidc-opts tok]
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [fx/meal]
+                            :members :invited-only
+                            :oidc oidc-opts})]
+    (inv/create! eng :member
+                 {:display "Bea" :actor_type "human" :bind_token tok}
+                 {:principal members/registrar :id "bea-row"})
+    eng))
+
+(defn- member-by-subject [eng sub]
+  (first (store/with-tx (:storage eng)
+           (fn [tx] (store/query-rows (:storage eng) tx :member
+                                      {:subject sub} {:limit 2})))))
+
+(defn- sign-in
+  "The browser's whole dance against h: /auth/login?login-query, the
+  IdP answering for sub, /auth/callback with the stash cookie."
+  [h sub login-query]
+  (reset! idp-response
+          {:status 200 :headers {"Content-Type" "application/json"}
+           :body (wire/write-json
+                  {:access_token (mint-access {:sub sub :name sub})})})
+  (let [login-resp (h (get-req "/auth/login" {:query login-query}))
+        state (get (loc-params login-resp) "state")
+        stash (get (cookie-of login-resp) "waymark_auth")]
+    (h (get-req "/auth/callback"
+                {:query (str "code=fake-code&state=" state)
+                 :headers {"cookie" (str "waymark_auth=" stash)}}))))
+
+(defn- session-headers [callback-resp]
+  {"cookie" (str "waymark_session="
+                 (get (cookie-of callback-resp) "waymark_session"))})
+
+(defn- body-of [resp] (wire/read-json (:body resp)))
+
+(deftest welcome-link-binds-an-invited-member-on-a-real-engine
+  (let [tok "tok-bea-4410"
+        eng (invited-engine (engine-oidc) tok)
+        h ((rp/wrap eng) (engine/handler eng))
+        welcome (fn [headers]
+                  (h (get-req "/api/-/welcome"
+                              {:query (str "invite=" tok) :headers headers})))]
+    (testing "while the invitation stands, the welcome doc names the sign-in"
+      (let [resp (welcome {})]
+        (is (= 200 (:status resp)))
+        (is (= (str "/auth/login?invite=" tok "&return-to=/")
+               (get-in (body-of resp) [:sign_in :href])))))
+    (testing "a stranger signing in without the invite meets the gate's 403"
+      (let [resp (sign-in h "stranger" "return-to=%2F")]
+        (is (= 302 (:status resp)))
+        (is (= 403 (:status (h (get-req "/api/.well-known/waymark"
+                                        {:headers (session-headers resp)})))))))
+    (testing "the welcome link's sign-in binds the invited row to the IdP subject"
+      (let [resp (sign-in h "bea-sub" (str "invite=" tok "&return-to=%2F"))
+            row (member-by-subject eng "bea-sub")]
+        (is (= 302 (:status resp)))
+        (is (= "/" (location resp)))
+        (is (= "bea-row" (:id row)))
+        (is (= "active" (some-> (:state row) name)))
+        (testing "and the session's first gated request is admitted"
+          (is (= 200 (:status (h (get-req "/api/.well-known/waymark"
+                                          {:headers (session-headers resp)}))))))
+        (testing "the spent invitation offers no sign-in any more"
+          (is (= 404 (:status (welcome {}))))
+          (let [again (welcome (session-headers resp))]
+            (is (= 200 (:status again)))
+            (is (nil? (:sign_in (body-of again))))))))
+    (testing "an engine without :rp never offers the sign-in"
+      (let [resp ((engine/handler (invited-engine (engine-oidc true) tok))
+                  (get-req "/api/-/welcome" {:query (str "invite=" tok)}))]
+        (is (= 200 (:status resp)))
+        (is (some? (:bind (body-of resp))))
+        (is (nil? (:sign_in (body-of resp))))))))
 
 (deftest callback-refuses-a-state-mismatch
   (reset! idp-response nil)

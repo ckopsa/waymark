@@ -15,13 +15,13 @@
   `finish!` removes an answered fire. `sweep!` removes every fire older
   than its cutoff; the caller records those as missed.
 
-  POLLS. `poll!` records that a localfire asked for a link's fires;
-  `last-poll` reads it. Piece 1b's routes write it.
+  POLLS are not kept here: a poll stamps the link row's
+  `puller_seen_at` (runner-links `seen!`), and `pull-waiting` reads it.
+  The old side table waymark10_pull_polls is dropped on first use.
 
   The tables are ensured on first use per storage, as the MCP session
   table is (mcp_sessions.clj): engine state, not a kind. The in-memory
-  twin keeps none — `last-poll` answers nil there, so a pull link
-  reads waiting, and a fire through one refuses."
+  twin keeps none, so a fire through a pull link refuses there."
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [waymark10.server.at-rest :as at-rest]
@@ -55,9 +55,8 @@
       text text NOT NULL)"
    "CREATE INDEX IF NOT EXISTS ix_wm10_pull_fires_link
       ON waymark10_pull_fires (link_id, created_at, seq)"
-   "CREATE TABLE IF NOT EXISTS waymark10_pull_polls (
-      link_id text PRIMARY KEY,
-      polled_at timestamptz NOT NULL)"])
+   ;; the poll side table, replaced by runner_link's puller_seen_at
+   "DROP TABLE IF EXISTS waymark10_pull_polls"])
 
 (defn postgres?
   "Does this storage keep the tables? The in-memory twin does not."
@@ -164,29 +163,3 @@
             (jdbc/execute! tx ["DELETE FROM waymark10_pull_fires
                                 WHERE created_at < ? RETURNING *" (ts cutoff)]
                            jdbc-opts)))))
-
-(defn poll!
-  "Record that a localfire asked for `link-id`'s fires at `now`."
-  [storage link-id ^Instant now]
-  (store/with-tx storage
-    (fn [tx]
-      (ensure! storage tx)
-      (jdbc/execute! tx ["INSERT INTO waymark10_pull_polls (link_id, polled_at)
-                          VALUES (?, ?)
-                          ON CONFLICT (link_id) DO UPDATE SET polled_at = EXCLUDED.polled_at"
-                         (str link-id) (ts now)])))
-  nil)
-
-(defn last-poll
-  "When a localfire last asked for `link-id`'s fires, or nil — always
-  nil over a storage that keeps no table."
-  ^Instant [storage link-id]
-  (when (postgres? storage)
-    (store/with-tx storage
-      (fn [tx]
-        (ensure! storage tx)
-        (some-> (jdbc/execute-one! tx ["SELECT polled_at FROM waymark10_pull_polls
-                                         WHERE link_id = ?" (str link-id)]
-                                   jdbc-opts)
-                :polled_at
-                instant)))))

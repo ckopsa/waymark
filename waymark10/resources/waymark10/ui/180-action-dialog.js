@@ -975,6 +975,9 @@ async function invokeBare(entry, doc) {
 function maybeUndoToast(name, before, after) {
   toast(`${pretty(name)} ✓`);
   recordUndoable(name, before, after || {});
+  /* a held invite's Allow answers its sign-in link this one time */
+  if (after && typeof after.invite_link === "string" && after.invite_link)
+    inviteLinkDialog(after.invite_link);
 }
 
 function problemBox(p) {

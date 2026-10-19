@@ -42,6 +42,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.ticket :as tk]
             [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
@@ -2409,6 +2410,140 @@
     (is (= 1 (count (calls-of state "bench__merge")))
         "the moved head is not merged under the old yes")))
 
+;; ticket abd12627: a yes carries over to a head the house brought up to
+;; date from base, when the pull request's own diff is unchanged
+(defn- moved-head-world
+  "A waiting merge yes whose change's head then moved to `a-head`, with
+  the rig's compare_heads scripted to answer `compared`."
+  [compared]
+  (let [{:keys [state] :as w} (allowed-waiting-world)]
+    (answer! state "bench__compare_heads" compared)
+    (answer! state "bench__merge" {:state "merged"})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    w))
+
+(deftest a-base-update-with-the-same-own-diff-carries-the-yes
+  (let [{:keys [eng state waiting]}
+        (moved-head-world {:parents [a-commit "b"] :merged_with_base true
+                           :same_own_diff true :carries true})]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [[ask :as asks] (bench/merge-asks eng)]
+      (is (= 1 (count asks)))
+      (is (= :allowed_waiting (:state ask)) "the yes is kept")
+      (is (= a-head (arg (get-in ask [:data :input]) :head_sha)))
+      (is (= a-head (arg (get-in ask [:data :forward]) :head_sha))))
+    (let [args (:arguments (first (calls-of state "bench__compare_heads")))]
+      (is (= a-repository (arg args :repo)))
+      (is (= a-commit (arg args :approved)))
+      (is (= a-head (arg args :head))))
+    (testing "the next pass merges the new head with no new ask"
+      (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 125))))
+      (let [asks (bench/merge-asks eng)]
+        (is (= 1 (count asks)))
+        (is (= :done (:state (first asks)))))
+      (is (= 2 (count (calls-of state "bench__merge"))))
+      (is (= a-head (arg (:arguments (last (calls-of state "bench__merge")))
+                         :head_sha))))))
+
+;; ticket e99ac1f5: the carry is a logged move on the held call
+(defn- carries-of
+  "The `carry` entries the transition log holds for one held call."
+  [eng id]
+  (filterv #(= "carry" (name (:action %)))
+           (store/with-tx (:storage eng)
+             (fn [tx] (store/transitions (:storage eng) tx
+                                         {:kind :held_call :resource-id (str id)}
+                                         {:limit 20})))))
+
+(def ^:private a-carry
+  {:head_sha a-head :from_head a-commit :compared {:carries true}})
+
+(deftest a-carried-yes-is-one-logged-carry-with-both-heads-and-the-compare
+  (let [{:keys [eng waiting]}
+        (moved-head-world {:parents [a-commit "b"] :merged_with_base true
+                           :same_own_diff true :carries true})]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [ask (first (bench/merge-asks eng))
+          [carry :as carries] (carries-of eng (:id ask))
+          inputs (:inputs carry)
+          compared (or (:compared inputs) (get inputs "compared"))]
+      (is (= :allowed_waiting (:state ask)))
+      (is (= 1 (count carries)))
+      (is (= "allowed_waiting" (name (:from-state carry))))
+      (is (= "allowed_waiting" (name (:to-state carry))))
+      (is (= a-head (arg inputs :head_sha)))
+      (is (= a-commit (arg inputs :from_head)))
+      (is (= "true" (arg compared :carries)))
+      (is (= "true" (arg compared :same_own_diff)))
+      (is (= "b" (arg compared :base_parent)))
+      (is (= (str "carried the yes from " (subs a-commit 0 7)
+                  " to " (subs a-head 0 7))
+             (:summary carry))))))
+
+(deftest only-the-engine-walks-carry
+  (let [{:keys [eng]} (allowed-waiting-world)
+        id (str (:id (first (bench/merge-asks eng))))
+        seat (t/principal {:id "a-seat" :type :agent :display "A seat"})]
+    (doseq [who [approver seat]]
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry a-carry
+                                {:principal who}))
+          (str (:id who) " is refused")))
+    (is (empty? (carries-of eng id)))
+    (is (= :allowed_waiting (:state (first (bench/merge-asks eng)))))))
+
+(deftest a-held-call-not-waiting-refuses-carry
+  (let [{:keys [eng]} (clean-world person-policy)
+        waiting (atom {})]
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (let [id (str (:id (first (bench/merge-asks eng))))]
+      (is (= :held (:state (first (bench/merge-asks eng)))))
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry a-carry
+                                {:principal held/engine-actor})))
+      (is (empty? (carries-of eng id))))))
+
+(deftest carry-refuses-a-head-that-is-not-lower-case-hex
+  ;; ticket 9c8711ac: a head is a commit sha, judged at the door
+  (let [{:keys [eng]} (allowed-waiting-world)
+        id (str (:id (first (bench/merge-asks eng))))]
+    (doseq [bad [(str/upper-case a-head) (str (subs a-head 0 39) "g") "head-1b"]
+            k [:head_sha :from_head]]
+      (is (thrown? Exception
+                   (inv/invoke! eng :held_call id :carry (assoc a-carry k bad)
+                                {:principal held/engine-actor}))
+          (str (name k) " " bad)))
+    (is (empty? (carries-of eng id)))
+    (is (= :allowed_waiting (:state (first (bench/merge-asks eng)))))))
+
+(defn- asks-again
+  "A moved head the rig answered `compared` for expires its yes with a
+  reason naming `said`, and a fresh ask follows for the new head."
+  [compared said]
+  (let [{:keys [eng state waiting]} (moved-head-world compared)]
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (let [[ask] (bench/merge-asks eng)]
+      (is (= :expired (:state ask)))
+      (is (str/includes? (str (get-in ask [:data :reason])) said)
+          (str (get-in ask [:data :reason]))))
+    (is (= 1 (count (calls-of state "bench__merge")))
+        "the moved head is not merged under the old yes")
+    ;; long past the wait, however the new head's clock was started
+    (is (= 1 (bench/ask-for-merges! eng waiting
+                                    (Instant/parse "2030-01-01T00:00:00Z")))
+        "a fresh ask")
+    (is (some #(and (= :held (:state %))
+                    (= a-head (arg (get-in % [:data :input]) :head_sha)))
+              (bench/merge-asks eng)))))
+
+(deftest a-moved-head-whose-own-diff-changed-asks-again
+  (asks-again {:merged_with_base true :same_own_diff false :carries false}
+              "own diff changed"))
+
+(deftest a-moved-head-the-rig-refuses-to-compare-asks-again
+  (asks-again {:refused "unknown_commit"} "unknown_commit"))
+
 (deftest a-required-check-missing-on-the-head-raises-no-merge-ask
   (let [{:keys [eng] :as w} (clean-world (assoc person-policy
                                                 :required_checks ["test"]))
@@ -2565,6 +2700,141 @@
     (bench/ask-for-merges! eng waiting t0)
     (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61))))
     (is (empty? (bench/merge-asks eng)))))
+
+;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────────
+
+(def ^:private orgs-policy (assoc house-policy :person_paths ["orgs/**"]))
+
+(def ^:private colton (t/principal {:id "colton" :type :human :display "colton"}))
+
+(defn- going-live-world
+  "A clean submitted change touching orgs/, whose pull request a plan
+  names that the owner took to going_live at `approved`. → w with :plan."
+  [approved]
+  (let [{:keys [eng change state] :as w} (submitted-world orgs-policy)
+        filed (:row (inv/create! eng :org_plan {:name "greenleaf"} {:principal colton}))]
+    (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (assoc w :plan (walk/going-live! eng (:id filed) colton
+                                     {:change (str (:id change)) :head approved}))))
+
+(defn- plan-row [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/load-row (:storage eng) tx :org_plan (str id) {}))))
+
+(deftest a-going-live-plans-pull-request-merges-on-the-owners-yes
+  (let [{:keys [eng state plan]} (going-live-world a-commit)
+        waiting (atom {})]
+    (is (= 1 (bench/merge-green! eng (atom {})))
+        "the owner's go_live is the merge's yes, under person_paths orgs/** too")
+    (let [calls (calls-of state "bench__merge")]
+      (is (= 1 (count calls)))
+      (is (= a-commit (arg (:arguments (first calls)) :head_sha))))
+    (bench/ask-for-merges! eng waiting t0)
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61))))
+    (is (empty? (bench/merge-asks eng)) "no second ask")
+    (is (= "going_live" (name (:state (plan-row eng plan)))))))
+
+(deftest a-head-the-owner-did-not-allow-is-not-merged
+  (let [{:keys [eng state plan] :as w} (going-live-world a-commit)]
+    (answer! state "bench__compare_heads" {:carries false :same_own_diff false})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (empty? (calls-of state "bench__merge")) "the moved head is not merged")
+    (let [row (plan-row eng plan)]
+      (is (= "simulated" (name (:state row))) "the plan goes back to simulated")
+      (is (nil? (get-in row [:data :approved_head])) "and its yes is retired")
+      (is (= ["head_moved"]
+             (mapv #(str (or (:key %) (get % "key"))) (get-in row [:data :findings])))))))
+
+;; ── the onboarding sit names the plan's change (ticket 64f5cb42) ───────
+
+(def ^:private onboarding-scope
+  "The onboarding seat's scope, as factorykit's seat spells it: the plan
+  doors on drafting and simulated plans, submit, and the bench powers
+  on one repository."
+  (into [{:kind "org_plan" :actions ["ask" "propose" "go_live"]
+          :filter {:state "drafting,simulated"}}
+         {:kind "change" :actions ["submit"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo a-repository}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(deftest an-onboarding-sit-names-the-plans-change-once
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        plan (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                          {:principal colton}))))
+        _ (open-seat! eng {:scope onboarding-scope :walk "org_plan"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        minted (some-> (get-in answer [:change :id]) str)]
+    (testing "the sit mints the plan's change and names it on the plan"
+      (is (some? minted) "the sit answers a change beside the plan")
+      (is (= (str "org_plan:" plan)
+             (some-> (get-in answer [:change :data :born_from]) str)))
+      (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str))))
+    (testing "a second sit leaves the plan's change as it was"
+      (let [again (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+        (is (= minted (some-> (get-in again [:change :id]) str)))
+        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))
+        (is (= "drafting" (name (:state (plan-row eng plan)))))))))
+
+;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
+
+(defn- simulated-world
+  "A clean submitted change touching orgs/, whose pull request a plan
+  names that the audit flipped to simulated at the change's head. → w
+  with :plan."
+  []
+  (let [{:keys [eng change state] :as w} (submitted-world orgs-policy)
+        id (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                         {:principal colton}))))
+        as {:principal colton}]
+    (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
+    (answer! state "bench__merge" {:state "merged"})
+    (walk/proposed! eng id colton {:change (str (:id change))})
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/greenleaf.mp4"
+                  :take_report "{}" :head_sha a-commit} as)
+    (inv/invoke! eng :org_plan id :attach_film
+                 {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
+    (walk/flipped! eng id a-commit)
+    (assoc w :plan id)))
+
+(deftest a-simulated-plans-pull-request-waits-on-go-live
+  (let [{:keys [eng state plan] :as w} (simulated-world)
+        waiting (atom {})]
+    (is (= "simulated" (name (:state (plan-row eng plan)))))
+    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (empty? (calls-of state "bench__merge")))
+    (is (= "org_plan_waits_go_live" (get-in (change-row w) [:data :line_why])))
+    (is (str/includes? (str (get-in (change-row w) [:data :line_reason])) plan))
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "past merge_wait_seconds, no ordinary merge ask")
+    (is (empty? (bench/merge-asks eng)))
+    (inv/invoke! eng :org_plan plan :go_live {} {:principal colton})
+    (is (= 1 (bench/merge-green! eng (atom {}))) "go_live's yes merges it")
+    (is (= 1 (count (calls-of state "bench__merge"))))
+    (is (= 0 (bench/ask-for-merges! eng waiting (minutes-after 120))))
+    (is (empty? (bench/merge-asks eng)) "with no second ask")))
+
+(deftest a-live-plans-pull-request-gets-the-ordinary-ask
+  (let [{:keys [eng plan]} (going-live-world a-commit)
+        waiting (atom {})]
+    (inv/invoke! eng :org_plan plan :mark_live {} walk/the-engine)
+    (is (= "live" (name (:state (plan-row eng plan)))))
+    (is (= 0 (bench/ask-for-merges! eng waiting t0)))
+    (is (= 1 (bench/ask-for-merges! eng waiting (minutes-after 61)))
+        "a live org's change is ordinary again")
+    (is (= 1 (count (bench/merge-asks eng))))))
 
 (deftest an-agents-removed-person-path-waits-for-the-person
   (let [eng (fresh-engine (state))
@@ -3307,6 +3577,40 @@
   (call! (:h w) (:sid w) "waymark_invoke"
          {:kind "change" :id (get-in (:answer w) [:change :id])
           :action action :input input}))
+
+;; AN ONBOARDING SEAT WALKS ONLY ITS OWN PLAN (ticket a2d5ee38). One
+;; person owns two drafting plans; beta is the older, so a walk that read
+;; only the state would hand it first, and the sit would mint beta's
+;; change for alpha's seat. The org_plan entry names its org, as
+;; onboarding.edn's does once filled.
+
+(deftest an-onboarding-seat-walks-and-links-only-its-own-orgs-plan
+  (let [eng (fresh-engine (state))
+        _ (a-policy! eng {})
+        filed! (fn [n] (str (:id (:row (inv/create! eng :org_plan {:name n}
+                                                    {:principal person})))))
+        beta (filed! "beta")
+        alpha (filed! "alpha")
+        _ (open-seat! eng {:walk "org_plan"
+                           :scope (into [{:kind "org_plan"
+                                          :actions ["create" "ask" "propose" "go_live" "retire"]
+                                          :filter {:state "drafting,simulated" :name "alpha"}}]
+                                        (rest ticket-scope))})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        change (some-> (get-in answer [:change :id]) str)]
+    (testing "the walk hands alpha's plan and not beta's"
+      (is (= [alpha] (mapv (comp str :id) (get-in answer [:walk :rows]))) (pr-str answer)))
+    (testing "the sit mints alpha's change and links it to alpha alone"
+      (is (some? change) (pr-str answer))
+      (is (= (str "org_plan:" alpha) (get-in answer [:change :data :born_from])))
+      (is (= change (some-> (get-in (plan-row eng alpha) [:data :change]) str)))
+      (is (nil? (get-in (plan-row eng beta) [:data :change]))))))
 
 ;; A PRIORITY TIE IS BROKEN BY ARRIVAL (ticket c944fd8c). An id is
 ;; random, so five tickets at one priority are filed here: by id they
@@ -4116,6 +4420,34 @@
     (is (false? (seats/named-beside-a-live-change? (:eng w) "ticket" ticket-id)))
     (is (empty? (get-in answer [:walk :rows]))
         "the fire names the leftover, and the sit hands nothing")))
+
+(deftest a-sit-woken-by-its-own-failing-change-is-handed-that-ticket-to-fix
+  (let [w (ticket-world)
+        change-id (str (get-in (:answer w) [:change :id]))
+        ticket-id (str (:id (:ticket w)))
+        _ (submitted-and-adopted! w 91)
+        _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
+        ;; the ticket under review while its change is red, as prod's
+        ;; was when a new failing head woke the seat (ticket c91b3af9)
+        _ (force-ticket-state! w :in_review)
+        seat-row (assoc-in (:seat w) [:data :instructions] "Build it.")
+        k (seats/hold-fire-key! (:eng w) seat-row ((:now-fn (:eng w)))
+                                (wire/write-json {:kind "change" :id change-id
+                                                  :action "observe_failing"}))
+        answer (doc-of (call! (:h w) (:sid w) "waymark_sit"
+                              {:key k :seat "bench-seat"}))
+        row (first (get-in answer [:walk :rows]))]
+    (is (= "failing" (name (:state (change-by-id w change-id)))))
+    (is (= ticket-id (:id row)) "the failing change's ticket comes first")
+    (is (= "failing_change" (:why row)))
+    (is (= change-id (:change row)))
+    (is (= 91 (:pr row)))
+    (testing "a failing change whose ticket the seat cannot fix marks nothing"
+      (is (nil? (seats/failing-change-mark
+                 (:eng w)
+                 {:data {:walk "ticket" :name "another-seat"
+                         :scope [{:kind "ticket" :actions ["ungroom"]}]}}
+                 change-id))))))
 
 (deftest the-sweep-closes-leftovers-and-leaves-live-ones
   (let [w (ticket-world)

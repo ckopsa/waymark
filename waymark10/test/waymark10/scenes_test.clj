@@ -7,12 +7,14 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.scenes :as scenes]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (def ^:private chore
   "The row the shots act on: one door with two arguments, one without."
@@ -315,8 +317,222 @@
       (is (= "In came: nothing came in."
              (scenes/fill-say ["In came: " (hole "2026-01-01" "2026-01-02") "."]
                               rows-of))))
+    (testing "a counting hole says how many, of the terminal ones when it asks"
+      (let [counted (assoc-in (hole (.minusSeconds now 3600) (.plusSeconds now 3600))
+                              ["$rows" :count] true)]
+        (is (= "2 in." (scenes/fill-say [counted " in."] rows-of)))
+        (is (= "0 in." (scenes/fill-say [(assoc-in counted ["$rows" :terminal] true) " in."]
+                                        rows-of)))))
+    (testing "a count with one and many words its number; a zero drops its clause"
+      (let [worded (fn [state]
+                     {"$rows" {:kind "chore" :state state :count true
+                               :since (str (.minusSeconds now 3600)) :until (str (.plusSeconds now 3600))
+                               :one (str "chore " state) :many (str "chores " state)}})]
+        (is (= "Week: 2 chores open, the end."
+               (scenes/fill-say ["Week: " (worded "open") ", " (worded "done") ", " "the end."]
+                                rows-of)))
+        (is (= "1 chore open." (scenes/fill-say [(worded "open") "."] (constantly ["a"]))))
+        (is (= "no chores done."
+               (scenes/fill-say [(assoc-in (worded "done") ["$rows" :none] "no chores done") "."]
+                                rows-of)))))
     (testing "a string say is spoken as written"
       (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
+
+(deftest a-moves-hole-is-filled-from-the-log-in-its-window
+  (let [eng (fresh-engine)
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        _ (inv/create! eng :chore {:title "Sweep the porch"} {:principal seat})
+        _ (inv/create! eng :chore {:title "Wash the van"} {:principal mayor})
+        now (java.time.Instant/now)
+        moves (fn [by since until]
+                {"$moves" {:kind "chore" :since (str since) :until (str until) :by by}})
+        said (fn [hole] (scenes/fill-say ["Did: " hole "."] (constantly [])
+                                         #(scenes/moves-in-window eng %)))
+        before (.minusSeconds now 3600)
+        after (.plusSeconds now 3600)]
+    (testing "by seats: the seat's move only, as summary and action"
+      (let [s (said (moves "seats" before after))]
+        (is (str/includes? s "Sweep the porch") s)
+        (is (str/includes? s ": create") s)
+        (is (not (str/includes? s "Wash the van")) s)))
+    (testing "by people: the person's move only"
+      (let [s (said (moves "people" before after))]
+        (is (str/includes? s "Wash the van") s)
+        (is (not (str/includes? s "Sweep the porch")) s)))
+    (testing "none in the window: the plain sentence"
+      (is (= "Did: nothing moved." (said (moves "anyone" "2026-01-01" "2026-01-02")))))))
+
+(defn- org-kind
+  "One of the fixture org's three kinds, all of domain `acme`: a row is
+  sent to review, and finished through a door that cannot be undone."
+  [k]
+  (r/resource
+   {:kind k
+    :plural (str (name k) "s")
+    :domain :acme
+    :states [:open :review :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+     [:domain {:optional true :x-display {:label "Domain"}
+               :not-a-ref "The name of a domain: a word, not a row id."}
+      [:maybe [:string {:max 40}]]]]
+    :actions
+    {:send {:from #{:open} :to :review
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Send" :order 1}}
+     :recall {:from #{:review} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Recall" :order 3}}
+     :finish {:from #{:open :review} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "It is done and stays done."}
+              :display {:label "Finish" :order 2}}}}))
+
+(deftest a-day-hole-says-one-day-of-an-org-in-one-sentence
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        now (java.time.Instant/now)
+        day {"$day" {:since (str (.minusSeconds now 3600))
+                     :until (str (.plusSeconds now 3600)) :domain "acme"}}
+        said (fn [hole] (scenes/fill-say [hole] (constantly []) (constantly [])
+                                         #(scenes/day-in-window eng %)))]
+    (testing "an empty day: a quiet day"
+      (is (= "A quiet day." (said day))))
+    (let [study (:row (inv/create! eng :study {:title "Acme's study" :domain "acme"}
+                                   {:principal mayor}))
+          _ (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"}
+                         {:principal mayor})]
+      (testing "a day of creates only: it names them"
+        (let [s (said day)]
+          (is (str/includes? s "Acme's study was written") s)
+          (is (str/includes? s "Acme's invoice was written") s)
+          (is (str/ends-with? s ".") s)))
+      (inv/invoke! eng :study (str (:id study)) :send {} {:principal seat})
+      (inv/invoke! eng :study (str (:id study)) :finish {} {:principal seat})
+      (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
+                                   :caller "seat:s1" :shown "the study"
+                                   :door {:kind "study" :id (str (:id study))
+                                          :action "finish" :author "seat:s1"}}
+                   {:principal held/engine-actor})
+      (testing "a held call and two moves: the held call first, two clauses at most"
+        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+               (said day))))
+      (testing "a caller who sees the org's kinds whole but not held_call hears no held call"
+        (let [as (fn [sees] (scenes/fill-say-as eng [day] (scenes/take-run) sees))
+              s (as #{:study :invoice :note})]
+          (is (str/starts-with? s "Acme's study went to done") s)
+          (is (not (str/includes? s "A person was asked")) s)
+          (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+                 (as #{:study :invoice :note :held_call})))))
+      (testing "another domain's day is quiet, or says its none"
+        (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
+        (is (= "Nothing." (said (update day "$day" assoc :domain "elsewhere"
+                                        :none "Nothing.")))))
+      (inv/create! eng :approval_request
+                   {:task "read the pantry."
+                    :scope [{:kind "study" :actions ["finish"]}]}
+                   {:principal (t/principal {:id "agent-ari" :type :agent
+                                             :display "agent-ari"})})
+      (testing "an ask from no seat's domain is the factory's, told first"
+        (let [s (said (assoc-in day ["$day" :domain] "factory"))]
+          (is (str/starts-with? s "A person was asked to approve access to read the pantry") s))
+        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+               (said day)))))))
+
+(deftest a-shot-window-day-hole-reads-since-the-last-day-caption
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        run (scenes/take-run)
+        caption {"$day" {:window "shot" :domain "acme"}}
+        said #(scenes/fill-say [caption] (constantly []) (constantly [])
+                               (fn [w] (scenes/day-in-window eng w)) run)
+        pause #(Thread/sleep 5)]
+    (pause)
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the first reads what came before it, since the take began"
+      (let [s (said)]
+        (is (str/includes? s "Acme's study was written") s)))
+    (pause)
+    ;; a meanwhile create between the two captions
+    (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the second reads that create only"
+      (let [s (said)]
+        (is (str/includes? s "Acme's invoice was written") s)
+        (is (not (str/includes? s "Acme's study")) s)))
+    (pause)
+    (testing "an empty window answers its none"
+      (is (= "A quiet day." (said)))
+      (is (= "Nothing." (scenes/fill-say [(assoc-in caption ["$day" :none] "Nothing.")]
+                                         (constantly []) (constantly [])
+                                         (fn [w] (scenes/day-in-window eng w)) run))))))
+
+(defn- say! [h headers body]
+  (let [resp (h {:request-method :post :uri "/api/-/scenes/say"
+                 :headers (merge {"content-type" "application/json"} headers)
+                 :body (wire/write-json body)})]
+    (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+
+(deftest the-say-door-fills-a-say-on-the-wire
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        h (engine/handler eng)
+        as-mayor {"x-waymark-principal" "mayor"}
+        now (java.time.Instant/now)
+        take-a (str "take-a-" (random-uuid))
+        take-b (str "take-b-" (random-uuid))
+        day {"$day" {:window "shot" :domain "acme"}}
+        said (fn [take-name say]
+               (:text (:parsed (say! h as-mayor {:take take-name :say say}))))
+        pause #(Thread/sleep 5)]
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "a `$rows` hole answers the filled text"
+      (let [{:keys [status parsed]}
+            (say! h as-mayor {:take take-b
+                              :say ["In came: "
+                                    {"$rows" {:kind "study"
+                                              :since (str (.minusSeconds now 3600))
+                                              :until (str (.plusSeconds now 3600))}}
+                                    "."]})]
+        (is (= 200 status))
+        (is (str/starts-with? (:text parsed) "In came: Acme's study") (:text parsed))))
+    (testing "a plain string stays as written"
+      (is (= "Hello." (said take-a "Hello."))))
+    (pause)
+    (testing "the take's first `$day` reads since the take began"
+      (is (= "A quiet day." (said take-a [day]))))
+    (pause)
+    (inv/create! eng :invoice {:title "Acme's invoice" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "the second `$day` of the same take names the create between them"
+      (let [s (said take-a [day])]
+        (is (str/includes? s "Acme's invoice was written") s)
+        (is (not (str/includes? s "Acme's study")) s)))
+    (testing "another take keeps its own window"
+      (let [s (said take-b [day])]
+        (is (str/includes? s "Acme's invoice was written") s)))
+    (testing "a say `check` refuses is refused with its reason"
+      (let [{:keys [status]} (say! h as-mayor {:take take-a
+                                               :say [{"$day" {:window "week" :domain "acme"}}]})]
+        (is (= 422 status))))
+    (testing "a call with no take is refused"
+      (is (= 422 (:status (say! h as-mayor {:say "Hello."})))))
+    (testing "an anonymous call is refused"
+      (is (= 404 (:status (say! h {} {:take take-a :say "Hello."})))))))
+
+(deftest a-take-run-is-kept-two-hours
+  (let [k (str "take-" (random-uuid))
+        t0 (java.time.Instant/now)
+        run (scenes/take-run-of k t0)]
+    (is (identical? run (scenes/take-run-of k (.plusSeconds t0 60))))
+    (is (not (identical? run (scenes/take-run-of k (.plusSeconds t0 (* 3 3600))))))))
 
 (deftest a-say-hole-checks
   (let [eng (fresh-engine)]
@@ -333,6 +549,15 @@
       (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
                                          :say [(hole "2026-10-20" "2026-10-19")]})
                          "shot 1: a `$rows` hole's `since` comes before its `until`.")))
+    (testing "a `$moves` hole checks, and its `by` is judged"
+      (let [id (write! eng (assoc-in well-formed [:shots 0 :say]
+                                     ["Did: " {"$moves" {:kind "chore" :since "2026-10-19"
+                                                         :until "2026-10-20"}}]))]
+        (is (nil? (refusal #(walk! eng id :check)))))
+      (is (str/includes? (why-not eng 1 {:open {:collection "chores"}
+                                         :say [{"$moves" {:kind "chore" :since "2026-10-19"
+                                                          :until "2026-10-20" :by "bots"}}]})
+                         "shot 1: `bots` is not whose moves a hole reads")))
     (testing "a say that is neither a string nor a list"
       (is (str/includes? (why-not eng 1 {:open {:collection "chores"} :say {:x 1}})
                          "shot 1: `say` is a string")))))

@@ -114,6 +114,7 @@
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.checks :as checks]
+            [waymark10.confirm :as confirm]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
@@ -413,8 +414,10 @@
   2/3): the seeded cast member's own, marked :acted-by the seat's
   principal, so the log records both hands. Refused 403 unless all
   hold: the engine is a clone, `seat` has acts_as_cast, the member
-  carries the seed loader's cast marker, and it is neither the org's
-  owner nor a manager."
+  carries the seed loader's cast marker, and it is no manager. The
+  org's owner is allowed: only a clone gets this far, a clone is a
+  throwaway copy of seeded rows, and its films are of the owner's week
+  (a live engine refuses every `as`, the owner's included)."
   [eng seat principal as-id]
   (let [member (row-by-id eng :member as-id)
         roles' (set (map str (get-in member [:data :roles])))
@@ -432,8 +435,8 @@
       (not (true? (get-in member [:data :cast])))
       (refuse "that is no member the seed loader made from its cast.")
 
-      (or (org-owner? eng member) (contains? roles' roles/manager))
-      (refuse "that is the org's owner or a manager, whom no seat acts as.")
+      (and (contains? roles' roles/manager) (not (org-owner? eng member)))
+      (refuse "that is a manager, whom no seat acts as.")
 
       :else
       (assoc (t/principal {:id (str (:id member))
@@ -713,7 +716,20 @@
                                            (res/decision r)
                                            (assoc :decision
                                                   {:by (some-> (res/decision r)
-                                                               :by name)}))]))
+                                                               :by name)})
+                                           ;; each extra create door, and
+                                           ;; who holds it: engine, or
+                                           ;; whoever the grant admits
+                                           (seq (:creates r))
+                                           (assoc :creates
+                                                  (mapv (fn [d]
+                                                          {:action (name (:action d))
+                                                           :href (str "/api/" (:plural r)
+                                                                      "/-/" (name (:action d)))
+                                                           :by (if (contains? (:by d) :engine)
+                                                                 "engine"
+                                                                 "grant")})
+                                                        (:creates r))))]))
                                  resources)}
          ;; when the engine ends (engine's :expires-at, a demo clone's
          ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).
@@ -786,7 +802,21 @@
                              ;; its own key before it spends one. Absent
                              ;; when the principal acts for nobody.
                              (not (str/blank? (str (:acts-for principal ""))))
-                             (assoc :acts_for (str (:acts-for principal))))))))))
+                             (assoc :acts_for (str (:acts-for principal)))
+                             ;; the grant this identity WEARS with no
+                             ;; header presented (ticket 152ff81d's
+                             ;; decision 3): a person's standing grant, a
+                             ;; guest's session grant — its id and the
+                             ;; kinds it scopes, so the UI's grant chip
+                             ;; can name it. A presented header is the
+                             ;; UI's own choice, and its chip shows that.
+                             (and (get-in vis [:grant :id])
+                                  (str/blank? (get-in req [:headers "x-waymark-grant"])))
+                             (assoc :worn_grant
+                                    {:id (str (get-in vis [:grant :id]))
+                                     :kinds (->> (keys (inv/resources eng))
+                                                 (filter (:kind? vis))
+                                                 (map name) sort vec)}))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
@@ -911,7 +941,8 @@
                                       :owner owner
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
-                                      :why (:detail d)})
+                                      :why (:detail d)
+                                      :shown (get-in d [:evidence :shown])})
             doc {:held true
                  :held_call (str (:id row))
                  :note held/held-note
@@ -920,13 +951,40 @@
         (json-response 202 doc media-type
                        {"Location" (:self doc)})))))
 
-(defn- create [eng]
+(defn- check-create-confirm!
+  "A create door that declares safety.confirm (:create-safety) refuses
+  until the `waymark-confirm` header carries the consequence sentence
+  its own body fills — the row doors' confirm gate at the birth door,
+  so the HTTP door holds what the MCP create path checks (ticket
+  13e3b323)."
+  [req rdef body]
+  (when (confirm/create-confirm? rdef)
+    (let [sentence (confirm/create-consequence rdef body)
+          aname (name (first (:create-action-names rdef)))]
+      (when (not= sentence (get-in req [:headers "waymark-confirm"]))
+        (throw (p/problem :confirm-required 409 "Confirmation required"
+                          {:detail (str "safety.confirm is true for " aname
+                                        " — send its consequence sentence as the"
+                                        " waymark-confirm header, exactly as written.")
+                           :action aname
+                           :consequence sentence
+                           :acknowledge {:header "waymark-confirm" :value sentence}}))))))
+
+(defn- create
+  "POST /api/{plural}: the kind's ordinary create. With `door`, one of
+  the extra create doors the kind declares under :creates, served at
+  POST /api/{plural}/-/{door} (collection-action): the same algorithm,
+  and the log row names the door."
+  ([eng] (create eng nil))
+  ([eng door]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
-          _ (check-action! req rdef (first (:create-action-names rdef)))
+          aname (or door (first (:create-action-names rdef)))
+          _ (check-action! req rdef aname)
           opts (invoke-opts eng req)
           body (read-body req)
+          _ (check-create-confirm! req rdef body)
           ;; a birth is a committed transition under the leash that
           ;; presented it, and a walking seat's whole output is births
           ;; (R-10.6, R-12.9)
@@ -937,14 +995,15 @@
                     ;; held call minted out here (scheduled/after-write!,
                     ;; docs/spec-scheduled-actions.md R-4.3)
                     (scheduled/after-write!
-                     eng rdef (first (:create-action-names rdef))
+                     eng rdef aname
                      (inv/create! eng (:kind rdef) body
-                                  (select-keys opts [:principal :acknowledged
-                                                     :idempotency-key :dry-run
-                                                     :grant]))))
+                                  (cond-> (select-keys opts [:principal :acknowledged
+                                                             :idempotency-key :dry-run
+                                                             :grant])
+                                    door (assoc :action door)))))
                    (catch clojure.lang.ExceptionInfo e
                      (if-some [resp (held-instead eng opts (:kind rdef)
-                                                  (first (:create-action-names rdef))
+                                                  aname
                                                   nil body e)]
                        {::held resp}
                        (do
@@ -959,7 +1018,7 @@
                            (walks/record-refused!
                             eng (principal-of req) (visibility-of req)
                             {:self (str "/api/" plural)
-                             :action (first (:create-action-names rdef))}
+                             :action aname}
                             e))
                          (throw e)))))]
       (cond
@@ -973,7 +1032,7 @@
         (do (when (true? (:dry-run opts))
               (announce-considering!
                eng req (str "/api/" plural)
-               (name (first (:create-action-names rdef))) result))
+               (name aname) result))
             (dry-run-response result))
 
         (= :idempotency (:replayed? result))
@@ -988,7 +1047,7 @@
         :else
         (let [row (:row result)]
           (envelope-response eng rdef row req 201
-                             {"Location" (str "/api/" plural "/" (:id row))}))))))
+                             {"Location" (str "/api/" plural "/" (:id row))})))))))
 
 (defn- depth-of
   "The GET's depth= parameter: absent/\"full\" → the whole envelope;
@@ -1419,6 +1478,16 @@
         (:valid? result)
         (dry-run-response result)
 
+        ;; HC3 (ticket a052edca): the person's Allow of an agent's
+        ;; invite answers the sign-in link beside the held call, to
+        ;; them alone; it is stored nowhere, so a replay lacks it
+        (:invite-link result)
+        (let [env (render/envelope rdef (:row result) (render-opts eng req))]
+          (json-response 200 (assoc env "invite_link" (:invite-link result))
+                         media-type
+                         {"ETag" (get-in env ["meta" "etag"])
+                          "Cache-Control" "no-store"}))
+
         :else
         (envelope-response eng rdef (:row result) req 200 nil))))))
 
@@ -1788,10 +1857,14 @@
   Own by construction: the audience IS the reader. A seat grant omits
   its scope (the seat's is read fresh at every request), so it answers
   the seat it cites and that seat's scope; any other grant reads as it
-  always did."
-  [eng pid]
+  always did. A person bound by subject holds the grant on their
+  member row (ticket 36fce73d): `aud` is that row's id, read when
+  nothing stands for `pid` itself."
+  [eng pid aud]
   (when (get (inv/resources eng) :grant)
-    (when-some [g (grants/standing-grant-for eng pid)]
+    (when-some [g (or (grants/standing-grant-for eng pid)
+                      (when (and aud (not= (str aud) (str pid)))
+                        (grants/standing-grant-for eng aud)))]
       (let [seat (grants/seat-of-grant eng g)]
         (cond-> {:href (str "/api/grants/" (:id g))
                  :id (:id g)
@@ -1871,7 +1944,7 @@
     (let [pid (:id principal)
           self (home-self eng pid)
           journal (home-journal eng pid)
-          grant (home-grant eng pid)
+          grant (home-grant eng pid (grants/member-audience eng principal))
           letters (home-letters eng pid)
           ;; the greeting counts the WHOLE shelf, not the ten that fit
           ;; in the document — a capped list must not shrink the news
@@ -2104,7 +2177,14 @@
                             "token to send back as a Cookie header on "
                             "every request; one use, the same link. "
                             "Prefer this over the bind header when you "
-                            "hold nothing else.")}))))))
+                            "hold nothing else.")}
+                :sign_in {:href (str "/auth/login?invite=" token
+                                     "&return-to=/")
+                          :method "GET"
+                          :note (str "a person in a browser: sign in "
+                                     "here — the invite rides the sign-in "
+                                     "and binds to the account you sign "
+                                     "in with; one use")}))))))
 
 ;; ── the grant-introspection door (waymark-44h) ──────────────────────
 
@@ -2461,9 +2541,15 @@
     (fn [{{:keys [plural action]} :path-params :as req}]
       (let [rdef (rdef-by-plural eng plural)
             dname (keyword action)]
-        (if (contains? (:collection-doors rdef) dname)
+        (cond
+          (contains? (:collection-doors rdef) dname)
           (collection-door eng req rdef dname)
-          (bulk req))))))
+
+          ;; an extra create door (:creates) births a row here
+          (inv/create-door rdef dname)
+          ((create eng dname) req)
+
+          :else (bulk req))))))
 
 (defn core-static
   "The static routes core answers whatever modules are assembled: the

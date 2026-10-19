@@ -28,6 +28,15 @@ A work order is scheduled, done or cancelled. It starts scheduled, and it ends d
 
 No door here waits for a person's tap: every door opens on its rules alone.
 
+## What you decided
+
+- request, while new: A request may stay new for a day; past that, the office clerk tells Rosa Delgado.
+- request **accept**: The office clerk accepts a request on its own once its detail says what the work is.
+- request **decline**: The office clerk declines work this office does not do on its own, and says why.
+- work order, while scheduled: A work order may stay scheduled for two weeks; past that, the crew lead tells Rosa Delgado.
+- work order **cancel**: The crew lead cancels a work order on its own when the work will not be done, and says why.
+- work order **complete**: The crew lead marks a work order done on its own once the crew has done the work.
+
 ## Doors that ask before they act
 
 No door here asks for a confirmation before it acts.
@@ -36,7 +45,7 @@ No door here asks for a confirmation before it acts.
 
 ### office-clerk
 
-Works through the requests, one at a time. Wakes every hour, and when a request is created.
+Works through the requests, one at a time. Wakes every hour, and when a request is written.
 
 It may:
 - accept or decline a request
@@ -50,7 +59,7 @@ Its charter:
 
 ### crew-lead
 
-Works through the work orders, one at a time. Wakes every hour, and when a work order is created.
+Works through the work orders, one at a time. Wakes every hour, and when a work order is written.
 
 It may:
 - complete or cancel a work order (only where state is scheduled)

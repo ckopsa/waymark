@@ -36,10 +36,6 @@
       1 (first xs)
       (str (str/join ", " (pop xs)) " or " (peek xs)))))
 
-(defn- past [verb]
-  (cond (str/ends-with? verb "e") (str verb "d")
-        :else (str verb "ed")))
-
 (defn- dollars [x]
   (let [^java.math.BigDecimal d (bigdec x)]
     (str "$" (.toPlainString (.setScale d 2 java.math.RoundingMode/HALF_UP)))))
@@ -77,12 +73,36 @@
     (conj (str "  - It cannot be undone" (if-some [w (:one-way safety)] (str ": " w) ".")))))
 
 (defn- doors
-  "Every door of a kind as [door-name guards safety], create first."
+  "Every door of a kind as [door-name guards safety], create first: the
+  ordinary create, then each create door :creates declares."
   [r]
   (concat (for [c (sort (:create-action-names r))]
             [c (:create-guards r) nil])
+          (for [d (:creates r)]
+            [(:action d) (:guards d) nil])
           (for [[aname a] (:actions r)]
             [aname (:guards a) (:safety a)])))
+
+(defn- create-door? [r aname]
+  (contains? (into (set (map name (:create-action-names r)))
+                   (map (comp name :action))
+                   (:creates r))
+             (name aname)))
+
+(defn- move-phrase
+  "How one door moves a row, in the words of the kind's section: 'a new
+  prospect becomes qualified'; a create door is 'a prospect is written'."
+  [r aname]
+  (let [k (words (:kind r))
+        a (some (fn [[n a]] (when (= (name n) (name aname)) a)) (:actions r))
+        from (either (map words (filter (set (:from a)) (:states r))))
+        to (:to a)]
+    (if (create-door? r aname)
+      (str (a-an k) " is written")
+      (str (a-an (if (str/blank? from) k (str from " " k))) " "
+           (cond (not (keyword? to)) "moves on"
+                 (= #{to} (set (:from a))) (str "stays " (words to))
+                 :else (str "becomes " (words to)))))))
 
 (defn- kind-section [r]
   (let [k (words (:kind r))
@@ -90,7 +110,11 @@
         named (fn [xs] (either (map words (filter (set xs) ss))))
         initial (words (:initial r))
         ends (named (:terminal r))
-        create? (set (:create-action-names r))]
+        create? (into (set (:create-action-names r)) (map :action) (:creates r))
+        engine-only? (into #{}
+                           (comp (filter #(contains? (:by %) :engine))
+                                 (map :action))
+                           (:creates r))]
     (concat
      [(str "## " (capital k))
       ""
@@ -99,20 +123,13 @@
       ""]
      (mapcat
       (fn [[aname guards safety]]
-        (let [a (get-in r [:actions aname])
-              from (named (:from a))
-              to (:to a)]
-          (concat
-           [(str "- **" (name aname) "**: "
-                 (if (create? aname)
-                   (str (a-an k) " is written, and it starts " initial ".")
-                   (str (a-an (if (str/blank? from) k (str from " " k))) " "
-                        (cond (not (keyword? to)) "moves on"
-                              (= #{to} (set (:from a))) (str "stays " (words to))
-                              :else (str "becomes " (words to)))
-                        ".")))]
-           (guard-lines guards)
-           (safety-lines safety))))
+        (concat
+         [(str "- **" (name aname) "**: " (move-phrase r aname)
+               (if (create? aname) (str ", and it starts " initial ".") "."))]
+         (when (engine-only? aname)
+           ["  - Only the engine walks it: no person or agent may."])
+         (guard-lines guards)
+         (safety-lines safety)))
       (doors r)))))
 
 (defn- held-section [rs]
@@ -125,6 +142,27 @@
           (if (seq held)
             held
             ["No door here waits for a person's tap: every door opens on its rules alone."]))))
+
+(defn- decided-section
+  "The person's answers to the org audit's questions (ticket e1ed02c7):
+  each :decided sentence, a kind's states first, then its doors."
+  [rs]
+  (let [said (for [r rs
+                   :let [k (words (:kind r))
+                         ds (when (map? (:decided r)) (:decided r))]
+                   line (concat
+                         (for [s (:states r)
+                               :let [d (some (fn [[st d]] (when (= (name s) (name st)) d)) ds)]
+                               :when d]
+                           (str "- " k ", while " (words s) ": " d))
+                         (for [[aname a] (:actions r)
+                               :when (:decided a)]
+                           (str "- " k " **" (name aname) "**: " (:decided a))))]
+               line)]
+    (into ["## What you decided" ""]
+          (if (seq said)
+            said
+            ["Nothing here is written down as decided yet."]))))
 
 (defn- confirm-section [rs]
   (let [asks (for [r rs
@@ -156,7 +194,16 @@
                 (str/join " and " (map (fn [[f v]] (str (words f) " is " v)) filter))
                 ")")))))
 
-(defn- seat-lines [plural seat]
+(defn- wake-phrase
+  "One wake, as the door's own move reads in its kind's section; a kind
+  this org does not declare is named with the door, never a guessed
+  past tense."
+  [kinds kind a]
+  (if-some [r (get kinds (name kind))]
+    (move-phrase r a)
+    (str (a-an (words kind)) " goes through " (words a))))
+
+(defn- seat-lines [plural kinds seat]
   (let [{:keys [walk cadence_seconds rows_per_firing wake_on scope
                 budget_usd_per_week charter]} seat
         wakes (remove nil?
@@ -165,7 +212,7 @@
                          (str "when "
                               (either (for [{:keys [kind actions]} wake_on
                                             a actions]
-                                        (str (a-an (words kind)) " is " (past a))))))])]
+                                        (wake-phrase kinds kind a)))))])]
     (concat
      [(str "### " (:name seat)) ""]
      (when (or walk (seq wakes))
@@ -190,10 +237,11 @@
 
 (defn- seats-section [rs seats]
   (let [plurals (into {} (map (fn [r] [(name (:kind r)) (words (:plural r))])) rs)
-        plural #(get plurals (name %) (str (words %) "s"))]
+        plural #(get plurals (name %) (str (words %) "s"))
+        kinds (into {} (map (fn [r] [(name (:kind r)) r])) rs)]
     (into ["## Seats" ""]
           (if (seq seats)
-            (apply concat (interpose [""] (map #(seat-lines plural %) seats)))
+            (apply concat (interpose [""] (map #(seat-lines plural kinds %) seats)))
             ["No seat works here."]))))
 
 (defn- budget-section [seats]
@@ -221,8 +269,11 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
-(defn- org-resources [org]
-  ((requiring-resolve (symbol (str (str/replace org "_" "-") ".org") "resources"))))
+(defn- org-resources
+  "The org's module is `<org>.org`, its name verbatim, underscores
+  included, as the engine boots it and conform judges it."
+  [org]
+  ((requiring-resolve (symbol (str org ".org") "resources"))))
 
 (defn law-text
   "The org at `org-dir` as the page a person approves: markdown, a
@@ -246,6 +297,7 @@
                           "and which seats work here and what they may spend.")]]
                    (map kind-section rs)
                    [(held-section rs)
+                    (decided-section rs)
                     (confirm-section rs)
                     (seats-section rs seats)
                     (budget-section seats)]))))

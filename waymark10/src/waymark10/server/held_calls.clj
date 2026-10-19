@@ -381,22 +381,91 @@
 (defhandler record-failure [row inp _ctx]
   (assoc-in row [:data :reason] (:reason inp)))
 
+(defhandler record-expiry [row inp _ctx]
+  ;; the engine's sentence on a waiting merge whose moved head did not
+  ;; carry the yes (ticket abd12627); the sweep's expiry writes none
+  (cond-> row
+    (:reason inp) (assoc-in [:data :reason] (:reason inp))))
+
+(defn- field-of [m k]
+  (some-> (or (get m k) (get m (name k))) str not-empty))
+
+(defn- read-row
+  "The row of `kind` and `id` through ctx, or nil. An id that is not a
+  row id is not read: a malformed one must not abort the create's
+  transaction."
+  [ctx kind id]
+  (when (some-> id parse-uuid)
+    ((:read ctx) kind id)))
+
+(defn- seat-domain
+  "The name of the domain a sitter's seat STORES, read through ctx, or
+  nil: a seat that names no domain is the house's here, not
+  seats/default-domain's derived one."
+  [ctx who]
+  (when-some [sid (some-> who str (as-> s (when (str/starts-with? s "seat:")
+                                           (not-empty (subs s 5)))))]
+    (when-some [did (field-of (:data (read-row ctx :seat sid)) :domain)]
+      (field-of (:data (read-row ctx :domain did)) :name))))
+
+(defn held-domain
+  "The domain a held call is the work of (ticket afcce783), read at
+  birth and never from the body: the stored domain of the row its door
+  moves, else the domain of the calling seat (the caller, or the door's
+  author), else nil, the house."
+  [row ctx]
+  (when (:read ctx)
+    (let [d (:data row)
+          door (:door d)
+          kind (field-of door :kind)
+          id (field-of door :id)]
+      (or (when (and kind id)
+            (field-of (:data (read-row ctx (keyword kind) id)) :domain))
+          (seat-domain ctx (:caller d))
+          (seat-domain ctx (field-of door :author))))))
+
+(defn- head-key
+  "The key a stored call map spells `head_sha` with."
+  [m]
+  (if (and (map? m) (contains? m "head_sha")) "head_sha" :head_sha))
+
+(defhandler record-carry [row inp _ctx]
+  ;; a waiting merge's yes pinned to the head the house brought up to
+  ;; date from base (ticket e99ac1f5): the call a person saw, and the
+  ;; one the rig receives
+  (let [pin #(assoc % (head-key %) (:head_sha inp))]
+    (-> row
+        (update-in [:data :input] pin)
+        (update-in [:data :forward] pin))))
+
+(defn- short-sha [s]
+  (let [s (str s)] (subs s 0 (min 7 (count s)))))
+
+(defn- carry-says
+  "The carry's line in the held call's history."
+  [_row inp]
+  (str "carried the yes from " (short-sha (:from_head inp))
+       " to " (short-sha (:head_sha inp))))
+
 (defn- born
   "The birth stamps: the leash the caller never chose, and the person
   the call waits on. `expires_at` is written AT CREATE, so the person
   who reads the row reads the moment it will actually stop waiting.
   `waits_on` is the member the `owner` names, or the one the `caller`
   is or acts for (grants/waits-on), so a notice_rule can address it.
-  It is read from the member rows, never from the body."
+  It is read from the member rows, never from the body. `domain` is
+  `held-domain`'s, so an org reads its held calls by that field."
   [row ctx]
   (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
                 (get-in row [:data :caller]))
-        m (grants/waits-on ctx who)]
+        m (grants/waits-on ctx who)
+        dom (held-domain row ctx)]
     (-> row
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
-        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on))))))
+        (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on)))
+        (update :data #(if dom (assoc % :domain dom) (dissoc % :domain))))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -613,6 +682,17 @@
                 :x-display {:label "Tells"
                             :help "The member this call waits on: the person the calling seat or delegate acts for, or the caller themselves. The engine stamps it at birth, and a notice rule tells them."}}
      [:maybe :waymark/ref]]
+    ;; THE ORG WHOSE WORK THIS IS (ticket afcce783): `born` stamps it,
+    ;; and no input names it. Engine-written but unfenced: the
+    ;; `:engine-written` mark (9e0a105b) has not landed. Not a
+    ;; `:maybe`, so it promotes the column the filter walks; a row
+    ;; held before it, or in the house, stores none.
+    [:domain {:optional true
+              :not-a-ref "The name of a domain: a word, not a row id."
+              :x-display {:raw true
+                          :label "Domain"
+                          :help "The name of the domain this call is the work of: the domain of the row its door moves, else of the seat that called. The engine stamps it at birth; a call of the house names none."}}
+     [:string {:min 1 :max 64}]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -737,7 +817,8 @@
    :filterable {:state #{:eq :in}
                 :caller #{:eq}
                 :tool #{:eq}
-                :answered_via #{:eq}}
+                :answered_via #{:eq}
+                :domain #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
@@ -812,10 +893,39 @@
      :display {:label "Failed"}}
     :expire
     {:from #{:held :allowed :allowed_waiting} :to :expired
+     :input [:map
+             [:reason {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 240}]]]]
      :guards [the-engine-finishes-it]
+     :handler record-expiry
+     :edit {:fence false
+            :unfenced-reason "The engine's own expiry of a call whose moment passed. No read preceded it to fence against."}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Nothing runs late: an expired call never goes out, and making it again is a new call."}
-     :display {:label "Expired"}}}
+     :display {:label "Expired"}}
+    ;; a waiting merge's yes carried to a head the house brought up to
+    ;; date from base (ticket e99ac1f5): its own logged move, so the
+    ;; person reads in the history that their yes now covers another
+    ;; head, from which, and what the rig compared
+    :carry
+    {:from #{:allowed_waiting} :to :allowed_waiting
+     :input [:map
+             [:head_sha {:x-display {:hidden true}} schema/commit-sha]
+             [:from_head {:x-display {:hidden true}} schema/commit-sha]
+             [:compared {:x-display {:hidden true}}
+              [:map
+               [:base_parent {:optional true} [:maybe [:string {:max 64}]]]
+               [:same_own_diff {:optional true} [:maybe :boolean]]
+               [:carries :boolean]]]]
+     :guards [the-engine-finishes-it]
+     :handler record-carry
+     :record true
+     :log-says carry-says
+     :edit {:fence false
+            :unfenced-reason "The engine's own re-pin of a yes the rig said carries over. No read preceded it to fence against."}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The person's yes now covers the new head; a head that moves again is compared again."}
+     :display {:label "Carried"}}}
    :scenarios [the-caller-does-not-allow-its-own-call
                an-approver-allows-the-call
                a-person-without-the-role-does-not-decide
@@ -908,7 +1018,7 @@
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner author why if-match]}]
+  [eng {:keys [kind action id body caller owner author why if-match] said :shown}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
@@ -932,9 +1042,12 @@
                   (not-empty (patch/changes (:data now)
                                             (patch/resolve-input edit (:data now) body)
                                             named)))
-        shown (str action " " kind (when what (str " " what))
-                   (when changes
-                     (str " · " (str/join ", " (map name (keys changes))))))
+        ;; a hold guard may say what the call is, as its evidence's
+        ;; `shown` (org_plan's hire offer, M4b)
+        shown (or (some-> said str not-empty)
+                  (str action " " kind (when what (str " " what))
+                       (when changes
+                         (str " · " (str/join ", " (map name (keys changes)))))))
         kept (kept-why (or (some-> why str not-empty)
                            "Held for the person's tap."))]
     (:row (inv/create!
@@ -978,12 +1091,34 @@
   (invoke/actor-map). The correction count reads that mark: a write a
   person allowed is that person's word, never the seat's own."
   [row]
-  (let [caller (str (get-in row [:data :caller]))]
-    (cond-> (t/principal {:id caller :type :agent :display caller})
-      (some-> (get-in row [:data :owner]) str not-empty)
-      (assoc :acts-for (str (get-in row [:data :owner])))
-      (some-> (get-in row [:data :decided_by]) str not-empty)
-      (assoc :allowed-by (str (get-in row [:data :decided_by]))))))
+  (let [caller (str (get-in row [:data :caller]))
+        owner (some-> (get-in row [:data :owner]) str not-empty)
+        {:keys [kind action id]} (get-in row [:data :door])]
+    (if (and owner
+             (or (and (#{"grant" "member"} (str kind)) (nil? (some-> id str not-empty)))
+                 ;; HC2 (ticket bed1f2f6): an agent's member suspend or
+                 ;; reinstate is the person's own, the same way
+                 (and (= "member" (str kind)) (some-> id str not-empty)
+                      (contains? #{"suspend" "reinstate"} (str action)))))
+      ;; HC1 (ticket b83e690d): an agent's grant create past its leash
+      ;; is the person's own create. The hand is the person's, so the
+      ;; guards judge it as they judge that person's direct create, and
+      ;; the log names the agent that asked as `requested_by`. HC3
+      ;; (ticket a052edca): an agent's invite is the same
+      (assoc (t/principal {:id owner :display owner}) :requested-by caller)
+      (cond-> (t/principal {:id caller :type :agent :display caller})
+        owner (assoc :acts-for owner)
+        (some-> (get-in row [:data :decided_by]) str not-empty)
+        (assoc :allowed-by (str (get-in row [:data :decided_by])))))))
+
+(defn- invite-link
+  "The sign-in link of an invite a replay just made (HC3, ticket
+  a052edca), or nil. It is answered to the allowing person once and
+  written nowhere: not to the held call, not to a log."
+  [kind written]
+  (when (and (= :member kind) (= :invited (:state written)))
+    (some->> (get-in written [:data :bind_token]) str not-empty
+             (str "/auth/login?invite="))))
 
 (defn- forward-door!
   "Replay one ALLOWED held seat call at its door, once (server/
@@ -997,8 +1132,11 @@
   keeps `prefill_digests`, the row is read again: if none of those
   fields moved, the replay runs once more at the row's current etag;
   if some did, it fails naming them. A door with no digests keeps the
-  strict version fence."
-  [eng row]
+  strict version fence.
+
+  `sink`, when given, is an atom that receives an invite's sign-in
+  link (`invite-link`)."
+  [eng row sink]
   (let [{:keys [kind action id if_match prefill_digests]} (get-in row [:data :door])
         kind (keyword (str kind))
         action (keyword (str action))
@@ -1034,6 +1172,8 @@
                       (attempt (assoc opts :if-match (refence e)))
                       (throw e))))
             written (:row res)]
+        (when-some [link (when sink (invite-link kind written))]
+          (reset! sink link))
         (finish! eng (:id row) :land
                  {:answer (wire/write-json
                            (cond-> {:kind (name kind) :action (name action)}
@@ -1062,12 +1202,15 @@
   `isError`: the tool refused, so the call did not do what the person
   allowed. Nothing here throws: the person's tap
   already committed, and a wire failure is a fact about the call, not
-  about the tap."
-  [eng row]
-  (when (= :allowed (:state row))
-    (if (some? (get-in row [:data :door]))
-      (forward-door! eng row)
-      (forward-tool! eng row))))
+  about the tap.
+
+  `sink`, when given, receives an invite's sign-in link (HC3)."
+  ([eng row] (forward! eng row nil))
+  ([eng row sink]
+   (when (= :allowed (:state row))
+     (if (some? (get-in row [:data :door]))
+       (forward-door! eng row sink)
+       (forward-tool! eng row)))))
 
 (defn- error-words
   "What a tool that answered `isError` said: its first text part, or the
@@ -1079,22 +1222,33 @@
             (:content payload))
       (wire/write-json payload)))
 
+(defn- answer-result
+  "The map a rig tool answered: structuredContent's `result`, or the
+  JSON object in a text part. nil when it answered neither."
+  [payload]
+  (let [result (or (get-in payload [:structuredContent :result])
+                   (some (fn [part]
+                           (when-some [t (:text part)]
+                             (try (let [v (wire/read-json (str t))]
+                                    (when (map? v) v))
+                                  (catch Exception _ nil))))
+                         (:content payload)))]
+    (when (map? result) result)))
+
+(defn- result-field
+  "One field of a rig's answer, however its keys decoded."
+  [m k]
+  (if (contains? m k) (get m k) (get m (name k))))
+
 (defn- answered-waiting?
   "Did the server answer that it acted on nothing yet? The rig's
   `bench__merge` says `state: waiting` while a change's checks run
   (ticket 4180a699): the call reached it and merged nothing."
   [row payload]
   (and (= bench-merge-tool (str (get-in row [:data :tool])))
-       (let [result (or (get-in payload [:structuredContent :result])
-                        (some (fn [part]
-                                (when-some [t (:text part)]
-                                  (try (let [v (wire/read-json (str t))]
-                                         (when (map? v) v))
-                                       (catch Exception _ nil))))
-                              (:content payload)))]
+       (let [result (answer-result payload)]
          (and (map? result)
-              (= "waiting" (some-> (or (:state result) (get result "state"))
-                                   name))))))
+              (= "waiting" (some-> (result-field result :state) name))))))
 
 (defn- forward-tool!
   "The tool call's forward, as it always was: `mcp-servers/call!` on
@@ -1154,11 +1308,87 @@
 
 (defn expire!
   "Expire an `allowed_waiting` call whose moment has passed — the
-  change it would merge closed, or its head moved. → the moved row, or
-  nil."
-  [eng row]
+  change it would merge closed, or its head moved and the yes did not
+  carry (`carry-or-expire!`). `reason`, when given, is written on the
+  row. → the moved row, or nil."
+  ([eng row] (expire! eng row nil))
+  ([eng row reason]
+   (when (= :allowed_waiting (:state row))
+     (finish! eng (:id row) :expire (if reason {:reason reason} {})))))
+
+(def ^:private compare-heads-tool
+  ;; the rig's answer to whether a moved head is the approved one
+  ;; brought up to date from base (waymark-bench#131)
+  "bench__compare_heads")
+
+(defn- carry-head!
+  "Pin a waiting merge's yes to `head` through the held call's own
+  `carry` door (ticket e99ac1f5): the `head_sha` of the call a person
+  saw and of the one the rig receives, logged with the head it carried
+  from and what the rig compared. → true when the row was still
+  `allowed_waiting` and is pinned now."
+  [eng row approved head said]
+  (some? (finish! eng (:id row) :carry
+                  {:head_sha head :from_head approved
+                   :compared (into {} (remove (comp nil? val))
+                                   (select-keys said [:base_parent
+                                                      :same_own_diff
+                                                      :carries]))})))
+
+(defn compared
+  "What the rig's `compare_heads` said of `approved` and `head`:
+  {:carries true}, or {:carries false :reason <why not>}. A refusal or
+  a call that failed does not carry."
+  [eng {:keys [repo base approved head]}]
+  (try
+    (let [payload (servers/call! eng compare-heads-tool
+                                 {:repo repo :base base
+                                  :approved approved :head head})
+          result (answer-result payload)]
+      (cond
+        (true? (:isError payload))
+        {:carries false
+         :reason (str "compare_heads refused: "
+                      (or (some-> result (result-field :refused) str not-empty)
+                          (error-words payload)))}
+
+        (true? (some-> result (result-field :carries)))
+        {:carries true
+         :same_own_diff (true? (result-field result :same_own_diff))
+         :base_parent (or (some-> (result-field result :base_parent) str not-empty)
+                          (some->> (result-field result :parents)
+                                   (map str) (remove #{approved}) first))}
+
+        (false? (some-> result (result-field :same_own_diff)))
+        {:carries false :reason "own diff changed"}
+
+        :else {:carries false :reason "not a base update"}))
+    (catch Exception e
+      {:carries false :reason (str "compare_heads failed: " (ex-message e))})))
+
+(defn carry-or-expire!
+  "A person's yes on a merge the rig answered `waiting`, whose change's
+  head then moved (ticket abd12627). The yes carries over when the rig's
+  `compare_heads` says the new head is the approved one brought up to
+  date from base with the pull request's own diff unchanged: the row
+  is pinned to the new head, stays `allowed_waiting`, and `reforward!`
+  merges it with no new ask. Anything else expires it with the reason,
+  so the merge ask files a fresh one. `at` is {:repo :base :head}, the
+  change now. → :carried, :expired, or nil when the row is not
+  waiting."
+  [eng row {:keys [repo base head]}]
   (when (= :allowed_waiting (:state row))
-    (finish! eng (:id row) :expire {})))
+    (let [input (get-in row [:data :input])
+          approved (str (or (get input :head_sha) (get input "head_sha")))
+          {:keys [carries reason] :as said}
+          (if (str/blank? head)
+            {:carries false :reason "the change names no head"}
+            (compared eng {:repo repo :base base
+                           :approved approved :head head}))]
+      (if (and carries (carry-head! eng row approved head said))
+        :carried
+        (do (expire! eng row (:text (capped (str reason) 240)))
+            :expired)))))
 
 (defn after-allow!
   "THE WIRE-BOUNDARY EFFECT of a person's allow (R-4), called by the
@@ -1178,18 +1408,22 @@
   person's one yes, which is the whole thing this kind exists to
   prevent."
   [eng rdef action out]
-  (when (and (= :held_call (:kind rdef))
-             (= :allow action)
-             (map? out)
-             (:transition out)
-             (nil? (:replayed? out))
-             (= :allowed (:state (:row out))))
-    (try
-      (forward! eng (:row out))
-      (catch Exception e
-        (warn! "the forward of held call " (:id (:row out)) " failed ("
-               (ex-message e) ")"))))
-  out)
+  (if (and (= :held_call (:kind rdef))
+           (= :allow action)
+           (map? out)
+           (:transition out)
+           (nil? (:replayed? out))
+           (= :allowed (:state (:row out))))
+    (let [link (atom nil)]
+      (try
+        (forward! eng (:row out) link)
+        (catch Exception e
+          (warn! "the forward of held call " (:id (:row out)) " failed ("
+                 (ex-message e) ")")))
+      ;; HC3 (ticket a052edca): an invite's sign-in link rides this
+      ;; answer alone, the allowing person's; no row keeps it
+      (cond-> out @link (assoc :invite-link @link)))
+    out))
 
 ;; ── the expiry sweep (R-7) ──────────────────────────────────────────
 

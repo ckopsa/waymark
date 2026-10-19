@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [waymark10.dev :as dev]
             [waymark10.holds :as holds]
             [waymark10.server.invoke :as inv]
@@ -44,6 +45,12 @@
 
 (def ^:private the-owner
   (t/principal {:id "colton" :type :human :display "colton"}))
+
+(def ^:private the-engine
+  "The film pass's hand: attach_film is the engine's door alone (ticket
+  e552de65)."
+  (t/principal {:id "factory10-source" :type :system
+                :display "factory10-source"}))
 
 (defn- get-row [h plural id]
   (json (req h :get (str "/api/" plural "/" id) {:headers person})))
@@ -113,27 +120,55 @@
 (deftest an-agents-go-live-is-held-for-the-owner-and-the-allow-runs-it
   (let [{:keys [h eng]} (world)
         id (filed! h)
-        _ (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+        _ (walk/proposed! eng id the-owner)
+        _ (inv/invoke! eng :org_plan id :hand_in_film
+                       {:film_url "https://example.com/greenleaf.mp4"
+                        :take_report "{}" :head_sha "5e469c6166edf6a3"}
+                       {:principal the-owner})
         _ (inv/invoke! eng :org_plan id :attach_film
                        {:film_url "https://example.com/greenleaf.mp4"}
-                       {:principal the-owner})
-        as (granted! h)
-        asked (req h :post (str "/api/org_plans/" id "/-/go_live")
-                   {:headers as :body {}})
-        held (:held_call (json asked))]
-    (testing "the agent's go_live is not served: it waits on the owner"
-      (is (= 202 (:status asked)) (pr-str (json asked)))
-      (is (true? (:held (json asked))))
-      (is (= "simulated" (:state (get-row h "org_plans" id))))
-      (let [call (get-row h "held_calls" held)]
-        (is (= "colton" (get-in call [:data :owner])))
-        (is (= {:kind "org_plan" :action "go_live" :id id}
-               (select-keys (get-in call [:data :door]) [:kind :action :id])))))
-    (testing "the owner's Allow runs it, as the agent's move"
-      (let [allowed (req h :post (str "/api/held_calls/" held "/-/allow")
-                         {:headers person})]
-        (is (= 200 (:status allowed)) (pr-str (json allowed))))
-      (is (= "live" (:state (get-row h "org_plans" id))))
-      (let [last-move (last (log-of eng id))]
-        (is (= :go_live (:action last-move)))
-        (is (= "onboarding" (get-in last-move [:actor :id])))))))
+                       {:principal the-engine})
+        as (granted! h)]
+    (testing "an org whose branch does not say live does not go live"
+      (let [no (req h :post (str "/api/org_plans/" id "/-/go_live")
+                    {:headers as :body {}})]
+        (is (= 409 (:status no)) (pr-str (json no)))
+        (is (= "simulated" (:state (get-row h "org_plans" id))))))
+    (walk/flipped! eng id walk/a-head)
+    (let [asked (req h :post (str "/api/org_plans/" id "/-/go_live")
+                     {:headers as :body {}})
+          held (:held_call (json asked))]
+      (testing "the agent's go_live is not served: it waits on the owner"
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (true? (:held (json asked))))
+        (is (= "simulated" (:state (get-row h "org_plans" id))))
+        (let [call (get-row h "held_calls" held)
+              why (str (get-in call [:data :why]))]
+          (is (= "colton" (get-in call [:data :owner])))
+          (is (= {:kind "org_plan" :action "go_live" :id id}
+                 (select-keys (get-in call [:data :door]) [:kind :action :id])))
+          (testing "its why names the org, the mayor, the budget and the head"
+            (is (str/includes? why "Make greenleaf live?") why)
+            (is (str/includes? why "Its mayor greenleaf-mayor will sit at $8/week.") why)
+            (is (str/includes? why "pull request at 5e469c6") why))))
+      (testing "the owner's Allow runs it, as the agent's move"
+        (let [allowed (req h :post (str "/api/held_calls/" held "/-/allow")
+                           {:headers person})]
+          (is (= 200 (:status allowed)) (pr-str (json allowed))))
+        (let [plan (get-row h "org_plans" id)]
+          (is (= "going_live" (:state plan)))
+          (is (= walk/a-head (get-in plan [:data :approved_head]))))
+        (let [last-move (last (log-of eng id))]
+          (is (= :go_live (:action last-move)))
+          (is (= "onboarding" (get-in last-move [:actor :id]))))))))
+
+(deftest only-the-engine-marks-a-going-live-plan-live
+  (let [{:keys [h eng]} (world)
+        id (walk/going-live! eng (filed! h) the-owner)]
+    (is (= "going_live" (:state (get-row h "org_plans" id))))
+    (is (thrown? Exception
+                 (inv/invoke! eng :org_plan id :mark_live {} {:principal the-owner}))
+        "the owner's own hand does not take it")
+    (is (= "going_live" (:state (get-row h "org_plans" id))))
+    (inv/invoke! eng :org_plan id :mark_live {} walk/the-engine)
+    (is (= "live" (:state (get-row h "org_plans" id))))))

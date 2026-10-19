@@ -12,6 +12,10 @@
 
   The classes, in the order they are judged:
 
+  org_name_not_snake_case
+            the org's directory name is snake_case, or live-orgs never
+            boots it (ticket d4750bf9)
+  manifest  org.edn is there, a map, naming the org and its :live
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
             names fills with no hole left
@@ -28,6 +32,13 @@
             seed entry names an :owner
             names a cast member, and sits inside that member's :scope,
             its ceiling (a member with no :scope holds the whole org)
+  decision  the person's business questions (ticket e1ed02c7), pure
+            over declarations and the seed: a final door a model seat
+            holds and no person does (unheld_final), a state with no
+            expected age (no_wait_limit), a money input no guard reads
+            (money_unbounded). Each sentence is a question to put to
+            the person; each clears in code — a :hold guard, an
+            :expected-age, or the person's answer as :decided
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -69,9 +80,10 @@
 
 ;; ── load ────────────────────────────────────────────────────────────
 
-(defn- with-org-classpath
+(defn with-org-classpath
   "Call f with the org's src and resources on the classpath, so an org
-  directory need not be a dep of whoever runs the suite."
+  directory need not be a dep of whoever runs the suite. The first-week
+  scene loads an org's kinds the same way."
   [^File dir f]
   (let [t (Thread/currentThread)
         prev (.getContextClassLoader t)
@@ -96,7 +108,7 @@
       (catch Throwable e
         {:findings [(finding :load [org] module
                              (str module " did not load: " (root-message e))
-                             (str "Make src/" org "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
+                             (str "Make src/" (munge org) "/org.clj load and declare resources, as docs/orgkit.md says."))]}))))
 
 ;; ── seed ────────────────────────────────────────────────────────────
 
@@ -104,7 +116,8 @@
   "The template's seat filled as the seed loader fills it."
   [{:keys [template params]}]
   (when-some [res (io/resource (str "seats/" template ".edn"))]
-    (let [seat (seed/filled (:seat (edn/read-string (slurp res))) (or params {}))]
+    (let [t (edn/read-string (slurp res))
+          seat (seed/filled (:seat t) (or params {}) (:template t))]
       {:seat seat
        :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" (pr-str seat))))})))
 
@@ -327,7 +340,130 @@
                f))]
       f))))
 
+;; ── decision ────────────────────────────────────────────────────────
+
+(defn- words [x] (str/replace (text x) "_" " "))
+
+(defn- a-an [s] (str (if (re-find #"^[aeiou]" s) "an " "a ") s))
+
+(defn- either
+  "a · a or b · a, b or c, as the law page joins them."
+  [xs]
+  (let [xs (vec xs)]
+    (case (count xs)
+      0 ""
+      1 (first xs)
+      (str (str/join ", " (pop xs)) " or " (peek xs)))))
+
+(defn- guard-of [g] (if (var? g) @g g))
+
+(defn- held? [a] (some #(:hold (guard-of %)) (:guards a)))
+
+(defn- decided? [a] (sentence? (:decided a)))
+
+(defn- model-holds?
+  "Whether a seed seat that is no person's holds kind.action."
+  [seats k a]
+  (some #(and (not (:person %)) (holds? (:scope %) k a)) seats))
+
+(defn- owner-tap
+  "Whose tap a door would wait for: the cast's :owner, else its first
+  approver, by display name; a person's when the cast names neither."
+  [seed]
+  (let [m (or (get (:cast seed) :owner)
+              (some (fn [[_ m]] (when (some #{"approver"} (map text (:roles m))) m))
+                    (sort-by (comp text key) (:cast seed))))]
+    (if-some [d (:display m)] (str d "'s") "a person's")))
+
+(defn- unheld-final-findings [rs seats who]
+  (for [r rs
+        :let [k (text (:kind r))
+              as (sort (for [[aname a] (:actions r)
+                             :let [an (text aname)]
+                             :when (and (false? (get-in a [:safety :reversible]))
+                                        (model-holds? seats k an)
+                                        (not (held? a))
+                                        (not (decided? a)))]
+                         an))]
+        :when (seq as)]
+    (finding :decision ["unheld_final" k] k
+             (str "Should the AI " (either (map words as)) " " (a-an (words k))
+                  " on its own, or wait for " who " tap?")
+             (str "Hold " (str/join ", " (map #(str k "." %) as))
+                  " for a person with a :hold guard, or write the person's answer on each as :decided \"…\"."))))
+
+(defn- state-decided? [r s]
+  (when (map? (:decided r))
+    (some (fn [[st d]] (and (= s (text st)) (sentence? d))) (:decided r))))
+
+(defn- no-wait-limit-findings [rs]
+  (for [r rs
+        :let [k (text (:kind r))
+              ends (set (map text (:terminal r)))
+              ages (set (map (comp text key) (:expected-age r)))]
+        s (map text (:states r))
+        :when (not (or (ends s) (ages s) (state-decided? r s)))]
+    (finding :decision ["no_wait_limit" k s] (str k "/" s)
+             (str "How long may " (a-an (words k)) " stay " (words s) " before someone is told, and who?")
+             (str "Declare " k "'s :expected-age for " s ", or write the person's answer as :decided {:" s " \"…\"}."))))
+
+(defn- money-field? [f]
+  (or (contains? #{"amount" "fee" "price"} f)
+      (str/ends-with? f "_cents")
+      (str/ends-with? f "_usd")))
+
+(defn- input-fields
+  "The field names a malli :map input declares, nested maps included."
+  [schema]
+  (->> (tree-seq coll? seq schema)
+       (filter #(and (vector? %) (= :map (first %))))
+       (mapcat (fn [m] (keep #(when (and (vector? %) (keyword? (first %))) (first %)) (rest m))))
+       (map text)
+       distinct))
+
+(defn- reads?
+  "Whether a guard's law names the field f anywhere."
+  [g f]
+  (let [g (guard-of g)]
+    (when (map? g)
+      (some #(and (or (keyword? %) (symbol? %) (string? %)) (= f (name %)))
+            (tree-seq coll? seq (dissoc g :name :explain :remedies))))))
+
+(defn- money-unbounded-findings [rs seats]
+  (for [r rs
+        :let [k (text (:kind r))]
+        [aname a] (sort-by (comp text key) (:actions r))
+        :let [an (text aname)]
+        :when (and (model-holds? seats k an)
+                   (not (held? a))
+                   (not (decided? a))
+                   (some (fn [f] (not-any? #(reads? % f) (:guards a)))
+                         (filter money-field? (input-fields (:input a)))))]
+    (finding :decision ["money_unbounded" k an] (str k "." an)
+             (str "Above what amount should " (words an) " on " (a-an (words k)) " wait for you?")
+             (str "Give " k "." an " a guard that reads its amount and holds the door for a person above the line, or write the person's answer as :decided \"…\"."))))
+
+(defn- decision-findings
+  "The person's business questions (ticket e1ed02c7), pure over the
+  declarations and the seed's seats: who may take a final step, how
+  long a row may wait, how much money moves without a tap — in that
+  order, each in the org's kind order."
+  [rs seats seed]
+  (concat (unheld-final-findings rs seats (owner-tap seed))
+          (no-wait-limit-findings rs)
+          (money-unbounded-findings rs seats)))
+
 ;; ── the suite ───────────────────────────────────────────────────────
+
+(defn- name-findings
+  "The org's name, its directory's: snake_case, as live-orgs boots only
+  such an org (waymark10.server.org, docs/orgkit.md § Naming rules), so a
+  wrong one shows before go_live."
+  [org]
+  (when-not (re-matches #"[a-z][a-z0-9_]*" org)
+    [(finding :org_name_not_snake_case [org] org
+              (str "The org's name " org " is not snake_case, so live-orgs skips orgs/" org " and it never boots.")
+              "Rename the org's directory, manifest :name and seed :org to lowercase letters, digits and underscores, starting with a letter, as docs/orgkit.md § Naming rules says.")]))
 
 (defn- manifest-findings
   "The org's manifest, org.edn (ticket 29f8e07a): there, readable, a
@@ -387,47 +523,90 @@
                   (sentence-findings rs)
                   (:findings booted)
                   (when-some [eng (:engine booted)]
-                    (scope-findings eng seats seed))))))))))
+                    (scope-findings eng seats seed))
+                  (decision-findings rs seats seed)))))))))
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its
-  manifest's first; [] when it conforms. The directory's name is the
-  org's name."
+  name's and manifest's first; [] when it conforms. The directory's name
+  is the org's name."
   [org-dir]
   (let [dir (.getCanonicalFile (io/file org-dir))
         org (.getName dir)]
-    (into (vec (manifest-findings dir org)) (judged dir org))))
+    (into (vec (concat (name-findings org) (manifest-findings dir org)))
+          (judged dir org))))
+
+(defn- live?
+  "Whether the org at `dir` says :live true in its manifest."
+  [^File dir]
+  (let [m (try (org-boot/manifest dir) (catch Throwable _ nil))]
+    (true? (when (map? m) (:live m)))))
 
 (defn- org-dirs
-  "An org directory as itself; any other directory as the orgs in it."
-  [arg]
+  "An org directory as itself; any other directory as the orgs in it,
+  only the live ones when `live-only?` (ticket 7310836f): a drafting
+  org's error findings are its onboarding walk's steps, not a red gate."
+  [live-only? arg]
   (let [d (io/file arg)]
     (if (.isFile (io/file d "deps.edn"))
       [d]
       (sort-by #(.getName ^File %)
-               (filter #(.isFile (io/file ^File % "deps.edn")) (.listFiles d))))))
+               (filter #(and (.isFile (io/file ^File % "deps.edn"))
+                             (or (not live-only?) (live? %)))
+                       (.listFiles d))))))
 
 (defn- wire-finding
   "A finding as org_plan's record_findings takes it: strings throughout."
   [f]
   (-> f (update :severity text) (update :class text)))
 
+(defn live-report
+  "What org_plan's go_live reads of the org at org-dir (ticket c8e131fb,
+  M2e): its manifest's :live as `live_flag`, and its `mayor`, the seed's
+  seat named <org>-mayor, as {name budget_usd_per_week}; no mayor when
+  the seed seats none. A boolean and strings, as the findings doors
+  take them."
+  [org-dir]
+  (let [dir (.getCanonicalFile (io/file org-dir))
+        org (.getName dir)
+        m (try (org-boot/manifest dir) (catch Throwable _ nil))
+        seed (try (edn/read-string (slurp (io/file dir "resources" org "seed.edn")))
+                  (catch Throwable _ nil))
+        mayor (when (map? seed)
+                (some #(when (= (str org "-mayor") (str (:name %))) %)
+                      (:seats (seed-seats seed))))
+        budget (:budget_usd_per_week mayor)]
+    (cond-> {:live_flag (true? (when (map? m) (:live m)))}
+      mayor (assoc :mayor (cond-> {:name (str (:name mayor))}
+                            (some? budget) (assoc :budget_usd_per_week (str budget)))))))
+
 (defn -main
   "Judge each org named, or each under a directory named. Exit 1 on
   any error finding, 2 when no org was found. `--json` prints one JSON
   object instead, each org's name to its findings, for the audit's CI
-  job to hand to org_plan's record_findings (ticket 5d62058e)."
+  job to hand to org_plan's record_findings (ticket 5d62058e), and under
+  `_live` each org's `live-report` (ticket c8e131fb). `--live` judges,
+  of a directory named, only the orgs whose manifest says :live true;
+  an org named itself is judged whatever it says (ticket 7310836f)."
   [& args]
   (let [json? (boolean (some #{"--json"} args))
-        dirs (mapcat org-dirs (or (seq (remove #{"--json"} args)) ["."]))
+        live-only? (boolean (some #{"--live"} args))
+        dirs (->> (or (seq (remove #{"--json" "--live"} args)) ["."])
+                  (mapcat (partial org-dirs live-only?))
+                  (map #(.getCanonicalFile ^File %))
+                  distinct)
         judged (mapv (fn [^File d] [(.getName (.getCanonicalFile d)) (conform d)])
                      dirs)
         errors (count (filter #(= :error (:severity %)) (mapcat second judged)))]
     (if json?
       (println (wire/write-json
-                (into (sorted-map)
-                      (map (fn [[org fs]] [org (mapv wire-finding fs)]))
-                      judged)))
+                (assoc (into (sorted-map)
+                             (map (fn [[org fs]] [org (mapv wire-finding fs)]))
+                             judged)
+                       "_live" (into (sorted-map)
+                                     (map (fn [^File d]
+                                            [(.getName (.getCanonicalFile d)) (live-report d)]))
+                                     dirs))))
       (doseq [[org fs] judged]
         (println (str org ": "
                       (if (seq fs) (str (count fs) " finding(s)") "conforms")))

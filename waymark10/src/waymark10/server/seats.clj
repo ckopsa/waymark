@@ -649,6 +649,15 @@
   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (entry-filter (walk-entries (get-in seat-row [:data :scope]) walk))))
 
+(defn walk-doors
+  "Every door the seat's scope names on the kind it walks, as strings:
+  the union over every entry that names the kind, because each door one
+  of them grants is a door the sitter holds (ticket c09893b1)."
+  [seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (into #{} (comp (mapcat :actions) (map name))
+          (walk-entries (get-in seat-row [:data :scope]) walk))))
+
 (g/defguard walk-names-a-kind-in-scope
   ;; :judges names :walk alone, though the check reads the scope beside
   ;; it: the refusal is ABOUT the walk, and a judged field needs either
@@ -792,11 +801,14 @@
                    " judgment — narrow the entry with a filter, or name a"
                    " judgment whose queue narrows it"))
 
+            ;; an any-of filter ("drafting,simulated") is judged state by
+            ;; state: each one the walk covers needs its own way out
             state
-            (when-not (leaves-the-state? rdef (:actions entry) state)
-              (str "no door this seat may take moves a " state " " walk
-                   " out of " state " — add a door of " walk
-                   " that leaves " state " to that scope entry's actions,"
+            (when-some [stuck (first (remove #(leaves-the-state? rdef (:actions entry) %)
+                                             (map str/trim (str/split state #","))))]
+              (str "no door this seat may take moves a " stuck " " walk
+                   " out of " stuck " — add a door of " walk
+                   " that leaves " stuck " to that scope entry's actions,"
                    " or filter the entry by a state one of its doors"
                    " leaves"))
 
@@ -2563,7 +2575,20 @@
            :x-display
            {:label "The row it named"
             :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting already holds it, of this seat or of another seat that walks the same kind."}}
-     [:string {:min 1 :max 128}]]]])
+     [:string {:min 1 :max 128}]]
+    ;; a fire held on a pull link (ticket a25950b4): its id in the
+    ;; link's queue, and when a localfire took it, since the missed-fire
+    ;; sweep counts from the take and passes a fire nobody took by
+    [:pull_fire {:optional true
+                 :x-display
+                 {:label "The pull fire it rides"
+                  :help "The id of the fire a pull runner link holds for a localfire. Until one takes it, the key is not a run that never sat."}}
+     [:string {:min 1 :max 128}]]
+    [:taken_at {:optional true
+                :x-display
+                {:label "When a localfire took it"
+                 :help "The instant a localfire took this pull fire. A key still unspent some minutes after it is a run that never sat."}}
+     :waymark/instant]]])
 
 (def ^:private delivers-help
   "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")
@@ -2634,6 +2659,36 @@
   render ctx lends."
   [row ctx]
   (domain-name-of (:read ctx) row))
+
+(defn pull-wait
+  "Why this seat waits rather than fails (LP2): while every live link of
+  the pool its fire goes out through is a pull link whose localfire is
+  away, the sentence naming the first (`runner-links/away-sentence`);
+  nil for a seat with a link of its own, no pool, or a link connected.
+  The schedule is read through `find'`, the chair and the links through
+  `read'`. The pool is `schedules/pool-of`'s, spelled as
+  `linked-for-fire` spells it: this file cannot require that one, nor
+  runner-links, which require it."
+  [read' find' row now]
+  (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
+        own #(some-> (get-in % [:data :fire_url]) str not-empty)
+        runners-of #(some->> (get-in % [:data :runners])
+                             (keep (fn [r] (some-> r str not-empty)))
+                             seq)
+        pool (or (runners-of sched)
+                 (when-not (own sched)
+                   (some->> (chair-of row) (read' :model) runners-of)))]
+    (when pool
+      ((requiring-resolve 'waymark10.server.runner-links/away-sentence)
+       (keep #(read' :runner_link %) pool) now))))
+
+(defn- held-reason-field
+  "The seat's :computed `held_reason`: `pull-wait` over the reads the
+  render ctx lends, at its clock. waiting_on reads it as a hold field,
+  so the seat's verdict says it waits."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (pull-wait (:read ctx) find' row (:now ctx))))
 
 (defn spend-by-domain
   "The dollars this seat's sittings of the last seven days cost, by the
@@ -2930,7 +2985,16 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
-   :computed {:in_domain
+   :computed {:held_reason
+              {:schema :string
+               :x-display
+               {:label "Waiting for its localfire"
+                :help "While every live link this seat fires through is a pull link whose localfire is away, the sentence naming it and when it was last seen, worked out at read time. A wait, not a failure: the fire goes out once the localfire asks for it, and the seat's health does not count it."}
+               ;; it reads the schedule and the links: with no :read it
+               ;; is absent, never a false wait
+               :reads? true
+               :fn held-reason-field}
+              :in_domain
               {:schema :string
                :x-display
                {:label "In domain"
@@ -6672,6 +6736,66 @@
                                     (:next-flip-at row))
                 true))))))))
 
+;; ── the key of a fire a pull link holds (ticket a25950b4) ────────────
+
+(defn fire-key-of-text
+  "The seat and the key hash a fire's text carries — the seat line and
+  the key under it (`schedules/fire-text`) — as {:seat :hash}, or nil
+  for a text with no key. A pull link holds the text alone, so this is
+  how it finds the entry its fire minted."
+  [text]
+  (when-some [[_ seat key] (re-find #"(?m)^Seat: (\S+) [^\n]*\nKey: (\S+)"
+                                    (str text))]
+    {:seat seat :hash (key-hash key)}))
+
+(defn- rewrite-fire-key!
+  "Rewrite the entry `held` ({:seat :hash}) names on its seat row, in
+  one transaction FOR UPDATE, as `spend-fire-key!` reads it: `f` of the
+  entry, or nil to take it off. → true when the entry was there."
+  [eng {:keys [seat hash]} f]
+  (when (and seat hash (get (inv/resources eng) :seat))
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :seat (str seat)
+                                        {:for-update true})]
+          (let [held (get-in row [:data :fire_keys])
+                same? #(= (str (:hash %)) (str hash))]
+            (when (some same? held)
+              (store/update-data! (:storage eng) tx :seat (str seat)
+                                  (assoc (:data row) :fire_keys
+                                         (into [] (keep #(if (same? %) (f %) %))
+                                               held))
+                                  (:next-flip-at row))
+              true)))))))
+
+(defn queue-fire-key!
+  "Mark the key of a fire a pull link holds: the entry keeps the fire's
+  id as `:pull_fire`, and answers until `until` at least (the link's
+  keep), so the key still opens the seat when a laptop that slept takes
+  the fire. → true when the entry was there."
+  [eng held fire-id ^Instant until]
+  (rewrite-fire-key! eng held
+                     (fn [e]
+                       (let [was (instant-of (:expires_at e))]
+                         (assoc e
+                                :pull_fire (str fire-id)
+                                :expires_at (str (if (and was (.isAfter ^Instant was until))
+                                                   was
+                                                   until)))))))
+
+(defn take-fire-key!
+  "Stamp `:taken_at` on the key of a pull fire a localfire took at `at`:
+  the missed-fire sweep counts from here. → true when the entry was
+  there."
+  [eng held ^Instant at]
+  (rewrite-fire-key! eng held #(assoc % :taken_at (str at))))
+
+(defn revoke-fire-key!
+  "Take the key of a pull fire off its seat row unspent: the fire was
+  dropped, or never queued. → true when the entry was there."
+  [eng held]
+  (rewrite-fire-key! eng held (constantly nil)))
+
 (defn keep-fire-key!
   "Keep the trace of a spent firing's key on the sitting it opened: its
   hash, never the key (R-12.37). A MAINTENANCE write, `spend-fire-key!`'s
@@ -7379,6 +7503,51 @@
           (let [born (str (get-in change [:data :born_from]))]
             (when (str/starts-with? born groomed-walk-prefix)
               (not-empty (subs born (count groomed-walk-prefix))))))))))
+
+(defn failing-change-mark
+  "The mark the walk row of a ticket carries when the fire named a
+  FAILING change born from it (ticket c91b3af9): the seat's own red
+  round, handed back for it to fix. → {\"why\" \"failing_change\"
+  \"change\" id \"pr\" number \"head\" sha} when `id` is a change in
+  `failing` whose ticket is `in_review`, and the seat wrote the change
+  (its `author` is the seat's name) or holds `complete` on tickets of
+  the ticket's repository. Nil otherwise, and the walk is as it was."
+  [eng seat-row id]
+  (when (= "ticket" (str (get-in seat-row [:data :walk])))
+    (let [row-of (fn [kind rid]
+                   (when-some [rdef (get (inv/resources eng) kind)]
+                     (try
+                       (some->> (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/load-row (:storage eng) tx kind
+                                                    (str rid) {})))
+                                (inv/decode-row rdef))
+                       (catch Exception _ nil))))
+          change (some->> id str not-empty (row-of :change))
+          born (str (get-in change [:data :born_from]))
+          ticket-id (when (str/starts-with? born groomed-walk-prefix)
+                      (not-empty (subs born (count groomed-walk-prefix))))
+          ticket (when (and ticket-id
+                            (= "failing" (some-> (:state change) name)))
+                   (row-of :ticket ticket-id))
+          repo (some-> (get-in ticket [:data :repo]) str not-empty)
+          seat-name (some-> (get-in seat-row [:data :name]) str not-empty)
+          wrote? (and seat-name
+                      (= seat-name (str (get-in change [:data :author]))))
+          completes? (some (fn [entry]
+                             (and (= "ticket" (some-> (:kind entry) name))
+                                  (some #(= "complete" (name %)) (:actions entry))
+                                  (let [r (some-> (get-in entry [:filter :repo]) str)]
+                                    (or (nil? r) (= r repo)))))
+                           (get-in seat-row [:data :scope]))
+          number (get-in change [:data :number])
+          head (some-> (get-in change [:data :head_sha]) str not-empty)]
+      (when (and ticket
+                 (= "in_review" (some-> (:state ticket) name))
+                 (or wrote? completes?))
+        (cond-> {"why" "failing_change" "change" (str (:id change))}
+          (some? number) (assoc "pr" number)
+          head (assoc "head" head))))))
 
 (defn fire-deferred-until
   "When a fire whose `text` names a walk row (`named-row`, read back to
