@@ -51,6 +51,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.checks :as checks]
+            [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
@@ -545,12 +546,23 @@
                ;; the secret disposition (waymark-kyg): the door
                ;; accepts a secret field; the ADVERTISED create input
                ;; never names it — union over both spellings, since a
-               ;; separate :create-schema may carry the mark itself
+               ;; separate :create-schema may carry the mark itself.
+               ;; An engine-written field (ticket 9e0a105b) is never
+               ;; offered either: the door refuses it from a hand
                :input (schema/conceal (schema/json-schema model)
-                                      (into (schema/secret-fields (:schema rdef))
-                                            (schema/secret-fields model)))
+                                      (-> (schema/secret-fields (:schema rdef))
+                                          (into (schema/secret-fields model))
+                                          (into (schema/engine-written-fields
+                                                 (:schema rdef)))))
                :effect {:to (name (:initial rdef))}
-               :safety {:idempotent false :reversible false :confirm false}}
+               ;; a confirm create advertises its sentence as the
+               ;; template its input fills; a fn's sentence is only
+               ;; known once the input is, and the refusal names it
+               :safety (let [c (get-in rdef [:create-safety :consequence])]
+                         (cond-> {:idempotent false :reversible false
+                                  :confirm (confirm/create-confirm? rdef)}
+                           (and (confirm/create-confirm? rdef) (string? c))
+                           (assoc :consequence c)))}
       :query {:method "GET"
               :href base
               :input (query-input-schema rdef)}}

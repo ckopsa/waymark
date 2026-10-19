@@ -52,8 +52,7 @@
   ["schedules" "seats" "models" "sittings" "definitions" "members" "roles"
    "grants" "approval_requests" "attachments" "subscriptions" "jobs"
    "runner_links" "waymark10_transitions" "waymark10_idempotency"
-   "waymark10_cursors" "waymark10_drafts" "waymark10_pull_fires"
-   "waymark10_pull_polls"])
+   "waymark10_cursors" "waymark10_drafts" "waymark10_pull_fires"])
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *fake* nil)
@@ -1114,7 +1113,7 @@
                                        {:principal elena}))))
         sid (str (:id (sched-of seat-id)))
         fire! (fn []
-                (pf/poll! st p (java.time.Instant/now))
+                (rl/seen! *eng* p (java.time.Instant/now))
                 (fire-seat! seat-id "Walk the pool.")
                 (drain! cn))
         acted? (fn [action] (some #(= action (:action %)) (log-of :schedule sid)))]
@@ -1160,7 +1159,7 @@
                                        {:principal elena}))))
         sid (str (:id (sched-of seat-id)))
         fire! (fn []
-                (pf/poll! st p (java.time.Instant/now))
+                (rl/seen! *eng* p (java.time.Instant/now))
                 (fire-seat! seat-id "Walk the pool.")
                 (drain! cn))
         at (fn [secs]

@@ -1,0 +1,30 @@
+;; A worker seat in a live org: the seat a hire plan adds to the org's
+;; seed when the audit finds a state of one of its kinds that no seat
+;; leaves. Shaped like org-mayor.edn, but it holds doors: its scope is
+;; exactly the kinds and doors the hire names, and it wakes when a row
+;; of the gap's kind is in the gap's state. The onboarding seat writes
+;; it into an org's seed for a hire plan. Ticket 9c1b34ef.
+{:template
+ {:params {:org "The org's name, as its directory under orgs/ spells it."
+           :domain "The org's navigation domain, by its name."
+           :domain_id "The id of that domain's row: the seat's :domain ref. In a seed, [:ref <the domain's :ref>]."
+           :owner "The member id of the person the seat works for: the org's owner."
+           :budget_usd_per_week "The seat's fuel for seven days, in dollars, as a decimal: 5M."
+           :gap_kind "The kind the hire's gap is on, as its crack finding names it: \"request\"."
+           :gap_state "The state of that kind no seat leaves, as its crack finding names it: \"new\"."
+           :kinds "The seat's whole scope, one entry for each kind: {:kind \"request\" :actions [\"accept\"]}. Name the door out of the gap's state, and only the doors the work needs."
+           :charter "One paragraph: the seat's work in the person's words, naming the door it takes out of the gap's state."}
+  :note "One seat per gap: its name is the org, the gap's kind and the gap's state. A whole-hole param fills as itself: the budget stays a decimal, :kinds is the whole scope and :charter the whole charter. It wakes when an action leaves at least one row of the gap's kind in the gap's state, and on its hourly cadence. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's."}
+ :seat
+ {:name "{{org}}-{{gap_kind}}-{{gap_state}}"
+  :mode "fired"
+  :cadence_seconds 3600
+  :standing_ttl_seconds 604800
+  :budget_usd_per_week "{{budget_usd_per_week}}"
+  :sitting_budget_tokens 200000
+  :sitting_idle_seconds 1200
+  :domain "{{domain_id}}"
+  :charter "{{charter}}"
+  :instructions "You sit in `{{org}}-{{gap_kind}}-{{gap_state}}`, a seat of {{org}}, working for {{owner}}.\n\nYour rows are the {{gap_kind}} rows in {{gap_state}}: read them with waymark_query kind \"{{gap_kind}}\", filter {state: \"{{gap_state}}\"}, and each with waymark_get. For each, take the door your charter names with waymark_invoke; take a door only when your scope names it. When a door refuses, leave the row and say why in one sentence.\n\nIds are full uuids. Halted or parked: say why, stop. When the Stop hook asks you to close the sitting, make that one call; the note names each row and the door you took."
+  :scope ["{{kinds}}"]
+  :wake_on [{:kind "{{gap_kind}}" :actions [] :filter {:state "{{gap_state}}"} :at_least 1}]}}
