@@ -1859,12 +1859,20 @@
   "The fire-key entries of this seat row still unspent more than
   `deadline` seconds after their `fired_at`, oldest first. An entry
   with no `fired_at` was held before the field existed; it is left to
-  expire, since nobody can say when its run was due."
+  expire, since nobody can say when its run was due.
+
+  A fire held on a pull link (`:pull_fire`, ticket a25950b4) counts from
+  when a localfire took it (`:taken_at`), not from when it was queued:
+  a laptop asleep is not a run that died. One nobody took yet is not
+  missed at all; the pull link's own keep drops it
+  (`runner-links/drop-missed!`)."
   [seat-row ^Instant now deadline]
   (let [cut (.minusSeconds now (long deadline))]
     (->> (get-in seat-row [:data :fire_keys])
          (keep (fn [e]
-                 (when-some [at (instant-of (:fired_at e))]
+                 (when-some [at (instant-of (if (:pull_fire e)
+                                              (:taken_at e)
+                                              (:fired_at e)))]
                    (when (.isBefore ^Instant at cut) [at e]))))
          (sort-by first)
          (mapv second))))

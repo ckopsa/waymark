@@ -46,6 +46,12 @@
 (def ^:private the-owner
   (t/principal {:id "colton" :type :human :display "colton"}))
 
+(def ^:private the-engine
+  "The film pass's hand: attach_film is the engine's door alone (ticket
+  e552de65)."
+  (t/principal {:id "factory10-source" :type :system
+                :display "factory10-source"}))
+
 (defn- get-row [h plural id]
   (json (req h :get (str "/api/" plural "/" id) {:headers person})))
 
@@ -114,10 +120,14 @@
 (deftest an-agents-go-live-is-held-for-the-owner-and-the-allow-runs-it
   (let [{:keys [h eng]} (world)
         id (filed! h)
-        _ (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+        _ (walk/proposed! eng id the-owner)
+        _ (inv/invoke! eng :org_plan id :hand_in_film
+                       {:film_url "https://example.com/greenleaf.mp4"
+                        :take_report "{}" :head_sha "5e469c6166edf6a3"}
+                       {:principal the-owner})
         _ (inv/invoke! eng :org_plan id :attach_film
                        {:film_url "https://example.com/greenleaf.mp4"}
-                       {:principal the-owner})
+                       {:principal the-engine})
         as (granted! h)]
     (testing "an org whose branch does not say live does not go live"
       (let [no (req h :post (str "/api/org_plans/" id "/-/go_live")

@@ -78,8 +78,11 @@ The flags:
 - `--port`: the run pages' port (default 8112);
 - `--model`: the model every fire runs (default `opus`);
 - `--mcp-url`: the engine's MCP door (default `<engine>/api/-/mcp`);
-- `--claude`: the Claude Code binary (default `claude`).
+- `--claude`: the Claude Code binary (default `claude`);
+- `--token-file`: a file holding the link's token, read again after
+  every refusal so a rotated token is taken up without a restart.
 
-The token is read from `LOCALFIRE_PULL_TOKEN` and from nowhere else.
+The token is read from the file `--token-file` names, or else from
+`LOCALFIRE_PULL_TOKEN`, and from nowhere else.
 An EDN config with a `:pull` block (see `localfire.example.edn`) still
 works as before, for anything the flags do not reach.

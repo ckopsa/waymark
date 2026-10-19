@@ -1015,7 +1015,9 @@
        [(str "UPDATE " table
              " SET data = ?, next_flip_at = ?, updated_at = now()"
              " WHERE id = ?")
-        (jsonb data)
+        ;; sealed as every write is: a maintenance write of a row read
+        ;; opened would otherwise store its secret fields in the clear
+        (sealed-data sealed kind {:data data})
         (some-> ^java.time.Instant next-flip-at Timestamp/from)
         id])
       nil))

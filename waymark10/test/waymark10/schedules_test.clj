@@ -38,8 +38,10 @@
             [waymark10.server.render :as render]
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -1138,6 +1140,73 @@
       (is (acted? :throttle))
       (is (str/includes? (str (get-in (sched-of seat-id) [:data :note]))
                          "dropped as missed")))
+
+    (seat-do! seat-id :retire)))
+
+(deftest a-pull-fire-nobody-took-waits-for-its-localfire
+  ;; waymark ticket a25950b4: the missed-fire sweep counts a pull fire
+  ;; from its take, a second fire queues nothing while one waits, and the
+  ;; link's keep drops an untaken fire, revokes its key and arms the wake.
+  (let [cn :sched-pull-wait
+        _ (drain! cn)
+        chair (model! "claude-chair-pull-wait")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "pull-waiter" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        st (:storage *eng*)
+        p (str (:id (:row (inv/create! *eng* :runner_link
+                                       {:provider "localfire" :delivery "pull"
+                                        :fire_token a-seat-token}
+                                       {:principal elena}))))
+        sid (str (:id (sched-of seat-id)))
+        fire! (fn []
+                (pf/poll! st p (java.time.Instant/now))
+                (fire-seat! seat-id "Walk the pool.")
+                (drain! cn))
+        at (fn [secs]
+             (assoc *eng* :now-fn
+                    (constantly (.plusSeconds (java.time.Instant/now) secs))))
+        seat-row #(store/with-tx st (fn [tx] (store/load-row st tx :seat (str seat-id) {})))
+        missed #(->> (store/with-tx st
+                       (fn [tx] (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                                  {:limit 50})))
+                     (filter (fn [s] (true? (get-in s [:data :missed])))))]
+    (set-runners! :schedule sid {:runners [p]})
+    (fire!)
+    (let [[f :as held] (pf/pending st p)]
+      (testing "a fire nobody took for 15 minutes is not missed"
+        (is (= 1 (count held)))
+        (is (= 0 (wakes/sweep-missed! (at 900))))
+        (is (empty? (missed)) "no never_sat sitting"))
+
+      (testing "a second fire while one waits queues nothing new"
+        (fire!)
+        (is (= [(:id f)] (mapv :id (pf/pending st p))))
+        (is (str/includes? (str (get-in (sched-of seat-id) [:data :note]))
+                           "already waits")))
+
+      (testing "taken after that, its key opens the seat, and the sweep counts from the take"
+        (let [taken (rl/take-fire! (at 900) p)
+              k (second (re-find #"(?m)^Key: (\S+)" (str (:text taken))))]
+          (is (= (:id f) (:id taken)))
+          (is (seats/fire-key-held? (at 900) (seat-row) k))
+          (is (= 0 (wakes/sweep-missed! (at 1200))))
+          (is (seats/fire-key-held? (at 1200) (seat-row) k))
+          (is (empty? (missed)))
+          (is (some? (rl/answer-fire! *eng* (:id taken) {:started "https://run/pull-wait"}))))))
+
+    (testing "a fire nobody took within the keep is dropped, its key revoked and its wake armed"
+      (fire!)
+      (let [[g] (pf/pending st p)
+            entry? (fn [] (some #(= (:id g) (:pull_fire %))
+                                (get-in (seat-row) [:data :fire_keys])))]
+        (is (some? g))
+        (is (entry?))
+        (is (nil? (rl/take-fire! (at (+ pf/keep-seconds 60)) p)))
+        (is (empty? (pf/pending st p)))
+        (is (not (entry?)) "its key was revoked")
+        (is (true? (get-in (sched-of seat-id) [:data :wake_pending])))
+        (is (empty? (missed)) "no never_sat sitting")))
 
     (seat-do! seat-id :retire)))
 

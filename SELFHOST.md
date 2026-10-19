@@ -172,6 +172,12 @@ When it did not: a red `tests` is the test command, not the factory;
 fix it in their repository. A missing `gh` is fine: open the pull
 request from the URL `git push` prints.
 
+This repository's own selfhost walk, before it reads the fixture
+repository, prints the fixture token's kind (from its prefix), its
+length, whether whitespace surrounded it, and the HTTP status GitHub's
+API answers it for the repository and its README, never the token; a
+status other than 200 there fails the step naming that status.
+
 ## 6. The mayor folder
 
 The mayor is the person's own seat: it tells them what waits on them.
