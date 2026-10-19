@@ -800,7 +800,21 @@
                              ;; its own key before it spends one. Absent
                              ;; when the principal acts for nobody.
                              (not (str/blank? (str (:acts-for principal ""))))
-                             (assoc :acts_for (str (:acts-for principal))))))))))
+                             (assoc :acts_for (str (:acts-for principal)))
+                             ;; the grant this identity WEARS with no
+                             ;; header presented (ticket 152ff81d's
+                             ;; decision 3): a person's standing grant, a
+                             ;; guest's session grant — its id and the
+                             ;; kinds it scopes, so the UI's grant chip
+                             ;; can name it. A presented header is the
+                             ;; UI's own choice, and its chip shows that.
+                             (and (get-in vis [:grant :id])
+                                  (str/blank? (get-in req [:headers "x-waymark-grant"])))
+                             (assoc :worn_grant
+                                    {:id (str (get-in vis [:grant :id]))
+                                     :kinds (->> (keys (inv/resources eng))
+                                                 (filter (:kind? vis))
+                                                 (map name) sort vec)}))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
