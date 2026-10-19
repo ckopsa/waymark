@@ -46,9 +46,10 @@
   THE PULLER (LP2). A poll also stamps the row's `puller_seen_at`
   (`seen!`), at most once in `seen-every` seconds, by a maintenance
   write, and the computed `puller` reads it: connected, away or never.
-  The poll table stays the pool's one source for `pull-waiting`; the
-  stored field is what a person, a seat's waiting sentence
-  (`away-sentence`) and the live cracks pass read."
+  It is the one source: the pool's `pull-waiting`, a person, a seat's
+  waiting sentence (`away-sentence`) and the live cracks pass all read
+  it. `poll-seconds` stays above `seen-every` plus the poll's hold, so a
+  live puller never reads away."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -923,12 +924,16 @@
               {:retry_after (str (sch/retry-instant at (:throttled answer)
                                                     (:body answer)))})))))
 
+(defn- seen-at ^Instant [row]
+  (instant-of (get-in row [:data :puller_seen_at])))
+
 (defn pull-waiting
   "For a pull link no localfire has polled within `poll-seconds` of
-  `at`: the instant to look again. nil when one has, and for a push link."
-  [eng row ^Instant at]
+  `at`, as its `puller_seen_at` says: the instant to look again. nil
+  when one has, and for a push link."
+  [_eng row ^Instant at]
   (when (pull? row)
-    (let [polled (pf/last-poll (:storage eng) (str (:id row)))]
+    (let [polled (seen-at row)]
       (when (or (nil? polled)
                 (.isBefore polled (.minusSeconds at poll-seconds)))
         (.plusSeconds at poll-seconds)))))
@@ -949,9 +954,6 @@
   "How stale `puller_seen_at` grows before a poll writes it again: a
   link takes at most one row write in this many seconds, not one a poll."
   30)
-
-(defn- seen-at ^Instant [row]
-  (instant-of (get-in row [:data :puller_seen_at])))
 
 (defn puller-of
   "Whether a localfire is on pull link `row` at `at`: \"connected\" when
@@ -985,10 +987,16 @@
                (str "(last seen " seen ")")
                "(never connected)"))))))
 
+(defn- owner-of [row]
+  (some-> (get-in row [:data :owner]) str not-empty))
+
 (defn pool-away
-  "`away-sentence` over the links of the pool `ids`."
-  [eng ids at]
-  (away-sentence (keep (links-by-id eng) (map str ids)) at))
+  "`away-sentence` over the links of the pool `ids` — with `owner`
+  (`pool-owner`), only that person's, as `fire-pool!` tries them."
+  [eng ids at & [owner]]
+  (away-sentence (cond->> (keep (links-by-id eng) (map str ids))
+                   owner (filter #(= owner (owner-of %))))
+                 at))
 
 (defn seen!
   "Stamp `puller_seen_at` on pull link `id` at `now` — only when it is
@@ -1009,9 +1017,6 @@
                                   (assoc (:data row) :puller_seen_at (str now))
                                   (:next-flip-at row))
               true)))))))
-
-(defn- owner-of [row]
-  (some-> (get-in row [:data :owner]) str not-empty))
 
 (defn pool-owner
   "The person whose links alone a seat's fire may go out on (b7572409,
