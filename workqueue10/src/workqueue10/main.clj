@@ -803,9 +803,10 @@
   (org-boot/admit resources orgs engine/full-registry))
 
 (defn live-orgs-on-boot!
-  "Each live org's seed, after WAYMARK10_ORG's and by the same rule:
-  loaded on a fresh engine, skipped on one that holds its marker, and a
-  refusal throws. `opts` are `org-boot/boot!`'s."
+  "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
+  engine and skipped on one that holds its marker. A refusal skips that
+  org with a line and a draft ticket, and the house boots (ticket
+  087753c1). `opts` are `org-boot/boot!`'s."
   ([eng orgs] (live-orgs-on-boot! eng orgs {}))
   ([eng orgs opts]
    (org-boot/boot-live! eng orgs opts)))

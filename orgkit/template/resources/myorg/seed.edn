@@ -6,6 +6,9 @@
  :version 1
  :org "myorg"
  :domains [{:name "myorg" :label "My Org" :ref :myorg}]
+ ;; on the house, the :owner :id is the filing person's member id, a
+ ;; member the seed reuses (seed.clj): the onboarding seat writes it
+ ;; from the plan's owner. "owner" serves a memory engine only.
  :cast
  {:owner {:id "owner" :display "The Owner" :type :human :roles ["approver"]}}
  ;; a seat is a factorykit template and its params, or a whole seat

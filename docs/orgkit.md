@@ -64,7 +64,11 @@ it:
   `:label`, its budget its `:budget_usd_per_week` or the factory's 3600.
   A `:ref` names the row, so a seat template's `:domain_id` can be
   `[:ref …]`.
-- `:cast`: the members, as in the demo seed. A member may declare
+- `:cast`: the members, as in the demo seed. On the house, the
+  `:owner`'s `:id` is the filing person's member id, a member the seed
+  reuses; the onboarding seat writes it from the plan's owner. An org
+  whose seed is refused at boot is skipped with a draft ticket, and the
+  house boots without it. A member may declare
   `:scope`, in a seat's own shape (`[{:kind "request" :actions
   ["accept"]}]`, `"*"` for every action of a kind): its ceiling, what
   any seat it owns may hold. A member with no `:scope` holds the whole
