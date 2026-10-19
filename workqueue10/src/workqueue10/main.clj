@@ -1187,22 +1187,35 @@
            storage :factory10-enroll
            {:retry-ms 5000
             :start-fn #(bench/start-enrol-sweeper! eng {})
-            :stop-fn bench/stop-enrol-sweeper!}))]
+            :stop-fn bench/stop-enrol-sweeper!}))
+        ;; …and org-live's two passes, which the boot ran above, again
+        ;; every five minutes (ticket 59d1cfa0): a hire the owner refuses
+        ;; retires on the next tick, not at the next deploy. ELECTED, so
+        ;; one process per database takes the plans' doors
+        org-live-pass
+        (when (factory-on?)
+          (store/elect-role!
+           storage :factory10-org-live
+           {:retry-ms 5000
+            :start-fn #(org-live/start-passes! eng {})
+            :stop-fn org-live/stop-passes!}))]
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass
                  :factory-watch factory-watch
-                 :factory-enrol-pass factory-enrol-pass})
+                 :factory-enrol-pass factory-enrol-pass
+                 :org-live-pass org-live-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
   (when-some [{:keys [engine server storage inbox-pass factory-pass
-                      factory-watch factory-enrol-pass]} @dev]
+                      factory-watch factory-enrol-pass org-live-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
     (when factory-watch (forge/stop-passes! factory-watch))
     (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
+    (when org-live-pass (store/release-role! storage org-live-pass))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))
