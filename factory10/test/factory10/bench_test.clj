@@ -2747,7 +2747,7 @@
         as {:principal colton}]
     (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
     (answer! state "bench__merge" {:state "merged"})
-    (inv/invoke! eng :org_plan id :propose {:change (str (:id change))} as)
+    (walk/proposed! eng id colton {:change (str (:id change))})
     (inv/invoke! eng :org_plan id :hand_in_film
                  {:film_url "https://example.com/greenleaf.mp4"
                   :take_report "{}" :head_sha a-commit} as)

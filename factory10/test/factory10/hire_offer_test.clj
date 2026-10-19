@@ -91,7 +91,8 @@
   [eng]
   (let [id (str (:id (:row (hire! eng))))
         as {:principal the-owner}]
-    (inv/invoke! eng :org_plan id :propose {:hire_seat a-hire-seat} as)
+    (inv/invoke! eng :org_plan id :propose
+                 {:hire_seat a-hire-seat :change (walk/audited! eng id {})} as)
     (inv/invoke! eng :org_plan id :hand_in_film
                  {:film_url "https://example.com/hire.mp4"
                   :take_report "{}" :head_sha walk/a-head} as)
@@ -128,6 +129,9 @@
     (testing "the owner's Allow goes live, and the pass opens the seat"
       (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
       (is (= "going_live" (name (:state (load-row eng :org_plan id)))))
+      ;; the hire's pull request merges: the pass opens the seat after it
+      (inv/invoke! eng :change (get-in (load-row eng :org_plan id) [:data :change])
+                   :merge nil walk/the-engine)
       (is (= 1 (org-live/mark-live-plans! eng)))
       (let [plan (load-row eng :org_plan id)
             seat (load-row eng :seat (get-in plan [:data :hired_seat]))]

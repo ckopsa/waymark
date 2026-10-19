@@ -14,6 +14,17 @@
 (deftest the-example-org-conforms
   (is (= [] (conform/conform "../orgs/example"))))
 
+(deftest the-orgkit-template-conforms-as-a-new-org
+  (let [src (io/file "../orgkit/template")
+        dir (io/file (str (Files/createTempDirectory "orgkit" (make-array FileAttribute 0)))
+                     "myorg")]
+    (doseq [^File f (file-seq src)
+            :when (.isFile f)
+            :let [to (io/file dir (str (.relativize (.toPath src) (.toPath f))))]]
+      (io/make-parents to)
+      (io/copy f to))
+    (is (= [] (filterv #(= :error (:severity %)) (conform/conform (str dir)))))))
+
 (defn- example-with-seat
   "A copy of orgs/example whose seed holds the seat `entry` beside its
   own, as the onboarding seat writes it. → its dir."
@@ -40,7 +51,7 @@
   (example-with-seat {:template "org-mayor"
                       :params {:org "example" :domain "example"
                                :domain_id [:ref :example] :owner "owner"
-                               :budget_usd_per_week 8M :kinds kinds}}))
+                               :budget_usd_per_week 8M :kinds kinds :wakes []}}))
 
 (deftest the-example-org-conforms-with-a-hired-seat-in-the-seed
   (is (= [] (conform/conform

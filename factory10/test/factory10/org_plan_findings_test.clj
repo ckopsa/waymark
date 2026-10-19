@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
@@ -112,6 +113,7 @@
 (deftest the-walk-takes-the-findings-in-a-fixed-order
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        _ (walk/linked! eng id "ccccccc1")
         step #(:key (:next_step (plan-of h id)))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
                                {:headers person :body {}}))]
@@ -147,6 +149,7 @@
 (deftest a-red-film-reopens-a-proposed-plan
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        change (walk/linked! eng id "ccccccc1")
         state #(:state (json (req h :get (str "/api/org_plans/" id)
                                   {:headers person})))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
@@ -178,6 +181,7 @@
         (is (some? (:next_step plan)) "the walk reopens on the film")))
     (testing "propose is shut until the finding clears"
       (is (not= 200 (propose)))
+      (inv/invoke! eng :change change :observe {:head_sha "ddddddd2"} walk/the-engine)
       (recorded! eng id "ddddddd2" [warning])
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
