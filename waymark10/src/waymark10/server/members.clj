@@ -652,7 +652,7 @@
     (t/allow)))
 
 (g/defguard an-agents-suspend-waits-on-its-person
-  {:hold true
+  {:hold :agents
    :reads [:principal :now :grant :approval_request :member :domain]
    :vars [:shown]
    :open "No door clears this one. The call waits as a held_call for the agent's person, and the person's Allow runs it as the person, judged as the person's own suspend or reinstate."

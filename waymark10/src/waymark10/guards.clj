@@ -40,7 +40,10 @@
     :needs-input     probe override; defaults to (check ∧ judges)
     :severity        :refuse | :warning (acknowledgable, E1)
     :hold            true: a refusal is held for the person's tap
-                     rather than answered 409 (waymark10.holds)
+                     rather than answered 409 (waymark10.holds);
+                     :agents: the same, for a guard that holds only an
+                     agent's call, so a person still takes the door
+                     directly (the cracks audit reads it as no hold)
     :resolves        vector of input fields whose row this guard reads
                      — the kind-and-id pairs the dangling-ref wall
                      cannot reach (checks/check-resolvers)
@@ -221,7 +224,7 @@
                      ": :evidence is [name …] or {name (fn [row ctx])}")))))
     ;; a hold is registered when its module loads, so the router's one
     ;; question (holds/hold?) knows it without a list kept by hand
-    (clojure.core/when (true? (:hold g))
+    (clojure.core/when (#{true :agents} (:hold g))
       (holds/register! (clojure.core/or name :guard)))
     (merge g
            {:name (clojure.core/or name :guard)
