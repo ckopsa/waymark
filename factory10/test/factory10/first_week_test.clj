@@ -87,7 +87,11 @@
 (deftest the-audit-renders-the-example-org's-scene-at-its-head
   (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
                                    (:day_one filmed-on))
-        {:keys [scene clone]} (edn/read-string text)]
+        {:keys [scene clone day_one]} (edn/read-string text)]
+    (testing "it names its day one, the day the clone's seed counts [:days 0] from"
+      (is (= (:day_one filmed-on) day_one))
+      (is (some #(= {:since day_one} (select-keys % [:since]))
+                (tree-seq coll? seq (:shots scene)))))
     (testing "it is the scene the seed renders, as edn text"
       (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""))) scene)))
     (testing "at the head it names, on no clone yet"
