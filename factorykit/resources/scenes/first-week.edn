@@ -3,7 +3,8 @@
 ;; before the person merges it. Epic cafa6106, M3d. factory10.first-week
 ;; renders it from the org's seed: :opening, then :day once for each of
 ;; the :days the world seat plays (seats/world.edn), then :closing, its
-;; {{kinds}} part :closing_kind once for each kind the seed's steps make.
+;; {{kinds}} part :closing_kind once for each success end of each kind the
+;; seed's steps make, at most four (ticket 3173de32).
 ;; The opening is :opening_bare when the org has no brief. The holes come
 ;; to 38 seconds; with the taps, about 45.
 {:template
@@ -13,6 +14,9 @@
            :day_one "Day 1's date (YYYY-MM-DD)."
            :week_end "The day after the last day, where the week's holes end."
            :each_kind "In :closing_kind: one kind the seed's steps make rows of."
+           :each_state "In :closing_kind: one of that kind's terminal states that is no loss."
+           :each_one "In :closing_kind: the kind's noun and that state, for one row: prospect engaged."
+           :each_many "In :closing_kind: the same, for many: prospects engaged."
            :owner "The cast id of the person filmed: the seed's approver, or its first cast member."
            :owner_display "That person's :display."
            :kind "The kind the world seat knocks on: the one the seed's first create makes, unless named."
@@ -46,16 +50,18 @@
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
          {"$day" {:window "shot" :domain "{{seed}}"}}]}]
- ;; the week's numbers: each kind's rows that ended the week finished,
- ;; then the held calls it asked the person
+ ;; the week's numbers: each kind's rows that ended the week in each
+ ;; success end, a zero dropping its clause, then the held calls it asked
+ ;; the person
  :closing_kind
- [{"$rows" {:kind "{{each_kind}}" :since "{{day_one}}" :until "{{week_end}}"
-            :field "updated_at" :terminal true :count true}}
-  " {{each_kind}} finished, "]
+ [{"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :since "{{day_one}}" :until "{{week_end}}"
+            :field "updated_at" :count true :one "{{each_one}}" :many "{{each_many}}"}}
+  ", "]
  :closing
  [{:hold {:ms 3000} :role "payoff"
    :say ["That was the week: "
          "{{kinds}}"
-         {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}" :count true}}
-         " taps from you. Merge to make it real."]}]
+         {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}" :count true
+                   :one "tap from you" :many "taps from you" :none "0 taps from you"}}
+         ". Merge to make it real."]}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}

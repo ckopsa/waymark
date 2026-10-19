@@ -323,6 +323,18 @@
         (is (= "2 in." (scenes/fill-say [counted " in."] rows-of)))
         (is (= "0 in." (scenes/fill-say [(assoc-in counted ["$rows" :terminal] true) " in."]
                                         rows-of)))))
+    (testing "a count with one and many words its number; a zero drops its clause"
+      (let [worded (fn [state]
+                     {"$rows" {:kind "chore" :state state :count true
+                               :since (str (.minusSeconds now 3600)) :until (str (.plusSeconds now 3600))
+                               :one (str "chore " state) :many (str "chores " state)}})]
+        (is (= "Week: 2 chores open, the end."
+               (scenes/fill-say ["Week: " (worded "open") ", " (worded "done") ", " "the end."]
+                                rows-of)))
+        (is (= "1 chore open." (scenes/fill-say [(worded "open") "."] (constantly ["a"]))))
+        (is (= "no chores done."
+               (scenes/fill-say [(assoc-in (worded "done") ["$rows" :none] "no chores done") "."]
+                                rows-of)))))
     (testing "a string say is spoken as written"
       (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
 

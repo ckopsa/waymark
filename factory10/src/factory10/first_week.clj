@@ -24,6 +24,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [factorykit.conform :as conform]
             [waymark10.server.invoke :as inv])
   (:import (java.time LocalDate)
            (java.time.format TextStyle)
@@ -68,6 +69,41 @@
   [seed]
   (distinct (keep #(some-> (:kind %) name) (:steps seed))))
 
+(def loss-states
+  "The terminal states the closing leaves out: the ends that are losses."
+  #{"declined" "written_off" "cancelled" "dropped"})
+
+(defn- words [k] (str/replace (name k) "_" " "))
+
+(defn plural
+  "`noun`'s plural: as written when it ends in s, -ies for a y after a
+  consonant, else -s."
+  [noun]
+  (cond (str/ends-with? noun "s") noun
+        (re-find #"[^aeiou]y$" noun) (str (subs noun 0 (dec (count noun))) "ies")
+        :else (str noun "s")))
+
+(defn- the-clauses
+  "The closing's clauses (ticket 3173de32): for each kind the seed's
+  steps make, in that order, each of its terminal states that is no
+  loss, in the kind's state order, as the values of one :closing_kind;
+  at most four. A kind's noun is its declared :label, else its name with
+  '_' as a space. `resources` are the org's declarations."
+  [seed resources]
+  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)]
+    (->> (the-org-kinds seed)
+         (mapcat (fn [k]
+                   (when-some [r (get by-kind k)]
+                     (let [noun (or (:label r) (words k))
+                           ends (into #{} (map name) (:terminal r))]
+                       (for [s (map name (:states r))
+                             :when (and (ends s) (not (loss-states s)))]
+                         {:each_kind k
+                          :each_state s
+                          :each_one (str noun " " (words s))
+                          :each_many (str (plural noun) " " (words s))})))))
+         (take 4))))
+
 (defn brief-line
   "The first sentence of `brief`, cut at 140 characters; nil when there
   is no brief."
@@ -86,8 +122,9 @@
   stood up with (clone__up's `day_one`), so its seed's [:days n] count
   from the day the captions' holes read (ticket bbf1f253). `brief` is
   the plan's brief: the opening says its first sentence beside the org's
-  name, or the name alone without one."
-  [seed {:keys [clone_url head_sha day_one kind brief]}]
+  name, or the name alone without one. `resources` are the org's kind
+  declarations: the closing counts each kind's success ends by them."
+  [seed {:keys [clone_url head_sha day_one kind brief resources]}]
   (let [t (template)
         owner (the-owner seed)
         day-one (LocalDate/parse (str day_one))
@@ -114,8 +151,8 @@
                                        :next_date (str (.plusDays day-one (long k)))))]
                 (cond-> shots
                   (get roles k) (update (dec (count shots)) assoc :role (get roles k)))))
-        per-kind (mapcat #(fill (:closing_kind t) (assoc values :each_kind %))
-                         (the-org-kinds seed))
+        per-kind (mapcat #(fill (:closing_kind t) (merge values %))
+                         (the-clauses seed resources))
         closing (mapv (fn [shot]
                         (cond-> shot
                           (sequential? (:say shot))
@@ -151,6 +188,14 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
+(defn- read-resources
+  "The kinds the org at `org-dir` declares, its `<org>.org/resources`,
+  loaded as conform loads them: with the org's src on the classpath."
+  [org-dir org]
+  (conform/with-org-classpath
+    (io/file org-dir)
+    #((requiring-resolve (symbol (str org ".org") "resources")))))
+
 (defn org-scene
   "The first-week scene of the org at `org-dir`, at `head-sha`, its day 1
   on `day-one`, as the edn text the org-findings artifact carries, its
@@ -158,9 +203,11 @@
   no clone, so the clone's url is empty: the director plays the scene on
   the clone it stands up at that head."
   [org-dir head-sha day-one]
-  (pr-str (scene (read-seed org-dir)
-                 {:clone_url "" :head_sha head-sha :day_one day-one
-                  :brief (read-brief org-dir)})))
+  (let [seed (read-seed org-dir)]
+    (pr-str (scene seed
+                   {:clone_url "" :head_sha head-sha :day_one day-one
+                    :brief (read-brief org-dir)
+                    :resources (read-resources org-dir (:org seed))}))))
 
 (defn -main
   "Print the first-week scene of the org at `org-dir` at `head-sha`, its
