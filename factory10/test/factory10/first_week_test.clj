@@ -91,6 +91,10 @@
                                           :brief "A six-person landscaping business."}
                                          {:principal the-owner}))))]
     (inv/invoke! e :org_plan id :propose {} {:principal the-owner})
+    (inv/invoke! e :org_plan id :hand_in_film
+                 {:film_url "https://films.example.test/example-week.mp4"
+                  :take_report "{}" :head_sha (:head_sha filmed-on)}
+                 {:principal the-owner})
     id))
 
 (def ^:private film

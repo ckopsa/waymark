@@ -792,11 +792,14 @@
                    " judgment — narrow the entry with a filter, or name a"
                    " judgment whose queue narrows it"))
 
+            ;; an any-of filter ("drafting,simulated") is judged state by
+            ;; state: each one the walk covers needs its own way out
             state
-            (when-not (leaves-the-state? rdef (:actions entry) state)
-              (str "no door this seat may take moves a " state " " walk
-                   " out of " state " — add a door of " walk
-                   " that leaves " state " to that scope entry's actions,"
+            (when-some [stuck (first (remove #(leaves-the-state? rdef (:actions entry) %)
+                                             (map str/trim (str/split state #","))))]
+              (str "no door this seat may take moves a " stuck " " walk
+                   " out of " stuck " — add a door of " walk
+                   " that leaves " stuck " to that scope entry's actions,"
                    " or filter the entry by a state one of its doors"
                    " leaves"))
 
@@ -7379,6 +7382,51 @@
           (let [born (str (get-in change [:data :born_from]))]
             (when (str/starts-with? born groomed-walk-prefix)
               (not-empty (subs born (count groomed-walk-prefix))))))))))
+
+(defn failing-change-mark
+  "The mark the walk row of a ticket carries when the fire named a
+  FAILING change born from it (ticket c91b3af9): the seat's own red
+  round, handed back for it to fix. → {\"why\" \"failing_change\"
+  \"change\" id \"pr\" number \"head\" sha} when `id` is a change in
+  `failing` whose ticket is `in_review`, and the seat wrote the change
+  (its `author` is the seat's name) or holds `complete` on tickets of
+  the ticket's repository. Nil otherwise, and the walk is as it was."
+  [eng seat-row id]
+  (when (= "ticket" (str (get-in seat-row [:data :walk])))
+    (let [row-of (fn [kind rid]
+                   (when-some [rdef (get (inv/resources eng) kind)]
+                     (try
+                       (some->> (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/load-row (:storage eng) tx kind
+                                                    (str rid) {})))
+                                (inv/decode-row rdef))
+                       (catch Exception _ nil))))
+          change (some->> id str not-empty (row-of :change))
+          born (str (get-in change [:data :born_from]))
+          ticket-id (when (str/starts-with? born groomed-walk-prefix)
+                      (not-empty (subs born (count groomed-walk-prefix))))
+          ticket (when (and ticket-id
+                            (= "failing" (some-> (:state change) name)))
+                   (row-of :ticket ticket-id))
+          repo (some-> (get-in ticket [:data :repo]) str not-empty)
+          seat-name (some-> (get-in seat-row [:data :name]) str not-empty)
+          wrote? (and seat-name
+                      (= seat-name (str (get-in change [:data :author]))))
+          completes? (some (fn [entry]
+                             (and (= "ticket" (some-> (:kind entry) name))
+                                  (some #(= "complete" (name %)) (:actions entry))
+                                  (let [r (some-> (get-in entry [:filter :repo]) str)]
+                                    (or (nil? r) (= r repo)))))
+                           (get-in seat-row [:data :scope]))
+          number (get-in change [:data :number])
+          head (some-> (get-in change [:data :head_sha]) str not-empty)]
+      (when (and ticket
+                 (= "in_review" (some-> (:state ticket) name))
+                 (or wrote? completes?))
+        (cond-> {"why" "failing_change" "change" (str (:id change))}
+          (some? number) (assoc "pr" number)
+          head (assoc "head" head))))))
 
 (defn fire-deferred-until
   "When a fire whose `text` names a walk row (`named-row`, read back to
