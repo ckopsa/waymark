@@ -3344,6 +3344,21 @@
           "and the redirect is followed with no bearer to another host")
       (is (true? (:binary blob)) "for the archive's bytes"))))
 
+(deftest an-artifact-is-read-from-its-json-entry
+  (let [state (gh/fake-state)
+        source (gh/fake-source state)
+        out (java.io.ByteArrayOutputStream.)]
+    (with-open [zout (java.util.zip.ZipOutputStream. out)]
+      (doseq [[entry ^String text] [["first_week_scene.edn" "{:scene {}}"]
+                                    ["org-findings.json" "{\"acme\": []}"]]]
+        (.putNextEntry zout (java.util.zip.ZipEntry. ^String entry))
+        (.write zout (.getBytes text "UTF-8"))
+        (.closeEntry zout)))
+    (gh/seed-artifact! state repo {:id 504 :name "findings" :expired false}
+                       (.toByteArray out))
+    (is (= {:acme []} (forge/forge-artifact source repo "findings"))
+        "the scene beside it does not stand in for the findings")))
+
 (deftest an-artifact-listed-only-expired-answers-nil
   (let [state (gh/fake-state)
         source (gh/fake-source state)]

@@ -11,6 +11,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
@@ -112,6 +113,7 @@
 (deftest the-walk-takes-the-findings-in-a-fixed-order
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        _ (walk/linked! eng id "ccccccc1")
         step #(:key (:next_step (plan-of h id)))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
                                {:headers person :body {}}))]
@@ -147,6 +149,7 @@
 (deftest a-red-film-reopens-a-proposed-plan
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        change (walk/linked! eng id "ccccccc1")
         state #(:state (json (req h :get (str "/api/org_plans/" id)
                                   {:headers person})))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
@@ -178,6 +181,7 @@
         (is (some? (:next_step plan)) "the walk reopens on the film")))
     (testing "propose is shut until the finding clears"
       (is (not= 200 (propose)))
+      (inv/invoke! eng :change change :observe {:head_sha "ddddddd2"} walk/the-engine)
       (recorded! eng id "ddddddd2" [warning])
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
@@ -210,3 +214,34 @@
                  :body {:head_sha "aaaaaaa1" :findings [quote-approver]}})]
     (is (not= 200 (:status no)) (pr-str (json no)))
     (is (empty? (:findings (plan-of h id))))))
+
+;; ticket d4750bf9: the name becomes a directory, a namespace and a
+;; domain, and live-orgs boots only a snake_case one.
+(defn- file-named [h org]
+  (req h :post "/api/org_plans" {:headers person :body {:name org}}))
+
+(deftest a-name-is-snake-case
+  (let [{:keys [h]} (world)]
+    (doseq [typed ["r&d-tax-services" "rd-tax-services"]]
+      (testing (str typed " is refused, naming the field and its snake_case")
+        (let [no (file-named h typed)
+              said (pr-str (json no))]
+          (is (= 422 (:status no)) said)
+          (is (re-find #"\bname\b" said) said)
+          (is (str/includes? said "rd_tax_services") said))))
+    (testing "rd_tax_services is accepted"
+      (is (= 201 (:status (file-named h "rd_tax_services")))))
+    (testing "capitals, spaces, slashes and a leading digit or underscore are refused"
+      (doseq [bad ["Greenleaf" "green leaf" "orgs/greenleaf" "_greenleaf" "9lives"]]
+        (is (= 422 (:status (file-named h bad))) bad)))
+    (testing "the projected create schema shows the pattern"
+      (let [doc (json (req h :get "/api/org_plans" {:headers person}))]
+        (is (some #(and (map? %) (= org-plan/name-pattern (:pattern %)))
+                  (tree-seq coll? seq doc)))))))
+
+(deftest the-snake-case-of-what-was-typed
+  (is (= "rd_tax_services" (org-plan/snake-name "r&d-tax-services")))
+  (is (= "rd_tax_services" (org-plan/snake-name "rd-tax-services")))
+  (is (= "acme_landscaping" (org-plan/snake-name "  Acme Landscaping!")))
+  (is (= "a_b" (org-plan/snake-name "a//b")))
+  (is (= "org_9lives" (org-plan/snake-name "9lives"))))

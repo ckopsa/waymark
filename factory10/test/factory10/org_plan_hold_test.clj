@@ -120,7 +120,7 @@
 (deftest an-agents-go-live-is-held-for-the-owner-and-the-allow-runs-it
   (let [{:keys [h eng]} (world)
         id (filed! h)
-        _ (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+        _ (walk/proposed! eng id the-owner)
         _ (inv/invoke! eng :org_plan id :hand_in_film
                        {:film_url "https://example.com/greenleaf.mp4"
                         :take_report "{}" :head_sha "5e469c6166edf6a3"}

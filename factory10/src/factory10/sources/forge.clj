@@ -2624,6 +2624,15 @@
     (let [page (or (get doc :law_page) (get doc "law_page"))]
       (when (and (string? page) (not (str/blank? page))) page))))
 
+(defn first-week-scene-of
+  "The first-week scene the artifact's JSON carries beside the findings,
+  its `first_week_scene` as edn text (ticket 4dbb8243), or nil when it
+  carries none."
+  [doc]
+  (when (map? doc)
+    (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
+      (when (and (string? scene) (not (str/blank? scene))) scene))))
+
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
   conform's `live_flag` for the org's org.edn at that head, and the
@@ -2666,7 +2675,8 @@
   findings were not recorded at → the artifact
   `org-findings-<org>-<head sha>` that head's tests.yml run uploaded,
   written through the door the plan's state affords, with the law page
-  the same artifact carries (ticket 4ab34d18). Once per head: a
+  the same artifact carries (ticket 4ab34d18) and its first-week scene,
+  rendered at that head (ticket 4dbb8243). Once per head: a
   plan whose `findings_sha` is its change's head is not read, and an
   artifact not there yet is tried on the next pass. A forge that does
   not answer, or a door the engine refuses, costs that plan one pass and
@@ -2687,7 +2697,7 @@
       (reduce
        (fn [census plan]
          (let [door (get findings-doors (state-of plan))
-               change (row-by-id eng :change (get-in plan [:data :change]))
+               change (row-by-id eng :change (bench/org-plan-change-id eng plan))
                repo (some-> (get-in change [:data :repository]) str not-empty)
                head (some-> (get-in change [:data :head_sha]) str not-empty)
                org (org-of plan)]
@@ -2705,7 +2715,9 @@
                    (do (inv/invoke! eng :org_plan (str (:id plan)) door
                                     (cond-> (merge {:head_sha head :findings found}
                                                    (live-of doc))
-                                      (law-page-of doc) (assoc :law_page (law-page-of doc)))
+                                      (law-page-of doc) (assoc :law_page (law-page-of doc))
+                                      (first-week-scene-of doc)
+                                      (assoc :first_week_scene (first-week-scene-of doc)))
                                     (as-opts))
                        (update census :findings (fnil inc 0)))
                    census))
