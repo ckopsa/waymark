@@ -1398,6 +1398,80 @@
                      ", which its head never ran; it was brought up to date,"
                      " once for this head")))))))
 
+;; A CHANGE HELD ONLY FOR BEING BEHIND ITS BASE (ticket 6add57e9). The
+;; line brings only its front forward, and only a change the house
+;; merges stands in a line: one a person merges, one an org_plan not yet
+;; live names, one whose ticket waits on another, would sit green and
+;; behind for good, and its seat may have no round left to move it. So
+;; each submitted change outside the lines whose head the mirror read
+;; green (`green_head`) and behind its base (`behind_base` at
+;; `held_head`) is brought up to date with the rig's `update_branch` —
+;; a merge commit, as a system act that spends no round — once per head,
+;; so at most once per base move. A conflict is not resolved: it is
+;; written on the row as `conflicts` through the ctx's
+;; `:held-conflict!`, and the change stays held.
+
+(defn held-only-behind?
+  "Is this change held only for being behind its base? Its head is the
+  one the mirror read green (`green_head`) and behind (`behind_base` at
+  `held_head`), and it is neither a draft nor conflicted."
+  [change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean
+     (and head
+          (= head (some-> (get-in change [:data :green_head]) str))
+          (= head (some-> (get-in change [:data :held_head]) str))
+          (true? (get-in change [:data :behind_base]))
+          (not (true? (get-in change [:data :draft])))
+          (not (conflicted-change? change))))))
+
+(defn bring-held-forward!
+  "Bring each of `changes` that is `held-only-behind?` up to date with
+  the rig's `update_branch`, once for its head (`seen` keeps it under
+  `[:updated id]`). A conflict goes to the ctx's `:held-conflict!` as
+  id, conflicts; no answer or a missing power is not remembered, so the
+  next pass asks again. → the number of `update_branch` calls made."
+  [ctx seen changes]
+  (let [conflict! (or (:held-conflict! ctx) (constantly false))
+        asked (volatile! 0)]
+    (doseq [change changes
+            :let [id (str (:id change))
+                  head (str (get-in change [:data :head_sha]))]
+            :when (and (held-only-behind? change)
+                       (not= head (get @seen [:updated id])))]
+      (vswap! asked inc)
+      (let [answer (ask ctx :update_branch (update-args change))
+            why (refused answer)]
+        (cond
+          (nil? answer)
+          (warn! "the update of " id " had no answer; the next pass asks again")
+
+          (contains? missing-power-refusals why)
+          (warn! "the rig has no update_branch yet (" why
+                 "); the next pass asks again")
+
+          :else
+          (do (swap! seen assoc [:updated id] head)
+              (cond
+                (update-conflict? answer)
+                (do (conflict! id (:conflicts (update-red-input change answer)))
+                    (warn! id " at " head " is held behind its base and conflicts"
+                           " with it (" (reason-of answer) "); it stays held"))
+
+                (nothing-forward? answer)
+                (do (swap! seen assoc [:current id] head)
+                    (warn! id " at " head " already holds its base ("
+                           (reason-of answer) ")"))
+
+                why
+                (warn! "the rig refused to update " id " at " head " ("
+                       (reason-of answer) ")")
+
+                :else
+                (warn! id " at " head " was held only behind its base; it was"
+                       " brought up to date, spending no round"))))))
+    @asked))
+
 (defn work-lines!
   "One merge call for every change of every line, with the engine's own
   hand; then only a line's front is brought up to date when it is
@@ -2090,16 +2164,41 @@
 
 ;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────
 
+(def ^:private live-change-states
+  "The change states whose pull request is still in play."
+  #{"open" "submitted" "failing" "stuck"})
+
+(defn org-plan-change-id
+  "The id of the change an org_plan names — or, for a plan whose
+  `change` is nil (one minted before the sit wrote it, ticket
+  db8b35bb), of the live change born from `org_plan:<id>`. nil when
+  there is neither."
+  [eng plan]
+  (or (some-> (get-in plan [:data :change]) str not-empty)
+      (when (rdef-of-kind eng :change)
+        (let [st (:storage eng)]
+          (some->> (store/with-tx st
+                     (fn [tx]
+                       (store/query-rows st tx :change
+                                         {:born_from (str "org_plan:" (:id plan))}
+                                         {:limit 20})))
+                   (filter #(contains? live-change-states
+                                       (some-> (:state %) name)))
+                   first
+                   :id
+                   str)))))
+
 (defn- org-plans
   "Every org_plan in one of `states`, decoded, by the id of the change it
-  names — empty in an engine that declares no org_plan kind."
+  names (`org-plan-change-id`) — empty in an engine that declares no
+  org_plan kind."
   [eng states]
   (if-some [rd (rdef-of-kind eng :org_plan)]
     (let [st (:storage eng)]
       (into {}
             (keep (fn [raw]
                     (let [plan (inv/decode-row rd raw)]
-                      (some-> (get-in plan [:data :change]) str not-empty
+                      (some-> (org-plan-change-id eng plan)
                               (vector plan)))))
             (store/with-tx st
               (fn [tx]
@@ -2184,7 +2283,9 @@
   (`review-parked-conflicts!`). A branch the rig says is behind its base is
   brought up to date with `update_branch` only when it is the front of
   its repository's line (`merge-lines`), once per head (`seen` keeps
-  that under `[:updated id]`). `merged` needs nothing here, because the
+  that under `[:updated id]`); a green change held behind outside every
+  line is brought up to date the same way (`bring-held-forward!`, ticket
+  6add57e9). `merged` needs nothing here, because the
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks; a refusal that says the pull request is not
@@ -2243,6 +2344,13 @@
                               by-repo)
                         @trains)]
     (try
+      (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)]
+        (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
+                              :held-conflict! (fn [id conflicts]
+                                                (mark-row! eng :change id
+                                                           {:conflicts conflicts} #{}))}
+                             seen
+                             (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (mark-conflicts! eng @answers)
       (doseq [[repo t] @trains]

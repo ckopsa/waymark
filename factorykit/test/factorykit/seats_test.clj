@@ -108,6 +108,13 @@
               (pr-str seat)
               values)))
 
+(deftest the-onboarding-seat-fits-its-caps-filled-with-a-real-org
+  (doseq [org ["rd_tax_services" "dress_rehearsal"]
+          :let [seat (fill (template "onboarding") {:org org})]]
+    (testing org
+      (is (<= 1 (count (:charter seat)) 1200) "the charter's cap")
+      (is (<= (count (:instructions seat)) 2000) "the instructions' cap"))))
+
 (def ^:private domain-names #{"draft-judge" "ops-seat" "sitting-judge" "mayor"})
 
 (deftest every-domain-template-writes-the-domain-ref-and-not-in-domain

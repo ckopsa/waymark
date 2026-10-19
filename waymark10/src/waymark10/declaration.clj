@@ -46,7 +46,12 @@
    ;; → one line or nil, read as the transition is appended, with the
    ;; row as the write leaves it. Prose, never law; outside the
    ;; fingerprint's action facet, like :out-of-state-says
-   :log-says])
+   :log-says
+   ;; the person's answer to the org audit's question about this door
+   ;; (ticket e1ed02c7): one sentence, rendered by factory10.law-text
+   ;; under 'What you decided'. Prose, never law; outside the
+   ;; fingerprint's action facet, like :log-says
+   :decided])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
@@ -69,7 +74,12 @@
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
-   :flow :actions :create-guards :create-action-names :allow-dead :renames
+   :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
+   ;; the create door's own safety (ticket 13e3b323): {:confirm true
+   ;; :consequence <fn of input, or a {field} template>} — the create
+   ;; refuses until its caller echoes the sentence its input fills
+   ;; (waymark10.confirm/create-consequence)
+   :create-safety
    ;; the doors licensed to depart a TERMINAL state (docs/spec-undo.md).
    ;; check-terminal-no-exit's flat rule — no action leaves a tomb — is
    ;; right about every door that CONTINUES a story and wrong about the
@@ -144,6 +154,12 @@
    ;; its name, or no age. It moves no row. Never in the fingerprint —
    ;; :waits' precedent
    :expected-age
+   ;; the person's answers to the org audit's questions about this
+   ;; kind's states (ticket e1ed02c7): {<state> "one sentence"} — how
+   ;; long a row may wait there, and who is told. factory10.law-text
+   ;; renders them; it moves no row. Never in the fingerprint — :waits'
+   ;; precedent
+   :decided
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; read-only fields the server computes at read time: {field {:schema

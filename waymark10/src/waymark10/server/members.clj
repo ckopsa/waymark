@@ -116,6 +116,10 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            ;; hold-owner: the person an agent's suspend or reinstate
+            ;; waits on (HC2). delegation requires nothing that
+            ;; requires members
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
@@ -589,6 +593,76 @@
       (t/deny {:vars {:times (str/join ", " bad)}})
       (t/allow))))
 
+;; ── an agent's suspend or reinstate (HC2, ticket bed1f2f6) ──────────
+;;
+;; An agent whose scope names the door does not suspend or reinstate
+;; by its own hand. When its person (delegation/hold-owner: the seat's
+;; owner, or a delegate's person) holds the manager role, the call is
+;; held for that person, and the Allow runs it AS THE PERSON
+;; (held-calls/door-principal), who is no agent, so these guards pass
+;; on the replay and the person's own judge it. Otherwise it refuses.
+
+(defn- agents-person
+  "The person an agent's suspend or reinstate waits on, or nil for a
+  caller who is no agent."
+  [ctx]
+  (when (= :agent (get-in ctx [:principal :type]))
+    (delegation/hold-owner ctx)))
+
+(defn- own-target?
+  "Is this member the asking agent itself, or the agent's own person?"
+  [row ctx]
+  (let [ids (into #{} (keep #(some-> % str not-empty))
+                  [(:id row) (get-in row [:data :subject])])]
+    (boolean (some ids (keep #(some-> % str not-empty)
+                             [(get-in ctx [:principal :id])
+                              (agents-person ctx)])))))
+
+(defn- managers-agent?
+  "Does a manager person stand behind this agent?"
+  [ctx]
+  (when-some [owner (agents-person ctx)]
+    (roles/manager? (assoc ctx :principal (t/principal {:id owner :display owner})))))
+
+(defn- suspend-shown
+  "What a held suspend or reinstate says to the person, in plain words:
+  whom it moves, and what changes for them."
+  [row]
+  (let [who (or (some-> (get-in row [:data :display]) str not-empty) (str (:id row)))]
+    (if (= "suspended" (some-> (:state row) name))
+      (str "Reinstate " who ": they can sign in again.")
+      (str "Suspend " who ": they can no longer sign in, and every request they make is refused until reinstated."))))
+
+(g/defguard agents-never-suspend-their-own
+  {:reads [:principal :now :grant :approval_request]
+   :open "No door clears this one: a suspend or reinstate of the agent itself, or of its own person, is never an agent's."
+   :explain "An agent never suspends or reinstates its own person, or the member that is the agent itself."}
+  [row _inp ctx]
+  (if (and (= :agent (get-in ctx [:principal :type])) (own-target? row ctx))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard agents-suspend-only-for-a-manager
+  {:reads [:principal :now :grant :approval_request :member :domain]
+   :open "An agent's suspend or reinstate waits on its person, and only a person who holds the manager role can allow it; that person suspends or reinstates directly."
+   :explain "An agent suspends or reinstates a member only for a person who holds the manager role, and no such person stands behind you."}
+  [_row _inp ctx]
+  (if (and (= :agent (get-in ctx [:principal :type])) (not (managers-agent? ctx)))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard an-agents-suspend-waits-on-its-person
+  {:hold :agents
+   :reads [:principal :now :grant :approval_request :member :domain]
+   :vars [:shown]
+   :open "No door clears this one. The call waits as a held_call for the agent's person, and the person's Allow runs it as the person, judged as the person's own suspend or reinstate."
+   :explain "Held for your person's tap. {shown} The call is recorded as a held_call, and their Allow runs it as them."}
+  [row _inp ctx]
+  (if (and (managers-agent? ctx) (not (own-target? row ctx)))
+    (let [shown (suspend-shown row)]
+      (t/deny {:vars {:shown shown} :evidence {:shown shown}}))
+    (t/allow)))
+
 (defn- hh-mm
   "A clock time as HH:mm: 6:00 becomes 06:00."
   [s]
@@ -682,6 +756,77 @@
                :x-display {:label "Zone" :help "The time zone the times are read in, e.g. America/Denver; UTC when empty."}}
         [:maybe [:string {:max 64}]]]]]]]])
 
+;; ── an agent's invite waits on its person (HC3, ticket a052edca) ────
+;;
+;; An agent proposes an invite (a member create with `invite` true);
+;; it is its manager person's to make. The call waits as a held_call,
+;; and the person's Allow replays it AS THE PERSON
+;; (held-calls/door-principal): the engine mints the token, the
+;; invitee's grant is born beside the row, and the sign-in link rides
+;; the person's Allow answer alone (held-calls/after-allow!).
+
+(defn- invite-holder
+  "The person an agent's invite waits on, or nil: the agent's person
+  (delegation/hold-owner) when that person holds the manager role.
+  Only an agent's create with `invite` true is asked."
+  [inp ctx]
+  (when (and (true? (:invite inp))
+             (= :agent (get-in ctx [:principal :type])))
+    (when-some [owner (delegation/hold-owner ctx)]
+      (when (roles/manager?
+             (assoc ctx :principal (t/principal {:id owner :display owner})))
+        owner))))
+
+(defn- scope-said
+  "One scope entry as a person reads it: `read member`, `create/edit ticket`."
+  [e]
+  (let [acts (seq (map name (:actions e)))]
+    (str (if acts (str/join "/" acts) "read") " " (name (:kind e)))))
+
+(defn- invite-shown
+  "What a held invite says to the person, in plain words: who is
+  invited, and what they will be able to see and do."
+  [inp]
+  (let [{:keys [scope expires_at]} (:grant inp)
+        roles' (seq (:roles inp))]
+    (str "Invite " (:display inp) " as a member"
+         (when roles' (str " holding " (str/join ", " roles')))
+         (if (seq scope)
+           (str ", who may " (str/join "; " (map scope-said scope))
+                (if expires_at (str " until " expires_at) " with no end"))
+           (when-not roles' ", with no access until one is given")))))
+
+(defn- mint-invite-token
+  "A fresh invite credential, minted by the engine: 32 random bytes,
+  base64url. The agent that proposed the invite never holds it."
+  []
+  (let [b (byte-array 32)]
+    (.nextBytes (java.security.SecureRandom.) b)
+    (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder)) b)))
+
+(g/defguard agents-invite-through-a-manager
+  {:judges [:invite]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :open "An agent's invite waits on its person only when that person holds the manager role; a manager makes the invite, or holds the agent's person."
+   :explain "An invite is your person's to make, and your person holds no manager role, so it cannot wait on them."}
+  [_row inp ctx]
+  (if (and (true? (:invite inp))
+           (= :agent (get-in ctx [:principal :type]))
+           (nil? (invite-holder inp ctx)))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard an-agents-invite-waits-on-its-person
+  {:hold true
+   :judges [:invite]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :open "No door clears this one. The invite waits as a held_call for the agent's person, and the person's Allow makes it as the person; the engine mints the token and shows the sign-in link to the person alone."
+   :explain "Held for your person's tap. An invite is your person's to make: the call is recorded as a held_call, and their Allow creates it as them."}
+  [_row inp ctx]
+  (if (invite-holder inp ctx)
+    (t/deny {:evidence {:shown (invite-shown inp)}})
+    (t/allow)))
+
 (defresource member
   {:kind :member
    :plural "members"
@@ -773,6 +918,26 @@
             ;; by the principal the row will bind to
             [:bind_token {:optional true :secret true}
              [:maybe [:string {:min 8 :max 128}]]]
+            ;; an invite the engine mints (HC3, ticket a052edca):
+            ;; `invite` asks for the token, and `grant` is the
+            ;; invitee's standing grant. Neither is kept: :on-create
+            ;; spends both
+            [:invite {:optional true
+                      :x-display {:label "Mint the invite"
+                                  :help "True has the engine mint the invite's token; the sign-in link is shown once, to the person who makes the invite."}}
+             [:maybe :boolean]]
+            [:grant {:optional true
+                     :x-display {:label "Their grant"
+                                 :help "The invitee's standing grant, as grant create takes it: its scope, and expires_at when it ends. It is made beside the invite, by the inviter."}}
+             [:maybe [:map
+                      [:scope {:x-display {:label "What it opens"
+                                           :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — as grant create takes it, so each entry is typed by hand."
+                                           :help "The leash, entry by entry: a kind and the actions allowed on it. Everything not named here stays shut."}}
+                       [:vector [:map-of :keyword :any]]]
+                      [:expires_at {:optional true
+                                    :x-display {:label "Ends at"
+                                                :help "When the invitee's grant stops opening anything. Leave it empty for a grant that does not end on its own."}}
+                       [:maybe :waymark/instant]]]]]
             ;; the homecoming credential (waymark-4zj.8): a one-shot
             ;; re-entry token for an ACTIVE agent member, minted by
             ;; :offer_reentry, spent by the /auth/agent door. :min 22
@@ -819,8 +984,10 @@
              [:maybe :boolean]]
             ;; the org a seed's completion marker was loaded for: written
             ;; by the seed loader (seed/mark!) and read back by
-            ;; seed/marker-org. Hidden: no form or roster shows it.
+            ;; seed/marker-org. Hidden: no form or roster shows it, and
+            ;; :engine-written: no hand's create or edit may carry it.
             [:seed_org {:optional true
+                        :engine-written true
                         :x-display {:hidden true
                                     :label "Seeded for org"
                                     :help "The org a seed's completion marker was loaded for. Written by the seed loader, never by hand."}}
@@ -846,6 +1013,7 @@
             ;; the notices quiet hours hold for the digest: written in
             ;; place by the engine, emptied when the digest goes out.
             [:quiet_held {:optional true
+                          :engine-written true
                           :x-display {:raw true
                                       :label "Held for quiet hours"
                                       :help "The notices that arrived during quiet hours, each a summary and a link, sent as one digest when the window closes. Written by the engine."}}
@@ -853,11 +1021,13 @@
             ;; a digest that did not go out: its lines stay in
             ;; :quiet_held for the next sweep, and it is counted here
             [:quiet_digest_failed {:optional true
+                                   :engine-written true
                                    :x-display {:raw true
                                                :label "Digests that failed"
                                                :help "How many times a quiet-hours digest could not be sent; its notices were kept for the next try. Written by the engine."}}
              [:maybe :int]]
             [:quiet_digest_error {:optional true
+                                  :engine-written true
                                   :x-display {:raw true
                                               :label "Last digest failure"
                                               :help "Why the last quiet-hours digest could not be sent. Written by the engine."}}
@@ -865,12 +1035,14 @@
             ;; "no carrier": notices are held but :notify names no
             ;; notifier that exists, so no digest is tried or counted
             [:quiet_digest_carrier {:optional true
+                                    :engine-written true
                                     :x-display {:raw true
                                                 :label "Digest carrier"
                                                 :help "\"no carrier\" when quiet-hours notices are held but no notifier is named, or the one named is gone: they wait, and no digest is tried or counted. Written by the engine."
                                                 :choices {"no carrier" "No carrier — notices are held, but no notifier can send the digest"}}}
              [:maybe [:enum "no carrier"]]]
             [:invited_by {:optional true
+                          :engine-written true
                           :x-ref {:principal true}
                           :x-display {:raw true
                                       :label "Invited by"
@@ -891,7 +1063,9 @@
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
                    acts-for-not-written-by-hand
-                   cast-not-written-by-hand]
+                   cast-not-written-by-hand
+                   agents-invite-through-a-manager
+                   an-agents-invite-waits-on-its-person]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -903,13 +1077,25 @@
    ;; a knock row lands "knock" and KEEPS it across its later bind
    ;; (bind/bind-agent! do not touch provenance).
    :on-create (fn [row ctx]
-                (let [tok (get-in row [:data :bind_token])
+                (let [{:keys [invite grant]} (:data row)
+                      ;; `invite` true: the engine mints the token
+                      row (cond-> (update row :data dissoc :invite :grant)
+                            (and (true? invite)
+                                 (nil? (get-in row [:data :bind_token])))
+                            (assoc-in [:data :bind_token] (mint-invite-token)))
+                      tok (get-in row [:data :bind_token])
                       inviter (get-in ctx [:principal :id])
                       provenance (cond
                                    (and tok (= inviter (:id registrar))) "knock"
                                    tok "invite"
                                    :else "idp")
                       row (assoc-in row [:data :provenance] provenance)]
+                  ;; the invitee's grant is born beside the row, the
+                  ;; inviter's own create, judged by grant create's guards
+                  (when (and (seq (:scope grant)) (:create ctx))
+                    ((:create ctx) :grant
+                     (cond-> {:audience (str (:id row)) :scope (:scope grant)}
+                       (:expires_at grant) (assoc :expires_at (:expires_at grant)))))
                   (if tok
                     (-> row
                         (assoc :state :invited)
@@ -1129,9 +1315,15 @@
     :suspend {:from #{:active} :to :suspended
               :safety {:idempotent true :reversible true :confirm true
                        :consequence "Every request this member makes is refused until reinstated; their held roles stop acting, and any standing re-entry credential is revoked."}
+              :guards [agents-never-suspend-their-own
+                       agents-suspend-only-for-a-manager
+                       an-agents-suspend-waits-on-its-person]
               :handler clear-reentry
               :display {:label "Suspend" :style :danger :order 9}}
     :reinstate {:from #{:suspended} :to :active
+                :guards [agents-never-suspend-their-own
+                         agents-suspend-only-for-a-manager
+                         an-agents-suspend-waits-on-its-person]
                 :safety {:idempotent true :reversible true :confirm false}
                 :display {:label "Reinstate" :order 1}}}})
 

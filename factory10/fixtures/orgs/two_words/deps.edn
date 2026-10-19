@@ -1,0 +1,3 @@
+;; A fixture org factory10.two-words-org-test loads: its name holds an
+;; underscore, so its namespace root is `two_words`, verbatim.
+{:paths ["src" "resources"]}

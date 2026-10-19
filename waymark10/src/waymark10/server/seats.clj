@@ -649,6 +649,15 @@
   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (entry-filter (walk-entries (get-in seat-row [:data :scope]) walk))))
 
+(defn walk-doors
+  "Every door the seat's scope names on the kind it walks, as strings:
+  the union over every entry that names the kind, because each door one
+  of them grants is a door the sitter holds (ticket c09893b1)."
+  [seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (into #{} (comp (mapcat :actions) (map name))
+          (walk-entries (get-in seat-row [:data :scope]) walk))))
+
 (g/defguard walk-names-a-kind-in-scope
   ;; :judges names :walk alone, though the check reads the scope beside
   ;; it: the refusal is ABOUT the walk, and a judged field needs either

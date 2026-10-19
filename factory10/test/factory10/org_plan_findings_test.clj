@@ -11,9 +11,12 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -112,6 +115,7 @@
 (deftest the-walk-takes-the-findings-in-a-fixed-order
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        _ (walk/linked! eng id "ccccccc1")
         step #(:key (:next_step (plan-of h id)))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
                                {:headers person :body {}}))]
@@ -147,6 +151,7 @@
 (deftest a-red-film-reopens-a-proposed-plan
   (let [{:keys [h eng]} (world)
         id (filed! h)
+        change (walk/linked! eng id "ccccccc1")
         state #(:state (json (req h :get (str "/api/org_plans/" id)
                                   {:headers person})))
         propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
@@ -178,6 +183,7 @@
         (is (some? (:next_step plan)) "the walk reopens on the film")))
     (testing "propose is shut until the finding clears"
       (is (not= 200 (propose)))
+      (inv/invoke! eng :change change :observe {:head_sha "ddddddd2"} walk/the-engine)
       (recorded! eng id "ddddddd2" [warning])
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
@@ -211,6 +217,25 @@
     (is (not= 200 (:status no)) (pr-str (json no)))
     (is (empty? (:findings (plan-of h id))))))
 
+(defn- entry-schema
+  "The schema of entry `k` in a :map form."
+  [form k]
+  (some #(when (and (vector? %) (= k (first %))) (last %)) form))
+
+(deftest every-head-the-plan-takes-is-lower-case-hex
+  ;; ticket 9c8711ac
+  (let [doors [:record_findings :record_findings_proposed :record_findings_simulated
+               :hand_in_film :record_film_findings :head_moved]
+        heads (concat (for [d doors]
+                        [d (entry-schema (get-in org-plan/org-plan [:actions d :input]) :head_sha)])
+                      (for [f [:findings_sha :approved_head :take_sha]]
+                        [f (entry-schema (:schema org-plan/org-plan) f)]))]
+    (doseq [[at s] heads]
+      (is (some? s) (name at))
+      (is (schema/validate s "5e469c6166edf6a3f28ae2e6bdb88b775025f14d") (name at))
+      (doseq [bad ["5E469C6166EDF6A3F28AE2E6BDB88B775025F14D" "5e469c6z" "head-1b"]]
+        (is (not (schema/validate s bad)) (str (name at) " " bad))))))
+
 ;; ticket d4750bf9: the name becomes a directory, a namespace and a
 ;; domain, and live-orgs boots only a snake_case one.
 (defn- file-named [h org]
@@ -241,3 +266,40 @@
   (is (= "acme_landscaping" (org-plan/snake-name "  Acme Landscaping!")))
   (is (= "a_b" (org-plan/snake-name "a//b")))
   (is (= "org_9lives" (org-plan/snake-name "9lives"))))
+
+;; ticket 4d243311: a plan filed before the rule keeps its name, is read
+;; and retired, and takes no other door.
+(defn- stored-name!
+  "The plan stores `nm`, as a filing before d4750bf9 left it."
+  [eng id nm]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :org_plan id {})]
+          (store/save-row! st tx :org_plan
+                           (-> (assoc-in row [:data :name] nm)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(deftest a-name-before-the-rule-is-read-and-retired
+  (let [{:keys [h eng]} (world)
+        id (id-of (file-named h "rd_tax_services"))
+        _ (stored-name! eng id "rd-tax-services")
+        row-of #(json (req h :get (str "/api/org_plans/" id) {:headers person}))]
+    (testing "it is read"
+      (let [got (req h :get (str "/api/org_plans/" id) {:headers person})]
+        (is (= 200 (:status got)) (pr-str (json got)))
+        (is (= "rd-tax-services" (get-in (json got) [:data :name])))))
+    (testing "propose refuses, naming the rule and the way out"
+      (let [no (req h :post (str "/api/org_plans/" id "/-/propose")
+                    {:headers person :body {}})
+            said (pr-str (json no))]
+        (is (not= 200 (:status no)) said)
+        (is (str/includes? said "snake_case rule") said)
+        (is (str/includes? said "retire it and file it again") said)
+        (is (= "drafting" (:state (row-of))))))
+    (testing "retire moves it to retired"
+      (let [ok (req h :post (str "/api/org_plans/" id "/-/retire")
+                    {:headers person :body {:why "Filed before the snake_case rule."}})]
+        (is (= 200 (:status ok)) (pr-str (json ok)))
+        (is (= "retired" (:state (row-of))))))))

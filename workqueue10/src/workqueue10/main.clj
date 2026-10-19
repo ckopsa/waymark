@@ -803,9 +803,10 @@
   (org-boot/admit resources orgs engine/full-registry))
 
 (defn live-orgs-on-boot!
-  "Each live org's seed, after WAYMARK10_ORG's and by the same rule:
-  loaded on a fresh engine, skipped on one that holds its marker, and a
-  refusal throws. `opts` are `org-boot/boot!`'s."
+  "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
+  engine and skipped on one that holds its marker. A refusal skips that
+  org with a line and a draft ticket, and the house boots (ticket
+  087753c1). `opts` are `org-boot/boot!`'s."
   ([eng orgs] (live-orgs-on-boot! eng orgs {}))
   ([eng orgs opts]
    (org-boot/boot-live! eng orgs opts)))
@@ -968,6 +969,15 @@
     (seed/boot! eng seed-name
                 {:wall-url (some-> wall-url str not-empty)})))
 
+(def membership
+  "Who the serving engine admits (ticket c157a094): invited members
+  only. An unknown principal is refused 403 (members `not-invited`)
+  and no member row is written; an existing member, a presented
+  invite token and a delegate of an active member (spec-connector-door
+  § 3) still pass. The IdP admits any Google account, so first sight
+  is no invitation."
+  :invited-only)
+
 (defn- clocked-engine
   "The engine `build` makes of `opts`, with the demo clock
   (docs/spec-agent-demo-walks.md § 7) assembled behind a demo seed
@@ -1050,6 +1060,8 @@
                              ;; (WAYMARK10_OIDC_*); absent env = the
                              ;; dev-header resolver, unchanged
                              :oidc (oidc/from-env)
+                             ;; invited members only: see `membership`
+                             :members membership
                              ;; what handlers and guards may read of the
                              ;; wiring: the home_assistant feature token
                              ;; and the caller behind it (waymark-i89n.4),
@@ -1187,22 +1199,35 @@
            storage :factory10-enroll
            {:retry-ms 5000
             :start-fn #(bench/start-enrol-sweeper! eng {})
-            :stop-fn bench/stop-enrol-sweeper!}))]
+            :stop-fn bench/stop-enrol-sweeper!}))
+        ;; …and org-live's two passes, which the boot ran above, again
+        ;; every five minutes (ticket 59d1cfa0): a hire the owner refuses
+        ;; retires on the next tick, not at the next deploy. ELECTED, so
+        ;; one process per database takes the plans' doors
+        org-live-pass
+        (when (factory-on?)
+          (store/elect-role!
+           storage :factory10-org-live
+           {:retry-ms 5000
+            :start-fn #(org-live/start-passes! eng {})
+            :stop-fn org-live/stop-passes!}))]
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass
                  :factory-watch factory-watch
-                 :factory-enrol-pass factory-enrol-pass})
+                 :factory-enrol-pass factory-enrol-pass
+                 :org-live-pass org-live-pass})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
   (when-some [{:keys [engine server storage inbox-pass factory-pass
-                      factory-watch factory-enrol-pass]} @dev]
+                      factory-watch factory-enrol-pass org-live-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
     (when factory-watch (forge/stop-passes! factory-watch))
     (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
+    (when org-live-pass (store/release-role! storage org-live-pass))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

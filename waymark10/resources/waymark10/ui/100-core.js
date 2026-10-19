@@ -218,6 +218,7 @@ function reflectIdentity(principal) {
   /* the curtain toggle (220-boot.js) needs the member id even when
      the dev box is empty and identity rides a session cookie */
   window.signedinPrincipal = principal;
+  grantChip();
   if (principalId()) return;
   $who.style.display = "none";
   if ($("#signedin")) return;
@@ -240,12 +241,22 @@ function principalHeaders() {
 function grantChip() {
   const chip = $("#grantchip");
   const grant = localStorage.getItem("wm10.grant");
-  chip.textContent = "";
-  chip.style.display = grant ? "inline-block" : "none";
+  /* no grant chosen here: the one the engine says this identity WEARS
+     (a person's standing grant, a guest's session grant — echoed on
+     well-known as principal.worn_grant), with its scope and no ✕,
+     since shedding it is not the browser's to do */
+  const worn = !grant && window.signedinPrincipal?.worn_grant;
+  chip.textContent = ""; chip.title = "";
+  chip.style.display = grant || worn ? "inline-block" : "none";
   if (grant) chip.append(`grant ${grant.slice(0, 8)}`,
     el("button", {title: "leave the grant scope", onclick: () => {
       localStorage.removeItem("wm10.grant"); grantChip(); render();
     }}, "✕"));
+  else if (worn) {
+    const kinds = (worn.kinds || []).join(", ") || "nothing";
+    chip.title = `you wear grant ${worn.id} — scope: ${kinds}`;
+    chip.append(`grant ${String(worn.id).slice(0, 8)} · ${kinds}`);
+  }
 }
 grantChip();
 

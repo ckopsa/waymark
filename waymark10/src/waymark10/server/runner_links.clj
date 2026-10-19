@@ -46,9 +46,10 @@
   THE PULLER (LP2). A poll also stamps the row's `puller_seen_at`
   (`seen!`), at most once in `seen-every` seconds, by a maintenance
   write, and the computed `puller` reads it: connected, away or never.
-  The poll table stays the pool's one source for `pull-waiting`; the
-  stored field is what a person, a seat's waiting sentence
-  (`away-sentence`) and the live cracks pass read."
+  It is the one source: the pool's `pull-waiting`, a person, a seat's
+  waiting sentence (`away-sentence`) and the live cracks pass all read
+  it. `poll-seconds` stays above `seen-every` plus the poll's hold, so a
+  live puller never reads away."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -112,15 +113,32 @@
     (t/allow)
     (t/deny)))
 
+(def ^:private push-or-pull
+  "A push link names the fire URL the engine posts each fire to. A pull link names none: a localfire on the person's machine asks the engine for its fires. Give a fire URL with push, and none with pull.")
+
 (g/defguard a-pull-link-has-no-url
   {:judges [:fire_url :delivery]
-   :explain "A push link names the fire URL the engine posts each fire to. A pull link names none: a localfire on the person's machine asks the engine for its fires. Give a fire URL with push, and none with pull."
+   :explain push-or-pull
    :remedies [:runner_link/create]}
   [_row inp _ctx]
   (if (= (= "pull" (some-> (:delivery inp) name))
          (nil? (some-> (:fire_url inp) str not-empty)))
     (t/allow)
     (t/deny)))
+
+;; the same law on restate, whose input has no :delivery: the row's
+;; delivery stands, so a pull link refuses a fire_url, and a push link
+;; that names none keeps the one it holds.
+(g/defguard a-restated-pull-link-has-no-url
+  {:name :a-pull-link-has-no-url
+   :judges [:fire_url]
+   :explain push-or-pull
+   :remedies [:runner_link/restate]}
+  [row inp _ctx]
+  (if (and (= "pull" (some-> (get-in row [:data :delivery]) name))
+           (some? (some-> (:fire_url inp) str not-empty)))
+    (t/deny)
+    (t/allow)))
 
 (g/defguard the-engine-writes-the-fire
   {:reads [:principal]
@@ -328,6 +346,7 @@
     seeded-from-field]
    :filterable {:state #{:eq :in}
                 :provider #{:eq :in}
+                :delivery #{:eq}
                 :seeded_from #{:eq}
                 :puller_seen_at #{:after :before :range}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
@@ -365,13 +384,13 @@
               [:maybe [:string {:min 16 :max 400}]]]]
      ;; NOT :record: this input may carry the credential, and a
      ;; recorded action persists its raw inputs into the log.
-     :guards [a-person-writes-the-token]
+     :guards [a-person-writes-the-token a-restated-pull-link-has-no-url]
      :edit {:prefill [:provider :fire_url :cap] :fence true}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link holds what this restate says; a new token replaces the old one, which is not kept."}
      :handler restate-link
      :display {:label "Restate the link" :order 1
-               :description "Change the fire URL or the cap, or paste a new token"}}
+               :description "Change the fire URL or the cap, or paste a new token. Push or pull stays as the link was made: to change it, retire this link and make a new one"}}
 
     :retire
     {:from #{:live :broken} :to :retired
@@ -821,6 +840,11 @@
       (contains? answer :transient)
       nil
 
+      ;; the localfire cannot say whether the run started: not the
+      ;; link's fault either, and no throttle (ticket 734b3ecd)
+      (contains? answer :not-started)
+      nil
+
       :else
       (let [reason (or (not-empty (str (:bad-link answer)))
                        "The provider refused the link.")]
@@ -905,12 +929,16 @@
               {:retry_after (str (sch/retry-instant at (:throttled answer)
                                                     (:body answer)))})))))
 
+(defn- seen-at ^Instant [row]
+  (instant-of (get-in row [:data :puller_seen_at])))
+
 (defn pull-waiting
   "For a pull link no localfire has polled within `poll-seconds` of
-  `at`: the instant to look again. nil when one has, and for a push link."
-  [eng row ^Instant at]
+  `at`, as its `puller_seen_at` says: the instant to look again. nil
+  when one has, and for a push link."
+  [_eng row ^Instant at]
   (when (pull? row)
-    (let [polled (pf/last-poll (:storage eng) (str (:id row)))]
+    (let [polled (seen-at row)]
       (when (or (nil? polled)
                 (.isBefore polled (.minusSeconds at poll-seconds)))
         (.plusSeconds at poll-seconds)))))
@@ -931,9 +959,6 @@
   "How stale `puller_seen_at` grows before a poll writes it again: a
   link takes at most one row write in this many seconds, not one a poll."
   30)
-
-(defn- seen-at ^Instant [row]
-  (instant-of (get-in row [:data :puller_seen_at])))
 
 (defn puller-of
   "Whether a localfire is on pull link `row` at `at`: \"connected\" when
@@ -967,10 +992,16 @@
                (str "(last seen " seen ")")
                "(never connected)"))))))
 
+(defn- owner-of [row]
+  (some-> (get-in row [:data :owner]) str not-empty))
+
 (defn pool-away
-  "`away-sentence` over the links of the pool `ids`."
-  [eng ids at]
-  (away-sentence (keep (links-by-id eng) (map str ids)) at))
+  "`away-sentence` over the links of the pool `ids` — with `owner`
+  (`pool-owner`), only that person's, as `fire-pool!` tries them."
+  [eng ids at & [owner]]
+  (away-sentence (cond->> (keep (links-by-id eng) (map str ids))
+                   owner (filter #(= owner (owner-of %))))
+                 at))
 
 (defn seen!
   "Stamp `puller_seen_at` on pull link `id` at `now` — only when it is
@@ -991,9 +1022,6 @@
                                   (assoc (:data row) :puller_seen_at (str now))
                                   (:next-flip-at row))
               true)))))))
-
-(defn- owner-of [row]
-  (some-> (get-in row [:data :owner]) str not-empty))
 
 (defn pool-owner
   "The person whose links alone a seat's fire may go out on (b7572409,
@@ -1098,12 +1126,18 @@
   "Land what a localfire answered (the Provider's four words) for the
   fire `fire-id` it took. The fire leaves the queue; the link and its
   provider row record the answer as `fire-link!` records a push answer,
-  and the schedule it was for lands it as `sch/fire!` lands one. → the
+  and the schedule it was for lands it as `sch/fire!` lands one. A
+  not-started answer also writes down the sitting the fire's key would
+  have opened, when no run spent it (`wakes/record-not-started!`). → the
   fire, or nil when no such fire waits."
   [eng fire-id answer]
   (when-some [f (pf/finish! (:storage eng) (str fire-id))]
     (when-some [link (get (links-by-id eng) (:link_id f))]
       (land-on-link! eng link answer))
+    (when (contains? answer :not-started)
+      ((requiring-resolve 'waymark10.server.wakes/record-not-started!)
+       eng (seats/fire-key-of-text (at-rest/open (:text f)))
+       (:not-started answer)))
     (when (= "schedule" (:for_kind f))
       (sch/land-pull-answer! eng (:for_id f) answer (now-of eng) (:link_id f)))
     f))

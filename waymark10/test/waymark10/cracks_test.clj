@@ -411,6 +411,13 @@
                                       :hold true}]})
             [c] (of (cracks/audit [held] [clerk]) "silent_person_exit" "placed")]
         (is (= [{:action "void" :held_by ["hold"]}] (:exits c)))))
+    (testing "a guard declared :hold :agents holds only an agent, so the door stays the seat's"
+      (let [agents (assoc-in order [:actions :void]
+                             {:from #{:placed} :to :void
+                              :guards [{:name :order/an-agents-void-waits
+                                        :explain "Held for your person's tap."
+                                        :hold :agents}]})]
+        (is (empty? (of (cracks/audit [agents] [clerk]) "silent_person_exit" "placed")))))
     (testing "one exit a seat takes alone clears it"
       (let [open (assoc-in order [:actions :ship] {:from #{:placed} :to :void})]
         (is (empty? (of (cracks/audit [open] [clerk]) "silent_person_exit" "placed")))))

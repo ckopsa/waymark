@@ -324,3 +324,45 @@
     (testing "the same empty body at a door that is not a leaving one is no crack"
       (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
                                  (:data fixture/code-seat) (at :restate)))))))
+
+;; ticket 9e2ff8a9: a merge is read as the seat leaving and its scope
+;; folding into `into`; its wakes do not fold.
+
+(defn- twin
+  "code-seat under another name, changed by `f`: a merge's `into`."
+  [seat-name f]
+  (-> fixture/code-seat
+      (assoc :id seat-name)
+      (assoc-in [:data :name] seat-name)
+      f))
+
+(deftest a-merge-is-read-as-its-scope-folded-into-the-target
+  (let [rdefs (main/resources)
+        person {:id "colton" :type :human}
+        with (fn [target] (conj (vec (fixture/seats rdefs)) target))
+        at (fn [seats door] (assoc (door-ctx rdefs seats person) :door door))]
+    (testing "a target woken as the seat is closes, with the scope it is given, what the seat alone could leave"
+      (let [bare (twin "bare-seat"
+                       (fn [s] (update-in s [:data :scope]
+                                          (fn [entries]
+                                            (filterv #(not= "ticket" (:kind %)) entries)))))
+            ;; the mayor holds every door, so without it the seat alone
+            ;; holds ticket/open's
+            seats (conj (vec (remove #(= "mayor" (:id %)) (fixture/seats rdefs)))
+                        bare)]
+        (testing "retired instead, the seat's ticket doors leave with it"
+          (is (first (judged seats/opens-no-crack fixture/code-seat nil
+                             (at seats :retire)))))
+        (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
+                                   {:into "bare-seat"} (at seats :merge))))))
+    (testing "a target whose wakes do not cover the seat's opens the crack its wake closed"
+      (let [deaf (twin "deaf-seat"
+                       (fn [s] (update-in s [:data :wake_on]
+                                          (fn [entries]
+                                            (filterv #(not-any? #{"groom"} (:actions %))
+                                                     entries)))))
+            seats (with deaf)
+            [denied? why] (judged seats/opens-no-crack fixture/code-seat
+                                  {:into "deaf-seat"} (at seats :merge))]
+        (is denied?)
+        (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))))

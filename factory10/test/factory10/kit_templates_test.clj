@@ -15,6 +15,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.roles :as roles]
+            [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -84,14 +85,19 @@
 
 (def ^:private world-values
   {:brief "A bakery that takes cake orders."
-   :kind "ticket"
+   :kinds "ticket"
    :cast "Ann, a customer"
    :day_one "2026-10-19"})
 
+(defn- world-seat
+  "The world template's seat, filled from `given` as a seed fills it."
+  [given]
+  (let [t (template "seats/world.edn")]
+    (seed/filled (:seat t) given (:template t))))
+
 (deftest only-a-clone-seats-the-world-template
-  (let [t (template "seats/world.edn")
-        body (fn [eng] (fill t (:seat t) (assoc world-values :domain_id
-                                               (str (:id (a-domain eng))))))]
+  (let [body (fn [eng] (world-seat (assoc world-values :domain_id
+                                          (str (:id (a-domain eng))))))]
     (testing "an engine that is not a clone refuses it"
       (let [eng (world {:clone? false})]
         (is (not (engine/clone? eng)))
@@ -102,6 +108,32 @@
             seat (:row (inv/create! eng :seat (body eng) as-person))]
         (is (engine/clone? eng))
         (is (true? (get-in seat [:data :acts_as_cast])))))))
+
+(defn- kinds-of [seat k]
+  (set (map (comp name :kind) (get-in seat [:data k]))))
+
+(deftest the-world-template-scopes-create-on-every-outside-kind
+  (testing "two outside kinds, comma-separated, each get a create entry"
+    (let [eng (world {:clone? true})
+          body (world-seat (assoc world-values :kinds "ticket, judgment"
+                                  :domain_id (str (:id (a-domain eng)))))
+          seat (:row (inv/create! eng :seat body as-person))]
+      (is (= #{"ticket" "judgment"} (kinds-of seat :scope)))
+      (is (every? #(= ["create"] (mapv name (:actions %))) (get-in seat [:data :scope])))
+      (is (= #{"ticket" "judgment"} (kinds-of seat :delivers)))))
+  (testing "a seed passing :kind alone still fills, as a one-element :kinds"
+    (let [eng (world {:clone? true})
+          body (world-seat (-> world-values (dissoc :kinds)
+                               (assoc :kind "ticket" :domain_id (str (:id (a-domain eng))))))
+          seat (:row (inv/create! eng :seat body as-person))]
+      (is (empty? (re-seq #"\{\{[^}]*\}\}" (pr-str body))) "no hole is left")
+      (is (= #{"ticket"} (kinds-of seat :scope))))))
+
+(deftest the-world-charter-fixes-the-weeks-arc
+  (let [charter (:charter (world-seat (assoc world-values :domain_id "d")))]
+    (doseq [day ["day 2" "day 5" "day 7"]]
+      (is (str/includes? charter day) (str "the charter names " day)))
+    (is (<= (count charter) 1200) "the charter's cap")))
 
 (defn- restate!
   "A seat's restate with the etag an honest client would have read off

@@ -114,7 +114,12 @@ jobs:
       tag: ${{ steps.tag.outputs.sha }}
 
     steps:
+      # On a pull_request the default checkout is the merge commit, whose
+      # sha names nothing a clone can ask for. The PR's head is the commit
+      # the director names, so the image is built and tagged at it.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Tag
         id: tag
@@ -132,11 +137,13 @@ jobs:
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
-      # Skipped on pull_request: a fork's PR has no write token, and a
-      # PR's job here is to prove the image still builds, not to publish
-      # one. Login would be the step that fails, so it does not run.
+      # Skipped on a fork's pull_request: it has no write token, and its
+      # job here is to prove the image still builds, not to publish one.
+      # Login would be the step that fails, so it does not run. A PR from
+      # a branch of this repository (bench/*, an org's PR) publishes, so
+      # an org can be cloned and filmed before it merges.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -181,7 +188,7 @@ jobs:
           build-args: |
             BASE=${{ steps.base.outputs.image }}
           platforms: linux/${{ matrix.arch }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # The dependency layer (`clojure -P -M:dev`) downloads the
@@ -197,6 +204,49 @@ jobs:
           # index buildx otherwise wraps it in to carry attestations.
           # The only index is the one `build` writes, naming both.
           provenance: false
+          # Also into this runner's docker, for the offline boot below.
+          load: true
+
+      # The image must BOOT behind the cage wall, not only build: a clone's
+      # engine has a database and no internet. Before this check a PR-head
+      # image exited 1 at ~47 s with no output in every clone. The engine
+      # runs on an --internal network beside a fresh Postgres with the
+      # clone env for 90 s; it fails when the engine exits or never
+      # listens on 8014, and prints the engine's log either way.
+      - name: Offline boot (90 s, no internet)
+        env:
+          IMAGE: ${{ steps.meta.outputs.tags }}
+        run: |
+          docker network create --internal cage
+          docker run -d --name db --network cage \
+            -e POSTGRES_USER=waymark -e POSTGRES_PASSWORD=waymark \
+            -e POSTGRES_DB=workqueue10 mirror.gcr.io/library/postgres:16
+          for i in $(seq 1 60); do
+            docker exec db pg_isready -U waymark -d workqueue10 >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker run -d --name engine --network cage --memory 1g \
+            -e WORKQUEUE10_DSN='jdbc:postgresql://db:5432/workqueue10?user=waymark&password=waymark' \
+            -e WAYMARK10_AUTO_MIGRATE=1 -e WAYMARK10_CLONE=1 \
+            "$IMAGE"
+          up=""
+          for i in $(seq 1 90); do
+            if [ "$(docker inspect -f '{{.State.Running}}' engine)" != true ]; then
+              docker logs engine
+              echo "::error::the engine exited $(docker inspect -f '{{.State.ExitCode}}' engine) after ${i} s offline (log above)"
+              exit 1
+            fi
+            if docker exec engine bash -c 'exec 3<>/dev/tcp/127.0.0.1/8014' 2>/dev/null; then
+              up=$i; break
+            fi
+            sleep 1
+          done
+          docker logs engine
+          if [ -z "$up" ]; then
+            echo "::error::the engine did not listen on 8014 within 90 s offline (log above)"
+            exit 1
+          fi
+          echo "the engine listened on 8014 after ${up} s offline"
 
   # Joins the two legs into one index under the bare short sha — the tag
   # the migration, the roll and the clone door read — so a node of either
@@ -217,10 +267,13 @@ jobs:
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
-      # Skipped on pull_request for the legs' reason: nothing was pushed,
-      # so there is nothing to join. The job still answers success.
+      # Skipped on a fork's pull_request for the legs' reason: nothing was
+      # pushed, so there is nothing to join. The job still answers
+      # success. A same-repo PR joins its legs under the bare short sha of
+      # its head, as main does; `latest` stays main's alone, and no job
+      # below runs on a pull_request, so it never migrates or rolls.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -228,7 +281,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Join the architectures into one index
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/workqueue10
           TAG: ${{ needs.arch.outputs.tag }}

@@ -17,13 +17,19 @@
   the pass opens its `hire_seat` in the org's domain as the plan's
   owner, unless that seat sits there already, and marks it live with
   `hired_seat`. `decline-refused-hires!` retires each simulated hire
-  plan whose held go_live the owner refused or let expire."
+  plan whose held go_live the owner refused or let expire.
+
+  Both passes run at boot and on a tick (`start-passes!`, ticket
+  59d1cfa0), so a refused hire retires within one tick of the refusal,
+  not at the next deploy. Each is idempotent: a tick with nothing to do
+  writes nothing."
   (:require [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.server.domains :as domains]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.util.concurrent CountDownLatch TimeUnit)))
 
 (defn- rows-of [eng kind where]
   (if (contains? (inv/resources eng) kind)
@@ -143,3 +149,48 @@
               0
               (if (seq ended) (rows-of eng :org_plan {:state "simulated"}) [])))
     0))
+
+;; ── the tick ────────────────────────────────────────────────────────
+
+(def default-every-seconds
+  "Five minutes between ticks."
+  300)
+
+(defn pass!
+  "One tick: `mark-live-plans!`, then `decline-refused-hires!`, each
+  run whatever the other did. → {:marked n :declined n}."
+  [eng]
+  (let [run (fn [what f]
+              (try (f eng)
+                   (catch Throwable e
+                     (binding [*out* *err*]
+                       (println (str "waymark10 org-live: the " what " pass failed ("
+                                     (or (ex-message e) (class e))
+                                     "); the next tick still runs")))
+                     0)))]
+    {:marked (run "mark-live" mark-live-plans!)
+     :declined (run "decline-hire" decline-refused-hires!)}))
+
+(defn start-passes!
+  "The tick's daemon: one `pass!` every `:every-seconds`, on a daemon
+  thread (the forge pass's own shape). The first tick is one interval
+  after the start: the boot ran both passes already. A tick that throws
+  is warned and the next one still runs. The wiring owns the lifecycle
+  and elects the one holder per database; a suite calls `pass!`
+  directly."
+  [eng {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
+  (let [stop (CountDownLatch. 1)
+        every-ms (long (* 1000 every-seconds))
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop every-ms TimeUnit/MILLISECONDS)
+                         (pass! eng)
+                         (recur))))
+                   "factory10-org-live")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-passes! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)

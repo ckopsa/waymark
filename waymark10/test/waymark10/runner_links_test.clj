@@ -20,6 +20,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -28,7 +29,7 @@
 
 (def ^:private tables
   ["runner_links" "runner_providers" "waymark10_transitions" "waymark10_idempotency"
-   "waymark10_drafts" "waymark10_pull_fires" "waymark10_pull_polls"])
+   "waymark10_drafts" "waymark10_pull_fires"])
 
 (use-fixtures :once
   (fn [f]
@@ -485,6 +486,24 @@
                                         {:principal colton})))))
   (is (rl/pull? (row-of (pull-link-id!)))))
 
+(deftest restate-keeps-delivery-and-judges-the-url-as-create-does
+  (testing "restate's input has no delivery"
+    (is (not (contains? (set (map name (keys (:properties (schema/json-schema
+                                                           (get-in rl/runner-link [:actions :restate :input]))))))
+                        "delivery"))))
+  (testing "a pull link's restate refuses a fire_url with create's sentence"
+    (let [id (pull-link-id!)]
+      (is (= :a-pull-link-has-no-url
+             (:guard (refusal #(restate! id {:fire_url a-url} colton)))))
+      (is (= (:explain rl/a-pull-link-has-no-url)
+             (:explain rl/a-restated-pull-link-has-no-url)))
+      (is (rl/pull? (row-of id)))))
+  (testing "a push link's restate may change its fire_url"
+    (let [id (str (:id (make-link! colton)))
+          other "https://api.example.test/v1/routines/trig_02/fire"]
+      (restate! id {:fire_url other} colton)
+      (is (= other (str (get-in (row-of id) [:data :fire_url])))))))
+
 (deftest a-pull-fire-is-held-sealed-not-posted
   (let [id (pull-link-id!)
         n (atom 0)
@@ -555,13 +574,44 @@
       (is (= 1 @n))
       (is (empty? (pf/pending (:storage *eng*) pull))))
     (testing "once a localfire polls, the pull link holds the fire"
-      (pf/poll! (:storage *eng*) pull now)
+      (rl/seen! *eng* pull now)
       (is (nil? (rl/waiting-reason *eng* (row-of pull) now)))
       (let [out (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
                                [pull cloud] "go" "prefer")]
         (is (= pull (:runner out)))
         (is (string? (get-in out [:answer :queued])))
         (is (= 1 @n) "nothing was posted")))))
+
+(deftest a-pool-reads-a-pull-link-waiting-from-its-puller-seen-at
+  (let [cloud (link-id!)
+        n (atom 0)
+        fire (fn [pull]
+               (:runner (rl/fire-pool! *eng* (constantly (counting n {:started nil}))
+                                       [pull cloud] "go" "prefer")))]
+    (testing "a link polled 40s ago is not skipped"
+      (let [pull (pull-link-id!)]
+        (rl/seen! *eng* pull (.minusSeconds (java.time.Instant/now) 40))
+        (is (= pull (fire pull)))))
+    (testing "a link polled 70s ago is skipped"
+      (let [pull (pull-link-id!)]
+        (rl/seen! *eng* pull (.minusSeconds (java.time.Instant/now) 70))
+        (is (= cloud (fire pull)))
+        (is (empty? (pf/pending (:storage *eng*) pull)))))))
+
+(deftest the-poll-side-table-is-dropped
+  (let [st (:storage *eng*)
+        exists? #(some? (first (vals (store/with-tx st
+                                       (fn [tx]
+                                         (jdbc/execute-one!
+                                          tx ["SELECT to_regclass('waymark10_pull_polls') AS t"]))))))]
+    (store/with-tx st
+      (fn [tx]
+        (jdbc/execute! tx ["CREATE TABLE IF NOT EXISTS waymark10_pull_polls (
+                              link_id text PRIMARY KEY, polled_at timestamptz NOT NULL)"])))
+    (is (exists?))
+    (swap! @#'pf/ensured disj st)
+    (pf/pending st "no-such-link")
+    (is (not (exists?)) "the first use after it drops the table")))
 
 (deftest a-least-used-pool-keeps-its-rule-when-named
   (let [a (link-id!) b (link-id!)]
@@ -593,7 +643,7 @@
         out (binding [rlr/*wait-ms* 0] (poll id a-token))]
     (is (= 200 (:status out)))
     (is (= {:id queued :text a-fire-text} (wire/read-json (:body out))))
-    (is (some? (pf/last-poll (:storage *eng*) id)) "the poll was recorded")
+    (is (some? (get-in (row-of id) [:data :puller_seen_at])) "the poll was recorded")
     (is (nil? (rl/waiting-reason *eng* (row-of id) (java.time.Instant/now))))))
 
 (deftest a-wrong-or-missing-token-is-401-and-a-push-link-404
@@ -604,7 +654,7 @@
       (is (= 401 (:status (refusal #(poll "no-such-link" a-token)))))
       (is (= 401 (:status (refusal #(answer id "f" nil {:status 429})))))
       (is (= 404 (:status (refusal #(poll (link-id!) a-token))))))
-    (is (nil? (pf/last-poll (:storage *eng*) id)) "a refused poll is not recorded")))
+    (is (nil? (get-in (row-of id) [:data :puller_seen_at])) "a refused poll is not recorded")))
 
 (deftest an-empty-queue-answers-204-after-the-wait
   (let [id (pull-link-id!)
@@ -636,6 +686,47 @@
            (rlr/answer-of {:status 400})))
     (is (= {:bad-link "The Routine refused the token." :status 401}
            (rlr/answer-of {:status 401})))))
+
+(deftest a-not-started-answer-closes-the-fire-and-pauses-nothing
+  (let [id (pull-link-id!)
+        {:keys [queued]} (rl/fire-link! *eng* nil (row-of id) a-fire-text
+                                        {:kind "schedule" :id "s-unknown"})
+        reason "localfire stopped before it knew whether the run started, and does not start a fire twice."
+        landed (atom [])
+        written (atom [])]
+    (testing "it is read with or without a status"
+      (is (= {:not-started reason} (rlr/answer-of {:started false :reason reason})))
+      (is (= {:not-started reason}
+             (rlr/answer-of {:status 400 :started false :reason reason}))))
+    (testing "with no reason, a blank one or one too long, it is refused 422"
+      (is (= 422 (:status (refusal #(answer id queued a-token {:started false})))))
+      (is (= 422 (:status (refusal #(answer id queued a-token
+                                            {:status 400 :started false :reason "  "})))))
+      (is (= 422 (:status (refusal #(answer id queued a-token
+                                            {:started false
+                                             :reason (apply str (repeat 501 "x"))}))))))
+    (with-redefs [sch/land-pull-answer! (fn [_eng sid ans _at _runner]
+                                          (swap! landed conj [sid ans]))
+                  wakes/record-not-started! (fn [_eng held why]
+                                              (swap! written conj [held why])
+                                              true)]
+      (is (= 200 (:status (answer id queued a-token {:started false :reason reason})))))
+    (is (empty? (pf/pending (:storage *eng*) id)) "the fire is closed")
+    (is (= [["s-unknown" {:not-started reason}]] @landed))
+    (is (= [[(seats/fire-key-of-text a-fire-text) reason]] @written)
+        "the sitting the key would have opened is written down")
+    (is (nil? (get-in (row-of id) [:data :retry_after])) "the link is not throttled")
+    (is (nil? (get-in (row-of id) [:data :note])) "nor broken")
+    (testing "the sitting reads the localfire's sentence"
+      (is (= (str "localfire stopped before it knew whether the run started: " reason)
+             (wakes/not-started-note reason))))
+    (testing "the Routine is neither paused nor throttled"
+      (let [acts (atom [])]
+        (with-redefs [sch/try-act! (fn [& args] (swap! acts conj (nth args 2)))
+                      sch/act! (fn [& args] (swap! acts conj (nth args 2)))]
+          (sch/land-answer! *eng* {:id "s-unknown" :state :live :data {}}
+                            {:not-started reason} (java.time.Instant/now)))
+        (is (empty? @acts))))))
 
 (deftest no-token-or-fire-text-reaches-a-log
   (let [id (pull-link-id!)
@@ -700,6 +791,25 @@
     (is (nil? (rl/away-sentence [away here] t0)) "one connected link fires")
     (is (nil? (rl/away-sentence [away push] t0)) "a push link fires")
     (is (nil? (rl/away-sentence [(assoc away :state :retired)] t0)) "no live link is no wait")))
+
+(deftest a-contributors-pool-note-names-only-their-links
+  (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
+        hour-ago (.minusSeconds t0 3600)
+        others {:id "bbbbbbbb-2" :state :live
+                :data {:provider "localfire" :delivery "pull" :owner "erin"}}
+        theirs {:id "aaaaaaaa-1" :state :live
+                :data {:provider "localfire" :delivery "pull" :owner "dana"
+                       :puller_seen_at (str hour-ago)}}
+        ids ["bbbbbbbb-2" "aaaaaaaa-1"]]
+    (with-redefs [rl/links-by-id (constantly {"aaaaaaaa-1" theirs "bbbbbbbb-2" others})]
+      (is (= "waiting for localfire link bbbbbbbb to connect (never connected)"
+             (rl/pool-away *eng* ids t0))
+          "a manager's seat names the pool's first link")
+      (is (= (str "waiting for localfire link aaaaaaaa to connect (last seen " hour-ago ")")
+             (rl/pool-away *eng* ids t0 "dana"))
+          "a contributor's seat names only that contributor's link")
+      (is (nil? (rl/pool-away *eng* ["bbbbbbbb-2"] t0 "dana"))
+          "no link of theirs is no wait to name"))))
 
 (deftest a-seat-on-an-away-link-reads-the-wait
   (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")

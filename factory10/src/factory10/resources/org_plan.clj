@@ -44,6 +44,12 @@
   lands it through `attach_film` or `record_film_findings`; both are
   the engine's doors alone.
 
+  A NEW HEAD VOIDS THE TAKE (ticket 4d9311f1). The film must be of the
+  head the owner approves: a push to a `filming` plan's branch, seen by
+  the findings pass or by the film pass before it lands the take, takes
+  `void_take`, the engine's door alone, which clears the take and sends
+  the plan back to `proposed` for the director to film the new head.
+
   THE WALK IS THE FINDINGS, IN A FIXED ORDER (ticket f64c9ce1, M2c).
   The onboarding walk is a computed `next_step` on the plan, not a
   `walkthrough` row: a walkthrough's steps are invitations a person or
@@ -62,6 +68,10 @@
   the org-findings artifact beside the findings (ticket 4ab34d18), and
   `record_findings` writes it for that head, so the page always matches
   the latest head; a propose without one keeps the recorded page.
+  The same run renders the org's first-week scene (ticket 4dbb8243),
+  which the findings doors write as `first_week_scene` with the head it
+  was rendered at as `first_week_scene_sha`: the director plays it only
+  when that is the change's head.
 
   `answer` AND `go_live` ARE THE OWNER'S. A question is asked of the
   person who owns the plan, so only that person answers it, or an
@@ -89,9 +99,9 @@
   seat holds or that the seats on it do not keep up with. `open-hire!`
   is that birth, the engine's hand alone: it copies the live plan's
   owner and directory, writes the brief from the gap, and opens one
-  hire plan per gap key. It is a function and not a declared door
-  because a kind has one create verb; the ordinary create keeps
-  `a-person-files-the-plan`, and the engine's birth passes it by.
+  hire plan per gap key. The birth is the declared create door
+  `open_hire`, held `:by #{:engine}` beside the ordinary create, which
+  keeps `a-person-files-the-plan`; `open-hire!` is its thin caller.
 
   A HIRE ARRIVES AS ONE HELD CALL (ticket 7116068f, M4b). propose on a
   hire plan names `hire_seat`, the seed step factorykit.hire drafted on
@@ -111,6 +121,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
@@ -163,7 +174,7 @@
 (defn hire-brief
   "The hire plan's brief: one sentence written from its gap."
   [{:keys [kind state reason row_ids oldest_since]}]
-  (str kind " rows wait in " state ": " (count row_ids)
+  (str (some-> kind name) " rows wait in " (some-> state name) ": " (count row_ids)
        " past their expected age, oldest since " (or oldest_since "unknown") "; "
        (if (= "pressure" (some-> reason name))
          "more than the seats on it keep up with"
@@ -253,12 +264,10 @@
         :else
         (inv/create! eng :org_plan
                      {:name org
-                      :purpose "hire"
                       :org_dir (get-in live [:data :org_dir])
                       :owner (str (get-in live [:data :owner]))
-                      :gap gap
-                      :brief (hire-brief gap)}
-                     (assoc opts :mint? true))))))
+                      :gap gap}
+                     (assoc opts :action :open_hire))))))
 
 ;; ── the findings walk (M2c) ─────────────────────────────────────────
 
@@ -275,15 +284,25 @@
    "crack" 2
    "sentence" 3
    "seed" 4 "scope" 4 "budget" 4
-   "film" 5})
+   "decision" 5
+   "film" 6})
 
-(def ^:private lint-rank 6)
+(def ^:private lint-rank 7)
+
+(def ^:private decision-order
+  "The decision class's questions in the order the person meets them
+  (ticket e1ed02c7): a final step, a wait, an amount."
+  ["decision/unheld_final/" "decision/no_wait_limit/" "decision/money_unbounded/"])
+
+(defn- question-rank [k]
+  (or (first (keep-indexed #(when (str/starts-with? (str k) %2) %1) decision-order)) 0))
 
 (defn walk-steps
   "The plan's open findings as the walk's steps: by class in
   walk-order, ties broken by key."
   [findings]
   (vec (sort-by (juxt #(get walk-order (str (:class %)) lint-rank)
+                      #(question-rank (:key %))
                       #(str (:key %)))
                 findings)))
 
@@ -322,6 +341,11 @@
     (some? (:hire_seat inp)) (assoc-in [:data :hire_seat] (:hire_seat inp))
     (some? (:law_page inp)) (assoc-in [:data :law_page] (:law_page inp))))
 
+(defhandler link-the-change [row inp _ctx]
+  ;; The sit's own hand (ticket db8b35bb): the change it minted for this
+  ;; plan is the plan's, so the findings pass and the go_live hold find it.
+  (assoc-in row [:data :change] (:change inp)))
+
 (defhandler hand-in-the-film [row inp _ctx]
   ;; The director's take, kept for the engine's film pass to judge. It
   ;; decides nothing; a new take is judged anew.
@@ -357,6 +381,9 @@
                 (assoc-in [:data :next_step] (next-step found)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
+      (some? (:first_week_scene inp))
+      (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
+          (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -415,6 +442,29 @@
                     moved)]
     (-> row
         (assoc-in [:data :approved_head] nil)
+        (assoc-in [:data :findings] found)
+        (assoc-in [:data :next_step] (next-step found)))))
+
+(defhandler void-the-take [row inp _ctx]
+  ;; A take of a head the branch has left is no film of the plan the
+  ;; owner approves: it is cleared, and the moved head is a finding the
+  ;; next run at that head replaces.
+  (let [voided {:key "take_voided" :severity "warning" :class "film"
+                :subject "film"
+                :sentence (str "The branch's head moved to " (short-sha (:head_sha inp))
+                               " while the film of "
+                               (short-sha (get-in row [:data :take_sha]))
+                               " waited to be judged, so that take was voided.")
+                :remedy "Film the new head: the film must be of the head the owner approves."}
+        found (conj (vec (remove #(= "take_voided" (str (:key %)))
+                                 (get-in row [:data :findings])))
+                    voided)]
+    (-> row
+        (assoc-in [:data :film_url] nil)
+        (assoc-in [:data :take_film_url] nil)
+        (assoc-in [:data :take_report] nil)
+        (assoc-in [:data :take_sha] nil)
+        (assoc-in [:data :take_landed_at] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
 
@@ -581,6 +631,50 @@
     (t/deny {:vars {:finding (str (:key f) ": " (:sentence f))}})
     (t/allow)))
 
+(defguardfn the-plan-was-audited-at-its-head
+  {:reads []
+   :vars [:head]
+   :explain "The audit has not recorded its findings at the head of this plan's pull request ({head}), so what would go up is not what was audited."
+   :open "Push, and wait for the audit's findings on this head before proposing."}
+  ;; Ticket db8b35bb. The change is the one propose names, or the plan's
+  ;; own, read through the ctx hook. A ctx with no hook — the scenarios
+  ;; and the render probe — allows, bench/policy-of's posture: the door
+  ;; judges again with a real hook behind it. That is the check tier's
+  ;; answer too, so the declared reads stay empty and org_plan's
+  ;; scenarios stay check-tier, as ticket.clj's
+  ;; `the-receiving-mayor-answers-an-ask` does.
+  [row inp ctx]
+  (if-some [read' (:read ctx)]
+    (let [named (some-> (or (:change inp) (get-in row [:data :change])) str not-empty)
+          head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)]
+      (if (and head (= head (str (get-in row [:data :findings_sha]))))
+        (t/allow)
+        (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
+    (t/allow)))
+
+(def ^:private gone-change-states
+  "The change states whose pull request is out of play."
+  #{"closed" "merged"})
+
+(defguardfn the-sit-links-its-change
+  {:reads [:principal :change]
+   :hide true
+   :explain "The sit names the change it minted for this plan, and only when the plan names none or names one that is closed."}
+  ;; The engine's hand alone (ticket db8b35bb), as the findings are: a
+  ;; plan whose change is still in play keeps it.
+  [row inp ctx]
+  (let [named (some-> (get-in row [:data :change]) str not-empty)]
+    (cond
+      (not= :system (:type (:principal ctx))) (t/deny)
+      (nil? named) (t/allow)
+      (= named (str (:change inp))) (t/deny)
+      :else (if-some [read' (:read ctx)]
+              (if (contains? gone-change-states
+                             (some-> (read' :change named) :state name))
+                (t/allow)
+                (t/deny))
+              (t/allow)))))
+
 ;; ── the law, written down as scenarios ──────────────────────────────
 
 (def ^:private a-plan
@@ -698,6 +792,23 @@
    [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
    [:key [:string {:min 1 :max 200}]]])
 
+(def ^:private hire-input
+  "The open_hire door's input: the org, the gap, and the live plan's
+  owner and directory, which the engine copies."
+  [:map
+   [:name [:string {:min 1 :max 64}]]
+   [:gap gap-schema]
+   [:org_dir {:optional true} [:maybe [:string {:max 200}]]]
+   [:owner {:optional true :kind :member} [:maybe :waymark/ref]]])
+
+(defn- stamp-the-hire
+  "The open_hire door's birth: a hire plan, its brief written from its
+  gap."
+  [row _ctx]
+  (-> row
+      (assoc-in [:data :purpose] "hire")
+      (assoc-in [:data :brief] (hire-brief (get-in row [:data :gap])))))
+
 (def ^:private mayor-schema
   [:map
    [:name [:string {:min 1 :max 64}]]
@@ -737,6 +848,17 @@
            (str "should be lowercase letters, digits and underscores, starting with a letter, like "
                 (or (not-empty (snake-name value)) "rd_tax_services")))}
     name-pattern]])
+
+(defguardfn the-name-is-snake-case
+  {:reads []
+   :explain "This plan's name predates the snake_case rule (lowercase letters, digits and underscores, starting with a letter): retire it and file it again under a snake_case name."
+   :open "Retire this plan and file it again under a snake_case name."}
+  [row _inp _ctx]
+  ;; ticket 4d243311: a name filed before d4750bf9 is read and retired,
+  ;; and no other door builds an org from it
+  (if (re-matches (re-pattern name-pattern) (str (get-in row [:data :name])))
+    (t/allow)
+    (t/deny)))
 
 (def ^:private entry-schema
   "One entry of a hired seat's scope or wake_on: a kind, the doors on it
@@ -809,7 +931,7 @@
    [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                :x-display {:hidden true :raw true
                            :label "The head commit"}}
-    [:string {:min 7 :max 64}]]
+    schema/commit-sha]
    [:findings {:x-display {:hidden true
                            :label "The run's findings"}}
     [:vector {:max 200} finding-schema]]
@@ -817,6 +939,10 @@
                :x-display {:hidden true
                            :label "The run's law page"}}
     [:maybe [:string {:max 40000}]]]
+   [:first_week_scene {:optional true
+                       :x-display {:hidden true
+                                   :label "The run's first-week scene"}}
+    [:maybe [:string {:max 65536}]]]
    [:live_flag {:optional true
                 :x-display {:hidden true
                             :label "The branch says live"}}
@@ -848,7 +974,8 @@
              {:in #{:going_live} :by :engine :via :mark_live :to :live}
              {:in #{:going_live} :by :engine :via :head_moved :to :simulated}
              {:in #{:filming} :by :engine :via :attach_film :to :simulated}
-             {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}]
+             {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}
+             {:in #{:filming} :by :engine :via :void_take :to :proposed}]
    ;; going_live waits a day at most on the merge and the mayor's seat
    :expected-age {:drafting 86400 :proposed 21600 :filming 3600 :simulated 604800
                   :going_live 86400}
@@ -861,12 +988,20 @@
                 :purpose #{:eq}}
    :on-create stamp-the-owner
    :create-guards [a-person-files-the-plan]
+   ;; the engine's own birth of a hire plan (M4a), beside the create
+   :creates [{:action :open_hire
+              :input hire-input
+              :by #{:engine}
+              :on-create stamp-the-hire
+              :display {:label "Open a hire plan"}}]
    :schema
    [:map
     [:name {:x-display
             {:label "The org's name"
              :help "A short name for the org, as its directory spells it: greenleaf, or acme_landscaping."}}
-     name-schema]
+     ;; a stored name may predate the snake_case rule (ticket 4d243311):
+     ;; create-schema judges a new one, the-name-is-snake-case the doors
+     [:string {:min 1 :max 64}]]
     [:brief {:optional true
              :x-display
              {:widget "prose"
@@ -890,7 +1025,7 @@
                     {:raw true
                      :label "Audited at"
                      :help "The head commit of the org's branch the findings were found on."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN ONLY BY THE FINDINGS DOORS, for that head (M2e)
     [:live_flag {:optional true
                  :x-display
@@ -908,7 +1043,7 @@
                      {:raw true
                       :label "Allowed at"
                       :help "The head of the org's branch the owner's go_live allowed: the house merges the pull request at that head, and no other."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN ONLY BY mark_live: the seat the live org's mayor sits in (M2e-4)
     [:mayor_seat {:optional true
                   :x-display
@@ -957,6 +1092,20 @@
                  :label "The law"
                  :help "The org's law in sentences, as the pull request carries it: what the person approves when it merges."}}
      [:maybe [:string {:max 40000}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the scene the audit's run
+    ;; rendered for that head, which the director plays (ticket 4dbb8243)
+    [:first_week_scene {:optional true
+                        :x-display
+                        {:raw true
+                         :label "The first-week scene"
+                         :help "The script of the org's simulated first week, rendered by the audit from the org's seed: what the director plays on a clone."}}
+     [:maybe [:string {:max 65536}]]]
+    [:first_week_scene_sha {:optional true
+                            :x-display
+                            {:raw true
+                             :label "Scene rendered at"
+                             :help "The head commit of the org's branch the first-week scene was rendered at."}}
+     [:maybe [:string {:max 64}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true
@@ -982,7 +1131,7 @@
                 {:raw true
                  :label "Filmed at"
                  :help "The head commit of the org's branch the film handed in was made at."}}
-     [:maybe [:string {:max 64}]]]
+     [:maybe schema/commit-sha]]
     ;; WRITTEN BY attach_film and record_film_findings: the take is landed
     [:take_landed_at {:optional true
                       :x-display
@@ -1000,7 +1149,7 @@
                {:label "Purpose"
                 :help "found: the plan stands the org up. hire: the engine opened it on a live org, for one gap its audit found. A plan with none founds its org."}}
      [:maybe [:enum "found" "hire"]]]
-    ;; WRITTEN ONLY BY THE ENGINE'S open-hire!: no create form takes it
+    ;; WRITTEN ONLY BY THE ENGINE'S open_hire door: the create form does not take it
     [:gap {:optional true
            :x-display
            {:label "The gap"
@@ -1029,6 +1178,7 @@
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
+     :guards [the-name-is-snake-case]
      :handler ask-the-owner
      :input [:map
              [:key {:x-display {:raw true :label "The question's key"
@@ -1067,7 +1217,8 @@
 
     :propose
     {:from #{:drafting} :to :proposed
-     :guards [no-error-finding-is-open a-hire-names-its-seat]
+     :guards [the-name-is-snake-case no-error-finding-is-open a-hire-names-its-seat
+              the-plan-was-audited-at-its-head]
      :handler put-the-pull-request-up
      :input [:map
              [:change {:optional true :kind :change
@@ -1107,7 +1258,7 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:raw true :label "The filmed commit"
                                      :help "The head commit of the org's branch the film was made at."}}
-              [:string {:min 7 :max 64}]]]
+              schema/commit-sha]]
      ;; :edit-shape — a take replaces the last one, nobody edits it
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
@@ -1130,6 +1281,24 @@
               :one-way "The film is on the plan for the owner to watch."}
      :display {:label "Attach the film" :order 4
                :description "Attach the film of the org's simulated first week"}}
+
+    ;; A NEW HEAD WHILE FILMING (ticket 4d9311f1). The engine's hand
+    ;; alone: the findings pass or the film pass voids a take whose head
+    ;; the branch has left, and the director films the new head.
+    :void_take
+    {:from #{:filming} :to :proposed
+     :guards [the-engine-records-the-findings]
+     :handler void-the-take
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              [:string {:min 7 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take is voided: the plan is proposed again, for the director to film its new head."}
+     :display {:label "Take voided" :order 11
+               :description "A new head on the branch voids the film waiting to be judged"}}
 
     ;; THE AUDIT'S OWN DOOR (M2b). Hidden, and the engine's hand alone,
     ;; for repo_policy's note_source's reasons. An empty run clears the
@@ -1184,7 +1353,7 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The filmed commit"}}
-              [:string {:min 7 :max 64}]]
+              schema/commit-sha]
              [:findings {:x-display {:hidden true
                                      :label "The film's red rules"}}
               [:vector {:min 1 :max 200} finding-schema]]]
@@ -1198,7 +1367,7 @@
     ;; merges the plan's pull request at the approved head.
     :go_live
     {:from #{:simulated} :to :going_live
-     :guards [not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
@@ -1236,12 +1405,29 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The moved head"}}
-              [:string {:min 7 :max 64}]]]
+              schema/commit-sha]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes is retired: the plan is simulated again, with the moved head among its findings."}
      :display {:label "Head moved" :order 11
                :description "The pull request's head moved after the owner's yes"}}
+
+    ;; THE SIT'S LINK (ticket db8b35bb). The onboarding seat's sit mints
+    ;; the plan's change; this door writes it onto the plan, so the
+    ;; findings pass reads its head and the merge line holds it.
+    :link_change
+    {:from #{:drafting} :to :drafting
+     :guards [the-sit-links-its-change]
+     :handler link-the-change
+     :input [:map
+             [:change {:kind :change
+                       :x-display {:label "The pull request"}}
+              :waymark/ref]]
+     ;; :edit-shape — the engine names the change, nobody edits it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Change linked" :order 20
+               :description "The sit names the change it minted for this plan"}}
 
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.

@@ -91,7 +91,8 @@
   [eng]
   (let [id (str (:id (:row (hire! eng))))
         as {:principal the-owner}]
-    (inv/invoke! eng :org_plan id :propose {:hire_seat a-hire-seat} as)
+    (inv/invoke! eng :org_plan id :propose
+                 {:hire_seat a-hire-seat :change (walk/audited! eng id {})} as)
     (inv/invoke! eng :org_plan id :hand_in_film
                  {:film_url "https://example.com/hire.mp4"
                   :take_report "{}" :head_sha walk/a-head} as)
@@ -128,6 +129,9 @@
     (testing "the owner's Allow goes live, and the pass opens the seat"
       (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
       (is (= "going_live" (name (:state (load-row eng :org_plan id)))))
+      ;; the hire's pull request merges: the pass opens the seat after it
+      (inv/invoke! eng :change (get-in (load-row eng :org_plan id) [:data :change])
+                   :merge nil walk/the-engine)
       (is (= 1 (org-live/mark-live-plans! eng)))
       (let [plan (load-row eng :org_plan id)
             seat (load-row eng :seat (get-in plan [:data :hired_seat]))]
@@ -165,3 +169,55 @@
     (testing "until the clock passes it"
       (reset! clock (.plusSeconds t0 (inc 604800)))
       (is (some? (:row (hire! eng)))))))
+
+(defn- versions
+  "Every org_plan, seat, held_call and domain row's version, by id."
+  [eng]
+  (into {}
+        (for [kind [:org_plan :seat :held_call :domain]
+              :when (contains? (inv/resources eng) kind)
+              row (store/with-tx (:storage eng)
+                    (fn [tx] (store/query-rows (:storage eng) tx kind {} {:limit 1000})))]
+          [[kind (str (:id row))] (:version row)])))
+
+(defn- refused-hire!
+  "A simulated hire plan whose held go_live the owner refused. → its id."
+  [eng]
+  (let [id (simulated-hire! eng)
+        call (held/hold-door! eng {:kind "org_plan" :action "go_live" :id id
+                                   :body {} :caller "onboarding" :owner "owner"
+                                   :why "The offer."})]
+    (inv/invoke! eng :held_call (str (:id call)) :refuse {:reason "Not this week."}
+                 {:principal the-owner})
+    id))
+
+(deftest a-refused-hire-retires-on-the-next-tick
+  (let [eng (org-engine (atom t0))
+        id (refused-hire! eng)]
+    (testing "the tick retires it, with no reboot"
+      (is (= {:marked 0 :declined 1} (org-live/pass! eng)))
+      (is (= "retired" (name (:state (load-row eng :org_plan id))))))
+    (testing "a second tick over the same rows writes nothing"
+      (let [before (versions eng)]
+        (is (= {:marked 0 :declined 0} (org-live/pass! eng)))
+        (is (= before (versions eng)))))))
+
+(deftest a-tick-with-nothing-to-do-writes-nothing
+  (let [eng (org-engine (atom t0))
+        _ (simulated-hire! eng)
+        before (versions eng)]
+    (is (= {:marked 0 :declined 0} (org-live/pass! eng)))
+    (is (= before (versions eng)))))
+
+(deftest the-daemon-ticks-the-pass
+  (let [eng (org-engine (atom t0))
+        id (refused-hire! eng)
+        daemon (org-live/start-passes! eng {:every-seconds 0.05})]
+    (try
+      (is (loop [n 0]
+            (cond
+              (= "retired" (name (:state (load-row eng :org_plan id)))) true
+              (< n 100) (do (Thread/sleep 50) (recur (inc n)))
+              :else false))
+          "the daemon's tick retires the refused hire")
+      (finally (org-live/stop-passes! daemon)))))

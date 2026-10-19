@@ -174,6 +174,10 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            ;; hold-owner: the person an agent's mint past its leash
+            ;; waits on (HC1). delegation requires nothing that
+            ;; requires grants
+            [waymark10.server.delegation :as delegation]
             ;; the powers vocabulary a dotted scope entry is judged
             ;; against (waymark-fp62.10.4). One-directional: mcp-servers
             ;; knows nothing of grants, so this require cannot close a
@@ -669,29 +673,101 @@
            (empty? (:hashed sk))
            (empty? (:args sk))))))
 
-(g/defguard agents-mint-within-their-leash
-  {:judges [:scope]
-   :reads [:principal :now :grant]
-   :vars [:kind]
-   :open "Delegation attenuates: an agent hands out only slices of the leash it holds — hold it first (an approved ask), then mint within it."
-   :explain "An agent mints only within its own live leash: no grant you hold covers the {kind} entry as asked (kind, every action, every id, and at least your own filter must all fit inside one grant you hold)."}
-  [_row inp ctx]
+(defn- leash-gap
+  "The first entry of an agent's mint that no live grant it holds
+  covers, as {:kind}, or nil. nil for every other principal, and for a
+  probe ctx with no :find hook — decline to guess."
+  [inp ctx]
   (let [p (:principal ctx)]
-    (if (or (not= :agent (:type p))
-            (nil? (:find ctx)))          ; probe ctx — decline to guess
-      (t/allow)
+    (when (and (= :agent (:type p)) (:find ctx))
       (let [now (:now ctx)
             live (filter (fn [g]
                            (and (= :accepted (:state g))
                                 (let [exp (get-in g [:data :expires_at])]
                                   (or (nil? exp) (neg? (compare now exp))))))
                          ((:find ctx) :grant {:audience (:id p)} {:limit 100}))
-            surfaces (map surface-of live)
-            bad (first (for [e (:scope inp)
-                             :when (not (some #(entry-within-surface? e %)
-                                              surfaces))]
-                         {:kind (str (:kind e))}))]
-        (if bad (t/deny {:vars bad}) (t/allow))))))
+            surfaces (map surface-of live)]
+        (first (for [e (:scope inp)
+                     :when (not (some #(entry-within-surface? e %)
+                                      surfaces))]
+                 {:kind (str (:kind e))}))))))
+
+(defn- leash-holder
+  "The person an agent's mint past its leash waits on, or nil (HC1,
+  ticket b83e690d): the agent's person (delegation/hold-owner — the
+  seat's owner, or a delegate's person) when that person holds the
+  manager role. Never for a grant whose audience is the asking agent
+  itself: widening itself stays a seat restate."
+  [inp ctx]
+  (let [p (:principal ctx)]
+    (when (not= (nonblank (:audience inp)) (nonblank (:id p)))
+      (when-some [owner (delegation/hold-owner ctx)]
+        (when (roles/manager?
+               (assoc ctx :principal (t/principal {:id owner :display owner})))
+          owner)))))
+
+(defn- entry-said
+  "One scope entry as a door a person reads: `read org_plan named
+  tax_desk`, `finish ticket where repo bench`. A dotted power with no
+  actions reads `use bench.edit where path ...`, never `read`: a power
+  may write or run (ticket 50722c43)."
+  [e]
+  (let [acts (seq (map name (:actions e)))
+        k (name (:kind e))
+        f (:filter e)
+        nm (or (get f :name) (get f "name"))
+        others (dissoc f :name "name")]
+    (str (cond acts (str/join "/" acts)
+               (str/includes? k ".") "use"
+               :else "read")
+         " " k
+         (when (nonblank nm) (str " named " nm))
+         (when (seq others)
+           (str " where " (str/join ", " (map (fn [[k v]] (str (name k) " " v))
+                                              (sort-by (comp name key) others)))))
+         (when (seq (:ids e)) (str " rows " (str/join ", " (map str (:ids e))))))))
+
+(defn- mint-shown
+  "What a held mint says to the person, in plain words: who gets what,
+  and until when."
+  [inp ctx]
+  (let [aud (str (:audience inp))
+        who (or (some-> (:read ctx) (apply [:member aud])
+                        (get-in [:data :display]) nonblank)
+                aud)
+        until (nonblank (:expires_at inp))]
+    (str "Give " who ": " (str/join "; " (map entry-said (:scope inp)))
+         (if until (str " · until " until) " · no end"))))
+
+(g/defguard agents-mint-within-their-leash
+  {:judges [:scope]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :vars [:kind]
+   :open "Delegation attenuates: an agent hands out only slices of the leash it holds — hold it first (an approved ask), then mint within it."
+   :explain "An agent mints only within its own live leash: no grant you hold covers the {kind} entry as asked (kind, every action, every id, and at least your own filter must all fit inside one grant you hold)."}
+  [_row inp ctx]
+  ;; a gap whose agent has a manager behind it is not refused here:
+  ;; `a-mint-past-the-leash-waits-on-its-person` holds it instead
+  (if-some [gap (leash-gap inp ctx)]
+    (if (leash-holder inp ctx) (t/allow) (t/deny {:vars gap}))
+    (t/allow)))
+
+(g/defguard a-mint-past-the-leash-waits-on-its-person
+  {:hold true
+   :judges [:scope]
+   :reads [:principal :now :grant :member :domain :approval_request]
+   :vars [:kind]
+   :open "No door clears this one. The mint waits as a held_call for the agent's person, and the person's Allow makes the grant as the person, judged as the person's own create."
+   :explain "Held for your person's tap. No grant you hold covers the {kind} entry, so this grant is your person's to make: the call is recorded as a held_call, and their Allow creates it as them."}
+  [_row inp ctx]
+  ;; HC1 (ticket b83e690d). The Allow replays as the PERSON
+  ;; (held-calls/door-principal), who is no agent, so no gap is met
+  ;; on the replay and the person's own guards judge it
+  (if-some [gap (leash-gap inp ctx)]
+    (if (leash-holder inp ctx)
+      (t/deny {:vars gap :evidence {:shown (mint-shown inp ctx)}})
+      (t/allow))
+    (t/allow)))
 
 (g/defguard approval-route-only
   {:reads [:principal]
@@ -1041,7 +1117,8 @@
                    scope-filters-are-filterable
                    scope-omits-private-kinds
                    scope-ends-are-stated
-                   agents-mint-within-their-leash]
+                   agents-mint-within-their-leash
+                   a-mint-past-the-leash-waits-on-its-person]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]
@@ -2589,6 +2666,8 @@
                 (assoc principal :model held))))))
       principal))
 
+(declare member-audience)
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2622,6 +2701,15 @@
                grant-id
                (when grant-id (load-decoded eng :grant grant-id)))
         grant-id (if (map? grant-id) (:id grant-id) grant-id)
+        ;; a person bound by subject presents the grant their MEMBER
+        ;; row holds (ticket 36fce73d): it is theirs, read with the
+        ;; audience as their principal, as `person-worn-visibility`
+        ;; wears it. The member read is paid only on a mismatch
+        aud (some-> (get-in row0 [:data :audience]) str)
+        row0 (if (and row0 aud (not= aud (some-> pid str))
+                      (= aud (member-audience eng principal)))
+               (assoc-in row0 [:data :audience] pid)
+               row0)
         own? (boolean (and row0 (= (get-in row0 [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
         now ((:now-fn eng))
@@ -2943,24 +3031,72 @@
   [eng principal]
   (assoc (visibility eng nil principal) :vocabulary-open? true))
 
-(defn- requester-member
-  "The member row of the person `principal` is, when that row holds the
-  `requester` role: the row of that id, or the row a binding stamped
-  with it as `subject`. nil for an agent, a system actor, anyone else,
-  and on an engine that serves no tickets."
+(defn- person-member
+  "The member row of the person `principal` is: the row of that id, or
+  the row a binding stamped with it as `subject`. nil for an agent, a
+  system actor, anyone without a member row, and on an engine that
+  serves no members."
   [eng principal]
-  (when (and (not (contains? #{:agent :system} (:type principal)))
-             (contains? (inv/resources eng) :ticket))
+  (when-not (contains? #{:agent :system} (:type principal))
     (when-some [pid (some-> (:id principal) str not-empty)]
       (when-some [rdef (get (inv/resources eng) :member)]
-        (when-some [m (or (load-decoded eng :member pid)
-                          (some->> (first (store/with-tx (:storage eng)
-                                            (fn [tx]
-                                              (store/query-rows (:storage eng) tx :member
-                                                                {:subject pid} {:limit 1}))))
-                                   (inv/decode-row rdef)))]
-          (when (contains? (set (get-in m [:data :roles])) roles/requester)
-            m))))))
+        (or (load-decoded eng :member pid)
+            (some->> (first (store/with-tx (:storage eng)
+                              (fn [tx]
+                                (store/query-rows (:storage eng) tx :member
+                                                  {:subject pid} {:limit 1}))))
+                     (inv/decode-row rdef)))))))
+
+(defn member-audience
+  "The id a grant on the person `principal` is addressed to when it is
+  their member row's (ticket 36fce73d): that row's id, which differs
+  from the principal id for a person bound by subject. nil wherever
+  `person-member` answers nil."
+  [eng principal]
+  (some-> (person-member eng principal) :id str not-empty))
+
+(defn- requester-member
+  "The member row of the person `principal` is, when that row holds the
+  `requester` role. nil for an agent, a system actor, anyone else, and
+  on an engine that serves no tickets."
+  [eng principal]
+  (when (contains? (inv/resources eng) :ticket)
+    (when-some [m (person-member eng principal)]
+      (when (contains? (set (get-in m [:data :roles])) roles/requester)
+        m))))
+
+(def ^:private never-narrowed-roles
+  "The roles whose holder a standing grant never narrows (ticket
+  152ff81d): the owner must not lock themselves out by being the
+  audience of some grant. `approver` is held_calls' `approver-role`,
+  spelled here because grants sits below that namespace."
+  #{"approver" "recovery-admin"})
+
+(defn- never-narrowed?
+  "Does the person `principal` hold a role `never-narrowed-roles`
+  names — on the principal itself, or on their member row?"
+  [eng principal]
+  (boolean
+   (or (some never-narrowed-roles (:roles principal))
+       (some never-narrowed-roles
+             (get-in (person-member eng principal) [:data :roles])))))
+
+(defn- person-worn-visibility
+  "The visibility a person wears from the standing grant on their
+  MEMBER row (ticket dbcc3fc5). A person bound by subject keeps their
+  own principal id, but the grant is addressed to the member id: the
+  grant is found by `member-id`, accepted as that audience (the
+  acceptance is still the audience's own act), and worn with the
+  audience read as the person's principal, so their own surface stays
+  the rows that name them. nil when nothing stands or it is not
+  accepted."
+  [eng principal member-id]
+  (when-some [g (standing-grant-for eng member-id)]
+    (let [row (accept-as-audience! eng g (assoc principal :id member-id))]
+      (when (= :accepted (:state row))
+        (assoc (visibility eng (assoc-in row [:data :audience] (:id principal))
+                           principal)
+               :vocabulary-open? true)))))
 
 (defn requester-visibility
   "What a person holding `requester` sees (epic 46831b3c, R-3.4): the
@@ -3009,14 +3145,50 @@
   falls to the bootstrap surface when nothing stands. Any other agent
   can present the header, so it must; waymark-rci's meaning for them
   is untouched. The rule lives here, in the one expression, for the
-  reason the paragraph above gives."
+  reason the paragraph above gives.
+
+  A PERSON WITH A STANDING GRANT WEARS IT (ticket 152ff81d): a human
+  the owner scoped with a grant arrives with `worn-visibility`, exactly
+  as a delegate does — accepted on first arrival when it stands
+  :offered — whichever door they signed in through. A grant on a
+  person is no longer ignored. A person with no standing grant is
+  unchanged (unscoped, or a requester's own tickets), and a person
+  holding `approver` or `recovery-admin` is never narrowed this way:
+  they keep today's sight unless they present the header. The rule
+  reads the member row: a member whose `actor_type` is agent, named
+  without the actor-type header (a seed's agent driven through a
+  clone door), is not a person and keeps today's sight. The cost is
+  one grant query per request a person makes.
+
+  THE GRANT IS THE MEMBER ROW'S (ticket dbcc3fc5): a person bound by
+  invite carries their sign-in subject as principal id, while the
+  grant names the member id; `person-worn-visibility` finds it there.
+  And it FAILS CLOSED: a person with any standing grant that cannot
+  be worn — the accept refused, any error — arrives with the bootstrap
+  surface, never unscoped. Unscoped stays only for a person with no
+  standing grant at all."
   [eng principal]
-  (if (= :agent (:type principal))
+  (cond
+    (= :agent (:type principal))
     (or (when (:acts-for principal)
           (worn-visibility eng principal))
         (bootstrap-visibility eng principal))
-    (when-some [m (requester-member eng principal)]
-      (requester-visibility eng principal m))))
+
+    (= :system (:type principal))
+    nil
+
+    :else
+    (let [m (person-member eng principal)
+          mid (when (and m
+                         (not= "agent" (get-in m [:data :actor_type]))
+                         (not (never-narrowed? eng principal)))
+                (some-> (:id m) str not-empty))]
+      (if (and mid (standing-grant-for eng mid))
+        (or (try (person-worn-visibility eng principal mid)
+                 (catch Exception _ nil))
+            (bootstrap-visibility eng principal))
+        (when-some [m (requester-member eng principal)]
+          (requester-visibility eng principal m))))))
 
 (defn capability-entry
   "The live surface entry a PRESENTED grant confers for one dotted
