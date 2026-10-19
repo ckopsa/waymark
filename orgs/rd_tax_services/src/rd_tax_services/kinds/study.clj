@@ -23,7 +23,7 @@
 
 (defguard reviewer-named
   (refuse "The principal signs off a study; name the principal who reviewed it, who is never its preparer.")
-  '(present? :signed_off_by))
+  '(present? :reviewer))
 
 (defguard cpa-named
   (refuse "A study is delivered to the client's CPA; name the CPA first.")
@@ -43,7 +43,7 @@
             [:referring_cpa_id {:optional true :kind :referring_cpa} [:maybe :waymark/ref]]
             [:prior_study_id {:optional true :kind :study} [:maybe :waymark/ref]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
-            [:signed_off_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:reviewer {:optional true} [:maybe [:string {:max 80}]]]
             [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
             [:records_received_on {:optional true} [:maybe [:string {:max 10}]]]
