@@ -75,10 +75,12 @@
       (fail! "the config's :pull needs a :routine, the routine its fires run as."))
     (when-not (contains? routine-names routine)
       (fail! (str "the config's :pull :routine " routine " is not under :routines.")))
-    {:engine-url url
-     :link-id    link
-     :routine    routine
-     :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}))
+    (cond-> {:engine-url url
+             :link-id    link
+             :routine    routine
+             :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}
+      ;; LP3: where the pull journal lives; the state dir's file without it
+      (some-> (:journal p) str not-empty) (assoc :journal (str (:journal p))))))
 
 (defn- normalize-routine [nm r]
   (when-not (map? r)
