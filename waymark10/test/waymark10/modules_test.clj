@@ -153,6 +153,13 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
                           (modules/selected [:webhooks :telepathy])))))
 
+(deftest every-assembly-enrols-the-seat
+  ;; waiting_on and in_flight read :seat with no guard, so no selection
+  ;; may assemble an engine without it
+  (doseq [selection (into [nil []] (map vector) (sort modules/known))]
+    (is (contains? (enrolled-kinds [] selection) :seat)
+        (str "selection " (pr-str selection)))))
+
 (deftest a-redundant-hand-enroll-names-the-module-that-owns-the-kind
   (let [[w :as ws] (modules/warnings [{:kind :member}] nil)]
     (is (= 1 (count ws)))

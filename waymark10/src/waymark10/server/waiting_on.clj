@@ -304,30 +304,30 @@
                             seat-rows))}))
 
 (defn for-row
-  "The block for a row the engine serves, or nil: for an engine that
-  serves no seat kind, and for a read that failed. `data` is the row's
-  data as the envelope projected it for the caller."
+  "The block for a row the engine serves, or nil for a read that
+  failed. The seat kind is core's and always enrolled, so every engine
+  serves one. `data` is the row's data as the envelope projected it
+  for the caller."
   [eng rdef row data]
   (try
     (let [st (:storage eng)
-          resources (inv/resources eng)]
-      (when (contains? resources :seat)
-        (let [[seat-rows log reads]
-              (store/with-tx st
-                (fn [tx]
-                  (let [seat-rows (store/query-rows st tx :seat {:state :active}
-                                                    {:limit seat-page})]
-                    [seat-rows
-                     (store/transitions st tx
-                                        {:kind (:kind rdef)
-                                         :resource-id (str (:id row))}
-                                        {:limit log-page :newest-first true})
-                     (walk-reads eng tx seat-rows [row])])))]
-          (block rdef seat-rows resources row
-                 (assoc reads
-                        :now ((:now-fn eng))
-                        :entered (entered log (:state row))
-                        :data data)))))
+          resources (inv/resources eng)
+          [seat-rows log reads]
+          (store/with-tx st
+            (fn [tx]
+              (let [seat-rows (store/query-rows st tx :seat {:state :active}
+                                                {:limit seat-page})]
+                [seat-rows
+                 (store/transitions st tx
+                                    {:kind (:kind rdef)
+                                     :resource-id (str (:id row))}
+                                    {:limit log-page :newest-first true})
+                 (walk-reads eng tx seat-rows [row])])))]
+      (block rdef seat-rows resources row
+             (assoc reads
+                    :now ((:now-fn eng))
+                    :entered (entered log (:state row))
+                    :data data)))
     (catch Exception e
       (warn! (text (:kind rdef)) " " (:id row) ": " (ex-message e))
       nil)))
