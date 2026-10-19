@@ -125,3 +125,44 @@
         (grant! eng "grant-owner" "owner")
         (is (nil? (grants/unscoped-visibility eng (person "owner")))
             "the owner keeps unscoped sight without the header")))))
+
+(defn- bound-member! [eng id subject]
+  (:row (inv/create! eng :member
+                     {:display id :actor_type "human" :subject subject}
+                     {:principal members/registrar :id id})))
+
+(deftest a-person-bound-by-subject-wears-the-grant-on-their-member-row
+  (let [eng (eng!)]
+    (bound-member! eng "member-carson" "google-carson")
+    (plan! eng "plan-x" "X")
+    (plan! eng "plan-y" "Y")
+    (grant! eng "grant-carson" "member-carson")
+    (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+      (testing "the grant addressed to the member id is accepted and worn"
+        (is (some? vis) "a bound person with a grant is not unscoped")
+        (is (= :accepted (:state (grants/standing-grant-for eng "member-carson")))))
+      (testing "they see only the org_plan rows named X"
+        (is ((:row? vis) :org_plan "plan-x"))
+        (is (not ((:row? vis) :org_plan "plan-y")))))))
+
+(deftest a-person-whose-grant-cannot-be-worn-sees-nothing
+  (let [eng (eng!)]
+    (bound-member! eng "member-carson" "google-carson")
+    (plan! eng "plan-x" "X")
+    (grant! eng "grant-carson" "member-carson")
+    (testing "an accept that refuses leaves the bootstrap surface, not full sight"
+      (with-redefs [grants/accept-as-audience! (fn [_ row _] row)]
+        (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+          (is (some? vis) "never unscoped")
+          (is (not ((:row? vis) :org_plan "plan-x"))))))
+    (testing "an error while wearing it fails closed the same way"
+      (with-redefs [grants/accept-as-audience!
+                    (fn [& _] (throw (ex-info "boom" {})))]
+        (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+          (is (some? vis) "never unscoped")
+          (is (not ((:row? vis) :org_plan "plan-x"))))))))
+
+(deftest a-bound-person-with-no-grant-is-unscoped-as-today
+  (let [eng (eng!)]
+    (bound-member! eng "member-sister" "google-sister")
+    (is (nil? (grants/unscoped-visibility eng (person "google-sister"))))))

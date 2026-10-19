@@ -2985,6 +2985,23 @@
        (some never-narrowed-roles
              (get-in (person-member eng principal) [:data :roles])))))
 
+(defn- person-worn-visibility
+  "The visibility a person wears from the standing grant on their
+  MEMBER row (ticket dbcc3fc5). A person bound by subject keeps their
+  own principal id, but the grant is addressed to the member id: the
+  grant is found by `member-id`, accepted as that audience (the
+  acceptance is still the audience's own act), and worn with the
+  audience read as the person's principal, so their own surface stays
+  the rows that name them. nil when nothing stands or it is not
+  accepted."
+  [eng principal member-id]
+  (when-some [g (standing-grant-for eng member-id)]
+    (let [row (accept-as-audience! eng g (assoc principal :id member-id))]
+      (when (= :accepted (:state row))
+        (assoc (visibility eng (assoc-in row [:data :audience] (:id principal))
+                           principal)
+               :vocabulary-open? true)))))
+
 (defn requester-visibility
   "What a person holding `requester` sees (epic 46831b3c, R-3.4): the
   ticket kind narrowed to the rows whose `filed_by` is their member
@@ -3045,7 +3062,15 @@
   reads the member row: a member whose `actor_type` is agent, named
   without the actor-type header (a seed's agent driven through a
   clone door), is not a person and keeps today's sight. The cost is
-  one grant query per request a person makes."
+  one grant query per request a person makes.
+
+  THE GRANT IS THE MEMBER ROW'S (ticket dbcc3fc5): a person bound by
+  invite carries their sign-in subject as principal id, while the
+  grant names the member id; `person-worn-visibility` finds it there.
+  And it FAILS CLOSED: a person with any standing grant that cannot
+  be worn — the accept refused, any error — arrives with the bootstrap
+  surface, never unscoped. Unscoped stays only for a person with no
+  standing grant at all."
   [eng principal]
   (cond
     (= :agent (:type principal))
@@ -3057,12 +3082,17 @@
     nil
 
     :else
-    (or (when-some [m (person-member eng principal)]
-          (when (and (not= "agent" (get-in m [:data :actor_type]))
-                     (not (never-narrowed? eng principal)))
-            (worn-visibility eng principal)))
+    (let [m (person-member eng principal)
+          mid (when (and m
+                         (not= "agent" (get-in m [:data :actor_type]))
+                         (not (never-narrowed? eng principal)))
+                (some-> (:id m) str not-empty))]
+      (if (and mid (standing-grant-for eng mid))
+        (or (try (person-worn-visibility eng principal mid)
+                 (catch Exception _ nil))
+            (bootstrap-visibility eng principal))
         (when-some [m (requester-member eng principal)]
-          (requester-visibility eng principal m)))))
+          (requester-visibility eng principal m))))))
 
 (defn capability-entry
   "The live surface entry a PRESENTED grant confers for one dotted
