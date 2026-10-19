@@ -482,6 +482,28 @@
              (mapv str (:actions (first (get-in stored [:data :scope])))))
           "…nor did the door it opens")))
 
+  (testing "an any-of state filter whose every state has a door out is opened"
+    (let [row (open-seat! "walks-active-and-retired-models"
+                          {:walk "model"
+                           :scope [{:kind "model" :actions ["retire" "reactivate"]
+                                    :filter {:state "active,retired"}}]})]
+      (is (= :active (:state row)))
+      (is (= {"state" "active,retired"} (named-filter (seats/walk-filter row))))))
+
+  (testing "an any-of state filter with one state no door leaves is refused naming it"
+    ;; ticket 0b3ef047: each state the walk covers is judged on its own
+    (let [p (refusal #(open-seat! "walks-and-never-leaves-retired"
+                                  {:walk "model"
+                                   :scope [{:kind "model" :actions ["retire"]
+                                            :filter {:state "active,retired"}}]}))]
+      (is (= :walk-leaves-its-filter (:guard p)))
+      (is (str/includes?
+           (str (:detail p))
+           "no door this seat may take moves a retired model out of retired")
+          "the sentence names the state with no way out")
+      (is (not (str/includes? (str (:detail p)) "out of active"))
+          "and not the state its door does leave")))
+
   (testing "a seat that names a judgment is not judged here at all"
     ;; R-3: it walks the judgment's own queue minus the subjects
     ;; already judged, and the exit is the verdict row — a door on
