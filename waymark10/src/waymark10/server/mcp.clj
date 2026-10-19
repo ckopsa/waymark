@@ -4427,6 +4427,24 @@
       said
       (pattern-branch policy row-id))))
 
+(defn- linked-change!
+  "The walk row learns the change the sit found or minted for it
+  (ticket db8b35bb): a kind that declares a `link_change` door is
+  walked through it with the engine's hand, so the row names its
+  change without a door of the seat's own. The door's guard decides
+  whether the row takes it — factory10's org_plan only when it names
+  none or names a closed one — and its refusal is the ordinary answer
+  once the row names it, so it is swallowed. → change."
+  [eng walk change]
+  (let [kind (keyword (str (get walk "kind")))
+        id (some-> (get-in walk ["rows" 0 "id"]) str not-empty)]
+    (when (and id (get-in (inv/resources eng) [kind :actions :link_change]))
+      (try
+        (inv/invoke! eng kind id :link_change {:change (str (:id change))}
+                     {:principal seat-change-principal})
+        (catch Exception _ nil)))
+    change))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -4790,7 +4808,8 @@
                                 (reopened-change eng)
                                 (regroomed-change eng)
                                 (rehomed-change eng seat row)
-                                (rebranched-change eng row))
+                                (rebranched-change eng row)
+                                (linked-change! eng walk))
                 repo (first (walk-home seat row))]
             [change
              (or note

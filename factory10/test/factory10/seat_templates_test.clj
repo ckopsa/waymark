@@ -183,7 +183,7 @@
     (testing "it cannot record findings"
       (is (not (served? (door "record_findings" {:findings []}))))
       (is (= "drafting" (state))))
-    (inv/invoke! eng :org_plan id :propose {} {:principal a-person})
+    (walk/proposed! eng id a-person)
     (testing "it cannot attach the film"
       (is (not (served? (door "attach_film" {:film_url "https://example.com/g.mp4"}))))
       (is (= "proposed" (state))))

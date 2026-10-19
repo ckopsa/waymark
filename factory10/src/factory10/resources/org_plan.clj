@@ -322,6 +322,11 @@
     (some? (:hire_seat inp)) (assoc-in [:data :hire_seat] (:hire_seat inp))
     (some? (:law_page inp)) (assoc-in [:data :law_page] (:law_page inp))))
 
+(defhandler link-the-change [row inp _ctx]
+  ;; The sit's own hand (ticket db8b35bb): the change it minted for this
+  ;; plan is the plan's, so the findings pass and the go_live hold find it.
+  (assoc-in row [:data :change] (:change inp)))
+
 (defhandler hand-in-the-film [row inp _ctx]
   ;; The director's take, kept for the engine's film pass to judge. It
   ;; decides nothing; a new take is judged anew.
@@ -580,6 +585,50 @@
                              (get-in row [:data :findings])))]
     (t/deny {:vars {:finding (str (:key f) ": " (:sentence f))}})
     (t/allow)))
+
+(defguardfn the-plan-was-audited-at-its-head
+  {:reads []
+   :vars [:head]
+   :explain "The audit has not recorded its findings at the head of this plan's pull request ({head}), so what would go up is not what was audited."
+   :open "Push, and wait for the audit's findings on this head before proposing."}
+  ;; Ticket db8b35bb. The change is the one propose names, or the plan's
+  ;; own, read through the ctx hook. A ctx with no hook — the scenarios
+  ;; and the render probe — allows, bench/policy-of's posture: the door
+  ;; judges again with a real hook behind it. That is the check tier's
+  ;; answer too, so the declared reads stay empty and org_plan's
+  ;; scenarios stay check-tier, as ticket.clj's
+  ;; `the-receiving-mayor-answers-an-ask` does.
+  [row inp ctx]
+  (if-some [read' (:read ctx)]
+    (let [named (some-> (or (:change inp) (get-in row [:data :change])) str not-empty)
+          head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)]
+      (if (and head (= head (str (get-in row [:data :findings_sha]))))
+        (t/allow)
+        (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
+    (t/allow)))
+
+(def ^:private gone-change-states
+  "The change states whose pull request is out of play."
+  #{"closed" "merged"})
+
+(defguardfn the-sit-links-its-change
+  {:reads [:principal :change]
+   :hide true
+   :explain "The sit names the change it minted for this plan, and only when the plan names none or names one that is closed."}
+  ;; The engine's hand alone (ticket db8b35bb), as the findings are: a
+  ;; plan whose change is still in play keeps it.
+  [row inp ctx]
+  (let [named (some-> (get-in row [:data :change]) str not-empty)]
+    (cond
+      (not= :system (:type (:principal ctx))) (t/deny)
+      (nil? named) (t/allow)
+      (= named (str (:change inp))) (t/deny)
+      :else (if-some [read' (:read ctx)]
+              (if (contains? gone-change-states
+                             (some-> (read' :change named) :state name))
+                (t/allow)
+                (t/deny))
+              (t/allow)))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 
@@ -1067,7 +1116,8 @@
 
     :propose
     {:from #{:drafting} :to :proposed
-     :guards [no-error-finding-is-open a-hire-names-its-seat]
+     :guards [no-error-finding-is-open a-hire-names-its-seat
+              the-plan-was-audited-at-its-head]
      :handler put-the-pull-request-up
      :input [:map
              [:change {:optional true :kind :change
@@ -1242,6 +1292,23 @@
               :one-way "The owner's yes is retired: the plan is simulated again, with the moved head among its findings."}
      :display {:label "Head moved" :order 11
                :description "The pull request's head moved after the owner's yes"}}
+
+    ;; THE SIT'S LINK (ticket db8b35bb). The onboarding seat's sit mints
+    ;; the plan's change; this door writes it onto the plan, so the
+    ;; findings pass reads its head and the merge line holds it.
+    :link_change
+    {:from #{:drafting} :to :drafting
+     :guards [the-sit-links-its-change]
+     :handler link-the-change
+     :input [:map
+             [:change {:kind :change
+                       :x-display {:label "The pull request"}}
+              :waymark/ref]]
+     ;; :edit-shape — the engine names the change, nobody edits it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Change linked" :order 20
+               :description "The sit names the change it minted for this plan"}}
 
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.

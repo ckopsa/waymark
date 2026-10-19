@@ -2090,16 +2090,41 @@
 
 ;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────
 
+(def ^:private live-change-states
+  "The change states whose pull request is still in play."
+  #{"open" "submitted" "failing" "stuck"})
+
+(defn org-plan-change-id
+  "The id of the change an org_plan names — or, for a plan whose
+  `change` is nil (one minted before the sit wrote it, ticket
+  db8b35bb), of the live change born from `org_plan:<id>`. nil when
+  there is neither."
+  [eng plan]
+  (or (some-> (get-in plan [:data :change]) str not-empty)
+      (when (rdef-of-kind eng :change)
+        (let [st (:storage eng)]
+          (some->> (store/with-tx st
+                     (fn [tx]
+                       (store/query-rows st tx :change
+                                         {:born_from (str "org_plan:" (:id plan))}
+                                         {:limit 20})))
+                   (filter #(contains? live-change-states
+                                       (some-> (:state %) name)))
+                   first
+                   :id
+                   str)))))
+
 (defn- org-plans
   "Every org_plan in one of `states`, decoded, by the id of the change it
-  names — empty in an engine that declares no org_plan kind."
+  names (`org-plan-change-id`) — empty in an engine that declares no
+  org_plan kind."
   [eng states]
   (if-some [rd (rdef-of-kind eng :org_plan)]
     (let [st (:storage eng)]
       (into {}
             (keep (fn [raw]
                     (let [plan (inv/decode-row rd raw)]
-                      (some-> (get-in plan [:data :change]) str not-empty
+                      (some-> (org-plan-change-id eng plan)
                               (vector plan)))))
             (store/with-tx st
               (fn [tx]
