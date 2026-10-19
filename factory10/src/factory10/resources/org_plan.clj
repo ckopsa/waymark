@@ -78,7 +78,9 @@
   `approved_head` and moves the plan to going_live. The house's merge
   pass takes that yes as the person's for that head (factory10.bench),
   and a moved head sends the plan back to simulated through
-  `head_moved`. `mark_live` is the engine's step to live.
+  `head_moved`. `mark_live` is the engine's step to live: the pass in
+  `factory10.org-live` takes it once the house serves the org's domain
+  and its mayor's seat is active there, and writes `mayor_seat`.
 
   A PLAN CAN BE A HIRE PLAN (ticket 78f11fa7, M4a). `purpose` is
   `found` (the plan that stands an org up; a plan born before the field
@@ -337,6 +339,11 @@
   ;; The owner's yes is for the head the audit last read: the house's
   ;; merge pass merges that head, or one the rig says carries from it.
   (assoc-in row [:data :approved_head] (get-in row [:data :findings_sha])))
+
+(defhandler seat-the-mayor [row inp _ctx]
+  ;; The org is live because its mayor sits: the plan names that seat.
+  (cond-> row
+    (some? (:mayor_seat inp)) (assoc-in [:data :mayor_seat] (:mayor_seat inp))))
 
 (defhandler the-head-moved [row inp _ctx]
   ;; The yes is retired, and the moved head is a finding the next run
@@ -678,6 +685,13 @@
                       :label "Allowed at"
                       :help "The head of the org's branch the owner's go_live allowed: the house merges the pull request at that head, and no other."}}
      [:maybe schema/commit-sha]]
+    ;; WRITTEN ONLY BY mark_live: the seat the live org's mayor sits in (M2e-4)
+    [:mayor_seat {:optional true
+                  :x-display
+                  {:raw true
+                   :label "Its mayor's seat"
+                   :help "The seat the org's mayor sits in, in the org's own domain: the engine writes it when it marks the org live."}}
+     [:maybe [:string {:max 64}]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
     [:next_step {:optional true
                  :x-display
@@ -949,6 +963,13 @@
     :mark_live
     {:from #{:going_live} :to :live
      :guards [the-engine-records-the-findings]
+     :handler seat-the-mayor
+     :input [:map
+             [:mayor_seat {:optional true
+                           :x-display {:hidden true :raw true
+                                       :label "The mayor's seat"}}
+              [:string {:min 1 :max 64}]]]
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The org is live: it is merged and its mayor sits. The way back is retire."}
      :display {:label "Live" :order 10
