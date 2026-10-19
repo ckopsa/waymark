@@ -2147,7 +2147,14 @@
                             "token to send back as a Cookie header on "
                             "every request; one use, the same link. "
                             "Prefer this over the bind header when you "
-                            "hold nothing else.")}))))))
+                            "hold nothing else.")}
+                :sign_in {:href (str "/auth/login?invite=" token
+                                     "&return-to=/")
+                          :method "GET"
+                          :note (str "a person in a browser: sign in "
+                                     "here — the invite rides the sign-in "
+                                     "and binds to the account you sign "
+                                     "in with; one use")}))))))
 
 ;; ── the grant-introspection door (waymark-44h) ──────────────────────
 
