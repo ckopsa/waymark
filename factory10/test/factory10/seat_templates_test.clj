@@ -112,7 +112,7 @@
                           {:now-fn (constantly t0)})
         h (dev/handler eng)
         t (edn-resource "seats/onboarding.edn")
-        seat (fill t :seat {:org "greenleaf"})
+        seat (fill t :seat {:org "rd_tax_services"})
         vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
                     (inv/resources eng))
         kinds (remove #(str/includes? (:kind %) ".") (:scope seat))
@@ -127,8 +127,8 @@
               a actions]
         (is (contains? (get vocab kind) a) (str kind "." a))))
     (testing "it holds the walk's doors and no other"
-      (is (= {"org_plan" #{"create" "ask" "propose" "go_live"}
-              "change" #{"submit" "stall"}}
+      (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
+              "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
       (is (= {:state "drafting,simulated"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
@@ -138,8 +138,20 @@
       (doseq [{:keys [kind filter]} powers]
         (is (str/starts-with? kind "bench.") kind)
         (is (= "ckopsa/waymark" (:repo filter)) kind)
-        (when (#{"bench.find" "bench.read" "bench.edit"} kind)
-          (is (= "orgs/greenleaf/**" (:path filter)) kind))))))
+        (when (#{"bench.find" "bench.read"} kind)
+          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-mayor.edn"
+                 (:path filter))
+              kind))
+        (when (= "bench.edit" kind)
+          (is (= "orgs/rd_tax_services/**" (:path filter)) kind)))
+      (is (every? (set (map :kind powers)) ["bench.feedback" "bench.pull"])
+          "it reads red CI and follows main"))
+    (testing "its instructions name only bench tools its scope holds, and stay short"
+      (let [held (set (map :kind powers))]
+        (doseq [[_ tool] (re-seq #"bench__(\w+)" (str (:charter seat) (:instructions seat)))]
+          (is (contains? held (str "bench." tool)) tool)))
+      (is (< (count (:charter seat)) 1200))
+      (is (< (count (:instructions seat)) 2000)))))
 
 (def ^:private agent-headers
   "The onboarding seat's sitter: an agent acting for its person."

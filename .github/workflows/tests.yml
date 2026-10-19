@@ -1912,9 +1912,17 @@ jobs:
       - uses: actions/checkout@v4
 
       # the runner context is not available in jobs.<id>.env, so the
-      # walk's state file is set here for every later step
+      # walk's state file is set here for every later step, and the
+      # fixture token loses the whitespace a paste may leave around it
       - name: Walk state
-        run: echo "WALK_STATE=$RUNNER_TEMP/walk-state.json" >> "$GITHUB_ENV"
+        run: |
+          echo "WALK_STATE=$RUNNER_TEMP/walk-state.json" >> "$GITHUB_ENV"
+          token="${FIXTURE_TOKEN#"${FIXTURE_TOKEN%%[![:space:]]*}"}"
+          token="${token%"${token##*[![:space:]]}"}"
+          if [ -n "$token" ]; then
+            echo "::add-mask::$token"
+          fi
+          echo "FIXTURE_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: "1. Prerequisites"
         run: docker compose version
@@ -1993,8 +2001,36 @@ jobs:
 
       - name: "5. The repo kit, on the fixture repository on GitHub"
         if: env.FIXTURE_TOKEN != ''
+        env:
+          FIXTURE_TOKEN_RAW: ${{ secrets.SELFHOST_FIXTURE_TOKEN }}
         run: |
           set -euo pipefail
+          # what the job holds and what GitHub answers it, never the token
+          case "$FIXTURE_TOKEN" in
+            github_pat_*) kind=fine-grained ;;
+            ghp_*) kind=classic ;;
+            ghs_*|gho_*) kind=app/oauth ;;
+            *) kind=unknown ;;
+          esac
+          if [ "$FIXTURE_TOKEN_RAW" != "$FIXTURE_TOKEN" ]; then padded=yes; else padded=no; fi
+          api() {
+            curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $FIXTURE_TOKEN" \
+              "https://api.github.com/repos/${FIXTURE_REPO}$1" || true
+          }
+          repo_status=$(api "")
+          readme_status=$(api /contents/README.md)
+          echo "fixture token: kind $kind, length ${#FIXTURE_TOKEN}, whitespace or newline around the secret: $padded"
+          echo "GET /repos/$FIXTURE_REPO: HTTP $repo_status"
+          echo "GET /repos/$FIXTURE_REPO/contents/README.md: HTTP $readme_status"
+          if [ "$repo_status" != "200" ]; then
+            echo "::error title=SELFHOST.md drifted (5)::the token GitHub received cannot see $FIXTURE_REPO (HTTP $repo_status): re-save SELFHOST_FIXTURE_TOKEN as an Actions repository secret"
+            exit 1
+          fi
+          if [ "$readme_status" != "200" ]; then
+            echo "::error title=SELFHOST.md drifted (5)::the token GitHub received cannot read $FIXTURE_REPO/contents/README.md (HTTP $readme_status): give SELFHOST_FIXTURE_TOKEN contents access to $FIXTURE_REPO and re-save it as an Actions repository secret"
+            exit 1
+          fi
           head=$(git ls-remote "https://x-access-token:${FIXTURE_TOKEN}@github.com/${FIXTURE_REPO}.git" refs/heads/main | cut -f1)
           [ -n "$head" ] || { echo "::error title=SELFHOST.md drifted (5)::$FIXTURE_REPO has no main"; exit 1; }
           echo "FIXTURE_HEAD=$head" >> "$GITHUB_ENV"
