@@ -1334,6 +1334,21 @@
             (when (= limit (count children))
               (recur (into seen (map :id) due)))))))))
 
+(defn- hand-written-errors
+  "The engine-written fields (schema/engine-written-fields of the kind's
+  :schema) an input carries from a hand — {field [why]}, or nil. A
+  :system principal (the seed loader, the registrar, a pass) writes
+  them; every other principal is refused as schema-invalid, before any
+  guard runs."
+  [rdef principal inp]
+  (when-not (= :system (:type principal))
+    (not-empty
+     (into {}
+           (keep (fn [k]
+                   (when (contains? inp k)
+                     [k ["written by the engine, never by hand"]])))
+           (schema/engine-written-fields (:schema rdef))))))
+
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
   invoke-declared! wraps in its own with-tx; bulk items and batch
@@ -1471,6 +1486,9 @@
                                            not-empty))]
                           (when errors
                             (throw (p/schema-invalid action-name errors)))
+                          (when-some [hand (when (:edit defn)
+                                             (hand-written-errors rdef principal decoded))]
+                            (throw (p/schema-invalid action-name hand)))
                           decoded)
                         (if (seq body)
                           (throw (p/schema-invalid
@@ -2276,13 +2294,15 @@
   mode): provided entries schema-checked, fully covered guard leaves
   judged, the rest :awaiting — on the verdict, and on a judged leaf's
   409 exactly as partial-verdict names them."
-  [engine guards model body principal acknowledged mode grant]
+  [engine rdef guards model body principal acknowledged mode grant]
   (let [partial? (= :partial mode)
         inp (schema/decode model (or body {}))
         errors (cond-> (schema/closed-errors model inp)
                  partial? (-> (select-keys (keys (or body {})))
                               not-empty))]
     (when errors (throw (p/schema-invalid :create errors)))
+    (when-some [hand (hand-written-errors rdef principal inp)]
+      (throw (p/schema-invalid :create hand)))
     (if (empty? guards)
       (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
       (store/with-tx (:storage engine)
@@ -2351,7 +2371,7 @@
         {model :model create-action :action guards :guards}
         (create-spec rdef action mint?)]
     (if dry-run
-      (let [verdict (create-dry-run! engine guards model body principal
+      (let [verdict (create-dry-run! engine rdef guards model body principal
                                      acknowledged dry-run grant)
             ;; a kind that declares :on-rehearse says what the create
             ;; would make: asked of the full rehearsal alone, after the
@@ -2476,6 +2496,8 @@
             inp (if mint? inp (schema/apply-defaults model inp))
             _ (when-some [errors (schema/closed-errors model inp)]
                 (throw (p/schema-invalid :create errors)))
+            _ (when-some [hand (hand-written-errors rdef principal inp)]
+                (throw (p/schema-invalid :create hand)))
             ctx (make-ctx engine tx :invoke principal
                           {:correlation-id correlation-id
                            :within within

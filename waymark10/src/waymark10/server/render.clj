@@ -307,6 +307,16 @@
   [js defn']
   (patch/door-js js defn'))
 
+(defn engine-written-js
+  "An edit door's advertised input without the kind's engine-written
+  fields (ticket 9e0a105b): the door refuses them from every hand but
+  :system's, so no projection offers them. Public beside
+  edit-input-js, and for the same reason."
+  [js defn' rdef]
+  (if (:edit defn')
+    (schema/conceal js (schema/engine-written-fields (:schema rdef)))
+    js))
+
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         ;; per-origin consequence (batch H): a {from-state sentence}
@@ -326,7 +336,8 @@
                        (project-input-js
                         (when arg?
                           #(arg? (:kind rdef) (:name defn') %)))
-                       (edit-input-js defn')))
+                       (edit-input-js defn')
+                       (engine-written-js defn' rdef)))
         key-field (when-some [place (:place defn')]
                     (get-in rdef [:part-scopes place :key]))]
     (cond-> {:method "POST"
