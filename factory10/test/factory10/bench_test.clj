@@ -2734,6 +2734,45 @@
       (is (= ["head_moved"]
              (mapv #(str (or (:key %) (get % "key"))) (get-in row [:data :findings])))))))
 
+;; ── the onboarding sit names the plan's change (ticket 64f5cb42) ───────
+
+(def ^:private onboarding-scope
+  "The onboarding seat's scope, as factorykit's seat spells it: the plan
+  doors on drafting and simulated plans, submit, and the bench powers
+  on one repository."
+  (into [{:kind "org_plan" :actions ["ask" "propose" "go_live"]
+          :filter {:state "drafting,simulated"}}
+         {:kind "change" :actions ["submit"]}]
+        (map (fn [token] {:kind token :actions []
+                          :filter {:repo a-repository}}))
+        ["bench.find" "bench.read" "bench.edit" "bench.pull"]))
+
+(deftest an-onboarding-sit-names-the-plans-change-once
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        plan (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                          {:principal colton}))))
+        _ (open-seat! eng {:scope onboarding-scope :walk "org_plan"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        minted (some-> (get-in answer [:change :id]) str)]
+    (testing "the sit mints the plan's change and names it on the plan"
+      (is (some? minted) "the sit answers a change beside the plan")
+      (is (= (str "org_plan:" plan)
+             (some-> (get-in answer [:change :data :born_from]) str)))
+      (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str))))
+    (testing "a second sit leaves the plan's change as it was"
+      (let [again (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+        (is (= minted (some-> (get-in again [:change :id]) str)))
+        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))
+        (is (= "drafting" (name (:state (plan-row eng plan)))))))))
+
 ;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
 
 (defn- simulated-world
@@ -3525,6 +3564,40 @@
   (call! (:h w) (:sid w) "waymark_invoke"
          {:kind "change" :id (get-in (:answer w) [:change :id])
           :action action :input input}))
+
+;; AN ONBOARDING SEAT WALKS ONLY ITS OWN PLAN (ticket a2d5ee38). One
+;; person owns two drafting plans; beta is the older, so a walk that read
+;; only the state would hand it first, and the sit would mint beta's
+;; change for alpha's seat. The org_plan entry names its org, as
+;; onboarding.edn's does once filled.
+
+(deftest an-onboarding-seat-walks-and-links-only-its-own-orgs-plan
+  (let [eng (fresh-engine (state))
+        _ (a-policy! eng {})
+        filed! (fn [n] (str (:id (:row (inv/create! eng :org_plan {:name n}
+                                                    {:principal person})))))
+        beta (filed! "beta")
+        alpha (filed! "alpha")
+        _ (open-seat! eng {:walk "org_plan"
+                           :scope (into [{:kind "org_plan"
+                                          :actions ["create" "ask" "propose" "go_live" "retire"]
+                                          :filter {:state "drafting,simulated" :name "alpha"}}]
+                                        (rest ticket-scope))})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        change (some-> (get-in answer [:change :id]) str)]
+    (testing "the walk hands alpha's plan and not beta's"
+      (is (= [alpha] (mapv (comp str :id) (get-in answer [:walk :rows]))) (pr-str answer)))
+    (testing "the sit mints alpha's change and links it to alpha alone"
+      (is (some? change) (pr-str answer))
+      (is (= (str "org_plan:" alpha) (get-in answer [:change :data :born_from])))
+      (is (= change (some-> (get-in (plan-row eng alpha) [:data :change]) str)))
+      (is (nil? (get-in (plan-row eng beta) [:data :change]))))))
 
 ;; A PRIORITY TIE IS BROKEN BY ARRIVAL (ticket c944fd8c). An id is
 ;; random, so five tickets at one priority are filed here: by id they

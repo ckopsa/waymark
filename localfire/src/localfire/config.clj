@@ -50,10 +50,20 @@
   "LOCALFIRE_PULL_TOKEN")
 
 (defn pull-token
-  "The pull link's token, from the variable `:pull :token-env` names and
-  from nowhere else (R-13.2)."
+  "The pull link's token (R-13.2): from the file `:pull :token-file`
+  names when it names one, read again on each call so a rotated token is
+  taken up, and otherwise from the variable `:token-env` names; from
+  nowhere else. nil when there is none."
   [pull]
-  (some-> (System/getenv (:token-env pull)) not-empty))
+  (if-let [f (:token-file pull)]
+    (try (some-> (slurp f) str/trim not-empty)
+         (catch java.io.IOException _ nil))
+    (some-> (System/getenv (:token-env pull)) not-empty)))
+
+(defn pull-token-source
+  "Where `pull-token` reads the token, for a message. Never the token."
+  [pull]
+  (if-let [f (:token-file pull)] (str "the file " f) (:token-env pull)))
 
 (defn- normalize-pull
   "The optional `:pull` map (§13): the engine and the runner link this
@@ -63,8 +73,9 @@
   (when-not (map? p)
     (fail! "the config's :pull must be a map."))
   (when (contains? p :token)
-    (fail! "the config's :pull must not hold the link's token; name its variable in :token-env."))
+    (fail! "the config's :pull must not hold the link's token; name its variable in :token-env or its file in :token-file."))
   (let [url     (some-> (:engine-url p) str not-empty (str/replace #"/+$" ""))
+        file    (some-> (:token-file p) str not-empty)
         link    (some-> (:link-id p) str not-empty)
         routine (some-> (:routine p) routine-name not-empty)]
     (when-not url
@@ -75,10 +86,14 @@
       (fail! "the config's :pull needs a :routine, the routine its fires run as."))
     (when-not (contains? routine-names routine)
       (fail! (str "the config's :pull :routine " routine " is not under :routines.")))
-    {:engine-url url
-     :link-id    link
-     :routine    routine
-     :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}))
+    (cond-> {:engine-url url
+             :link-id    link
+             :routine    routine
+             :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}
+      ;; the file wins over the variable when both are named
+      file (assoc :token-file file)
+      ;; LP3: where the pull journal lives; the state dir's file without it
+      (some-> (:journal p) str not-empty) (assoc :journal (str (:journal p))))))
 
 (defn- normalize-routine [nm r]
   (when-not (map? r)
@@ -241,6 +256,72 @@
           (catch Exception e
             (fail! (str "the config at " (.getPath f) " is not readable EDN: "
                         (ex-message e))))))))
+
+;; ── `localfire pull` (§13): a config built from flags ────────────────
+
+(def pull-flags
+  "The flags `localfire pull` takes, each to the key it fills. Only
+  --engine and --link are required."
+  {"--engine"   :engine-url
+   "--link"     :link-id
+   "--place"    :place
+   "--runs-dir" :runs-dir
+   "--port"     :port
+   "--model"    :model
+   "--mcp-url"  :mcp-url
+   "--claude"   :claude
+   "--token-file" :token-file})
+
+(def default-pull-place
+  "The seat place `localfire pull` copies when --place names none: the
+  one the image bakes in (Dockerfile.localfire)."
+  "/srv/waymark-seat")
+
+(def pull-routine
+  "The one routine `localfire pull` serves, and its fires run as."
+  "pull")
+
+(defn- parse-pull-flags [args]
+  (loop [m {} [f v & more :as as] (seq args)]
+    (cond
+      (empty? as) m
+      (not (contains? pull-flags f))
+      (fail! (str "localfire pull does not take " f "; it takes "
+                  (str/join ", " (sort (keys pull-flags))) "."))
+      (or (nil? v) (str/starts-with? v "--"))
+      (fail! (str "localfire pull's " f " needs a value."))
+      :else (recur (assoc m (pull-flags f) v) more))))
+
+(defn pull-config-map
+  "The config map `localfire pull --engine <url> --link <id>` stands for:
+  the EDN a localfire.edn with a `:pull` block would hold, built from
+  the flags and the defaults, so `normalize` judges both alike. The
+  link's token is read from the file --token-file names, or else from
+  LOCALFIRE_PULL_TOKEN, as the EDN path's is."
+  [args]
+  (let [f      (parse-pull-flags args)
+        engine (some-> (:engine-url f) (str/replace #"/+$" "") not-empty)
+        port   (if-let [p (:port f)]
+                 (or (parse-long p)
+                     (fail! (str "localfire pull's --port must be an integer, not " p ".")))
+                 8112)]
+    (when-not engine
+      (fail! "localfire pull needs --engine, the engine's base URL."))
+    (when-not (:link-id f)
+      (fail! "localfire pull needs --link, the pull runner link's id."))
+    {:port       port
+     :public-url (str "http://127.0.0.1:" port)
+     :place      (or (:place f) default-pull-place)
+     :runs-dir   (or (:runs-dir f)
+                     (str (System/getProperty "user.home") "/.localfire/runs"))
+     :claude     (or (:claude f) "claude")
+     :mcp        {:name default-mcp-name
+                  :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+     :routines   {pull-routine {:model (or (:model f) "opus")}}
+     :pull       (cond-> {:engine-url engine
+                          :link-id    (:link-id f)
+                          :routine    pull-routine}
+                   (:token-file f) (assoc :token-file (:token-file f)))}))
 
 (defn routine
   "The routine of that name, or nil — the 404 of R-5.1."

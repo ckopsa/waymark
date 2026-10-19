@@ -9,7 +9,10 @@
                        ;; the org kit's template and its example org, so
                        ;; factory10.orgkit-test can load both modules
                        orgkit/template        {:local/root "../orgkit/template"}
-                       orgs/example           {:local/root "../orgs/example"}}
+                       orgs/example           {:local/root "../orgs/example"}
+                       ;; an org whose name holds an underscore, so
+                       ;; factory10.two-words-org-test loads `two_words.org`
+                       fixtures/two-words     {:local/root "fixtures/orgs/two_words"}}
          :main-opts   ["-m" "kaocha.runner"]}
   ;; make check-factory: the declaration-time gate — warnings on
   ;; stdout, exit 1 on a definition error; no database, no env

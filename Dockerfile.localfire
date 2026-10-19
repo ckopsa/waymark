@@ -4,9 +4,14 @@
 # (linux/amd64 + linux/arm64 → ghcr.io/ckopsa/localfire:<short sha>).
 # Nothing here is arch-specific: nodesource and npm pick the build
 # platform's Node and Claude Code.
-# The base is Docker Hub's library image, from the ECR Public mirror:
-# an anonymous pull from Docker Hub is rate limited, and CI has none.
-FROM public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
+# The base is Docker Hub's library image, from Google's mirror: an
+# anonymous pull from Docker Hub is rate limited, and CI has none.
+# ECR Public's anonymous data limit is exhausted by the shared IP pool
+# of GitHub-hosted runners (429 toomanyrequests); the build already
+# takes buildkit and binfmt from mirror.gcr.io. A laptop build may
+# pass --build-arg BASE=... to pull from elsewhere.
+ARG BASE=mirror.gcr.io/library/clojure:temurin-21-tools-deps-bookworm-slim
+FROM ${BASE}
 
 # The one pin for the CLI every fired session runs. Bump it here.
 # 2.1.284 is the first checked with `claude mcp add --client-id
@@ -66,5 +71,8 @@ ENV HOME=/data
 EXPOSE 8112
 
 # /etc/localfire/localfire.edn comes from the Nomad job's template;
-# LOCALFIRE_TOKEN from its environment.
-ENTRYPOINT ["clojure", "-M:serve", "/etc/localfire/localfire.edn"]
+# LOCALFIRE_TOKEN from its environment. Arguments replace the config
+# path: `docker run ... localfire pull --engine <url> --link <id>`
+# needs no file (localfire/README.md).
+ENTRYPOINT ["clojure", "-M:serve"]
+CMD ["/etc/localfire/localfire.edn"]

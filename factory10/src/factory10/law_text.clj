@@ -77,10 +77,13 @@
     (conj (str "  - It cannot be undone" (if-some [w (:one-way safety)] (str ": " w) ".")))))
 
 (defn- doors
-  "Every door of a kind as [door-name guards safety], create first."
+  "Every door of a kind as [door-name guards safety], create first: the
+  ordinary create, then each create door :creates declares."
   [r]
   (concat (for [c (sort (:create-action-names r))]
             [c (:create-guards r) nil])
+          (for [d (:creates r)]
+            [(:action d) (:guards d) nil])
           (for [[aname a] (:actions r)]
             [aname (:guards a) (:safety a)])))
 
@@ -90,7 +93,11 @@
         named (fn [xs] (either (map words (filter (set xs) ss))))
         initial (words (:initial r))
         ends (named (:terminal r))
-        create? (set (:create-action-names r))]
+        create? (into (set (:create-action-names r)) (map :action) (:creates r))
+        engine-only? (into #{}
+                           (comp (filter #(contains? (:by %) :engine))
+                                 (map :action))
+                           (:creates r))]
     (concat
      [(str "## " (capital k))
       ""
@@ -111,6 +118,8 @@
                               (= #{to} (set (:from a))) (str "stays " (words to))
                               :else (str "becomes " (words to)))
                         ".")))]
+           (when (engine-only? aname)
+             ["  - Only the engine walks it: no person or agent may."])
            (guard-lines guards)
            (safety-lines safety))))
       (doors r)))))
@@ -221,8 +230,11 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
-(defn- org-resources [org]
-  ((requiring-resolve (symbol (str (str/replace org "_" "-") ".org") "resources"))))
+(defn- org-resources
+  "The org's module is `<org>.org`, its name verbatim, underscores
+  included, as the engine boots it and conform judges it."
+  [org]
+  ((requiring-resolve (symbol (str org ".org") "resources"))))
 
 (defn law-text
   "The org at `org-dir` as the page a person approves: markdown, a

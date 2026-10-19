@@ -130,9 +130,9 @@
       (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
-      (is (= {:state "drafting,simulated"}
+      (is (= {:state "drafting,simulated" :name "rd_tax_services"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
-          "the walk is the drafting and simulated plans: propose leaves one, go_live's Allow the other"))
+          "the walk is its own org's drafting and simulated plans: propose leaves one, go_live's Allow the other"))
     (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
@@ -180,6 +180,10 @@
         id (made! h "org_plans" {:name "greenleaf" :brief "A six-person landscaping business."})
         state #(:state (json (req h :get (str "/api/org_plans/" id) nil)))
         door #(req-as h :post (str "/api/org_plans/" id "/-/" %1) as %2)]
+    (testing "it files its person's first plan with create"
+      (let [filed (req-as h :post "/api/org_plans" as
+                          {:name "bluefern" :brief "A four-person bakery."})]
+        (is (= 201 (:status filed)) (pr-str (json filed)))))
     (testing "it cannot record findings"
       (is (not (served? (door "record_findings" {:findings []}))))
       (is (= "drafting" (state))))

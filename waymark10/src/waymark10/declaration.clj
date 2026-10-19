@@ -69,7 +69,7 @@
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
-   :flow :actions :create-guards :create-action-names :allow-dead :renames
+   :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
    ;; the create door's own safety (ticket 13e3b323): {:confirm true
    ;; :consequence <fn of input, or a {field} template>} — the create
    ;; refuses until its caller echoes the sentence its input fills
