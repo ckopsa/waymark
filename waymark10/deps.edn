@@ -18,8 +18,12 @@
          org.commonmark/commonmark-ext-task-list-items {:mvn/version "0.24.0"}}
  :aliases
  {:test {:extra-paths ["test"]
+         ;; localfire for localfire_pull_test only (LP5): its real pull
+         ;; loop against this engine on a real port. localfire's own deps
+         ;; are http-kit and jsonista at the versions pinned above.
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
-                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
+                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}
+                       localfire/localfire    {:local/root "../localfire"}}
          :main-opts   ["-m" "kaocha.runner"]}
   :dev  {:extra-paths ["dev"]}
   ;; the affordance-following CLI (phase 10):

@@ -147,6 +147,29 @@
     (is (= "2026-10-04" (due :later)))
     (is (= "2026-09-29" (due :earlier)))))
 
+(deftest a-relative-date-counts-from-the-day-one-the-clone-was-given
+  ;; ticket bbf1f253: the scene's day_one is the clone's day one, though
+  ;; the clone is stood up days later
+  (let [week (assoc toy :steps
+                    [{:as :ada :kind :chore :ref :first
+                      :create {:title "Day 1" :due [:days 0]}}
+                     {:as :ada :kind :chore :ref :last
+                      :create {:title "Day 7" :due [:days 6]}}])
+        later (Instant/parse "2026-10-23T09:00:00Z")
+        dues (fn [opts]
+               (let [eng (engine)
+                     result (seed/load! eng week (assoc opts :now later))]
+                 (mapv #(str (get-in (dev/row eng :chore (get-in result [:refs % :id]))
+                                     [:data :due]))
+                       [:first :last])))]
+    (testing "with a day one, [:days n] counts from it, not from the boot"
+      (is (= ["2026-10-19" "2026-10-25"] (dues {:day-one "2026-10-19"}))))
+    (testing "without one, from the boot, as before"
+      (is (= ["2026-10-23" "2026-10-29"] (dues {})))
+      (is (= ["2026-10-23" "2026-10-29"] (dues {:day-one ""}))))
+    (testing "one that is not a date refuses the seed"
+      (is (some? (refused #(seed/load! (engine) week {:day-one "next tuesday"})))))))
+
 ;; ── a live seed ─────────────────────────────────────────────────────
 
 ;; Its values are the boot's params, and its second step fills a seat
