@@ -221,8 +221,11 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
-(defn- org-resources [org]
-  ((requiring-resolve (symbol (str (str/replace org "_" "-") ".org") "resources"))))
+(defn- org-resources
+  "The org's module is `<org>.org`, its name verbatim, underscores
+  included, as the engine boots it and conform judges it."
+  [org]
+  ((requiring-resolve (symbol (str org ".org") "resources"))))
 
 (defn law-text
   "The org at `org-dir` as the page a person approves: markdown, a
