@@ -537,6 +537,7 @@
                     (let [t (edn/read-string (slurp res))]
                       {:kind kind
                        :params (get-in t [:template :params])
+                       :template (:template t)
                        :body (get t kind)})))
                 template-places))
         (throw (refusal (str "The seed names the template `" n
@@ -554,6 +555,24 @@
   [v]
   (and (vector? v) (keyword? (first v))))
 
+(defn- aliased
+  "`given` with each param a template's :aliases names, old → new,
+  taken from the old name when the caller gave only that one."
+  [tmpl given]
+  (reduce-kv (fn [g old new]
+               (if (and (contains? g old) (not (contains? g new)))
+                 (assoc g new (get g old))
+                 g))
+             given (:aliases tmpl)))
+
+(defn- items
+  "A list param's value as its items: a comma-separated text split and
+  trimmed, a collection as itself."
+  [v]
+  (if (coll? v)
+    (mapv str v)
+    (into [] (comp (map str/trim) (remove str/blank?)) (str/split (str v) #","))))
+
 (defn filled
   "A template's body with each `{{hole}}` filled from `given`, param
   keyword → value. A hole inside a string takes the value's text. A
@@ -561,41 +580,63 @@
   itself, so a budget stays a decimal; inside a vector it splices a
   list in, so a template's scope takes an org's own entries beside its
   fixed ones. A seed's unresolved `[:ref …]` stands as its text. A hole
-  `given` does not name is left."
-  [body given]
-  (let [given (into {} (map (fn [[k v]] [k (if (unresolved? v) (str v) v)])) given)
-        raw (fn [x]
-              (when-some [k (whole-hole x)]
-                (let [v (get given k)]
-                  (when (or (number? v) (coll? v)) v))))]
-    (letfn [(walk [x]
-              (cond
-                (map? x) (into (empty x) (map (fn [[k v]] [k (walk v)])) x)
-                (vector? x) (into [] (mapcat #(let [v (raw %)]
-                                                (if (sequential? v) v [(walk %)])))
-                                  x)
-                (set? x) (into (empty x) (map walk) x)
-                (string? x) (if-some [v (raw x)]
-                              v
-                              (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
-                                         x given))
-                :else x))]
-      (walk body))))
+  `given` does not name is left.
+
+  `tmpl`, the template's own :template map, may name :lists, params
+  whose value is a comma-separated list: a vector element holding such
+  a hole is repeated once for each item, the hole taking that item, so
+  a scope gets one entry per kind. Elsewhere the hole takes the list's
+  text. Its :aliases, old name → new, let a caller that still gives the
+  old param fill the new one."
+  ([body given] (filled body given nil))
+  ([body given tmpl]
+   (let [lists (set (:lists tmpl))
+         given (into {} (map (fn [[k v]]
+                               [k (cond (unresolved? v) (str v)
+                                        (and (lists k) (coll? v)) (str/join "," v)
+                                        :else v)]))
+                     (aliased tmpl given))
+         raw (fn [g x]
+               (when-some [k (whole-hole x)]
+                 (let [v (get g k)]
+                   (when (or (number? v) (coll? v)) v))))
+         listed (fn [g x]
+                  (some #(when (and (contains? g %)
+                                    (str/includes? (pr-str x) (str "{{" (name %) "}}")))
+                           %)
+                        lists))]
+     (letfn [(walk [g x]
+               (cond
+                 (map? x) (into (empty x) (map (fn [[k v]] [k (walk g v)])) x)
+                 (vector? x) (into [] (mapcat #(if-some [k (listed g %)]
+                                                 (map (fn [item] (walk (assoc g k item) %))
+                                                      (items (get g k)))
+                                                 (let [v (raw g %)]
+                                                   (if (sequential? v) v [(walk g %)]))))
+                                   x)
+                 (set? x) (into (empty x) (map (partial walk g)) x)
+                 (string? x) (if-some [v (raw g x)]
+                               v
+                               (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
+                                          x g))
+                 :else x))]
+       (walk given body)))))
 
 (defn- fill
   "A template's body with each `{{hole}}` its params name filled from
   `given`. Throws for a param not given and for a hole left over."
-  [{:keys [params body]} given template-name]
-  (when-some [missing (seq (remove #(contains? given %) (keys params)))]
-    (throw (refusal (str "The seed's template `" template-name "` needs the params "
-                         (str/join ", " (map name missing)) ", and the step does not give them.")
-                    {:template template-name :missing (vec missing)})))
-  (let [made (filled body (select-keys given (keys params)))]
-    (when-some [left (re-find #"\{\{[a-z_]+\}\}" (pr-str made))]
-      (throw (refusal (str "The seed's template `" template-name "` has the hole " left
-                           ", and no param of the template fills it.")
-                      {:template template-name :hole left})))
-    made))
+  [{:keys [params body template]} given template-name]
+  (let [given (aliased template given)]
+    (when-some [missing (seq (remove #(contains? given %) (keys params)))]
+      (throw (refusal (str "The seed's template `" template-name "` needs the params "
+                           (str/join ", " (map name missing)) ", and the step does not give them.")
+                      {:template template-name :missing (vec missing)})))
+    (let [made (filled body (select-keys given (keys params)) template)]
+      (when-some [left (re-find #"\{\{[a-z_]+\}\}" (pr-str made))]
+        (throw (refusal (str "The seed's template `" template-name "` has the hole " left
+                             ", and no param of the template fills it.")
+                        {:template template-name :hole left})))
+      made)))
 
 (defn- kind-of [refs step]
   (cond

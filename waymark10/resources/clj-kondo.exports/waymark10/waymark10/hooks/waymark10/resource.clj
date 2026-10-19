@@ -24,13 +24,13 @@
     :on-create :mirror :at-rest-migrate :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
-    :waits :left-by :reached-by :expected-age
+    :waits :left-by :reached-by :expected-age :decided
     :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :engine
-    :out-of-state-says :replay :log-says})
+    :out-of-state-says :replay :log-says :decided})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

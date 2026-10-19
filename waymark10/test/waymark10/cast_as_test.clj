@@ -82,6 +82,14 @@
       (is (= "ann" (get-in (first log) [:actor :id])))
       (is (= "seat:world" (get-in (first log) [:actor :acted_by]))))))
 
+(deftest a-clone-seat-acts-as-the-seeded-owner
+  (let [eng (engine true)
+        p (router/cast-principal eng world-seat sitter "rosa")
+        row (:row (inv/create! eng :chore {:title "Plan the first week"} {:principal p}))]
+    (is (= "rosa" (:id p)))
+    (is (some? (:id row)))
+    (is (= "rosa" (get-in (first (moves eng :chore (:id row))) [:actor :id])))))
+
 (deftest acting-as-is-refused-unless-all-hold
   (let [eng (engine true)]
     (inv/create! eng :member {:display "Zed" :actor_type "human" :subject "zed"}
@@ -91,8 +99,8 @@
     (testing "a seat without acts_as_cast"
       (is (some? (refused #(router/cast-principal eng {:id "clerk" :data {}} sitter "ann"))))
       (is (some? (refused #(router/cast-principal eng nil sitter "ann")))))
-    (testing "the owner"
-      (is (some? (refused #(router/cast-principal eng world-seat sitter "rosa")))))
+    (testing "the owner, on a live engine"
+      (is (some? (refused #(router/cast-principal (engine false) world-seat sitter "rosa")))))
     (testing "a manager"
       (is (some? (refused #(router/cast-principal eng world-seat sitter "lee")))))
     (testing "a member with no cast marker"

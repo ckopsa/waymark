@@ -995,3 +995,63 @@
         (let [[again] (finish-pass! late seen after)]
           (is (= after again))
           (is (= 1 (count (args-of r "bench__train_checks"))) "not twice"))))))
+
+;; ── a change held only for being behind its base (ticket 6add57e9) ──
+
+(defn- held-behind
+  "Change `number`, outside every line, whose head the mirror read green
+  and held, `behind` its base, on its last round."
+  [number behind & {:as extra}]
+  (let [head (str "head-" number)]
+    (apply a-change "ckopsa/waymark" number number
+           (mapcat identity
+                   (merge {:green_head head :held_head head
+                           :behind_base behind :rounds 6}
+                          extra)))))
+
+(defn- held-pass!
+  [{:keys [ctx]} seen conflicts changes]
+  (bench/bring-held-forward!
+   (assoc ctx :held-conflict! (fn [id cs] (swap! conflicts conj [id cs]) true))
+   seen changes))
+
+(deftest a-held-behind-green-change-is-brought-up-to-date-once
+  (let [reds (atom [])
+        conflicts (atom [])
+        r (update-rig {:state "updated"} reds)
+        seen (atom {})
+        c (held-behind 1526 true)]
+    (is (= 1 (held-pass! r seen conflicts [c])))
+    (is (= [1526] (numbers-of r "bench__update_branch")))
+    (held-pass! r seen conflicts [c])
+    (is (= [1526] (numbers-of r "bench__update_branch")) "once per head")
+    (is (= [] @reds) "it spends no round: nothing goes back to its seat")
+    (is (= [] @conflicts))
+    (is (= 6 (get-in c [:data :rounds])))))
+
+(deftest a-conflicting-held-change-records-its-conflict-and-stays-held
+  (let [reds (atom [])
+        conflicts (atom [])
+        r (update-rig {:refused "merge_conflict"
+                       :reason "merge conflict between base and head"
+                       :conflicts ["a.clj"]}
+                      reds)
+        seen (atom {})
+        c (held-behind 7 true)]
+    (held-pass! r seen conflicts [c])
+    (is (= [7] (numbers-of r "bench__update_branch")))
+    (is (= [["change-7" ["a.clj"]]] @conflicts))
+    (is (= [] @reds) "it stays held, not failing")
+    (held-pass! r seen conflicts [c])
+    (is (= [7] (numbers-of r "bench__update_branch")) "asked once")))
+
+(deftest a-change-not-held-behind-is-not-brought-forward
+  (let [reds (atom [])
+        conflicts (atom [])
+        r (update-rig {:state "updated"} reds)]
+    (held-pass! r (atom {}) conflicts
+                [(held-behind 1 false)
+                 (held-behind 2 true :green_head "head-old")
+                 (held-behind 3 true :mergeable "conflicted")
+                 (held-behind 4 true :draft true)])
+    (is (= [] (numbers-of r "bench__update_branch")))))
