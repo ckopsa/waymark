@@ -3041,7 +3041,10 @@
   person is no longer ignored. A person with no standing grant is
   unchanged (unscoped, or a requester's own tickets), and a person
   holding `approver` or `recovery-admin` is never narrowed this way:
-  they keep today's sight unless they present the header. The cost is
+  they keep today's sight unless they present the header. The rule
+  reads the member row: a member whose `actor_type` is agent, named
+  without the actor-type header (a seed's agent driven through a
+  clone door), is not a person and keeps today's sight. The cost is
   one grant query per request a person makes."
   [eng principal]
   (cond
@@ -3054,10 +3057,10 @@
     nil
 
     :else
-    (or (when (and (some-> (:id principal) str not-empty)
-                   (not= (:id principal) (:id t/anonymous))
-                   (not (never-narrowed? eng principal)))
-          (worn-visibility eng principal))
+    (or (when-some [m (person-member eng principal)]
+          (when (and (not= "agent" (get-in m [:data :actor_type]))
+                     (not (never-narrowed? eng principal)))
+            (worn-visibility eng principal)))
         (when-some [m (requester-member eng principal)]
           (requester-visibility eng principal m)))))
 

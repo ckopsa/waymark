@@ -87,6 +87,14 @@
     (member! eng "sister" nil)
     (is (nil? (grants/unscoped-visibility eng (person "sister"))))))
 
+(deftest an-agent-member-is-not-narrowed-as-a-person
+  (let [eng (eng!)]
+    (inv/create! eng :member {:display "juniper" :actor_type "agent"}
+                 {:principal members/registrar :id "juniper"})
+    (grant! eng "grant-juniper" "juniper")
+    (is (nil? (grants/unscoped-visibility eng (person "juniper")))
+        "an agent's member row named with no actor type keeps today's sight")))
+
 (deftest an-approver-is-never-narrowed-by-a-grant
   (doseq [role ["approver" "recovery-admin"]]
     (testing role
