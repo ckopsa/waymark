@@ -2589,6 +2589,8 @@
                 (assoc principal :model held))))))
       principal))
 
+(declare member-audience)
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2622,6 +2624,15 @@
                grant-id
                (when grant-id (load-decoded eng :grant grant-id)))
         grant-id (if (map? grant-id) (:id grant-id) grant-id)
+        ;; a person bound by subject presents the grant their MEMBER
+        ;; row holds (ticket 36fce73d): it is theirs, read with the
+        ;; audience as their principal, as `person-worn-visibility`
+        ;; wears it. The member read is paid only on a mismatch
+        aud (some-> (get-in row0 [:data :audience]) str)
+        row0 (if (and row0 aud (not= aud (some-> pid str))
+                      (= aud (member-audience eng principal)))
+               (assoc-in row0 [:data :audience] pid)
+               row0)
         own? (boolean (and row0 (= (get-in row0 [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
         now ((:now-fn eng))
@@ -2958,6 +2969,14 @@
                                 (store/query-rows (:storage eng) tx :member
                                                   {:subject pid} {:limit 1}))))
                      (inv/decode-row rdef)))))))
+
+(defn member-audience
+  "The id a grant on the person `principal` is addressed to when it is
+  their member row's (ticket 36fce73d): that row's id, which differs
+  from the principal id for a person bound by subject. nil wherever
+  `person-member` answers nil."
+  [eng principal]
+  (some-> (person-member eng principal) :id str not-empty))
 
 (defn- requester-member
   "The member row of the person `principal` is, when that row holds the
