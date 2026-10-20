@@ -328,8 +328,11 @@
   filters; the ne/before/set/contains batch adds :not=/:not-in (NULL
   fails both, SQL semantics), :set? (IS [NOT] NULL over the extracted
   text), and :contains (ILIKE over the text, the value's wildcards
-  escaped)."
-  [{:keys [target field cast op value values absent?]}]
+  escaped). cols is the kind's promoted columns, {field sql-type}: a
+  field promoted at the cond's cast is read off its f_ column; with
+  no cols every field reads off the document."
+  ([c] (leaf-cond-sql {} c))
+  ([cols {:keys [target field cast op value values absent?]}]
   (if (= :in-any op)
     ;; the ?| operator (JDBC-escaped ??|), not jsonb_exists_any: the
     ;; planner matches INDEXES through operators only, so the function
@@ -346,11 +349,16 @@
                  :state "state"
                  :id "id"
                  (let [f (store/definition-checked-name field)]
-                   (case cast
-                     "date" (str "waymark10_date(data->>'" f "')")
-                     "timestamptz" (str "waymark10_ts(data->>'" f "')")
-                     "text" (str "data->>'" f "'")
-                     (str "(data->>'" f "')::" cast))))
+                   ;; the promoted twin at this cast derives by the very
+                   ;; expression below, so it answers the same — and an
+                   ;; index over it can serve the comparison (68ebaa0f)
+                   (if (= cast (get cols (keyword field)))
+                     (str "f_" f)
+                     (case cast
+                       "date" (str "waymark10_date(data->>'" f "')")
+                       "timestamptz" (str "waymark10_ts(data->>'" f "')")
+                       "text" (str "data->>'" f "'")
+                       (str "(data->>'" f "')::" cast)))))
           rval (if (or (contains? #{:state :id} target) (= "text" cast))
                  "?"
                  (case cast
@@ -378,24 +386,24 @@
         ;; comparison itself stays the one an index can serve
         (if absent?
           [(str "(" sql " OR " lval " IS NULL)") params]
-          [sql params])))))
+          [sql params]))))))
 
 (defn- cond-sql
   "One cond → [sql-fragment params]. An :any-of cond is the OR of its
   :of alternatives, each a conjunction of conds: the sight of a grant
   whose scope filters one kind in several entries (grants/conds-of).
   Every other cond is `leaf-cond-sql`'s."
-  [{:keys [op of] :as c}]
+  [cols {:keys [op of] :as c}]
   (if (= :any-of op)
     (let [alts (for [conds of
-                     :let [parts (map cond-sql conds)]]
+                     :let [parts (map #(cond-sql cols %) conds)]]
                  [(if (seq parts)
                     (str "(" (str/join " AND " (map first parts)) ")")
                     "TRUE")
                   (mapcat second parts)])]
       [(str "(" (str/join " OR " (map first alts)) ")")
        (vec (mapcat second alts))])
-    (leaf-cond-sql c)))
+    (leaf-cond-sql cols c)))
 
 ;; ── elected singletons (pg_advisory_lock) ───────────────────────────
 ;; Lived in server/coherence.clj until waymark-db9.4. It moved here
@@ -688,40 +696,62 @@
   kind it names, under that kind's own conds, carries this row's id
   (or its field's text) in the named place. It is spelled here and not
   in `cond-sql` because it names a second table. The inner conds are
-  unqualified, and inside the subquery they read the inner table."
-  [tables table conds]
-  (map (fn [{:keys [op target field from] :as c}]
-         (if (= :no-row op)
-           (let [side (fn [t tgt f]
-                        (if (= :id tgt)
-                          (str t ".id")
-                          (str t ".data->>'"
-                               (store/definition-checked-name f) "'")))
-                 parts (map cond-sql (:conds from))]
-             [(str "NOT EXISTS (SELECT 1 FROM "
-                   (table-for tables (:kind from)) " AS j WHERE "
-                   (side "j" (:target from) (:field from))
-                   " = " (side table target field)
-                   (when (seq parts)
-                     (str " AND " (str/join " AND " (map first parts))))
-                   ")")
-              (vec (mapcat second parts))])
-           (cond-sql c)))
-       conds))
+  unqualified, and inside the subquery they read the inner table — so
+  they read the inner kind's promoted columns too."
+  [tables promoted kind conds]
+  (let [table (table-for tables kind)]
+    (map (fn [{:keys [op target field from] :as c}]
+           (if (= :no-row op)
+             (let [side (fn [t tgt f]
+                          (if (= :id tgt)
+                            (str t ".id")
+                            (str t ".data->>'"
+                                 (store/definition-checked-name f) "'")))
+                   parts (map #(cond-sql (get @promoted (:kind from)) %)
+                              (:conds from))]
+               [(str "NOT EXISTS (SELECT 1 FROM "
+                     (table-for tables (:kind from)) " AS j WHERE "
+                     (side "j" (:target from) (:field from))
+                     " = " (side table target field)
+                     (when (seq parts)
+                       (str " AND " (str/join " AND " (map first parts))))
+                     ")")
+                (vec (mapcat second parts))])
+             (cond-sql (get @promoted kind) c)))
+         conds)))
 
-(defrecord PostgresStorage [^HikariDataSource ds tables sealed]
+(defn- promoted-types
+  "The kind's promoted columns as cond-sql reads them: {field sql-type}."
+  [rmap]
+  (into {}
+        (keep (fn [{col :name :keys [type generated?]}]
+                (when generated? [(keyword (subs col 2)) type])))
+        (:columns (store/kind-projection rmap))))
+
+(defrecord PostgresStorage [^HikariDataSource ds tables sealed promoted]
   store/Storage
   (with-tx* [_ f]
     (jdbc/with-transaction [tx ds]
       (f tx)))
 
-  (ensure-kind! [_ rmap]
-    (with-open [conn (jdbc/get-connection ds)]
-      (doseq [stmt (concat prerequisites (kind-ddl rmap))]
-        (jdbc/execute! conn [stmt])))
+  (ensure-kind! [this rmap]
+    (let [[create & indexes] (kind-ddl rmap)
+          table (store/definition-checked-name (:plural rmap))]
+      (with-open [conn (jdbc/get-connection ds)]
+        (doseq [stmt (concat prerequisites [create])]
+          (jdbc/execute! conn [stmt])))
+      ;; an index over an f_ column the live table lacks yet waits for
+      ;; the migrate gate, whose plan adds the column and then the
+      ;; index (68ebaa0f): building it here would fail the boot first
+      (let [live (set (keys (:columns (table-snapshot this table))))]
+        (with-open [conn (jdbc/get-connection ds)]
+          (doseq [stmt indexes
+                  :when (every? live (map second (re-seq #"[(,]\s*(f_\w+)" stmt)))]
+            (jdbc/execute! conn [stmt])))))
     (swap! tables assoc (:kind rmap)
            (store/definition-checked-name (:plural rmap)))
     (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
+    (swap! promoted assoc (:kind rmap) (promoted-types rmap))
     (reseal! ds (table-for tables (:kind rmap)) (get @sealed (:kind rmap))
              (:at-rest-migrate rmap))
     nil)
@@ -900,7 +930,7 @@
     ;; narrowing ride in as one semi-join over the kind's table, never
     ;; a query per row
     (let [table (table-for tables kind)
-          parts (map cond-sql conds)
+          parts (map #(cond-sql (get @promoted kind) %) conds)
           sql (str "SELECT at FROM waymark10_transitions"
                    " WHERE kind = ? AND action = ? AND at >= ? AND at < ?"
                    " AND resource_id IN (SELECT id FROM " table
@@ -980,7 +1010,7 @@
 
   (count-matching [_ tx kind conds]
     (let [table (table-for tables kind)
-          parts (conds-sql tables table conds)
+          parts (conds-sql tables promoted kind conds)
           sql (str "SELECT count(*) AS n FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts)))))]
@@ -989,7 +1019,7 @@
   (sum-matching [_ tx kind of conds]
     (let [table (table-for tables kind)
           fname (store/definition-checked-name of)
-          parts (map cond-sql conds)
+          parts (map #(cond-sql (get @promoted kind) %) conds)
           ;; un-coalesced deliberately: SUM over no contributions is
           ;; NULL, and the maintainer owns the empty default (0, or
           ;; absent under {:when-empty :absent})
@@ -1001,7 +1031,7 @@
 
   (ids-matching [_ tx kind conds limit]
     (let [table (table-for tables kind)
-          parts (conds-sql tables table conds)
+          parts (conds-sql tables promoted kind conds)
           sql (str "SELECT id FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
@@ -1055,7 +1085,7 @@
 
   (search-rows [_ tx kind conds {:keys [order-by desc then-by limit offset]}]
     (let [table (table-for tables kind)
-          parts (conds-sql tables table conds)
+          parts (conds-sql tables promoted kind conds)
           column (fn [f]
                    (cond
                      (nil? f) "created_at"
@@ -1080,7 +1110,7 @@
 
   (facet-counts [_ tx kind field conds array? absent-as]
     (let [table (table-for tables kind)
-          parts (conds-sql tables table conds)
+          parts (conds-sql tables promoted kind conds)
           ;; a scalar field's absent rows count under the declared value
           absent (when-not (or (= :state field) array?) absent-as)
           expr (cond
@@ -1339,7 +1369,7 @@
               (.setJdbcUrl jdbc-url)
               (.setMaximumPoolSize 8)
               (.setPoolName "waymark10"))]
-    (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}))))
+    (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}) (atom {}))))
 
 (defn close! [^PostgresStorage st]
   (.close ^HikariDataSource (:ds st)))

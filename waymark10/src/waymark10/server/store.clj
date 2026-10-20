@@ -425,6 +425,33 @@
                              " USING gin ((data->'" fname "'))")]))))
         (sort (keys (:filterable rmap)))))
 
+(defn- btree-indexes
+  "A btree index per promoted filterable field (ticket 68ebaa0f): by
+  default a field filterable by :eq or :in carries one, since equality
+  and any-of are what it serves, and any other field carries none. The
+  kind's :index {field :btree|:none} says otherwise for one field. A
+  field whose own one-field :unique group indexes it takes no second."
+  [rmap table promoted]
+  (let [cols (set (map :name promoted))
+        uniq (into #{}
+                   (keep (fn [g]
+                           (cond (keyword? g) g
+                                 (= 1 (count g)) (first g))))
+                   (:unique rmap))]
+    (into {}
+          (keep (fn [[field ops]]
+                  (let [fname (definition-checked-name field)
+                        col (str "f_" fname)
+                        want (get (:index rmap) field
+                                  (if (some #{:eq :in} ops) :btree :none))]
+                    (when (and (= :btree want)
+                               (contains? cols col)
+                               (not (contains? uniq field)))
+                      (let [ix (str "ix_" table "_f_" fname)]
+                        [ix (str "CREATE INDEX IF NOT EXISTS " ix " ON " table
+                                 " (" col ")")])))))
+          (sort-by key (:filterable rmap)))))
+
 (defn kind-projection
   "The one projection of a kind's table: the engine's fixed columns,
   a generated column per promoted field (filterable ∪ sortable, phase
@@ -432,7 +459,8 @@
   promote too; :state has its own column; vocab arrays have no
   single-value promotion; the sortable-timestamps promote nothing,
   being engine columns already), and the standard indexes — plus a GIN
-  index per vocab-array filterable field (batch F).
+  index per vocab-array filterable field (batch F), and a btree index
+  per promoted :eq/:in filterable field its :index does not decline.
 
   ix_<table>_created and ix_<table>_updated land on the kinds whose
   :sortable NAMES that timestamp, and nowhere else — a recorded
@@ -482,6 +510,7 @@
        (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
             " (next_flip_at) WHERE next_flip_at IS NOT NULL")}
       (gin-indexes rmap table)
+      (btree-indexes rmap table promoted)
       ;; declared uniqueness reaches storage (design §24): one UNIQUE
       ;; index per :unique group over the promoted generated columns —
       ;; check-unique already demands every field be promoted, so the

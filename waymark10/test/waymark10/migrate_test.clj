@@ -129,10 +129,11 @@
   (testing "(a) a drifted boot refuses, naming the plan"
     (let [d (boot-error [v-promoted] {})]
       (is (= :migrate (:check d)))
-      (is (= [:add-column] (mapv :kind (:steps d))))))
-  (testing "(a) the plan is one non-destructive add-column"
+      (is (= [:add-column :add-index] (mapv :kind (:steps d))))))
+  (testing "(a) the plan is one non-destructive add-column, then the
+            btree index an :eq field carries (ticket 68ebaa0f)"
     (let [steps (steps-of [v-promoted])]
-      (is (= 1 (count steps)))
+      (is (= [:add-column :add-index] (mapv :kind steps)))
       (let [s (first steps)]
         (is (= :add-column (:kind s)))
         (is (= "widgets" (:table s)))
@@ -142,7 +143,7 @@
     (fn [st]
       (let [{:keys [applied skipped]}
             (migrate/apply! st (migrate/plan st [v-promoted]) {})]
-        (is (= 1 (count applied)))
+        (is (= 2 (count applied)))
         (is (empty? skipped)))
       (testing "(a) Postgres backfilled the generated column for old rows"
         (is (= #{["w1" 2] ["w2" 1]}
@@ -168,7 +169,7 @@
                                               {:order-by :priority}))))))))))
   (testing "(b) a dropped promotion drops its column — derived data"
     (let [steps (steps-of [v-base])]
-      (is (= [:drop-column] (mapv :kind steps)))
+      (is (= [:drop-column :drop-index] (mapv :kind steps)))
       (is (every? (comp false? :destructive?) steps))
       (with-st
         (fn [st]
@@ -181,7 +182,9 @@
       (fn [st]
         (migrate/apply! st (migrate/plan st [v-promoted]) {}) ; bigint again
         (let [steps (migrate/plan st [v-retyped])]
-          (is (= [:recreate-column :recreate-column] (mapv :kind steps)))
+          ;; the drop takes the btree index, so the plan builds it again
+          (is (= [:recreate-column :recreate-column :add-index]
+                 (mapv :kind steps)))
           (is (every? (comp false? :destructive?) steps))
           (migrate/apply! st steps {})
           (is (= {:type "text" :generated? true}

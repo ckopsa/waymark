@@ -181,6 +181,10 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; {field :btree|:none}: whether a promoted filterable field carries
+   ;; a btree index — by default one filterable by :eq or :in does
+   ;; (ticket 68ebaa0f). In the fingerprint through the storage facet
+   :index
    ;; the kind's SAFE collection doors (ticket 80c6c9e2): {name {:input
    ;; <malli> :summary "…" :handler (fn [engine body ctx])}}. Each is
    ;; POST /api/{plural}/-/{name}, a route that reads and writes
