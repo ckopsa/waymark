@@ -71,21 +71,56 @@
                              "` is not an org's name: it is snake_case, [a-z][a-z0-9_]* (docs/orgkit.md).")
                         {:org v}))))))
 
-(defn resources
-  "The kinds the org's module `<org>.org` declares. Throws when the
-  module is not on the classpath."
+(declare orgs-dir with-classpath)
+
+(defn- on-classpath?
+  "True when the org's module `<org>/org.clj` is on the classpath."
   [org]
-  (if (io/resource (str org "/org.clj"))
-    (vec ((requiring-resolve (symbol (str org ".org") "resources"))))
-    (throw (ex-info (str "WAYMARK10_ORG names the org `" org "`, and `" org
-                         ".org` is not on the classpath: add the org's directory as a deps root.")
-                    {:org org}))))
+  (some? (io/resource (str org "/org.clj"))))
+
+(defn disk-dir
+  "The org's directory on disk, for an org not on the classpath (ticket
+  8c331ba3): `<org>` under the dir the WAYMARK10_ORGS_DIR value
+  `dir-value` names (`orgs-dir`), when it is a directory holding
+  `org.edn`. Live or not: WAYMARK10_ORG names the org. nil when the org
+  is on the classpath, or when no such directory is."
+  ^File [org dir-value]
+  (when-not (on-classpath? org)
+    (let [d (io/file (orgs-dir dir-value) (str org))]
+      (when (.isFile (io/file d "org.edn")) d))))
+
+(defn- with-org-dir
+  "Call f with the org on the classpath: as it is, or through
+  `with-classpath` over its `disk-dir` when only the disk holds it."
+  [org dir-value f]
+  (if-some [d (disk-dir org dir-value)]
+    (with-classpath [d] f)
+    (f)))
+
+(defn resources
+  "The kinds the org's module `<org>.org` declares: from the classpath
+  first, and else from the org's `disk-dir`. `dir-value` is
+  WAYMARK10_ORGS_DIR's value, read from the environment when not given.
+  Throws when neither holds the module."
+  ([org] (resources org (System/getenv "WAYMARK10_ORGS_DIR")))
+  ([org dir-value]
+   (or (with-org-dir org dir-value
+         #(when (on-classpath? org)
+            (vec ((requiring-resolve (symbol (str org ".org") "resources"))))))
+       (throw (ex-info (str "WAYMARK10_ORG names the org `" org "`, and `" org
+                            ".org` is not on the classpath, nor in `"
+                            (.getPath (io/file (orgs-dir dir-value) (str org)))
+                            "` with an org.edn beside it: add the org's directory as a deps root, or put it under WAYMARK10_ORGS_DIR.")
+                       {:org org})))))
 
 (defn read-seed
-  "The org's seed, `<org>/seed.edn` on the classpath; nil when the org
-  carries none."
-  [org]
-  (some-> (io/resource (str org "/seed.edn")) slurp edn/read-string))
+  "The org's seed, `<org>/seed.edn` on the classpath, or else in the
+  org's `disk-dir`; nil when the org carries none. `dir-value` is as
+  `resources` takes it."
+  ([org] (read-seed org (System/getenv "WAYMARK10_ORGS_DIR")))
+  ([org dir-value]
+   (with-org-dir org dir-value
+     #(some-> (io/resource (str org "/seed.edn")) slurp edn/read-string))))
 
 (defn- made-step
   "One entry of a seed's `:seats` or `:judgments` as a loader step,
@@ -150,16 +185,21 @@
   what the seed gained since, and say what it added. → `seed/load!`'s
   answer; nil for an org that carries no seed. Throws for everything
   `seed/load!` throws for. `opts` are `seed/load!`'s, and `:params`, when
-  absent, are read from WAYMARK10_SEED_PARAMS."
+  absent, are read from WAYMARK10_SEED_PARAMS. An org not on the
+  classpath is loaded from its `disk-dir`; `:orgs-dir`, when given, is
+  WAYMARK10_ORGS_DIR's value, and otherwise read from the environment."
   ([eng org] (boot! eng org {}))
   ([eng org opts]
-   (when-some [s (read-seed org)]
-     (let [opts (cond-> (assoc (or opts {}) :org (str org))
-                  (not (contains? opts :params))
-                  (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
-           result (seed/load! eng (loader-seed s) opts)]
-       (println (boot-line org result))
-       result))))
+   (let [dir-value (get opts :orgs-dir (System/getenv "WAYMARK10_ORGS_DIR"))
+         opts (dissoc opts :orgs-dir)]
+     (with-org-dir org dir-value
+       #(when-some [s (read-seed org dir-value)]
+          (let [opts (cond-> (assoc (or opts {}) :org (str org))
+                       (not (contains? opts :params))
+                       (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
+                result (seed/load! eng (loader-seed s) opts)]
+            (println (boot-line org result))
+            result))))))
 
 ;; ── live orgs, found on disk ────────────────────────────────────────
 

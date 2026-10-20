@@ -775,11 +775,15 @@
   (docs/orgkit.md, epic cafa6106 M1b), or as they are when `org` is
   nil. The engine's registry judges them with everything else, so a
   broken org kind fails the boot with the registry's own message. With
-  FACTORY10_ONLY=1 the engine is framework, factory and the one org."
-  [resources org]
-  (if org
-    (into (vec resources) (org-boot/resources org))
-    resources))
+  FACTORY10_ONLY=1 the engine is framework, factory and the one org.
+  An org not on the classpath is found on disk under `orgs-dir`,
+  WAYMARK10_ORGS_DIR's value (ticket 8c331ba3)."
+  ([resources org]
+   (with-org resources org (System/getenv "WAYMARK10_ORGS_DIR")))
+  ([resources org orgs-dir]
+   (if org
+     (into (vec resources) (org-boot/resources org orgs-dir))
+     resources)))
 
 (defn org-on-boot!
   "The org's seed, behind WAYMARK10_ORG and nothing otherwise: loaded
