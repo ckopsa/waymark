@@ -119,7 +119,7 @@
   day job's work, not the family's."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
-                                   defscenario refuse]]
+                                   defscenario expr-guard refuse]]
             [waymark10.holds :as holds]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
@@ -218,19 +218,20 @@
         (some? v) (try (Instant/parse (str v)) (catch Exception _ nil))))
 
 ;; the open_hire door's own law: any caller of the door — open-hire!,
-;; or the live cracks pass walking it generically — is judged the same
+;; or the live cracks pass walking it generically — is judged the same.
+;; It is declarative (docs/spec-related-row-law.md §7, ticket fc360087):
+;; every stored plan carries a `purpose` (the create's stamp, the boot's
+;; purpose-backfill), so `not= "hire"` reads a found plan and misses
+;; none. Its name stays `no_live_org`, the reason open-hire! answers.
 
-(defguardfn the-org-is-live
-  {:name :no_live_org
-   :judges [:name]
-   :reads [:org_plan]
-   :vars [:org]
-   :explain "No live plan founds {org}: a hire plan is opened on an org that is live."}
-  [_row inp ctx]
-  (let [plans (plans-named ctx (:name inp))]
-    (if (and (some? plans) (nil? (live-plan-of plans)))
-      (t/deny {:vars {:org (str (:name inp))}})
-      (t/allow))))
+(def the-org-is-live
+  (expr-guard
+   {:name :no_live_org
+    :when '(exists [p :org_plan {:name (= (input :name))
+                                 :state (= "live")
+                                 :purpose (not= "hire")}])
+    :vars {:org '(input :name)}
+    :explain "No live plan founds {org}: a hire plan is opened on an org that is live."}))
 
 (defguardfn one-hire-per-gap
   {:name :hire_open

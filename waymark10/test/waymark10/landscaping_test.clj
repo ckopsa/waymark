@@ -135,7 +135,7 @@
     (is (= {:b "bk-parks" :free "crew-elm"} (:evidence v))
         "the Parks' job, and the first active crew with no overlapping booking")
     (is (= (str "That crew is already at the Parks' yard from "
-                "2026-10-22T08:00:00Z to 2026-10-22T12:00:00Z. "
+                "08:00 to 12:00. "
                 "The Elm Street crew is free.")
            (g/render-reason d v hendersons)))
     (is (= [{:door :booking/reschedule :id "bk-parks"}]
@@ -151,7 +151,7 @@
       (is (t/deny? v))
       (is (= {:b "bk-parks"} (:evidence v)))
       (is (= (str "That crew is already at the Parks' yard from "
-                  "2026-10-22T08:00:00Z to 2026-10-22T12:00:00Z.")
+                  "08:00 to 12:00.")
              (g/render-reason d v hendersons))
           "the sentence that reads the unbound free drops; {free.name} never renders"))))
 
