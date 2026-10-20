@@ -2832,7 +2832,25 @@
     (testing "a second sit keeps the fresh change"
       (let [again (doc-of (call! h sid "waymark_sit" {:key a-key}))]
         (is (= minted (some-> (get-in again [:change :id]) str)))
-        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))))))
+        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))))
+    (testing "the sitting holds the fresh change's branch (ticket e07182a5)"
+      (answer! st "bench__edit" {:repo a-repository :branch (str spent "-2")
+                                 :path "orgs/greenleaf/org.edn" :replaced 1})
+      (let [edit! #(call! h sid "waymark_power"
+                          {:tool "bench__edit"
+                           :arguments {:repo a-repository :branch %
+                                       :path "orgs/greenleaf/org.edn"
+                                       :old "a" :new "b" :why "the org"}})
+            r (edit! (str spent "-2"))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= 1 (count (calls-of st "bench__edit")))
+            "the edit on the fresh branch reaches the rig")
+        (let [other (edit! (str "waymark/" (random-uuid)))]
+          (is (true? (:isError other)))
+          (is (str/includes? (text-of other) "sitting-does-not-hold")
+              (text-of other))
+          (is (= 1 (count (calls-of st "bench__edit")))
+              "an edit on any other branch is still refused before the wire"))))))
 
 ;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
 
