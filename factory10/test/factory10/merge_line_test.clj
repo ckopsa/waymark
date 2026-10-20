@@ -1071,6 +1071,8 @@
       (is (= [] (pass! (plan :simulated "at_go_live")))))
     (testing "under always, it is brought forward"
       (is (= [9] (pass! (plan :simulated "always")))))
+    (testing "under when_org_dir_changes, it is brought forward too (ticket ce8a4e17)"
+      (is (= [9] (pass! (plan :simulated "when_org_dir_changes")))))
     (testing "once the plan is going_live, the default brings it forward too"
       (is (= [9] (pass! (plan :going_live))))
       (is (= [9] (pass! (plan :going_live "at_go_live")))))
