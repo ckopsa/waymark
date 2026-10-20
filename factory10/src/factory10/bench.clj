@@ -2213,10 +2213,15 @@
   [eng]
   (org-plans eng ["going_live"]))
 
-(def ^:private go-live-wait-states
+(defn- go-live-wait-states
   "Every org_plan state whose pull request merges only on the owner's
-  go_live yes (ticket 7aff6a5c): all but live and retired."
-  ["drafting" "proposed" "simulated" "going_live"])
+  go_live yes (ticket 7aff6a5c): all but live and retired. Read from the
+  kind's declared states, not a hand list, so a state added later waits
+  too (ticket b79643fe: `filming` was missing and leaked a merge)."
+  [eng]
+  (into []
+        (comp (map name) (remove #{"live" "retired"}))
+        (:states (rdef-of-kind eng :org_plan))))
 
 (defn- go-live-waits
   "The changes whose pull request an org_plan not yet live names, and
@@ -2225,7 +2230,7 @@
   it and no person is asked to (ticket 7aff6a5c). Once its plan is live
   or retired the change is ordinary again."
   [eng changes]
-  (let [plans (org-plans eng go-live-wait-states)]
+  (let [plans (org-plans eng (go-live-wait-states eng))]
     (into {}
           (keep (fn [c]
                   (let [id (str (:id c))]
