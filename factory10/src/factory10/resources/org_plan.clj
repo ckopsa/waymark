@@ -578,6 +578,24 @@
   [_row _inp ctx]
   (if (some? (the-person ctx)) (t/allow) (t/deny)))
 
+;; the org's directory is orgs/<name>, so one plan not retired holds a
+;; name: a second create cannot take over the first's directory (ticket
+;; be518c13). It reads through the ctx :find hook, as the hire walls do.
+
+(defguardfn one-plan-per-name
+  {:judges [:name]
+   :reads [:org_plan]
+   :check-tier :given
+   :vars [:name :plan :state]
+   :explain "The org {name} is held by plan {plan}, in {state}: one plan that is not retired holds an org's name, and its directory orgs/{name}."
+   :open "Work the plan that holds the name, retire it first, or file this one under another name."}
+  [_row inp ctx]
+  (if-some [held (first (remove #(= "retired" (state-name %))
+                                (plans-named ctx (:name inp))))]
+    (t/deny {:vars {:name (str (:name inp)) :plan (str (:id held)) :state (state-name held)}
+             :evidence {:plan (str (:id held))}})
+    (t/allow)))
+
 (defguardfn only-the-owner-decides
   {:reads [:principal]
    :explain "This is the owner's decision: only the person who owns this plan, or an agent acting for them, may take this door."
@@ -946,6 +964,27 @@
    :as      {:id "factory10-hire" :type :system}
    :expect  {:allowed true}})
 
+(defscenario a-second-plan-does-not-take-a-held-name
+  "An org's name is held by its plan while that plan is not retired: a
+   second create with the same name is refused."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :drafting
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :one-plan-per-name}})
+
+(defscenario a-retired-plan-frees-its-name
+  "And once that plan is retired, the name may be filed again."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :retired
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── :org_plan ───────────────────────────────────────────────────────
 
 (def ^:private finding-schema
@@ -1183,7 +1222,7 @@
                 :purpose #{:eq}}
    :on-create stamp-the-owner
    :data-migrate purpose-backfill
-   :create-guards [a-person-files-the-plan]
+   :create-guards [a-person-files-the-plan one-plan-per-name]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
               :input hire-input
@@ -1765,4 +1804,6 @@
                the-owner-goes-live
                an-unflipped-org-does-not-go-live
                no-hire-without-a-live-org
-               a-live-org-opens-a-hire]})
+               a-live-org-opens-a-hire
+               a-second-plan-does-not-take-a-held-name
+               a-retired-plan-frees-its-name]})
