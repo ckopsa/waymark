@@ -39,9 +39,11 @@
             over declarations and the seed: a final door a model seat
             holds and no person does (unheld_final), a state with no
             expected age (no_wait_limit), a money input no guard reads
-            (money_unbounded). Each sentence is a question to put to
-            the person; each clears in code — a :hold guard, an
-            :expected-age, or the person's answer as :decided
+            (money_unbounded), a :decided sentence that says a door a
+            model seat holds waits for a person while no :hold guard
+            holds it (decided_says_held). Each sentence is a question
+            to put to the person; each clears in code — a :hold guard,
+            an :expected-age, or the person's answer as :decided
   no-outside-world
             the org's rehearsal has an outside world (ticket
             a4149376): a :rehearsal cast member whose :scope creates
@@ -369,6 +371,16 @@
 
 (defn- decided? [a] (sentence? (:decided a)))
 
+(def ^:private says-held
+  "Words in a :decided sentence that say the door waits for a person."
+  #"(?i)\bonly on\b|['’]s tap\b|\bwaits? for\b|\bnever on its own\b")
+
+(defn- narrative?
+  "Whether the door says its :decided sentence is narrative and the AI
+  may act: `:decided-held {:none \"why\"}`."
+  [a]
+  (sentence? (get-in a [:decided-held :none])))
+
 (defn- model-holds?
   "Whether a seed seat that is no person's holds kind.action."
   [seats k a]
@@ -399,6 +411,26 @@
                   " on its own, or wait for " who " tap?")
              (str "Hold " (str/join ", " (map #(str k "." %) as))
                   " for a person with a :hold guard, or write the person's answer on each as :decided \"…\"."))))
+
+(defn- decided-says-held-findings
+  "A :decided sentence that says a door waits for a person, on a door a
+  model seat holds and no :hold guard holds (ticket 7315ae72): the law
+  page would say the person taps it while the AI takes it alone."
+  [rs seats who]
+  (for [r rs
+        :let [k (text (:kind r))]
+        [aname a] (sort-by (comp text key) (:actions r))
+        :let [an (text aname)]
+        :when (and (decided? a)
+                   (re-find says-held (:decided a))
+                   (model-holds? seats k an)
+                   (not (held? a))
+                   (not (narrative? a)))]
+    (finding :decision ["decided_says_held" k an] (str k "." an)
+             (str "You said " (words an) " on " (a-an (words k)) " waits for a person, but nothing holds it:"
+                  " should the AI do it on its own, or wait for " who " tap?")
+             (str "Add a :hold guard for that person, or reword the decision if the AI may act alone"
+                  " (:decided-held {:none \"why\"} keeps the sentence as narrative)."))))
 
 (defn- state-decided? [r s]
   (when (map? (:decided r))
@@ -455,9 +487,11 @@
   "The person's business questions (ticket e1ed02c7), pure over the
   declarations and the seed's seats: who may take a final step, how
   long a row may wait, how much money moves without a tap — in that
-  order, each in the org's kind order."
+  order, each in the org's kind order, after any :decided sentence the
+  law contradicts."
   [rs seats seed]
-  (concat (unheld-final-findings rs seats (owner-tap seed))
+  (concat (decided-says-held-findings rs seats (owner-tap seed))
+          (unheld-final-findings rs seats (owner-tap seed))
           (no-wait-limit-findings rs)
           (money-unbounded-findings rs seats)))
 

@@ -170,10 +170,10 @@
 
 (defn purpose-of
   "The plan's purpose, `found` or `hire`. Every stored plan carries one
-  (the create's stamp, the boot's purpose-backfill); a bare map with
-  none reads as found."
+  (the create's stamp, the boot's purpose-backfill), so it is read
+  straight; a plan with none is a bug the backfill should catch."
   [plan]
-  (if (= "hire" (some-> (get-in plan [:data :purpose]) name)) "hire" "found"))
+  (some-> (get-in plan [:data :purpose]) name))
 
 (def ^:private standing-hire-states
   "The states a hire plan blocks another for its gap in. A retired or
