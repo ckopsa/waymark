@@ -13,6 +13,16 @@
   (refuse "Nothing starts until the client signs the engagement letter; record the day they signed.")
   '(present? :letter_signed_on))
 
+(defguard principal-engages
+  {:hold true}
+  (refuse "A prospect is engaged only on The Principal's tap, because nothing starts until the client signs the engagement letter; this waits for The Principal.")
+  'false)
+
+(defguard principal-declines
+  {:hold true}
+  (refuse "A prospect is declined only on The Principal's tap; the AI never declines one on its own, so this waits for The Principal.")
+  'false)
+
 (defresource prospect
   {:kind :prospect
    :plural "prospects"
@@ -39,11 +49,10 @@
                        :one-way "A qualified prospect stays qualified; decline it if the letter is never signed."}
               :decided "The AI qualifies a prospect on its own once the call has given a rough credit estimate."}
     :engage  {:from #{:qualified} :to :engaged
-              :guards [letter-signed]
+              :guards [letter-signed principal-engages]
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "An engaged prospect is a client; its studies carry it from here."}
-              :decided "A prospect is engaged only on The Principal's tap, because nothing starts until the client signs the engagement letter."}
+                       :one-way "An engaged prospect is a client; its studies carry it from here."}}
     :decline {:from #{:new :qualified} :to :declined
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A declined prospect is closed; open a new one if they come back."}
-              :decided "A prospect is declined only on The Principal's tap; the AI never declines one on its own."}}})
+              :guards [principal-declines]}}})

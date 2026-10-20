@@ -28,6 +28,16 @@
   (refuse "A study goes to review once the credit is calculated.")
   '(present? :credit_usd))
 
+(defguard specialist-confirms-records
+  {:hold true}
+  (refuse "A study moves to drafting only on a person's tap, because the tax specialist decides the cost records are complete; until a tax specialist is in the seed this waits for The Principal, and then the hold moves to them.")
+  'false)
+
+(defguard principal-signs-off
+  {:hold true}
+  (refuse "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it; this waits for The Principal.")
+  'false)
+
 (defguard has-signer
   (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
   '(present? :signed_off_by))
@@ -62,20 +72,18 @@
              :signed_off "A signed-off study may wait 2 days to be delivered; past that, the mayor tells The Principal."}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
-                 :guards [records-complete records-confirmed]
+                 :guards [records-complete records-confirmed specialist-confirms-records]
                  :safety {:idempotent true :reversible false :confirm false
-                          :one-way "Drafting has begun; a late record is added to the draft."}
-                 :decided "A study moves to drafting only on the tax specialist's tap, because the specialist decides the cost records are complete."}
+                          :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review
                  :guards [has-preparer has-credit]
                  :safety {:idempotent true :reversible true :confirm false}}
     :send_back  {:from #{:review} :to :drafting
                  :safety {:idempotent true :reversible true :confirm false}}
     :sign_off   {:from #{:review} :to :signed_off
-                 :guards [has-signer]
+                 :guards [has-signer principal-signs-off]
                  :safety {:idempotent true :reversible false :confirm false
-                          :one-way "A signed-off study is final; correct it with a new study."}
-                 :decided "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it."}
+                          :one-way "A signed-off study is final; correct it with a new study."}}
     :deliver    {:from #{:signed_off} :to :delivered
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "The study and Form 6765 are with the client's CPA."}

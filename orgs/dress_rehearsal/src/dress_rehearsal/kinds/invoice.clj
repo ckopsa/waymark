@@ -7,6 +7,11 @@
   (refuse "An invoice is paid against an amount; say what was billed.")
   '(present? :amount_usd))
 
+(defguard principal-writes-off
+  {:hold true}
+  (refuse "An invoice is written off only on The Principal's tap; the AI never writes one off on its own, so this waits for The Principal.")
+  'false)
+
 (defresource invoice
   {:kind :invoice
    :plural "invoices"
@@ -29,6 +34,6 @@
                          :one-way "A paid invoice stays paid."}
                 :decided "The AI records an invoice paid on its own when the payment arrives."}
     :write_off {:from #{:open} :to :written_off
+                :guards [principal-writes-off]
                 :safety {:idempotent true :reversible false :confirm false
-                         :one-way "A written-off invoice is let go; bill again with a new one."}
-                :decided "An invoice is written off only on The Principal's tap; the AI never writes one off on its own."}}})
+                         :one-way "A written-off invoice is let go; bill again with a new one."}}}})
