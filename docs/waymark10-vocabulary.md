@@ -114,14 +114,22 @@ shows:
   '(present? :value_type :amount :effective_date))
 ```
 
-A map after the law carries the way out and the per-field sentences —
-`{:remedies … :open … :errors {field "…"}}`, any of the three, no other key:
+A map after the law carries the way out, the per-field sentences and what
+the sentence reads — `{:remedies … :open … :errors {field "…"} :evidence …
+:vars {name '(expr)} :hidden {binder "…"}}`, any of them, no other key:
 
 - `:remedies` — the doors that change the verdict, e.g.
   `[{:door :meal/accept :id '(input :meal_id)}]`;
 - `:open` — the sentence that says no door does;
 - `:errors` — a field-error sentence per input field, so a declarative
-  refusal keeps the per-field error a code guard returns.
+  refusal keeps the per-field error a code guard returns;
+- `:vars` — `{name '(expr)}`, each evaluated as the law is and read by
+  `{name}` in the sentence, e.g. `{:count '(count [o :booking {…}])}`;
+- `:hidden` — `{binder "…"}`, keyed by a binder of the law: the sentence
+  that stands in for each sentence reading `{binder.field}` when every
+  match is outside the caller's grant. Without it that sentence drops;
+  when none would remain, the engine says "What stops this is outside
+  what you can see." (docs/spec-related-row-law.md §3).
 
 ```clojure
 (defguard meal-is-listed
