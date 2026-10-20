@@ -1050,6 +1050,47 @@
         "a change no train found red is left as the rig said it")
     (is (nil? (with-train-red nil {:data {}})))))
 
+(deftest feedback-carries-the-ops-seats-verdicts-first
+  ;; ticket 954e9d25: the ops seat's verdict and remedy on the change's
+  ;; head ride in the feedback, not only as a GitHub label
+  (let [with-ops-verdicts #'mcp/with-ops-verdicts
+        head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
+        change {:id "c-1" :data {:head_sha head}}
+        run (fn [state verdict & [sha]]
+              {:state state
+               :data {:check_name "test10" :head_sha (or sha head)
+                      :verdict verdict :remedy "Fix the fixture."}})
+        rig {"findings" [{"source" "pipeline" "message" "test10 red"}]
+             "unavailable" []}]
+    (testing "a this_change run shows its remedy first"
+      (let [got (with-ops-verdicts rig change [(run :classified "this_change")])
+            [first-finding :as findings] (get got "findings")]
+        (is (= 2 (count findings)))
+        (is (= "ops-seat" (get first-finding "source")))
+        (is (= "test10: this_change — Fix the fixture."
+               (get first-finding "message")))
+        (is (nil? (get got "note")))))
+    (testing "only infra runs carry the rerun note"
+      (let [note (str (get (with-ops-verdicts rig change
+                                              [(run :classified "infra")
+                                               (run :reclassified "infra")])
+                           "note"))]
+        (is (str/includes? note "rerun"))
+        (is (str/includes? note "stop the sitting"))
+        (is (str/includes? note "Do not stall the ticket"))))
+    (testing "a base_red run carries the pull note"
+      (let [note (str (get (with-ops-verdicts nil change
+                                              [(run :classified "base_red")])
+                           "note"))]
+        (is (str/includes? note "bench.pull"))
+        (is (str/includes? note "Do not stall the ticket"))))
+    (testing "with no classified runs on the head the feedback is unchanged"
+      (is (= rig (with-ops-verdicts rig change [])))
+      (is (= rig (with-ops-verdicts rig change [(run :red nil)])))
+      (is (= rig (with-ops-verdicts rig change
+                   [(run :classified "this_change" "0ld")])))
+      (is (nil? (with-ops-verdicts nil change [(run :superseded nil)]))))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))

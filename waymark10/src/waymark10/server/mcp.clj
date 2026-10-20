@@ -5026,6 +5026,60 @@
       {"findings" [finding] "unavailable" []})
     feedback))
 
+(def ^:private base-red-note
+  "What the sit says beside feedback the ops seat read as `base_red`:
+  the base branch is red, and this change did not make it so."
+  (str "The base branch is red (base_red): this change did not cause it. "
+       "Call the bench's pull tool (bench.pull in bench.tools) once the "
+       "base is green. Do not stall the ticket on a red base, and do not "
+       "change code for it."))
+
+(defn- ops-verdict-finding
+  "One classified run as a finding: the check, the ops seat's verdict
+  and its remedy."
+  [run]
+  {"source" "ops-seat"
+   "severity" "failure"
+   "message" (str (get-in run [:data :check_name]) ": "
+                  (get-in run [:data :verdict]) " — "
+                  (get-in run [:data :remedy]))})
+
+(defn- with-ops-verdicts
+  "The sit's `feedback` with the ops seat's verdicts first among its
+  findings (ticket 954e9d25): one per `ci_run` of `runs` that is
+  classified or reclassified on the change's current head. A run with
+  no verdict yet is left out, and with none left the feedback is as it
+  was. Every run `infra` carries the rerun note; a `base_red` the pull
+  note."
+  [feedback change runs]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+        judged (when head
+                 (filterv #(and (contains? #{"classified" "reclassified"}
+                                           (some-> (:state %) name))
+                                (= head (some-> (get-in % [:data :head_sha]) str))
+                                (some-> (get-in % [:data :verdict]) str not-empty))
+                          runs))
+        verdicts (set (map #(str (get-in % [:data :verdict])) judged))]
+    (if (empty? judged)
+      feedback
+      (cond-> (update (or feedback {"findings" [] "unavailable" []})
+                      "findings" #(into (mapv ops-verdict-finding judged) %))
+        (= #{"infra"} verdicts) (assoc "note" interrupted-note)
+        (contains? verdicts "base_red") (assoc "note" base-red-note)))))
+
+(defn- ci-runs-of
+  "Every `ci_run` row that points at `change`, decoded; nil on an
+  engine that serves no ci_run."
+  [eng change]
+  (when-some [rdef (get (inv/resources eng) :ci_run)]
+    (when-some [id (some-> (:id change) str not-empty)]
+      (let [st (:storage eng)]
+        (->> (store/with-tx st
+               (fn [tx]
+                 (store/query-rows st tx :ci_run {:change id}
+                                   {:limit change-scan-limit})))
+             (mapv #(inv/decode-row rdef %)))))))
+
 (defn- feedback-of
   "What the submit caused, or nil. ONE `feedback` of the rig, with the
   engine's own hand and through the same caller the prepare rides
@@ -5265,7 +5319,10 @@
           ;; pushes it and the source adopts it.
           ;; a merge train's red rides on the change row, not on the
           ;; branch the rig reads, so it is added here (ticket 238f45b3)
-          feedback (with-train-red
+          ;; and the ops seat's verdicts on the change's head ride
+          ;; first of all (ticket 954e9d25)
+          feedback (with-ops-verdicts
+                    (with-train-red
                      (when (and made
                                 (or (>= (long (or (get-in change [:data :rounds])
                                                   0))
@@ -5277,6 +5334,7 @@
                                     (str (or (:branch made) branch))
                                     (bench-tools-of eng seat)))
                      change)
+                    change (ci-runs-of eng change))
           ;; the path the policy names, answered only when the file
           ;; is really there (R-6); a worktree that was never made
           ;; holds nothing, so a dark rig is asked for no read
