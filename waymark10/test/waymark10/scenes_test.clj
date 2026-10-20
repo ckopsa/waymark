@@ -29,7 +29,8 @@
     [:map
      [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
      [:room {:optional true :x-display {:label "Room"}}
-      [:maybe [:string {:max 40}]]]]
+      [:maybe [:string {:max 40}]]]
+     [:minutes {:optional true :x-display {:label "Minutes"}} [:maybe :int]]]
     :filterable {:state #{:eq :in}}
     :actions
     {:rename {:from #{:open} :to :open
@@ -365,8 +366,12 @@
       (is (= "Quiet. Done." (scenes/fill-say [listed ". Done."] (constantly [])))))
     (testing "check judges a sum and a list"
       (let [eng (fresh-engine)
-            h {"$rows" {:kind "chore" :since since :until until :sum "title" :one "x" :many "y"}}]
+            h {"$rows" {:kind "chore" :since since :until until :sum "minutes" :one "x" :many "y"}}]
         (is (nil? (scenes/say-refusal eng [{"$list" {:items [h] :lead "Week: "}}])))
+        (is (= "`title` is not a number field of `chore`."
+               (scenes/say-refusal eng [(assoc-in h ["$rows" :sum] "title")])))
+        (is (= "`hours` is not a number field of `chore`."
+               (scenes/say-refusal eng [(assoc-in h ["$rows" :sum] "hours")])))
         (is (= "a `$rows` hole counts or sums, not both."
                (scenes/say-refusal eng [(assoc-in h ["$rows" :count] true)])))
         (is (= "a `$list`'s `items` are one or more `$rows` holes."

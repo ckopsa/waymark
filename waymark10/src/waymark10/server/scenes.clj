@@ -425,6 +425,12 @@
       (when (and (contains? h "sum")
                  (not (and (string? (get h "sum")) (not (str/blank? (get h "sum"))))))
         "a `$rows` hole's `sum` names a field.")
+      (when (contains? h "sum")
+        (let [s (some-> (rdef-of (str (get h "kind"))) :schema
+                        (schema/field-schema (keyword (get h "sum"))))
+              head (if (vector? s) (first s) s)]
+          (when-not (#{:int :double :float :number :decimal} head)
+            (str (tick (get h "sum")) " is not a number field of " (tick (get h "kind")) "."))))
       (when (and (contains? h "sum") (true? (get h "count")))
         "a `$rows` hole counts or sums, not both.")
       (when (and (contains? h "state")
