@@ -18,7 +18,7 @@
   whoever may make one may restate its `output` and `unless`. Only a
   person retires one.
 
-  `ensure-seed-rules!` is the boot seed: the eleven rules the scorecard
+  `ensure-seed-rules!` is the boot seed: the fifteen rules the scorecard
   starts with, each made once by its name. The engine's own start runs
   it (`engine/start-runtime!`), so every application that enrolls the
   kind has them. A seed row made before `output` and `unless` existed
@@ -54,7 +54,11 @@
    ["frame_match_min" "the lowest run.frame_match"]
    ["bare_lists" "the day captions (a shot.caption that opens with a weekday) that list three or more things and say no verb"]
    ["quiet_days" "the day captions that end in 'A quiet day.'"]
-   ["asked_person" "the day captions that say 'was asked'"]])
+   ["asked_person" "the day captions that say 'was asked'"]
+   ["week_bare_lists" "the day captions of a first week that are bare lists, as bare_lists counts them"]
+   ["busy_days" "the day captions of a first week that do not end in 'A quiet day.'"]
+   ["arc_moves" "the arc's roles whose day holds a shot.meanwhile move on a kind other than film.kind"]
+   ["person_asks" "the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]])
 
 (def metric-names (mapv first metrics))
 
@@ -114,12 +118,14 @@
 
 (defn- arc
   "1 when the shot roles run friction, turn, payoff and the last shot's
-  goal state is done; else 0."
+  goal state is done; else 0. A meanwhile shot is a call, not a shot the
+  camera holds, so the arc does not read it."
   [shots]
-  (if (and (= roles (vec (dedupe (map (comp word :role) shots))))
-           (= "done" (word (:goal_state (last shots)))))
-    1
-    0))
+  (let [shots (remove :meanwhile shots)]
+    (if (and (= roles (vec (dedupe (map (comp word :role) shots))))
+             (= "done" (word (:goal_state (last shots)))))
+      1
+      0)))
 
 ;; The first week (FS2) draws one shot per day, its caption the weekday
 ;; and the `$day` phrasing of what happened (scenes): `Monday. Acme's
@@ -161,6 +167,85 @@
   [shots]
   (boolean (some (set roles) (map (comp word :role) shots))))
 
+;; A played first week (ticket fb9a1cff) carries the director's calls
+;; as meanwhile shots, each with what it did: `{:meanwhile {:as :kind
+;; :action :outcome :held_by}}`. `outcome` is `moved`, `held` (a held
+;; call, waiting on a person's tap) or `refused`, and `held_by` is who
+;; holds the door the call named. A day caption's day is the calls since
+;; the day caption before it. `film.kind` is the kind the world knocks
+;; on, the opening's, and `film.cast` the scene's cast, the person first.
+
+(def ^:private week-days
+  "The day captions of a whole first week."
+  7)
+
+(def ^:private played-metrics
+  "The metrics read from a first week's captions and its meanwhile
+  calls. They judge a take whose shots carry the arc's roles, when a
+  meanwhile shot played its week or it has a whole week of day captions."
+  #{"week_bare_lists" "busy_days" "arc_moves" "person_asks"})
+
+(defn- week?
+  "True when the take `tk` is a first week `played-metrics` judge."
+  [{:keys [shots]}]
+  (and (first-week? shots)
+       (boolean (or (some :meanwhile shots)
+                    (<= week-days (count (day-captions shots)))))))
+
+(defn- day-caption?
+  [shot]
+  (let [c (:caption shot)]
+    (boolean (and (string? c) (re-find weekday c)))))
+
+(defn- role-days
+  "Each shot of `shots` that carries a role, as [role calls]: the
+  meanwhile calls of its day. A day caption's day is the calls since the
+  day caption before it; a shot that is no day caption, as the closing,
+  reads the last day before it and the calls since."
+  [shots]
+  (loop [s (seq shots) pending [] last-day [] out []]
+    (if-let [shot (first s)]
+      (let [role (word (:role shot))]
+        (cond
+          (:meanwhile shot) (recur (next s) (conj pending (:meanwhile shot)) last-day out)
+          (day-caption? shot) (recur (next s) [] pending
+                                     (cond-> out role (conj [role pending])))
+          :else (recur (next s) pending last-day
+                       (cond-> out role (conj [role (into last-day pending)])))))
+      out)))
+
+(def ^:private moved
+  "The outcomes of a call that tell a move: a held call is the house
+  moving to the person."
+  #{"moved" "held"})
+
+(defn- arc-moves
+  "How many of the arc's roles have a shot whose day holds a call that
+  moved, or was held, on a kind other than the knocked one."
+  [{:keys [film shots]}]
+  (let [knocked (word (:kind film))
+        off? (fn [m] (and (moved (word (:outcome m)))
+                          (some? (word (:kind m)))
+                          (not= knocked (word (:kind m)))))
+        told (set (keep (fn [[role calls]] (when (some off? calls) role))
+                        (role-days shots)))]
+    (count (filter told roles))))
+
+(defn- person-asks
+  "How many meanwhile calls of the take were held for a person, or were
+  the person's own move (film.cast's first) through a door a person
+  holds."
+  [{:keys [film shots]}]
+  (let [cast (:cast film)
+        person (when (sequential? cast) (word (first cast)))]
+    (count (filter (fn [m]
+                     (or (= "held" (word (:outcome m)))
+                         (and (some? person)
+                              (= person (word (:as m)))
+                              (= "moved" (word (:outcome m)))
+                              (= "person" (word (:held_by m))))))
+                   (keep :meanwhile shots)))))
+
 (def ^:private film-readers
   "Metric → how it is read from the whole take."
   {"frame_fill" (fn [{:keys [film]}]
@@ -171,7 +256,11 @@
    "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
    "bare_lists" (partial days-that bare-list?)
    "quiet_days" (partial days-that #(str/ends-with? % "A quiet day."))
-   "asked_person" (partial days-that #(str/includes? % "was asked"))})
+   "asked_person" (partial days-that #(str/includes? % "was asked"))
+   "week_bare_lists" (partial days-that bare-list?)
+   "busy_days" (partial days-that #(not (str/ends-with? % "A quiet day.")))
+   "arc_moves" arc-moves
+   "person_asks" person-asks})
 
 (def ^:private shot-readers
   "Metric → how it is read from one shot of the take."
@@ -459,7 +548,10 @@
           [:dead_air_s {:optional true} :double]
           [:chrome_leaks {:optional true} :int]
           [:runtime_s {:optional true} :double]
-          [:output {:optional true} (into [:enum] outputs)]]]
+          [:output {:optional true} (into [:enum] outputs)]
+          ;; the knocked kind, and the scene's cast, the person first
+          [:kind {:optional true} :string]
+          [:cast {:optional true} [:vector :string]]]]
         [:shots {:optional true}
          [:vector
           [:map
@@ -475,7 +567,15 @@
            [:hold_s {:optional true} :double]
            [:words {:optional true} :int]
            ;; a count, or the list of names
-           [:surfaces_changed {:optional true} :any]]]]
+           [:surfaces_changed {:optional true} :any]
+           ;; a call made while the camera stayed, and what it did
+           [:meanwhile {:optional true}
+            [:map
+             [:as {:optional true} :string]
+             [:kind {:optional true} :string]
+             [:action {:optional true} :string]
+             [:outcome {:optional true} [:enum "moved" "held" "refused"]]
+             [:held_by {:optional true} :string]]]]]]
         [:runs {:optional true}
          [:vector
           [:map
@@ -578,7 +678,11 @@
    "runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]
    "bare_lists" day-needs
    "quiet_days" day-needs
-   "asked_person" day-needs})
+   "asked_person" day-needs
+   "week_bare_lists" day-needs
+   "busy_days" day-needs
+   "arc_moves" [["film.kind" #(some? (word (get-in % [:film :kind])))]]
+   "person_asks" []})
 
 (def ^:private shot-needs
   "Metric → the fields of one shot it is read from, each with how to
@@ -615,6 +719,8 @@
   (merge
    {:index index :caption (:caption shot)}
    (cond
+     ;; a meanwhile shot is a call: the camera holds no frame of it
+     (:meanwhile shot) {:verdict :unscored}
      (not (judges? rule film shot)) {:verdict :unscored}
      (exempt? rule shot) {:verdict :pass}
      :else
@@ -711,6 +817,11 @@
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
        ;; the week's rules judge the takes the arc's roles mark
        (and (week-metrics metric) (not (first-week? (:shots tk)))) {:verdict "unscored"}
+       (and (played-metrics metric) (not (week? tk))) {:verdict "unscored"}
+       ;; a week no meanwhile shot played, as an older render's: the rule
+       ;; cannot be judged, and that is a finding, not a pass
+       (and (played-metrics metric) (not-any? :meanwhile (:shots tk)))
+       {:verdict "miss" :missing ["shot.meanwhile"]}
        (contains? shot-readers metric) (judge-shots rule tk)
        (contains? film-readers metric) (judge-film rule tk)
        (contains? run-readers metric) (judge-runs rule tk)
@@ -809,7 +920,23 @@
    {:name "asked-person" :metric "asked_person" :op ">=" :threshold 1M
     :scope "film" :severity "fail"
     :why "On at least one day of the first week the person is asked: the film shows where they come in."
-    :origin "FS4, the mayor's restatement of 2026-10-19"}])
+    :origin "FS4, the mayor's restatement of 2026-10-19"}
+   {:name "no-bare-list" :metric "week_bare_lists" :op "=" :threshold 0M
+    :scope "film" :severity "fail"
+    :why "No day of the played first week is a bare list of rows: each is one sentence of what happened."
+    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+   {:name "busy-week" :metric "busy_days" :op ">=" :threshold 5M
+    :scope "film" :severity "fail"
+    :why "At least five of the first week's seven days tell something other than 'A quiet day.'"
+    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+   {:name "week-arc" :metric "arc_moves" :op "=" :threshold 3M
+    :scope "film" :severity "fail"
+    :why "The friction, turn and payoff days each hold a move on a kind other than the one the world knocks on."
+    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+   {:name "asks-the-person" :metric "person_asks" :op ">=" :threshold 1M
+    :scope "film" :severity "fail"
+    :why "The week holds a call held for the person, or the person's own move through a door a person holds."
+    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}])
 
 (defn- rows-of [eng where]
   (store/with-tx (:storage eng)
