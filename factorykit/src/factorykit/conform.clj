@@ -39,6 +39,11 @@
             (money_unbounded). Each sentence is a question to put to
             the person; each clears in code — a :hold guard, an
             :expected-age, or the person's answer as :decided
+  no-outside-world
+            the org's rehearsal has an outside world (ticket
+            a4149376): a :rehearsal cast member whose :scope creates
+            one of the org's kinds, and a world seat under
+            :rehearsal :seats; org.edn's :world :none waives it
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -453,6 +458,32 @@
           (no-wait-limit-findings rs)
           (money-unbounded-findings rs seats)))
 
+;; ── world ───────────────────────────────────────────────────────────
+
+(defn- world-findings
+  "The org's outside world, which only its clone loads (ticket
+  a4149376): a `:rehearsal` cast member whose :scope creates one of the
+  org's kinds, and a world seat under `:rehearsal :seats` — the world
+  template, or a whole seat that acts as cast. Without both, nobody
+  files, sends or pays anything in the filmed week. `:world :none` in
+  the manifest waives it, for an org that only works inside."
+  [org rs seed manifest]
+  (let [kinds (set (map (comp text :kind) rs))
+        {:keys [cast seats]} (:rehearsal seed)
+        outside? (some (fn [[_ m]]
+                         (some #(and (kinds (text (:kind %)))
+                                     (some #{"create" "*"} (map text (:actions %))))
+                               (:scope m)))
+                       cast)
+        world? (some #(or (= "world" (text (:template %)))
+                          (true? (get-in % [:seat :acts_as_cast])))
+                     seats)]
+    (when-not (or (= :none (when (map? manifest) (:world manifest)))
+                  (and outside? world?))
+      [(finding :no-outside-world [org] org
+                "Nobody outside the business starts work in the first week, so the film has nothing to show."
+                "Ask: \"Who outside your business starts work for you, and what do they send?\" Write each as a :rehearsal :cast member whose :scope creates what they send, and the world seat, as orgs/example does; or :world :none in org.edn.")])))
+
 ;; ── the suite ───────────────────────────────────────────────────────
 
 (defn- name-findings
@@ -524,7 +555,9 @@
                   (:findings booted)
                   (when-some [eng (:engine booted)]
                     (scope-findings eng seats seed))
-                  (decision-findings rs seats seed)))))))))
+                  (decision-findings rs seats seed)
+                  (world-findings org rs seed
+                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))))))))))
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its

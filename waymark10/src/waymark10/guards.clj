@@ -980,36 +980,21 @@
 
 (defn unless
   "Bar the principal a log fact names: unless (actor-of :propose).
-  The (:actor-of ctx) engine hook resolves the last actor of the
-  named transition (phase 2 wires it; nil actor allows)."
+  The tree is (not (did transition)) (docs/spec-related-row-law.md §4):
+  any face of any logged actor of the transition on this row is
+  barred, not only the newest; no log to ask answers pending."
   [transition & [{:keys [explain hide name]}]]
   (clojure.core/when (str/blank? (clojure.core/name transition))
     (throw (t/definition-error "unless names a transition of this resource")))
-  (guard {:name (clojure.core/or name (keyword (str "unless:actor-of:"
-                                                    (clojure.core/name transition))))
-          :unless transition
-          :explain (clojure.core/or explain
-                                    (str "You performed "
-                                         (str/replace (clojure.core/name transition) "_" " ")
-                                         " on this resource; a different principal must do this."))
-          :reads [:transitions :principal]
-          :hide (boolean hide)
-          :check (with-meta
-                   (fn [row _ ctx]
-                     (let [actor (clojure.core/when-some [f (:actor-of ctx)]
-                                   (f row transition))]
-                       (if (clojure.core/and (some? actor)
-                                             (= actor (:id (:principal ctx))))
-                         (t/deny)
-                         (t/allow))))
-                   {:waymark10/form
-                    (list 'fn '[row _ ctx]
-                          (list 'let ['actor (list 'when-some ['f '(:actor-of ctx)]
-                                                   (list 'f 'row transition))]
-                                '(if (and (some? actor)
-                                          (= actor (:id (:principal ctx))))
-                                   (t/deny)
-                                   (t/allow))))})}))
+  (expr {:name (clojure.core/or name (keyword (str "unless:actor-of:"
+                                                   (clojure.core/name transition))))
+         :unless transition
+         :explain (clojure.core/or explain
+                                   (str "You performed "
+                                        (str/replace (clojure.core/name transition) "_" " ")
+                                        " on this resource; a different principal must do this."))
+         :hide (boolean hide)
+         :when (list 'not (list 'did transition))}))
 
 (defn four-eyes
   "Whoever performed `of` cannot do this."
@@ -1167,42 +1152,27 @@
 ;; drawing, generalized, so the :decision sugar and the hand-written
 ;; guard are one law with two spellings.
 ;;
-;; Both mint their :check's canonical form EXPLICITLY — the rule these
-;; two set first and waymark-j82 carried to every factory above (role,
-;; owner, feature-flag, require, unless, rate-limit). A guard the sugar
-;; mints is the one place a formless :check would be intolerable: it
-;; would file the law under the address callable-hash falls back to,
-;; and warn an author about a body they did not write and cannot fix.
-;; So the form is data here, built to print exactly as the equivalent
-;; defguard body would — which is also what lets grants.clj's own
-;; someone-else-decides become a call to this factory without moving
-;; approval_request's fingerprint by one byte.
+;; Both emit a :when TREE (docs/spec-related-row-law.md §4, §6): the
+;; field read against (me), so the fingerprint stores the law itself
+;; rather than a hand-built fn form, and the decision record names it
+;; instead of filing it opaque. grants.clj's someone-else-decides is a
+;; call to this factory, so it and the sugar's wall stay one law.
 
 (defn not-the-field
   "The field four-eyes wall: whoever this row names in `field` cannot
   be the principal acting now. \"Not you\", where you is written down
   in the document rather than remembered from the log."
   [field & [{:keys [explain hide name open]}]]
-  (guard
+  (expr
    (cond-> {:name (clojure.core/or name
                                    (keyword (str "not-the-" (clojure.core/name field))))
-            :reads [:principal]
             :explain (clojure.core/or
                       explain
                       (str "The "
                            (str/replace (clojure.core/name field) "_" " ")
                            " of this row cannot be the one to decide it; "
                            "another principal must."))
-            :check (with-meta
-                     (fn [row _inp ctx]
-                       (if (= (:id (:principal ctx)) (get-in row [:data field]))
-                         (t/deny) (t/allow)))
-                     {:waymark10/form
-                      (list 'fn '[row _inp ctx]
-                            (list 'if
-                                  (list '= '(:id (:principal ctx))
-                                        (list 'get-in 'row [:data field]))
-                                  '(t/deny) '(t/allow)))})}
+            :when (list 'not= (list 'data field) '(me))}
      open (assoc :open open)
      hide (assoc :hide true))))
 
@@ -1214,27 +1184,16 @@
   nobody names no decider, and the wall refuses rather than opening:
   an unassigned verdict waits for an assignment."
   [field & [{:keys [explain hide name]}]]
-  (guard
+  (expr
    (cond-> {:name (clojure.core/or name
                                    (keyword (str "is-the-" (clojure.core/name field))))
-            :reads [:principal]
             :explain (clojure.core/or
                       explain
                       (str "Only this row's "
                            (str/replace (clojure.core/name field) "_" " ")
                            " may decide it."))
-            :check (with-meta
-                     (fn [row _inp ctx]
-                       (let [named (get-in row [:data field])]
-                         (if (clojure.core/and (some? named)
-                                               (= (:id (:principal ctx)) named))
-                           (t/allow) (t/deny))))
-                     {:waymark10/form
-                      (list 'fn '[row _inp ctx]
-                            (list 'let ['named (list 'get-in 'row [:data field])]
-                                  (list 'if (list 'and '(some? named)
-                                                  '(= (:id (:principal ctx)) named))
-                                        '(t/allow) '(t/deny))))})}
+            :when (list 'and (list 'is-set (list 'data field))
+                        (list '= (list 'data field) '(me)))}
      hide (assoc :hide true))))
 
 ;; ── the grantable person-wall (waymark-sfe) ─────────────────────────
