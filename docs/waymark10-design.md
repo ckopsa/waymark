@@ -322,6 +322,38 @@ identity; respelling a law is not a revision; a diff confined to a
 | --- | --- | --- |
 | (v1 set: see §1) | the waymark8 vocabulary, verbatim | 2026-07-09 |
 | `(follow <ref> :field)` expr node, normalized to `(follow :kind <ref> :field)`; reads derived into `:reads`; the defguard `:errors` option beside it | the household meal list's `meal-is-listed` (`mealplan10/resources/plan_day.clj`), a one-hop read of the meal's state that was a `defguardfn` — docs/spec-related-row-law.md §2 | 2026-10-20 |
+| `(exists [b :kind where])`, `(none [b :kind where])` and `(count [b :kind where])`, normalized to `(exists :kind where)`, `(none …)` and `(count-rows …)`; `{b.field}` evidence vars and `(evidence :b)` remedy bindings; the gate findings `[exists-unfiltered]` and `[remedy-on-evidence-kind]` | the landscaping booking's overlap (`the-crew-is-free`), which must name the conflicting row — docs/spec-related-row-law.md §3 | 2026-10-20 |
+
+### `exists` / `none` / `count-rows`
+
+Other rows of a kind, asked from a guard. The binder is `[name kind
+where]`; its name is erased to a de Bruijn index at normalization, so
+two laws differing only in it are one law. `none` is `(not (exists …))`.
+`count` with a kind keyword where a collection expression would stand
+is written `count-rows`, so it never shares a fingerprint with the
+collection `count`.
+
+- **The `where` grammar.** A map from a target field (or `:state`,
+  `:id`) to `(op <expr>)`, `op` in `#{< <= = >= > not=}` or `(in v …)`.
+  `<expr>` is any own-scope expression — `(input …)`, `(data …)`,
+  `(now)`, `(self)`, arithmetic, a `follow` — and may not read the
+  binder: these are filters, not joins. Each entry becomes one
+  `store/ids-matching` condition, cast from the target schema.
+- **Self-exclusion.** On an existing row `:id (not= (self))` is implied;
+  a create has no self to exclude.
+- **Evidence.** When the guard refuses, the binder name is bound to the
+  oldest visible match (`created_at`, then id). The sentence reads it as
+  `{b.field}`, under a row read's visibility; a remedy binds its id as
+  `(evidence :b)`. When every match is hidden, the refusal names none.
+- **`[exists-unfiltered]`** (error): a `where` field the target kind
+  does not declare `:filterable` (`:id` and `:state` are the row's own
+  columns) — an unindexed guard query would run on every write.
+- **`[remedy-on-evidence-kind]`** (error): a remedy bound to
+  `(evidence :b)` names a door not on `b`'s kind.
+- Derived expressions may not use them: a derived fact reads declared
+  inputs, not other rows.
+
+Proof: `waymark10/test/waymark10/exists_test.clj`.
 
 # 7. Phase 8 — the mealplan10 dogfood, and the engine it forced
 
