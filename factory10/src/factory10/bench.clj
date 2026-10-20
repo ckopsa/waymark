@@ -1604,7 +1604,7 @@
 (def line-whys
   "Every word `line_why` may carry."
   ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
-   "person" "org_plan_waits_go_live"])
+   "person" "org_plan_waits_go_live" "org_plan_retired"])
 
 (def ^:private reason-chars 500)
 
@@ -2251,21 +2251,37 @@
   that carry no go_live yes (`go-live-yeses!`): change id → that plan.
   Such a change merges only through go_live — the house does not merge
   it and no person is asked to (ticket 7aff6a5c). Once its plan is live
-  or retired the change is ordinary again."
+  the change is ordinary again. A retired plan's change is never
+  merge-eligible (ticket e0ff6d71): it is held too, whether the plan
+  names it or it was born from that plan, unless a live plan names it."
   [eng changes]
-  (let [plans (org-plans eng (go-live-wait-states eng))]
+  (let [live (org-plans eng ["live"])
+        retired (apply dissoc (org-plans eng ["retired"]) (keys live))
+        born-of (into {}
+                      (map (fn [p] [(str "org_plan:" (:id p)) p]))
+                      (vals retired))
+        plans (merge retired (org-plans eng (go-live-wait-states eng)))]
     (into {}
           (keep (fn [c]
                   (let [id (str (:id c))]
-                    (when-some [plan (get plans id)]
+                    (when-some [plan (or (get plans id)
+                                         (when-not (contains? live id)
+                                           (get born-of (str (get-in c [:data :born_from])))))]
                       (when (nil? (::go-live-yes c)) [id plan])))))
           changes)))
+
+(defn- retired-plan?
+  [plan]
+  (= "retired" (some-> (:state plan) name)))
 
 (defn go-live-wait-reason
   "What a change waiting on its org_plan's go_live says on its row."
   [plan]
-  (str "org plan " (:id plan) " is " (some-> (:state plan) name)
-       ": only its owner's go_live merges this pull request"))
+  (if (retired-plan? plan)
+    (str "org plan " (:id plan) " is retired: its pull request is never"
+         " merged; close it")
+    (str "org plan " (:id plan) " is " (some-> (:state plan) name)
+         ": only its owner's go_live merges this pull request")))
 
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
@@ -2338,7 +2354,8 @@
   names merges on the owner's go_live yes (`go-live-yeses!`, ticket
   c8e131fb); one an org_plan not yet live names is merged by nothing
   else, and says `org_plan_waits_go_live` (`go-live-waits`, ticket
-  7aff6a5c). Throws nothing.
+  7aff6a5c); one a retired org_plan names or bore is merged by nothing
+  and says `org_plan_retired` (ticket e0ff6d71). Throws nothing.
   → the number of `merge` calls made."
   ([eng seen] (merge-green! eng seen nil))
   ([eng seen repos]
@@ -2423,7 +2440,9 @@
                            ;; (ticket 7aff6a5c)
                            (into {}
                                  (map (fn [[id plan]]
-                                        [id {:line_why "org_plan_waits_go_live"
+                                        [id {:line_why (if (retired-plan? plan)
+                                                         "org_plan_retired"
+                                                         "org_plan_waits_go_live")
                                              :line_reason (go-live-wait-reason plan)}]))
                                  waits))
                    changes repos)
