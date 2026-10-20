@@ -146,6 +146,26 @@ may name `one` and `many`, together: it then says `<n> <one>` or
 names one, or drops its clause, the hole and the string after it, when
 it does not (`"3 prospects engaged, "`).
 
+With `"sum"` naming a field in place of `count`, a hole adds that field
+over the rows it reads, a value that is no number adding nothing, and
+says the total in whole dollars, `$1,250`, then its `one` or `many` when
+it names them (`"$1,250 invoiced"`). A zero total is worded as a zero
+count is. A hole counts or sums, never both.
+
+A `$list`, `{"$list": {items, lead, none}}`, joins clauses. Its `items`
+are `$rows` holes; it says its `lead`, then what each item says, joined
+with `, `, an item that drops its clause left out. When every item
+drops, it says its `none` instead (`nothing came in` unless it names
+one).
+
+```json
+{"say": [{"$list": {"lead": "That was the week: ", "none": "A quiet week",
+                    "items": [{"$rows": {"kind": "invoice", "since": "2026-10-19",
+                                         "until": "2026-10-26", "sum": "amount",
+                                         "one": "invoiced", "many": "invoiced"}}]}},
+         "."]}
+```
+
 A `$moves` hole, `{"$moves": {kind, since, until, by, none}}`, reads the
 log instead: the transitions on rows of `kind` logged in
 [`since`, `until`), made by those `by` names: `seats` (the default, the
