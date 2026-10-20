@@ -191,7 +191,11 @@
   by a declared scenario at all: before it, `:given` rows were minted
   under fresh ids and no scenario could cite a row that would exist,
   so every citation had to be an invented address the door was
-  obliged to accept."
+  obliged to accept.
+
+  `{given/run}` is reserved: it is filled with a token fresh to each
+  run, so a row whose name is on record once (an mcp_server) can be
+  staged again when one engine runs the scenarios twice."
   #"\{given/([A-Za-z0-9_-]+)\}")
 
 (defn handle-refs
@@ -295,9 +299,9 @@
          (when (and h (contains? seen h))
            (err sname (str "two :given rows answer to the handle " h)))
          (cond-> seen h (conj h))))
-     #{} (:given m)))
+     #{"run"} (:given m)))
   ;; every handle the scenario NAMES is a handle it staged
-  (let [staged (into #{} (keep #(some-> (:handle %) name)) (:given m))
+  (let [staged (into #{"run"} (keep #(some-> (:handle %) name)) (:given m))
         named (-> (handle-refs (:input m))
                   (into (handle-refs (get-in m [:row :data])))
                   (into (mapcat #(handle-refs (:input %))) (filter map? (:history m))))]
