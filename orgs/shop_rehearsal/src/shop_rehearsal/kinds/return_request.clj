@@ -14,7 +14,7 @@
 
 (defguard unbroken
   (refuse "Only an unbroken item goes back into stock.")
-  '(= :condition "unbroken"))
+  '(= (data :condition) "unbroken"))
 
 (defresource return-request
   {:kind :return_request

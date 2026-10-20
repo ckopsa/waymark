@@ -10,7 +10,7 @@
 
 (defguard not-over-paid
   (refuse "A refund is never more than was paid.")
-  '(<= :amount_cents :paid_cents))
+  '(<= (data :amount_cents) (data :paid_cents)))
 
 (defguard names-approver
   (refuse "Say who approves this refund.")
@@ -18,11 +18,11 @@
 
 (defguard packer-does-not-approve
   (refuse "Whoever packed an order does not approve its refund.")
-  '(not= :approved_by :packed_by))
+  '(not= (data :approved_by) (data :packed_by)))
 
 (defguard owner-over-100
   (hold "A refund over $100 waits for the owner's approval.")
-  '(<= :amount_cents 10000))
+  '(<= (data :amount_cents) 10000))
 
 (defguard has-processor-ref
   (refuse "A refund goes back through the processor; record the processor's refund reference.")

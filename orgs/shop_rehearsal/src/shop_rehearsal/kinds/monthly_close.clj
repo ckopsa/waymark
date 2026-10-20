@@ -5,7 +5,7 @@
 
 (defguard books-balance
   (refuse "The books balance only when what came in from the processor equals orders paid minus refunds minus fees.")
-  '(= :processor_in_cents (- :orders_paid_cents :refunds_cents :fees_cents)))
+  '(= (data :processor_in_cents) (- (data :orders_paid_cents) (data :refunds_cents) (data :fees_cents))))
 
 (defresource monthly-close
   {:kind :monthly_close

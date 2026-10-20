@@ -12,7 +12,7 @@
 ;; not read from its account and invoices (concept 1)
 (defguard in-good-standing
   (refuse "A cafe with an invoice more than 15 days past due gets no new wholesale order until it pays.")
-  '(= :account_standing "good"))
+  '(= (data :account_standing) "good"))
 
 (defguard has-invoice
   (refuse "A shipped wholesale order is invoiced; name its invoice first.")
