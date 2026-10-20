@@ -1189,6 +1189,9 @@
     :note_base
     {:from #{:active} :to :active
      :guards [the-engine-notes-the-base]
+     ;; :ref-unjudged — the engine's own hand names the red-base ticket
+     ;; it filed, and no person reaches this door
+     :waives #{:ref-unjudged}
      :handler note-the-base
      :input [:map
              [:verdict {:optional true

@@ -106,7 +106,7 @@
                   :place :days
                   :input [:map
                           [:date :waymark/date]
-                          [:meal_id {:kind :meal} :waymark/ref]]
+                          [:meal_id {:kind :meal :pick {:state "on_list"}} :waymark/ref]]
                   :guards [fx/date-in-plan]
                   :safety {:idempotent true :reversible false :confirm false}
                   :handler fx/assign-meal

@@ -382,7 +382,8 @@ Two consequences:
 | `[reads-handwritten]` | error | A `:when` guard also writes `:reads`; it is derived. |
 | `[ref-unjudged]` | warning | A door's input takes a `:kind` ref, and no guard on that door reads that kind and the field carries no `:pick`. The door accepts any id of that kind. |
 | `[remedy-on-evidence-kind]` | error | A remedy bound to `(evidence :b)` names a door not on `b`'s kind. |
-| `[convertible-guard]` | info | A `defguardfn` whose `:reads` names one kind and whose `:judges` is one ref field of that kind: a `follow` candidate. Counted, not enforced, as scenario coverage is. |
+| `[convertible-guard]` | info | A `defguardfn` whose `:reads` names one kind and whose `:judges` is one ref field of that kind: a `follow` candidate. Counted, not enforced, as scenario coverage is. Not raised when a declarative guard on the same door already follows that field. |
+| `[stays-code]` | info / error | A `defguardfn` that would be `[convertible-guard]` and declares `:stays-code "<why>"` is listed with that sentence instead (the reparent guards: they walk the ticket tree to any depth). A `:stays-code` that is not one sentence is an error. |
 
 `[ref-unjudged]` is the one the ticket asks for by example. It is a
 warning because a ref that may name any row is sometimes the law (a note
