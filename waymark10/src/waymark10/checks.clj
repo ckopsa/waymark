@@ -229,7 +229,10 @@
       :else #{})))
 
 (defn- orphan-placeholders [lg]
-  (let [known (-> (declared-vars lg) (into (:judges lg)) (into (keys (:binders lg))))]
+  (let [known (-> (declared-vars lg) (into (:judges lg)) (into (keys (:binders lg)))
+                  ;; a first in :evidence binds {name.field} as a binder does
+                  (into (keep (fn [[k v]] (when (map? v) k)))
+                        (when (map? (:evidence lg)) (:evidence lg))))]
     (seq (sort (remove known (template-placeholders (:explain lg)))))))
 
 (defn- check-guard-templates [r]
