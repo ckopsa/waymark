@@ -382,7 +382,8 @@ Two consequences:
 | `[reads-handwritten]` | error | A `:when` guard also writes `:reads`; it is derived. |
 | `[ref-unjudged]` | warning | A door's input takes a `:kind` ref, and no guard on that door reads that kind and the field carries no `:pick`. The door accepts any id of that kind. |
 | `[remedy-on-evidence-kind]` | error | A remedy bound to `(evidence :b)` names a door not on `b`'s kind. |
-| `[convertible-guard]` | info | A `defguardfn` whose `:reads` names one kind and whose `:judges` is one ref field of that kind: a `follow` candidate. Counted, not enforced, as scenario coverage is. |
+| `[convertible-guard]` | info | A `defguardfn` whose `:reads` names one kind and whose `:judges` is one ref field of that kind: a `follow` candidate. Counted, not enforced, as scenario coverage is. Not raised when a declarative guard on the same door already follows that field. |
+| `[stays-code]` | info / error | A `defguardfn` that would be `[convertible-guard]` and declares `:stays-code "<why>"` is listed with that sentence instead (the reparent guards: they walk the ticket tree to any depth). A `:stays-code` that is not one sentence is an error. |
 
 `[ref-unjudged]` is the one the ticket asks for by example. It is a
 warning because a ref that may name any row is sometimes the law (a note
@@ -435,6 +436,53 @@ The build plan's survey step reads the remaining `:reads [:kind]` guards
 (`hypothesis.clj`, `insight.clj`, `letters.clj`, `ingredient.clj`,
 `dwelling.clj`, `decision.clj`'s `subject-resolves`) and sorts each into
 these three tables before any of them is touched.
+
+### Survey (step 11)
+
+Every `defguardfn` / `defacceptsfn` left in `workqueue10/` and
+`factory10/` that reads a row of a kind (by `:read`, `:find`, or the
+registry behind `:storage`), sorted. Each row of *Become declarative* is
+one draft ticket under bf93c90a.
+
+**Become declarative**
+
+| Guard | Path | Form | Ticket |
+|---|---|---|---|
+| `duplicate-is-absorbable` | `mealplan10/resources/ingredient.clj` | `follow` over `:duplicate_id`, state `active`, `not=` self | 44ef1795 |
+| `relates-through-somebody-here` | `workqueue10/resources/person.clj` | Two guards: `not=` self, `follow` over `:through_id` exists | 80455c24 |
+| `list-owned-by-the-capturing-source` | `workqueue10/resources/task.clj` | `follow` over `:task_list` `:source`, with `:errors` | 9dbf270c |
+| `swap-partner-is-ahead-on-this-day` | `dayplan10/resources/span.clj` | `follow` over `:with_span_id`: state, same `:plan_id`, `:ends_at` after `(now)` | f1fde41b |
+| `neighbour-keeps-some-width` | same | `none` over planned spans of the plan starting at/after this end and ending by the input end (spans never overlap, so this is the nearest-neighbour test) | d3edec2c |
+| `something-still-ahead` | `dayplan10/resources/day_plan.clj` | `exists` planned span of `(self)` with `:starts_at` after `(now)` | 2d23ead4 |
+| `a-different-shape` | same | `(or (not= shape) (none …))`, `:pending :deny` | d2f01b05 |
+| `the-org-is-live` | `factory10/resources/org_plan.clj` | `exists` live found plan by `:name`; a plan with no `:purpose` reads as found | fc360087 |
+
+**Partial**
+
+| Guard | Path | Why |
+|---|---|---|
+| `not-a-second-belief`, `still-the-only-belief` | `workqueue10/resources/hypothesis.clj` | `exists` over shape and standing state, but the clash is an intersection of the `about` vectors; `where` has no set-overlap op. |
+| `one-live-finding-per-offer`, `the-question-is-open-again` | `workqueue10/resources/insight.clj` | The same: the offer triple is three `=`, the `evidence` intersection is not expressible. |
+| `one-hire-per-gap`, `a-turned-down-gap-is-quiet` | `factory10/resources/org_plan.clj` | The gap key is nested in the `:gap` map; they convert once it is a top-level `:filter` field. |
+| `self-is-singleton` | `workqueue10/resources/dwelling.clj` | `none` over active `:self` by owner, but the owner is the caller's id for an agent and the input's for a person, a principal fact no expression reads. |
+| `the-sit-links-its-change` | `factory10/resources/org_plan.clj` | The change half is `follow` over `:change`; the first arm is a `:system`-principal wall. |
+| `under-the-round-ceiling` | `factory10/resources/change.clj` | Reads a value of the policy found by repository, not by a ref; converts if `first` (step 12) lets an expression read the match's fields. |
+
+**Stay code**
+
+| Guard | Path | Why |
+|---|---|---|
+| `subject-resolves`, `a-passage-reads-as-a-place` | `dayplan10/resources/decision.clj` | The subject is an address string whose kind comes from its plural, not a ref; the passage parses a medium's grammar. |
+| `substitution-applies` | `mealplan10/resources/meal_line.clj` | An acceptance set (`defacceptsfn`), as `meal-fits-day`. |
+| `no-overlap-in-shape`, `restores-clear-of-the-shape` | `dayplan10/resources/context.clj` | Clock windows and shapes are vectors inside each template; the overlap is between nested collections. |
+| `cites-what-it-claims`, `offers-something-light` | `workqueue10/resources/insight.clj` | Registry reads (`:rdef-of`) over addresses of any kind. |
+| `a-belief-cites-what-it-is-about` | `workqueue10/resources/hypothesis.clj` | The same. |
+| `names-only-what-stands` | `workqueue10/resources/dwelling.clj` | The same, over addresses found in prose. |
+| `owner-is-self-or-on-behalf` | same | Principal type and role, then a member by id or subject. |
+| `letter-to-is-a-member` | `workqueue10/resources/letters.clj` | Resolves a member to its subject and throws a schema-shaped refusal rather than denying. |
+| `the-branch-matches-the-policy`, `the-branch-is-not-the-base` | `factory10/resources/change.clj` | The branch and pattern are derived by `bench/` helpers; the match is a glob. |
+| `no-open-ticket-names-this-failure` | `factory10/resources/ticket.clj` | A substring search over titles and details. |
+| Every guard reading `:member`, `:approval_request` or `:model` | `server/grants.clj` | Engine machinery, as above. |
 
 ---
 

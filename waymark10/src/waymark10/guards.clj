@@ -50,6 +50,9 @@
     :resolves        vector of input fields whose row this guard reads
                      — the kind-and-id pairs the dangling-ref wall
                      cannot reach (checks/check-resolvers)
+    :stays-code      one sentence: why a code guard that reads one
+                     kind through one ref is not a `follow` — the
+                     audit lists it instead of [convertible-guard]
 
   Composites: {:all [g …]} via g/and — first deny wins, judges/reads
   union; {:any [g …]} via g/or — first allow wins, judges absent (an
