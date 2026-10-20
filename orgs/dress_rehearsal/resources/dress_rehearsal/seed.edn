@@ -5,27 +5,46 @@
 {:seed "dress_rehearsal"
  :version 1
  :org "dress_rehearsal"
- :domains [{:name "dress_rehearsal" :label "R&D Tax Studies" :ref :dress_rehearsal}]
- ;; the :owner :id is the plan owner's member id
+ :domains [{:name "dress_rehearsal" :label "Landscaping (rehearsal)" :ref :dress_rehearsal}]
+ ;; the :owner :id is the plan owner's member id. The office manager
+ ;; and three crew leads are cast here as people; the customer, the
+ ;; supplier and the payment processor are outside parties
  :cast
- {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}}
- ;; the org's mayor, sat by the principal at $8 a week: it holds every
- ;; door out of each kind's open states, so no prospect, study or
- ;; invoice is left without a leaver; its scope names only the org's
- ;; own kinds
+ {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}
+  :office {:display "Office Manager" :type :human :roles ["office"]}
+  :lead1 {:display "Crew 1 Lead" :type :human :roles ["crew_lead"]}
+  :lead2 {:display "Crew 2 Lead" :type :human :roles ["crew_lead"]}
+  :lead3 {:display "Crew 3 Lead" :type :human :roles ["crew_lead"]}}
+ ;; outside parties who act: the customer, the supplier and the online
+ ;; payment processor, played by the world seat in a rehearsal
+ :rehearsal
+ {:cast {:customer {:display "A Customer" :type :outside}
+         :supplier {:display "Materials Supplier" :type :outside}
+         :processor {:display "Online Payment Processor" :type :outside}}}
+ ;; the org's mayor, sat by the owner at $8 a week: it holds every
+ ;; door out of each kind's open states, so no row is left without a
+ ;; leaver; its scope names only the org's own kinds
  :seats
  [{:template "org-mayor"
    :params {:org "dress_rehearsal" :domain "dress_rehearsal" :domain_id [:ref :dress_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
-            :kinds [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
-                    {:kind "study" :actions ["records_in" "submit" "send_back" "sign_off" "deliver"]}
-                    {:kind "invoice" :actions ["pay" "write_off"]}]
-            :wakes [{:kind "prospect" :actions ["create" "qualify"]}
-                    {:kind "study" :actions ["create" "records_in" "submit" "send_back" "sign_off"]}
-                    {:kind "invoice" :actions ["create"]}]}}]
+            :kinds [{:kind "quote" :actions ["send" "accept" "decline" "expire"]}
+                    {:kind "job" :actions ["clear_deposit" "schedule" "rain_delay" "start" "complete" "cancel"]}
+                    {:kind "contract" :actions ["activate" "end" "cancel"]}
+                    {:kind "visit" :actions ["rain_delay" "done" "skip"]}
+                    {:kind "time_entry" :actions ["accept" "claim_overtime" "approve_overtime"]}
+                    {:kind "invoice" :actions ["remind" "pay" "write_off"]}]
+            :wakes [{:kind "quote" :actions ["create" "send"]}
+                    {:kind "job" :actions ["create" "clear_deposit" "schedule" "rain_delay" "start"]}
+                    {:kind "contract" :actions ["create" "activate"]}
+                    {:kind "visit" :actions ["create" "rain_delay"]}
+                    {:kind "time_entry" :actions ["create" "claim_overtime"]}
+                    {:kind "invoice" :actions ["create" "remind"]}]}}]
  :judgments []
  :steps
- [{:as :owner :kind :prospect :ref :acme
-   :create {:company "Acme Robotics" :source "cpa_referral" :referring_cpa "Jordan Lee, CPA"}}
-  {:as :owner :kind :study :ref :acme-2025
-   :create {:client "Acme Robotics" :tax_year 2025 :cpa "Jordan Lee, CPA"}}]}
+ [{:as :owner :kind :quote :ref :patio
+   :create {:customer "Rivera household" :work "patio" :visited_on "2026-04-02"
+            :labor_cents 640000 :materials_cents 410000 :price_cents 1250000}}
+  {:as :owner :kind :contract :ref :lawn
+   :create {:customer "Oak Street HOA" :crew "crew_2" :every_days 14
+            :starts_on "2026-04-06" :ends_on "2026-10-26"}}]}
