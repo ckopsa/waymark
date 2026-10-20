@@ -48,9 +48,9 @@
   existing stamp, deliberately not a new clock fact or action. Era 4 adds the second clock:
   opened_shelf_life_days is how long the ingredient keeps once
   opened — the anchor/flex solver's input, never a law here."
-  (:require [waymark10.dsl :refer [defaction defderived defguardfn
-                                   defresource defhandler expr-guard]]
-            [waymark10.types :as t])
+  (:require [waymark10.dsl :refer [defaction defderived defguard
+                                   defresource defhandler defscenario
+                                   expr-guard refuse]])
   (:import (java.time Instant LocalDate ZoneOffset)))
 
 (def alias-schema
@@ -126,21 +126,11 @@
                :explain "{n} tracked product(s) still point here — absorb the duplicate or rematch them first."
                :vars {:n '(data :products_tracked)}}))
 
-(defguardfn duplicate-is-absorbable
-  {:judges [:duplicate_id]
-   :reads [:ingredient]
-   :explain "Only another ACTIVE ingredient can be absorbed — and never this one itself."
-   :remedies [:ingredient/accept]}
-  [row inp ctx]
-  (if-some [read (:read ctx)]
-    (let [dup-id (:duplicate_id inp)]
-      (cond
-        (= (str dup-id) (str (:id row))) (t/deny)
-        (not= :active (:state (read :ingredient dup-id))) (t/deny)
-        :else (t/allow)))
-    ;; pure render probe carries no hooks — optimistic, the invoke
-    ;; loop re-judges with them
-    (t/allow)))
+(defguard duplicate-is-absorbable
+  (refuse "Only another ACTIVE ingredient can be absorbed — and never this one itself.")
+  '(and (not= (input :duplicate_id) (self))
+        (= (follow (input :duplicate_id) :state) "active"))
+  {:remedies [:ingredient/accept]})
 
 (defhandler apply-aliases [row inp _ctx]
   (assoc-in row [:data :aliases] (vec (distinct (:aliases inp)))))
@@ -262,6 +252,38 @@
    :handler absorb-duplicate
    :display {:label "Absorb duplicate" :order 5}})
 
+;; ── law scenarios ───────────────────────────────────────────────────
+;; Check-tier: absorb carries only duplicate-is-absorbable, declarative,
+;; so the :given duplicate answers its follow with no database.
+
+(def ^:private thighs
+  {:state :active :data {:name "Chicken thighs"}})
+
+(def ^:private dup-thighs
+  {:kind :ingredient :handle :dup :state :active
+   :data {:name "chicken thigh"}})
+
+(defscenario a-duplicate-folds-into-its-survivor
+  "Another active ingredient standing for the same thing is absorbed."
+  {:kind    :ingredient
+   :attempt :absorb
+   :given   [dup-thighs]
+   :row     thighs
+   :input   {:duplicate_id "{given/dup}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-suggestion-is-not-yet-a-duplicate
+  "An ingredient only suggested is accepted before anything absorbs it."
+  {:kind    :ingredient
+   :attempt :absorb
+   :given   [(assoc dup-thighs :state :suggested)]
+   :row     thighs
+   :input   {:duplicate_id "{given/dup}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :duplicate-is-absorbable
+             :remedies [:ingredient/accept]}})
+
 (defresource ingredient
   {:kind :ingredient
    :states [:suggested :active :retired]
@@ -321,6 +343,8 @@
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}
+   :scenarios [a-duplicate-folds-into-its-survivor
+               a-suggestion-is-not-yet-a-duplicate]
    :owns [{:kind :product :via :ingredient_id}
           ;; the substitutions FROM this ingredient — an owns edge so
           ;; the accepted stand-ins embed on this page
