@@ -314,13 +314,14 @@
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
   (expect! sname (:expect m))
-  (assoc m
-         :name sname
-         :sentence sentence
-         :given (vec (:given m))
-         :history (vec (:history m))
-         :as (principal! sname (:as m))
-         :expect (:expect m)))
+  (cond-> (assoc m
+                 :name sname
+                 :sentence sentence
+                 :given (vec (:given m))
+                 :as (principal! sname (:as m))
+                 :expect (:expect m))
+    ;; only when spoken, so a scenario without one normalizes as before
+    (some? (:history m)) (assoc :history (vec (:history m)))))
 
 ;; ── the attempted door ──────────────────────────────────────────────
 
