@@ -221,6 +221,25 @@
                      (example-with {:name "example" :live false}
                                    #(update-in % [:rehearsal :seats 0 :params] dissoc :brief)))))))
 
+(deftest the-dress-rehearsal-org-seeds-a-clone-that-boots
+  (is (= [] (filterv #(= :seed (:class %)) (conform/conform "../orgs/dress_rehearsal")))))
+
+(defn- brief-of [n]
+  (apply str (take n (cycle "A long brief about the business. "))))
+
+(deftest a-world-seat-with-a-long-brief-fits-the-seat-schema
+  (is (= [] (conform/conform
+             (example-with {:name "example" :live false}
+                           #(assoc-in % [:rehearsal :seats 0 :params :brief] (brief-of 1000)))))))
+
+(deftest a-world-seat-breaking-the-seat-schema-earns-its-finding
+  (let [fs (conform/conform
+            (example-with {:name "example" :live false}
+                          #(assoc-in % [:rehearsal :seats 0 :params :brief] (brief-of 2400))))]
+    (is (= ["seed/schema/world/instructions"] (mapv :key fs)))
+    (is (re-find #"instructions .*should be at most 2000 characters; this one is \d+"
+                 (:sentence (first fs))))))
+
 (deftest a-rehearsal-cast-member-scoping-an-unknown-kind-earns-its-finding
   (is (= ["scope/unknown-kind/cast/bob/gadget"]
          (mapv :key (conform/conform

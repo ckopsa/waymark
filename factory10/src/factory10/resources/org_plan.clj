@@ -233,10 +233,14 @@
     :vars {:org '(input :name)}
     :explain "No live plan founds {org}: a hire plan is opened on an org that is live."}))
 
+;; the two code walls read the org's plans through the ctx :find hook,
+;; and say `:check-tier :given`, so open_hire's scenarios need no database.
+
 (defguardfn one-hire-per-gap
   {:name :hire_open
    :judges [:gap]
    :reads [:org_plan]
+   :check-tier :given
    :vars [:gap :state]
    :explain "A hire plan for {gap} stands already, in {state}."}
   [_row inp ctx]
@@ -252,6 +256,7 @@
   {:name :hire_quiet
    :judges [:gap]
    :reads [:org_plan]
+   :check-tier :given
    :vars [:gap :until]
    :explain "The owner turned down a hire for {gap}: it is quiet until {until}."}
   [_row inp ctx]
@@ -360,6 +365,23 @@
     (update-in row [:data :questions]
                (fnil conj [])
                (select-keys inp [:key :finding_key :question]))))
+
+(defn- workaround-key [w] [(:concept w) (:subject w)])
+
+(defhandler log-the-workarounds [row inp _ctx]
+  ;; Workarounds are appended, never rewritten: one already logged
+  ;; under the same concept and subject is nothing, so a retried log is
+  ;; safe. The concepts they name are kept beside them, once each, the
+  ;; list a query filters plans by (ticket 4fdcd08a).
+  (let [logged (reduce (fn [ws w]
+                         (if (some #(= (workaround-key w) (workaround-key %)) ws)
+                           ws
+                           (conj ws (select-keys w [:concept :subject :need :instead]))))
+                       (vec (get-in row [:data :workarounds]))
+                       (:entries inp))]
+    (-> row
+        (assoc-in [:data :workarounds] logged)
+        (assoc-in [:data :workarounds_concept] (vec (distinct (map :concept logged)))))))
 
 (defhandler answer-the-question [row inp ctx]
   (update-in row [:data :questions]
@@ -572,6 +594,24 @@
    :open "File it as a person, or as an agent acting for one."}
   [_row _inp ctx]
   (if (some? (the-person ctx)) (t/allow) (t/deny)))
+
+;; the org's directory is orgs/<name>, so one plan not retired holds a
+;; name: a second create cannot take over the first's directory (ticket
+;; be518c13). It reads through the ctx :find hook, as the hire walls do.
+
+(defguardfn one-plan-per-name
+  {:judges [:name]
+   :reads [:org_plan]
+   :check-tier :given
+   :vars [:name :plan :state]
+   :explain "The org {name} is held by plan {plan}, in {state}: one plan that is not retired holds an org's name, and its directory orgs/{name}."
+   :open "Work the plan that holds the name, retire it first, or file this one under another name."}
+  [_row inp ctx]
+  (if-some [held (first (remove #(= "retired" (state-name %))
+                                (plans-named ctx (:name inp))))]
+    (t/deny {:vars {:name (str (:name inp)) :plan (str (:id held)) :state (state-name held)}
+             :evidence {:plan (str (:id held))}})
+    (t/allow)))
 
 (defguardfn only-the-owner-decides
   {:reads [:principal]
@@ -915,6 +955,53 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :not-flipped}})
 
+(def ^:private a-gap
+  {:kind "invoice" :state "sent" :reason "no_holder"
+   :row_ids ["i1" "i2" "i3"] :oldest_since "2026-10-11T08:00:00Z"
+   :expected_seconds 604800 :key "greenleaf/invoice/sent"})
+
+(defscenario no-hire-without-a-live-org
+  "A hire plan is opened on an org that is live: with no live found
+   plan, the engine's open_hire is refused."
+  {:kind    :org_plan
+   :attempt :open_hire
+   :at      "2026-10-18T08:00:00Z"
+   :input   {:name "greenleaf" :gap a-gap}
+   :as      {:id "factory10-hire" :type :system}
+   :expect  {:refused :no_live_org}})
+
+(defscenario a-live-org-opens-a-hire
+  "And with the org's found plan live, the engine opens the hire."
+  {:kind    :org_plan
+   :attempt :open_hire
+   :at      "2026-10-18T08:00:00Z"
+   :given   [{:kind :org_plan :state :live
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf" :gap a-gap}
+   :as      {:id "factory10-hire" :type :system}
+   :expect  {:allowed true}})
+
+(defscenario a-second-plan-does-not-take-a-held-name
+  "An org's name is held by its plan while that plan is not retired: a
+   second create with the same name is refused."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :drafting
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :one-plan-per-name}})
+
+(defscenario a-retired-plan-frees-its-name
+  "And once that plan is retired, the name may be filed again."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :retired
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── :org_plan ───────────────────────────────────────────────────────
 
 (def ^:private finding-schema
@@ -945,6 +1032,20 @@
    [:oldest_since {:optional true} [:maybe :waymark/instant]]
    [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
    [:key [:string {:min 1 :max 200}]]])
+
+(def workaround-concepts
+  "The concepts a workaround stands in for, as epic 2bb0aed8 numbers
+  them: 1 related-row rules, 2 calendar time and recurrence, 3 ledger
+  money, 4 retention and evidence, 5 teams and outside parties, 6
+  integrations, 7 goals and measures; then new and default."
+  ["1" "2" "3" "4" "5" "6" "7" "new" "default"])
+
+(def ^:private workaround-schema
+  [:map
+   [:concept (into [:enum] workaround-concepts)]
+   [:subject [:string {:min 1 :max 200}]]
+   [:need [:string {:min 1 :max 240}]]
+   [:instead [:string {:min 1 :max 240}]]])
 
 (def ^:private hire-input
   "The open_hire door's input: the org, the gap, and the live plan's
@@ -1149,10 +1250,11 @@
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :owner #{:eq}
-                :purpose #{:eq}}
+                :purpose #{:eq}
+                :workarounds_concept #{:eq :in}}
    :on-create stamp-the-owner
    :data-migrate purpose-backfill
-   :create-guards [a-person-files-the-plan]
+   :create-guards [a-person-files-the-plan one-plan-per-name]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
               :input hire-input
@@ -1257,6 +1359,19 @@
                  {:label "Questions for the owner"
                   :help "What the onboarding seat asked, each tied to the finding that raised it, and the owner's answer."}}
      [:maybe [:vector {:max 100} question-schema]]]
+    ;; WRITTEN ONLY BY THE log_workarounds DOOR (ticket 4fdcd08a): read
+    ;; and counted like any plan field, and not law, so the law page
+    ;; leaves it out
+    [:workarounds {:optional true
+                   :x-display
+                   {:label "Workarounds"
+                    :help "What the onboarding seat had to make do with where the engine had no concept for it: the concept, the kind's field or door, what the org needed, and what was built instead."}}
+     [:maybe [:vector {:max 200} workaround-schema]]]
+    [:workarounds_concept {:optional true
+                           :x-display
+                           {:label "Workaround concepts"
+                            :help "Each concept the plan's workarounds name, once: what a query finds plans by."}}
+     [:vector {:max 9} [:waymark/vocab {:open true}]]]
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
@@ -1397,6 +1512,19 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Answer" :order 2
                :description "Answer a question the onboarding seat asked"}}
+
+    :log_workarounds
+    {:from #{:drafting} :to :drafting
+     :guards [the-name-is-snake-case]
+     :handler log-the-workarounds
+     :input [:map
+             [:entries {:x-display {:label "The workarounds"
+                                    :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
+              [:vector {:min 1 :max 50} workaround-schema]]]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
+     :display {:label "Log workarounds" :order 16
+               :description "Log the workarounds onboarding had to make"}}
 
     :propose
     {:from #{:drafting} :to :proposed
@@ -1732,4 +1860,8 @@
                a-stranger-does-not-answer
                an-agent-does-not-go-live-alone
                the-owner-goes-live
-               an-unflipped-org-does-not-go-live]})
+               an-unflipped-org-does-not-go-live
+               no-hire-without-a-live-org
+               a-live-org-opens-a-hire
+               a-second-plan-does-not-take-a-held-name
+               a-retired-plan-frees-its-name]})

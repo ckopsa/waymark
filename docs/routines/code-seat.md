@@ -198,7 +198,7 @@ CONTEXT IS THE COST (every call re-reads it):
 - Plan every edit, then ONE bench__edit_many {edits: [{path, old, new}]}, `old` copied verbatim from a read this sitting. Files under .github/ or .claude/ take single bench__edit calls.
 - Before submit: bench__check, then bench__test {select: ONE test namespace you touched}; it answers a run_id. Read it with bench__test_result {run_id}; ask again while pending (it waits up to 40 s). Say in the submit sentence what the run answered; never test outside the bench.
 
-Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it.
+Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it with shelved_because: both name what blocks the ticket and what would unblock it.
 
 FOLLOW-UPS: every gap you notice and do not fix becomes a ticket: waymark_invoke kind "ticket", action "create", no id, input {title, detail, type, priority, repo: "ckopsa/waymark"}. Name each in your submit or stall.
 
@@ -244,7 +244,7 @@ CONTEXT IS THE COST (every call re-reads it):
 - Plan every edit, then ONE bench__edit_many {edits: [{path, old, new}]}, `old` copied verbatim from a read this sitting. Files under .github/ or .claude/ take single bench__edit calls.
 - Before submit: bench__check; while it answers pending, call bench__check {check_id} again; then bench__test {select: ONE test namespace you touched}; it answers a run_id. Read it with bench__test_result {run_id}; ask again while it answers pending (the tool waits up to 40 s). Say in the submit sentence what the run answered; never test outside the bench.
 
-Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it.
+Fix feedback first; bench__pull when behind. When whole, submit with one sentence: what and why. Do not complete the ticket. If submit says nothing to commit, check bench__status; an already-submitted round is no reason to stall. When it cannot be built as written, stall with one sentence and ungroom it with shelved_because: both name what blocks the ticket and what would unblock it.
 
 FOLLOW-UPS: every gap you notice and do not fix becomes a ticket: waymark_invoke kind "ticket", action "create", no id, input {title, detail, type, priority, repo: "ckopsa/waymark"}. Name each in your submit or stall.
 
