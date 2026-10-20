@@ -128,17 +128,39 @@
 
       :else (t/allow))))
 
+(def ^:private subject-kinds
+  "The plurals a subject names that the check tier can answer from a
+  scenario's :given rows — the two the explain sentence cites. Any
+  other address needs the registry, which the check tier does not
+  lend, so there it is unknown and allowed, never refused."
+  {"media" :media "tasks" :task})
+
 (defguardfn subject-resolves
   {:judges [:subject]
-   :reads [:storage]
+   :reads [:media :task]
+   :check-tier :given
    :vars [:subject]
    :open "A subject is an address — /api/media/01H…, /api/tasks/01H… — and the schema can say it is a string and nothing more; the door reads the row it names, so the legal answers are the house's own rows and not a vocabulary."
    :explain "The subject is the address of a row this house serves, and nothing stands at {subject}. Name a row that exists — /api/media/01H…, /api/tasks/01H… — or leave the subject blank and say it in the text."}
   [_row inp ctx]
   (let [s (some-> (:subject inp) str str/trim not-empty)]
-    (if (and s (seq (insight/unresolved-addresses [s] ctx)))
-      (t/deny {:vars {:subject s}})
-      (t/allow))))
+    (cond
+      (nil? s) (t/allow)
+
+      ;; the write path lends the registry: every kind, read as before
+      (:rdef-of ctx)
+      (if (seq (insight/unresolved-addresses [s] ctx))
+        (t/deny {:vars {:subject s}})
+        (t/allow))
+
+      ;; the check tier lends :read over its :given rows and no registry
+      :else
+      (let [{:keys [plural id]} (insight/row-address s)
+            kind (get subject-kinds plural)
+            read' (:read ctx)]
+        (if (and kind read' (nil? (read' kind id)))
+          (t/deny {:vars {:subject s}})
+          (t/allow))))))
 
 (defn- media-address
   "The id a subject names when it is a media row's address, nil for
@@ -150,7 +172,8 @@
 
 (defguardfn a-passage-reads-as-a-place
   {:judges [:launch :subject]
-   :reads [:storage]
+   :reads [:media]
+   :check-tier :given
    :vars [:why]
    :open "A passage is a place in the subject, and which grammar a place is spelled in — a time, a chapter, a page — is the subject's medium to say; the schema can say from and to are strings and nothing about the row they read against, so the door reads the media row and this sentence names the grammar."
    :explain "A passage is a place in something the house owns: the subject names the media row, and the place is spelled the way that medium counts — a time for a film, a show, an audiobook or an album (1:19:00; S02E05 0:12:00 for a show), a chapter, a page or a percent for a book or a comic (ch. 7, p. 213, 34%). Here: {why}."}
@@ -319,9 +342,11 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; The create-door scenarios read the world (:storage, :block) and are
-;; CONFORMANCE-tier — proved through the HTTP door in the dayplan10
-;; conformance suite. The start-door scenarios read only the boot's
+;; The create-door scenarios read the world (:media, :task, :block) and
+;; run in the CHECK tier: the block walls are declarative, and
+;; subject-resolves and a-passage-reads-as-a-place declare
+;; `:check-tier :given`, so a scenario's :given rows answer their reads.
+;; The conformance suite still proves the door over HTTP. The start-door scenarios read only the boot's
 ;; feature tokens and are judged at declaration time, where a scenario
 ;; sees no wiring at all — which is exactly the case the wall exists
 ;; to refuse.
@@ -358,14 +383,27 @@
 
 (defscenario a-decision-sits-on-a-block-that-stands
   "A decision into a block nobody added is refused naming the fix —
-   add the block to the day first. CONFORMANCE-tier like its siblings:
-   subject-resolves on the same door reads :storage."
+   add the block to the day first."
   {:kind    :decision
    :attempt :create
    :input   {:block_id a-block :kind "pick" :text "Tonight's film" :order 1}
    :as      {:id "colton" :type :person}
    :expect  {:refused :on-a-planned-block
              :because "add the block to the day first"}})
+
+(defscenario a-skipped-block-takes-no-decision
+  "A block the day let go takes no new decision, and the refusal names
+   the block and its state — un-skip or reopen it first."
+  {:kind    :decision
+   :attempt :create
+   :given   [{:kind :block :handle :block :state :skipped
+              :data {:plan_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D3"
+                     :context_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
+                     :context_name "Workday"}}]
+   :input   {:block_id "{given/block}" :kind "pick" :text "Into a skipped block" :order 1}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-block-is-still-planned
+             :because "Workday block is skipped"}})
 
 (def ^:private a-film "/api/media/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0")
 
@@ -659,6 +697,7 @@
    :scenarios [a-subject-is-a-row-that-stands
                a-launch-says-how
                a-decision-sits-on-a-block-that-stands
+               a-skipped-block-takes-no-decision
                a-passage-ends-after-it-starts
                a-passage-counts-one-way
                go-needs-the-room-wired
