@@ -47,7 +47,7 @@
     doubles as a freshness check, so :to :fresh is earned, not
     asserted."
   (:require [waymark10.dsl :refer [defguard defguardfn defhandler refuse
-                                   resource]]
+                                   defscenario resource]]
             [waymark10.guards :as g]
             [waymark10.server.mirror :as mirror]
             [waymark10.types :as t])
@@ -76,12 +76,25 @@
     (t/deny)
     (t/allow)))
 
-(defguardfn list-owned-by-the-capturing-source
-  {:judges [:task_list :source]
-   :reads [:task_list]
-   :vars [:owner :capturing]
-   :explain "That list belongs to {owner} and this capture goes to {capturing} — a mirrored list rides only google's own capture, and the lists any door may name are the engine's native ones."}
-  [_row inp ctx]
+;; Declarative related-row law (docs/spec-related-row-law.md §7): one
+;; follow over :task_list's :source. Its reads are derived, a
+;; scenario's :given rows answer them, and a ctx with no hook leaves
+;; the verdict pending — allowed, as the code guard allowed it.
+;; A named list that is not on file is its own wall, with its own
+;; sentence and field error, so the ownership guard below only ever
+;; judges a list that stands and its {owner} never renders blank.
+(defguard the-list-stands
+  (refuse "No task list by that name is on file."
+          {:open "No door here makes a list stand at that id: name a list that is on file, or leave the list out."})
+  '(or (not (is-set (input :task_list)))
+       (is-set (follow (input :task_list) :id)))
+  {:errors {:task_list "task list not found"}})
+
+;; :capturing reads the birth door's "todo" default, so an unsaid
+;; source — absent or an explicit null — is named as the one it
+;; lands in.
+(defguard list-owned-by-the-capturing-source
+  (refuse "That list belongs to {owner} and this capture goes to {capturing} — a mirrored list rides only google's own capture, and the lists any door may name are the engine's native ones.")
   ;; naming a list is only expressible because lists became rows, and
   ;; only MEANINGFUL when someone honours it. For a MIRRORED list that
   ;; someone is the authority whose birth reads it: google reads the
@@ -93,20 +106,13 @@
   ;; A NATIVE list the hub itself honours: the parent is the hub's
   ;; own fact (the :priority posture, one field over), no authority
   ;; ever hears of it, so any capture may carry one.
-  (let [capturing (or (:source inp) "todo")]
-    (if-some [ref (:task_list inp)]
-      (if-some [read (:read ctx)]
-        (let [row (read :task_list ref)
-              owner (get-in row [:data :source])]
-          (if (or (= "native" owner)
-                  (= "gtasks" owner capturing))
-            (t/allow)
-            (t/deny (cond-> {:vars {:owner (or owner "no authority we mirror")
-                                    :capturing capturing}}
-                      (nil? row)
-                      (assoc :errors {:task_list ["task list not found"]})))))
-        (t/allow))
-      (t/allow))))
+  '(or (not (is-set (input :task_list)))
+       (not (is-set (follow (input :task_list) :id)))
+       (= (follow (input :task_list) :source) "native")
+       (and (= (follow (input :task_list) :source) "gtasks")
+            (= (input :source) "gtasks")))
+  {:vars {:owner '(follow (input :task_list) :source)
+          :capturing '(input :source)}})
 
 (defn clock-timed?
   "Does this instant name a time of DAY? Midnight UTC is how the queue
@@ -137,6 +143,79 @@
   (if (and (= "gtasks" (:source inp)) (clock-timed? (:due_at inp)))
     (t/deny)
     (t/allow)))
+
+;; The list wall's scenarios run in the CHECK tier: the wall is a
+;; follow, so a scenario's :given list answers its read.
+
+(defscenario a-native-list-takes-any-capture
+  "A native list is the hub's own grouping and no authority hears of
+   it, so a capture bound anywhere may name one."
+  {:kind    :task
+   :attempt :create
+   :given   [{:kind :task_list :handle :list :state :fresh
+              :data {:title "Woodworking" :source "native"}}]
+   :input   {:title "Sand the shelf" :source "todo" :task_list "{given/list}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-google-list-rides-googles-capture
+  "Google reads the list its capture names, so a google list on a
+   google-bound capture lands where the person picked."
+  {:kind    :task
+   :attempt :create
+   :given   [{:kind :task_list :handle :list :state :fresh
+              :data {:title "Errands" :source "gtasks"}}]
+   :input   {:title "Return the drill" :source "gtasks" :task_list "{given/list}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-google-list-refuses-a-house-capture
+  "Home assistant captures into its one entity and would ignore the
+   list without a word, so a google list on a todo capture is refused
+   naming both."
+  {:kind    :task
+   :attempt :create
+   :given   [{:kind :task_list :handle :list :state :fresh
+              :data {:title "Errands" :source "gtasks"}}]
+   :input   {:title "Wrong door" :source "todo" :task_list "{given/list}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :list-owned-by-the-capturing-source
+             :because "belongs to gtasks and this capture goes to todo"}})
+
+(defscenario a-house-list-refuses-a-google-capture
+  "A mirrored list rides only google's own capture, so the wall
+   tablet's list refuses a google-bound one."
+  {:kind    :task
+   :attempt :create
+   :given   [{:kind :task_list :handle :list :state :fresh
+              :data {:title "Groceries" :source "todo"}}]
+   :input   {:title "Wrong door again" :source "gtasks" :task_list "{given/list}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :list-owned-by-the-capturing-source
+             :because "belongs to todo and this capture goes to gtasks"}})
+
+(defscenario a-missing-list-refuses-by-name
+  "A list that is not on file is refused as missing, not as someone
+   else's — no owner to name, so the sentence names the gap."
+  {:kind    :task
+   :attempt :create
+   :input   {:title "Nowhere to land" :source "gtasks"
+             :task_list "00000000-0000-0000-0000-000000000000"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-list-stands
+             :because "No task list by that name is on file."}})
+
+(defscenario a-null-source-is-the-house-capture
+  "An explicit null source lands where an unsaid one does, so the
+   refusal names the house capture rather than a blank."
+  {:kind    :task
+   :attempt :create
+   :given   [{:kind :task_list :handle :list :state :fresh
+              :data {:title "Errands" :source "gtasks"}}]
+   :input   {:title "Said nothing" :source nil :task_list "{given/list}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :list-owned-by-the-capturing-source
+             :because "belongs to gtasks and this capture goes to todo"}})
 
 (defn- day-end
   "A day-granular due → the canonical instant: the day's closing
@@ -310,7 +389,8 @@
                               {:label "What needs doing"
                                :help "The one line you would say out loud — \"call the dentist\", \"return the library books\"; the how goes further down."}}
                       [:string {:min 1 :max 200}]]
-                     [:source {:optional true
+                     [:source {:optional true :default "todo"
+                               :default-on-null true
                                :x-display
                                {:label "Where it should land"
                                 :choices {"todo" "The house list — home assistant, on the wall tablet"
@@ -330,8 +410,15 @@
                                {:label "Anything the doer needs to know"
                                 :help "The part that would otherwise be a text message — which pharmacy, which shelf, what to bring; it rides along on the queue so whoever picks it up reads it there."}}
                       [:maybe [:string {:max 1000}]]]]
-     :create-guards [one-due list-owned-by-the-capturing-source
+     :create-guards [one-due the-list-stands
+                     list-owned-by-the-capturing-source
                      day-granular-due-for-google]
+     :scenarios [a-native-list-takes-any-capture
+                 a-google-list-rides-googles-capture
+                 a-google-list-refuses-a-house-capture
+                 a-house-list-refuses-a-google-capture
+                 a-missing-list-refuses-by-name
+                 a-null-source-is-the-house-capture]
      :on-create (fn [row ctx]
                   ;; a named list arrives as the ROW's id and has to
                   ;; leave as the authority's own key: :list_key is

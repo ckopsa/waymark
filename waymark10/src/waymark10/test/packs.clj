@@ -764,6 +764,46 @@
 
 (declare leash!)
 
+(defn- unique-groups
+  "A kind's :unique groups, each a vector of field keywords."
+  [rd]
+  (let [u (:unique rd)]
+    (map #(if (keyword? %) [%] (vec %)) (if (keyword? u) [u] u))))
+
+(defn- adopt-unique-row
+  "A `:reuse true` given: the id of the row already on record with
+  `data`'s values for one of `kind`'s :unique groups, or nil when
+  there is none. The adopted row is taken as it stands, not walked."
+  [ctx kind data]
+  (when-some [rd (rdef ctx kind)]
+    (some (fn [group]
+            (when (every? #(some? (get data %)) group)
+              (let [q (str/join "&" (map #(str (name %) "="
+                                               (java.net.URLEncoder/encode (str (get data %)) "UTF-8"))
+                                         group))
+                    resp (req ctx :get (str "/api/" (:plural rd) "?" q))
+                    item (when (= 200 (:status resp))
+                           (first (get-in (json ctx resp) [:data :items])))]
+                (some-> (:self item) str (str/split #"/") last))))
+          (unique-groups rd))))
+
+(defn- fixed-unique-givens
+  "The lint: a :given row whose kind declares a :unique group and whose
+  values for it carry no `{{run}}` and say no `:reuse true`. The first
+  run on a fresh engine stages it; the second run on the same engine
+  is refused 409. A warning, never a violation."
+  [ctx s]
+  (distinct
+   (for [gv (:given s)
+         :when (and (not (:reuse gv)) (contains? (:registry-kinds ctx) (:kind gv)))
+         group (unique-groups (rdef ctx (:kind gv)))
+         :when (every? #(some? (get (:data gv) %)) group)
+         :when (not-any? #(str/includes? (str (get (:data gv) %)) scenario/run-sigil) group)]
+     (str "[given-unique-fixed] " (name (:name s)) ": its :given " (name (:kind gv))
+          " names " (str/join ", " (map name group)) " without " scenario/run-sigil
+          ", so a second suite run on this engine is refused 409; write "
+          scenario/run-sigil " into the value, or say :reuse true"))))
+
 (defn- run-scenario
   "One conformance-tier scenario, staged and attempted through the
   real HTTP door.
@@ -788,13 +828,21 @@
   (`stage-declared-row`), so a deferred `did` guard reads a real log
   and never an empty one. An entry that cannot be staged refuses the
   scenario with a sentence naming it; `:history-mode :refuse` opts out
-  of staging and refuses the scenario outright."
+  of staging and refuses the scenario outright.
+
+  Every `{{run}}` is first replaced by the suite run's token (`:run-token`,
+  minted by `suite/run`; a fresh one when the caller minted none), so a
+  given with a :unique name stages once per run. A `:reuse true` given
+  adopts the row already on record under its :unique values and stages
+  one only when there is none."
   [ctx rdef' s]
-  (let [staged (reduce
+  (let [s (scenario/fill-run s (or (:run-token ctx) (scenario/run-token)))
+        staged (reduce
                 (fn [ids gv]
-                  (let [out (stage-declared-row
-                             ctx (:kind gv) (:state gv)
-                             (scenario/fill-handles (:data gv) ids))]
+                  (let [data (scenario/fill-handles (:data gv) ids)
+                        out (or (when (:reuse gv)
+                                  (some->> (adopt-unique-row ctx (:kind gv) data) (hash-map :id)))
+                                (stage-declared-row ctx (:kind gv) (:state gv) data))]
                     (if (:error out)
                       (reduced out)
                       (cond-> ids
@@ -871,6 +919,7 @@
                    :when (not (scenario/check-tier? rd s))]
                [rd s])]
     {:violations (into [] (keep (fn [[rd s]] (run-scenario ctx rd s))) work)
+     :warnings (into [] (mapcat (fn [[_ s]] (fixed-unique-givens ctx s))) work)
      :covered (count work)}))
 
 (def core

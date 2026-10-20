@@ -55,6 +55,7 @@
 
 (defalias refuse d/refuse)
 (defalias warn d/warn)
+(defalias hold d/hold)
 (defalias guard g/guard)
 (defalias expr-guard g/expr)
 (defalias relation g/relation)

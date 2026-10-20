@@ -120,6 +120,12 @@
         (is (= "create" (some-> made :transition :action name)))
         (is (= "found" (org-plan/purpose-of (:row made))))))))
 
-(deftest a-plan-without-purpose-reads-as-found
-  (is (= "found" (org-plan/purpose-of {:data {:name "greenleaf"}})))
-  (is (= "found" (org-plan/purpose-of (filed! (engine))))))
+(deftest a-stored-plan-created-without-purpose-reads-as-found
+  (testing "the create stamps found on a plan filed without :purpose"
+    (let [row (filed! (engine))]
+      (is (= "found" (get-in row [:data :purpose])) (pr-str row))
+      (is (= "found" (org-plan/purpose-of row)))))
+  (testing "the boot's backfill stamps found on a stored plan with none"
+    (is (= "found" (:purpose (#'org-plan/purpose-backfill {:name "greenleaf"}))))
+    (is (= "hire" (:purpose (#'org-plan/purpose-backfill
+                             {:name "greenleaf" :purpose "hire"}))))))

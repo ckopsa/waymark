@@ -30,8 +30,8 @@
   Spelled :schema + :actions with a :create-schema that leaves the
   shape optional — the create form asks only what a person decides."
   (:require [dayplan10.zone :as zone]
-            [waymark10.dsl :refer [defguard defguardfn defhandler
-                                   defresource defscenario refuse]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario refuse]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek Instant LocalDate)))
 
@@ -89,31 +89,30 @@
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
-(defguardfn something-still-ahead
-  {:reads [:span :now]
-   :remedies [:day_plan/close]
-   :explain "Every window of this day has passed — there is nothing ahead to replan. Close the day instead; its blocks stand as the record."}
-  [row _inp ctx]
-  (if (nil? (:find ctx))
-    (t/allow)
-    (let [now (:now ctx)
-          spans ((:find ctx) :span {:plan_id (:id row) :state "planned"} {:limit 500})]
-      (if (some #(ahead? (:data %) now) spans)
-        (t/allow)
-        (t/deny)))))
+;; Declarative (docs/spec-related-row-law.md §7): one indexed ask for a
+;; planned span of this day that has not begun
+(defguard something-still-ahead
+  (refuse "Every window of this day has passed — there is nothing ahead to replan. Close the day instead; its blocks stand as the record.")
+  '(exists [s :span {:plan_id (= (self))
+                     :state (= "planned")
+                     :starts_at (> (now))}])
+  {:remedies [:day_plan/close]})
 
 ;; The same shape passes only when no planned span of this day starts
 ;; after now (docs/spec-related-row-law.md §7, ticket d2f01b05). A ctx
 ;; with no hook to answer the `none` — the render probe — is refused
 ;; (`:pending :deny`), as the code wall refused the same shape with no
-;; store; another shape passes there too, since `or` needs one arm.
+;; store; another shape passes there too, since `or` needs one arm. A
+;; reshape that names no shape is refused outright (`is-set`), so an
+;; empty scope reads a known verdict, not an unknown one (§5).
 
 (defguard a-different-shape
   (refuse "This is already a {shape} day with windows still ahead; name the other shape to reshape it. The same shape is let through only when nothing is ahead, so a day minted before its templates can be filled.")
   '(or (not= (input :shape) (data :shape))
-       (none [s :span {:plan_id (= (self))
-                       :state (= "planned")
-                       :starts_at (> (now))}]))
+       (and (is-set (input :shape))
+            (none [s :span {:plan_id (= (self))
+                            :state (= "planned")
+                            :starts_at (> (now))}])))
   {:vars {:shape '(data :shape)}
    :pending :deny})
 
@@ -164,22 +163,13 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; Reshape's wall is declarative (a `none` over the day's spans and the
-;; clock), so its scenarios are CHECK-tier: the :given spans answer the
-;; `none` with no database. The check tier names the literal row
-;; `scenario:<name>`, so a span of this day carries that as its
-;; :plan_id; the member and block ids stand for nothing.
-;;
-;; Replan's wall still reads the day's spans in code (:reads [:span
-;; :now]), so its scenario is CONFORMANCE-tier — the plan is staged
-;; through the real door (its blocks and spans materialising from
-;; whatever workday templates the engine holds, all of them in 2020 and
-;; so all of them passed), walked to set, and replanned as a client
-;; would. Which is why it stages a member (waymark-fp62.4.1): a plan's
-;; :member is a ref and the engine resolves every ref at the door, so
-;; the day the conformance tier actually creates needs a member who
-;; stands — it stages one as a `:given` row and cites it by
-;; `{given/who}`.
+;; Both walls are declarative — replan's an `exists`, reshape's a
+;; `none`, each over the day's spans and the clock — so their scenarios
+;; are CHECK-tier: the :given spans answer the ask with no database. The
+;; check tier names the literal row `scenario:<name>`, so a span of this
+;; day carries that as its :plan_id. Replan's scenarios stage a member
+;; (waymark-fp62.4.1) and cite it by `{given/who}`, a plan's :member
+;; being a ref; reshape's member and block ids stand for nothing.
 
 (defn- reshape-span
   "A planned span of the scenario's own day, from `from` to `to`."
@@ -235,6 +225,25 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :something-still-ahead
              :remedies [:day_plan/close]}})
+
+(defscenario a-day-with-a-window-ahead-is-replanned
+  "While one planned window of the day has not begun, the set day opens
+   again for replanning."
+  {:kind    :day_plan
+   :attempt :replan
+   :given   [{:kind :member :handle :who :state :active
+              :data {:display "Scenario day ahead" :actor_type "human"}}
+             {:kind :span :handle :evening :state :planned
+              :data {:block_id "scenario:a-day-with-a-window-ahead-is-replanned-block"
+                     :plan_id "scenario:a-day-with-a-window-ahead-is-replanned"
+                     :starts_at "2026-09-05T17:30:00Z"
+                     :ends_at "2026-09-05T18:00:00Z"}}]
+   :row     {:state :set
+             :data {:date "2026-09-05" :member "{given/who}"
+                    :shape "off"}}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
 
 ;; ── the declaration ─────────────────────────────────────────────────
 

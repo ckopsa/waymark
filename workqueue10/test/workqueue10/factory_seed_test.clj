@@ -141,7 +141,8 @@
   (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
         link "Linking a model or a schedule stays the person's by design (money): it names who is paid to sit."
-        runner "A runner link carries a credential, and a credential is the person's by design."]
+        runner "A runner link carries a credential, and a credential is the person's by design."
+        server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."]
     {["domain" "active" "remedy_unheld" "restate" "seat/park"]
      "Parking a seat stays the person's by design (power and money), as the seat's own cracks say."
      ["judgment" "draft" "remedy_unheld" "promote" "judgment/revise"] judgment
@@ -151,6 +152,8 @@
      ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
      ["member" nil "remedy_unheld" "create" "role/create"] role
      ["model" nil "remedy_unheld" "create" "model/link"] link
+     ["notifier" "active" "remedy_unheld" "restate" "mcp_server/restore"] server
+     ["notifier" "paused" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
@@ -172,7 +175,7 @@
   either direction fails here and is read. Member reinstate's hold
   (HC2, ticket bed1f2f6) is declared `:hold :agents`: it holds only an
   agent's call, so a suspended member's exit stays a seat's (9b8e9749)."
-  {"cadence_only" 2 "no_exit" 72 "remedy_unheld" 32 "silent_person_exit" 20})
+  {"cadence_only" 2 "no_exit" 72 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

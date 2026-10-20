@@ -71,8 +71,10 @@
     (inv/invoke! eng :change change :observe {:head_sha "0000000"} the-forge)
     (inv/invoke! eng :org_plan id :record_findings
                  {:head_sha "0000000" :findings []} the-forge)
-    (inv/invoke! eng :org_plan id :propose {:change change}
-                 {:principal the-owner})
+    ;; a forge-made change is not born from the plan, so the engine
+    ;; links it and propose names none (ticket b02c9808)
+    (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
+    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
     (inv/invoke! eng :change change :observe {:head_sha head} the-forge)
     id))
 

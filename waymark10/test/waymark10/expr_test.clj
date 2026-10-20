@@ -402,3 +402,35 @@
   (testing "well-formed law reads"
     (is (= '(<= (abs (var :difference)) 0.02M)
            (e/read-form "(<= (abs (var :difference)) 0.02M)")))))
+
+;; ── instants on the reader's clock (ticket 2af2d5dc) ────────────────
+
+(def ^:private clock-guard
+  (g/expr {:name :clock-guard
+           :when '(is-set (data :never))
+           :explain "near {near}, week {week}, far {far}, raw {raw}, clock {hm}, day {dd}"
+           :vars {:near '(input :near) :week '(input :week) :far '(input :far)
+                  :raw '(iso (input :far)) :hm '(clock (input :far))
+                  :dd '(day (input :far))}}))
+
+(deftest a-datetime-hole-reads-the-readers-clock
+  (let [row {:id "r1" :state :open
+             :data {:starts_at (Instant/parse "2099-01-14T16:00:00Z")}}
+        inp {:near (Instant/parse "2099-01-14T20:00:00Z")
+             :week (Instant/parse "2099-01-13T20:00:00Z")
+             :far (Instant/parse "2099-01-06T20:00:00Z")}
+        ctx {:mode :invoke :now (Instant/parse "2026-10-20T12:00:00Z")
+             :principal {:id "p1"}
+             :read (fn [kind id]
+                     (when (and (= :member kind) (= "p1" (str id)))
+                       {:id "p1" :data {:zone "America/Denver"}}))}
+        [v d] (g/evaluate clock-guard row inp ctx)]
+    (testing "on the row's day, within a week, beyond — in the member's zone"
+      (is (= (str "near 13:00, week Tue 13:00, far 6 Jan 13:00, "
+                  "raw 2099-01-06T20:00:00Z, clock 13:00, day Tue 6 Jan")
+             (g/render-reason d v row))))
+    (testing "no member zone and no row day: the house zone, today"
+      (is (= "2099-01-06T20:00:00Z"
+             (e/evaluate '(iso (input :far)) {:input inp})))
+      (is (= "20:00" (e/evaluate '(clock (input :far)) {:input inp}))
+          "no :zone in scope reads UTC"))))

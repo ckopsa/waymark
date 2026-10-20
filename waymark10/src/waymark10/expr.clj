@@ -31,7 +31,9 @@
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
   :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn])
-  (:import (java.time LocalDate Instant Period ZoneOffset)))
+  (:import (java.time LocalDate Instant OffsetDateTime Period ZoneId ZoneOffset)
+           (java.time.format DateTimeFormatter)
+           (java.util Locale)))
 
 (set! *warn-on-reflection* true)
 
@@ -65,13 +67,18 @@
   str: its parts joined into one string, in order — earned by
   factory10's its-change-is-under-review, which finds a change by its
   stored born_from, (= (str \"ticket:\" (self))). An unknown part is
-  unknown, a missing one is nil (docs/spec-related-row-law.md §7)."
+  unknown, a missing one is nil (docs/spec-related-row-law.md §7).
+
+  clock/day/iso: a sentence's own form for an instant — the hour on
+  the reader's clock, the day it falls on there, or the raw RFC 3339
+  value — earned by span's neighbour-keeps-some-width, whose holes
+  read instants (ticket 2af2d5dc). The guard scope lends its :zone."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      str
-     days date-of is-set
+     days date-of is-set clock day iso
      every some count sum
      follow did me self
      exists none count-rows})
@@ -178,7 +185,7 @@
             (conj problems (str "(date …) takes one ISO date string; got "
                                 (pr-str (vec args)))))
 
-          (days date-of is-set not abs)
+          (days date-of is-set clock day iso not abs)
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
@@ -739,6 +746,35 @@
     (clojure.core/str v)
     :else nil))
 
+(def ^:private rfc3339
+  #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})")
+
+(defn instant-of
+  "An instant, or its RFC 3339 wire string (a :given row, a stored map
+  not yet decoded), as an Instant; anything else nil."
+  ^Instant [x]
+  (cond (instance? Instant x) x
+        (and (string? x) (re-matches rfc3339 x))
+        (try (.toInstant (OffsetDateTime/parse ^String x)) (catch Exception _ nil))))
+
+(def ^:private ^DateTimeFormatter hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
+
+(def ^:private ^DateTimeFormatter weekday-day-month
+  (DateTimeFormatter/ofPattern "EEE d MMM" Locale/ENGLISH))
+
+(defn- instant-text
+  "(clock x), (day x) and (iso x) over an instant: the hour on the
+  scope's :zone (UTC without one), the day it falls on there, or the
+  raw RFC 3339 value. Anything else passes through."
+  [op x zone]
+  (if-some [i (instant-of x)]
+    (let [z (.atZone i ^ZoneId (if (instance? ZoneId zone) zone ZoneOffset/UTC))]
+      (case op
+        clock (.format hh-mm z)
+        day   (.format weekday-day-month z)
+        iso   (str i)))
+    x))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -788,6 +824,7 @@
                     v))
         is-set  (let [v (evaluate (first args) scope)]
                   (if (unknown? v) unknown (some? v)))
+        (clock day iso) (instant-text op (evaluate (first args) scope) (:zone scope))
 
         not (let [v (evaluate (first args) scope)]
               (if (unknown? v) unknown (clojure.core/not (truthy? v))))
