@@ -4466,22 +4466,50 @@
       said
       (pattern-branch policy row-id))))
 
+(def ^:private spent-branch-tries
+  "How many fresh names `unspent-branch` tries past a spent one."
+  20)
+
+(defn- unspent-branch
+  "`branch`, or the first of `branch-2`, `branch-3` … that no MERGED
+  change in `repo` names (ticket 87fc7996). A merged pull request's
+  branch is spent: a walk row whose change merged before its work was
+  done — an org_plan merged before go_live — gets a fresh change, cut
+  from the base on a branch of its own, not on top of the merged head."
+  [eng repo branch]
+  (let [spent? #(some? (change-in-state eng {:repository repo :head_branch %}
+                                        [:merged]))]
+    (or (first (remove spent? (cons branch
+                                    (map #(str branch "-" %)
+                                         (range 2 (+ 2 spent-branch-tries))))))
+        branch)))
+
+(def ^:private link-doors
+  "The doors the sit names a walk row's change through, in order:
+  `link_change` for a row that names none (ticket db8b35bb), then
+  `relink_change` for one past it whose change is gone (ticket
+  87fc7996)."
+  [:link_change :relink_change])
+
 (defn- linked-change!
   "The walk row learns the change the sit found or minted for it
-  (ticket db8b35bb): a kind that declares a `link_change` door is
-  walked through it with the engine's hand, so the row names its
-  change without a door of the seat's own. The door's guard decides
-  whether the row takes it — factory10's org_plan only when it names
-  none or names a closed one — and its refusal is the ordinary answer
-  once the row names it, so it is swallowed. → change."
+  (ticket db8b35bb): a kind that declares a `link_change` door — or a
+  `relink_change` one — is walked through it with the engine's hand,
+  so the row names its change without a door of the seat's own. The
+  door's guard decides whether the row takes it — factory10's org_plan
+  only when it names none or names a closed or merged one — and its
+  refusal is the ordinary answer once the row names it, so it is
+  swallowed. → change."
   [eng walk change]
   (let [kind (keyword (str (get walk "kind")))
         id (some-> (get-in walk ["rows" 0 "id"]) str not-empty)]
-    (when (and id (get-in (inv/resources eng) [kind :actions :link_change]))
-      (try
-        (inv/invoke! eng kind id :link_change {:change (str (:id change))}
-                     {:principal seat-change-principal})
-        (catch Exception _ nil)))
+    (when id
+      (doseq [door link-doors
+              :when (get-in (inv/resources eng) [kind :actions door])]
+        (try
+          (inv/invoke! eng kind id door {:change (str (:id change))}
+                       {:principal seat-change-principal})
+          (catch Exception _ nil))))
     change))
 
 (defn- minted-change
@@ -4522,7 +4550,7 @@
        (if-not repo
         [nil note]
         (let [policy (repo-policy-of eng repo)
-              branch (wanted-branch policy row row-id)]
+              branch (unspent-branch eng repo (wanted-branch policy row row-id))]
           (if-some [held (change-in-state
                           eng {:repository repo
                                :head_branch branch}
@@ -4621,7 +4649,9 @@
           (let [policy (repo-policy-of
                         eng (str (get-in change [:data :repository])))
                 ;; the row's own branch wins over the pattern (R-12.32a)
-                wanted (wanted-branch policy row row-id)]
+                wanted (unspent-branch
+                        eng (str (get-in change [:data :repository]))
+                        (wanted-branch policy row row-id))]
             (when-not (= wanted (str (get-in change [:data :head_branch])))
               (try
                 (:row (inv/invoke! eng :change (str (:id change)) :rebranch
@@ -4660,7 +4690,8 @@
               (try
                 (:row (inv/invoke! eng :change (str (:id change)) :rebranch
                                    {:repository repo
-                                    :head_branch (wanted-branch policy row row-id)
+                                    :head_branch (unspent-branch
+                                                  eng repo (wanted-branch policy row row-id))
                                     :base_branch (or (some-> (get-in policy [:data :base])
                                                              str not-empty)
                                                      default-base)}

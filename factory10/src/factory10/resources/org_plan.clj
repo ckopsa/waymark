@@ -315,6 +315,15 @@
 
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
+(defn take-of?
+  "Is the take `take-sha` a film of `head` (ticket 87fc7996)? The
+  director may hand in a short sha — hand_in_film takes seven
+  characters and up — so a take the head begins with names it."
+  [take-sha head]
+  (let [tk (str take-sha)
+        hd (str head)]
+    (and (<= 7 (count tk)) (str/starts-with? hd tk))))
+
 ;; ── the doors' writes ───────────────────────────────────────────────
 
 (defhandler ask-the-owner [row inp _ctx]
@@ -468,6 +477,42 @@
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
 
+(defhandler refilm-the-head [row inp _ctx]
+  ;; A NEW HEAD IS FILMED AGAIN (ticket 87fc7996). The film the owner
+  ;; would judge is of a head the change has left: it is cleared, with
+  ;; any yes, and the finding names the take it leaves.
+  (let [take-sha (get-in row [:data :take_sha])
+        refilm {:key "take_left" :severity "warning" :class "film"
+                :subject "film"
+                :sentence (str "The change's head moved to " (short-sha (:head_sha inp))
+                               " after the film of "
+                               (if (str/blank? (str take-sha))
+                                 "an earlier head"
+                                 (short-sha take-sha))
+                               ", so the plan is proposed again to film the new head.")
+                :remedy "Let the director film the new head: go_live merges only the head that was filmed."}
+        found (conj (vec (remove #(= "take_left" (str (:key %)))
+                                 (get-in row [:data :findings])))
+                    refilm)]
+    (-> row
+        (assoc-in [:data :film_url] nil)
+        (assoc-in [:data :take_film_url] nil)
+        (assoc-in [:data :take_report] nil)
+        (assoc-in [:data :take_sha] nil)
+        (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :approved_head] nil)
+        (assoc-in [:data :findings] found)
+        (assoc-in [:data :next_step] (next-step found)))))
+
+(defhandler relink-the-change [row inp _ctx]
+  ;; A CHANGE MERGED BEFORE GO_LIVE (ticket 87fc7996). The plan names
+  ;; the fresh change the sit minted, and a yes for the merged head is
+  ;; retired. The take stays: the new head is not it, so the findings
+  ;; pass sends the plan to be filmed again once the seat pushes.
+  (-> row
+      (assoc-in [:data :change] (:change inp))
+      (assoc-in [:data :approved_head] nil)))
+
 ;; ── the walls ───────────────────────────────────────────────────────
 
 (defguardfn a-person-files-the-plan
@@ -506,6 +551,25 @@
    :open "Set :live true in the org's org.edn on the plan's branch, push, and let the audit run again."}
   [row _inp _ctx]
   (if (true? (get-in row [:data :live_flag])) (t/allow) (t/deny)))
+
+(defguardfn the-take-is-of-the-head
+  {:reads []
+   :vars [:take :head]
+   :explain "The film is of {take} and the pull request's head is {head}: go_live merges only the head that was filmed."
+   :open "Let the findings pass send the plan back to proposed (refilm) and the director film the new head, then ask go_live again."}
+  ;; Ticket 87fc7996: a new head is filmed again, no exception. Read
+  ;; through the ctx hook as `the-plan-was-audited-at-its-head` reads;
+  ;; a ctx with no hook allows, for the same reasons.
+  [row _inp ctx]
+  (if-some [read' (:read ctx)]
+    (let [named (some-> (get-in row [:data :change]) str not-empty)
+          head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)
+          take-sha (some-> (get-in row [:data :take_sha]) str not-empty)]
+      (if (and head (take-of? take-sha head))
+        (t/allow)
+        (t/deny {:vars {:take (if take-sha (short-sha take-sha) "no head")
+                        :head (if head (short-sha head) "none yet")}})))
+    (t/allow)))
 
 (defn- go-live-vars
   "What the owner reads in go_live's held call: the org, its mayor and
@@ -975,7 +1039,9 @@
              {:in #{:going_live} :by :engine :via :head_moved :to :simulated}
              {:in #{:filming} :by :engine :via :attach_film :to :simulated}
              {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}
-             {:in #{:filming} :by :engine :via :void_take :to :proposed}]
+             {:in #{:filming} :by :engine :via :void_take :to :proposed}
+             {:in #{:simulated} :by :engine :via :refilm :to :proposed}
+             {:in #{:going_live} :by :engine :via :relink_change :to :simulated}]
    ;; going_live waits a day at most on the merge and the mayor's seat
    :expected-age {:drafting 86400 :proposed 21600 :filming 3600 :simulated 604800
                   :going_live 86400}
@@ -1367,7 +1433,7 @@
     ;; merges the plan's pull request at the approved head.
     :go_live
     {:from #{:simulated} :to :going_live
-     :guards [the-name-is-snake-case not-flipped only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
@@ -1428,6 +1494,44 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Change linked" :order 20
                :description "The sit names the change it minted for this plan"}}
+
+    ;; A CHANGE MERGED BEFORE GO_LIVE (ticket 87fc7996). The sit mints a
+    ;; fresh change from the base for a simulated or going_live plan
+    ;; whose change is gone, and names it here; the plan is simulated,
+    ;; for its seat to push :live true on the new branch.
+    :relink_change
+    {:from #{:simulated :going_live} :to :simulated
+     :guards [the-sit-links-its-change]
+     :handler relink-the-change
+     :input [:map
+             [:change {:kind :change
+                       :x-display {:label "The pull request"}}
+              :waymark/ref]]
+     ;; :edit-shape — the engine names the change, nobody edits it
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The plan names its fresh change, and a yes for the merged one is retired."}
+     :display {:label "Change linked again" :order 21
+               :description "The sit names the fresh change it minted for a plan whose change merged"}}
+
+    ;; A NEW HEAD IS FILMED AGAIN (ticket 87fc7996). The engine's hand
+    ;; alone: the findings pass sends a simulated plan whose change's
+    ;; head is not its take back to proposed, and the director films
+    ;; the new head before go_live can merge it.
+    :refilm
+    {:from #{:simulated} :to :proposed
+     :guards [the-engine-records-the-findings]
+     :handler refilm-the-head
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              [:string {:min 7 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The film is cleared: the plan is proposed again, for the director to film its new head."}
+     :display {:label "Refilm" :order 13
+               :description "A new head on a simulated plan's change is filmed again before go_live"}}
 
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.

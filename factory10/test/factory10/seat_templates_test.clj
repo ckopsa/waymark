@@ -130,9 +130,9 @@
       (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
-      (is (= {:state "drafting,simulated" :name "rd_tax_services"}
+      (is (= {:state "drafting,simulated,going_live" :name "rd_tax_services"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
-          "the walk is its own org's drafting and simulated plans: propose leaves one, go_live's Allow the other"))
+          "the walk is its own org's drafting, simulated and going_live plans: propose leaves one, go_live's Allow the next, and a merged change is minted again on the last (ticket 87fc7996)"))
     (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
