@@ -222,9 +222,29 @@
     (is (t/allow? (verdict big-spends-wait big (at-the-door the-principal))))
     (is (t/allow? (verdict big-spends-wait big (at-the-door the-clerk (replay allowed-sign-off)))))))
 
+(defguard a-specialist-files
+  (hold "A return is filed only on a tax specialist's tap." :for :role "tax_specialist"))
+
+(deftest a-hold-for-a-role-names-whose-tap-it-waits-for
+  (let [row {:id "s1" :state :review :data {}}]
+    (is (true? (:hold a-specialist-files)))
+    (is (= "tax_specialist" (:hold-role a-specialist-files)))
+    (is (holds/hold? :a-specialist-files))
+    (testing "an agent's call is held, and the refusal names the role"
+      (let [v (verdict a-specialist-files row (at-the-door the-clerk))]
+        (is (t/deny? v))
+        (is (= {:role "tax_specialist"} (:evidence v)))))
+    (testing "a plain hold names no role"
+      (is (nil? (:evidence (verdict principal-signs-off row (at-the-door the-clerk))))))
+    (testing "a person's call goes through"
+      (is (t/allow? (verdict a-specialist-files row (at-the-door the-principal)))))))
+
 (deftest a-hold-validates-at-the-def-site
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold takes the sentence" (hold " ")))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold takes only its sentence"
                         (hold "A tap." :for :role)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold takes only its sentence"
+                        (hold "A tap." :for :role "x" :and-more)))
+  (is (= "x" (:for-role (hold "A tap." :for :role "x"))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold's law"
                         (d/sentence-guard :bad (hold "A tap.") "not a law"))))
