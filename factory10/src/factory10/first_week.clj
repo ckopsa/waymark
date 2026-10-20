@@ -69,6 +69,13 @@
   [seed]
   (distinct (keep #(some-> (:kind %) name) (:steps seed))))
 
+(defn- the-collection
+  "`kind`'s collection among `resources`: its declared :plural, else its
+  name and an s, as the registry makes it."
+  [resources kind]
+  (or (some #(when (= kind (name (:kind %))) (:plural %)) resources)
+      (str kind "s")))
+
 (def loss-states
   "The terminal states the closing leaves out: the ends that are losses."
   #{"declined" "written_off" "cancelled" "dropped"})
@@ -130,11 +137,13 @@
         day-one (LocalDate/parse (str day_one))
         days (get-in t [:template :days])
         line (brief-line brief)
+        kind (or kind (the-knocked-kind seed))
         values {:seed (:seed seed)
                 :org_display (or (:label (first (:domains seed))) (:org seed))
                 :owner (:id owner)
                 :owner_display (or (:display owner) (:id owner))
-                :kind (or kind (the-knocked-kind seed))
+                :kind kind
+                :kind_plural (the-collection resources kind)
                 :clone_url clone_url
                 :head_sha head_sha
                 :brief_line (or line "")
