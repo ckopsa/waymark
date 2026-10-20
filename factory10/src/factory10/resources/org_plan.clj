@@ -233,10 +233,14 @@
     :vars {:org '(input :name)}
     :explain "No live plan founds {org}: a hire plan is opened on an org that is live."}))
 
+;; the two code walls read the org's plans through the ctx :find hook,
+;; and say `:check-tier :given`, so open_hire's scenarios need no database.
+
 (defguardfn one-hire-per-gap
   {:name :hire_open
    :judges [:gap]
    :reads [:org_plan]
+   :check-tier :given
    :vars [:gap :state]
    :explain "A hire plan for {gap} stands already, in {state}."}
   [_row inp ctx]
@@ -252,6 +256,7 @@
   {:name :hire_quiet
    :judges [:gap]
    :reads [:org_plan]
+   :check-tier :given
    :vars [:gap :until]
    :explain "The owner turned down a hire for {gap}: it is quiet until {until}."}
   [_row inp ctx]
@@ -914,6 +919,32 @@
    :row     {:state :simulated :data (assoc a-flipped-plan :live_flag false)}
    :as      {:id "colton" :type :person}
    :expect  {:refused :not-flipped}})
+
+(def ^:private a-gap
+  {:kind "invoice" :state "sent" :reason "no_holder"
+   :row_ids ["i1" "i2" "i3"] :oldest_since "2026-10-11T08:00:00Z"
+   :expected_seconds 604800 :key "greenleaf/invoice/sent"})
+
+(defscenario no-hire-without-a-live-org
+  "A hire plan is opened on an org that is live: with no live found
+   plan, the engine's open_hire is refused."
+  {:kind    :org_plan
+   :attempt :open_hire
+   :at      "2026-10-18T08:00:00Z"
+   :input   {:name "greenleaf" :gap a-gap}
+   :as      {:id "factory10-hire" :type :system}
+   :expect  {:refused :no_live_org}})
+
+(defscenario a-live-org-opens-a-hire
+  "And with the org's found plan live, the engine opens the hire."
+  {:kind    :org_plan
+   :attempt :open_hire
+   :at      "2026-10-18T08:00:00Z"
+   :given   [{:kind :org_plan :state :live
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf" :gap a-gap}
+   :as      {:id "factory10-hire" :type :system}
+   :expect  {:allowed true}})
 
 ;; ── :org_plan ───────────────────────────────────────────────────────
 
@@ -1732,4 +1763,6 @@
                a-stranger-does-not-answer
                an-agent-does-not-go-live-alone
                the-owner-goes-live
-               an-unflipped-org-does-not-go-live]})
+               an-unflipped-org-does-not-go-live
+               no-hire-without-a-live-org
+               a-live-org-opens-a-hire]})
