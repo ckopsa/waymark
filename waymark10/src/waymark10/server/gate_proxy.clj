@@ -1110,19 +1110,42 @@
                     (get-in [:data :walk]) str not-empty keyword)]
       (when (and k (get (inv/resources eng) k)) k))))
 
+(defn- minted-for-row-id
+  "The walked row a change on this branch was minted for (ticket
+  e07182a5): the change's `born_from` is `<kind>:<id>` and the id is
+  among `ids`. A sit that finds its row's change merged mints a fresh
+  one on `<branch>-2` (ticket 87fc7996), whose name the pattern does
+  not read back to the row; the change it minted says which row it is.
+  nil when no such change names the branch."
+  [eng st tx kind ids repo branch]
+  (when (get (inv/resources eng) :change)
+    (let [wanted (set (map #(str (name kind) ":" %) ids))]
+      (some (fn [c]
+              (let [born (some-> (get-in c [:data :born_from]) str)]
+                (when (contains? wanted born)
+                  (subs born (inc (count (name kind)))))))
+            (store/query-rows st tx :change
+                              (cond-> {:head_branch branch}
+                                repo (assoc :repository repo))
+                              {:limit 20})))))
+
 (defn- claiming-row-id
   "The walk row whose own `branch` field is this branch, among the rows
-  these sittings were handed, or nil when none names it."
-  [st tx kind sittings branch]
+  these sittings were handed, or the one of them a change on this
+  branch was minted for; nil when none names it."
+  [eng st tx kind sittings repo branch]
   (when kind
-    (->> sittings
-         (mapcat #(get-in % [:data :walked_rows]))
-         (keep #(some-> % str not-empty))
-         distinct
-         (some (fn [id]
-                 (when (= branch (some-> (store/load-row st tx kind id {})
-                                         (get-in [:data :branch]) str))
-                   id))))))
+    (let [ids (->> sittings
+                   (mapcat #(get-in % [:data :walked_rows]))
+                   (keep #(some-> % str not-empty))
+                   distinct)]
+      (or (some (fn [id]
+                  (when (= branch (some-> (store/load-row st tx kind id {})
+                                          (get-in [:data :branch]) str))
+                    id))
+                ids)
+          (when (seq ids)
+            (minted-for-row-id eng st tx kind ids repo branch))))))
 
 (defn- bench-hold-block
   "Why a bench write should be refused because the calling sitting does
@@ -1145,8 +1168,10 @@
                                                         {:seat seat :state :open}
                                                         {:limit 50 :newest-first true})
                                       (remove #(= sid (str (:id %))))))
-                        row-id (or (claiming-row-id st tx (walk-kind-of eng st tx seat)
-                                                    (cons s others) branch)
+                        row-id (or (claiming-row-id eng st tx (walk-kind-of eng st tx seat)
+                                                    (cons s others)
+                                                    (some-> (:repo args) str not-empty)
+                                                    branch)
                                    (branch-row-id policy branch))]
                     [s row-id (when row-id
                                 (first (filter #(holds-row? % row-id) others)))])))
