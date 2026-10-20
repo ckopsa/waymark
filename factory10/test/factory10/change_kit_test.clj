@@ -10,7 +10,9 @@
   to `superseded_by`. Ticket 7e12f1e8 moved it: `close_without_pr`'s
   one-way sentence says the house opens the change again only when its
   ticket is queued again after the close. Ticket 7aff6a5c moved it:
-  `line_why` may say `org_plan_waits_go_live`."
+  `line_why` may say `org_plan_waits_go_live`. Ticket ccc3ecae moved it:
+  `born_from` is filterable by :eq, so a declarative guard finds a
+  ticket's change by it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -39,7 +41,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "c7c4dcad92b90872d582ac327f0acda58cc9fb9b4888834358fdd0a835a62190")
+  "2bea33fadaccd2323a13e9faead40f8ead78a25098bd535b9604adcaac4ce029")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

@@ -11,6 +11,7 @@
             [waymark10.expr :as e]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.server.decision]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
@@ -121,6 +122,26 @@
   (let [[n read] (meals {"m1" {:id "m1" :state :on_list :data {:name "Tacos"}}})]
     (is (t/allow? (judge :serve {:data {:title "Mon" :meal_id "m1"}} nil {:read read})))
     (is (= 1 @n) "two follows of one ref cost one read")))
+
+(deftest an-unknown-is-named-where-it-is-shown
+  (testing ":vars in a deny: an unknown var reads unknown, not the object"
+    (let [gd (g/expr {:name :noted :explain "{who} left no note."
+                      :remedies [:fw_day/plan]
+                      :when '(= (input :note) "x")
+                      :vars {:who '(me)}})
+          [v _] (g/evaluate gd {:data {}} {:note "y"} {})]
+      (is (t/deny? v))
+      (is (= {:who "unknown"} (:vars v)))))
+  (testing "the decision record writes the word unknown"
+    (is (= "unknown" (#'waymark10.server.decision/recordable e/unknown)))
+    (is (= {"who" "unknown"}
+           (#'waymark10.server.decision/recordable {:who e/unknown}))))
+  (testing "a require gate at create: an unknown spec is pending, not truthy"
+    (let [gd {:name :needs-me :require :fw_day
+              :require/spec {:expr (e/normalize '(me))}}
+          [v _] (g/evaluate gd nil {:title "Mon"} {})]
+      (is (t/allow? v))
+      (is (t/pending-input? v)))))
 
 ;; ── 3. the gate ─────────────────────────────────────────────────────────────────
 

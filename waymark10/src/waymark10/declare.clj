@@ -393,11 +393,12 @@
                  ": a guard is a verdict — give it its law: "
                  "(defguard " (name gname) " (refuse \"…\") '(expr))"))))
   (when-not (and (or (nil? opts) (map? opts))
-                 (every? #{:remedies :open :errors :evidence :vars :hidden} (keys opts)))
+                 (every? #{:remedies :open :errors :evidence :vars :hidden :pending} (keys opts))
+                 (contains? #{nil :allow :deny} (:pending opts)))
     (throw (t/definition-error
             (str "defguard " (name gname)
                  ": the map after the law is {:remedies … :open … :errors {field \"…\"}"
-                 " :vars {name expr} :hidden {binder \"…\"}}; "
+                 " :vars {name expr} :hidden {binder \"…\"} :pending :allow|:deny}; "
                  (pr-str opts) " is not"))))
   (when-some [vs (:vars opts)]
     (when-not (and (map? vs) (every? keyword? (keys vs)) (every? seq? (vals vs)))
@@ -434,7 +435,9 @@
               (:open clause) (assoc :open (:open clause))
               (:errors clause) (assoc :errors (:errors clause))
               (:evidence clause) (assoc :evidence (:evidence clause))
-              (:hidden opts) (assoc :hidden (:hidden opts))))))
+              (:hidden opts) (assoc :hidden (:hidden opts))
+              ;; the default, :allow, is left out, so no fingerprint moves
+              (= :deny (:pending clause)) (assoc :pending :deny)))))
 
 (defmacro defguard
   "A sentence-first expression guard:
@@ -453,7 +456,9 @@
   :vars {:count '(count [c :kind where])} names what {count} reads,
   each evaluated as the law is; :hidden {:c \"…\"} is the sentence a
   {c.field} part reads as when binder c matched only rows the caller
-  cannot see (left out, that sentence drops)."
+  cannot see (left out, that sentence drops). `:pending :deny` makes an
+  unknown verdict (a read no hook could answer, as on the render probe)
+  refuse; the default, :allow, answers pending."
   [name clause & [law opts]]
   `(def ~name (sentence-guard ~(keyword name) ~clause ~law ~opts)))
 
