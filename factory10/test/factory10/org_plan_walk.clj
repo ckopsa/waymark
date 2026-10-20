@@ -70,11 +70,17 @@
 
 (defn proposed!
   "Audit the drafting plan `id` (`audited!`) and propose it as `owner`
-  with its change. → propose's answer."
+  with its change. A `change` named in `opts` may be born from anything,
+  so the engine links it first (`linked!`'s door) and propose names none:
+  propose takes only a change opened for the plan (ticket b02c9808).
+  → propose's answer."
   ([eng id owner] (proposed! eng id owner {}))
   ([eng id owner opts]
-   (inv/invoke! eng :org_plan (str id) :propose
-                {:change (audited! eng id opts)} {:principal owner})))
+   (let [change (audited! eng id opts)]
+     (when (:change opts)
+       (inv/invoke! eng :org_plan (str id) :link_change {:change change} the-engine))
+     (inv/invoke! eng :org_plan (str id) :propose
+                  (if (:change opts) {} {:change change}) {:principal owner}))))
 
 (defn going-live!
   "Walk the drafting plan `id` to going_live as `owner`: propose
