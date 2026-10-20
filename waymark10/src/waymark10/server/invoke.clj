@@ -656,15 +656,15 @@
              (fn [grant-id since until]
                (store/transitions-under-grant (:storage engine) tx
                                               (str grant-id) since until {}))
-             :actor-of (fn [row transition]
-                         ;; the newest matching transition's actor id
-                         (some (fn [rec]
-                                 (when (= (:action rec) transition)
-                                   (get-in rec [:actor :id])))
-                               (store/transitions
-                                (:storage engine) tx
-                                {:kind (:kind row) :resource-id (:id row)}
-                                {:newest-first true})))
+             ;; the newest matching transition's actor id — or, with
+             ;; :every, each face of every actor of it (did, §4)
+             :actor-of (fn [row transition & every]
+                         (apply g/actors-of
+                                (store/transitions
+                                 (:storage engine) tx
+                                 {:kind (:kind row) :resource-id (:id row)}
+                                 {:newest-first true})
+                                transition every))
              ;; …and its sibling, which asks the log the OTHER question
              ;; (docs/spec-undo.md): not "who did X" but "what was the
              ;; last thing done here, by whom, and when". A guard
