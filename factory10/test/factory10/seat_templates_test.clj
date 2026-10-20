@@ -127,12 +127,14 @@
               a actions]
         (is (contains? (get vocab kind) a) (str kind "." a))))
     (testing "it holds the walk's doors and no other"
-      (is (= {"org_plan" #{"create" "ask" "log_workarounds" "propose" "go_live" "retire"}
+      (is (= {"org_plan" #{"create" "ask" "log_workarounds" "log_workarounds_proposed"
+                           "log_workarounds_simulated" "log_workarounds_going_live"
+                           "propose" "go_live" "retire"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
-      (is (= {:state "drafting,simulated,going_live" :name "rd_tax_services"}
+      (is (= {:state "drafting,proposed,simulated,going_live" :name "rd_tax_services"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
-          "the walk is its own org's drafting, simulated and going_live plans: propose leaves one, go_live's Allow the next, and a merged change is minted again on the last (ticket 87fc7996)"))
+          "the walk is its own org's drafting, proposed, simulated and going_live plans: propose leaves one, go_live's Allow the next, a merged change is minted again on the last (ticket 87fc7996), and a proposed plan still logs its workarounds (ticket beb733af)"))
     (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
