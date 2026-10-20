@@ -15,7 +15,7 @@
 
 (defguard owner-approves-large
   (hold "The owner approves any quote over $10,000 before it goes out.")
-  '(<= :price_cents 1000000))
+  '(<= (data :price_cents) 1000000))
 
 (defguard has-valid-until
   (refuse "A quote is good for 30 days; record the day it lapses.")
