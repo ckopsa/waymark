@@ -761,13 +761,20 @@
   :state are the row's own columns — an error, not a warning, because
   an unindexed guard query runs on every write. [remedy-on-evidence-kind]:
   a remedy whose :id is (evidence :b), b a binder, names a door of b's
-  kind (docs/spec-related-row-law.md §3, §6)."
+  kind (docs/spec-related-row-law.md §3, §6). A `first` in :evidence is
+  judged as a binder is: its where and its pred's wheres must ask
+  indexed fields, and (evidence :name) must name a door of its kind."
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
             {:keys [door guard]} (checks/guard-sites r)
-            :when (:when guard)]
-      (doseq [[tk where] (mapcat expr/rows-queries (cons (:when guard) (vals (:vars guard))))
+            :let [firsts (when (map? (:evidence guard))
+                           (into {} (filter (comp map? val)) (:evidence guard)))]
+            :when (or (:when guard) (seq firsts))]
+      (doseq [[tk where] (concat (mapcat expr/rows-queries (cons (:when guard) (vals (:vars guard))))
+                                 (mapcat (fn [{:keys [kind where pred]}]
+                                           (cons [kind where] (expr/rows-queries pred)))
+                                         (vals firsts)))
               :let [target (get kinds tk)]
               :when target
               f (sort (keys where))
@@ -781,7 +788,8 @@
       (doseq [rmd (:remedies guard)
               :when (map? rmd)
               :let [[op b] (when (seq? (:id rmd)) (:id rmd))
-                    tk (get-in guard [:binders b :kind])]
+                    tk (or (get-in guard [:binders b :kind])
+                           (get-in firsts [b :kind]))]
               :when (and (= 'evidence op) tk
                          (not= (name tk) (namespace (:door rmd))))]
         (err kind :remedy-on-evidence-kind
