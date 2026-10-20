@@ -5,12 +5,19 @@
 {:seed "example"
  :version 1
  :org "example"
- :domains [{:name "example" :label "Example Landscaping"}]
+ :domains [{:name "example" :label "Example Landscaping" :ref :example}]
  :cast
  {:owner {:id "owner" :display "Rosa Delgado" :type :human :roles ["approver"]}
-  :crew  {:id "crew"  :display "Lee Park"     :type :human}
-  ;; a customer, so a world seat on a clone has one to act as
-  :ana   {:id "ana"   :display "Ana Ruiz"     :type :human}}
+  :crew  {:id "crew"  :display "Lee Park"     :type :human}}
+ ;; the outside world, which only a clone loads (ticket a4149376): a
+ ;; customer who files requests, and the world seat that plays their week
+ :rehearsal
+ {:cast {:ana {:id "ana" :display "Ana Ruiz" :type :human
+               :scope [{:kind "request" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "Example Landscaping trims hedges and mows lawns for homeowners, who send it requests for the work."
+                    :kinds "request" :cast "ana" :day_one [:days 0]
+                    :domain_id [:ref :example]}}]}
  ;; one seat. No factorykit template walks a request, so it is a whole
  ;; seat map under :seat, in the shape a template's :seat takes
  :seats
