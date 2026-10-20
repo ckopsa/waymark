@@ -264,8 +264,8 @@
                         ") is not in the law's vocabulary"))))
 
 (def ^:private where-ops
-  "What a where condition may ask: the edge's join-ops, and (in v …)."
-  '#{= < <= > >= in})
+  "What a where condition may ask: the edge's join-ops, not=, and (in v …)."
+  '#{= not= < <= > >= in})
 
 (defn- check-where
   "A where map: each target field to (op <expr>) or (in <expr> …). The
@@ -278,9 +278,6 @@
        (cond
          (not (keyword? field))
          (conj p (str "where field " (pr-str field) " is not a keyword"))
-         (= 'not= cop)
-         (conj p (str "where " field " (not= …): the store cannot ask not= "
-                      "yet — spell it with in or an ordering"))
          (not (contains? where-ops cop))
          (conj p (str "where " field " takes (op <expr>), op one of "
                       (pr-str (sort-by str where-ops)) "; got " (pr-str c)))
