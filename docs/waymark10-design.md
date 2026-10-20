@@ -321,6 +321,7 @@ identity; respelling a law is not a revision; a diff confined to a
 | Node | Demanded by | Date |
 | --- | --- | --- |
 | (v1 set: see §1) | the waymark8 vocabulary, verbatim | 2026-07-09 |
+| `(follow <ref> :field)` expr node, normalized to `(follow :kind <ref> :field)`; reads derived into `:reads`; the defguard `:errors` option beside it | the household meal list's `meal-is-listed` (`mealplan10/resources/plan_day.clj`), a one-hop read of the meal's state that was a `defguardfn` — docs/spec-related-row-law.md §2 | 2026-10-20 |
 
 # 7. Phase 8 — the mealplan10 dogfood, and the engine it forced
 
