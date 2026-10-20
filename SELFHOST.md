@@ -95,7 +95,9 @@ Make a long-lived token for the person's Claude account:
 
 and keep what it prints as `CLAUDE_CODE_OAUTH_TOKEN`. Find the pull
 link the seed made: `waymark_query` kind `runner_link` with
-`{delivery: "pull"}` answers one row; its id is the link id.
+`fields: ["delivery"]` and no filter (the published engine image may
+predate the `delivery` filter), and keep the one row whose `delivery`
+is `pull`; its id is the link id.
 
 Write `selfhost/localfire.edn` (it holds no secret):
 
