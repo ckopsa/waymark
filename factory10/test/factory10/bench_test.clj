@@ -2836,6 +2836,41 @@
         "a live org's change is ordinary again")
     (is (= 1 (count (bench/merge-asks eng))))))
 
+(defn- plan-state!
+  "The plan stores `s` as its state, whatever door would reach it."
+  [eng id s]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :org_plan id {})]
+          (store/save-row! st tx :org_plan
+                           (-> (assoc row :state (keyword s))
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(deftest every-state-but-live-and-retired-waits-on-go-live
+  ;; ticket b79643fe: the states come from the kind, so `filming` and any
+  ;; state added later are covered.
+  (let [{:keys [eng state change plan] :as w} (simulated-world)
+        states (map name (:states (get (inv/resources eng) :org_plan)))
+        ordinary #{"live" "retired"}
+        waits? (fn [] (contains? (#'bench/go-live-waits eng [{:id (str (:id change))}])
+                                 (str (:id change))))]
+    (is (some #{"filming"} states))
+    (doseq [s (remove ordinary states)]
+      (testing (str "a " s " plan keeps its change unmerged")
+        (plan-state! eng plan s)
+        (is (= s (name (:state (plan-row eng plan)))))
+        (is (waits?))
+        (is (= 0 (bench/merge-green! eng (atom {}))))
+        (is (empty? (calls-of state "bench__merge")))
+        (is (= "org_plan_waits_go_live"
+               (get-in (change-row w) [:data :line_why])))))
+    (doseq [s ordinary]
+      (testing (str "a " s " plan's change is ordinary")
+        (plan-state! eng plan s)
+        (is (not (waits?)))))))
+
 (deftest an-agents-removed-person-path-waits-for-the-person
   (let [eng (fresh-engine (state))
         both ["terraform/keycloak_*.tf" "terraform/iam_*.tf"]
