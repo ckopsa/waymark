@@ -122,8 +122,8 @@
                                                the-change-has-no-pull-request
                                                the-mirror-writes-this-row
                                                unstalled]]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
@@ -710,29 +710,28 @@
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
-;; The three that read the repository policy are CONFORMANCE-tier:
-;; each declares `:reads [:repo_policy]` and asks the ctx `:find` hook
-;; for the row. A ctx with no hook — the render probe — is answered
-;; with an ALLOW, which is the framework's own posture there (the
-;; envelope advertises optimistically and the door judges again with a
-;; real hook behind it). Their law is proved in factory10.bench-test,
-;; over a real store, because a scenario cannot stage the policy row
-;; they read.
+;; Whether the repository has a policy is DECLARATIVE
+;; (docs/spec-related-row-law.md §7): an `exists` over `repo_policy`,
+;; the very filter `bench/policy-of` asks. The three that read the
+;; policy's values are code: each declares `:reads [:repo_policy]`,
+;; asks the ctx `:find` hook for the row, and says `:check-tier :given`,
+;; so a scenario's :given rows answer that read and submit's scenarios
+;; need no database. A ctx with no hook — the render probe — is
+;; answered with an ALLOW (the declarative wall's unknown verdict is
+;; pending, which is advertised), the framework's own posture there:
+;; the envelope advertises optimistically and the door judges again
+;; with a real hook behind it. Their law is proved in
+;; factory10.bench-test as well, over a real store.
 
-(defguardfn the-repository-has-a-policy
-  {:reads [:repo_policy]
-   :vars [:repository]
-   :remedies [:repo_policy/create]
-   :explain "What submit means in {repository} is a row, and this repository has no active policy: the branch pattern, the base, the size ceiling and the round ceiling are all unsaid. A person states them once, and the bench works this repository from then on."}
-  [row _inp ctx]
-  (if (nil? (:find ctx))
-    (t/allow)
-    (if (bench/policy-of row ctx)
-      (t/allow)
-      (t/deny {:vars {:repository (str (get-in row [:data :repository]))}}))))
+(defguard the-repository-has-a-policy
+  (refuse "What submit means in {repository} is a row, and this repository has no active policy: the branch pattern, the base, the size ceiling and the round ceiling are all unsaid. A person states them once, and the bench works this repository from then on.")
+  '(exists [p :repo_policy {:repository (= (data :repository))
+                            :state (= "active")}])
+  {:remedies [:repo_policy/create]})
 
 (defguardfn the-branch-matches-the-policy
   {:reads [:repo_policy]
+   :check-tier :given
    :vars [:branch :pattern]
    :remedies [:repo_policy/restate]
    :explain "This change works on the branch {branch}, and the policy says a work branch of this repository looks like {pattern}. A branch outside the pattern is a branch nobody agreed to, so the door refuses it before the bench does."}
@@ -748,6 +747,7 @@
 
 (defguardfn the-branch-is-not-the-base
   {:reads [:repo_policy]
+   :check-tier :given
    :vars [:branch]
    :open "No door here changes this verdict. The base branch is where the work lands, never where it is written, and the bench refuses a push to it whatever the grant says."
    :explain "This change works on {branch}, which is the base branch of this repository. Nothing is ever pushed to the base branch from a seat."}
@@ -762,6 +762,7 @@
 
 (defguardfn under-the-round-ceiling
   {:reads [:repo_policy]
+   :check-tier :given
    :vars [:rounds :ceiling]
    :remedies [:change/stall]
    :explain "This change has had {rounds} of the {ceiling} rounds the policy gives it. The house stops here rather than spending another wake on the same change: say with the stall door what is wrong, and a person reads it."}
@@ -1022,6 +1023,23 @@
              :data (assoc a-pull-request :failing_checks ["gate"])}
    :as      {:id "bench-seat" :type :agent}
    :expect  {:refused :the-mirror-writes-this-row}})
+
+;; Check-tier as well: submit's four walls read the policy, one
+;; declarative and three that say `:check-tier :given`, so a scenario
+;; with no :given policy is a repository that never stated one.
+
+(defscenario a-change-is-not-submitted-where-no-policy-says-what-submit-means
+  "A repository with no active policy never said what a submit is: its
+   branch pattern, its base and its ceilings are unsaid. The door
+   refuses, and names the policy a person states."
+  {:kind    :change
+   :attempt :submit
+   :row     {:state :open :data (dissoc a-pull-request :number)}
+   :input   {:why "Fix the fixture's table list."}
+   :as      {:id "code-seat" :type :agent}
+   :expect  {:refused :the-repository-has-a-policy
+             :because "has no active policy"
+             :remedies [:repo_policy/create]}})
 
 ;; ── :change — one pull request, mirrored ────────────────────────────
 

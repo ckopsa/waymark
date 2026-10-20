@@ -4977,14 +4977,20 @@
 (deftest a-refused-follow-up-leaves-the-groom-standing
   (let [w (ticket-world)
         _ (stalled-with-a-pull-request! w 97)
-        born @#'tk/changes-born-from
+        conds-of @#'inv/law-conds
         res (with-redefs-fn
               ;; the follow-up's guard finds no submitted change, so its
-              ;; door refuses; the groom's own read of the stuck one stands
-              {#'tk/changes-born-from
-               (fn [row states find']
-                 (when-not (= ["submitted"] states)
-                   (born row states find')))}
+              ;; door refuses; the groom's own read of the stuck one
+              ;; stands. The guard is an `exists` over :change by
+              ;; `born_from`, whose conds the engine spells here; the
+              ;; groom reads rows through :find, which never comes here.
+              {#'inv/law-conds
+               (fn [trdef conds]
+                 (conds-of trdef
+                           (cond-> conds
+                             (some #(= :born_from (:field %)) conds)
+                             (conj {:field :id :op :=
+                                    :value "00000000-0000-0000-0000-000000000000"}))))}
               #(person-moves-ticket! w :groom))]
     (is (string? (:refused (first (:followed res))))
         "the follow-up was refused, and said so")
