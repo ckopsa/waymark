@@ -239,7 +239,22 @@
                                        (mapcat day (range 1 (inc days)))
                                        closing)))
      :clone (fill (:clone t) values)
-     :day_one (str day-one)}))
+     :day_one (str day-one)
+     :first-week (true? (get-in t [:template :first-week]))}))
+
+(defn marked
+  "The take `tk` marked `:scene {:first_week true}` when it is a take of
+  the plan's first-week scene `scene-text`, edn text (ticket 78da0888):
+  the scene says `:first-week true`, as every one `scene` renders does,
+  or it is a scene rendered before the mark, which the plan's takes are
+  filmed of all the same. `tk` as given when the plan carries no scene."
+  [tk scene-text]
+  (let [doc (when (and (string? scene-text) (not (str/blank? scene-text)))
+              (try (edn/read-string scene-text) (catch Exception _ nil)))]
+    (if (and (map? tk) (map? doc)
+             (or (true? (:first-week doc)) (map? (:scene doc))))
+      (assoc tk :scene (assoc (if (map? (:scene tk)) (:scene tk) {}) :first_week true))
+      tk)))
 
 (defn- read-brief
   "The brief in the org's org.edn at `org-dir`, its :brief; nil when it

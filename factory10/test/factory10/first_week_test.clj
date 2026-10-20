@@ -257,6 +257,21 @@
       (is (not (str/includes? text "{{")))
       (is (<= (count text) 65536)))))
 
+(deftest a-take-of-the-plan's-scene-is-marked-a-first-week
+  (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
+                                   (:day_one filmed-on))
+        tk {:shots [{:caption "Monday. A quiet day."}]}]
+    (testing "the scene the audit renders says it is a first week"
+      (is (true? (:first-week (edn/read-string text)))))
+    (testing "a take of it is marked, its shots as they were"
+      (is (= (assoc tk :scene {:first_week true}) (first-week/marked tk text))))
+    (testing "a scene rendered before the mark marks its take all the same"
+      (is (= {:first_week true}
+             (:scene (first-week/marked tk (pr-str (dissoc (edn/read-string text) :first-week)))))))
+    (testing "a plan with no scene leaves the take as it is"
+      (is (= tk (first-week/marked tk nil)))
+      (is (= tk (first-week/marked tk ""))))))
+
 (def ^:private rules
   [{:name "chrome-leaks" :metric "chrome_leaks" :op "=" :threshold 0
     :scope "film" :severity "fail" :origin "craft"

@@ -721,6 +721,30 @@
                  (update a-take :shots #(into [(call "acme" "record" "create" "moved")] %))
                  "arc"))))))
 
+(deftest a-take-is-a-first-week-when-its-scene-says-so
+  (let [rules (concat week-rules played-rules)
+        quiet (mapv #(str % ". A quiet day.") weekdays)
+        week (played-take quiet {2 [(call "acme" "record" "create" "refused")]})
+        roleless (update week :shots #(mapv (fn [shot] (dissoc shot :role)) %))
+        verdict-of #(:verdict (rule-in %1 %2))]
+    (testing "a take of a :first-week scene, no shot carrying a role, is judged by the week's rules"
+      (let [answer (film-rules/judge rules (assoc roleless :scene {:first_week true}))]
+        (is (= "red" (:verdict answer)))
+        (is (= "miss" (verdict-of answer "busy-week")))
+        (is (= "miss" (verdict-of answer "quiet-days")))))
+    (testing "a take whose shots carry the roles is judged as before, marked or not"
+      (let [answer (film-rules/judge rules week)]
+        (is (= "miss" (verdict-of answer "busy-week")))
+        (is (= "miss" (verdict-of answer "quiet-days")))
+        (is (= answer (film-rules/judge rules (assoc week :scene {:first_week true}))))))
+    (testing "a take with no mark and no role leaves the week's rules unscored"
+      (let [answer (film-rules/judge rules roleless)]
+        (is (= "green" (:verdict answer)))
+        (is (every? #{"unscored"} (map :verdict (:rules answer))))))
+    (testing "a mark that is not true marks nothing"
+      (is (every? #{"unscored"}
+                  (map :verdict (:rules (film-rules/judge rules (assoc roleless :scene {:first_week "yes"})))))))))
+
 (deftest a-take-is-judged-on-the-frame-under-each-caption
   (let [made (make-rule! {:name "frame-shows-beat" :metric "frame_match_min"
                           :op ">=" :threshold 0.9M :severity "fail"}
