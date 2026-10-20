@@ -8,9 +8,9 @@
   '(present? :amount_usd))
 
 (defguard principal-writes-off
-  {:hold true}
   (refuse "An invoice is written off only on The Principal's tap; the AI never writes one off on its own, so this waits for The Principal.")
-  'false)
+  'false
+  {:hold true})
 
 (defresource invoice
   {:kind :invoice

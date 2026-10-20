@@ -14,14 +14,14 @@
   '(present? :letter_signed_on))
 
 (defguard principal-engages
-  {:hold true}
   (refuse "A prospect is engaged only on The Principal's tap, because nothing starts until the client signs the engagement letter; this waits for The Principal.")
-  'false)
+  'false
+  {:hold true})
 
 (defguard principal-declines
-  {:hold true}
   (refuse "A prospect is declined only on The Principal's tap; the AI never declines one on its own, so this waits for The Principal.")
-  'false)
+  'false
+  {:hold true})
 
 (defresource prospect
   {:kind :prospect
