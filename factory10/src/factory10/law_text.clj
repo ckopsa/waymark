@@ -145,7 +145,8 @@
 
 (defn- decided-section
   "The person's answers to the org audit's questions (ticket e1ed02c7):
-  each :decided sentence, a kind's states first, then its doors."
+  each :decided sentence, a kind's states first, then its doors. A held
+  door is told under 'Doors a person taps' and not again here."
   [rs]
   (let [said (for [r rs
                    :let [k (words (:kind r))
@@ -156,8 +157,11 @@
                                :when d]
                            (str "- " k ", while " (words s) ": " d))
                          (for [[aname a] (:actions r)
-                               :when (:decided a)]
-                           (str "- " k " **" (name aname) "**: " (:decided a))))]
+                               :when (and (:decided a)
+                                          (not-any? #(:hold (guard-of %)) (:guards a)))]
+                           (str "- " k " **" (name aname) "**: " (:decided a)
+                                (when-some [why (get-in a [:decided-held :none])]
+                                  (str " (No person taps it: " why ")")))))]
                line)]
     (into ["## What you decided" ""]
           (if (seq said)

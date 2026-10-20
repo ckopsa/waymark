@@ -158,6 +158,24 @@
       (is (= ["decision/no_wait_limit/bill/open"]
              (decisions bill [(assoc (first clerk) :person true)]))))))
 
+(deftest a-decision-that-says-a-person-taps-needs-a-hold
+  (let [says (assoc-in bill [:actions :pay :decided] "Paying a bill happens only on The Principal's tap.")
+        held {:name :owner-taps :hold true :explain "The Principal taps each payment."}]
+    (testing "with no hold, the audit finds the contradiction"
+      (let [fs (#'conform/decision-findings [says] clerk rosa)]
+        (is (= ["decision/decided_says_held/bill/pay" "decision/no_wait_limit/bill/open"]
+               (mapv :key fs)))
+        (is (= :error (:severity (first fs))))
+        (is (re-find #"Add a :hold guard" (:remedy (first fs))))))
+    (testing "the same door with a :hold guard does not"
+      (is (= ["decision/no_wait_limit/bill/open"]
+             (decisions (assoc-in says [:actions :pay :guards] [held])))))
+    (testing ":decided-held :none with a reason keeps the sentence as narrative"
+      (is (= ["decision/no_wait_limit/bill/open"]
+             (decisions (assoc-in says [:actions :pay :decided-held] {:none "The tap is on the bank's side."})))))
+    (testing "a door no model seat holds asks nothing"
+      (is (= ["decision/no_wait_limit/bill/open"] (decisions says []))))))
+
 (deftest a-cast-scope-naming-what-the-engine-does-not-serve-earns-its-findings
   (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
           "scope/unknown-kind/cast/boss/gadget"]
