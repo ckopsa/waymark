@@ -151,9 +151,9 @@
       (is (t/deny? v))
       (is (= {:b "bk-parks"} (:evidence v)))
       (is (= (str "That crew is already at the Parks' yard from "
-                  "2026-10-22T08:00:00Z to 2026-10-22T12:00:00Z. "
-                  "{free.name} is free.")
-             (g/render-reason d v hendersons))))))
+                  "2026-10-22T08:00:00Z to 2026-10-22T12:00:00Z.")
+             (g/render-reason d v hendersons))
+          "the sentence that reads the unbound free drops; {free.name} never renders"))))
 
 ;; ── first: correlated, canonical, evidence-only ───────────────────────
 

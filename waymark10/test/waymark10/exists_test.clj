@@ -204,8 +204,67 @@
                          (ctx-over bookings (constantly false)))]
         (is (t/deny? v))
         (is (nil? (:evidence v)))
-        (is (= "That crew is already at {b.customer_name} from {b.starts_at} to {b.ends_at}."
-               (g/render-reason d v newcomer)))))))
+        (is (= "What stops this is outside what you can see."
+               (g/render-reason d v newcomer))
+            "its one sentence reads the unseen binder: the engine's own stands")))))
+
+;; ── 3b. no visible evidence: :hidden, and :vars beside the law ────────
+;; children-are-finished's two sentences, over the crew's bookings.
+
+(def ^:private elm-bookings
+  '(none [b :ex_booking {:crew (= (input :crew)) :state (in "scheduled")}]))
+
+(def ^:private elm-count
+  {:count '(count [o :ex_booking {:crew (= (input :crew)) :state (in "scheduled")}])})
+
+(defguard the-crew-is-finished
+  (refuse "{count} of this crew's bookings are not finished. The oldest is \"{b.customer_name}\". A crew rests after its bookings: finish each one first, and then this door opens.")
+  elm-bookings
+  {:remedies [{:door :ex_booking/finish :id '(evidence :b)}]
+   :vars elm-count
+   :hidden {:b "They are outside what you can see."}})
+
+(defguard the-crew-is-finished-plainly
+  (refuse "{count} of this crew's bookings are not finished. The oldest is \"{b.customer_name}\". A crew rests after its bookings.")
+  elm-bookings
+  {:vars elm-count})
+
+(deftest a-refusal-words-what-it-cannot-show
+  (let [elm {:crew "elm"}]
+    (testing "a visible match: the count from :vars, the oldest by name"
+      (let [[v d] (g/evaluate the-crew-is-finished newcomer elm (ctx-over bookings))]
+        (is (= {:b "b1"} (:evidence v)))
+        (is (= (str "2 of this crew's bookings are not finished. The oldest is \"the Parks' yard\". "
+                    "A crew rests after its bookings: finish each one first, and then this door opens.")
+               (g/render-reason d v newcomer)))))
+    (testing "every match hidden: the :hidden sentence stands in for the oldest"
+      (let [[v d] (g/evaluate the-crew-is-finished newcomer elm
+                              (ctx-over bookings (constantly false)))]
+        (is (nil? (:evidence v)))
+        (is (= (str "2 of this crew's bookings are not finished. They are outside what you can see. "
+                    "A crew rests after its bookings: finish each one first, and then this door opens.")
+               (g/render-reason d v newcomer)))))
+    (testing "no :hidden: the sentence that reads the binder drops cleanly"
+      (let [[v d] (g/evaluate the-crew-is-finished-plainly newcomer elm
+                              (ctx-over bookings (constantly false)))]
+        (is (= "2 of this crew's bookings are not finished. A crew rests after its bookings."
+               (g/render-reason d v newcomer)))))
+    (testing "a bare {b.field} never reaches the caller"
+      (doseq [g [the-crew-is-finished the-crew-is-finished-plainly the-crew-is-free]
+              ctx [(ctx-over bookings (constantly false)) {}]]
+        (let [[v d] (g/evaluate g newcomer (merge half-nine elm) ctx)]
+          (when (t/deny? v)
+            (is (not (re-find #"\{b\." (g/render-reason d v newcomer))))))))
+    (testing ":vars and :hidden are law: declared, they are hashed; absent, nothing moves"
+      (is (= {:count (e/normalize (:count elm-count))} (:vars the-crew-is-finished)))
+      (is (nil? (:hidden the-crew-is-finished-plainly)))
+      (is (empty? (:vars the-crew-is-free))))
+    (testing "a :hidden that names no binder is refused at the def line"
+      (is (thrown? Exception
+                   (eval '(waymark10.declare/defguard nobody-is-c
+                            (waymark10.declare/refuse "Busy: {b.customer_name}.")
+                            '(none [b :ex_booking {:crew (= (input :crew))}])
+                            {:hidden {:c "Busy."}})))))))
 
 ;; ── 4. count-rows: the others, for capacity ───────────────────────────
 

@@ -111,7 +111,11 @@
              "check"          nil}
       (seq (:errors g)) (assoc "errors" (into (sorted-map)
                                               (map (fn [[k s]] [(name k) s]))
-                                              (:errors g))))
+                                              (:errors g)))
+      ;; the unseen-evidence sentences, likewise only when declared
+      (seq (:hidden g)) (assoc "hidden" (into (sorted-map)
+                                              (map (fn [[k s]] [(name k) s]))
+                                              (:hidden g))))
     {"name"           (name (:name g))
      "check"          (callable-hash (str address ".check")
                                      (or (:check g) (:accepts g)))

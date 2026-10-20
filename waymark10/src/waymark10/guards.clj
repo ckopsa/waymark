@@ -645,14 +645,58 @@
                        (str (get vars k))
                        whole))))))
 
+(def ^:private sentence-break #"(?<=[.!?])\s+")
+
+(def ^:private unseen-sentence
+  "What stops this is outside what you can see.")
+
+(defn- binder-of
+  "The binder a {b.field} placeholder reads, when b is one of the
+  guard's, else nil."
+  [binders k]
+  (let [[b f] (str/split k #"\." 2)]
+    (clojure.core/when (clojure.core/and f (contains? binders b)) b)))
+
+(defn- without-unseen
+  "The explain with each sentence that reads a binder bound to no row
+  the caller may see replaced by that binder's :hidden sentence, or
+  left out (docs/spec-related-row-law.md §3). When no sentence would
+  remain, the engine's own sentence stands."
+  [g template vars binders]
+  (let [unseen (into #{} (remove #(contains? vars (str % ".id"))) binders)]
+    (if (empty? unseen)
+      template
+      (let [reads (fn [s] (some (fn [[_ k]] (unseen (binder-of binders k)))
+                                (re-seq placeholder s)))
+            kept (keep (fn [s]
+                         (if-some [b (reads s)]
+                           (get-in g [:hidden (keyword b)])
+                           s))
+                       (str/split template sentence-break))]
+        (if (seq kept) (str/join " " kept) unseen-sentence)))))
+
 (defn render-reason
   "The denier's explain, formatted from deny vars over vars-fn
   garnish (deny vars win). Garnish must never block: vars-fn errors
-  are swallowed."
+  are swallowed. A binder's {b.field} never renders literally: an
+  unseen binder's sentence goes (without-unseen), a field its match
+  lacks reads empty."
   [g deny row]
   (let [garnish (clojure.core/when (clojure.core/and (:vars-fn g) (some? row))
-                  (try ((:vars-fn g) row) (catch Exception _ nil)))]
-    (format-map (:explain g) (merge garnish (:vars deny)))))
+                  (try ((:vars-fn g) row) (catch Exception _ nil)))
+        vars (merge garnish (:vars deny))
+        binders (into #{} (map (comp clojure.core/name key))
+                      (concat (:binders g) (evidence-firsts g)))]
+    (if (empty? binders)
+      (format-map (:explain g) vars)
+      (let [template (without-unseen g (:explain g) vars binders)]
+        (format-map template
+                    (into vars
+                          (keep (fn [[_ k]]
+                                  (clojure.core/when (clojure.core/and (binder-of binders k)
+                                                                       (clojure.core/not (contains? vars k)))
+                                    [k ""])))
+                          (re-seq placeholder template)))))))
 
 (defn becomes-available
   "Structured hope: {:at iso} from deny retry-at or the declared
