@@ -139,7 +139,7 @@
         (is (str/starts-with? kind "bench.") kind)
         (is (= "ckopsa/waymark" (:repo filter)) kind)
         (when (#{"bench.find" "bench.read"} kind)
-          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-*.edn"
+          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-*.edn,factorykit/resources/seats/world.edn"
                  (:path filter))
               kind))
         (when (= "bench.edit" kind)
