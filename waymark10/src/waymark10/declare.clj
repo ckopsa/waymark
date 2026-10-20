@@ -393,7 +393,7 @@
                  ": a guard is a verdict — give it its law: "
                  "(defguard " (name gname) " (refuse \"…\") '(expr))"))))
   (when-not (and (or (nil? opts) (map? opts))
-                 (every? #{:remedies :open :errors} (keys opts)))
+                 (every? #{:remedies :open :errors :evidence} (keys opts)))
     (throw (t/definition-error
             (str "defguard " (name gname)
                  ": the map after the law is {:remedies … :open … :errors {field \"…\"}}; "
@@ -414,7 +414,8 @@
               (seq vars) (assoc :vars vars)
               (:remedies clause) (assoc :remedies (:remedies clause))
               (:open clause) (assoc :open (:open clause))
-              (:errors clause) (assoc :errors (:errors clause))))))
+              (:errors clause) (assoc :errors (:errors clause))
+              (:evidence clause) (assoc :evidence (:evidence clause))))))
 
 (defmacro defguard
   "A sentence-first expression guard:
