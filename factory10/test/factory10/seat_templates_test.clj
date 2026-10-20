@@ -127,7 +127,7 @@
               a actions]
         (is (contains? (get vocab kind) a) (str kind "." a))))
     (testing "it holds the walk's doors and no other"
-      (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
+      (is (= {"org_plan" #{"create" "ask" "log_workarounds" "propose" "go_live" "retire"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
       (is (= {:state "drafting,simulated,going_live" :name "rd_tax_services"}
