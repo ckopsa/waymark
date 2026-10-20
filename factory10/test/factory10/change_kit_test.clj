@@ -12,7 +12,9 @@
   ticket is queued again after the close. Ticket 7aff6a5c moved it:
   `line_why` may say `org_plan_waits_go_live`. Ticket ccc3ecae moved it:
   `born_from` is filterable by :eq, so a declarative guard finds a
-  ticket's change by it."
+  ticket's change by it. Ticket 14d32fc4 moved it: submit's
+  `the-repository-has-a-policy` is an `exists` over `repo_policy`, and
+  its three other walls say `:check-tier :given`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -41,7 +43,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "2bea33fadaccd2323a13e9faead40f8ead78a25098bd535b9604adcaac4ce029")
+  "4aa11c0e940815f2f94cf5855cb45a14cd9407cf9b420f98a6795b5380377919")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
