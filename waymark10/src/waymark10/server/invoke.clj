@@ -471,6 +471,11 @@
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
+             ;; THIS write, `{:kind :action}`, as a guard reads it: a
+             ;; declarative (hold "…") knows the door its replay stands
+             ;; on from here (ticket 8e02609c), and without it no
+             ;; allowed held call ever cleared the hold that minted it
+             :self self
              ;; the key this invoke rides under, as the transition
              ;; will carry it — see the docstring
              :idempotency-key idempotency-key
