@@ -39,10 +39,10 @@
                     {:kind "visit" :actions ["create" "attend" "sign" "no_show" "cancel"]}
                     {:kind "claim" :actions ["create" "submit" "post_payment" "deny" "resubmit" "write_off" "bill_patient"]}]
             :wakes [{:kind "referral" :actions ["create"]}
-                    {:kind "patient" :actions ["create"]}
-                    {:kind "plan_of_care" :actions ["create"]}
-                    {:kind "visit" :actions ["create"]}
-                    {:kind "claim" :actions ["create"]}]}}]
+                    {:kind "patient" :actions ["create" "admit" "discharge"]}
+                    {:kind "plan_of_care" :actions ["create" "activate" "resign"]}
+                    {:kind "visit" :actions ["create" "attend"]}
+                    {:kind "claim" :actions ["create" "submit" "resubmit" "post_payment" "deny"]}]}}]
  :judgments []
  :steps
  [{:as :owner :kind :referral :ref :ref-1

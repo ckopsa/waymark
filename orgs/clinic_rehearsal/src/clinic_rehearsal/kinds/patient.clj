@@ -44,7 +44,7 @@
             [:consent_signed_on {:optional true} [:maybe [:string {:max 10}]]]
             [:privacy_signed_on {:optional true} [:maybe [:string {:max 10}]]]
             [:insurer {:optional true} [:maybe [:string {:max 120}]]]
-            [:member_id {:optional true} [:maybe [:string {:max 60}]]]
+            [:insurance_member_no {:optional true} [:maybe [:string {:max 60}]]]
             [:coverage {:optional true} [:maybe [:enum "verified" "self_pay"]]]
             [:care_team {:optional true} [:maybe [:string {:max 240}]]]
             [:no_shows {:optional true} [:maybe [:int {:min 0}]]]

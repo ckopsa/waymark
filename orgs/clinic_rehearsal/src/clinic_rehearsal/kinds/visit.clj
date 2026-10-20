@@ -23,7 +23,7 @@
 
 (defguard has-signer
   (refuse "Every visit note is signed by the treating therapist; name who signs.")
-  '(present? :signed_by))
+  '(present? :signer))
 
 (defguard has-author-role
   (refuse "Say whether a physical therapist or an assistant wrote the note.")
@@ -50,8 +50,8 @@
             [:author_role {:optional true} [:maybe [:enum "pt" "pta"]]]
             [:note {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 4000}]]]
-            [:signed_by {:optional true} [:maybe [:string {:max 80}]]]
-            [:cosigned_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:signer {:optional true} [:maybe [:string {:max 80}]]]
+            [:cosigner {:optional true} [:maybe [:string {:max 80}]]]
             [:no_show_fee_cents {:optional true} [:maybe [:int {:min 0}]]]]
    :filterable {:state #{:eq :in} :therapist #{:eq} :plan_id #{:eq} :patient_id #{:eq}}
    :decided {:booked "A visit stays booked until its time; the mayor tells the owner of one a day past its time."
