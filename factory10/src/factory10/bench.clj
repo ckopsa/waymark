@@ -1414,17 +1414,20 @@
 ;; A FILMED PLAN'S CHANGE WAITS FOR go_live (ticket 8288529f). Each move
 ;; of an org_plan's change refilms the plan, so a change a `simulated`
 ;; plan names is left behind its base unless that plan's `base_follow`
-;; says `always`; the default, `at_go_live` (or none), brings it forward
-;; only from `going_live` on. The ctx's `:plan-of` answers the plan a
-;; change id names.
+;; says `always` or `when_org_dir_changes` (ticket ce8a4e17: the
+;; findings pass then refilms only a move that changed the org); the
+;; default, `at_go_live` (or none), brings it forward only from
+;; `going_live` on. The ctx's `:plan-of` answers the plan a change id
+;; names.
 
 (defn follows-base?
   "Does the held-forward pass bring forward the change `plan` names?
-  Yes without a plan, under `base_follow` `always`, and in every state
-  but `simulated`."
+  Yes without a plan, under `base_follow` `always` or
+  `when_org_dir_changes`, and in every state but `simulated`."
   [plan]
   (or (nil? plan)
-      (= "always" (some-> (get-in plan [:data :base_follow]) name))
+      (contains? #{"always" "when_org_dir_changes"}
+                 (some-> (get-in plan [:data :base_follow]) name))
       (not= "simulated" (some-> (:state plan) name))))
 
 (defn held-only-behind?
@@ -2267,24 +2270,31 @@
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
   names marked with the owner's go_live yes when its head is the plan's
-  `approved_head`, or one the rig's compare_heads says carries from it:
-  that yes is the person's merge yes, so `person-path` keeps nothing of
-  it for a person and the house merges it with no second ask. Any other
-  head is not merged: the plan's `head_moved` retires the yes and sends
-  it back to simulated."
+  `approved_head`: that yes is the person's merge yes, so `person-path`
+  keeps nothing of it for a person and the house merges it with no
+  second ask. A head the rig's compare_heads says carries from it (a
+  base move) is not merged yet: the findings pass moves the yes to it
+  when the move left the org alone, or refilms the plan when it did not
+  (ticket ce8a4e17). Any other head is not merged: the plan's
+  `head_moved` retires the yes and sends it back to simulated."
   [eng changes]
   (let [plans (going-live-plans eng)]
     (mapv (fn [change]
             (if-some [plan (get plans (str (:id change)))]
               (let [approved (some-> (get-in plan [:data :approved_head]) str not-empty)
                     head (some-> (get-in change [:data :head_sha]) str not-empty)]
-                (if (and approved head
-                         (or (= approved head)
-                             (:carries (held/compared
-                                        eng {:repo (str (get-in change [:data :repository]))
-                                             :base (str (get-in change [:data :base_branch]))
-                                             :approved approved :head head}))))
+                (cond
+                  (and approved head (= approved head))
                   (assoc change ::go-live-yes approved)
+
+                  (and approved head
+                       (:carries (held/compared
+                                  eng {:repo (str (get-in change [:data :repository]))
+                                       :base (str (get-in change [:data :base_branch]))
+                                       :approved approved :head head})))
+                  change
+
+                  :else
                   (do (try
                         (inv/invoke! eng :org_plan (str (:id plan)) :head_moved
                                      {:head_sha (str head)}
