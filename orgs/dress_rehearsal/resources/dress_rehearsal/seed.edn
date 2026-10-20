@@ -9,6 +9,19 @@
  ;; the :owner :id is the plan owner's member id
  :cast
  {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}}
+ ;; the outside world, which only a clone loads (ticket a4149376), as
+ ;; the owner answered no-outside-world on 2026-10-20: a client company
+ ;; that sends the records for its study, a CPA who refers prospects,
+ ;; and the world seat that plays their first week
+ :rehearsal
+ {:cast {:acme   {:id "acme" :display "Acme Robotics" :type :human
+                  :scope [{:kind "study" :actions ["create"]}]}
+         :jordan {:id "jordan" :display "Jordan Lee, CPA" :type :human
+                  :scope [{:kind "prospect" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "R&D Tax Studies prepares R&D credit studies: Jordan Lee, CPA refers prospects, and Acme Robotics, a client, sends the payroll and project records for its study and pays its invoice. On day 2 Acme's payroll records are late. On day 5 the house chases them and asks The Principal for a tap. On day 7 Acme's study is delivered and invoiced."
+                    :kinds "prospect,study,invoice" :cast "acme,jordan" :day_one [:days 0]
+                    :domain_id [:ref :dress_rehearsal]}}]}
  ;; the org's mayor, sat by the principal at $8 a week: it holds every
  ;; door out of each kind's open states, so no prospect, study or
  ;; invoice is left without a leaver; its scope names only the org's
