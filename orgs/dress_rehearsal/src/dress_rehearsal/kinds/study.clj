@@ -72,7 +72,12 @@
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
             [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
             [:records_confirmed_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
-            [:missing_records {:optional true} [:maybe [:string {:max 500}]]]
+            ;; what records are still missing: one entry per kind of record, with when it was last chased
+            [:missing_records {:optional true}
+             [:maybe [:vector {:max 4}
+                      [:map
+                       [:record [:enum "payroll" "contractor_invoices" "cloud_and_supply_costs" "engineering_records"]]
+                       [:last_chased_on {:optional true} [:maybe [:string {:max 10}]]]]]]]
             [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
             [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
