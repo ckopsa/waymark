@@ -340,6 +340,32 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
+(defn- law-conds
+  "An exists/none/count-rows where as the store's conds
+  (docs/spec-related-row-law.md §3): :state and :id are the row's own
+  columns, any other field a data field cast as the target's schema
+  types it — the condition list a :related edge hands ids-matching."
+  [trdef conds]
+  (let [text #(if (keyword? %) (name %) (str %))
+        cast (fn [field]
+               (let [s (schema/field-schema (:schema trdef) field)
+                     s (if (and (vector? s) (= :maybe (first s))) (second s) s)]
+                 (case (if (vector? s) (first s) s)
+                   :waymark/date "date"
+                   :waymark/instant "timestamptz"
+                   :boolean "boolean"
+                   :int "bigint"
+                   (:double :decimal) "numeric"
+                   "text")))]
+    (mapv (fn [{:keys [field op value values]}]
+            (cond-> (case field
+                      :state {:target :state :op op}
+                      :id {:target :id :op op}
+                      {:target :data :field (name field) :cast (cast field) :op op})
+              (= :in op) (assoc :values (mapv text values))
+              (not= :in op) (assoc :value (text value))))
+          conds)))
+
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
          create-guard-pass)
 
@@ -622,6 +648,17 @@
                     (when (get (resources engine) target-kind)
                       (store/sum-matching (:storage engine) tx target-kind
                                           field conds)))
+             ;; …and the existence twin (docs/spec-related-row-law.md
+             ;; §3): exists/none/count-rows ask for ids, or a count,
+             ;; over the conds their where spells — never a page of rows
+             :rows-matching (fn [target-kind conds limit]
+                              (when-some [trdef (get (resources engine) target-kind)]
+                                (store/ids-matching (:storage engine) tx target-kind
+                                                    (law-conds trdef conds) limit)))
+             :count-matching (fn [target-kind conds]
+                               (when-some [trdef (get (resources engine) target-kind)]
+                                 (store/count-matching (:storage engine) tx target-kind
+                                                       (law-conds trdef conds))))
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render

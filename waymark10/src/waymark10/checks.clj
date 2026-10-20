@@ -229,7 +229,7 @@
       :else #{})))
 
 (defn- orphan-placeholders [lg]
-  (let [known (into (declared-vars lg) (:judges lg))]
+  (let [known (-> (declared-vars lg) (into (:judges lg)) (into (keys (:binders lg))))]
     (seq (sort (remove known (template-placeholders (:explain lg)))))))
 
 (defn- check-guard-templates [r]

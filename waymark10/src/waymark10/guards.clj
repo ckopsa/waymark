@@ -56,6 +56,7 @@
             [waymark10.expr :as expr]
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -137,9 +138,11 @@
     (:id r) (conj (:id r))))
 
 (defn evidence-names
-  "The evidence names a guard declares its refusal returns."
+  "The evidence names a guard declares its refusal returns — and the
+  binder of each exists/none/count-rows it asks, which binds its match."
   [g]
-  (let [e (:evidence g)] (set (if (map? e) (keys e) e))))
+  (let [e (:evidence g)]
+    (into (set (if (map? e) (keys e) e)) (keys (:binders g)))))
 
 (defn- bound-value [[op k] row inp evidence]
   (case op
@@ -340,14 +343,18 @@
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
   principal), which row this is, and the log through `:actor-of`; for
-  (follow …), the ctx's :read hook memoized for this verdict. A
+  (follow …), the ctx's :read hook memoized for this verdict; for
+  (exists …), (none …), (count-rows …), its :rows-matching and
+  :count-matching. A
   ctx without a principal or a log leaves its key out, and the form
   that asks for it answers unknown."
   [row inp ctx]
   (let [p (:principal ctx)
         actor-of (:actor-of ctx)]
     (cond-> {:data (:data row) :input inp :now (:now ctx)
-             :read (memo-read (:read ctx))}
+             :read (memo-read (:read ctx))
+             :rows-matching (:rows-matching ctx)
+             :count-matching (:count-matching ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
@@ -446,20 +453,72 @@
                 [(t/deny {:vars (zipmap (:judges g) values)}) g]))
             [(t/allow) g]))))))
 
+(defn- binder-evidence
+  "Each exists/none/count-rows binder of a refusing guard, bound to its
+  evidence (docs/spec-related-row-law.md §3): the oldest match by
+  created_at, the id breaking a tie, among the rows the caller's grant
+  can see — {:evidence {name id}} for (evidence :b) in a remedy, and
+  {:vars {\"b.field\" value}} for {b.field} in the sentence, a secret
+  field rendered empty. A binder whose every match is hidden, or a ctx
+  with no hook to ask, binds nothing: the refusal stands and names none."
+  [g row inp ctx]
+  (let [scope (expr-scope row inp ctx)
+        match (:rows-matching ctx)
+        read (:read scope)
+        sees? (clojure.core/or (get-in ctx [:grant :row?]) (constantly true))
+        secret (fn [kind]
+                 (clojure.core/or (when-some [rdef-of (:rdef-of ctx)]
+                                    (some-> (rdef-of kind) :schema schema/secret-fields))
+                                  #{}))]
+    (when (clojure.core/and match read)
+      (reduce
+       (fn [acc [b {:keys [kind where]}]]
+         (let [conds (expr/where-conds where scope)
+               hit (when (vector? conds)
+                     (->> (match kind conds 50)
+                          (map str)
+                          (remove #{(:self scope)})
+                          (filter #(sees? kind %))
+                          (keep #(read kind %))
+                          (sort-by (juxt :created_at (comp str :id)))
+                          first))]
+           (if (nil? hit)
+             acc
+             (let [hidden (secret kind)
+                   at (fn [k] (str (name b) "." (name k)))]
+               (-> acc
+                   (assoc-in [:evidence b] (str (:id hit)))
+                   (update :vars merge
+                           (into {(at :id) (str (:id hit))
+                                  (at :state) (some-> (:state hit) name)}
+                                 (map (fn [[k v]] [(at k) (if (hidden k) "" v)]))
+                                 (:data hit))))))))
+       {}
+       (:binders g)))))
+
 (defn- with-evidence
   "A denying leaf's evidence: the verdict's own, else what the guard's
-  :evidence fns find over (row, ctx), each nil left out. A render ctx
-  without read hooks lends its :evidence-reads, so an envelope's
-  refusal names what the POST's would."
-  [[v g :as res] row ctx]
-  (if (clojure.core/and (t/deny? v) (map? (:evidence g)) (nil? (:evidence v)))
-    (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
-          ev (into {}
-                   (keep (fn [[k f]]
-                           (clojure.core/when-some [x (f row ctx)] [k x])))
-                   (:evidence g))]
-      (if (seq ev) [(assoc v :evidence ev) g] res))
-    res))
+  :evidence fns find over (row, ctx), each nil left out — and, for a
+  guard that asks exists/none/count-rows, each binder's match
+  (binder-evidence). A render ctx without read hooks lends its
+  :evidence-reads, so an envelope's refusal names what the POST's would."
+  [[v g :as res] row inp ctx]
+  (let [[v g :as res]
+        (if (clojure.core/and (t/deny? v) (map? (:evidence g)) (nil? (:evidence v)))
+          (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
+                ev (into {}
+                         (keep (fn [[k f]]
+                                 (clojure.core/when-some [x (f row ctx)] [k x])))
+                         (:evidence g))]
+            (if (seq ev) [(assoc v :evidence ev) g] res))
+          res)]
+    (if (clojure.core/and (t/deny? v) (seq (:binders g)))
+      (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)]
+        [(cond-> v
+           (seq evidence) (update :evidence merge evidence)
+           (seq vars) (update :vars merge vars))
+         g])
+      res)))
 
 (defn evaluate
   "→ [verdict denier]. The denier is the leaf whose explain renders
@@ -485,7 +544,7 @@
         first-deny))
 
     (:relation g) (evaluate-relation g row inp ctx)
-    :else (with-evidence (evaluate-leaf g row inp ctx) row ctx)))
+    :else (with-evidence (evaluate-leaf g row inp ctx) row inp ctx)))
 
 ;; ── reasons and structured hope ─────────────────────────────────────
 
@@ -560,7 +619,7 @@
                            (reads? (comp seq :doors)) (conj :transitions :principal)
                            (reads? :uses-me) (conj :principal)
                            (reads? :uses-now) (conj :now))))
-          (sort (into #{} (mapcat :follows) infos)))))
+          (sort (into #{} (mapcat #(concat (:follows %) (:queries %))) infos)))))
 
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the
@@ -602,6 +661,9 @@
                    :vars vars
                    :judges (clojure.core/or judges (vec (sort (:inputs winfo))))
                    :reads (clojure.core/or reads (derived-reads w vars))}
+                  ;; the binder names the tree erased, kept for evidence
+                  (clojure.core/when-some [bs (not-empty (expr/rows-binders when))]
+                    {:binders bs})
                   ;; the gate names it: [reads-handwritten]
                   (clojure.core/when (some? reads) {:reads-written true})))))
 
@@ -611,14 +673,19 @@
   derive :reads again. A guard with nothing to bind comes back as it
   was, so no law that does not follow moves."
   [g kind-of]
-  (let [forms (cons (:when g) (vals (:vars g)))]
+  (let [forms (concat (cons (:when g) (vals (:vars g)))
+                      (map :where (vals (:binders g))))]
     (if (clojure.core/or (nil? (:when g))
                          (not-any? (comp nil? first) (mapcat expr/follows forms)))
       g
       (let [bind #(expr/normalize (expr/bind-follows % kind-of))
             w (bind (:when g))
-            vars (into {} (map (fn [[k f]] [k (bind f)])) (:vars g))]
+            vars (into {} (map (fn [[k f]] [k (bind f)])) (:vars g))
+            binders (into {}
+                          (map (fn [[b q]] [b (update q :where expr/bind-follows kind-of)]))
+                          (:binders g))]
         (cond-> (assoc g :when w :vars vars)
+          (seq binders) (assoc :binders binders)
           (clojure.core/not (:reads-written g)) (assoc :reads (derived-reads w vars)))))))
 
 (defn relation
