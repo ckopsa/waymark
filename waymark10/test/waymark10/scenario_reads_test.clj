@@ -4,11 +4,19 @@
   judged with no database — its :given rows answer :read and the
   existence hooks, its :history answers :actor-of. Over a fixture pair
   of kinds: a meal, and the day that plans and serves it."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [next.jdbc :as jdbc]
             [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.scenario :as scenario]
+            [waymark10.server.engine :as engine]
+            [waymark10.server.store :as store]
+            [waymark10.server.store.postgres :as pg]
+            [waymark10.test.db :as db]
+            [waymark10.test.packs :as packs]
+            [waymark10.test.suite :as suite]
             [waymark10.types :as t]))
 
 ;; ── the world ───────────────────────────────────────────────────────────────────
@@ -106,7 +114,7 @@
   "Whoever planned the day does not also serve it."
   {:kind :sr_day :attempt :serve
    :given [soup]
-   :history [{:action :plan :as "mom"}]
+   :history [{:action :plan :as "mom" :input {:meal_id "{given/soup}"}}]
    :row {:state :planned :data {:title "Monday" :meal_id "{given/soup}"}}
    :as {:id "mom" :type :person}
    :expect {:refused :sr-planner-does-not-serve}})
@@ -115,7 +123,7 @@
   "Someone who did not plan the day serves it."
   {:kind :sr_day :attempt :serve
    :given [soup]
-   :history [{:action :plan :as "mom"}]
+   :history [{:action :plan :as "mom" :input {:meal_id "{given/soup}"}}]
    :row {:state :planned :data {:title "Monday" :meal_id "{given/soup}"}}
    :as {:id "dad" :type :person}
    :expect {:allowed true}})
@@ -205,4 +213,55 @@
                                   {:kind :sr_day :attempt :serve
                                    :history [{:action :plan :as "mom" :when "now"}]
                                    :row {:state :planned :data {:title "Monday"}}
-                                   :expect {:allowed true}}))))
+                                   :expect {:allowed true}})))
+  (is (thrown? Exception
+               (scenario/scenario :bad "A log entry's input is a map."
+                                  {:kind :sr_day :attempt :serve
+                                   :history [{:action :plan :as "mom" :input "soup"}]
+                                   :row {:state :planned :data {:title "Monday"}}
+                                   :expect {:allowed true}})))
+  (is (thrown-with-msg? Exception #"which no :given row"
+                        (scenario/scenario :bad "A log entry's handle is staged."
+                                           {:kind :sr_day :attempt :serve
+                                            :history [{:action :plan :as "mom"
+                                                       :input {:meal_id "{given/stew}"}}]
+                                            :row {:state :planned :data {:title "Monday"}}
+                                            :expect {:allowed true}}))))
+
+;; ── the conformance tier stages the same log through the real door ─────────────
+;; Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides.
+
+(def ^:private tables
+  ["sr_meals" "sr_days" "members" "roles" "grants" "approval_requests" "definitions"
+   "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
+   "waymark10_cursors" "events"])
+
+(defn- with-engine [f]
+  (let [st (pg/storage db/dsn)]
+    (try
+      (store/with-tx st
+        (fn [tx]
+          (doseq [table tables]
+            (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
+      (let [eng (engine/engine {:storage st :resources [@meal @day]})]
+        (f (suite/context {:engine eng :handler (engine/handler eng)
+                           :kinds [:sr_meal :sr_day]})))
+      (finally (pg/close! st)))))
+
+(deftest a-history-entry-carries-its-input-through-the-door
+  (with-engine
+    (fn [ctx]
+      (let [run #(#'packs/run-scenario ctx @day %)]
+        (testing "the :plan entry stages with its :input, and the did guard reads it"
+          (is (nil? (run the-planner-does-not-serve)))
+          (is (nil? (run another-hand-serves))))
+        (testing "without its :input the :plan entry refuses, naming its door's answer"
+          (let [v (run (assoc another-hand-serves :history [{:action :plan :as "mom"}]))]
+            (is (str/includes? (str v) "cannot be staged by the conformance tier") v)))
+        (testing "an acted-as entry points to the check tier"
+          (let [v (run (assoc another-hand-serves
+                              :history [{:action :plan :as "mom" :acted-by "seat:robot"
+                                         :input {:meal_id "{given/soup}"}}]))]
+            (is (str/includes? (str v) (str "An acted-as history entry is judged in the check tier;"
+                                            " mark the scenario :check-tier :given or move it there."))
+                v)))))))
