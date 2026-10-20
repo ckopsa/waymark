@@ -162,3 +162,30 @@
   (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
           "scope/unknown-kind/cast/boss/gadget"]
          (mapv :key (conform/conform "fixtures/orgs/miscast")))))
+
+;; ── world (ticket a4149376) ──────────────────────────────────────
+
+(defn- example-without-rehearsal
+  "A copy of orgs/example whose seed holds no :rehearsal, beside the
+  manifest `manifest`. → its dir."
+  [manifest]
+  (let [src (io/file "../orgs/example")
+        dir (io/file (str (Files/createTempDirectory "org-world" (make-array FileAttribute 0)))
+                     "example")
+        seed-file (io/file dir "resources" "example" "seed.edn")]
+    (doseq [^File f (file-seq src)
+            :when (.isFile f)
+            :let [to (io/file dir (str (.relativize (.toPath src) (.toPath f))))]]
+      (io/make-parents to)
+      (io/copy f to))
+    (spit seed-file (pr-str (dissoc (edn/read-string (slurp seed-file)) :rehearsal)))
+    (spit (io/file dir "org.edn") (pr-str manifest))
+    (str dir)))
+
+(deftest an-org-with-no-outside-world-earns-its-finding
+  (let [fs (conform/conform (example-without-rehearsal {:name "example" :live false}))]
+    (is (= ["no-outside-world/example"] (mapv :key fs)))
+    (is (= "Nobody outside the business starts work in the first week, so the film has nothing to show."
+           (:sentence (first fs)))))
+  (testing "an org that only works inside waives it with :world :none"
+    (is (= [] (conform/conform (example-without-rehearsal {:name "example" :live false :world :none}))))))

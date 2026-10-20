@@ -114,11 +114,12 @@
 
 (defn- open-seat!
   "A world seat over the org's `request` create door, its key offered.
-  acts_as_cast only where `cast?`: off a clone the seat door refuses it."
+  acts_as_cast only where `cast?`: off a clone the seat door refuses it.
+  Not named `world`: a clone's seed already opens that one."
   [eng cast?]
   (let [model (add-model! eng)
         seat (:row (inv/create! eng :seat
-                                (cond-> {:name "world"
+                                (cond-> {:name "cast-as-world"
                                          :charter "Play the customers who file requests."
                                          :scope [{:kind "request" :actions ["create"]}]
                                          :held_for [(:id model)]
