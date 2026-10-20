@@ -336,8 +336,9 @@
   {:kind    :judgment
    :attempt :supersede
    :given   [{:kind :judgment :handle :old :state :superseded
-              :data (assoc a-judgment :name "Why did CI go red, before")}]
-   :row     {:state :promoted :data a-judgment}
+              :data (assoc a-judgment :name "Why did CI go red, before {{run}}")}]
+   :row     {:state :promoted
+             :data (assoc a-judgment :name "Why did CI go red {{run}}")}
    :input   {:successor "{given/old}"}
    :as      {:id "colton" :type :human}
    :expect  {:refused :the-successor-still-stands

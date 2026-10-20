@@ -847,7 +847,7 @@
                       (reduced out)
                       (cond-> ids
                         (:handle gv) (assoc (name (:handle gv)) (:id out))))))
-                {"run" (subs (str (random-uuid)) 0 8)} (:given s))]
+                {} (:given s))]
     (cond
       (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})

@@ -1615,7 +1615,7 @@
   {:kind    :notifier
    :attempt :restate
    :given   [{:kind :mcp_server :handle :gone :state :retired
-              :data {:name "oldbot_{given/run}" :transport "http"
+              :data {:name "oldbot_{{run}}" :transport "http"
                      :url "http://127.0.0.1:8100/mcp/"}}]
    :row     {:state :active :data a-notifier}
    :input   {:server "{given/gone}"}
@@ -1629,7 +1629,7 @@
   {:kind    :notifier
    :attempt :restate
    :given   [{:kind :mcp_server :handle :live :state :live
-              :data {:name "newbot_{given/run}" :transport "http"
+              :data {:name "newbot_{{run}}" :transport "http"
                      :url "http://127.0.0.1:8101/mcp/"}}]
    :row     {:state :active :data a-notifier}
    :input   {:server "{given/live}"}
@@ -2098,7 +2098,7 @@
   {:kind    :notice_rule
    :attempt :restate
    :given   [{:kind :mcp_server :handle :srv :state :live
-              :data {:name "tellbot_{given/run}" :transport "http"
+              :data {:name "tellbot_{{run}}" :transport "http"
                      :url "http://127.0.0.1:8102/mcp/"}}
              {:kind :notifier :handle :tired :state :retired
               :data (assoc a-notifier :server "{given/srv}")}]
