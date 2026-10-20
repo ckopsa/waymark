@@ -57,6 +57,7 @@ From `waymark10.expr/ops`; anything else is refused with
 | `days` | `(days 7)` — a whole-day span, for date arithmetic: `(+ (var :start_date) (days 6))` |
 | `date-of` | an `Instant` → its UTC `LocalDate`: `(date-of (now))`, `(date-of (var :now))` |
 | `is-set` | `(is-set (data :field))` — present and non-nil |
+| `clock day iso` | a sentence's own form for an instant, in the reader's zone: `(clock (data :ends_at))` → `13:00`, `(day …)` → `Tue 6 Jan`, `(iso …)` → the raw RFC 3339 value. Unwrapped, a sentence hole holding an instant reads `13:00` on the row's day (else today), `Tue 13:00` within a week, `6 Jan 13:00` beyond |
 | `follow` | `(follow (input :meal_id) :state)` — one hop to a field of the row a ref names (guard scope; docs/spec-related-row-law.md §2). The ref is literally `(data :f)` or `(input :f)`, where `:f` is a `:waymark/ref` (or `[:maybe :waymark/ref]`) entry carrying `:kind`; the field is a data field of the target kind, `:state` or `:id`. One hop only: a `follow` cannot start from a `follow`. At the def site the kind is written in: the normalized spelling is `(follow :meal (input :meal_id) :state)`, so retargeting a ref moves the fingerprint |
 | `every some count sum` | over a collection, binder-first: `(every [d (var :days)] (is-set (get d :meal_id)))`, `(count [i (var :items)] (get i :urgent))` — or just `(count (var :items))` for the plain size — `(sum [l (var :lines)] (get l :amount))` |
 
