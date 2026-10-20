@@ -93,6 +93,10 @@
         shots (:shots (:scene (first-week/scene three-kind-seed
                                                 (assoc filmed-on :brief brief :resources three-kinds))))
         closing (last shots)]
+    (testing "the shots open the knocked kind's collection, and tap no nav"
+      (is (not-any? #(some-> % :tap :surface (str/starts-with? "nav.")) shots))
+      (is (= {:collection "prospects"} (:open (first shots))))
+      (is (= 8 (count (filter #(= {:collection "prospects"} (:open %)) shots)))))
     (testing "the opening says the business and its brief's first sentence"
       (is (= "Example Landscaping: A six-person landscaping business in Provo."
              (:say (first shots)))))

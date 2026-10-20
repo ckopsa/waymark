@@ -98,7 +98,9 @@ whole name such as `dialog.submit`, or a stem completed, such as
 `dialog.field:title` or `sheet.step:1`. The row is a `$ref` or
 `/api/<plural>/<id>`. With no `@row`, the row is the one last opened.
 
-- `nav.<kind>`: the kind is one this engine serves.
+- `nav.<kind>`: the kind is one this engine serves. A kind that is not
+  a primary tab of the active domain is drawn behind `nav-more`; an
+  `open` of its collection reaches it wherever the nav puts it.
 - `door:<action>` and `door-shut:<action>`: where the row's kind is
   known, the action is a door of it.
 - `doors-more`: the 'More doors (n)' line of a row whose kind marks
