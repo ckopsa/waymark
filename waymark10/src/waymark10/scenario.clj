@@ -34,8 +34,11 @@
 
   A scenario runs in the CHECK tier — in this process, with no
   storage of any kind, in the same breath as `make check-queue` —
-  when it declares no :given rows AND every guard on the attempted
-  action declares :reads ⊆ offline-reads. Both conditions are read
+  when every guard on the attempted action declares :reads ⊆
+  offline-reads or is DECLARATIVE — its :reads derived from a :when
+  tree whose follow, exists and did the scenario answers from its own
+  :given rows and :history (docs/spec-related-row-law.md §5) — AND it
+  stages :given rows only for such a guard to read. Both conditions are read
   off DECLARATIONS, which is guards.clj's own posture ('call shape
   comes from :reads/:judges declarations, never from arity
   inspection'). Everything else is the CONFORMANCE tier: the
@@ -79,7 +82,7 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :row :input :as :at :given :expect])
+  [:name :sentence :kind :attempt :row :input :as :at :given :history :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -88,6 +91,9 @@
 
 (def row-keys [:state :data])
 (def given-keys [:kind :state :data :handle])
+;; one entry of the log the scenario's row is to have, oldest first:
+;; who did which door, and for an acted-as move the seat behind them
+(def history-keys [:action :as :acted-by])
 ;; :leashed (waymark-zs9) is the conformance tier's one opt-out: an
 ;; :agent is attempted holding a grant over exactly the door it knocks
 ;; on, unless the scenario says `:leashed false` — which is how "an
@@ -294,6 +300,16 @@
     (when-some [bad (seq (sort (remove staged named)))]
       (err sname (str "names {given/" (first bad) "}, which no :given row"
                       " declares as its :handle"))))
+  (when (some? (:history m))
+    (when-not (vector? (:history m))
+      (err sname ":history is a vector of {:action … :as …}, the row's log oldest first"))
+    (doseq [h (:history m)]
+      (when-not (map? h) (err sname "each :history entry is {:action … :as \"principal-id\"}"))
+      (closed! sname "history" history-keys h)
+      (when-not (keyword? (:action h))
+        (err sname "each :history entry names its :action as a keyword"))
+      (when (str/blank? (str (:as h)))
+        (err sname "each :history entry names who acted, :as \"principal-id\""))))
   (when (and (some? (:input m)) (not (map? (:input m))))
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
@@ -302,6 +318,7 @@
          :name sname
          :sentence sentence
          :given (vec (:given m))
+         :history (vec (:history m))
          :as (principal! sname (:as m))
          :expect (:expect m)))
 
@@ -350,16 +367,45 @@
 
 ;; ── the tier, read off declarations ─────────────────────────────────
 
+(defn- declarative?
+  "A guard whose verdict is a :when tree and whose :reads that tree
+  derived: every read it makes is a follow, an exists or a did the
+  scenario itself can answer. A hand-written :reads is the author's
+  word over the tree, and stays as asserted."
+  [gd]
+  (boolean (and (:when gd) (not (:reads-written gd)))))
+
+(defn- unserved-reads
+  "What this guard tree reads that the check tier cannot answer: a
+  declarative leaf nothing, any other leaf its :reads beyond
+  offline-reads, a composite what its parts leave."
+  [gd]
+  (cond
+    (declarative? gd) []
+    (or (seq (:all gd)) (seq (:any gd))) (mapcat unserved-reads (concat (:all gd) (:any gd)))
+    :else (remove offline-reads (:reads gd))))
+
+(defn- reads-related?
+  "Does some declarative leaf of this tree read another row or the
+  log — the reads the scenario's :given and :history are there to
+  serve?"
+  [gd]
+  (boolean
+   (or (and (declarative? gd) (some (complement offline-reads) (:reads gd)))
+       (some reads-related? (concat (:all gd) (:any gd))))))
+
 (defn check-tier?
   "Does this scenario keep check.clj's no-storage posture? Two
-  declared conditions, both read and neither sniffed: it stages no
-  :given rows, and every guard on the attempted action declares
-  :reads ⊆ offline-reads."
+  declared conditions, both read and neither sniffed: every guard on
+  the attempted action declares :reads ⊆ offline-reads or is
+  declarative, and it stages :given rows only when such a guard reads
+  related rows — a :given row nothing declarative reads is a row to
+  stage for real."
   [rdef s]
   (let [{:keys [guards missing]} (attempted rdef s)]
     (boolean (and (nil? missing)
-                  (empty? (:given s))
-                  (every? #(every? offline-reads (:reads %)) guards)))))
+                  (empty? (mapcat unserved-reads guards))
+                  (or (empty? (:given s)) (some reads-related? guards))))))
 
 (defn deferral-reason
   "Why a scenario waits for the suite, in the author's own terms —
@@ -370,12 +416,11 @@
     (let [{:keys [guards missing]} (attempted rdef s)]
       (cond
         missing nil
-        (seq (:given s)) (str "stages " (count (:given s)) " given row"
-                              (when (not= 1 (count (:given s))) "s"))
+        (and (seq (:given s)) (not-any? reads-related? guards))
+        (str "stages " (count (:given s)) " given row"
+             (when (not= 1 (count (:given s))) "s"))
         :else
-        (let [beyond (into (sorted-set)
-                           (comp (mapcat :reads) (remove offline-reads))
-                           guards)]
+        (let [beyond (into (sorted-set) (mapcat unserved-reads) guards)]
           (str "reads " (str/join ", " (map str beyond))))))))
 
 ;; ── the check-tier judge ────────────────────────────────────────────
@@ -410,20 +455,109 @@
    {:warned []}
    guards))
 
+(defn- given-id
+  "The id the check tier gives the n-th :given row: its handle's, so
+  `{given/<handle>}` names it, or its place for a row with none."
+  [n gv]
+  (if-some [h (:handle gv)]
+    (str "given:" (name h))
+    (str "given:#" n)))
+
+(defn- given-ids
+  "handle → id over the :given rows, as fill-handles takes it."
+  [s]
+  (into {}
+        (keep-indexed (fn [n gv] (when-some [h (:handle gv)] [(name h) (given-id n gv)])))
+        (:given s)))
+
+(defn- given-rows
+  "The :given rows as storage would hand them back — kind, id, state,
+  data — under the ids given-id mints, their own handles filled."
+  [s]
+  (let [ids (given-ids s)]
+    (into []
+          (map-indexed (fn [n gv]
+                         {:kind (:kind gv)
+                          :id (given-id n gv)
+                          :state (:state gv)
+                          :data (fill-handles (:data gv {}) ids)}))
+          (:given s))))
+
+(defn- holds?
+  "One where condition over one in-memory row, as the store asks it:
+  :state and :id are the row's own, any other field a data field; a
+  missing value matches nothing, numbers order as numbers and the
+  rest as text."
+  [row {:keys [field op value values]}]
+  (let [text #(if (keyword? %) (name %) (str %))
+        v (case field
+            :state (:state row)
+            :id (:id row)
+            (get-in row [:data field]))]
+    (and (some? v)
+         (if (= :in op)
+           (contains? (into #{} (map text) values) (text v))
+           (let [c (if (and (number? v) (number? value))
+                     (compare (double v) (double value))
+                     (compare (text v) (text value)))]
+             (case op
+               := (zero? c)
+               :< (neg? c)
+               :<= (not (pos? c))
+               :> (pos? c)
+               :>= (not (neg? c))
+               false))))))
+
+(defn- scenario-reads
+  "The read hooks served from the scenario itself (docs/spec-related-
+  row-law.md §5): :read, :find, :rows-matching and :count-matching
+  over its :given rows, :actor-of over its :history — the world is
+  exactly what the scenario declares, so no :given is no rows and no
+  :history an empty log."
+  [s]
+  (let [rows (given-rows s)
+        of-kind (fn [kind] (filter #(= (keyword kind) (keyword (:kind %))) rows))
+        matching (fn [kind conds] (filter (fn [r] (every? #(holds? r %) conds)) (of-kind kind)))
+        log (reverse (:history s))]
+    {:read (fn [kind id] (some #(when (= (str id) (:id %)) %) (of-kind kind)))
+     :find (fn [kind where & [opts]]
+             (cond->> (filter (fn [r] (every? (fn [[f v]] (holds? r {:field f :op := :value v})) where))
+                              (of-kind kind))
+               (:limit opts) (take (:limit opts))
+               true vec))
+     :rows-matching (fn [kind conds limit]
+                      (cond->> (map :id (matching kind conds))
+                        limit (take limit)
+                        true vec))
+     :count-matching (fn [kind conds] (count (matching kind conds)))
+     :actor-of (fn [_row door & every]
+                 (apply g/actors-of
+                        (into []
+                              (comp (filter #(= (name door) (name (:action %))))
+                                    (map (fn [h]
+                                           {:action door
+                                            :actor (cond-> {:id (str (:as h))}
+                                                     (:acted-by h) (assoc :acted_by (str (:acted-by h))))})))
+                              log)
+                        door every))}))
+
 (defn- offline-ctx
   "Everything a check-tier guard is allowed to read, and nothing
   else. :invoke and not :probe because a scenario SUPPLIES its input
   and must not collect the probe's pending-input short-circuit; :rate
   nil because an engine without a rate coordinator is what
-  guards/rate-limit already allows for; no :read, :find or :actor-of
-  hook, because there is no storage here and a guard that reaches for
-  one gets the offline answer it declared it could give."
-  [s]
-  {:mode :invoke
-   :now (some-> ^String (:at s) Instant/parse)
-   :principal (:as s)
-   :services {:features []}
-   :rate nil})
+  guards/rate-limit already allows for. The read hooks are lent only
+  when `related?` — a declarative guard on the door reads other rows
+  or the log — and then from the scenario (scenario-reads); otherwise
+  there are none, and a code guard that reaches for one gets the
+  offline answer it declared it could give."
+  [s related?]
+  (cond-> {:mode :invoke
+           :now (some-> ^String (:at s) Instant/parse)
+           :principal (:as s)
+           :services {:features []}
+           :rate nil}
+    related? (merge (scenario-reads s))))
 
 (defn- scenario-row
   "The row as a literal document, wearing the shape storage would
@@ -526,8 +660,13 @@
   [rdef s]
   (or (structural rdef s)
       (let [{:keys [door action guards]} (attempted rdef s)
+            ;; a {given/<handle>} names the id the check tier gave it
+            ids (given-ids s)
+            s (cond-> s
+                (seq ids) (-> (update :row fill-handles ids)
+                              (update :input fill-handles ids)))
             row (scenario-row s)
-            ctx (offline-ctx s)]
+            ctx (offline-ctx s (some reads-related? guards))]
         (if (and (= :action door)
                  (not (contains? (set (:from action)) (:state row))))
           ;; the machine's own refusal, before any guard is consulted —
