@@ -378,10 +378,18 @@
   [rdef attempt]
   (boolean (contains? (or (:create-action-names rdef) #{:create}) attempt)))
 
+(defn extra-create
+  "The extra create door (:creates) this attempt names, or nil: a door
+  the kind declares beside its ordinary create, judged by its own
+  :guards over its own :input."
+  [rdef attempt]
+  (some #(when (= attempt (:action %)) %) (:creates rdef)))
+
 (defn attempted
   "What the scenario attempts, resolved against the declaration:
   {:door :create :guards […]} | {:door :action :action a :guards […]}
-  | {:missing \"sentence\"}."
+  | {:missing \"sentence\"}. A :creates door is a create, carrying its
+  own :input beside its guards."
   [rdef s]
   (let [a (:attempt s)]
     (cond
@@ -394,6 +402,10 @@
 
       (create-door? rdef a)
       {:door :create :guards (vec (:create-guards rdef))}
+
+      (some? (extra-create rdef a))
+      (let [c (extra-create rdef a)]
+        {:door :create :guards (vec (:guards c)) :input (:input c)})
 
       (contains? (:actions rdef) a)
       (let [d (assoc (get-in rdef [:actions a]) :name a)]
@@ -553,13 +565,15 @@
             :id (:id row)
             (get-in row [:data field]))]
     (and (some? v)
-         (if (= :in op)
-           (contains? (into #{} (map text) values) (text v))
+         (case op
+           :in (contains? (into #{} (map text) values) (text v))
+           :not-in (not (contains? (into #{} (map text) values) (text v)))
            (let [c (if (and (number? v) (number? value))
                      (compare (double v) (double value))
                      (compare (text v) (text value)))]
              (case op
                := (zero? c)
+               :not= (not (zero? c))
                :< (neg? c)
                :<= (not (pos? c))
                :> (pos? c)
@@ -719,7 +733,7 @@
   [rdef s]
   (or (structural rdef s)
       (let [s (fill-run s check-run)
-            {:keys [door action guards]} (attempted rdef s)
+            {:keys [door action guards] door-input :input} (attempted rdef s)
             ;; a {given/<handle>} names the id the check tier gave it
             ids (given-ids s)
             s (cond-> s
@@ -730,7 +744,7 @@
             s (cond-> s
                 (= :create door)
                 (update :input #(schema/apply-defaults
-                                 (or (:create-schema rdef) (:schema rdef))
+                                 (or door-input (:create-schema rdef) (:schema rdef))
                                  (or % {}))))
             row (scenario-row s)
             ctx (offline-ctx s (some reads-related? guards))]
