@@ -8,9 +8,10 @@
   validation."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [waymark10.declare :as d :refer [defguard refuse warn]]
+            [waymark10.declare :as d :refer [defguard hold refuse warn]]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.types :as t]))
 
@@ -159,3 +160,71 @@
     (is (= "" (g/listed nil)))
     (is (= "" (g/listed [])))
     (is (= "" (g/listed #{})))))
+
+;; ── a person's tap, one line (ticket 914d0cff) ───────────────────────
+
+(defguard principal-signs-off
+  (hold "A study is signed off only on The Principal's tap."))
+
+(defguard big-spends-wait
+  (hold "Spending $5,000 or more waits for The Principal's tap.")
+  '(< (data :amount_usd) 5000))
+
+(def ^:private the-principal (t/principal {:id "principal" :display "The Principal"}))
+(def ^:private the-clerk (t/principal {:id "study-clerk" :type :agent}))
+
+(defn- at-the-door
+  "The ctx a write on study/sign_off judges with, as invoke builds it."
+  [principal & [extra]]
+  (merge {:mode :invoke :principal principal
+          :self {:kind :study :action :sign_off} :door :sign_off}
+         extra))
+
+(defn- replay
+  "The engine's replay of a held call the person allowed: :within names
+  it, and :read answers it back."
+  [held]
+  {:within {:kind :held_call :action :allow :id "h1"}
+   :read (fn [k id] (when (and (= :held_call k) (= "h1" id)) held))})
+
+(def ^:private allowed-sign-off
+  {:state :allowed
+   :data {:door {:kind "study" :action "sign_off" :id "s1"} :caller "study-clerk"}})
+
+(defn- verdict [guard row ctx] (first (g/evaluate guard row {} ctx)))
+
+(deftest a-hold-clause-is-a-persons-tap
+  (let [row {:id "s1" :state :review :data {}}]
+    (testing "it compiles to the hand-written hold's shape, and is registered"
+      (is (true? (:hold principal-signs-off)))
+      (is (= [:principal :within] (:reads principal-signs-off)))
+      (is (holds/hold? :principal-signs-off)))
+    (testing "an agent's call is held"
+      (is (t/deny? (verdict principal-signs-off row (at-the-door the-clerk)))))
+    (testing "a person's call goes through"
+      (is (t/allow? (verdict principal-signs-off row (at-the-door the-principal)))))
+    (testing "the replay of the call the person allowed goes through"
+      (is (t/allow? (verdict principal-signs-off row
+                             (at-the-door the-clerk (replay allowed-sign-off))))))
+    (testing "a held call for another door, row or caller opens nothing"
+      (doseq [h [(assoc-in allowed-sign-off [:data :door :action] "send_back")
+                 (assoc-in allowed-sign-off [:data :door :id] "s2")
+                 (assoc-in allowed-sign-off [:data :caller] "someone-else")
+                 (assoc allowed-sign-off :state :pending)]]
+        (is (t/deny? (verdict principal-signs-off row (at-the-door the-clerk (replay h)))))))))
+
+(deftest a-hold-with-a-law-holds-only-while-the-law-is-false
+  (let [small {:id "s1" :state :review :data {:amount_usd 1200}}
+        big {:id "s1" :state :review :data {:amount_usd 9000}}]
+    (is (holds/hold? :big-spends-wait))
+    (is (t/allow? (verdict big-spends-wait small (at-the-door the-clerk))))
+    (is (t/deny? (verdict big-spends-wait big (at-the-door the-clerk))))
+    (is (t/allow? (verdict big-spends-wait big (at-the-door the-principal))))
+    (is (t/allow? (verdict big-spends-wait big (at-the-door the-clerk (replay allowed-sign-off)))))))
+
+(deftest a-hold-validates-at-the-def-site
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold takes the sentence" (hold " ")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold takes only its sentence"
+                        (hold "A tap." :for :role)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"hold's law"
+                        (d/sentence-guard :bad (hold "A tap.") "not a law"))))
