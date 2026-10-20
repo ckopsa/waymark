@@ -472,13 +472,17 @@
 (defn- sentence-clock
   "{:zone :day}: the reader's zone and the day a sentence speaks of
   there — the row's :date, else the day its :starts_at falls on, else
-  today."
-  [row ctx]
+  the same of the call's input (the slot a draft is being given),
+  else today."
+  [row inp ctx]
   (let [zone (reader-zone ctx)
         d (:data row)]
     {:zone zone
      :day (clojure.core/or (local-day (:date d) zone)
                            (local-day (:starts_at d) zone)
+                           (clojure.core/when (map? inp)
+                             (clojure.core/or (local-day (:date inp) zone)
+                                              (local-day (:starts_at inp) zone)))
                            (local-day (clojure.core/or (:now ctx) (Instant/now)) zone))}))
 
 (def ^:private ^DateTimeFormatter clock-hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
@@ -542,7 +546,7 @@
                           (t/allow {:pending-input true}))
       v (t/allow)
       :else
-      (let [clock (delay (sentence-clock row ctx))
+      (let [clock (delay (sentence-clock row inp ctx))
             scope (cond-> scope
                     (some chosen-form? (vals (:vars g))) (assoc :zone (:zone @clock)))]
         (t/deny {:vars (not-empty
@@ -722,7 +726,7 @@
     (if (clojure.core/and (t/deny? v)
                           (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))))
       (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)
-            clock (delay (sentence-clock row ctx))]
+            clock (delay (sentence-clock row inp ctx))]
         [(cond-> v
            (seq evidence) (update :evidence merge evidence)
            (seq vars) (update :vars merge
