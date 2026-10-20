@@ -220,16 +220,19 @@
     (clojure.core/when-some [e (:evidence g)]
       (clojure.core/when-not
        (clojure.core/or (clojure.core/and (map? e) (every? keyword? (keys e))
-                                          (every? fn? (vals e)))
+                                          (every? #(clojure.core/or (fn? %) (expr/first-form? %)
+                                                                    (clojure.core/and (map? %) (contains? % :pred)))
+                                                  (vals e)))
                         (clojure.core/and (sequential? e) (every? keyword? e)))
         (throw (t/definition-error
                 (str "guard " (pr-str (clojure.core/or name :guard))
-                     ": :evidence is [name …] or {name (fn [row ctx])}")))))
+                     ": :evidence is [name …] or {name (fn [row ctx]) | '(first [c :kind where] pred)}")))))
     ;; a hold is registered when its module loads, so the router's one
     ;; question (holds/hold?) knows it without a list kept by hand
     (clojure.core/when (#{true :agents} (:hold g))
       (holds/register! (clojure.core/or name :guard)))
-    (merge g
+    (cond->
+     (merge g
            {:name (clojure.core/or name :guard)
             :judges (vec judges)
             :reads (vec reads)
@@ -239,7 +242,13 @@
             :needs-input (if (some? needs-input)
                            (boolean needs-input)
                            (clojure.core/and (clojure.core/or (some? check) (some? when))
-                                             (boolean (seq judges))))})))
+                                             (boolean (seq judges))))})
+      ;; a first in :evidence, canonical: its binder erased (§3)
+      (map? (:evidence g))
+      (update :evidence (fn [e]
+                          (into {}
+                                (map (fn [[k v]] [k (if (fn? v) v (expr/normalize-first v))]))
+                                e))))))
 
 (defn leaf? [g] (clojure.core/and (nil? (:all g)) (nil? (:any g))))
 
@@ -453,6 +462,22 @@
                 [(t/deny {:vars (zipmap (:judges g) values)}) g]))
             [(t/allow) g]))))))
 
+(defn- evidence-firsts
+  "The `first`s of a guard's :evidence map, canonical {name {:kind
+  :where :pred}} (docs/spec-related-row-law.md §3): each bound as a
+  binder's match is, to the oldest grant-visible row of one page (50)
+  its where matches for which its pred holds, that row as (it 0).
+  Evidence-only: asked when the guard refuses, never in a verdict."
+  [g]
+  (let [e (:evidence g)]
+    (when (map? e) (filter (comp map? val) e))))
+
+(defn- row-face
+  "A row as a `first`'s pred reads its candidate: (get c :id),
+  (get c :state), (get c :field)."
+  [row]
+  (assoc (:data row) :id (str (:id row)) :state (some-> (:state row) name)))
+
 (defn- binder-evidence
   "Each exists/none/count-rows binder of a refusing guard, bound to its
   evidence (docs/spec-related-row-law.md §3): the oldest match by
@@ -472,7 +497,7 @@
                                   #{}))]
     (when (clojure.core/and match read)
       (reduce
-       (fn [acc [b {:keys [kind where]}]]
+       (fn [acc [b {:keys [kind where pred]}]]
          (let [conds (expr/where-conds where scope)
                hit (when (vector? conds)
                      (->> (match kind conds 50)
@@ -481,6 +506,10 @@
                           (filter #(sees? kind %))
                           (keep #(read kind %))
                           (sort-by (juxt :created_at (comp str :id)))
+                          ;; a first's pred, over each candidate as (it 0)
+                          (filter #(clojure.core/or
+                                    (nil? pred)
+                                    (true? (expr/evaluate pred (update scope :its conj (row-face %))))))
                           first))]
            (if (nil? hit)
              acc
@@ -494,7 +523,7 @@
                                  (map (fn [[k v]] [(at k) (if (hidden k) "" v)]))
                                  (:data hit))))))))
        {}
-       (:binders g)))))
+       (concat (:binders g) (evidence-firsts g))))))
 
 (defn- with-evidence
   "A denying leaf's evidence: the verdict's own, else what the guard's
@@ -508,11 +537,13 @@
           (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
                 ev (into {}
                          (keep (fn [[k f]]
-                                 (clojure.core/when-some [x (f row ctx)] [k x])))
+                                 (clojure.core/when (fn? f)
+                                   (clojure.core/when-some [x (f row ctx)] [k x]))))
                          (:evidence g))]
             (if (seq ev) [(assoc v :evidence ev) g] res))
           res)]
-    (if (clojure.core/and (t/deny? v) (seq (:binders g)))
+    (if (clojure.core/and (t/deny? v)
+                          (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))))
       (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)]
         [(cond-> v
            (seq evidence) (update :evidence merge evidence)
