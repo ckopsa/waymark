@@ -20,11 +20,15 @@
             [:amount_usd {:optional true} [:maybe [:int {:min 0}]]]
             [:due_on {:optional true} [:maybe [:string {:max 10}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :study_id #{:eq}}
+   ;; the owner's answers to the org audit's questions (factorykit.conform)
+   :decided {:open "An invoice may stay open for 45 days: it is due in 30, a reminder goes at 15 days late, and past 45 days the mayor tells The Principal."}
    :actions
    {:pay       {:from #{:open} :to :paid
                 :guards [has-amount]
                 :safety {:idempotent true :reversible false :confirm false
-                         :one-way "A paid invoice stays paid."}}
+                         :one-way "A paid invoice stays paid."}
+                :decided "The AI records an invoice paid on its own when the payment arrives."}
     :write_off {:from #{:open} :to :written_off
                 :safety {:idempotent true :reversible false :confirm false
-                         :one-way "A written-off invoice is let go; bill again with a new one."}}}})
+                         :one-way "A written-off invoice is let go; bill again with a new one."}
+                :decided "An invoice is written off only on The Principal's tap; the AI never writes one off on its own."}}})

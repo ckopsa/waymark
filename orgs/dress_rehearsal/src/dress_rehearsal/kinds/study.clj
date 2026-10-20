@@ -55,11 +55,17 @@
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
             [:signed_off_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :tax_year #{:eq} :preparer #{:eq}}
+   ;; the owner's answers to the org audit's questions (factorykit.conform)
+   :decided {:collecting "A study may stay collecting for 14 days: missing documents are chased twice, then the principal is told, and past 14 days the mayor tells The Principal."
+             :drafting "A study may stay drafting for 7 days; past that, the mayor tells the tax specialist."
+             :review "A study may stay in review for 3 days; past that, the mayor tells The Principal."
+             :signed_off "A signed-off study may wait 2 days to be delivered; past that, the mayor tells The Principal."}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
                  :guards [records-complete records-confirmed]
                  :safety {:idempotent true :reversible false :confirm false
-                          :one-way "Drafting has begun; a late record is added to the draft."}}
+                          :one-way "Drafting has begun; a late record is added to the draft."}
+                 :decided "A study moves to drafting only on the tax specialist's tap, because the specialist decides the cost records are complete."}
     :submit     {:from #{:drafting} :to :review
                  :guards [has-preparer has-credit]
                  :safety {:idempotent true :reversible true :confirm false}}
@@ -68,7 +74,9 @@
     :sign_off   {:from #{:review} :to :signed_off
                  :guards [has-signer]
                  :safety {:idempotent true :reversible false :confirm false
-                          :one-way "A signed-off study is final; correct it with a new study."}}
+                          :one-way "A signed-off study is final; correct it with a new study."}
+                 :decided "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it."}
     :deliver    {:from #{:signed_off} :to :delivered
                  :safety {:idempotent true :reversible false :confirm false
-                          :one-way "The study and Form 6765 are with the client's CPA."}}}})
+                          :one-way "The study and Form 6765 are with the client's CPA."}
+                 :decided "The AI delivers a study to the client's CPA on its own once it is signed off; sign-off is the gate."}}})

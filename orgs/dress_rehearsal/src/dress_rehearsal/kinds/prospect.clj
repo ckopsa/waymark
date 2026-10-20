@@ -29,15 +29,21 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in} :source #{:eq} :referring_cpa #{:eq}}
+   ;; the owner's answers to the org audit's questions (factorykit.conform)
+   :decided {:new "A prospect may stay new for 2 days; past that, the mayor tells The Principal."
+             :qualified "A prospect may stay qualified for 14 days while the engagement letter is unsigned; past that, the mayor tells The Principal."}
    :actions
    {:qualify {:from #{:new} :to :qualified
               :guards [has-estimate]
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "A qualified prospect stays qualified; decline it if the letter is never signed."}}
+                       :one-way "A qualified prospect stays qualified; decline it if the letter is never signed."}
+              :decided "The AI qualifies a prospect on its own once the call has given a rough credit estimate."}
     :engage  {:from #{:qualified} :to :engaged
               :guards [letter-signed]
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "An engaged prospect is a client; its studies carry it from here."}}
+                       :one-way "An engaged prospect is a client; its studies carry it from here."}
+              :decided "A prospect is engaged only on The Principal's tap, because nothing starts until the client signs the engagement letter."}
     :decline {:from #{:new :qualified} :to :declined
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "A declined prospect is closed; open a new one if they come back."}}}})
+                       :one-way "A declined prospect is closed; open a new one if they come back."}
+              :decided "A prospect is declined only on The Principal's tap; the AI never declines one on its own."}}})
