@@ -86,6 +86,7 @@
              :errors (not-empty (into {}
                                       (map (fn [[k s]] [(keyword k) s]))
                                       (get entry "errors")))
+             :pending (some-> (get entry "pending") keyword)
              :becomes-available-at (:becomes-available-at resident)})
     (catch Exception e
       (binding [*out* *err*]

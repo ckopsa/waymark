@@ -111,7 +111,9 @@
              "check"          nil}
       (seq (:errors g)) (assoc "errors" (into (sorted-map)
                                               (map (fn [[k s]] [(name k) s]))
-                                              (:errors g))))
+                                              (:errors g)))
+      ;; :pending projects only when it is not the default :allow
+      (= :deny (:pending g)) (assoc "pending" "deny"))
     {"name"           (name (:name g))
      "check"          (callable-hash (str address ".check")
                                      (or (:check g) (:accepts g)))
