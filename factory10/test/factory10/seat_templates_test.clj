@@ -215,11 +215,21 @@
                                       :charter "Example Landscaping"
                                       :budget_usd_per_week 1000})
         org-kinds (sort (map (comp name :kind) (example/resources)))
-        seat (seed/filled (:seat (edn-resource "seats/org-mayor.edn"))
+        t (edn-resource "seats/org-mayor.edn")
+        seat (seed/filled (:seat t)
                           {:org "example" :domain "example" :domain_id domain-id
                            :owner "owner" :budget_usd_per_week 8M
                            :kinds (mapv (fn [k] {:kind k :actions []}) org-kinds)
-                           :wakes []})]
+                           :wakes []}
+                          (:template t))]
+    (testing "its :cues are optional, the wakes when left out, and a cue may carry its own note"
+      (let [wake {:kind "request" :actions ["create"]}
+            cue (assoc wake :note "A request came in.")
+            given {:org "example" :domain "example" :domain_id domain-id
+                   :owner "owner" :budget_usd_per_week 8M :kinds [] :wakes [wake]}]
+        (is (= {:cues [wake]} (:inbox (seed/filled (:seat t) given (:template t)))))
+        (is (= {:cues [cue]}
+               (:inbox (seed/filled (:seat t) (assoc given :cues [cue]) (:template t)))))))
     (testing "it fills with no hole left, its budget a decimal"
       (is (nil? (re-find #"\{\{" (pr-str seat))))
       (is (= 8M (:budget_usd_per_week seat)))

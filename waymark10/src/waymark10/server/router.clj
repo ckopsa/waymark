@@ -939,6 +939,7 @@
                                       :body body
                                       :caller (:id p)
                                       :owner owner
+                                      :role (get-in d [:evidence :role])
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
                                       :why (:detail d)

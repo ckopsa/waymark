@@ -97,6 +97,10 @@
                     :x-display (:notes prose-for)}
             [:maybe [:string {:max 2000}]]]]
    :edit {:prefill [:name :area :assignee :cadence :notes]}
+   ;; :ref-unjudged — any member of the household may usually own a
+   ;; chore; whether they sign in is the member kind's own state rule,
+   ;; and each run is handed to somebody on the day anyway
+   :waives #{:ref-unjudged}
    ;; the overwrite writes the WHOLE detail set and is declared
    ;; non-reversible, so the log has to carry what was written — an
    ;; audit of the blank-form era (waymark-wnh) found 13 of these

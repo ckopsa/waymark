@@ -817,6 +817,7 @@
                         :waymark/ref]]
                :safety {:idempotent true :reversible false :confirm true
                         :consequence "An event goes on the family calendar for this prep step."}
+               :waives #{:ref-unjudged}
                :handler ptask/set-calendar-event
                :display {:label "Put on calendar" :style :primary :order 1}}
     :complete {:from #{:pending :scheduled} :to :done
