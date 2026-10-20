@@ -11,6 +11,17 @@
  ;; from the plan's owner. "owner" serves a memory engine only.
  :cast
  {:owner {:id "owner" :display "The Owner" :type :human :roles ["approver"]}}
+ ;; the outside world, which only a clone loads: who outside the
+ ;; business starts work, each a member whose :scope creates the kind
+ ;; they send, and the world seat that plays their first week. An org
+ ;; nobody outside starts work for says :world :none in org.edn instead
+ :rehearsal
+ {:cast {:client {:id "client" :display "A Client" :type :human
+                  :scope [{:kind "item" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "My Org does the work its clients send it."
+                    :kinds "item" :cast "client" :day_one [:days 0]
+                    :domain_id [:ref :myorg]}}]}
  ;; a seat is a factorykit template and its params, or a whole seat
  ;; map under :seat when no template walks the org's kinds
  ;; the org's mayor holds item's doors out of open, so an open item has

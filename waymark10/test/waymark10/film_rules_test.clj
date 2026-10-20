@@ -466,8 +466,8 @@
 (def ^:private a-good-take
   "a-take on a phone, with the turn held for its words and changing one
   surface, and two days that tell what happened, one of them asking the
-  person: it passes every seed rule but the played week's, which judge
-  no take short of a week."
+  person: it passes every seed rule but the played week's, which cannot
+  measure a take short of a week."
   (-> a-take
       (assoc-in [:film :output] "phone")
       (assoc-in [:shots 0 :caption] "Monday. Acme's study went to review.")
@@ -499,12 +499,17 @@
   (testing "a good take is green, with one verdict for each rule by name"
     (let [answer (judged a-good-take)]
       (is (= "green" (:verdict answer)))
-      (is (= [] (:unmeasured answer)))
+      ;; a-good-take is a first week short of a played one: the played
+      ;; week's rules cannot measure it, and are never unscored on it
+      (is (= ["asks-the-person" "busy-week" "no-bare-list" "week-arc"]
+             (:unmeasured answer)))
       (is (= (sort (map :name film-rules/seed-rules))
              (map :name (:rules answer))))
-      ;; a-good-take is no week: the played week's rules leave it unscored
-      (is (every? #(= (if (played-names (:name %)) "unscored" "pass") (:verdict %))
+      (is (every? #(= (if (played-names (:name %)) "unmeasured" "pass") (:verdict %))
                   (:rules answer)))
+      (testing "an unmeasured fail rule counts as a miss, a warn rule as a pass"
+        (is (= "miss" (:unmeasured (rule-in answer "busy-week"))))
+        (is (= "pass" (:unmeasured (rule-in answer "type-size")))))
       (is (= {:name "frame-fill" :metric "frame_fill" :op ">="
               :threshold 0.95M :severity "fail"}
              (select-keys (rule-in answer "frame-fill")
@@ -538,7 +543,8 @@
           air (rule-in answer "dead-air")]
       (is (= "unmeasured" (:verdict air)))
       (is (= ["film.dead_air_s"] (:missing air)))
-      (is (= ["dead-air"] (:unmeasured answer)))))
+      (is (= ["asks-the-person" "busy-week" "dead-air" "no-bare-list" "week-arc"]
+             (:unmeasured answer)))))
   (testing "a shot that lacks a field leaves its rule unmeasured"
     (let [answer (judged (update-in a-good-take [:shots 2] dissoc :focus_type_px))]
       (is (= "unmeasured" (:verdict (rule-in answer "type-size"))))

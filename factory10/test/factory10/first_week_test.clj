@@ -317,3 +317,56 @@
       (is (= "error" (get-in row [:data :findings 0 :severity])))
       (is (= (:head_sha film) (get-in row [:data :findings_sha]))))
     (is (nil? (get-in row [:data :film_url])))))
+
+;; ── a first week the rules cannot pass by not measuring it (ticket 179f7824)
+
+(def ^:private week-rules
+  (filterv #(#{"busy-week" "quiet-days"} (:name %)) film-rules/seed-rules))
+
+(defn- week-take
+  "A first week's take: shots that run the arc's roles, with a day
+  caption for each of `days` between the friction and the payoff."
+  [days]
+  {:film {:output "phone"}
+   :shots (-> [{:role "friction"
+                :caption "Example Landscaping: A six-person landscaping business."}]
+              (into (map (fn [c] {:role "turn" :caption c}) days))
+              (conj {:role "payoff" :goal_state "done" :caption "That was the week."}))})
+
+(def ^:private quiet-week
+  (mapv #(str % ". A quiet day.")
+        ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"]))
+
+(deftest a-quiet-first-week-returns-the-plan-to-drafting
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge week-rules (week-take quiet-week))
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= "drafting" (some-> row :state name)))
+    (is (= ["film/busy-week" "film/quiet-days"]
+           (mapv :key (get-in row [:data :findings]))))
+    (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-first-week-the-film-cannot-measure-returns-the-plan-to-drafting
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge week-rules (week-take []))
+        row (:row (first-week/land! e id answer film {:principal the-forge}))
+        findings (get-in row [:data :findings])]
+    (is (= ["busy-week" "quiet-days"] (:unmeasured answer)))
+    (is (= "drafting" (some-> row :state name)))
+    (is (= ["film/busy-week" "film/quiet-days"] (mapv :key findings)))
+    (testing "each finding says what could not be measured, and its remedy names the fields"
+      (is (every? #(str/starts-with? (:sentence %) "The film could not measure ") findings))
+      (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
+      (is (str/includes? (:remedy (second findings)) "shot.caption")))
+    (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-warn-rule-the-film-cannot-measure-does-not-block-it
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge rules {:film {:chrome_leaks 0}})
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= ["dead-air"] (:unmeasured answer)))
+    (is (= "simulated" (some-> row :state name)))
+    (is (= (:film_url film) (get-in row [:data :film_url])))))

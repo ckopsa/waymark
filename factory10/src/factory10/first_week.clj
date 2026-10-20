@@ -310,27 +310,55 @@
 (defn- clip [s n]
   (let [s (str s)] (if (> (count s) n) (subs s 0 n) s)))
 
+(defn- word [v]
+  (when (or (string? v) (keyword? v)) (name v)))
+
+(defn- missed?
+  "True when `rule` of the judge's answer keeps the film from landing: a
+  fail rule it missed, or one it could not measure, unless the rule
+  counts that as a pass (ticket 179f7824)."
+  [rule]
+  (and (= "fail" (word (:severity rule)))
+       (case (word (:verdict rule))
+         "miss" true
+         "unmeasured" (not= "pass" (word (:unmeasured rule)))
+         false)))
+
+(defn- lower-first [s]
+  (let [s (str s)]
+    (if (seq s) (str (str/lower-case (subs s 0 1)) (subs s 1)) s)))
+
 (defn finding-of
   "One missed fail rule of the judge's answer, as a finding in the
-  audit's shape."
+  audit's shape. A rule the film could not measure names the fields the
+  take lacks."
   [rule]
-  {:key (clip (str "film/" (:name rule)) 64)
-   :severity "error"
-   :class "film"
-   :subject (clip (:metric rule) 200)
-   :sentence (clip (str "The film missed " (:name rule) ": " (:why rule)) 240)
-   :remedy (clip (str "Revise the org so its film holds " (:metric rule) " "
-                      (:op rule) " " (:threshold rule) ", and film it again.")
-                 240)})
+  (let [metric (:metric rule)
+        fields (str/join ", " (map str (:missing rule)))
+        fields (if (str/blank? fields) (str "the fields " metric " needs") fields)]
+    {:key (clip (str "film/" (:name rule)) 64)
+     :severity "error"
+     :class "film"
+     :subject (clip metric 200)
+     :sentence (clip (if (= "unmeasured" (word (:verdict rule)))
+                       (str "The film could not measure " metric " (missing " fields
+                            "), so it cannot show " (lower-first (:why rule)))
+                       (str "The film missed " (:name rule) ": " (:why rule)))
+                     240)
+     :remedy (clip (if (= "unmeasured" (word (:verdict rule)))
+                     (str "Film it again with " fields " in its take, so " metric
+                          " can be measured.")
+                     (str "Revise the org so its film holds " metric " "
+                          (:op rule) " " (:threshold rule) ", and film it again."))
+                   240)}))
 
 (defn landing
   "Where a film lands on its plan, from the film rules' `answer`: the
   door and its input. No fail rule missed attaches `film_url`; a red
-  film records its missed fail rules, at `head_sha`."
+  film records its missed fail rules, at `head_sha`. A fail rule the
+  film could not measure is missed, unless its `unmeasured` is `pass`."
   [answer {:keys [film_url head_sha]}]
-  (if-some [missed (seq (filter #(and (= "miss" (str (:verdict %)))
-                                      (= "fail" (str (:severity %))))
-                                (:rules answer)))]
+  (if-some [missed (seq (filter missed? (:rules answer)))]
     {:action :record_film_findings
      :input {:head_sha head_sha :findings (mapv finding-of missed)}}
     {:action :attach_film

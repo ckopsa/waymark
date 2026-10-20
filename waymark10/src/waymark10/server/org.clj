@@ -71,7 +71,7 @@
                              "` is not an org's name: it is snake_case, [a-z][a-z0-9_]* (docs/orgkit.md).")
                         {:org v}))))))
 
-(declare orgs-dir with-classpath)
+(declare orgs-dir with-classpath manifest)
 
 (defn- on-classpath?
   "True when the org's module `<org>/org.clj` is on the classpath."
@@ -155,18 +155,57 @@
                            :budget_usd_per_week (or budget_usd_per_week domain-budget)})}
     ref (assoc :ref ref)))
 
+(defn- cast-seat?
+  "Whether a seed's seat entry seats a cast member: a whole seat, or a
+  template's seat, that says `:acts_as_cast true`."
+  [{:keys [template seat]}]
+  (true? (:acts_as_cast
+          (or seat
+              (some-> (io/resource (str "seats/" template ".edn"))
+                      slurp edn/read-string :seat)))))
+
+(defn rehearsed
+  "The org's seed as this engine loads it (ticket a4149376). Its
+  `:rehearsal` — the outside world's `:cast`, `:seats` and `:steps` —
+  joins it on a clone and is dropped everywhere else, so a live org
+  never holds a pretend client nor seats the world, whose acts_as_cast
+  only a clone admits. Off a clone, `:skip-cast-seats?` (org.edn's
+  `:rehearsal-seats :skip-off-clone`) leaves out a seat of the seed's
+  own `:seats` that acts as cast, with a line, instead of its refusal."
+  [{:keys [rehearsal] :as org-seed} {:keys [clone? skip-cast-seats?]}]
+  (let [s (dissoc org-seed :rehearsal)]
+    (cond
+      clone?
+      (-> s
+          (update :cast merge (:cast rehearsal))
+          (update :seats (fnil into []) (:seats rehearsal))
+          (update :steps (fnil into []) (:steps rehearsal)))
+
+      skip-cast-seats?
+      (let [{skipped true kept false} (group-by (comp boolean cast-seat?) (:seats s))]
+        (doseq [e skipped]
+          (println (str "waymark10 org: `" (:org s) "`: the seat "
+                        (or (get-in e [:seat :name]) (:template e))
+                        " acts as cast, and this engine is not a clone: skipped.")))
+        (assoc s :seats (vec kept)))
+
+      :else s)))
+
 (defn loader-seed
   "An org's seed in the loader's grammar: `:live-ok`, with its domains,
   then its seats and judgments, made first, as the owner, and its own
-  steps after."
-  [{:keys [domains seats judgments steps] :as org-seed}]
-  (assoc org-seed
-         :live-ok true
-         :steps (-> []
-                    (into (map made-domain) domains)
-                    (into (map made-step) seats)
-                    (into (map made-step) judgments)
-                    (into steps))))
+  steps after. `opts` are `rehearsed`'s: with none, the engine is not a
+  clone, and the seed's `:rehearsal` is left out."
+  ([org-seed] (loader-seed org-seed {}))
+  ([org-seed opts]
+   (let [{:keys [domains seats judgments steps] :as s} (rehearsed org-seed opts)]
+     (assoc s
+            :live-ok true
+            :steps (-> []
+                       (into (map made-domain) domains)
+                       (into (map made-step) seats)
+                       (into (map made-step) judgments)
+                       (into steps))))))
 
 (defn boot-line
   "The line `boot!` prints for an org's `seed/load!` answer: what was
@@ -197,7 +236,13 @@
           (let [opts (cond-> (assoc (or opts {}) :org (str org))
                        (not (contains? opts :params))
                        (assoc :params (seed/read-params (System/getenv "WAYMARK10_SEED_PARAMS"))))
-                result (seed/load! eng (loader-seed s) opts)]
+                m (try (manifest (io/file (orgs-dir dir-value) (str org)))
+                       (catch Exception _ nil))
+                result (seed/load! eng
+                                   (loader-seed s {:clone? (true? (:clone? eng))
+                                                   :skip-cast-seats? (= :skip-off-clone
+                                                                        (:rehearsal-seats m))})
+                                   opts)]
             (println (boot-line org result))
             result))))))
 
