@@ -1083,6 +1083,26 @@
           (err r :absent-as
                (str "absent-as " (name f) "=" (pr-str v) " " problem)))))))
 
+(defn- check-index
+  "An :index entry says whether a promoted filterable field carries its
+  btree index: :btree or :none. It can only name a field the
+  declaration filters that promotes to one column — not :state, which
+  has its own index, and not a vocab array, whose index is GIN."
+  [r]
+  (doseq [[f v] (sort-by key (:index r))]
+    (let [s (schema/field-schema (:schema r) f)
+          array? (boolean (and (vector? s) (= :vector (first s))))]
+      (cond
+        (not (contains? #{:btree :none} v))
+        (err r :index
+             (str "index " (name f) " " (pr-str v)
+                  " is neither :btree nor :none"))
+        (or (= :state f) array? (not (contains? (:filterable r) f)))
+        (err r :index
+             (str "index field " f " is not a filterable scalar field — "
+                  "only a filterable field's promoted column takes a "
+                  "btree index"))))))
+
 (defn- check-faceted [r]
   (doseq [f (:faceted r)
           :when (not= f :state)]
@@ -2294,7 +2314,7 @@
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
-          check-absent-as check-collection-doors
+          check-absent-as check-index check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by

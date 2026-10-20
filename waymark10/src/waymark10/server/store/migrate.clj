@@ -114,18 +114,36 @@
                        "; the column is derived data, regenerable from the document."))))]
     (concat adds recreates drops)))
 
+(defn- recreated-columns
+  "The f_ columns column-steps recreates: live, at another type."
+  [{:keys [columns]} live]
+  (into #{}
+        (keep (fn [{col :name :keys [type]}]
+                (let [lv (get (:columns live) col)]
+                  (when (and lv (str/starts-with? col "f_") (not= type (:type lv)))
+                    col))))
+        columns))
+
 (defn- index-steps
   "The engine's standard indexes by NAME (Postgres normalizes index
   definitions past honest text comparison): declared names missing
   live are created; live ix_* names on the table that no declaration
-  claims are dropped (an index is derived data by construction)."
-  [{:keys [table indexes]} live drop-derived?]
-  (let [live-ix (:indexes live)]
+  claims are dropped (an index is derived data by construction). A
+  declared index over a column column-steps recreates is planned again
+  though it is live: the DROP COLUMN takes it with the column."
+  [{:keys [table indexes]} live drop-derived? recreated]
+  (let [live-ix (:indexes live)
+        over-recreated? (fn [sql]
+                          (some #(re-find (re-pattern (str "\\b" % "\\b")) sql)
+                                recreated))]
     (concat
      (for [[ix-name sql] (sort-by key indexes)
-           :when (not (contains? live-ix ix-name))]
+           :when (or (not (contains? live-ix ix-name))
+                     (over-recreated? sql))]
        (step :add-index table sql false
-             (str ix-name " is a declared index with no live twin.")))
+             (if (contains? live-ix ix-name)
+               (str ix-name " covers a recreated column, and its drop takes the index.")
+               (str ix-name " is a declared index with no live twin."))))
      (when drop-derived?
        (for [[ix-name _] (sort-by key live-ix)
              ;; only names this table's OWN derived patterns could have
@@ -174,7 +192,8 @@
     (create-steps proj
                   (str "table " (:table proj) " does not exist; the full kind DDL is one CREATE."))
     (concat (column-steps proj live drop-derived?)
-            (index-steps proj live drop-derived?)
+            (index-steps proj live drop-derived?
+                         (if drop-derived? (recreated-columns proj live) #{}))
             (when rmap (rename-steps st rmap (:table proj))))))
 
 ;; ── the plan ────────────────────────────────────────────────────────
