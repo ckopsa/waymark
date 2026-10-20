@@ -191,6 +191,33 @@
                    (seq fields) (assoc :fields fields)))))
            (:remedies g)))))
 
+(def context-reads
+  "The `:reads` a guard may declare that name no kind: the store
+  itself, the log, the clock, the caller, the wiring, the call. Every
+  other read is a kind keyword — the one read `:check-tier :given`
+  admits."
+  #{:storage :transitions :now :principal :services :services.features
+    :within :grant :facts :rate})
+
+(defn- check-tier-problem
+  "Why this guard may not carry its :check-tier, or nil. The one value
+  is :given — the guard's (:read ctx)/(:find ctx) calls are safe to
+  answer from a scenario's :given rows — and only a code guard whose
+  every read is a kind may say it (docs/waymark10-vocabulary.md §6)."
+  [{:keys [check-tier reads] :as g}]
+  (clojure.core/when (some? check-tier)
+    (cond
+      (not= :given check-tier)
+      (str ":check-tier is :given, not " (pr-str check-tier))
+
+      (:when g)
+      ":check-tier is for a code guard; a :when guard's reads are served by its tree already — drop :check-tier"
+
+      (clojure.core/or (empty? reads) (clojure.core/not (not-any? context-reads reads)))
+      (str ":check-tier :given answers kind reads from a scenario's :given rows, and this guard reads "
+           (pr-str (vec reads))
+           " — only a guard whose every read is a kind can opt in"))))
+
 (defn guard
   "Validate and default a guard map. Every invariant here is an
   import-time refusal."
@@ -210,6 +237,9 @@
               "a guard must advertise (accepts/when) or enforce (check) — this one does neither")))
     (clojure.core/when (clojure.core/and vars-fn (empty? vars))
       (throw (t/definition-error ":vars-fn must be accompanied by the :vars names it supplies")))
+    (clojure.core/when-some [p (check-tier-problem g)]
+      (throw (t/definition-error
+              (str "guard " (pr-str (clojure.core/or name :guard)) ": " p))))
     (clojure.core/when (fn? vars)
       (throw (t/definition-error "a callable belongs in :vars-fn; :vars declares the names")))
     (doseq [r (:remedies g)

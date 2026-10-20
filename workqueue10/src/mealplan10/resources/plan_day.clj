@@ -152,10 +152,13 @@
               (find' :meal {:state :on_list}
                      {:limit 500}))))))
 
-;; the same admitted set, judging the side's field
+;; the same admitted set, judging the side's field. Its one read is a
+;; :find over :meal, which a scenario's :given rows answer, so it opts
+;; into the check tier and add_side_dish's scenarios need no database
 (defacceptsfn side-fits-day
   {:judges [:side_id]
    :reads [:meal]
+   :check-tier :given
    :explain "That side doesn't serve this day's theme night."
    :remedies [:plan_day/assign_off_theme]}
   [row ctx]
@@ -325,8 +328,9 @@
 ;; ── law scenarios ───────────────────────────────────────────────────
 ;; Check-tier: assign_off_theme carries only plan-editable and
 ;; meal-is-listed, both declarative, so the :given week and meal answer
-;; their follows with no database. add_side_dish also carries the code
-;; acceptance set side-fits-day, which defers that door to the suite.
+;; their follows with no database. add_side_dish is check-tier too: its
+;; code acceptance set side-fits-day declares :check-tier :given, so the
+;; :given sides answer its :find beside side-is-listed's follow.
 
 (def ^:private week
   {:kind :plan :handle :week :state :draft
@@ -370,6 +374,48 @@
    :input   {:meal_id "{given/soup}"}
    :as      {:id "colton" :type :person}
    :expect  {:refused :meal-is-listed
+             :because "not on the family meal list"}})
+
+(def ^:private rice
+  {:kind :meal :handle :rice :state :on_list
+   :data {:name "Rice" :themes ["Mexican"]}})
+
+(def ^:private planned-monday
+  (assoc monday :state :planned))
+
+(defscenario a-side-that-serves-the-night-goes-on
+  "A listed side that serves the day's theme night goes beside its meal."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week rice]
+   :row     planned-monday
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario an-off-theme-side-stays-off
+  "A side that does not serve the day's theme night does not go on it."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week (assoc-in rice [:data :themes] ["Italian"])]
+   :row     planned-monday
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :side-fits-day
+             :because "serve this day's theme night"}})
+
+(defscenario a-suggested-side-is-not-dinner-yet
+  "A side only suggested does not go on a night until it is accepted,
+   even on a rotating Sunday that binds no theme."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week (assoc rice :state :suggested)]
+   :row     (-> planned-monday
+                (assoc-in [:data :date] "2099-01-04")
+                (assoc-in [:data :theme] themes/rotating))
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :side-is-listed
              :because "not on the family meal list"}})
 
 (defresource plan-day
@@ -456,4 +502,7 @@
     :remove_side_dish remove-side-dish}
    :scenarios [a-listed-meal-goes-on-a-week-being-built
                a-finalized-week-is-frozen
-               a-suggestion-is-not-dinner-yet]})
+               a-suggestion-is-not-dinner-yet
+               a-side-that-serves-the-night-goes-on
+               an-off-theme-side-stays-off
+               a-suggested-side-is-not-dinner-yet]})
