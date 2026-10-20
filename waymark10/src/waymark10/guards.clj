@@ -301,10 +301,26 @@
                     (let [s (str value)]
                       (some #(= s (str %)) allowed)))))
 
+(defn- memo-read
+  "The ctx's :read hook, memoized for one verdict: a law that follows
+  the same ref three times costs one read (docs/spec-related-row-law.md
+  §2). nil when the ctx lends no hook."
+  [read]
+  (clojure.core/when read
+    (let [seen (atom {})]
+      (fn [kind id]
+        (let [k [kind (str id)]]
+          (if-some [e (find @seen k)]
+            (val e)
+            (let [v (read kind id)]
+              (swap! seen assoc k v)
+              v)))))))
+
 (defn- expr-check
   "The check a :when tree compiles to."
   [g row inp ctx]
-  (let [scope {:data (:data row) :input inp :now (:now ctx)}
+  (let [scope {:data (:data row) :input inp :now (:now ctx)
+               :read (memo-read (:read ctx))}
         v (expr/evaluate (:when g) scope)]
     (cond
       ;; an unknown verdict is never a refusal: it is pending, as a
@@ -317,7 +333,11 @@
                             (keep (fn [[k form]]
                                     (try [k (expr/evaluate form scope)]
                                          (catch Exception _ nil))))
-                            (:vars g)))}))))
+                            (:vars g)))
+               ;; the declared per-field sentences, as a code guard's
+               ;; {:errors {field ["…"]}} spells them
+               :errors (not-empty
+                        (into {} (map (fn [[k s]] [k [s]])) (:errors g)))}))))
 
 (declare evaluate)
 
@@ -491,12 +511,21 @@
 
 ;; ── declared verdicts: g/expr ───────────────────────────────────────
 
+(defn- when-reads
+  "The :reads a :when tree declares by itself: :now for (now), then
+  every kind a (follow …) reaches."
+  [w vars]
+  (let [infos (cons (expr/info w) (map expr/info (vals vars)))]
+    (into (if (some :uses-now infos) [:now] [])
+          (sort (into #{} (mapcat :follows) infos)))))
+
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the
   fingerprint stores the tree, the reviewer diffs the leaf, and (9.0)
   the judgment overlay evaluates any stored revision. :judges derives
-  from the tree's (input …) reads, :reads from (now) — declared by
-  the law itself."
+  from the tree's (input …) reads, :reads from (now) and each
+  (follow …)'s kind — declared by the law itself. :errors is
+  {field \"sentence\"}, the per-field error a refusal carries."
   [{:keys [when vars judges reads name] :as opts}]
   (clojure.core/when-not (seq? when)
     (throw (t/definition-error "guard/expr takes a :when expression form")))
@@ -517,14 +546,37 @@
                             [k f])))
                    vars)
         winfo (expr/info w)]
+    (clojure.core/when-some [es (:errors opts)]
+      (clojure.core/when-not
+       (clojure.core/and (map? es) (every? keyword? (keys es))
+                         (every? #(clojure.core/and (string? %) (clojure.core/not (str/blank? %)))
+                                 (vals es)))
+        (throw (t/definition-error
+                (str "guard " name " :errors is {field \"sentence\"} — the "
+                     "per-field error the refusal carries")))))
     (guard (merge (dissoc opts :when :vars)
                   {:when w
                    :vars vars
                    :judges (clojure.core/or judges (vec (sort (:inputs winfo))))
-                   :reads (clojure.core/or reads
-                                           (if (clojure.core/or (:uses-now winfo)
-                                                                (some (comp :uses-now expr/info) (vals vars)))
-                                             [:now] []))}))))
+                   :reads (clojure.core/or reads (when-reads w vars))}
+                  ;; the gate names it: [reads-handwritten]
+                  (clojure.core/when (some? reads) {:reads-written true})))))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field) of an
+  expression guard (`kind-of`: the ref form → its kind, or nil), then
+  derive :reads again. A guard with nothing to bind comes back as it
+  was, so no law that does not follow moves."
+  [g kind-of]
+  (let [forms (cons (:when g) (vals (:vars g)))]
+    (if (clojure.core/or (nil? (:when g))
+                         (not-any? (comp nil? first) (mapcat expr/follows forms)))
+      g
+      (let [bind #(expr/normalize (expr/bind-follows % kind-of))
+            w (bind (:when g))
+            vars (into {} (map (fn [[k f]] [k (bind f)])) (:vars g))]
+        (cond-> (assoc g :when w :vars vars)
+          (clojure.core/not (:reads-written g)) (assoc :reads (when-reads w vars)))))))
 
 (defn relation
   "Multi-field admission: :accepts produces admissible tuples, or :op

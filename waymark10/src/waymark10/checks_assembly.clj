@@ -20,6 +20,7 @@
   v10 spelling yet; each check arrives with its feature."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
+            [waymark10.expr :as expr]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -714,6 +715,29 @@
                         " does not depart from " landed ", where the step's "
                         ":do lands — it is not this step's reverse")))))))))
 
+;; ── follow: the field is on the kind it reaches ─────────────────────
+
+(defn- check-follow-fields
+  "[follow-unknown-field]: every follow reads a field its target kind
+  has — a data field, :state or :id (docs/spec-related-row-law.md §6).
+  Judged here, where the target's schema is known; a target that is
+  not registered is check-refs' to name."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk _ field] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :let [target (get kinds tk)]
+            :when (and target
+                       (not (contains? #{:state :id} field))
+                       (not (contains? (set (schema/entry-keys (:schema target))) field)))]
+      (err kind :follow-unknown-field
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (name tk) "." (name field) ", a field " (name tk) " does not "
+                "have — follow reads a data field, :state or :id")))
+    []))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -751,4 +775,4 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-unref'd-ids])})
+          check-link-where check-follow-fields check-unref'd-ids])})

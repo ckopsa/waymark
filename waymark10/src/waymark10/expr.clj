@@ -14,7 +14,8 @@
   a ported declaration demands it, never speculatively.
 
   Evaluation is total: no calls, no recursion, no names beyond the
-  scope, no reads. Ordering comparisons with a nil operand are false
+  scope, and no reads but the scope's own :read hook, which `follow`
+  asks for one row (and is unknown without). Ordering comparisons with a nil operand are false
   (a missing value satisfies no ordering claim); arithmetic over nil
   propagates nil. Numbers are longs and exact decimals — a float
   literal is refused at validation, not rounded.
@@ -28,7 +29,7 @@
   (see `normalize`), so reformatting a law never mints a revision.
 
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
-  :its (innermost-first seq of quantifier items)}."
+  :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn])
   (:import (java.time LocalDate Instant Period ZoneOffset)))
 
@@ -43,13 +44,18 @@
   count/sum (batch C): the waymark8 quantifier pair, earned by the
   blast-radius meter's own acceptance declarations (a flip count over
   a collection fact and a summed quantity are the shapes the meter's
-  test laws speak) — recorded in docs/waymark10-c-notes.md."
+  test laws speak) — recorded in docs/waymark10-c-notes.md.
+
+  follow: one hop to a field of the row a ref names
+  (docs/spec-related-row-law.md §2), earned by the household meal
+  list's meal-is-listed."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      days date-of is-set
-     every some count sum})
+     every some count sum
+     follow})
 
 (def ^:private quantifier-ops '#{every some count sum})
 
@@ -76,6 +82,12 @@
   (and (string? s)
        (try (LocalDate/parse ^String s) true
             (catch Exception _ false))))
+
+(defn- follow-ref?
+  "The one ref a follow may start from: (data :f) or (input :f)."
+  [x]
+  (and (seq? x) (contains? '#{data input} (first x))
+       (= 2 (count x)) (keyword? (second x))))
 
 (defn- check
   "Accumulate problem strings for `form`. `env` is the set of bound
@@ -135,6 +147,22 @@
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
+
+          ;; authored (follow <ref> :field); normalized at the def site
+          ;; to (follow :kind <ref> :field)
+          follow
+          (let [[kind ref field] (if (= n 3) args (cons nil args))]
+            (cond
+              (not (<= 2 n 3))
+              (conj problems "(follow <ref> :field) takes a ref and a field")
+              (and (= n 3) (not (keyword? kind)))
+              (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
+              (not (follow-ref? ref))
+              (conj problems (str "(follow …) starts from (data :f) or (input :f) — "
+                                  "one hop; got " (pr-str ref)))
+              (not (keyword? field))
+              (conj problems "(follow …) reads one keyword field of the row it reaches")
+              :else problems))
 
           (= not= < <= > >=)
           (if (= n 2)
@@ -648,6 +676,26 @@
                   (number? v) (clojure.core/abs v)
                   :else nil)))))
 
+        ;; one hop through the scope's :read hook: a nil ref, an id no
+        ;; row has and a row the caller may not see answer nil; no
+        ;; hook, or no kind written in yet, is unknown
+        follow
+        (if (= 3 (count args))
+          (let [[kind ref field] args
+                id (evaluate ref scope)
+                read (:read scope)]
+            (cond
+              (unknown? id) unknown
+              (nil? id) nil
+              (nil? read) unknown
+              :else
+              (when-some [row (read kind id)]
+                (case field
+                  :state (some-> (:state row) name)
+                  :id    (some-> (:id row) str)
+                  (clojure.core/get (:data row) field)))))
+          unknown)
+
         (every some count sum)
         (if (vector? (first args))
           ;; authored spelling — erase the binder names, then evaluate
@@ -664,7 +712,8 @@
 ;; ── scope analysis ──────────────────────────────────────────────────
 
 (defn info
-  "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
+  "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool
+  :follows #{kind}} — :follows the kinds written into its follows.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -675,6 +724,10 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
+                  follow (reduce #(walk %2 %1)
+                                 (cond-> acc
+                                   (= 3 (count args)) (update :follows conj (first args)))
+                                 (remove keyword? args))
                   (date it) acc
                   (every some count sum)
                   (let [args (if (vector? (first args))
@@ -685,7 +738,7 @@
                           acc
                           (remove keyword? args))))
               acc))]
-    (walk form {:vars #{} :data #{} :inputs #{} :uses-now false})))
+    (walk form {:vars #{} :data #{} :inputs #{} :uses-now false :follows #{}})))
 
 (defn derived-scope-problems
   "A derivation reads only its declared inputs: no data/input/now
@@ -716,3 +769,36 @@
       (seq vars)
       (conj (str "guard expressions read (data …)/(input …)/(now), not (var …): "
                  (pr-str (sort vars)))))))
+
+;; ── follow: the kind written in (docs/spec-related-row-law.md §2) ──
+
+(defn follows
+  "Every follow in the form, as [kind ref field]; kind is nil where
+  none is written in yet."
+  [form]
+  (cond
+    (seq? form)
+    (let [[op & args] form
+          inner (mapcat follows args)]
+      (if (= 'follow op)
+        (cons (if (= 3 (count args)) (vec args) (into [nil] args)) inner)
+        inner))
+    (vector? form) (mapcat follows form)
+    :else nil))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field): `kind-of`
+  answers the ref form's kind, or nil to leave that follow as written.
+  The stored tree then evaluates under a later revision without the
+  resident schema, and retargeting a ref moves the fingerprint."
+  [form kind-of]
+  (cond
+    (seq? form)
+    (let [[op & args] form]
+      (if (and (= 'follow op) (= 2 (count args)))
+        (if-some [kind (kind-of (first args))]
+          (list 'follow kind (first args) (second args))
+          form)
+        (cons op (map #(bind-follows % kind-of) args))))
+    (vector? form) (mapv #(bind-follows % kind-of) form)
+    :else form))

@@ -2230,6 +2230,28 @@
                 ":own-surface {:by …}, or :no-own-surface with one sentence saying "
                 "why a grant-wearer should not reach it")])))))
 
+(defn- check-follow
+  "A follow reaches a ref, and a :when guard's :reads are derived
+  (docs/spec-related-row-law.md §6): [follow-not-a-ref] names a follow
+  whose (data :f)/(input :f) carries no :kind, so no kind could be
+  written in; [reads-handwritten] names a :when guard that also writes
+  :reads."
+  [r]
+  (doseq [{:keys [door guard]} (guard-sites r)
+          :when (:when guard)]
+    (doseq [[kind ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (nil? kind)]
+      (err r :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (pr-str ref) ", a field with no :kind — follow starts from a "
+                ":waymark/ref entry that names its kind")))
+    (when (:reads-written guard)
+      (err r :reads-handwritten
+           (str "guard " (name (:name guard)) " on " (name door) " writes :reads "
+                (pr-str (:reads guard)) "; a :when guard's reads are derived "
+                "from its tree — drop :reads"))))
+  [])
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -2251,5 +2273,5 @@
           check-derived check-renames check-unless check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
-          check-remedy-bindings
+          check-follow check-remedy-bindings
           check-owned-surface])})
