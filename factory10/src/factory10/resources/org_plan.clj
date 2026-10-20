@@ -379,10 +379,17 @@
       (assoc-in [:data :take_landed_at] nil)))
 
 (defhandler attach-the-film [row inp ctx]
-  ;; The take is landed: the film pass does not judge it again.
-  (-> row
-      (assoc-in [:data :film_url] (:film_url inp))
-      (assoc-in [:data :take_landed_at] (:now ctx))))
+  ;; The take is landed: the film pass does not judge it again. A green
+  ;; take's warnings (ticket ef24488d) join the findings as a red one's
+  ;; rules do, a key already on the plan replaced; a warning moves no step.
+  (let [film (vec (:findings inp))
+        theirs (into #{} (map :key) film)]
+    (cond-> (-> row
+                (assoc-in [:data :film_url] (:film_url inp))
+                (assoc-in [:data :take_landed_at] (:now ctx)))
+      (seq film)
+      (update-in [:data :findings]
+                 #(into (vec (remove (fn [f] (contains? theirs (:key f))) %)) film)))))
 
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
@@ -1400,7 +1407,11 @@
      :input [:map
              [:film_url {:x-display {:raw true :label "The film"
                                      :help "Where the film of the org's simulated first week is served, for the owner to watch."}}
-              [:string {:min 1 :max 500}]]]
+              [:string {:min 1 :max 500}]]
+             [:findings {:optional true
+                         :x-display {:hidden true
+                                     :label "The film's warnings"}}
+              [:vector {:max 20} finding-schema]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The film is on the plan for the owner to watch."}

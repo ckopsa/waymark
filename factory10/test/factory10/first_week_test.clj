@@ -318,6 +318,50 @@
       (is (= (:head_sha film) (get-in row [:data :findings_sha]))))
     (is (nil? (get-in row [:data :film_url])))))
 
+;; ── a take's shots against its scene's (ticket ef24488d)
+
+(deftest a-take's-shots-line-up-with-its-scene's-ids-and-roles
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds) :week a-week))
+        text (pr-str doc)
+        shots (:shots (:scene doc))
+        filmed #(if (:meanwhile %) {:meanwhile {:as (get-in % [:meanwhile :as])}} {:hold_s 1.0})]
+    (testing "each scene shot carries its 1-based position as its id, a meanwhile shot too"
+      (is (some :meanwhile shots))
+      (is (= (range 1 (inc (count shots))) (map :id shots))))
+    (testing "a take naming each shot's id carries its scene shot's role, and drops none"
+      (let [tk {:shots (mapv #(assoc (filmed %) :id (:id %)) shots)}
+            lined (first-week/line-up tk text)]
+        (is (= (map :role shots) (map :role (:shots lined))))
+        (is (= ["friction" "turn" "payoff"] (keep :role (:shots lined))))
+        (is (= [] (first-week/dropped-roles lined text)))
+        (is (= ["take-dropped-role"] (map :key (first-week/dropped-roles tk text))))))
+    (testing "a take from before the id lines up by position, its meanwhile shots aside"
+      (let [tk {:shots (vec (cons {:meanwhile {:as "ana"}}
+                                  (map filmed (remove :meanwhile shots))))}
+            lined (first-week/line-up tk text)]
+        (is (= (map :id (remove :meanwhile shots)) (map :id (remove :meanwhile (:shots lined)))))
+        (is (= (keep :role shots) (keep :role (:shots lined))))
+        (is (= [] (first-week/dropped-roles lined text)))))
+    (testing "a take whose count is not the scene's is a take-dropped-role warning naming both"
+      (let [[w] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} text)]
+        (is (= "warning" (:severity w)))
+        (is (str/includes? (:sentence w)
+                           (str "the scene has " (count (remove :meanwhile shots)) " shots and the take 1")))))
+    (testing "a plan with no scene drops nothing"
+      (is (= [] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} nil))))))
+
+(deftest a-green-film's-warning-lands-beside-it
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge rules {:film {:chrome_leaks 0 :dead_air_s 0.5}})
+        warning {:key "take-dropped-role" :severity "warning" :class "film"
+                 :subject "film" :sentence "The take does not line up with its scene."}
+        row (:row (first-week/land! e id answer (assoc film :warnings [warning])
+                                    {:principal the-forge}))]
+    (is (= "simulated" (some-> row :state name)))
+    (is (= ["take-dropped-role"] (mapv :key (get-in row [:data :findings]))))
+    (is (nil? (get-in row [:data :next_step])) "a warning moves no step")))
+
 ;; ── a first week the rules cannot pass by not measuring it (ticket 179f7824)
 
 (def ^:private week-rules
