@@ -1870,6 +1870,29 @@
                             " names no transition of this resource — the log "
                             "fact could never have an actor"))))))
 
+(defn- check-did-doors
+  "`(did :door …)` asks the log who took a door on this row; a door
+  the kind does not declare could never have an actor, so it is
+  refused where it is written (docs/spec-related-row-law.md §4)."
+  [r]
+  (let [validate
+        (fn [where lg]
+          (doseq [form (cons (:when lg)
+                             (when (map? (:vars lg)) (vals (:vars lg))))
+                  :when (seq? form)
+                  door (sort (:doors (expr/info form)))]
+            (when-not (contains? (:actions r) door)
+              (err r :did-unknown-door
+                   (str where ": guard " (:name lg) " asks (did " door
+                        "), but " door " is no door of this kind; its "
+                        "doors are " (vec (sort (keys (:actions r)))))))))]
+    (doseq [a (machine/actions-seq r)
+            lg (leaf-guards a)]
+      (validate (str "action " (name (:name a))) lg))
+    (doseq [top (:create-guards r)
+            lg (g/iter-leaves top)]
+      (validate "create guard" lg))))
+
 (defn- check-require [r]
   (let [validate
         (fn [where lg]
@@ -2230,6 +2253,28 @@
                 ":own-surface {:by …}, or :no-own-surface with one sentence saying "
                 "why a grant-wearer should not reach it")])))))
 
+(defn- check-follow
+  "A follow reaches a ref, and a :when guard's :reads are derived
+  (docs/spec-related-row-law.md §6): [follow-not-a-ref] names a follow
+  whose (data :f)/(input :f) carries no :kind, so no kind could be
+  written in; [reads-handwritten] names a :when guard that also writes
+  :reads."
+  [r]
+  (doseq [{:keys [door guard]} (guard-sites r)
+          :when (:when guard)]
+    (doseq [[kind ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (nil? kind)]
+      (err r :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (pr-str ref) ", a field with no :kind — follow starts from a "
+                ":waymark/ref entry that names its kind")))
+    (when (:reads-written guard)
+      (err r :reads-handwritten
+           (str "guard " (name (:name guard)) " on " (name door) " writes :reads "
+                (pr-str (:reads guard)) "; a :when guard's reads are derived "
+                "from its tree — drop :reads"))))
+  [])
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -2248,8 +2293,8 @@
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
-          check-derived check-renames check-unless check-require
+          check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
-          check-remedy-bindings
+          check-follow check-remedy-bindings
           check-owned-surface])})

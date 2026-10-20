@@ -14,7 +14,8 @@
   a ported declaration demands it, never speculatively.
 
   Evaluation is total: no calls, no recursion, no names beyond the
-  scope, no reads. Ordering comparisons with a nil operand are false
+  scope, and no reads but the scope's own :read hook, which `follow`
+  asks for one row (and is unknown without). Ordering comparisons with a nil operand are false
   (a missing value satisfies no ordering claim); arithmetic over nil
   propagates nil. Numbers are longs and exact decimals — a float
   literal is refused at validation, not rounded.
@@ -28,7 +29,7 @@
   (see `normalize`), so reformatting a law never mints a revision.
 
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
-  :its (innermost-first seq of quantifier items)}."
+  :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn])
   (:import (java.time LocalDate Instant Period ZoneOffset)))
 
@@ -43,13 +44,24 @@
   count/sum (batch C): the waymark8 quantifier pair, earned by the
   blast-radius meter's own acceptance declarations (a flip count over
   a collection fact and a summed quantity are the shapes the meter's
-  test laws speak) — recorded in docs/waymark10-c-notes.md."
+  test laws speak) — recorded in docs/waymark10-c-notes.md.
+
+  follow: one hop to a field of the row a ref names
+  (docs/spec-related-row-law.md §2), earned by the household meal
+  list's meal-is-listed.
+
+  did/me/self (docs/spec-related-row-law.md §4): separation of duties —
+  who took a door on this row, who acts now, and which row this is.
+  They read the scope's :actors, :faces, :principal and :self, which
+  the guard scope fills from its ctx; a scope without them answers
+  unknown."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      days date-of is-set
-     every some count sum})
+     every some count sum
+     follow did me self})
 
 (def ^:private quantifier-ops '#{every some count sum})
 
@@ -76,6 +88,12 @@
   (and (string? s)
        (try (LocalDate/parse ^String s) true
             (catch Exception _ false))))
+
+(defn- follow-ref?
+  "The one ref a follow may start from: (data :f) or (input :f)."
+  [x]
+  (and (seq? x) (contains? '#{data input} (first x))
+       (= 2 (count x)) (keyword? (second x))))
 
 (defn- check
   "Accumulate problem strings for `form`. `env` is the set of bound
@@ -112,6 +130,14 @@
           now
           (if (zero? n) problems (conj problems "(now) takes no arguments"))
 
+          (me self)
+          (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
+
+          did
+          (if (and (pos? n) (every? keyword? args))
+            problems
+            (conj problems "(did :door …) takes one or more keyword door names"))
+
           it
           (cond
             (not (and (= n 1) (nat-int? (first args))))
@@ -135,6 +161,22 @@
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
+
+          ;; authored (follow <ref> :field); normalized at the def site
+          ;; to (follow :kind <ref> :field)
+          follow
+          (let [[kind ref field] (if (= n 3) args (cons nil args))]
+            (cond
+              (not (<= 2 n 3))
+              (conj problems "(follow <ref> :field) takes a ref and a field")
+              (and (= n 3) (not (keyword? kind)))
+              (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
+              (not (follow-ref? ref))
+              (conj problems (str "(follow …) starts from (data :f) or (input :f) — "
+                                  "one hop; got " (pr-str ref)))
+              (not (keyword? field))
+              (conj problems "(follow …) reads one keyword field of the row it reaches")
+              :else problems))
 
           (= not= < <= > >=)
           (if (= n 2)
@@ -277,7 +319,7 @@
   "Ops whose value is always a boolean — the only operands and/or/not
   may collapse around without changing the value domain: (and x x)
   means (boolean x), which is x itself only when x is already boolean."
-  '#{= not= < <= > >= and or not is-set every some})
+  '#{= not= < <= > >= and or not is-set every some did})
 
 (defn- boolean-valued? [form]
   (and (seq? form) (contains? boolean-valued-ops (first form))))
@@ -315,6 +357,10 @@
             (and (seq? a) (= '= (first a)))    (cons 'not= (rest a))
             (and (seq? a) (= 'not= (first a))) (cons '= (rest a))
             :else (list 'not a)))
+
+        ;; a door named twice, or in another order, is the same question
+        did
+        (cons op (sort (distinct args)))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -566,6 +612,16 @@
         var   (clojure.core/get (:vars scope) (first args))
         now   (:now scope)
         it    (nth (:its scope) (long (first args)) nil)
+        me    (if (contains? scope :principal) (:principal scope) unknown)
+        self  (if (contains? scope :self) (:self scope) unknown)
+
+        ;; true when a face of the principal acting now is a face of
+        ;; any logged actor of one of the doors; no log to ask is unknown
+        did
+        (if-some [actors (:actors scope)]
+          (let [faces (set (:faces scope))]
+            (boolean (some (fn [door] (some faces (actors door))) args)))
+          unknown)
 
         get
         (let [v (evaluate (first args) scope)]
@@ -648,6 +704,26 @@
                   (number? v) (clojure.core/abs v)
                   :else nil)))))
 
+        ;; one hop through the scope's :read hook: a nil ref, an id no
+        ;; row has and a row the caller may not see answer nil; no
+        ;; hook, or no kind written in yet, is unknown
+        follow
+        (if (= 3 (count args))
+          (let [[kind ref field] args
+                id (evaluate ref scope)
+                read (:read scope)]
+            (cond
+              (unknown? id) unknown
+              (nil? id) nil
+              (nil? read) unknown
+              :else
+              (when-some [row (read kind id)]
+                (case field
+                  :state (some-> (:state row) name)
+                  :id    (some-> (:id row) str)
+                  (clojure.core/get (:data row) field)))))
+          unknown)
+
         (every some count sum)
         (if (vector? (first args))
           ;; authored spelling — erase the binder names, then evaluate
@@ -665,6 +741,9 @@
 
 (defn info
   "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
+  A form that asks who acts adds :doors (from did), :uses-me and
+  :uses-self; a form that asks no such thing carries none of them.
+  A form that follows adds :follows, the kinds written into its follows.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -675,6 +754,13 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
+                  follow (reduce #(walk %2 %1)
+                                 (cond-> acc
+                                   (= 3 (count args)) (update :follows (fnil conj #{}) (first args)))
+                                 (remove keyword? args))
+                  did   (update acc :doors (fnil into #{}) args)
+                  me    (assoc acc :uses-me true)
+                  self  (assoc acc :uses-self true)
                   (date it) acc
                   (every some count sum)
                   (let [args (if (vector? (first args))
@@ -692,9 +778,11 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now]} (info form)
+  (let [{:keys [vars data inputs uses-now doors uses-me uses-self]} (info form)
         undeclared (remove over vars)]
     (cond-> []
+      (or (seq doors) uses-me uses-self)
+      (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
       (seq data)
       (conj (str "derived expressions read declared inputs, not (data …): "
                  (pr-str (sort data))))
@@ -716,3 +804,36 @@
       (seq vars)
       (conj (str "guard expressions read (data …)/(input …)/(now), not (var …): "
                  (pr-str (sort vars)))))))
+
+;; ── follow: the kind written in (docs/spec-related-row-law.md §2) ──
+
+(defn follows
+  "Every follow in the form, as [kind ref field]; kind is nil where
+  none is written in yet."
+  [form]
+  (cond
+    (seq? form)
+    (let [[op & args] form
+          inner (mapcat follows args)]
+      (if (= 'follow op)
+        (cons (if (= 3 (count args)) (vec args) (into [nil] args)) inner)
+        inner))
+    (vector? form) (mapcat follows form)
+    :else nil))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field): `kind-of`
+  answers the ref form's kind, or nil to leave that follow as written.
+  The stored tree then evaluates under a later revision without the
+  resident schema, and retargeting a ref moves the fingerprint."
+  [form kind-of]
+  (cond
+    (seq? form)
+    (let [[op & args] form]
+      (if (and (= 'follow op) (= 2 (count args)))
+        (if-some [kind (kind-of (first args))]
+          (list 'follow kind (first args) (second args))
+          form)
+        (cons op (map #(bind-follows % kind-of) args))))
+    (vector? form) (mapv #(bind-follows % kind-of) form)
+    :else form))

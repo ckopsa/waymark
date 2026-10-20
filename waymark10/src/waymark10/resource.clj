@@ -201,6 +201,44 @@
                 (fn [a] (update a :guards #(mapv (partial map-leaf-guards bind) %))))
         (update :create-guards #(mapv (partial map-leaf-guards bind) (or % []))))))
 
+(defn- bind-guard-follows
+  "One guard tree with each leaf's follows bound; a composite whose
+  parts moved sums its :reads again, as g/and and g/or built it."
+  [kind-of guard]
+  (if-some [k (cond (:all guard) :all (:any guard) :any)]
+    (let [parts (mapv (partial bind-guard-follows kind-of) (get guard k))]
+      (if (= parts (get guard k))
+        guard
+        (assoc guard k parts :reads (vec (distinct (mapcat :reads parts))))))
+    (g/bind-follows guard kind-of)))
+
+(defn- ref-kinds
+  "field → target kind, for the single-id refs of a :map schema."
+  [form]
+  (into {}
+        (keep (fn [{:keys [field kind listed]}] (when-not listed [field kind])))
+        (when form (schema/ref-fields form))))
+
+(defn- bind-follow-kinds
+  "Write the target kind into every (follow <ref> :field) of the kind's
+  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
+  the row's schema, (input :f) the door's own input. A ref that names
+  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  [rmap]
+  (let [data-kinds (ref-kinds (:schema rmap))
+        bind (fn [input-form guards]
+               (let [input-kinds (ref-kinds input-form)
+                     kind-of (fn [[op f]]
+                               (get (if (= 'data op) data-kinds input-kinds) f))]
+                 (mapv (partial bind-guard-follows kind-of) guards)))]
+    (cond-> (-> rmap
+                (update :actions update-vals
+                        (fn [a] (update a :guards #(bind (:input a) %))))
+                (update :create-guards
+                        #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
+      (:creates rmap)
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
   and property vectors: [:vector [:waymark/vocab {:open true}]] →
@@ -2047,6 +2085,7 @@
         ;; mapped, and replay-history reads the log through the chain
         (update :renames #(merge {:states {} :actions {}} %))
         normalize-derived
+        bind-follow-kinds
         bind-require-specs
         merge-vocab-filters))))
 

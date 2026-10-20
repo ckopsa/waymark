@@ -95,18 +95,23 @@
 
 (defn- guard-fp [address g]
   (if-some [w (:when g)]
-    ;; expression guard: the stored tree IS the law; check is nil
-    {"name"           (name (:name g))
-     "expr"           (form-tree w)
-     "vars_exprs"     (into (sorted-map)
-                            (map (fn [[k f]] [(name k) (form-tree f)]))
-                            (:vars g))
-     "explain"        (:explain g)
-     "remedies"       (mapv remedy-fp (:remedies g []))
-     "hide"           (boolean (:hide g))
-     "severity"       (name (:severity g :refuse))
-     "requires_token" (:requires-token g)
-     "check"          nil}
+    ;; expression guard: the stored tree IS the law; check is nil.
+    ;; :errors, the per-field sentences, projects only when declared,
+    ;; so a guard without them hashes as it always did
+    (cond-> {"name"           (name (:name g))
+             "expr"           (form-tree w)
+             "vars_exprs"     (into (sorted-map)
+                                    (map (fn [[k f]] [(name k) (form-tree f)]))
+                                    (:vars g))
+             "explain"        (:explain g)
+             "remedies"       (mapv remedy-fp (:remedies g []))
+             "hide"           (boolean (:hide g))
+             "severity"       (name (:severity g :refuse))
+             "requires_token" (:requires-token g)
+             "check"          nil}
+      (seq (:errors g)) (assoc "errors" (into (sorted-map)
+                                              (map (fn [[k s]] [(name k) s]))
+                                              (:errors g))))
     {"name"           (name (:name g))
      "check"          (callable-hash (str address ".check")
                                      (or (:check g) (:accepts g)))

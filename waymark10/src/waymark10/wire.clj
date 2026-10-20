@@ -55,6 +55,10 @@
         (= op 'it)   ["it" (first args)]
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
+        (= op 'follow) (let [[ref field] (take-last 2 args)]
+                         (cond-> ["follow"]
+                           (= 3 (count args)) (conj (name (first args)))
+                           true (conj (form->wire ref) (name field))))
         :else (into [(name op)] (map form->wire) args)))
 
     :else form))
@@ -113,6 +117,16 @@
               (list 'get (decode (first args)) (keyword (second args)))
               (refuse "(get …) wire node takes a tree and a field-name string"
                       {:tree tree}))
+
+            (= op 'follow)
+            (let [[kind ref field] (if (= 3 (count args)) args (cons nil args))]
+              (if (and (<= 2 (count args) 3) (string? field)
+                       (or (= 2 (count args)) (string? kind)))
+                (cond->> (list (decode ref) (keyword field))
+                  kind (cons (keyword kind))
+                  true (cons 'follow))
+                (refuse "(follow …) wire node takes [kind] ref field-name"
+                        {:tree tree})))
 
             :else (cons op (map decode args))))))
 
