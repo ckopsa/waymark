@@ -114,9 +114,10 @@
 
 (defn- arc
   "1 when the shot roles run friction, turn, payoff and the last shot's
-  goal state is done; else 0."
+  goal state is done; else 0. A shot with no role (a camera, a hold, a
+  meanwhile) is not read."
   [shots]
-  (if (and (= roles (vec (dedupe (map (comp word :role) shots))))
+  (if (and (= roles (vec (dedupe (keep (comp word :role) shots))))
            (= "done" (word (:goal_state (last shots)))))
     1
     0))
