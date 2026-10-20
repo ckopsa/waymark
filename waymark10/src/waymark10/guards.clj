@@ -301,6 +301,21 @@
                     (let [s (str value)]
                       (some #(= s (str %)) allowed)))))
 
+(defn- memo-read
+  "The ctx's :read hook, memoized for one verdict: a law that follows
+  the same ref three times costs one read (docs/spec-related-row-law.md
+  §2). nil when the ctx lends no hook."
+  [read]
+  (clojure.core/when read
+    (let [seen (atom {})]
+      (fn [kind id]
+        (let [k [kind (str id)]]
+          (if-some [e (find @seen k)]
+            (val e)
+            (let [v (read kind id)]
+              (swap! seen assoc k v)
+              v)))))))
+
 (defn actors-of
   "The `:actor-of` answer over `recs`, a row's log newest first.
   `(actors-of recs door)` is the newest actor id of `door` (unless,
@@ -324,13 +339,15 @@
 (defn- expr-scope
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
-  principal), which row this is, and the log through `:actor-of`. A
+  principal), which row this is, and the log through `:actor-of`; for
+  (follow …), the ctx's :read hook memoized for this verdict. A
   ctx without a principal or a log leaves its key out, and the form
   that asks for it answers unknown."
   [row inp ctx]
   (let [p (:principal ctx)
         actor-of (:actor-of ctx)]
-    (cond-> {:data (:data row) :input inp :now (:now ctx)}
+    (cond-> {:data (:data row) :input inp :now (:now ctx)
+             :read (memo-read (:read ctx))}
       (some? (:id row)) (assoc :self (str (:id row)))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
@@ -353,7 +370,11 @@
                             (keep (fn [[k form]]
                                     (try [k (expr/evaluate form scope)]
                                          (catch Exception _ nil))))
-                            (:vars g)))}))))
+                            (:vars g)))
+               ;; the declared per-field sentences, as a code guard's
+               ;; {:errors {field ["…"]}} spells them
+               :errors (not-empty
+                        (into {} (map (fn [[k s]] [k [s]])) (:errors g)))}))))
 
 (declare evaluate)
 
@@ -530,21 +551,24 @@
 (defn- derived-reads
   "What a :when tree and its :vars read beyond the row: (did …) the log
   and the actor, (me) the actor, (now) the clock — in that order, once
-  each, so a tree that asks none of them keeps the :reads it had."
+  each — then every kind a (follow …) reaches, sorted; so a tree that
+  asks none of them keeps the :reads it had."
   [w vars]
   (let [infos (cons (expr/info w) (map expr/info (vals vars)))
         reads? (fn [k] (boolean (some k infos)))]
-    (vec (distinct (cond-> []
-                     (reads? (comp seq :doors)) (conj :transitions :principal)
-                     (reads? :uses-me) (conj :principal)
-                     (reads? :uses-now) (conj :now))))))
+    (into (vec (distinct (cond-> []
+                           (reads? (comp seq :doors)) (conj :transitions :principal)
+                           (reads? :uses-me) (conj :principal)
+                           (reads? :uses-now) (conj :now))))
+          (sort (into #{} (mapcat :follows) infos)))))
 
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the
   fingerprint stores the tree, the reviewer diffs the leaf, and (9.0)
   the judgment overlay evaluates any stored revision. :judges derives
-  from the tree's (input …) reads, :reads from (did …), (me) and
-  (now) — declared by the law itself."
+  from the tree's (input …) reads, :reads from (did …), (me), (now)
+  and each (follow …)'s kind — declared by the law itself. :errors is
+  {field \"sentence\"}, the per-field error a refusal carries."
   [{:keys [when vars judges reads name] :as opts}]
   (clojure.core/when-not (seq? when)
     (throw (t/definition-error "guard/expr takes a :when expression form")))
@@ -565,11 +589,37 @@
                             [k f])))
                    vars)
         winfo (expr/info w)]
+    (clojure.core/when-some [es (:errors opts)]
+      (clojure.core/when-not
+       (clojure.core/and (map? es) (every? keyword? (keys es))
+                         (every? #(clojure.core/and (string? %) (clojure.core/not (str/blank? %)))
+                                 (vals es)))
+        (throw (t/definition-error
+                (str "guard " name " :errors is {field \"sentence\"} — the "
+                     "per-field error the refusal carries")))))
     (guard (merge (dissoc opts :when :vars)
                   {:when w
                    :vars vars
                    :judges (clojure.core/or judges (vec (sort (:inputs winfo))))
-                   :reads (clojure.core/or reads (derived-reads w vars))}))))
+                   :reads (clojure.core/or reads (derived-reads w vars))}
+                  ;; the gate names it: [reads-handwritten]
+                  (clojure.core/when (some? reads) {:reads-written true})))))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field) of an
+  expression guard (`kind-of`: the ref form → its kind, or nil), then
+  derive :reads again. A guard with nothing to bind comes back as it
+  was, so no law that does not follow moves."
+  [g kind-of]
+  (let [forms (cons (:when g) (vals (:vars g)))]
+    (if (clojure.core/or (nil? (:when g))
+                         (not-any? (comp nil? first) (mapcat expr/follows forms)))
+      g
+      (let [bind #(expr/normalize (expr/bind-follows % kind-of))
+            w (bind (:when g))
+            vars (into {} (map (fn [[k f]] [k (bind f)])) (:vars g))]
+        (cond-> (assoc g :when w :vars vars)
+          (clojure.core/not (:reads-written g)) (assoc :reads (derived-reads w vars)))))))
 
 (defn relation
   "Multi-field admission: :accepts produces admissible tuples, or :op

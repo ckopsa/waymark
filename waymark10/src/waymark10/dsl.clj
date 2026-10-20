@@ -85,8 +85,8 @@
 (defmacro defderived [name spec]
   `(d/defderived ~name ~spec))
 
-(defmacro defguard [name clause & [law]]
-  `(d/defguard ~name ~clause ~law))
+(defmacro defguard [name clause & [law opts]]
+  `(d/defguard ~name ~clause ~law ~opts))
 
 ;; the declared policy test beside the law it judges — the same
 ;; sentence-first shape, one turn outward

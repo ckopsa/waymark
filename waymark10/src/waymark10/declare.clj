@@ -381,7 +381,7 @@
   "Build the plain expression-guard map a sentence + law pair means.
   Construction-validated here (the defaction pattern): the def line is
   where a malformed guard fails."
-  [gname clause law]
+  [gname clause law & [opts]]
   (when-not (and (map? clause) (#{:refuse :warning} (:severity clause))
                  (string? (:explain clause)))
     (throw (t/definition-error
@@ -392,7 +392,14 @@
             (str "defguard " (name gname)
                  ": a guard is a verdict — give it its law: "
                  "(defguard " (name gname) " (refuse \"…\") '(expr))"))))
-  (let [w (rewrite-sentence-law law)
+  (when-not (and (or (nil? opts) (map? opts))
+                 (every? #{:remedies :open :errors} (keys opts)))
+    (throw (t/definition-error
+            (str "defguard " (name gname)
+                 ": the map after the law is {:remedies … :open … :errors {field \"…\"}}; "
+                 (pr-str opts) " is not"))))
+  (let [clause (merge clause opts)
+        w (rewrite-sentence-law law)
         inputs (:inputs (expr/info (expr/normalize w)))
         vars (into {}
                    (keep (fn [[_ p]]
@@ -406,7 +413,8 @@
                      :severity (:severity clause)}
               (seq vars) (assoc :vars vars)
               (:remedies clause) (assoc :remedies (:remedies clause))
-              (:open clause) (assoc :open (:open clause))))))
+              (:open clause) (assoc :open (:open clause))
+              (:errors clause) (assoc :errors (:errors clause))))))
 
 (defmacro defguard
   "A sentence-first expression guard:
@@ -418,9 +426,12 @@
 
   Def's the plain guard map the inline g/expr spelling produces —
   construction-validated at the def line. (waymark10.guards/defguard
-  remains the CODE-guard macro; this one speaks sentences and trees.)"
-  [name clause & [law]]
-  `(def ~name (sentence-guard ~(keyword name) ~clause ~law)))
+  remains the CODE-guard macro; this one speaks sentences and trees.)
+
+  A map after the law carries the way out and the per-field sentences:
+  {:remedies […] :open \"…\" :errors {:meal_id \"not an on-list meal\"}}."
+  [name clause & [law opts]]
+  `(def ~name (sentence-guard ~(keyword name) ~clause ~law ~opts)))
 
 ;; ── sentence-first scenarios (waymark-442.2) ────────────────────────
 ;; The same shape as defguard, one turn outward: a guard's sentence
