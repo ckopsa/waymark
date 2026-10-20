@@ -204,6 +204,27 @@ The sentence and the remedies read it:
 a row read (secret fields render empty, as in the decision record).
 `(evidence :b)` in a remedy binding is its id.
 
+**No visible evidence.** When every match is hidden, a `{b.field}` never
+renders literally. The explain is split into sentences, and each sentence
+that reads the unseen binder is replaced by the guard's `:hidden` sentence
+for that binder, or dropped when the guard gives none. When no sentence
+would remain, the engine's own stands: "What stops this is outside what
+you can see." A number the refusal still owes its reader, such as how many
+rows match, comes from `:vars`, which `defguard` evaluates as the law is:
+
+```clojure
+(defguard the-crew-is-finished
+  (refuse "{count} of this crew's bookings are not finished. The oldest is \"{b.customer_name}\". Finish each one first.")
+  '(none [b :booking {:crew (= (input :crew)) :state (in "scheduled")}])
+  {:remedies [{:door :booking/finish :id '(evidence :b)}]
+   :vars {:count '(count [o :booking {:crew (= (input :crew)) :state (in "scheduled")}])}
+   :hidden {:b "They are outside what you can see."}})
+```
+
+With every match hidden this reads "2 of this crew's bookings are not
+finished. They are outside what you can see. Finish each one first.";
+without `:hidden`, the middle sentence drops.
+
 ### Worked: the landscaping booking
 
 ```clojure
