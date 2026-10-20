@@ -425,7 +425,10 @@
       (t/deny {:vars (not-empty
                       (into {}
                             (keep (fn [[k form]]
-                                    (try [k (expr/evaluate form scope)]
+                                    ;; a var no hook could answer is named,
+                                    ;; not printed as the sentinel object
+                                    (try (let [x (expr/evaluate form scope)]
+                                           [k (if (expr/unknown? x) "unknown" x)])
                                          (catch Exception _ nil))))
                             (:vars g)))
                ;; the declared per-field sentences, as a code guard's
@@ -458,11 +461,14 @@
                        (get-in g [:require/spec :expr]))
      (if (nil? inp)
        [(t/allow {:pending-input true}) g]
-       [(if (expr/evaluate (get-in g [:require/spec :expr])
-                           {:vars (assoc inp :now (:now ctx))})
-          (t/allow)
-          (t/deny))
-        g])
+       (let [v (expr/evaluate (get-in g [:require/spec :expr])
+                              {:vars (assoc inp :now (:now ctx))})]
+         ;; an unknown spec is pending, never truthy and never a
+         ;; refusal (docs/spec-related-row-law.md §5)
+         [(cond (expr/unknown? v) (t/allow {:pending-input true})
+                v (t/allow)
+                :else (t/deny))
+          g]))
 
      (:when g)
      (if (clojure.core/and (= :probe (:mode ctx)) (nil? inp) (:needs-input g))
