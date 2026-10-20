@@ -113,30 +113,21 @@
 
   Recorded punt: the with_plan profile has no v10 spelling."
   (:require [mealplan10.resources.meal-line :as meal-line]
-            [waymark10.dsl :refer [defacceptsfn defderived defguardfn
-                                   defresource defhandler guard
-                                   require-fact]]
-            [waymark10.types :as t])
+            [waymark10.dsl :refer [defacceptsfn defderived defguard
+                                   defresource defhandler defscenario
+                                   guard refuse require-fact]])
   (:import (java.time LocalDate)))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
-;; the recorded 8.0 §5 residue: a verdict that READS another kind's
-;; state is not pure over (row, input, clock), so it stays code —
-;; :reads [:plan] names the dependency honestly. The pure render probe
-;; carries no :read and declines; every enforcement ctx carries it.
-(defguardfn plan-is-planned
-  {:reads [:plan]
-   :explain "Finalize the meal plan first — the grocery list follows from it."
-   :remedies [{:door :plan/finalize :id '(data :plan_id)}]}
-  [row _inp ctx]
-  (if-some [read (:read ctx)]
-    (let [plan (read :plan (get-in row [:data :plan_id]))]
-      (cond
-        (nil? plan) (t/deny {:errors {:plan_id ["plan not found"]}})
-        (contains? #{:planned :active} (:state plan)) (t/allow)
-        :else (t/deny)))
-    (t/allow)))
+;; once the recorded 8.0 §5 residue, now related-row law
+;; (docs/spec-related-row-law.md §7): the follow derives :reads [:plan],
+;; and a probe with no :read answers pending rather than allow
+(defguard plan-is-planned
+  (refuse "Finalize the meal plan first — the grocery list follows from it.")
+  '(or (= (follow (data :plan_id) :state) "planned")
+       (= (follow (data :plan_id) :state) "active"))
+  {:remedies [{:door :plan/finalize :id '(data :plan_id)}]})
 
 ;; what's on the list: the rendered enum, the per-part availability,
 ;; and the enforcement, from one set
@@ -550,8 +541,38 @@
   (require-fact :window_paired
                 {:explain "A coverage window is both ends or neither — covers_from through covers_until, in order."}))
 
+;; ── law scenarios ───────────────────────────────────────────────────
+;; Check-tier: finalize carries only plan-is-planned, declarative, so
+;; the :given plan answers its follow with no database.
+
+(def ^:private the-plan
+  {:kind :plan :handle :week :state :planned
+   :data {:start_date "2099-01-04" :weeks 1}})
+
+(defscenario a-list-for-a-finalized-plan-is-ready
+  "A list whose plan is finalized is ready to shop."
+  {:kind    :grocery_list
+   :attempt :finalize
+   :given   [the-plan]
+   :row     {:state :draft :data {:plan_id "{given/week}"}}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-list-follows-its-plan
+  "A list whose plan is still a draft waits for the plan to be
+   finalized, and the refusal names that door."
+  {:kind    :grocery_list
+   :attempt :finalize
+   :given   [(assoc the-plan :state :draft)]
+   :row     {:state :draft :data {:plan_id "{given/week}"}}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :plan-is-planned
+             :remedies [:plan/finalize]}})
+
 (defresource grocery-list
   {:kind :grocery_list
+   :scenarios [a-list-for-a-finalized-plan-is-ready
+               a-list-follows-its-plan]
    :initial :draft
    :terminal #{:done :discarded}
    ;; two terminal states, and the machine cannot tell them apart:

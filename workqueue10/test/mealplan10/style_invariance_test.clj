@@ -519,6 +519,10 @@
 
 (def old-grocery-list
   {:kind :grocery_list
+   ;; scenarios are never fingerprinted; the old spelling cites the
+   ;; same objects so the normalized maps stay equal
+   :scenarios [glist/a-list-for-a-finalized-plan-is-ready
+               glist/a-list-follows-its-plan]
    :states [:draft :ready :done :discarded]
    :initial :draft
    :terminal #{:done :discarded}

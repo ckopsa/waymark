@@ -62,6 +62,7 @@
             [dayplan10.passage :as passage]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.guards :as g]
             [waymark10.types :as t]
             [workqueue10.resources.insight :as insight]))
 
@@ -185,25 +186,28 @@
             (t/deny {:vars {:why why}})
             (t/allow)))))))
 
-(defguardfn on-a-planned-block
-  {:judges [:block_id] :reads [:block]
-   :vars [:why]
-   :explain "A decision sits on a block of the day that is still planned: {why}."}
-  [_row inp ctx]
-  (if (nil? (:read ctx))
-    (t/allow)
-    (let [block ((:read ctx) :block (:block_id inp))]
-      (cond
-        (nil? block)
-        (t/deny {:vars {:why "no block stands at that id — add the block to the day first"}
-                 :errors {:block_id ["block not found"]}})
+;; Declarative related-row law (docs/spec-related-row-law.md §7): two
+;; walls, each one follow over :block_id — the block stands, and it is
+;; still planned. A missing block is the first wall's alone.
 
-        (not= :planned (:state block))
-        (t/deny {:vars {:why (str "the " (get-in block [:data :context_name])
-                                  " block is " (name (:state block))
-                                  "; un-skip or reopen it before deciding into it")}})
+(def on-a-planned-block
+  (g/expr {:name :on-a-planned-block
+           :severity :refuse
+           :when '(is-set (follow (input :block_id) :id))
+           :explain "A decision sits on a block of the day that is still planned: no block stands at that id — add the block to the day first."
+           :errors {:block_id "block not found"}
+           :remedies [:block/create]}))
 
-        :else (t/allow)))))
+(def the-block-is-still-planned
+  (g/expr {:name :the-block-is-still-planned
+           :severity :refuse
+           :when '(or (not (is-set (follow (input :block_id) :id)))
+                      (= (follow (input :block_id) :state) "planned"))
+           :vars {:context_name '(follow (input :block_id) :context_name)
+                  :block_state '(follow (input :block_id) :state)}
+           :explain "A decision sits on a block of the day that is still planned: the {context_name} block is {block_state}; un-skip or reopen it before deciding into it."
+           :remedies [{:door :block/unskip :id '(input :block_id)}
+                      {:door :block/reopen :id '(input :block_id)}]}))
 
 ;; ── the start wall ──────────────────────────────────────────────────
 
@@ -351,6 +355,17 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :launch-says-how
              :because "names no service"}})
+
+(defscenario a-decision-sits-on-a-block-that-stands
+  "A decision into a block nobody added is refused naming the fix —
+   add the block to the day first. CONFORMANCE-tier like its siblings:
+   subject-resolves on the same door reads :storage."
+  {:kind    :decision
+   :attempt :create
+   :input   {:block_id a-block :kind "pick" :text "Tonight's film" :order 1}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :on-a-planned-block
+             :because "add the block to the day first"}})
 
 (def ^:private a-film "/api/media/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0")
 
@@ -640,9 +655,10 @@
    ;; medium (after subject-resolves, so the row stands when it looks);
    ;; the block wall reads the day
    :create-guards [launch-says-how subject-resolves a-passage-reads-as-a-place
-                   on-a-planned-block]
+                   on-a-planned-block the-block-is-still-planned]
    :scenarios [a-subject-is-a-row-that-stands
                a-launch-says-how
+               a-decision-sits-on-a-block-that-stands
                a-passage-ends-after-it-starts
                a-passage-counts-one-way
                go-needs-the-room-wired
