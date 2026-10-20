@@ -19,7 +19,9 @@
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
             names fills with no hole left — its `:rehearsal :seats`
-            too, joined as a clone joins them (ticket 290faa7a)
+            too, joined as a clone joins them (ticket 290faa7a), each
+            of those fitting the seat create door's schema (ticket
+            71e711a2)
   resource  every kind passed the defresource gate
   registry  the kinds assemble beside the ones the engine enrols
   crack     cracks/audit over the org's kinds and its seed's seats,
@@ -56,10 +58,12 @@
             [clojure.string :as str]
             [waymark10.check :as check]
             [waymark10.dev :as dev]
+            [waymark10.schema :as schema]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org-boot]
+            [waymark10.server.seats :as seats]
             [waymark10.server.seed :as seed]
             [waymark10.wire :as wire])
   (:import (clojure.lang Compiler DynamicClassLoader)
@@ -158,6 +162,37 @@
                         "Write {:template … :params …} or {:seat {…}}."))))
    {:seats [] :findings []}
    (map-indexed vector (:seats seed))))
+
+(defn- unresolved-ref?
+  "A seed's `[:ref …]`, whole or as the text a template fills in: only
+  boot resolves it, so the schema cannot judge it here."
+  [v]
+  (or (and (vector? v) (= :ref (first v)))
+      (and (string? v) (str/starts-with? v "[:ref "))))
+
+(defn- seat-schema-findings
+  "Each `:rehearsal :seats` entry, filled, judged against the seat
+  create door's schema as boot's create judges it — decoded, defaults
+  filled — with no database (ticket 71e711a2): an overlong charter or
+  instructions is a finding naming the field and its length, not a
+  clone that dies at boot."
+  [seed]
+  (for [seat (:seats (seed-seats {:seats (get-in seed [:rehearsal :seats])}))
+        :let [form (:create-schema seats/seat)
+              errs (->> (dissoc seat :owner)
+                        (schema/decode form)
+                        (schema/apply-defaults form)
+                        (schema/errors form))]
+        :when (map? errs)
+        [field msgs] (sort-by (comp text key) errs)
+        :when (not (unresolved-ref? (get seat field)))
+        :let [said (if (sequential? msgs)
+                     (str/join "; " (map #(if (string? %) % (pr-str %)) msgs))
+                     (pr-str msgs))]]
+    (finding :seed ["schema" (:name seat) field] (str "seat " (:name seat))
+             (str "The seat " (:name seat) "'s " (text field)
+                  " does not fit the seat create door: " said ".")
+             (str "Mend the seed's " (text field) " for this seat, or the template's params that fill it."))))
 
 ;; ── resource, registry ──────────────────────────────────────────────
 
@@ -588,6 +623,7 @@
                               (str "The seed names the org " (pr-str (:org seed)) ", not " org ".")
                               "Set the seed's :org to the org's directory name.")])
                   (:findings seeded)
+                  (seat-schema-findings seed)
                   (resource-findings rs)
                   (registry-findings org rs)
                   (crack-findings rs seats)
