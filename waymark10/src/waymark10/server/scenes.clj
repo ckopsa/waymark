@@ -894,6 +894,23 @@
               (when why (str "wearing " (tick who) ": " why))))
           (get scene "wearing"))))
 
+(defn- query-bind-problem
+  "Why a given cannot bind what it answers, as `given N: <why>`; nil when
+  each can. A bind names one row: the performer reads the answer's
+  `self`. A waymark_query answers a collection, which has none, so its
+  bind stands only as the grant read a `wearing` names."
+  [scene]
+  (let [worn (into #{} (map str) (vals (get scene "wearing")))]
+    (some (fn [[i c]]
+            (when (and (map? c) (= "waymark_query" (get c "tool"))
+                       (some? (get c "bind"))
+                       (not (contains? worn (str "$" (get c "bind")))))
+              (str "given " (inc i) ": a bind names one row, and a waymark_query"
+                   " answers a collection, so " (tick (get c "bind"))
+                   " would bind nothing; bind a waymark_get, or name it in `wearing`"
+                   " as a grant read.")))
+          (map-indexed vector (get scene "given")))))
+
 (defn problem-of
   "The first call, `wearing` entry or shot of a scene's data that cannot
   be performed, as `given N: <why>`, `wearing <key>: <why>` or
@@ -911,7 +928,8 @@
                       st
                       (map-indexed vector items)))
         st (run {:bound {}} "given" call-step (get scene "given"))
-        worn (when-not (:problem st) (wearing-problem scene people))]
+        worn (when-not (:problem st)
+               (or (query-bind-problem scene) (wearing-problem scene people)))]
     (:problem (cond
                 (:problem st) st
                 worn (fail worn)

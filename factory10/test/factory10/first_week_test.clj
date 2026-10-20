@@ -144,6 +144,9 @@
              (map (juxt :kind :state :many) (counts (last (:shots scene)))))))
     (testing "the arc runs friction, turn, payoff"
       (is (= ["friction" "turn" "payoff"] (keep :role (:shots scene)))))
+    (testing "each given binds one row: none binds a waymark_query's collection"
+      (is (not-any? #(and (some? (:bind %)) (= "waymark_query" (:tool %)))
+                    (:given scene))))
     (testing "about 45 seconds"
       (is (<= 35000 (reduce + (keep #(get-in % [:hold :ms]) (:shots scene))) 45000)))
     (testing "it checks ready beside the org's kinds"
