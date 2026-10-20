@@ -717,11 +717,24 @@
 
 ;; ── follow: the field is on the kind it reaches ─────────────────────
 
+(defn- garnish-keys
+  "The data fields a kind's refs maintain beside its schema's own: each
+  ref's :label and the targets of its :carry — written onto the row by
+  the engine, so a follow reads them like any data field."
+  [form]
+  (into #{}
+        (mapcat (fn [[_ {:keys [properties]}]]
+                  (cond-> []
+                    (keyword? (:label properties)) (conj (:label properties))
+                    (map? (:carry properties)) (into (vals (:carry properties))))))
+        (schema/entry-map form)))
+
 (defn- check-follow-fields
   "[follow-unknown-field]: every follow reads a field its target kind
-  has — a data field, :state or :id (docs/spec-related-row-law.md §6).
-  Judged here, where the target's schema is known; a target that is
-  not registered is check-refs' to name."
+  has — a data field, a ref's maintained label or carry, :state or :id
+  (docs/spec-related-row-law.md §6). Judged here, where the target's
+  schema is known; a target that is not registered is check-refs' to
+  name."
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
@@ -731,7 +744,9 @@
             :let [target (get kinds tk)]
             :when (and target
                        (not (contains? #{:state :id} field))
-                       (not (contains? (set (schema/entry-keys (:schema target))) field)))]
+                       (not (contains? (into (set (schema/entry-keys (:schema target)))
+                                             (garnish-keys (:schema target)))
+                                       field)))]
       (err kind :follow-unknown-field
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (name tk) "." (name field) ", a field " (name tk) " does not "
