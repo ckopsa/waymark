@@ -29,14 +29,12 @@
   '(present? :credit_usd))
 
 (defguard specialist-confirms-records
-  (refuse "A study moves to drafting only on a person's tap, because the tax specialist decides the cost records are complete; until a tax specialist is in the seed this waits for The Principal, and then the hold moves to them.")
-  'false
-  {:hold true})
+  (refuse "A study moves to drafting only on a person's tap, because the tax specialist decides the cost records are complete; until a tax specialist is in the seed this waits for The Principal, and then the hold moves to them." {:hold true})
+  '(= 1 0))
 
 (defguard principal-signs-off
-  (refuse "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it; this waits for The Principal.")
-  'false
-  {:hold true})
+  (refuse "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it; this waits for The Principal." {:hold true})
+  '(= 1 0))
 
 (defguard has-signer
   (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
