@@ -9,28 +9,31 @@
   (refuse "A visit is booked from a plan of care; name the plan first.")
   '(present? :plan_id))
 
-(defguard has-slot
-  (refuse "A visit is booked into the therapist's slot; name the therapist and the time.")
-  '(and (present? :therapist) (present? :starts_at)))
+(defguard has-therapist
+  (refuse "A visit is booked into a therapist's slot; name the therapist.")
+  '(present? :therapist))
+
+(defguard has-time
+  (refuse "A visit is booked into a slot; name its time.")
+  '(present? :starts_at))
 
 (defguard has-note
   (refuse "Every visit note is written before it is signed.")
   '(present? :note))
 
-(defguard signed-by-treating-therapist
-  (refuse "Every visit note is signed by the treating therapist.")
-  '(= :signed_by :therapist))
+(defguard has-signer
+  (refuse "Every visit note is signed by the treating therapist; name who signs.")
+  '(present? :signed_by))
 
-(defguard assistant-cosigned
-  (refuse "A note written by a physical therapist assistant is also co-signed by a licensed therapist.")
-  '(or (= :author_role "pt") (present? :cosigned_by)))
+(defguard has-author-role
+  (refuse "Say whether a physical therapist or an assistant wrote the note.")
+  '(present? :author_role))
 
-(defguard no-self-cosign
-  (refuse "Nobody co-signs their own note.")
-  '(not= :cosigned_by :signed_by))
-
+;; the treating therapist's own tap stands in for "signed by the
+;; treating therapist", and their tap again for the co-sign a PTA's
+;; note needs: no law here compares one field with another
 (defguard therapist-signs
-  (hold "A visit note is signed on the treating therapist's own tap."))
+  (hold "A visit note is signed on the treating therapist's own tap; a note an assistant wrote also waits for a licensed therapist, never its author, to co-sign."))
 
 (defresource visit
   {:kind :visit
@@ -43,7 +46,7 @@
             [:plan_id {:optional true :kind :plan_of_care} [:maybe :waymark/ref]]
             [:patient_id {:optional true :kind :patient} [:maybe :waymark/ref]]
             [:therapist {:optional true} [:maybe [:string {:max 80}]]]
-            [:starts_at {:optional true} [:maybe :waymark/datetime]]
+            [:starts_at {:optional true} [:maybe [:string {:max 25}]]]
             [:author_role {:optional true} [:maybe [:enum "pt" "pta"]]]
             [:note {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 4000}]]]
@@ -56,12 +59,12 @@
    :expected-age {:booked 1209600 :attended 86400}
    :actions
    {:attend   {:from #{:booked} :to :attended
-               :guards [has-plan has-slot]
+               :guards [has-plan has-therapist has-time]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "An attended visit is noted and signed from here."}
                :decided "The front desk checks a patient in on its own when they arrive for a booked visit."}
     :sign     {:from #{:attended} :to :signed
-               :guards [has-note signed-by-treating-therapist assistant-cosigned no-self-cosign therapist-signs]
+               :guards [has-note has-signer has-author-role therapist-signs]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A signed note is the record; correct it with an addendum on a new visit."}}
     :no_show  {:from #{:booked} :to :no_show

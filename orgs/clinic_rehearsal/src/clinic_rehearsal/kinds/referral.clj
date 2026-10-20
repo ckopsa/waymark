@@ -24,7 +24,7 @@
             [:physician [:string {:min 1 :max 120}]]
             [:prescription {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]
-            [:signed_on {:optional true} [:maybe :waymark/date]]]
+            [:signed_on {:optional true} [:maybe [:string {:max 10}]]]]
    :filterable {:state #{:eq :in} :physician #{:eq}}
    :default-filters {:state "received"}
    :decided {:received "A referral may wait a day for the front desk; past that, the mayor tells the owner."}

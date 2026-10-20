@@ -49,4 +49,4 @@
    :create {:patient_name "Pat Example" :physician "Dr. Lena Vance"
             :prescription "PT eval and treat, left knee, post-op."}}
   {:as :owner :kind :patient :ref :pat-1
-   :create {:name "Pat Example" :coverage "unverified" :insurer "Acme Health"}}]}
+   :create {:name "Pat Example" :insurer "Acme Health"}}]}

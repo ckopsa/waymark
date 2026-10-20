@@ -11,8 +11,12 @@
   '(present? :patient_id))
 
 (defguard has-frequency
-  (refuse "A plan of care says how many visits a week and for how many weeks.")
-  '(and (present? :visits_per_week) (present? :weeks)))
+  (refuse "A plan of care says how many visits a week.")
+  '(present? :visits_per_week))
+
+(defguard has-weeks
+  (refuse "A plan of care says for how many weeks.")
+  '(present? :weeks))
 
 (defguard has-evaluation
   (refuse "A therapist evaluates the patient before writing the plan; the evaluation goes on it.")
@@ -36,15 +40,15 @@
              [:maybe [:string {:max 4000}]]]
             [:visits_per_week {:optional true} [:maybe [:int {:min 1 :max 7}]]]
             [:weeks {:optional true} [:maybe [:int {:min 1 :max 52}]]]
-            [:starts_on {:optional true} [:maybe :waymark/date]]
-            [:physician_signed_on {:optional true} [:maybe :waymark/date]]]
+            [:starts_on {:optional true} [:maybe [:string {:max 10}]]]
+            [:physician_signed_on {:optional true} [:maybe [:string {:max 10}]]]]
    :filterable {:state #{:eq :in} :therapist #{:eq} :patient_id #{:eq}}
    :decided {:draft "A plan may stay a draft for three days while the physician signs it; past that, the mayor tells the owner."
              :active "A plan stays active until its weeks are done or the physician has not re-signed it within 30 days."}
    :expected-age {:draft 259200 :active 2592000}
    :actions
    {:activate {:from #{:draft} :to :active
-               :guards [has-patient has-frequency has-evaluation physician-signed]
+               :guards [has-patient has-frequency has-weeks has-evaluation physician-signed]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "An active plan books visits; end it or let it lapse to stop them."}
                :decided "The treating therapist starts a plan on their own once it says its frequency and the physician has signed it."}
