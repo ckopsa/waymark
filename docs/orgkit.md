@@ -134,6 +134,12 @@ declarations and the seed's seats:
   holds whose input names money (`amount`, `fee`, `price`, a field
   ending `_cents` or `_usd`) that none of its guards reads, with no
   guard that holds it. "Above what amount should this wait for you?"
+- `decision/decided_says_held/<kind>/<action>`: a door a model seat
+  holds whose `:decided` sentence says it waits for a person ("only
+  on", "'s tap", "waits for", "never on its own") while no guard
+  holds it. Add a `:hold` guard for that person, or reword the
+  decision if the AI may act alone; `:decided-held {:none "why"}`
+  keeps the sentence as narrative, and the law page says so.
 
 Each clears in code, one of two ways. Either the law says it:
 
@@ -152,7 +158,9 @@ their own words:
   `:decided {:open "An item may stay open for a week; past that, the
   mayor tells the owner."}` (no_wait_limit).
 
-`:decided` is prose, never law: the engine does not enforce it.
+`:decided` is prose, never law: the engine does not enforce it, so an
+answer of "wait for me" is a `:hold` guard, its reason the guard's
+`:explain`, and `:decided` says only what the AI may do on its own.
 `factory10.law-text` renders every one under "What you decided", a
 kind's states first and then its doors, so the person reads back what
 they said. `orgkit/template/` and `orgs/example/` answer theirs this
