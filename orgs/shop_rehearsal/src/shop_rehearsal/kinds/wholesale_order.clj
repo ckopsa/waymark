@@ -29,7 +29,7 @@
             [:cafe [:string {:min 1 :max 120}]]
             [:account_id {:optional true :kind :wholesale_account} [:maybe :waymark/ref]]
             ;; stand-in: line items as text
-            [:items [:string {:min 1 :max 2000}]]
+            [:items {:x-display {:widget "prose"}} [:string {:min 1 :max 2000}]]
             [:total_cents [:int {:min 0}]]
             [:account_standing {:optional true} [:maybe [:enum "good" "past_due"]]]
             [:invoice_id {:optional true :kind :invoice} [:maybe :waymark/ref]]]

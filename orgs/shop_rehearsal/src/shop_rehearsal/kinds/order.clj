@@ -27,7 +27,7 @@
             [:customer [:string {:min 1 :max 120}]]
             [:email {:optional true} [:maybe [:string {:max 200}]]]
             ;; stand-in: line items as text, one product per line
-            [:items [:string {:min 1 :max 2000}]]
+            [:items {:x-display {:widget "prose"}} [:string {:min 1 :max 2000}]]
             [:product_id {:optional true :kind :product} [:maybe :waymark/ref]]
             [:quantity {:optional true} [:maybe [:int {:min 1}]]]
             [:subtotal_cents [:int {:min 0}]]
