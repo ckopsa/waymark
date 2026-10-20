@@ -543,7 +543,8 @@
           air (rule-in answer "dead-air")]
       (is (= "unmeasured" (:verdict air)))
       (is (= ["film.dead_air_s"] (:missing air)))
-      (is (= ["dead-air"] (:unmeasured answer)))))
+      (is (= ["asks-the-person" "busy-week" "dead-air" "no-bare-list" "week-arc"]
+             (:unmeasured answer)))))
   (testing "a shot that lacks a field leaves its rule unmeasured"
     (let [answer (judged (update-in a-good-take [:shots 2] dissoc :focus_type_px))]
       (is (= "unmeasured" (:verdict (rule-in answer "type-size"))))
