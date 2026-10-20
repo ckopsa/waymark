@@ -84,8 +84,8 @@
   that nothing checks. The roster is small, it is seeded in dependency
   order (the person somebody relates through is written first), and
   `relates-through-somebody-here` refuses a dangling one at every door
-  that can write it. The same wall refuses a row that relates through
-  ITSELF, which is the one cycle worth spending a check on; deeper
+  that can write it. Its sibling `relates-through-somebody-else`
+  refuses a row that relates through ITSELF, which is the one cycle worth spending a check on; deeper
   rings (A through B through A) are not walled: waymark-jfv.15 records
   that, and says what would have to be true before walking the chain
   is worth a read per hop.
@@ -202,9 +202,9 @@
   persons — a roster screen with the unanswered ones on top is the
   obvious first ask — that is when a population and its pack obligation
   are earned."
-  (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
+  (:require [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario unless-granted]]
+            [waymark10.guards :as g]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -258,37 +258,31 @@
     (t/deny)
     (t/allow)))
 
-(defguardfn relates-through-somebody-here
-  {:judges [:through_id]
-   :reads [:person]
-   :vars [:problem]
-   :open "Somebody may relate to this house THROUGH somebody else — a grandparent's caregiver belongs to the grandparent, not to the house. When a row says so, it names a person this house actually holds."
-   :explain "That is not somebody this house can relate anyone through: {problem}"}
-  [row inp ctx]
-  (let [read' (:read ctx)
-        tid (some-> (:through_id inp) str str/trim not-empty)
-        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
-    (cond
-      ;; ABSENT IS THE COMMON CASE. Most of this house relates to it
-      ;; directly, and a door that demanded a chain would invent one.
-      (nil? tid) (t/allow)
-      ;; the storage-free probe (render, the partial rehearsal) has no
-      ;; read hook: advertise optimistically, as every world-reading
-      ;; wall in this tree does. The write path always carries it.
-      (nil? read') (t/allow)
+;; Declarative related-row law (docs/spec-related-row-law.md §7): two
+;; walls over `through_id`, each with its own sentence. ABSENT IS THE
+;; COMMON CASE — most of this house relates to it directly, and a door
+;; that demanded a chain would invent one — so both stand aside when
+;; it is not set. On create there is no (self) yet: the first wall is
+;; pending there, never a refusal.
 
-      (= tid (str (:id row)))
-      (deny (str "it is this row itself. Nobody relates to a house"
-                 " through themselves — leave it empty and the relation"
-                 " you already wrote says how they relate directly."))
+(def relates-through-somebody-else
+  (g/expr {:name :relates-through-somebody-else
+           :severity :refuse
+           :when '(or (not (is-set (input :through_id)))
+                      (not= (input :through_id) (self)))
+           :explain "That is not somebody this house can relate anyone through: it is this row itself. Nobody relates to a house through themselves — leave it empty and the relation you already wrote says how they relate directly."
+           :errors {:through_id "this row itself"}
+           :open "No door makes a row somebody it relates through: the fix is in this same input — leave `through_id` empty, or name somebody else this house holds."}))
 
-      :else
-      (let [through (read' :person tid)]
-        (if (nil? through)
-          (deny (str "this house has nobody at " tid
-                     " — read /api/people and name one of those, or"
-                     " write them down first and then say so."))
-          (t/allow))))))
+(def relates-through-somebody-here
+  (g/expr {:name :relates-through-somebody-here
+           :severity :refuse
+           :when '(or (not (is-set (input :through_id)))
+                      (is-set (follow (input :through_id) :id)))
+           :vars {:through '(input :through_id)}
+           :explain "That is not somebody this house can relate anyone through: this house has nobody at {through} — read /api/people and name one of those, or write them down first and then say so."
+           :errors {:through_id "person not found"}
+           :remedies [:person/create]}))
 
 ;; ── the stamps ──────────────────────────────────────────────────────
 
@@ -424,12 +418,11 @@
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; TWO TIERS, and which scenario lands in which is read off the
-;; declarations rather than chosen (scenario.clj's own rule). The three
-;; whose door carries only a HAND wall are judged by `make check-queue`
-;; with no database at all; the other three share a door with
-;; `relates-through-somebody-here`, which reads another row, so they
-;; defer to the conformance suite and are attempted through the real
-;; HTTP door there.
+;; declarations rather than chosen (scenario.clj's own rule). The
+;; `through` walls read the roster only through `follow`
+;; (docs/spec-related-row-law.md §7), so they no longer push a door to
+;; the conformance suite: every scenario here is judged by
+;; `make check-queue` with no database at all.
 ;;
 ;; AND THAT SPLIT IS WHY THREE SENTENCES OF THIS KIND'S LAW ARE PROVED
 ;; IN person_test RATHER THAN HERE. A conformance-tier scenario cannot
@@ -561,6 +554,19 @@
    :expect  {:refused :relates-through-somebody-here
              :because "this house has nobody at"}})
 
+(defscenario nobody-relates-through-themselves
+  "The one cycle worth a check: a row that names itself as the person
+   it relates through is refused, and told to leave it empty."
+  {:kind    :person
+   :attempt :revise
+   :row     {:state :current :data somebody-observed}
+   :as      {:id "colton" :type :person}
+   :input   {:name "Bram"
+             :relation "Odell's CNA"
+             :through_id "scenario:nobody-relates-through-themselves"}
+   :expect  {:refused :relates-through-somebody-else
+             :because "this row itself"}})
+
 ;; ── :person — the roster this house plans from ──────────────────────
 
 (defresource person
@@ -655,7 +661,8 @@
                a-guess-is-answered-with-one-tap
                a-departed-person-is-not-corrected-back-into-the-week
                a-relation-runs-through-somebody-this-house-holds
-               an-agent-writes-down-somebody-through-somebody-real]
+               an-agent-writes-down-somebody-through-somebody-real
+               nobody-relates-through-themselves]
    :actions
    ;; THE CORRECTING DOOR SPLITS BY HAND, waymark-jfv.10's cost paid
    ;; again: `:to` is a static keyword, so one door cannot land in two
@@ -671,6 +678,7 @@
              ;; this house has described somebody
              :record true
              :guards [(roster-wall :revise)
+                      relates-through-somebody-else
                       relates-through-somebody-here]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "This overwrites how the house describes them with what you write; the log keeps the earlier words, who changed them and when. If they were only observed in your record, saying it in your own words is also what makes the row this house's."}
@@ -687,6 +695,7 @@
               :edit {:prefill [:name :relation :through_id :born]}
               :record true
               :guards [only-the-observer-corrects
+                       relates-through-somebody-else
                        relates-through-somebody-here]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "This overwrites what was observed with what you now think you see; the log keeps the earlier reading. The row stays observed either way — nothing here makes it the house's, and no plan may name them until somebody says so."}

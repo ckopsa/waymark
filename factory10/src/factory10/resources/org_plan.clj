@@ -157,13 +157,23 @@
     (str/blank? (str (get-in row [:data :purpose])))
     (assoc-in [:data :purpose] "found")))
 
+(defn- purpose-backfill
+  "The boot's data backfill (ticket 0fa0eb6c): a plan stored before
+  `purpose` was declared founds its org, as stamp-the-owner says at
+  create — so a `purpose <> hire` cond no longer misses it."
+  [data]
+  (if (str/blank? (str (:purpose data)))
+    (assoc data :purpose "found")
+    data))
+
 ;; ── the hire plan (M4a) ──────────────────────────────────────────────
 
 (defn purpose-of
-  "The plan's purpose, `found` or `hire`. A plan born before the field
-  was declared has none, and reads as found."
+  "The plan's purpose, `found` or `hire`. Every stored plan carries one
+  (the create's stamp, the boot's purpose-backfill), so it is read
+  straight; a plan with none is a bug the backfill should catch."
   [plan]
-  (if (= "hire" (some-> (get-in plan [:data :purpose]) name)) "hire" "found"))
+  (some-> (get-in plan [:data :purpose]) name))
 
 (def ^:private standing-hire-states
   "The states a hire plan blocks another for its gap in. A retired or
@@ -1140,6 +1150,7 @@
                 :owner #{:eq}
                 :purpose #{:eq}}
    :on-create stamp-the-owner
+   :data-migrate purpose-backfill
    :create-guards [a-person-files-the-plan]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire

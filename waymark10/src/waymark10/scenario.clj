@@ -91,7 +91,9 @@
   [:allowed :refused :because :remedies])
 
 (def row-keys [:state :data])
-(def given-keys [:kind :state :data :handle])
+;; :reuse adopts the row already on record under the kind's :unique
+;; group instead of creating one — opt-in, for a fixture meant to be shared
+(def given-keys [:kind :state :data :handle :reuse])
 ;; one entry of the log the scenario's row is to have, oldest first:
 ;; who did which door with what body, and for an acted-as move the seat
 ;; behind them
@@ -226,6 +228,37 @@
        v))
    x))
 
+(def run-sigil
+  "A token minted once per suite run, written into a :given row's
+  strings where a fixed value would collide with the last run's row: a
+  kind whose :unique group names the field takes one row per value,
+  and one engine may run the suite twice (modules_test does). The
+  conformance tier replaces it with `run-token`'s answer, the check tier
+  with `check-run`."
+  "{{run}}")
+
+(def check-run
+  "What `{{run}}` reads as in the check tier, which stages nothing."
+  "check")
+
+(defn run-token
+  "A fresh `{{run}}`: a lowercase letter, then six hex digits, so it
+  sits inside a name any spelling rule of letters, digits and
+  underscores admits."
+  []
+  (str "r" (subs (str (random-uuid)) 0 6)))
+
+(defn fill-run
+  "`s` with every `{{run}}` in its :given data, :row, :input and
+  :history replaced by `token`."
+  [s token]
+  (let [f #(walk/postwalk (fn [v] (if (string? v) (str/replace v run-sigil token) v)) %)]
+    (cond-> s
+      (:given s) (update :given (fn [gs] (mapv #(cond-> % (:data %) (update :data f)) gs)))
+      (:row s) (update :row f)
+      (:input s) (update :input f)
+      (:history s) (update :history f))))
+
 (defn- row! [sname label legal row]
   (when (some? row)
     (when-not (map? row) (err sname (str label " is {:state … :data {…}}")))
@@ -286,6 +319,8 @@
       (when-not (keyword? (:kind gv)) (err sname "each :given row names its :kind"))
       (when (and (some? (:handle gv)) (not (keyword? (:handle gv))))
         (err sname "a :given row's :handle is a keyword"))
+      (when (and (some? (:reuse gv)) (not (boolean? (:reuse gv))))
+        (err sname "a :given row's :reuse is true or false"))
       (row! sname ":given row" given-keys gv))
     ;; the handles, in staging order: a row may name only what is
     ;; already standing when it is staged, and two rows may not answer
@@ -686,7 +721,8 @@
   judges what it is handed."
   [rdef s]
   (or (structural rdef s)
-      (let [{:keys [door action guards]} (attempted rdef s)
+      (let [s (fill-run s check-run)
+            {:keys [door action guards]} (attempted rdef s)
             ;; a {given/<handle>} names the id the check tier gave it
             ids (given-ids s)
             s (cond-> s

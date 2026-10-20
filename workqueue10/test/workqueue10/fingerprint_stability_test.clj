@@ -26,6 +26,7 @@
             [waymark10.expr :as e]
             [waymark10.fingerprint :as fp]
             [waymark10.resource :as r]
+            [waymark10.scenario :as sc]
             [workqueue10.main :as main]))
 
 (defn- hashes
@@ -207,12 +208,20 @@
           history)))
 
 (defn- judged-scopes
-  "One scope per principal per scenario history of the kind — an empty
-  log when the kind declares no scenario."
+  "One scope per principal per scenario of the kind — an empty one when
+  the kind declares no scenario. Each lends the scenario's :history as
+  :actors, its row's id as :self, and :rows-matching and
+  :count-matching served from its :given rows, as offline-ctx does at
+  check tier — so a related-row tree is judged two-valued."
   [res]
   (for [p principals
-        h (or (seq (keep :history (:scenarios res))) [[]])]
-    (assoc p :data {} :input {} :vars {} :actors (history-actors h))))
+        s (or (seq (:scenarios res)) [{:name :fingerprint-pin}])
+        :let [reads (@#'sc/scenario-reads s)]]
+    (assoc p :data {} :input {} :vars {}
+           :actors (history-actors (:history s))
+           :self (str "scenario:" (name (:name s)))
+           :rows-matching (:rows-matching reads)
+           :count-matching (:count-matching reads))))
 
 (deftest the-unknown-verdict-moves-no-existing-law
   ;; docs/spec-related-row-law.md §9 step 1: the third verdict is new
@@ -223,7 +232,8 @@
   ;; tree reads, no :when answers unknown — the two-valued verdict it
   ;; always gave. (me) and did read the principal and :actors, so each
   ;; tree is judged by an agent and a person over each scenario's
-  ;; :history (step 9).
+  ;; :history (step 9); (self), exists, none and count-rows read :self
+  ;; and the row hooks, lent from each scenario's row and :given.
   (let [resources (main/check-resources)
         trees (mapcat (fn [res] (map #(vector (name (:kind res)) % res) (when-trees res)))
                       resources)]

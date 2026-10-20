@@ -316,7 +316,7 @@
                        {:name "Bram" :relation "Odell's CNA" :through_id bid}
                        colt)]
           (is (= 409 (:status r)) (str "allowed: " (json r)))
-          (is (= "relates-through-somebody-here" (guard-of r)))
+          (is (= "relates-through-somebody-else" (guard-of r)))
           (is (str/includes? (detail r) "this row itself"))))
       (testing "and dropping it really clears — the correcting doors overwrite the authored surface wholesale"
         (let [r (word! "people" bid :revise

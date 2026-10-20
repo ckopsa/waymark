@@ -30,8 +30,8 @@
   Spelled :schema + :actions with a :create-schema that leaves the
   shape optional — the create form asks only what a person decides."
   (:require [dayplan10.zone :as zone]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario refuse]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek Instant LocalDate)))
 
@@ -89,18 +89,14 @@
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
-(defguardfn something-still-ahead
-  {:reads [:span :now]
-   :remedies [:day_plan/close]
-   :explain "Every window of this day has passed — there is nothing ahead to replan. Close the day instead; its blocks stand as the record."}
-  [row _inp ctx]
-  (if (nil? (:find ctx))
-    (t/allow)
-    (let [now (:now ctx)
-          spans ((:find ctx) :span {:plan_id (:id row) :state "planned"} {:limit 500})]
-      (if (some #(ahead? (:data %) now) spans)
-        (t/allow)
-        (t/deny)))))
+;; Declarative (docs/spec-related-row-law.md §7): one indexed ask for a
+;; planned span of this day that has not begun
+(defguard something-still-ahead
+  (refuse "Every window of this day has passed — there is nothing ahead to replan. Close the day instead; its blocks stand as the record.")
+  '(exists [s :span {:plan_id (= (self))
+                     :state (= "planned")
+                     :starts_at (> (now))}])
+  {:remedies [:day_plan/close]})
 
 (defguardfn a-different-shape
   {:judges [:shape] :reads [:span :now]
@@ -164,9 +160,11 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; Both walls read the day's spans and the clock (:reads [:span :now]) —
-;; reshape's because the same shape passes when nothing is ahead — so
-;; both scenarios are CONFORMANCE-tier —
+;; Replan's wall is declarative, so the check tier judges its scenarios
+;; from their :given spans (the plan's id is `scenario:<name>`).
+;; Reshape's reads the day's spans and the clock in code (:reads [:span
+;; :now]) — the same shape passes when nothing is ahead — so its
+;; scenario is CONFORMANCE-tier —
 ;; the plan is staged through the real door (its blocks and spans
 ;; materialising from whatever workday templates the engine holds, all
 ;; of them in 2020 and so all of them passed), walked to set, and
@@ -213,6 +211,25 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :something-still-ahead
              :remedies [:day_plan/close]}})
+
+(defscenario a-day-with-a-window-ahead-is-replanned
+  "While one planned window of the day has not begun, the set day opens
+   again for replanning."
+  {:kind    :day_plan
+   :attempt :replan
+   :given   [{:kind :member :handle :who :state :active
+              :data {:display "Scenario day ahead" :actor_type "human"}}
+             {:kind :span :handle :evening :state :planned
+              :data {:block_id "scenario:a-day-with-a-window-ahead-is-replanned-block"
+                     :plan_id "scenario:a-day-with-a-window-ahead-is-replanned"
+                     :starts_at "2026-09-05T17:30:00Z"
+                     :ends_at "2026-09-05T18:00:00Z"}}]
+   :row     {:state :set
+             :data {:date "2026-09-05" :member "{given/who}"
+                    :shape "off"}}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
 
 ;; ── the declaration ─────────────────────────────────────────────────
 
