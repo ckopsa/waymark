@@ -552,7 +552,10 @@
                           (remove #{(:self scope)})
                           (filter #(sees? kind %))
                           (keep #(read kind %))
-                          (sort-by (juxt :created_at (comp str :id)))
+                          ;; a stored row stamps :created-at; a literal
+                          ;; one may spell the column
+                          (sort-by (juxt #(clojure.core/or (:created-at %) (:created_at %))
+                                         (comp str :id)))
                           ;; a first's pred, over each candidate as (it 0)
                           (filter #(clojure.core/or
                                     (nil? pred)

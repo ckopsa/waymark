@@ -28,7 +28,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
-            [waymark10.declare :refer [defscenario]]
+            [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
@@ -130,6 +130,31 @@
                through-the-door-a-neighbour-is-refused]})
 
 (def ^:private errand (r/resource errand-map))
+
+;; a kind whose wall reads the row's log — what a scenario's :history
+;; is there to stage
+(defguard claimer-does-not-finish
+  (refuse "Whoever claimed the chore does not also finish it; ask someone else.")
+  '(not (did :claim))
+  {:remedies [:approval_request/create]})
+
+(def ^:private chore
+  (r/resource
+   {:kind :chore
+    :plural "chores"
+    :states [:open :claimed :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions
+    {:claim {:from #{:open} :to :claimed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A claimed chore stays claimed."}}
+     :finish {:from #{:claimed} :to :done
+              :guards [claimer-does-not-finish]
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished chore stays finished."}}}}))
 
 (defn- with-guard
   "The same declaration behind a different wall — how every negative
@@ -314,7 +339,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["errands" "members" "roles" "grants" "approval_requests" "definitions"
+  ["errands" "chores" "members" "roles" "grants" "approval_requests" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "events"])
 
@@ -326,7 +351,7 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [eng (engine/engine {:storage st :resources [errand]})]
+        (let [eng (engine/engine {:storage st :resources [errand chore]})]
           (binding [*eng* eng *h* (engine/handler eng)]
             (f)))
         (finally (pg/close! st))))))
@@ -383,3 +408,39 @@
         (is (str/includes? (str v) "404") v)))
     (testing ":leashed is a boolean, refused where it is written"
       (is (thrown? Exception (an-agent-closes {:id "sweeper" :type :agent :leashed "no"}))))))
+
+(defn- someone-finishes
+  [as & {:as more}]
+  (scenario/scenario
+   :the-claimer-does-not-finish
+   "Whoever claimed the chore does not also finish it."
+   (merge {:kind    :chore
+           :attempt :finish
+           :history [{:action :claim :as "mom"}]
+           :row     {:state :claimed :data {:title "Fold the laundry"}}
+           :as      as
+           :expect  {:refused :claimer-does-not-finish}}
+          more)))
+
+(deftest a-scenarios-history-is-staged-through-the-door
+  (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:chore]})
+        run #(#'packs/run-scenario ctx chore %)]
+    (testing "the did guard reads the log :history walked, not an empty one"
+      (is (nil? (run (someone-finishes {:id "mom" :type :person}))))
+      (is (nil? (run (someone-finishes {:id "dad" :type :person}
+                                       :expect {:allowed true})))))
+    (testing "an entry the tier cannot stage refuses, naming it"
+      (let [v (run (someone-finishes {:id "mom" :type :person}
+                                     :history [{:action :sweep :as "mom"}]))]
+        (is (string? v))
+        (is (str/includes? (str v) "cannot be staged by the conformance tier") v)
+        (is (str/includes? (str v) ":sweep") v)))
+    (testing ":history-mode :refuse declines to stage, and never passes silently"
+      (let [v (run (someone-finishes {:id "dad" :type :person}
+                                     :expect {:allowed true}
+                                     :history-mode :refuse))]
+        (is (string? v))
+        (is (str/includes? (str v) ":history-mode :refuse") v)))
+    (testing ":history-mode is :stage or :refuse, refused where it is written"
+      (is (thrown? Exception (someone-finishes {:id "mom" :type :person}
+                                               :history-mode :maybe))))))

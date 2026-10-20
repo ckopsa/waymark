@@ -5,10 +5,11 @@
   envelope's doing and not the charter's. Every assertion is about an
   ENVELOPE — which doors a row offers the hand in front of it — read
   through `render/action-availability`, tree_test's arrangement and
-  for its reason. The three walls that read other tickets are judged
-  over a FAKE hook: a ctx whose `:read` and `:find` answer from a map,
-  which is the shape the engine's own probe ctx has and the suite's
-  factories build (waymark10.test.factories/probe-ctx).
+  for its reason. The walls that read other tickets are judged over a
+  FAKE hook: a ctx whose `:read`, `:find`, `:rows-matching` and
+  `:count-matching` answer from a map, which is the shape the engine's
+  own probe ctx has and the suite's factories build
+  (waymark10.test.factories/probe-ctx).
 
   The declaration gate — the usability battery, the remedies census
   and the check-tier scenarios — is tree_test's, and it iterates
@@ -57,20 +58,43 @@
 (def ^:private the-person {:id "colton" :type :person :roles #{}})
 (def ^:private the-engine {:id "waymark10" :type :system :roles #{}})
 
+(defn- holds?
+  "One where condition over one fake-store row, as the store asks it:
+  :state and :id are the row's own, any other field a data field."
+  [r {:keys [field op value values]}]
+  (let [v (case field
+            :state (some-> (:state r) name)
+            :id (str (:id r))
+            (some-> (get-in r [:data field]) str))]
+    (case op
+      := (= v (str value))
+      :in (contains? (set (map str values)) v)
+      false)))
+
 (defn- ctx
-  "A probe ctx, with a fake store behind `:read` and `:find` when rows
-  are given: `:read` answers by id, `:find` answers the rows whose
-  data matches every pair of the where map."
+  "A probe ctx, with a fake store behind `:read`, `:find`,
+  `:rows-matching` and `:count-matching` when rows are given: `:read`
+  answers by id, `:find` answers the rows whose data matches every pair
+  of the where map, and the two existence hooks the ids, or the count,
+  of the rows every condition holds over."
   ([principal] (ctx principal nil))
   ([principal rows]
-   (cond-> {:principal principal :now now :mode :probe}
-     rows (assoc :read (fn [_kind id] (get rows (str id)))
-                 :find (fn [_kind where _opts]
-                         (filterv (fn [r]
-                                    (every? (fn [[k v]]
-                                              (= (str v) (str (get-in r [:data k]))))
-                                            where))
-                                  (vals rows)))))))
+   (let [matching (fn [conds]
+                    (filter (fn [r] (every? #(holds? r %) conds)) (vals rows)))]
+     (cond-> {:principal principal :now now :mode :probe}
+       rows (assoc :read (fn [_kind id] (get rows (str id)))
+                   :find (fn [_kind where _opts]
+                           (filterv (fn [r]
+                                      (every? (fn [[k v]]
+                                                (= (str v) (str (get-in r [:data k]))))
+                                              where))
+                                    (vals rows)))
+                   :rows-matching (fn [_kind conds limit]
+                                    (cond->> (map :id (matching conds))
+                                      limit (take limit)
+                                      true vec))
+                   :count-matching (fn [_kind conds]
+                                     (count (matching conds))))))))
 
 (defn- offers
   "The doors this row would advertise to this hand."
@@ -476,7 +500,7 @@
   resolves them: the availability answer carries the denier and its
   sentence, and the evidence is the denier's own verdict."
   [shut row c]
-  (let [deny ((:check (:denier shut)) row nil c)]
+  (let [[deny _] (g/evaluate (:denier shut) row nil c)]
     {:evidence (:evidence deny)
      :remedies (g/resolve-remedies (:denier shut) row nil (:evidence deny))}))
 
