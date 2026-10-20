@@ -5,7 +5,9 @@
   read per (kind, id) per verdict. Over a fixture pair of kinds — a meal
   and the day that plans it: allow, deny, and unknown when no :read
   hook is lent."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.checks :as checks]
             [waymark10.checks-assembly :as ca]
             [waymark10.declare :refer [defguard refuse]]
             [waymark10.expr :as e]
@@ -169,3 +171,38 @@
   (testing "the fixture pair itself assembles"
     (is (map? (ca/run-all {:kinds {:fw_meal (:meal @world)
                                    :fw_day (:day @world)}})))))
+
+;; ── 4. the audit ─────────────────────────────────────────────────────────────────
+
+(defn- meal-is-real [opts]
+  (g/guard (merge {:name :meal-is-real
+                   :explain "That meal is not on the list."
+                   :judges [:meal_id] :reads [:fw_meal]
+                   :open "Which meals exist is read at the write."
+                   :remedies [:fw_day/plan]
+                   :check (fn [_ _ _] (t/allow))}
+                  opts)))
+
+(defn- audit [plan-guards]
+  (:warnings (checks/run-all (r/resource (day-map {:plan plan-guards})))))
+
+(defn- lines [tag ws] (filter #(str/starts-with? % tag) ws))
+
+(deftest the-audit-names-unjudged-refs-and-convertible-guards
+  (testing "[ref-unjudged]: nothing at the door reads the ref's kind"
+    (is (= 1 (count (lines "[ref-unjudged] action plan field meal_id" (audit [])))))
+    (is (empty? (lines "[ref-unjudged]" (audit [meal-is-listed])))))
+  (testing "[convertible-guard]: a code guard reading one kind through one ref"
+    (let [ws (audit [(meal-is-real {})])]
+      (is (= 1 (count (lines "[convertible-guard] info: guard meal-is-real on plan" ws))))
+      (is (empty? (lines "[ref-unjudged]" ws)))))
+  (testing "the same guard with :stays-code is listed as info, not flagged"
+    (let [ws (audit [(meal-is-real {:stays-code "It reads two hops."})])]
+      (is (empty? (lines "[convertible-guard]" ws)))
+      (is (= ["[stays-code] info: guard meal-is-real on plan reads fw_meal over meal_id and stays code: It reads two hops."]
+             (lines "[stays-code]" ws)))))
+  (testing "a follow over the same field on the door covers the read"
+    (is (empty? (lines "[convertible-guard]" (audit [meal-is-listed (meal-is-real {})])))))
+  (testing "a :stays-code that is not a sentence is an error"
+    (is (thrown-with-msg? Exception #"\[stays-code\]"
+                          (r/resource (day-map {:plan [(meal-is-real {:stays-code " "})]}))))))

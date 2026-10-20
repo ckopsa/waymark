@@ -2279,6 +2279,89 @@
                 "from its tree — drop :reads"))))
   [])
 
+(defn- door-refs
+  "[field kind props single?] for each `:kind` ref entry of a door's
+  input form; single? is false for a list of refs."
+  [form]
+  (for [[k {:keys [properties schema]}] (some-> form schema/entry-map)
+        :when (and (keyword? (:kind properties)) (ref-shape? schema))]
+    [k (:kind properties) properties
+     (not (some #(and (vector? %) (= :vector (first %)))
+                (tree-seq #(and (vector? %) (= :maybe (first %))) rest schema)))]))
+
+(defn- check-ref-unjudged
+  "[ref-unjudged] (docs/spec-related-row-law.md §6): an action takes a
+  `:kind` ref, and no guard at that door reads that kind, resolves the
+  field, or narrows it with `:pick` — so the door accepts the id of any
+  row of that kind. A warning: a ref that may name any row is sometimes
+  the law."
+  [r]
+  (vec
+   (for [a (machine/actions-seq r) :when (:input a)
+         :let [leaves (leaf-guards a)
+               read (into #{} (mapcat :reads) leaves)
+               resolved (into #{} (mapcat :resolves) leaves)]
+         [f kind props _] (door-refs (:input a))
+         :when (not (or (read kind) (resolved f) (:pick props)))]
+     (str "[ref-unjudged] action " (name (:name a)) " field " (name f)
+          " takes the id of any " (name kind) " row: no guard at the door "
+          "reads " (name kind) ", and the field carries no :pick. May every "
+          (name kind) " be named here? If not, guard the door with a "
+          "follow over (input " f "), or narrow the picker with :pick."))))
+
+(defn- check-convertible-guard
+  "[convertible-guard] (docs/spec-related-row-law.md §6): a code guard
+  whose :reads is one kind and whose :judges is one ref field of that
+  kind at its door is a `follow` candidate. Counted, not enforced. A
+  guard that declares `:stays-code \"<why>\"` is listed with its reason
+  instead, and one whose door already carries a declarative guard
+  following the same field is covered by that tree. A :stays-code that
+  is not one sentence is an error."
+  [r]
+  (let [forms (into {:create (or (:create-schema r) (:schema r))}
+                    (for [a (machine/actions-seq r) :when (:input a)]
+                      [(:name a) (:input a)]))
+        sites (guard-sites r)
+        follows (into #{}
+                      (for [{:keys [door guard]} sites
+                            :when (:when guard)
+                            kind (:reads guard)
+                            f (:judges guard)]
+                        [door f kind]))]
+    (into []
+          (keep
+           (fn [{:keys [door guard]}]
+             (let [{gname :name :keys [judges reads check stays-code]} guard
+                   [f] judges
+                   [kind] reads
+                   refs (into {} (for [[k kd _ single?] (door-refs (forms door))
+                                       :when single?]
+                                   [k kd]))]
+               (when (and (contains? guard :stays-code)
+                          (not (and (string? stays-code) (not (str/blank? stays-code)))))
+                 (err r :stays-code
+                      (str "guard " (name gname) " on " (name door) " declares "
+                           ":stays-code " (pr-str stays-code) "; it is one "
+                           "sentence saying why this guard stays code")))
+               (when (and check (nil? (:when guard))
+                          (= 1 (count judges)) (= 1 (count reads))
+                          (= kind (refs f)))
+                 (cond
+                   stays-code
+                   (str "[stays-code] info: guard " (name gname) " on " (name door)
+                        " reads " (name kind) " over " (name f)
+                        " and stays code: " stays-code)
+
+                   (follows [door f kind]) nil
+
+                   :else
+                   (str "[convertible-guard] info: guard " (name gname) " on "
+                        (name door) " reads one " (name kind) " row through "
+                        (name f) ". Could a follow over (input " f ") say it? "
+                        "If so, write it as a :when tree; if not, declare "
+                        ":stays-code with one sentence saying why.")))))
+           sites))))
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
   {:warnings [str …]}."
@@ -2301,4 +2384,5 @@
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings
+          check-ref-unjudged check-convertible-guard
           check-owned-surface])})
