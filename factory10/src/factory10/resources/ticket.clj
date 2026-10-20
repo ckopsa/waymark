@@ -588,6 +588,7 @@
    :reads [:ticket]
    :check-tier :given
    :vars [:which]
+   :stays-code "It walks the ticket tree up the parent chain to any depth, which a one-hop follow cannot express."
    ;; the merge-order guard's acknowledgment, one field over: which
    ;; tickets sit above the parent is read from their rows at the write
    :open "The parent's own ancestors are read from their rows at the write, up the parent chain; no form can recite them. Name a parent this ticket does not wait on."
@@ -614,6 +615,7 @@
    :reads [:ticket]
    :check-tier :given
    :vars [:which]
+   :stays-code "It walks the ticket tree up the parent chain to any depth, which a one-hop follow cannot express."
    ;; the-parent-is-not-waited-on's acknowledgment: the chain above the
    ;; parent named is read from the rows at the write
    :open "The tickets above the parent named are read from their rows at the write, up the parent chain; no form can recite them. Name a parent that is not under this ticket."

@@ -93,6 +93,7 @@
         rows (for [r resources]
                {:kind (:kind r)
                 :warnings (vec (:waymark10/warnings (meta r)))
+                :info (vec (:waymark10/info (meta r)))
                 :usability (usability/warnings r)
                 :deviations (vec (:deviations r))
                 :scenarios (scenario/report r)
@@ -116,7 +117,7 @@
                     :usability u :deviations []
                     :scenarios s :coverage (scenario/coverage r)})
         all-rows (concat rows enrolled)]
-    (doseq [{:keys [kind enrolled warnings usability deviations scenarios
+    (doseq [{:keys [kind enrolled warnings info usability deviations scenarios
                     coverage]}
             (sort-by :kind all-rows)]
       (let [n (+ (count warnings) (count usability))]
@@ -128,6 +129,8 @@
         (println (str "      " w)))
       (doseq [w usability]
         (println (str "      " w)))
+      (doseq [i info]
+        (println (str "      " i)))
       (doseq [d deviations]
         (println (str "      deviation: " d)))
       (let [{:keys [total checked deferred violations]} scenarios
