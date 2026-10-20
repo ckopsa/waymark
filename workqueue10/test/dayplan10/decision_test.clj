@@ -235,7 +235,7 @@
     (testing "…and one that is still planned"
       (act! :block (:id block) :skip nil)
       (let [r (refusal #(decide! block {:text "Into a skipped block"}))]
-        (is (= "on-a-planned-block" (:guard r)))
+        (is (= "the-block-is-still-planned" (:guard r)))
         (is (re-find #"Workday block is skipped" (str (:detail r))))))))
 
 (deftest a-subject-is-a-row-that-stands
