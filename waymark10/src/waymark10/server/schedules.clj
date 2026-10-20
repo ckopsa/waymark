@@ -1001,6 +1001,9 @@
                        :help "One of the models the seat is held for. The push that follows writes it onto the provider's copy; the prompt does not change."}}
               [:maybe :waymark/ref]]]
      :record true
+     ;; :ref-unjudged — any active model may be named here; which models
+     ;; are active is the model kind's own state rule, not this door's
+     :waives #{:ref-unjudged}
      :edit {:prefill [:model] :fence true}
      :safety {:idempotent true :reversible false :confirm false}
      :handler restate-model

@@ -620,6 +620,9 @@
     :summary "{data.title}"
     :schema [:map [:title [:string {:min 1 :max 40}]]]
     :actions {:seat {:from #{:open} :to :open
+                     ;; :ref-unjudged — the fixture proves the engine's own
+                     ;; resolution (R-4), so any meal may be named
+                     :waives #{:ref-unjudged}
                      :input [:map
                              [:meal_id {:kind :meal} :waymark/ref]
                              [:meal_ids {:kind :meal}

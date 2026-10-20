@@ -149,7 +149,7 @@
   ;; § 6: a walk is recorded under its recorder's sight, so the person
   ;; led makes it; the engine and the author never do
   {:judges [:walk]
-   :reads [:storage]
+   :reads [:storage :walk]
    :open "Name a walk you made yourself that is still recording and follows this walkthrough's author, or leave `walk` out and nothing is recorded."
    :explain "A walkthrough is recorded into a walk its subject made, that is still recording and follows the author."}
   [row inp ctx]

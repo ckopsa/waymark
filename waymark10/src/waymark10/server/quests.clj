@@ -571,6 +571,9 @@
                 (into (map (fn [[k props sch]]
                              [k (assoc props :x-display {:hidden true}) sch]))
                       plan-fields))
+     ;; :ref-unjudged — the engine's own hand names the invitation it
+     ;; minted for this plan, and no person reaches this door
+     :waives #{:ref-unjudged}
      :guards [the-engine-plans-it]
      ;; a plan equal to the one held is still written: a step already
      ;; done, taken again, would else replay the last plan's outcome
