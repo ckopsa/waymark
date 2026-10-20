@@ -16,10 +16,12 @@
   tapped. Where a kind is not known, the kind's own law is not judged.
 
   A SAY MAY HOLD HOLES. A `say` is a string, or a list of strings and
-  `{\"$rows\": {kind, since, until, field, terminal, count, none}}` and
+  `{\"$rows\": {kind, since, until, field, terminal, state, count, sum,
+  one, many, none}}` and
   `{\"$moves\": {kind, since, until, by, none}}` holes, and
   `{\"$day\": {since, until, domain, none}}`, whose window may instead be
   `window: \"shot\"`: since the take's last `$day` was filled (`take-run`).
+  A `{\"$list\": {items, lead, none}}` joins what its `$rows` holes say.
   `check` judges each hole;
   the performer fills it when the shot plays (`fill-say`), from the rows
   the scene's clone holds in that window (`rows-in-window`), the
@@ -339,7 +341,7 @@
   "A quiet day.")
 
 (def ^:private say-shape
-  "`say` is a string, or a list of strings and `$rows`, `$moves` or `$day` holes.")
+  "`say` is a string, or a list of strings, `$rows`, `$moves` or `$day` holes and `$list`s.")
 
 (defn- instant-of
   "An RFC 3339 instant, or a YYYY-MM-DD date read as its first moment in
@@ -364,6 +366,11 @@
   "The `$day` map a say part holds; nil when the part is no such hole."
   [part]
   (when (map? part) (get part "$day")))
+
+(defn- list-hole-of
+  "The `$list` map a say part holds; nil when the part is no list."
+  [part]
+  (when (map? part) (get part "$list")))
 
 (defn- span-problem
   "Why a hole named `hole` cannot read [since, until); nil when it can."
@@ -406,7 +413,7 @@
   "Why one `$rows` hole cannot be filled; nil when it can."
   [h rdef-of]
   (or (window-problem "$rows" ["kind" "since" "until" "field" "terminal" "state" "count"
-                               "one" "many" "none"]
+                               "sum" "one" "many" "none"]
                       h rdef-of)
       (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
         (str (tick (get h "field")) " is not a field a hole reads; the fields are "
@@ -415,14 +422,25 @@
               (when (and (contains? h k) (not (boolean? (get h k))))
                 (str "a `$rows` hole's `" k "` is true or false.")))
             ["terminal" "count"])
+      (when (and (contains? h "sum")
+                 (not (and (string? (get h "sum")) (not (str/blank? (get h "sum"))))))
+        "a `$rows` hole's `sum` names a field.")
+      (when (contains? h "sum")
+        (let [s (some-> (rdef-of (str (get h "kind"))) :schema
+                        (schema/field-schema (keyword (get h "sum"))))
+              head (if (vector? s) (first s) s)]
+          (when-not (#{:int :double :float :number :decimal} head)
+            (str (tick (get h "sum")) " is not a number field of " (tick (get h "kind")) "."))))
+      (when (and (contains? h "sum") (true? (get h "count")))
+        "a `$rows` hole counts or sums, not both.")
       (when (and (contains? h "state")
                  (not (some #{(str (get h "state"))}
                             (map name (:states (rdef-of (str (get h "kind"))))))))
         (str (tick (get h "state")) " is not a state of " (tick (get h "kind")) "."))
       (when (not= (contains? h "one") (contains? h "many"))
         "a `$rows` hole names `one` and `many` together.")
-      (when (and (contains? h "one") (not (true? (get h "count"))))
-        "a `$rows` hole's `one` and `many` word a count: it names `count` true.")
+      (when (and (contains? h "one") (not (true? (get h "count"))) (not (contains? h "sum")))
+        "a `$rows` hole's `one` and `many` word a count or a sum: it names `count` true or a `sum`.")
       (some (fn [k]
               (when (and (contains? h k) (not (string? (get h k))))
                 (str "a `$rows` hole's `" k "` is a string.")))
@@ -463,6 +481,29 @@
 
           :else (span-problem "$day" h))))))
 
+(defn- list-problem
+  "Why one `$list` part cannot be spoken; nil when it can: its `items`
+  are `$rows` holes, each judged, and its `lead` and `none` strings."
+  [l rdef-of]
+  (let [names ["items" "lead" "none"]
+        items (when (map? l) (get l "items"))]
+    (cond
+      (not (map? l)) "a `$list` is a map of `items`, `lead` and `none`."
+
+      (seq (remove (set names) (keys l)))
+      (str "a `$list` takes items, lead and none, not "
+           (tick (first (remove (set names) (keys l)))) ".")
+
+      (not (and (sequential? items) (seq items) (every? hole-of items)))
+      "a `$list`'s `items` are one or more `$rows` holes."
+
+      :else
+      (or (some #(hole-problem (hole-of %) rdef-of) items)
+          (some (fn [k]
+                  (when (and (contains? l k) (not (string? (get l k))))
+                    (str "a `$list`'s `" k "` is a string.")))
+                ["lead" "none"])))))
+
 (defn- say-problem
   "Why a shot's `say` cannot be spoken; nil when it can."
   [say rdef-of]
@@ -478,8 +519,15 @@
                     (moves-problem (moves-hole-of part) rdef-of)
                     (and (map? part) (contains? part "$day"))
                     (day-problem (day-hole-of part))
+                    (and (map? part) (contains? part "$list"))
+                    (list-problem (list-hole-of part) rdef-of)
                     :else say-shape))
                 say)))
+
+(defn- dollars
+  "Whole dollars `n` with a comma between thousands: 1250 as 1,250."
+  [n]
+  (str/replace (str n) #"\B(?=(\d{3})+(?!\d))" ","))
 
 (defn take-run
   "One take as the performer plays it: an atom holding the instant the
@@ -498,8 +546,13 @@
   that state. A count with `one` and `many` says `<n> <one>` or `<n>
   <many>`; at zero it says its `none`, or without one drops its clause:
   the hole and the string after it. `rows-of` is a fn of
-  {:kind :since :until :field :terminal :state} to summary lines; the performer
-  passes `rows-in-window` over the scene's clone. Each `$moves` hole is
+  {:kind :since :until :field :terminal :state :sum} to summary lines; the performer
+  passes `rows-in-window` over the scene's clone. With `sum` naming a
+  field, `rows-of` answers that field of each row instead, and the hole
+  says their total in whole dollars (`$1,250`), worded and dropped as a
+  count is. A `$list` says its `lead` and the text of each of its
+  `items`, `$rows` holes, that says something, joined with `, `; or its
+  `none` (`nothing came in`) when none does. Each `$moves` hole is
   replaced the same way by the lines `moves-of` answers, a fn of
   {:kind :since :until :by} (`moves-in-window`), or by its `none`
   (`nothing moved`). Each `$day` hole is replaced by the sentence
@@ -516,36 +569,44 @@
          spoken (fn [lines h none]
                   (if (seq lines)
                     (str/join "; " lines)
-                    (str (get h "none" none))))]
+                    (str (get h "none" none))))
+         ;; a `$rows` hole's text; nil when its zero drops its clause
+         rows-said (fn [h]
+                     (let [sum (some-> (get h "sum") str)
+                           lines (rows-of (cond-> {:kind (str (get h "kind"))
+                                                   :since (instant-of (get h "since"))
+                                                   :until (instant-of (get h "until"))
+                                                   :field (get h "field" "created_at")
+                                                   :terminal (true? (get h "terminal"))
+                                                   :state (some-> (get h "state") str)}
+                                            sum (assoc :sum sum)))
+                           n (if sum
+                               (Math/round (double (reduce + 0 (filter number? lines))))
+                               (count lines))
+                           said (if sum (str "$" (dollars n)) (str n))]
+                       (cond
+                         (not (or sum (true? (get h "count")))) (spoken lines h nothing)
+                         (not (contains? h "one")) said
+                         (pos? n) (str said " " (get h (if (= 1 n) "one" "many")))
+                         (contains? h "none") (str (get h "none"))
+                         :else nil)))
+         said-list (fn [l]
+                     (let [said (keep #(some-> (hole-of %) rows-said) (get l "items"))]
+                       (if (seq said)
+                         (str (get l "lead") (str/join ", " said))
+                         (str (get l "none" nothing)))))]
      (if-not (sequential? say)
        (str say)
        (loop [parts (seq say) out []]
          (if-not parts
            (apply str out)
            (let [part (first parts)]
-             (if-some [h (hole-of part)]
-               (let [lines (rows-of {:kind (str (get h "kind"))
-                                     :since (instant-of (get h "since"))
-                                     :until (instant-of (get h "until"))
-                                     :field (get h "field" "created_at")
-                                     :terminal (true? (get h "terminal"))
-                                     :state (some-> (get h "state") str)})
-                     n (count lines)]
-                 (cond
-                   (not (true? (get h "count")))
-                   (recur (next parts) (conj out (spoken lines h nothing)))
-
-                   (not (contains? h "one"))
-                   (recur (next parts) (conj out (str n)))
-
-                   (pos? n)
-                   (recur (next parts) (conj out (str n " " (get h (if (= 1 n) "one" "many")))))
-
-                   (contains? h "none")
-                   (recur (next parts) (conj out (str (get h "none"))))
-
-                   ;; a zero count drops its clause: the hole and the string after it
-                   :else
+             (if-some [h (or (hole-of part) (list-hole-of part))]
+               (if (list-hole-of part)
+                 (recur (next parts) (conj out (said-list h)))
+                 (if-some [s (rows-said h)]
+                   (recur (next parts) (conj out s))
+                   ;; a zero drops its clause: the hole and the string after it
                    (recur (cond-> (next parts) (string? (second parts)) next) out)))
                (recur (next parts)
                       (conj out
@@ -571,15 +632,19 @@
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
   (created_at, or updated_at) falls in [since, until), oldest first;
   with `terminal`, only those in one of the kind's terminal states, and
-  with `state`, only those in that state. None for a kind the engine
-  does not serve."
-  [eng {:keys [kind since until field terminal state]}]
+  with `state`, only those in that state; with `sum`, that field of
+  each instead of its line. None for a kind the engine does not serve."
+  [eng {:keys [kind since until field terminal state sum]}]
   (let [st (:storage eng)
         rdef (get (inv/resources eng) (keyword kind))
         ended (into #{} (map name) (:terminal rdef))
         ended? (fn [row]
                  (and (or (not terminal) (contains? ended (some-> (:state row) name)))
                       (or (nil? state) (= state (some-> (:state row) name)))))
+        said (fn [row]
+               (if sum
+                 (get-in row [:data (keyword sum)])
+                 (summary/line rdef (assoc row :kind (:kind rdef)))))
         at (if (= "updated_at" field) :updated-at :created-at)
         within? (fn [row]
                   (let [t (get row at)]
@@ -594,8 +659,7 @@
                (filter within?)
                (filter ended?)
                (sort-by #(inst-ms (get % at)))
-               (mapv #(summary/line rdef (assoc (inv/decode-row rdef %)
-                                                :kind (:kind rdef))))))))))
+               (mapv #(said (inv/decode-row rdef %)))))))))
 
 (defn- moved-by?
   "Whether a logged actor is one a `$moves` hole's `by` names: a seat

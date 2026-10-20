@@ -147,7 +147,7 @@
     (fn [tx] (jdbc/execute! tx ["DELETE FROM film_rules"])))
   (engine/start-runtime! *eng*)
   (try
-    (is (= 11 (count film-rules/seed-rules)))
+    (is (= 15 (count film-rules/seed-rules)))
     (doseq [{:keys [name]} film-rules/seed-rules]
       (testing name
         (is (= 1 (count (rows-of {:name name}))))))
@@ -466,7 +466,8 @@
 (def ^:private a-good-take
   "a-take on a phone, with the turn held for its words and changing one
   surface, and two days that tell what happened, one of them asking the
-  person: it passes every seed rule."
+  person: it passes every seed rule but the played week's, which judge
+  no take short of a week."
   (-> a-take
       (assoc-in [:film :output] "phone")
       (assoc-in [:shots 0 :caption] "Monday. Acme's study went to review.")
@@ -487,6 +488,10 @@
 
 (defn- judged [tk] (film-rules/judge film-rules/seed-rules tk))
 
+(def ^:private played-names
+  "The rules of a played first week (ticket 853b6707)."
+  #{"no-bare-list" "busy-week" "week-arc" "asks-the-person"})
+
 (defn- rule-in [answer name']
   (first (filter #(= name' (:name %)) (:rules answer))))
 
@@ -497,7 +502,9 @@
       (is (= [] (:unmeasured answer)))
       (is (= (sort (map :name film-rules/seed-rules))
              (map :name (:rules answer))))
-      (is (every? #(= "pass" (:verdict %)) (:rules answer)))
+      ;; a-good-take is no week: the played week's rules leave it unscored
+      (is (every? #(= (if (played-names (:name %)) "unscored" "pass") (:verdict %))
+                  (:rules answer)))
       (is (= {:name "frame-fill" :metric "frame_fill" :op ">="
               :threshold 0.95M :severity "fail"}
              (select-keys (rule-in answer "frame-fill")
@@ -609,6 +616,104 @@
       (let [answer (film-rules/judge week-rules (week-take []))]
         (is (= ["asked-person" "caption-not-list" "quiet-days"] (:unmeasured answer)))
         (is (= ["shot.caption"] (:missing (rule-in answer "asked-person"))))))))
+
+(def ^:private weekdays
+  ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
+
+(defn- call
+  "A meanwhile shot of a take: the call and what it did."
+  ([as kind action outcome] (call as kind action outcome nil))
+  ([as kind action outcome held-by]
+   {:meanwhile (cond-> {:as as :kind kind :action action :outcome outcome}
+                 held-by (assoc :held_by held-by))}))
+
+(defn- played-take
+  "A first week as the template renders it, knocking on prospects: an
+  opening, seven day captions with day 2 the friction and day 5 the
+  turn, each after its day's `calls` (day → meanwhile shots), and the
+  closing, the payoff."
+  [captions calls]
+  {:film {:output "phone" :kind "prospect" :cast ["owner" "acme"]}
+   :shots (-> [{:caption "Example Landscaping: A six-person landscaping business."}]
+              (into (mapcat (fn [day caption]
+                              (conj (vec (get calls day))
+                                    (cond-> {:caption caption}
+                                      (= 2 day) (assoc :role "friction")
+                                      (= 5 day) (assoc :role "turn"))))
+                            (range 1 8) captions))
+              (conj {:role "payoff" :goal_state "done" :caption "That was the week."}))})
+
+(def ^:private told-week
+  ["Monday. Hedge lead came in."
+   "Tuesday. Acme's payroll records were late."
+   "Wednesday. Yard study was drawn."
+   "Thursday. Acme was chased for its records."
+   "Friday. A person was asked to sign off on Yard study."
+   "Saturday. A quiet day."
+   "Sunday. Yard study was delivered."])
+
+(def ^:private told-calls
+  "A late record on day 2, a chase answered and a tap on day 5, and a
+  study the person delivered on day 7."
+  {1 [(call "acme" "prospect" "create" "moved")]
+   2 [(call "acme" "record" "create" "moved")]
+   4 [(call "owner" "record" "chase" "moved" "seat")]
+   5 [(call "acme" "record" "submit" "moved")
+      (call "owner" "study" "sign_off" "held" "person")]
+   7 [(call "owner" "study" "deliver" "moved" "person")]})
+
+(def ^:private played-rules
+  (filter (comp played-names :name) film-rules/seed-rules))
+
+(deftest a-played-first-week-is-judged-from-its-captions-and-its-calls
+  (let [judged-week #(film-rules/judge played-rules (played-take %1 %2))
+        missed #(mapv :name (filter (comp #{"miss"} :verdict) (:rules %)))]
+    (testing "a late record, a chase, a tap and a delivered study pass all four"
+      (let [answer (judged-week told-week told-calls)]
+        (is (= "green" (:verdict answer)))
+        (is (= [] (:unmeasured answer)))
+        (is (= ["pass" "pass" "pass" "pass"] (mapv :verdict (:rules answer))))
+        (is (== 0 (:value (rule-in answer "no-bare-list"))))
+        (is (== 6 (:value (rule-in answer "busy-week"))))
+        (is (== 3 (:value (rule-in answer "week-arc"))))
+        (is (== 2 (:value (rule-in answer "asks-the-person"))))))
+    (testing "an all-quiet week misses busy-week and week-arc"
+      (let [answer (judged-week (mapv #(str % ". A quiet day.") weekdays)
+                                {2 [(call "acme" "record" "create" "refused")]})]
+        (is (= "red" (:verdict answer)))
+        (is (= ["asks-the-person" "busy-week" "week-arc"] (missed answer)))
+        (is (== 0 (:value (rule-in answer "busy-week"))))
+        (is (== 0 (:value (rule-in answer "week-arc"))))))
+    (testing "a day that is a bare list misses no-bare-list"
+      (let [answer (judged-week (assoc told-week 2 "Wednesday. Hedge lead, Yard study, Front hedge.")
+                                told-calls)]
+        (is (= ["no-bare-list"] (missed answer)))))
+    (testing "moves on the knocked kind alone tell no arc"
+      (let [knocked (into {} (map (fn [[day calls]]
+                                    [day (mapv #(assoc-in % [:meanwhile :kind] "prospect") calls)]))
+                          told-calls)
+            answer (judged-week told-week knocked)]
+        (is (= ["week-arc"] (missed answer)))
+        (is (== 0 (:value (rule-in answer "week-arc"))))))
+    (testing "a week that never reaches the person misses asks-the-person"
+      (let [answer (judged-week told-week (assoc told-calls
+                                                 5 [(call "acme" "record" "submit" "moved")]
+                                                 7 [(call "owner" "study" "deliver" "moved" "seat")]))]
+        (is (= ["asks-the-person"] (missed answer)))))
+    (testing "an older render, whose week no meanwhile shot played, misses all four"
+      (let [answer (judged-week told-week {})]
+        (is (= "red" (:verdict answer)))
+        (is (= ["asks-the-person" "busy-week" "no-bare-list" "week-arc"] (missed answer)))
+        (is (every? #(= ["shot.meanwhile"] (:missing %)) (:rules answer)))))
+    (testing "a scene whose shots carry no role, as LP7's, is not judged by them"
+      (let [answer (film-rules/judge played-rules
+                                     {:shots [{:caption "Monday. Hedge lead, Yard study, Front hedge."}]})]
+        (is (= "green" (:verdict answer)))
+        (is (= ["unscored" "unscored" "unscored" "unscored"] (mapv :verdict (:rules answer))))))
+    (testing "the seed's arc reads past a meanwhile shot"
+      (is (== 1 (film-rules/measure
+                 (update a-take :shots #(into [(call "acme" "record" "create" "moved")] %))
+                 "arc"))))))
 
 (deftest a-take-is-judged-on-the-frame-under-each-caption
   (let [made (make-rule! {:name "frame-shows-beat" :metric "frame_match_min"
