@@ -3,9 +3,10 @@
   normalized resource map, ported one-for-one by name from waymark9
   core/checks.py. A declaration that fails never serves a request.
 
-  run-all returns {:warnings [str …]} or throws the named check's
-  definition error (ex-data carries {:check <name>}). Warnings are
-  \"[check-name] …\" strings the resource gate surfaces on *err*.
+  run-all returns {:warnings [str …] :info [str …]} or throws the
+  named check's definition error (ex-data carries {:check <name>}).
+  Warnings are \"[check-name] …\" strings the resource gate surfaces on
+  *err*. Info lines are listed beside them and never count as one.
 
   Phase-2 punts: check-when (conditional demand) and check-authored
   wait for their features. The assembly-time battery — check-refs,
@@ -33,7 +34,7 @@
 
 (def ^:private snake #"[a-z][a-z0-9_]*")
 
-(def ^:private waivable #{:altitude :edit-shape :large-effort})
+(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged})
 
 (def ^:private long-text-budget 280)
 
@@ -2294,10 +2295,11 @@
   `:kind` ref, and no guard at that door reads that kind, resolves the
   field, or narrows it with `:pick` — so the door accepts the id of any
   row of that kind. A warning: a ref that may name any row is sometimes
-  the law."
+  the law, and a door that says so waives :ref-unjudged."
   [r]
   (vec
-   (for [a (machine/actions-seq r) :when (:input a)
+   (for [a (machine/actions-seq r)
+         :when (and (:input a) (not (contains? (:waives a) :ref-unjudged)))
          :let [leaves (leaf-guards a)
                read (into #{} (mapcat :reads) leaves)
                resolved (into #{} (mapcat :resolves) leaves)]
@@ -2306,7 +2308,8 @@
      (str "[ref-unjudged] action " (name (:name a)) " field " (name f)
           " takes the id of any " (name kind) " row: no guard at the door "
           "reads " (name kind) ", and the field carries no :pick. May every "
-          (name kind) " be named here? If not, guard the door with a "
+          (name kind) " be named here? If so, waive :ref-unjudged at the "
+          "door; if not, guard the door with a "
           "follow over (input " f "), or narrow the picker with :pick."))))
 
 (defn- check-convertible-guard
@@ -2364,9 +2367,12 @@
 
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
-  {:warnings [str …]}."
+  {:warnings [str …] :info [str …]}. [convertible-guard] and
+  [stays-code] are info (docs/spec-related-row-law.md §6): counted,
+  not enforced, so they never land among the warnings."
   [rmap]
-  {:warnings
+  {:info (check-convertible-guard rmap)
+   :warnings
    (into []
          (mapcat #(% rmap))
          [check-tokens check-reachability check-terminal-no-exit
@@ -2384,5 +2390,5 @@
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings
-          check-ref-unjudged check-convertible-guard
+          check-ref-unjudged
           check-owned-surface])})

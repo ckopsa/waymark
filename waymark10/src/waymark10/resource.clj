@@ -2098,10 +2098,13 @@
   [rmap]
   (declaration/check! rmap)
   (let [r (normalize-resource rmap)
-        {:keys [warnings]} (checks/run-all r)]
+        {:keys [warnings info]} (checks/run-all r)]
     (doseq [w warnings]
       (binding [*out* *err*]
         (println (str "waymark10 usability warning [" (name (:kind r)) "] " w))))
+    (doseq [i info]
+      (binding [*out* *err*]
+        (println (str "waymark10 audit info [" (name (:kind r)) "] " i))))
     ;; the recall affordance advertises itself (probe defect D5):
     ;; import-time prints scroll away, the metadata doesn't
     (when (seq warnings)
@@ -2112,7 +2115,8 @@
     ;; a decision kind says so (waymark-442.15): the :decision key is
     ;; gone once desugared, so the fact rides the metadata — true about
     ;; the declaration but not law, and so no fingerprint moves
-    (cond-> (vary-meta r assoc :waymark10/warnings (vec warnings))
+    (cond-> (vary-meta r assoc :waymark10/warnings (vec warnings)
+                       :waymark10/info (vec info))
       (:decision rmap)
       (vary-meta assoc :waymark10/decision
                  {:by (:by (:decision rmap))}))))

@@ -1359,8 +1359,10 @@
                                      :help "The page factory10.law-text renders from the org's directory, for the person to read on the plan."}}
               [:maybe [:string {:max 40000}]]]]
      ;; :edit-shape — the first pull request onto a blank row is not an
-     ;; edit of one
-     :waives #{:edit-shape}
+     ;; edit of one. :ref-unjudged — the-plan-was-audited-at-its-head
+     ;; reads the named change through the :read hook, and keeps its
+     ;; declared reads empty so the scenarios stay check-tier
+     :waives #{:edit-shape :ref-unjudged}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The pull request is up for the owner to see."}
      :display {:label "Propose" :order 3

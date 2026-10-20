@@ -184,17 +184,27 @@
                   opts)))
 
 (defn- audit [plan-guards]
-  (:warnings (checks/run-all (r/resource (day-map {:plan plan-guards})))))
+  (let [{:keys [warnings info]} (checks/run-all (r/resource (day-map {:plan plan-guards})))]
+    (into warnings info)))
 
 (defn- lines [tag ws] (filter #(str/starts-with? % tag) ws))
 
 (deftest the-audit-names-unjudged-refs-and-convertible-guards
   (testing "[ref-unjudged]: nothing at the door reads the ref's kind"
     (is (= 1 (count (lines "[ref-unjudged] action plan field meal_id" (audit [])))))
-    (is (empty? (lines "[ref-unjudged]" (audit [meal-is-listed])))))
+    (is (empty? (lines "[ref-unjudged]" (audit [meal-is-listed]))))
+    (is (empty? (lines "[ref-unjudged]"
+                       (:warnings (checks/run-all
+                                   (r/resource (assoc-in (day-map {:plan []})
+                                                         [:actions :plan :waives]
+                                                         #{:ref-unjudged}))))))
+        "a door that may name any meal says so, and is not flagged"))
   (testing "[convertible-guard]: a code guard reading one kind through one ref"
     (let [ws (audit [(meal-is-real {})])]
       (is (= 1 (count (lines "[convertible-guard] info: guard meal-is-real on plan" ws))))
+      (is (empty? (lines "[convertible-guard]"
+                         (:warnings (checks/run-all (r/resource (day-map {:plan [(meal-is-real {})]}))))))
+          "an info line is listed, never warned")
       (is (empty? (lines "[ref-unjudged]" ws)))))
   (testing "the same guard with :stays-code is listed as info, not flagged"
     (let [ws (audit [(meal-is-real {:stays-code "It reads two hops."})])]
