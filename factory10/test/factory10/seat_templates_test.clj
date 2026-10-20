@@ -286,11 +286,11 @@
       (is (= {:state "proposed"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
           "the walk is the proposed plans"))
-    (testing "its powers are the clone door's four"
-      (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"}
+    (testing "its powers are the clone door's five: it calls the clone to write the week"
+      (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.down"}
              (into #{} (comp (map :kind) (filter #(str/includes? % ".")))
                    (:scope seat)))))
     (testing "its instructions name only the tools its scope holds"
       (let [named (into #{} (map (fn [[_ k a]] (str k "." a)))
                         (re-seq #"\b([a-z]+)__([a-z_]+)" (:instructions seat)))]
-        (is (= #{"clone.up" "clone.perform" "clone.film" "clone.down"} named))))))
+        (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.down"} named))))))
