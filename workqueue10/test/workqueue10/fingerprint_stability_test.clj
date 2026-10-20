@@ -23,6 +23,7 @@
   where it started."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.expr :as e]
             [waymark10.fingerprint :as fp]
             [waymark10.resource :as r]
             [workqueue10.main :as main]))
@@ -167,3 +168,29 @@
                  ": declaring how its work ENDS left its fingerprint"
                  " unmoved — :over is law the ending wall reads, and"
                  " fingerprint-of must project it"))))))
+
+(defn- when-trees
+  "Every declarative :when tree a kind carries, wherever it sits."
+  [res]
+  (->> (tree-seq (some-fn map? vector? set?)
+                 #(if (map? %) (vals %) (seq %))
+                 (into {} res))
+       (keep #(when (map? %) (:when %)))
+       (filter #(and (seq? %) (e/well-formed? %)))
+       distinct))
+
+(deftest the-unknown-verdict-moves-no-existing-law
+  ;; docs/spec-related-row-law.md §9 step 1: the third verdict is new
+  ;; language, and nothing the household already declares may change
+  ;; by it. The fingerprint hashes the normalized tree and neither
+  ;; normalize nor fingerprint-of learned the sentinel, so no hash
+  ;; moves; the verdict is pinned here: with no unknown in scope no
+  ;; :when answers unknown — the two-valued verdict it always gave.
+  (let [trees (mapcat (fn [res] (map #(vector (name (:kind res)) %) (when-trees res)))
+                      (main/check-resources))]
+    (is (seq trees) "no kind declares a :when — this test has gone stale")
+    (doseq [[kind w] trees]
+      (testing (str kind " " (pr-str w))
+        (is (= (e/evaluate w {}) (e/evaluate (e/normalize w) {})))
+        (is (not (e/unknown? (e/evaluate w {}))))
+        (is (not (e/unknown? (e/evaluate w {:data {} :input {} :vars {}}))))))))

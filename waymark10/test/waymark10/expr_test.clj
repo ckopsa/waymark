@@ -4,7 +4,9 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [waymark10.expr :as e]
-            [waymark10.gen-forms :as gf])
+            [waymark10.gen-forms :as gf]
+            [waymark10.guards :as g]
+            [waymark10.types :as t])
   (:import (java.time Instant LocalDate)))
 
 (def trials 300)
@@ -160,6 +162,72 @@
   (is (= {:vars #{} :data #{:start_date} :inputs #{:date} :uses-now true}
          (e/info '(and (<= (data :start_date) (date-of (now)))
                        (is-set (input :date)))))))
+
+;; ── the unknown verdict (docs/spec-related-row-law.md §5) ───────────
+
+(def ^:private three
+  {:vars {:t true :f false :u e/unknown :xs [1 2]}})
+
+(defn- truth [v]
+  (if (e/unknown? v) :unknown v))
+
+(defn- ev [form] (truth (e/evaluate form three)))
+
+(defspec a-scope-without-unknown-never-answers-unknown trials
+  (prop/for-all [f gf/gen-form
+                 scope gf/gen-scope]
+    (not (e/unknown? (e/evaluate f scope)))))
+
+(deftest kleene-truth-tables
+  (let [cells [[:t :t] [:t :f] [:t :u] [:f :t] [:f :f] [:f :u]
+               [:u :t] [:u :f] [:u :u]]]
+    (testing "and"
+      (is (= [true false :unknown false false false :unknown false :unknown]
+             (mapv (fn [[a b]] (ev (list 'and (list 'var a) (list 'var b)))) cells))))
+    (testing "or"
+      (is (= [true true true true false :unknown true :unknown :unknown]
+             (mapv (fn [[a b]] (ev (list 'or (list 'var a) (list 'var b)))) cells))))
+    (testing "not"
+      (is (= [false true :unknown]
+             (mapv #(ev (list 'not (list 'var %))) [:t :f :u]))))))
+
+(deftest unknown-propagates-through-every-op
+  (doseq [form '[(= (var :u) 1) (not= (var :u) 1) (= (var :u) nil)
+                 (< (var :u) 1) (<= 1 (var :u)) (> (var :u) 1) (>= (var :u) 1)
+                 (+ (var :u) 1) (- (var :u) 1) (- (var :u)) (* 2 (var :u))
+                 (min (var :u) 5) (max 5 (var :u)) (abs (var :u))
+                 (days (var :u)) (date-of (var :u)) (is-set (var :u))
+                 (get (var :u) :x) (not (var :u))
+                 (every [x (var :u)] (= x 1)) (some [x (var :u)] (= x 1))
+                 (count (var :u)) (sum [x (var :u)] x)
+                 (every [x (var :xs)] (= (var :u) x))
+                 (some [x (var :xs)] (= (var :u) x))
+                 (count [x (var :xs)] (= (var :u) x))
+                 (sum [x (var :xs)] (+ x (var :u)))]]
+    (is (= :unknown (ev form)) (pr-str form))))
+
+(deftest known-operands-still-decide
+  (is (false? (ev '(every [x (var :xs)] (and (= x 2) (var :u))))))
+  (is (true? (ev '(some [x (var :xs)] (or (= x 1) (var :u))))))
+  (is (false? (ev '(and (< 2 1) (= (var :u) 1)))))
+  (is (true? (ev '(or (is-set (var :xs)) (> (var :u) 1)))))
+  (testing "an empty collection decides without its predicate"
+    (is (true? (ev '(every [x (var :none)] (var :u)))))
+    (is (= 0 (ev '(count [x (var :none)] (var :u)))))))
+
+(deftest an-unknown-when-answers-pending
+  (let [listed (g/expr {:name :listed
+                        :when '(= (data :listed) true)
+                        :explain "The meal must be on the list."})
+        [v] (g/evaluate listed {:data {:listed e/unknown}} {} {})]
+    (is (t/allow? v) "an unknown verdict is never a refusal")
+    (is (t/pending-input? v) "it is reported as pending"))
+  (testing "a known verdict is unchanged"
+    (let [listed (g/expr {:name :listed
+                          :when '(= (data :listed) true)
+                          :explain "The meal must be on the list."})]
+      (is (t/deny? (first (g/evaluate listed {:data {:listed false}} {} {}))))
+      (is (= (t/allow) (first (g/evaluate listed {:data {:listed true}} {} {})))))))
 
 ;; ── the boundary refuses ────────────────────────────────────────────
 

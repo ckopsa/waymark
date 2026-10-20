@@ -304,9 +304,14 @@
 (defn- expr-check
   "The check a :when tree compiles to."
   [g row inp ctx]
-  (let [scope {:data (:data row) :input inp :now (:now ctx)}]
-    (if (expr/evaluate (:when g) scope)
-      (t/allow)
+  (let [scope {:data (:data row) :input inp :now (:now ctx)}
+        v (expr/evaluate (:when g) scope)]
+    (cond
+      ;; an unknown verdict is never a refusal: it is pending, as a
+      ;; probe without input is (docs/spec-related-row-law.md §5)
+      (expr/unknown? v) (t/allow {:pending-input true})
+      v (t/allow)
+      :else
       (t/deny {:vars (not-empty
                       (into {}
                             (keep (fn [[k form]]
