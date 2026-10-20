@@ -215,6 +215,12 @@
    ;; Postgres store at boot before it seals. Never in the fingerprint
    ;; — :on-create's precedent
    :at-rest-migrate
+   ;; (fn [data]) → data: the data backfill's move for a row from
+   ;; before a field was defaulted (ticket 0fa0eb6c), applied by every
+   ;; store at boot (ensure-kind!), key or none, to each row it
+   ;; changes — no version bumped, no transition logged, so it must be
+   ;; idempotent. Never in the fingerprint — :on-create's precedent
+   :data-migrate
    ;; what the create door's FULL rehearsal answers beyond its verdict:
    ;; `(fn [engine inp {:keys [principal grant]}])` → a map that rides
    ;; the dry-run's body as `preview`. Asked after the create guards
