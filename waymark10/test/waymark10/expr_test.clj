@@ -6,6 +6,7 @@
             [waymark10.expr :as e]
             [waymark10.gen-forms :as gf]
             [waymark10.guards :as g]
+            [waymark10.resource :as r]
             [waymark10.types :as t])
   (:import (java.time Instant LocalDate)))
 
@@ -228,6 +229,95 @@
                           :explain "The meal must be on the list."})]
       (is (t/deny? (first (g/evaluate listed {:data {:listed false}} {} {}))))
       (is (= (t/allow) (first (g/evaluate listed {:data {:listed true}} {} {})))))))
+
+;; ── separation of duties: did, (me), (self) ─────────────────────────
+
+(def ^:private the-preparer-does-not-sign
+  (g/expr {:name :the-preparer-does-not-sign
+           :when '(not (did :revise :prepare))
+           :explain "You prepared this study, so someone else signs it off."}))
+
+(defn- sign-off
+  "The verdict on signing `row` off as `principal`, over `log` (newest
+  first) through the same `actors-of` the engine's hook answers with."
+  [principal log]
+  (first (g/evaluate the-preparer-does-not-sign
+                     {:id "study-1" :data {}} {}
+                     {:principal principal
+                      :actor-of (fn [_row door & every]
+                                  (apply g/actors-of log door every))})))
+
+(deftest whoever-submitted-never-signs-off
+  (let [log [{:action :prepare :actor {:id "ann"}}]]
+    (is (t/deny? (sign-off {:id "ann"} log)) "the preparer is refused")
+    (is (t/allow? (sign-off {:id "bob"} log)) "another member signs"))
+  (testing "any actor of any named door, not only the newest"
+    (let [log [{:action :revise :actor {:id "eve"}}
+               {:action :revise :actor {:id "bob"}}
+               {:action :prepare :actor {:id "ann"}}]]
+      (doseq [who ["ann" "bob" "eve"]]
+        (is (t/deny? (sign-off {:id who} log)) who))
+      (is (t/allow? (sign-off {:id "dan"} log)))))
+  (testing "an acted-as transition binds both faces"
+    (let [log [{:action :prepare
+                :actor {:id "cast-cleo" :acted_by "seat:robot"}}]]
+      (is (t/deny? (sign-off {:id "cast-cleo"} log)) "the member it was done as")
+      (is (t/deny? (sign-off {:id "seat:robot"} log)) "the seat that did it")
+      (is (t/deny? (sign-off {:id "cast-dan" :acted-by "seat:robot"} log))
+          "the same seat, acting as someone else")
+      (is (t/allow? (sign-off {:id "bob"} log)) "another member signs")
+      (is (t/allow? (sign-off {:id "cast-dan" :acted-by "seat:other"} log))
+          "another seat, as another member")))
+  (testing "no log to ask is pending, never a refusal"
+    (let [[v] (g/evaluate the-preparer-does-not-sign {:id "study-1" :data {}}
+                          {} {:principal {:id "ann"}})]
+      (is (t/allow? v))
+      (is (t/pending-input? v))))
+  (testing "the tree declares what it reads, and spells its doors once"
+    (is (= [:transitions :principal] (:reads the-preparer-does-not-sign)))
+    (is (= '(did :prepare :revise) (e/normalize '(did :revise :prepare :revise))))))
+
+(deftest me-and-self
+  (let [mine (g/expr {:name :is-the-requester
+                      :when '(and (is-set (data :requested_by))
+                                  (= (data :requested_by) (me)))
+                      :explain "Only the requester may withdraw this."})
+        row {:id "study-1" :data {:requested_by "ann"}}]
+    (is (t/allow? (first (g/evaluate mine row {} {:principal {:id "ann"}}))))
+    (is (t/deny? (first (g/evaluate mine row {} {:principal {:id "bob"}}))))
+    (is (t/deny? (first (g/evaluate mine {:id "study-1" :data {}} {}
+                                    {:principal {:id "ann"}})))
+        "an unset field is refused")
+    (is (= [:principal] (:reads mine))))
+  (is (= "study-1" (e/evaluate '(self) {:self "study-1"})))
+  (is (e/unknown? (e/evaluate '(self) {})))
+  (is (e/unknown? (e/evaluate '(me) {})))
+  (testing "arity, and a derivation reads no actor"
+    (is (seq (e/problems '(did))))
+    (is (seq (e/problems '(did "prepare"))))
+    (is (seq (e/problems '(me 1))))
+    (is (seq (e/derived-scope-problems '(= (var :x) (me)) #{:x})))))
+
+(deftest did-unknown-door
+  (let [base {:kind :study
+              :states [:open :closed]
+              :initial :open
+              :terminal #{:closed}
+              :summary "{data.name} · {state}"
+              :schema [:map [:name [:string {:max 100}]]]
+              :actions {:close {:from #{:open} :to :closed
+                                :safety {:idempotent true :reversible false
+                                         :confirm false
+                                         :one-way "Closing is cheap."}}}}
+        guarded (fn [form]
+                  (assoc-in base [:actions :close :guards]
+                            [(g/expr {:name :not-the-closer
+                                      :when form
+                                      :explain "Someone else closes this."})]))
+        load (fn [m] (binding [*err* (java.io.StringWriter.)] (r/resource m)))]
+    (is (some? (load (guarded '(not (did :close))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[did-unknown-door\].*:prepair"
+                          (load (guarded '(not (did :prepair))))))))
 
 ;; ── the boundary refuses ────────────────────────────────────────────
 

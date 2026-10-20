@@ -301,10 +301,46 @@
                     (let [s (str value)]
                       (some #(= s (str %)) allowed)))))
 
+(defn actors-of
+  "The `:actor-of` answer over `recs`, a row's log newest first.
+  `(actors-of recs door)` is the newest actor id of `door` (unless,
+  four-eyes). `(actors-of recs door :every)` is every face of every
+  actor of it, as strings: the actor's id and, for an acted-as
+  transition, the seat's `acted_by` (docs/spec-related-row-law.md §4)."
+  ([recs door]
+   (some (fn [rec]
+           (clojure.core/when (= (:action rec) door)
+             (get-in rec [:actor :id])))
+         recs))
+  ([recs door _every]
+   (into #{}
+         (comp (filter #(= (:action %) door))
+               (mapcat (fn [rec] [(get-in rec [:actor :id])
+                                  (get-in rec [:actor :acted_by])]))
+               (remove nil?)
+               (map str))
+         recs)))
+
+(defn- expr-scope
+  "The scope a :when tree reads: the row, the input, the clock, and —
+  for (did …), (me), (self) — who acts now (both faces of an acted-as
+  principal), which row this is, and the log through `:actor-of`. A
+  ctx without a principal or a log leaves its key out, and the form
+  that asks for it answers unknown."
+  [row inp ctx]
+  (let [p (:principal ctx)
+        actor-of (:actor-of ctx)]
+    (cond-> {:data (:data row) :input inp :now (:now ctx)}
+      (some? (:id row)) (assoc :self (str (:id row)))
+      p (assoc :principal (some-> (:id p) str)
+               :faces (into #{} (comp (remove nil?) (map str))
+                            [(:id p) (:acted-by p)]))
+      actor-of (assoc :actors (fn [door] (actor-of row door :every))))))
+
 (defn- expr-check
   "The check a :when tree compiles to."
   [g row inp ctx]
-  (let [scope {:data (:data row) :input inp :now (:now ctx)}
+  (let [scope (expr-scope row inp ctx)
         v (expr/evaluate (:when g) scope)]
     (cond
       ;; an unknown verdict is never a refusal: it is pending, as a
@@ -491,12 +527,24 @@
 
 ;; ── declared verdicts: g/expr ───────────────────────────────────────
 
+(defn- derived-reads
+  "What a :when tree and its :vars read beyond the row: (did …) the log
+  and the actor, (me) the actor, (now) the clock — in that order, once
+  each, so a tree that asks none of them keeps the :reads it had."
+  [w vars]
+  (let [infos (cons (expr/info w) (map expr/info (vals vars)))
+        reads? (fn [k] (boolean (some k infos)))]
+    (vec (distinct (cond-> []
+                     (reads? (comp seq :doors)) (conj :transitions :principal)
+                     (reads? :uses-me) (conj :principal)
+                     (reads? :uses-now) (conj :now))))))
+
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the
   fingerprint stores the tree, the reviewer diffs the leaf, and (9.0)
   the judgment overlay evaluates any stored revision. :judges derives
-  from the tree's (input …) reads, :reads from (now) — declared by
-  the law itself."
+  from the tree's (input …) reads, :reads from (did …), (me) and
+  (now) — declared by the law itself."
   [{:keys [when vars judges reads name] :as opts}]
   (clojure.core/when-not (seq? when)
     (throw (t/definition-error "guard/expr takes a :when expression form")))
@@ -521,10 +569,7 @@
                   {:when w
                    :vars vars
                    :judges (clojure.core/or judges (vec (sort (:inputs winfo))))
-                   :reads (clojure.core/or reads
-                                           (if (clojure.core/or (:uses-now winfo)
-                                                                (some (comp :uses-now expr/info) (vals vars)))
-                                             [:now] []))}))))
+                   :reads (clojure.core/or reads (derived-reads w vars))}))))
 
 (defn relation
   "Multi-field admission: :accepts produces admissible tuples, or :op

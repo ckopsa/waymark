@@ -43,13 +43,20 @@
   count/sum (batch C): the waymark8 quantifier pair, earned by the
   blast-radius meter's own acceptance declarations (a flip count over
   a collection fact and a summed quantity are the shapes the meter's
-  test laws speak) — recorded in docs/waymark10-c-notes.md."
+  test laws speak) — recorded in docs/waymark10-c-notes.md.
+
+  did/me/self (docs/spec-related-row-law.md §4): separation of duties —
+  who took a door on this row, who acts now, and which row this is.
+  They read the scope's :actors, :faces, :principal and :self, which
+  the guard scope fills from its ctx; a scope without them answers
+  unknown."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      days date-of is-set
-     every some count sum})
+     every some count sum
+     did me self})
 
 (def ^:private quantifier-ops '#{every some count sum})
 
@@ -111,6 +118,14 @@
 
           now
           (if (zero? n) problems (conj problems "(now) takes no arguments"))
+
+          (me self)
+          (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
+
+          did
+          (if (and (pos? n) (every? keyword? args))
+            problems
+            (conj problems "(did :door …) takes one or more keyword door names"))
 
           it
           (cond
@@ -277,7 +292,7 @@
   "Ops whose value is always a boolean — the only operands and/or/not
   may collapse around without changing the value domain: (and x x)
   means (boolean x), which is x itself only when x is already boolean."
-  '#{= not= < <= > >= and or not is-set every some})
+  '#{= not= < <= > >= and or not is-set every some did})
 
 (defn- boolean-valued? [form]
   (and (seq? form) (contains? boolean-valued-ops (first form))))
@@ -315,6 +330,10 @@
             (and (seq? a) (= '= (first a)))    (cons 'not= (rest a))
             (and (seq? a) (= 'not= (first a))) (cons '= (rest a))
             :else (list 'not a)))
+
+        ;; a door named twice, or in another order, is the same question
+        did
+        (cons op (sort (distinct args)))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -566,6 +585,16 @@
         var   (clojure.core/get (:vars scope) (first args))
         now   (:now scope)
         it    (nth (:its scope) (long (first args)) nil)
+        me    (if (contains? scope :principal) (:principal scope) unknown)
+        self  (if (contains? scope :self) (:self scope) unknown)
+
+        ;; true when a face of the principal acting now is a face of
+        ;; any logged actor of one of the doors; no log to ask is unknown
+        did
+        (if-some [actors (:actors scope)]
+          (let [faces (set (:faces scope))]
+            (boolean (some (fn [door] (some faces (actors door))) args)))
+          unknown)
 
         get
         (let [v (evaluate (first args) scope)]
@@ -665,6 +694,8 @@
 
 (defn info
   "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
+  A form that asks who acts adds :doors (from did), :uses-me and
+  :uses-self; a form that asks no such thing carries none of them.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -675,6 +706,9 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
+                  did   (update acc :doors (fnil into #{}) args)
+                  me    (assoc acc :uses-me true)
+                  self  (assoc acc :uses-self true)
                   (date it) acc
                   (every some count sum)
                   (let [args (if (vector? (first args))
@@ -692,9 +726,11 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now]} (info form)
+  (let [{:keys [vars data inputs uses-now doors uses-me uses-self]} (info form)
         undeclared (remove over vars)]
     (cond-> []
+      (or (seq doors) uses-me uses-self)
+      (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
       (seq data)
       (conj (str "derived expressions read declared inputs, not (data …): "
                  (pr-str (sort data))))
