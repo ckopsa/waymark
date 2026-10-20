@@ -134,12 +134,24 @@ declarations and the seed's seats:
   holds whose input names money (`amount`, `fee`, `price`, a field
   ending `_cents` or `_usd`) that none of its guards reads, with no
   guard that holds it. "Above what amount should this wait for you?"
+- `decision/decided_says_held/<kind>/<action>`: a door a model seat
+  holds whose `:decided` sentence says it waits for a person ("only
+  on", "'s tap", "waits for", "never on its own") while no guard
+  holds it. Add a `:hold` guard for that person, or reword the
+  decision if the AI may act alone; `:decided-held {:none "why"}`
+  keeps the sentence as narrative, and the law page says so.
 
 Each clears in code, one of two ways. Either the law says it:
 
-- a guard with `:hold true` on the door, so its refusal is held for
-  the person's tap (unheld_final, money_unbounded; for money, the
-  guard reads the amount and holds above the line);
+- a hold on the door, so an agent's call waits as a held_call for the
+  person's tap while a person's own call goes through. It is one
+  line, and the one way to write "wait for me":
+  `(defguard principal-signs-off (hold "A study is signed off only on The Principal's tap."))`
+  (unheld_final). Its law is optional; with one, it holds only while
+  the law is false, so for money it reads the amount and holds above
+  the line:
+  `(defguard big-spends-wait (hold "Spending $5,000 or more waits for your tap.") '(< (data :amount_usd) 5000))`
+  (money_unbounded);
 - the kind's `:expected-age {<state> <seconds>}` (no_wait_limit).
 
 Or the person's answer is written down as `:decided`, a sentence in
@@ -152,7 +164,9 @@ their own words:
   `:decided {:open "An item may stay open for a week; past that, the
   mayor tells the owner."}` (no_wait_limit).
 
-`:decided` is prose, never law: the engine does not enforce it.
+`:decided` is prose, never law: the engine does not enforce it, so an
+answer of "wait for me" is a `:hold` guard, its reason the guard's
+`:explain`, and `:decided` says only what the AI may do on its own.
 `factory10.law-text` renders every one under "What you decided", a
 kind's states first and then its doors, so the person reads back what
 they said. `orgkit/template/` and `orgs/example/` answer theirs this

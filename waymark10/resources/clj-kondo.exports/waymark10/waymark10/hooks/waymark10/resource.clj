@@ -21,7 +21,7 @@
     :absent-as :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
-    :on-create :mirror :at-rest-migrate :on-rehearse
+    :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
@@ -31,7 +31,7 @@
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :engine
-    :out-of-state-says :replay :log-says :decided})
+    :out-of-state-says :replay :log-says :decided :decided-held})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

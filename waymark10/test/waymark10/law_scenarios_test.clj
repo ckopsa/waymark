@@ -156,6 +156,24 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A finished chore stays finished."}}}}))
 
+;; a kind with a :unique name — what a given that must stage once per
+;; suite run, or be shared, is about
+(def ^:private badge
+  (r/resource
+   {:kind :badge
+    :plural "badges"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.name} · {state}"
+    :schema [:map [:name [:string {:min 1 :max 80}]]]
+    :filterable {:name #{:eq}}
+    :unique [[:name]]
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A closed badge stays closed."}}}}))
+
 (defn- with-guard
   "The same declaration behind a different wall — how every negative
   case here is built, so the app's own guards are never touched."
@@ -339,7 +357,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["errands" "chores" "members" "roles" "grants" "approval_requests" "definitions"
+  ["errands" "chores" "badges" "members" "roles" "grants" "approval_requests" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "events"])
 
@@ -351,7 +369,7 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [eng (engine/engine {:storage st :resources [errand chore]})]
+        (let [eng (engine/engine {:storage st :resources [errand chore badge]})]
           (binding [*eng* eng *h* (engine/handler eng)]
             (f)))
         (finally (pg/close! st))))))
@@ -362,7 +380,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 7 (:covered mine))
+    (is (= 9 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: errand's one, plus mcp_server's one (waymark-fp62.10"
              " — the chain rule: a-create-does-not-carry-a-secret"
@@ -379,7 +397,10 @@
              " held_call's two refuse scenarios (ticket f7c43dc1:"
              " an-approver-or-the-persons-delegate-refuses walls the"
              " refuse door and reads the grant, the seat and the"
-             " member). The"
+             " member), plus judgment's one and notice_rule's one"
+             " (ticket 5bd3ed13 — each walls its door with a follow"
+             " guard that reads the judgment or notifier the input"
+             " names). The"
              " :feed module's deferred scenarios —"
              " ranking_note's, recipe_proposal's, feed_view's,"
              " verdict_reason's and remark's — went with it (retired"
@@ -444,3 +465,46 @@
     (testing ":history-mode is :stage or :refuse, refused where it is written"
       (is (thrown? Exception (someone-finishes {:id "mom" :type :person}
                                                :history-mode :maybe))))))
+
+(defn- a-curator-closes-beside
+  [given]
+  (scenario/scenario
+   :a-curator-closes-beside-a-badge
+   "A curator closes the errand while a badge stands on record."
+   {:kind    :errand
+    :attempt :close
+    :given   [given]
+    :row     {:state :open :data {:title "Take the bins out"}}
+    :as      {:id "mom" :type :person :roles #{:curator}}
+    :expect  {:allowed true}}))
+
+(deftest a-unique-given-stages-once-per-run
+  (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:errand :badge]})
+        run (fn [ctx s] (#'packs/run-scenario ctx errand s))
+        badges (fn [nm] (get-in ((:json ctx) ((:req ctx) :get (str "/api/badges?name=" nm) nil nil))
+                                [:data :total]))
+        per-run (a-curator-closes-beside {:kind :badge :state :open :data {:name "pin_{{run}}"}})]
+    (testing "two suite runs on one engine mint two tokens, so the unique name stages twice without a 409"
+      (is (nil? (run (assoc ctx :run-token (scenario/run-token)) per-run)))
+      (is (nil? (run (assoc ctx :run-token (scenario/run-token)) per-run))))
+    (testing "one token twice is the collision {{run}} exists to prevent"
+      (let [ctx (assoc ctx :run-token "rsame")]
+        (is (nil? (run ctx per-run)))
+        (let [v (run ctx per-run)]
+          (is (string? v))
+          (is (str/includes? (str v) "409") v))))
+    (testing ":reuse true adopts the row already on record"
+      (let [shared (a-curator-closes-beside {:kind :badge :state :open :reuse true
+                                             :data {:name "shared_pin"}})]
+        (is (nil? (run ctx shared)))
+        (is (nil? (run ctx shared)))
+        (is (= 1 (badges "shared_pin")))))
+    (testing "the lint names a fixed unique value, and not one with {{run}} or :reuse"
+      (let [lint #(seq (#'packs/fixed-unique-givens ctx %))]
+        (is (lint (a-curator-closes-beside {:kind :badge :state :open :data {:name "pin"}})))
+        (is (nil? (lint per-run)))
+        (is (nil? (lint (a-curator-closes-beside {:kind :badge :state :open :reuse true
+                                                  :data {:name "pin"}}))))))
+    (testing ":reuse is true or false, refused where it is written"
+      (is (thrown? Exception (a-curator-closes-beside {:kind :badge :reuse "yes"
+                                                        :data {:name "pin"}}))))))

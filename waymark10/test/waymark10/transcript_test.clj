@@ -1165,8 +1165,7 @@
       (let [p (refused (cue "n" {:filter {:name "ours"}}))]
         (is (= :inbox-cues-filter-declared-fields (:guard p)))
         (is (str/includes? (str (:detail p)) "name"))))
-    (testing "a missing note, and one past 280 characters"
-      (is (some? (refused (dissoc (cue "n") :note))))
+    (testing "a note past 280 characters"
       (is (some? (refused (cue (apply str (repeat 281 "n")))))))
     (testing "more than 20 cues"
       (is (some? (refusal #(open-seat! eng model
@@ -1202,6 +1201,22 @@
           lines (lines-of (tail! h key))]
       (is (= [unstamped] (mapv :id lines)))
       (is (not (contains? (first lines) :cue))))))
+
+(deftest a-cue-with-no-note-shows-the-default-sentence
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        seat (open-seat! eng (add-model! eng)
+                         (assoc-in hears-asks [:inbox :cues]
+                                   [{:kind "tr_ask" :actions ["groom"]}
+                                    {:kind "tr_ask" :actions []}]))
+        key (get-in (sit! h) [:inbox :key])
+        plain (groomed! eng {:name "plain"} person)
+        lines (lines-of (tail! h key))]
+    (is (some? (:id seat)) "a cue with no note passes the schema")
+    (is (= [plain] (mapv :id lines)))
+    (is (= (str "A tr_ask arrived by groom: it may wait on your tap."
+                " · A tr_ask moved: it may wait on your tap.")
+           (:cue (first lines))))))
 
 ;; ── the default inbox, and the keys a re-sit keeps (epic 3ad250ef) ──
 
