@@ -83,6 +83,7 @@
             [reitit.ring :as ring]
             [waymark10.machine :as machine]
             [waymark10.modules :as modules]
+            [waymark10.scenario :as scenario]
             [waymark10.server.invoke :as inv]
             [waymark10.server.router :as router]
             [waymark10.server.runtime :as runtime]
@@ -309,23 +310,28 @@
                        {:violations
                         [(str name " threw " (.getName (class e)) ": "
                               (ex-message e))]}))
-            {:keys [violations covered]} (if (map? out)
-                                           out
-                                           {:violations out})]
+            {:keys [violations covered warnings]} (if (map? out)
+                                                    out
+                                                    {:violations out})]
         (cond-> {:module module :name name :violations (vec violations)}
-          covered (assoc :covered covered))))))
+          covered (assoc :covered covered)
+          (seq warnings) (assoc :warnings (vec warnings)))))))
 
 (defn run
   "Every obligation this engine owes: core's pack plus the packs of
   the modules it assembled, each obligation's `:needs` judged against
   what actually landed. Returns a report — one map per obligation,
   either {:module :name :violations […] :covered n} or {:module :name
-  :skipped [unmet-needs]}."
+  :skipped [unmet-needs]}, with :warnings when an obligation has any.
+
+  Each call is one run and mints its own `{{run}}` token, so two runs
+  on one engine stage a scenario's unique-named givens under two names."
   [ctx]
-  (into []
-        (mapcat (fn [{:keys [module obligations]}]
-                  (map #(run-obligation ctx module %) obligations)))
-        (modules/packs (:modules ctx))))
+  (let [ctx (assoc ctx :run-token (scenario/run-token))]
+    (into []
+          (mapcat (fn [{:keys [module obligations]}]
+                    (map #(run-obligation ctx module %) obligations)))
+          (modules/packs (:modules ctx)))))
 
 (defn ran
   "The obligations that actually ran — needs met."
