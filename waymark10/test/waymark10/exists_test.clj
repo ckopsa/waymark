@@ -105,6 +105,7 @@
         c (compare v (str value))]
     (case op
       := (zero? c)
+      :not= (not (zero? c))
       :< (neg? c)
       :<= (not (pos? c))
       :> (pos? c)
@@ -216,6 +217,27 @@
       (is (t/allow? (first (judge :schedule 1 (row-of "b1") {:crew "elm"} ctx)))))
     (testing "the oak crew holds one"
       (is (t/allow? (first (judge :schedule 1 newcomer {:crew "oak"} ctx)))))))
+
+;; ── 4b. not=: a where may ask what a field is not ─────────────────────
+
+(deftest a-where-may-ask-not=
+  (let [law '(none [b :ex_booking {:crew (= (input :crew)) :state (not= "scheduled")}])
+        d (-> (r/resource (booking-map {:schedule [(g/expr {:name :no-past
+                                                            :explain "That crew has a past booking."
+                                                            :remedies [:ex_booking/finish]
+                                                            :when law})]}))
+              (get-in [:actions :schedule :guards 0]))
+        ctx (ctx-over bookings)]
+    (is (empty? (e/problems law)) "check-where admits not=")
+    (is (= [{:field :crew :op := :value "elm"} {:field :state :op :not= :value "scheduled"}]
+           (e/where-conds (nth (:when d) 2) {:input {:crew "elm"}}))
+        "the where reaches the store as a :not= cond")
+    (testing "deny: b3, a done elm booking, is not scheduled"
+      (is (t/deny? (first (g/evaluate d newcomer {:crew "elm"} ctx)))))
+    (testing "allow: oak's one booking is scheduled"
+      (is (t/allow? (first (g/evaluate d newcomer {:crew "oak"} ctx)))))
+    (testing "allow: b3 asking leaves itself out"
+      (is (t/allow? (first (g/evaluate d (row-of "b3") {:crew "elm"} ctx)))))))
 
 ;; ── 5. the gate ──────────────────────────────────────────────────────────────────
 
