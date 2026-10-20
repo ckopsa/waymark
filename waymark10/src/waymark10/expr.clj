@@ -264,8 +264,8 @@
                         ") is not in the law's vocabulary"))))
 
 (def ^:private where-ops
-  "What a where condition may ask: the edge's join-ops, and (in v …)."
-  '#{= < <= > >= in})
+  "What a where condition may ask: the edge's join-ops, not=, and (in v …)."
+  '#{= not= < <= > >= in})
 
 (defn- check-where
   "A where map: each target field to (op <expr>) or (in <expr> …). The
@@ -278,9 +278,6 @@
        (cond
          (not (keyword? field))
          (conj p (str "where field " (pr-str field) " is not a keyword"))
-         (= 'not= cop)
-         (conj p (str "where " field " (not= …): the store cannot ask not= "
-                      "yet — spell it with in or an ordering"))
          (not (contains? where-ops cop))
          (conj p (str "where " field " takes (op <expr>), op one of "
                       (pr-str (sort-by str where-ops)) "; got " (pr-str c)))
@@ -1019,3 +1016,24 @@
     (vector? form) (mapcat rows-queries form)
     (map? form) (mapcat rows-queries (vals form))
     :else nil))
+
+;; ── first: the one correlated form, evidence-only (§3) ──────────────
+
+(defn first-form?
+  "(first [c :kind where] pred): a guard's :evidence may name one; a
+  verdict may not — `first` is not in `ops`."
+  [x]
+  (and (seq? x) (= 'first (first x)) (= 3 (count x)) (rows-binder? (second x))))
+
+(defn normalize-first
+  "(first [c :kind where] pred) → {:kind :where :pred}, canonical: the
+  where as exists normalizes it (it may not read c), the pred with c
+  erased to (it 0), so the pred's own wheres may read the candidate —
+  that is what makes it correlated. A canonical map passes through."
+  [form]
+  (if (map? form)
+    form
+    (let [[_ [c kind where] pred] form]
+      {:kind kind
+       :where (nth (normalize (list 'exists [c kind where])) 2)
+       :pred (norm (debruijn pred {c 0} 1))})))
