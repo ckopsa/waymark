@@ -857,7 +857,8 @@
                                               " conformance tier does not stage its :history"
                                               " and will not judge it over an empty log")})
 
-      (and (seq (:history s)) (scenario/create-door? rdef' (:attempt s)))
+      (and (seq (:history s)) (or (scenario/create-door? rdef' (:attempt s))
+                                  (scenario/extra-create rdef' (:attempt s))))
       (scenario/violation s {:unreadable (str "its :history cannot be staged by the conformance"
                                               " tier: a create has no row for it to be the log of")})
 
@@ -877,6 +878,10 @@
 
                    (scenario/create-door? rdef' (:attempt s))
                    (req ctx :post (str "/api/" (:plural rdef')) (or input {}) hs)
+                   ;; an extra create door is served beside the collection
+                   (scenario/extra-create rdef' (:attempt s))
+                   (req ctx :post (str "/api/" (:plural rdef') "/-/" (name (:attempt s)))
+                        (or input {}) hs)
                    :else
                    (let [subject (stage-declared-row
                                   ctx (:kind s)
