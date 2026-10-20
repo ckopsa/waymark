@@ -1,0 +1,52 @@
+;; clinic_rehearsal's seed: what a fresh engine holds the moment it
+;; boots this org. The grammar is docs/orgkit.md § The seed.
+{:seed "clinic_rehearsal"
+ :version 1
+ :org "clinic_rehearsal"
+ :domains [{:name "clinic_rehearsal" :label "Outpatient PT Clinic" :ref :clinic_rehearsal}]
+ ;; the clinic's team. The owner is a physical therapist; the cast has
+ ;; no group or license field, so each role is a :roles string
+ :cast
+ {:owner   {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner (PT)" :type :human
+            :roles ["approver" "pt"]}
+  :pt_a    {:id "pt_a"    :display "Dana Holt (PT)"     :type :human :roles ["pt"]}
+  :pt_b    {:id "pt_b"    :display "Sam Ortiz (PT)"     :type :human :roles ["pt"]}
+  :pta     {:id "pta"     :display "Jo Kim (PTA)"       :type :human :roles ["pta"]}
+  :desk    {:id "desk"    :display "Ari Lane (front desk)" :type :human :roles ["front_desk"]}
+  :billing {:id "billing" :display "Mo Reyes (billing)" :type :human :roles ["billing"]}}
+ ;; the outside world, which only a clone loads: physicians who send
+ ;; referrals, and the world seat that plays their week. Patients and
+ ;; insurers act too, but only a referral's create is theirs to knock on
+ :rehearsal
+ {:cast {:dr_vance {:id "dr_vance" :display "Dr. Lena Vance" :type :human
+                    :scope [{:kind "referral" :actions ["create"]}]}
+         :dr_okafor {:id "dr_okafor" :display "Dr. Tobi Okafor" :type :human
+                     :scope [{:kind "referral" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "We are a small outpatient physical therapy clinic. A physician refers a patient by sending a prescription; we cannot book a first visit until we have it, and it expires after 90 days."
+                    :kinds "referral" :cast "dr_vance,dr_okafor" :day_one [:days 0]
+                    :domain_id [:ref :clinic_rehearsal]}}]}
+ ;; the org's mayor holds every door out of every open state, so each
+ ;; open row has a leaver; doors a person must tap are hold guards
+ :seats
+ [{:template "org-mayor"
+   :params {:org "clinic_rehearsal" :domain "clinic_rehearsal"
+            :domain_id [:ref :clinic_rehearsal]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "referral" :actions ["accept" "decline" "expire"]}
+                    {:kind "patient" :actions ["create" "admit" "discharge" "purge"]}
+                    {:kind "plan_of_care" :actions ["create" "activate" "resign" "end" "lapse"]}
+                    {:kind "visit" :actions ["create" "attend" "sign" "no_show" "cancel"]}
+                    {:kind "claim" :actions ["create" "submit" "post_payment" "deny" "resubmit" "write_off" "bill_patient"]}]
+            :wakes [{:kind "referral" :actions ["create"]}
+                    {:kind "patient" :actions ["create"]}
+                    {:kind "plan_of_care" :actions ["create"]}
+                    {:kind "visit" :actions ["create"]}
+                    {:kind "claim" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :referral :ref :ref-1
+   :create {:patient_name "Pat Example" :physician "Dr. Lena Vance"
+            :prescription "PT eval and treat, left knee, post-op."}}
+  {:as :owner :kind :patient :ref :pat-1
+   :create {:name "Pat Example" :coverage "unverified" :insurer "Acme Health"}}]}
