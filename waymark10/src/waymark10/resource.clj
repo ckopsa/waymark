@@ -2134,14 +2134,33 @@
   namespace that owns it. A kind may also self-declare :domain; the
   stamp only fills the blank, it never overrides. Domain placement is
   advertisement (well-known carries it, the generic UI's global nav
-  reads it), not fingerprinted law — the :nav precedent."
-  [domain resources]
-  (when-not (and (keyword? domain)
-                 (re-matches #"[a-z][a-z0-9_]*" (name domain)))
-    (throw (t/definition-error
-            (str "in-domain: domain must be a snake_case keyword token, got "
-                 (pr-str domain)))))
-  (mapv #(update % :domain (fn [d] (or d domain))) resources))
+  reads it), not fingerprinted law — the :nav precedent.
+
+  With `defaults`, an org's template stamps those keys too, each only
+  where the kind does not say it itself: `:default-expected-age`, the
+  seconds a row may rest in a non-terminal state that names no age
+  (nil opts out), and `:row-domain`."
+  ([domain resources] (in-domain domain nil resources))
+  ([domain defaults resources]
+   (when-not (and (keyword? domain)
+                  (re-matches #"[a-z][a-z0-9_]*" (name domain)))
+     (throw (t/definition-error
+             (str "in-domain: domain must be a snake_case keyword token, got "
+                  (pr-str domain)))))
+   (when-some [extra (seq (remove #{:default-expected-age :row-domain} (keys defaults)))]
+     (throw (t/definition-error
+             (str "in-domain: defaults name " (vec extra)
+                  "; they may name :default-expected-age and :row-domain"))))
+   (let [age (:default-expected-age defaults)]
+     (when-not (or (nil? age) (pos-int? age))
+       (throw (t/definition-error
+               (str "in-domain: :default-expected-age is a positive integer of seconds or nil, got "
+                    (pr-str age))))))
+   (mapv (fn [r]
+           (reduce-kv (fn [r k v] (if (contains? r k) r (assoc r k v)))
+                      (update r :domain (fn [d] (or d domain)))
+                      defaults))
+         resources)))
 
 (defmacro defhandler
   "An imperative-residue handler whose identity is its canonical
