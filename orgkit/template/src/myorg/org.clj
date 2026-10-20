@@ -13,10 +13,15 @@
 ;; org name = namespace root = domain name
 (def domain :myorg)
 
+;; seconds a row may rest in a state its kind gives no :expected-age;
+;; nil: such a state never ages
+(def default-expected-age 86400)
+
 (defn resources
   "Every kind this org declares, stamped with its domain."
   []
-  (in-domain domain [item]))
+  (in-domain domain {:default-expected-age default-expected-age}
+             [item]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."

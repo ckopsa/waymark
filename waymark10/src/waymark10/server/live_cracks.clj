@@ -57,9 +57,11 @@
 
   AN EXPECTED AGE is declared per kind and state, in seconds, under the
   declaration's `:expected-age`. A state with none takes the default
-  for its NAME (`default-ages`), and a state with neither has no
-  expected age. That is deliberate: a row may rest in `draft`, `done`
-  or `active` for as long as it likes.
+  for its NAME (`default-ages`); a non-terminal state with neither takes
+  the kind's `:default-expected-age`, which an org's `in-domain` stamps
+  from its template (a day, unless the org says otherwise or nil), and
+  a state with none of these has no expected age. That is deliberate: a
+  row may rest in `draft`, `done` or `active` for as long as it likes.
 
   AN ORG'S HIRING GAPS (`hiring-gaps`, ticket 6a3fac3e) read the same
   aged rows, for the rows of an org's domains only, grouped by domain,
@@ -156,11 +158,14 @@
 (defn expected-age
   "Seconds a row of this kind may sit in `state` with no write: the
   kind's own `:expected-age` for the state, or the default for the
-  state's name, or nil when it has neither."
+  state's name, or — for a state that is not terminal — the kind's
+  `:default-expected-age`, or nil when it has none of these."
   [rdef state]
   (let [s (text state)]
     (or (some (fn [[k v]] (when (= s (text k)) v)) (:expected-age rdef))
-        (get default-ages s))))
+        (get default-ages s)
+        (when-not (some #(= s (text %)) (:terminal rdef))
+          (:default-expected-age rdef)))))
 
 (defn- crack [word kind id m]
   (merge {:crack word
@@ -289,10 +294,14 @@
 
 (defn row-domain
   "The name of the domain a row is in: its stored `domain`, or what its
-  kind's declaration says an absent one counts as, or nil."
+  kind's declaration says an absent one counts as, or the kind's own
+  `:domain` token (`in-domain`'s stamp), or nil. A kind that says
+  `:row-domain :stored-only` takes no fallback to its `:domain`."
   [rdef row]
   (or (some-> (fget (:data row) "domain") text not-empty)
-      (some-> (get-in rdef [:absent-as :domain]) text not-empty)))
+      (some-> (get-in rdef [:absent-as :domain]) text not-empty)
+      (when-not (= :stored-only (:row-domain rdef))
+        (some-> (:domain rdef) text not-empty))))
 
 (defn hiring-gaps
   "An org's hiring gaps in a world of rows (the world `find-cracks`

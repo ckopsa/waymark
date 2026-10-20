@@ -85,6 +85,18 @@ it:
 - `:judgments`: each a factorykit judgment template and its params.
 - `:steps`: the starting rows, each an ordinary create or invoke by a
   cast member, as in the demo seed.
+- `:rehearsal`: the outside world, `{:cast {...} :seats [...] :steps
+  [...]}`, which only a clone loads (ticket a4149376): the loader merges
+  it onto the seed when the engine boots as a clone and drops it
+  everywhere else, so a live org never holds a pretend client nor
+  seats the world. Its cast are the people outside the business who
+  start work, each with a `:scope` that creates the kind they send;
+  its seats hold the `world` template. A seed whose own `:seats` hold
+  an `acts_as_cast` seat may set `:rehearsal-seats :skip-off-clone` in
+  org.edn: off a clone the loader skips that seat with a line instead
+  of refusing it. Conformance answers `no-outside-world/<org>` for a
+  seed with no such cast member or no world seat; `:world :none` in
+  org.edn waives it for an org that only works inside.
 
 The loader that walks it on a fresh engine is M1b's.
 
