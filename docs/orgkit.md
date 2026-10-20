@@ -151,7 +151,11 @@ Each clears in code, one of two ways. Either the law says it:
   the law is false, so for money it reads the amount and holds above
   the line:
   `(defguard big-spends-wait (hold "Spending $5,000 or more waits for your tap.") '(< (data :amount_usd) 5000))`
-  (money_unbounded);
+  (money_unbounded). By default the tap is the agent's own person's;
+  `:for :role` after the sentence names whose it is instead, read from
+  the seed's cast roles, and the Allow door refuses a person without
+  that role:
+  `(defguard return-is-filed (hold "A return is filed only on a tax specialist's tap." :for :role "tax_specialist"))`;
 - the kind's `:expected-age {<state> <seconds>}` (no_wait_limit).
 
 Or the person's answer is written down as `:decided`, a sentence in
