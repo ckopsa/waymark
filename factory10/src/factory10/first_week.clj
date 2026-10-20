@@ -160,6 +160,20 @@
       (let [sentence (or (re-find #"(?s)^.*?[.!?](?=\s|$)" s) s)]
         (if (> (count sentence) 140) (subs sentence 0 140) sentence)))))
 
+(defn- call-as
+  "The cast member a meanwhile call acts as."
+  [call]
+  (some-> (or (:as call) (get call "as")) str))
+
+(defn- with-calls
+  "One day's `shots` with its meanwhile `calls` spliced in right before
+  its caption, the day's last shot."
+  [shots calls]
+  (let [shots (vec shots)]
+    (if (seq calls)
+      (vec (concat (pop shots) (map (fn [c] {:meanwhile c}) calls) [(peek shots)]))
+      shots)))
+
 (defn scene
   "The first-week scene of the org whose seed is `seed`, filmed on the
   clone at `clone_url`, made at `head_sha`, its day 1 on `day_one`
@@ -171,8 +185,13 @@
   the plan's brief: the opening says its first sentence beside the org's
   name, or the name alone without one. `resources` are the org's kind
   declarations: the closing counts each kind's success ends by them, and
-  sums the money of the first kind with an amount field."
-  [seed {:keys [clone_url head_sha day_one kind brief resources]}]
+  sums the money of the first kind with an amount field.
+  `week`, when given, is the week the director writes (ticket fb9a1cff):
+  a vector of 7 vectors of meanwhile calls, {as, tool, arguments,
+  bind?}, day k's calls played as `meanwhile` shots right before day
+  k's caption, and each one's `as` joining the scene's cast after the
+  owner. With no `week` the scene is the audit's, and none plays."
+  [seed {:keys [clone_url head_sha day_one kind brief resources week]}]
   (let [t (template)
         owner (the-owner seed)
         day-one (LocalDate/parse (str day_one))
@@ -200,7 +219,9 @@
                                                                  TextStyle/FULL Locale/ENGLISH)
                                        :next_date (str (.plusDays day-one (long k)))))]
                 (cond-> shots
-                  (get roles k) (update (dec (count shots)) assoc :role (get roles k)))))
+                  (get roles k) (update (dec (count shots)) assoc :role (get roles k))
+                  true (with-calls (get (vec week) (dec k))))))
+        actors (keep call-as (apply concat week))
         money (the-money seed resources)
         ;; four clauses at most: the ends, the money, then the taps
         per-kind (map #(fill (:closing_kind t) (merge values %))
@@ -212,7 +233,8 @@
                      (vec (mapcat #(case % "{{kinds}}" per-kind "{{money}}" per-money [%]) x))
                      x))
                  (fill (:closing t) values))]
-    {:scene (assoc (fill (:scene t) values)
+    {:scene (assoc (cond-> (fill (:scene t) values)
+                     (seq actors) (update :cast #(vec (distinct (concat % actors)))))
                    :shots (vec (concat (fill (if line (:opening t) (:opening_bare t)) values)
                                        (mapcat day (range 1 (inc days)))
                                        closing)))
