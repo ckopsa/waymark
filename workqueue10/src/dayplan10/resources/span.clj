@@ -131,21 +131,15 @@
                           :other (window-label hit)}})
           (t/allow))))))
 
-(defguardfn swap-partner-is-ahead-on-this-day
-  {:judges [:with_span_id] :reads [:span :now]
-   :explain "Swap exchanges windows with another planned span of this same day whose time is still ahead — {with_span_id} is not one."}
-  [row inp ctx]
-  (if (nil? (:read ctx))
-    (t/allow)
-    (let [other ((:read ctx) :span (:with_span_id inp))]
-      (if (and other
-               (not= (:id other) (:id row))
-               (= :planned (:state other))
-               (= (str (get-in other [:data :plan_id]))
-                  (str (get-in row [:data :plan_id])))
-               (.isAfter ^Instant (get-in other [:data :ends_at]) ^Instant (:now ctx)))
-        (t/allow)
-        (t/deny {:vars {:with_span_id (str (:with_span_id inp))}})))))
+;; Declarative related-row law (docs/spec-related-row-law.md §7): one
+;; follow over :with_span_id. A partner that is not there follows to
+;; nil, and (= nil "planned") refuses with the same sentence.
+(defguard swap-partner-is-ahead-on-this-day
+  (refuse "Swap exchanges windows with another planned span of this same day whose time is still ahead — {with_span_id} is not one.")
+  '(and (not= (input :with_span_id) (self))
+        (= (follow (input :with_span_id) :state) "planned")
+        (= (follow (input :with_span_id) :plan_id) (data :plan_id))
+        (> (follow (input :with_span_id) :ends_at) (now))))
 
 (defguardfn extends-later
   {:judges [:ends_at]
@@ -401,14 +395,44 @@
    as the sentence the household wrote rather than as a dead link."
   {:kind    :span
    :attempt :swap
-   :given   (staged-day "swap" "2099-01-06"
-                        {:from "23:38" :to "23:39"})
    :row     {:state :planned
-             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+             :data (decoded-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
    :input   {:with_span_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9E6"}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
    :expect  {:refused :swap-partner-is-ahead-on-this-day}})
+
+;; The partner is a :given row the swap guard follows to, so these two
+;; are CHECK-tier too: the scenario's own rows are the whole world.
+
+(defscenario swap-wants-a-partner-still-ahead
+  "A partner span of the same day whose window has already passed is
+   history; swap refuses it by the same sentence."
+  {:kind    :span
+   :attempt :swap
+   :given   [{:kind :span :handle :partner :state :planned
+              :data (decoded-window "2026-09-05T09:00:00Z" "2026-09-05T10:00:00Z")}]
+   :row     {:state :planned
+             :data (decoded-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:with_span_id "{given/partner}"}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :swap-partner-is-ahead-on-this-day
+             :because "is not one"}})
+
+(defscenario swap-with-a-planned-span-ahead
+  "Another planned span of the same day, still ahead, is a partner the
+   swap admits."
+  {:kind    :span
+   :attempt :swap
+   :given   [{:kind :span :handle :partner :state :planned
+              :data (decoded-window "2099-01-06T13:00:00Z" "2099-01-06T14:00:00Z")}]
+   :row     {:state :planned
+             :data (decoded-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:with_span_id "{given/partner}"}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
 
 (defscenario extend-never-squeezes-a-neighbour-to-nothing
   "Extending to the neighbour's own end would leave it no time at all;

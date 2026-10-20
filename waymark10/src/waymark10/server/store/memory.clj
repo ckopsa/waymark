@@ -61,6 +61,18 @@
   [v]
   (some-> v wire/write-json wire/read-json))
 
+(defn- remigrate
+  "The kind's :data-migrate over its table, as the Postgres store runs
+  it at boot: a row it changes takes the moved document, and keeps its
+  version."
+  [migrate table]
+  (if migrate
+    (reduce-kv (fn [t id row]
+                 (let [after (jsonish (migrate (:data row)))]
+                   (cond-> t (not= after (:data row)) (assoc-in [id :data] after))))
+               table table)
+    table))
+
 (defn- json-text
   "data->>'f': the field's value as Postgres text, nil stays nil."
   [v]
@@ -237,7 +249,9 @@
              (-> s
                  (assoc-in [:kinds (:kind rmap)]
                            (store/definition-checked-name (:plural rmap)))
-                 (update-in [:tables (:kind rmap)] #(or % (sorted-map))))))
+                 (update-in [:tables (:kind rmap)] #(or % (sorted-map)))
+                 (update-in [:tables (:kind rmap)]
+                            (partial remigrate (:data-migrate rmap))))))
     nil)
 
   (load-row [_ _tx kind id _opts]
