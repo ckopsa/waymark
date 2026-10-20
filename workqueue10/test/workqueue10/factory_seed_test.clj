@@ -3,20 +3,25 @@
   engine, booted as `start!` boots one, the seed makes the owner and
   the agent acting for them, both starter judgments promoted, the
   bench, the repository's policy, the pull link and the model, and the
-  four seats active and held for that model; a second load skips it.
+  four seats active and held for that model, each fired one with a
+  schedule on the pull link an owner's fire goes out through (ticket
+  39815531); a second load skips it.
   No database: the in-memory twin.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.factory-seed-test"
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.pull-fires :as pf]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
+            [waymark10.server.schedules :as sch]
             [waymark10.server.seed :as seed]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -199,6 +204,15 @@
         (is (= [model-id] (mapv str (get-in s [:data :held_for]))) n))
       (doseq [n ["mayor" "draft-judge" "sitting-judge"]]
         (is (= domain-id (str (get-in (named eng :seat n) [:data :domain]))) n)))
+    (testing "each fired seat has a schedule on the pull link, and the interactive mayor none"
+      (let [pull (str (get-in out [:refs :pull :id]))]
+        (doseq [n ["code-seat" "draft-judge" "sitting-judge"]
+                :let [s (named eng :seat n)
+                      row (sch/schedule-for-seat eng (:id s))]]
+          (is (some? row) n)
+          (is (= [pull] (sch/runners-of-row row)) n)
+          (is (= [pull] (sch/pool-of eng row s)) n))
+        (is (nil? (sch/schedule-for-seat eng (:id (named eng :seat "mayor")))))))
     (testing "the cracks door answers"
       (let [resp ((engine/handler eng)
                   {:request-method :get :uri "/api/-/cracks"
@@ -237,4 +251,32 @@
           (is (false? (action? "repo_policy" "restate"))))))
     (testing "a second load skips it"
       (is (false? (:seeded (seed/load! eng factory {:params params}))))
+      (is (= 3 (count (dev/rows eng :schedule))) "and makes no second schedule")
       (is (= 4 (count (dev/rows eng :seat)))))))
+
+(deftest an-owners-fire-on-draft-judge-is-handed-out-on-the-pull-link
+  ;; ticket 39815531: the self-host walk's step 7 found no schedule for
+  ;; draft-judge, so the owner's fire went nowhere
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params params})
+        pull (str (get-in out [:refs :pull :id]))
+        judge (named eng :seat "draft-judge")
+        drain! #(consumers/drain-consumer! eng :factory-seed-fire (sch/consumer-fn eng))]
+    ;; the cursor seeds at the newest transition, so the drain after
+    ;; the fire hears the fire alone
+    (drain!)
+    (runner-links/seen! eng pull (java.time.Instant/now))
+    (inv/invoke! eng :seat (str (:id judge)) :fire {:text "Groom the draft."}
+                 {:principal (t/principal {:id "tim" :display "Tim"})
+                  :idempotency-key (str "factory-seed-test:" (random-uuid))})
+    ;; the pull-fire queue is a Postgres table the in-memory twin keeps
+    ;; no copy of, so the queue's own seam records what was handed out
+    (let [queued (atom [])]
+      (with-redefs [pf/sweep! (constantly nil)
+                    pf/pending (constantly [])
+                    pf/enqueue! (fn [_ fire] (swap! queued conj fire) "fire-1")]
+        (drain!))
+      (is (= [[pull "schedule" (str (:id (sch/schedule-for-seat eng (:id judge))))]]
+             (mapv (juxt :link-id #(some-> (:for-kind %) name) #(some-> (:for-id %) str))
+                   @queued))
+          "one fire is handed out on the pull link, for draft-judge's schedule"))))
