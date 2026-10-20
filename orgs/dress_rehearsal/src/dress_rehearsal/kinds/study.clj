@@ -10,7 +10,9 @@
   when the cost records are complete, and that is what moves the study
   to drafting. A missing document is chased twice; after the second
   chase the principal is told."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  (:require [waymark10.dsl :refer [defguard defguardfn defresource refuse]]
+            [waymark10.holds :as holds]
+            [waymark10.types :as t]))
 
 (defguard records-complete
   (refuse "Drafting starts once the cost records are complete; say when the last one came.")
@@ -28,17 +30,31 @@
   (refuse "A study goes to review once the credit is calculated.")
   '(present? :credit_usd))
 
-(defguard specialist-confirms-records
-  (refuse "A study moves to drafting only on a person's tap, because the tax specialist decides the cost records are complete; until a tax specialist is in the seed this waits for The Principal, and then the hold moves to them." {:hold true})
-  '(= 1 0))
-
-(defguard principal-signs-off
-  (refuse "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it; this waits for The Principal." {:hold true})
-  '(= 1 0))
-
 (defguard has-signer
   (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
   '(present? :signed_off_by))
+
+(defguardfn records-confirmed-by-a-person
+  {:reads [:principal :within]
+   :hold true
+   :explain "The cost records are declared complete only on a person's tap: The Principal's for now, the tax specialist's once one is on file."
+   :open "No door clears this one. The call waits as a held call for The Principal's tap."}
+  [row _inp ctx]
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :study :records_in (:id row)) (t/allow)
+    :else (t/deny)))
+
+(defguardfn principal-signs-off
+  {:reads [:principal :within]
+   :hold true
+   :explain "A study is signed off only on The Principal's tap, because the principal signs off every study, never the one who prepared it."
+   :open "No door clears this one. The call waits as a held call for The Principal's tap."}
+  [row _inp ctx]
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :study :sign_off (:id row)) (t/allow)
+    :else (t/deny)))
 
 (defresource study
   {:kind :study
@@ -70,7 +86,7 @@
              :signed_off "A signed-off study may wait 2 days to be delivered; past that, the mayor tells The Principal."}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
-                 :guards [records-complete records-confirmed specialist-confirms-records]
+                 :guards [records-complete records-confirmed records-confirmed-by-a-person]
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review

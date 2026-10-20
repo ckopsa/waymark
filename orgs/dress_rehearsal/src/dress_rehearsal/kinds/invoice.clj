@@ -1,15 +1,24 @@
 (ns dress_rehearsal.kinds.invoice
   "An invoice: the fee for one delivered study, a share of the credit
   with a fixed minimum, due in 30 days. It names its study by id."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  (:require [waymark10.dsl :refer [defguard defguardfn defresource refuse]]
+            [waymark10.holds :as holds]
+            [waymark10.types :as t]))
 
 (defguard has-amount
   (refuse "An invoice is paid against an amount; say what was billed.")
   '(present? :amount_usd))
 
-(defguard principal-writes-off
-  (refuse "An invoice is written off only on The Principal's tap; the AI never writes one off on its own, so this waits for The Principal." {:hold true})
-  '(= 1 0))
+(defguardfn principal-writes-off
+  {:reads [:principal :within]
+   :hold true
+   :explain "An invoice is written off only on The Principal's tap; the AI never writes one off on its own."
+   :open "No door clears this one. The call waits as a held call for The Principal's tap."}
+  [row _inp ctx]
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :invoice :write_off (:id row)) (t/allow)
+    :else (t/deny)))
 
 (defresource invoice
   {:kind :invoice
