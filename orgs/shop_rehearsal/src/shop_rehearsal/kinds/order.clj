@@ -36,7 +36,7 @@
             [:total_cents [:int {:min 0}]]
             [:placed_on {:optional true} [:maybe [:string {:max 10}]]]
             [:payment_id {:optional true :kind :payment} [:maybe :waymark/ref]]
-            [:packed_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:packed_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:label_id {:optional true :kind :shipping_label} [:maybe :waymark/ref]]]
    :filterable {:state #{:eq :in} :customer #{:eq} :buyer_state #{:eq}}
    :decided {:placed "A placed order may wait a day for its payment to clear; past that, the mayor cancels it and tells the owner."

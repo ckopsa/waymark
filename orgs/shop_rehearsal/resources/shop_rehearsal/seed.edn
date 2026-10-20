@@ -46,17 +46,18 @@
                     {:kind "invoice" :actions ["pay" "mark_overdue" "void"]}
                     {:kind "wholesale_order" :actions ["accept" "decline" "ship"]}
                     {:kind "monthly_close" :actions ["balance"]}]
+            ;; every door that lands a row in a state the mayor leaves
             :wakes [{:kind "product" :actions ["create"]}
                     {:kind "kiln_batch" :actions ["create"]}
-                    {:kind "order" :actions ["create"]}
+                    {:kind "order" :actions ["create" "mark_paid" "pack" "ship"]}
                     {:kind "payment" :actions ["create"]}
                     {:kind "shipping_label" :actions ["create"]}
-                    {:kind "return_request" :actions ["create"]}
-                    {:kind "refund" :actions ["create"]}
-                    {:kind "breakage_claim" :actions ["create"]}
-                    {:kind "wholesale_account" :actions ["create"]}
-                    {:kind "invoice" :actions ["create"]}
-                    {:kind "wholesale_order" :actions ["create"]}
+                    {:kind "return_request" :actions ["create" "receive"]}
+                    {:kind "refund" :actions ["create" "approve"]}
+                    {:kind "breakage_claim" :actions ["create" "claim"]}
+                    {:kind "wholesale_account" :actions ["create" "approve"]}
+                    {:kind "invoice" :actions ["create" "mark_overdue"]}
+                    {:kind "wholesale_order" :actions ["create" "accept"]}
                     {:kind "monthly_close" :actions ["create"]}]}}]
  :judgments []
  :steps

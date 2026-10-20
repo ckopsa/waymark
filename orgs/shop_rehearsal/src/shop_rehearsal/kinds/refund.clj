@@ -41,8 +41,8 @@
             [:amount_cents [:int {:min 1}]]
             ;; copied from the order and its packer by hand (concept 1)
             [:paid_cents [:int {:min 0}]]
-            [:packed_by {:optional true} [:maybe [:string {:max 80}]]]
-            [:approved_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:packed_by {:optional true :kind :member} [:maybe :waymark/ref]]
+            [:approved_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:processor_ref {:optional true} [:maybe [:string {:max 120}]]]]
    :filterable {:state #{:eq :in} :order_id #{:eq} :reason #{:eq}}
    :decided {:requested "A requested refund is approved or declined within two days; past that, the mayor tells the owner."

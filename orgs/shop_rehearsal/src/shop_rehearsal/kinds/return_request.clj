@@ -31,7 +31,7 @@
             [:delivered_on {:optional true} [:maybe [:string {:max 10}]]]
             [:requested_on {:optional true} [:maybe [:string {:max 10}]]]
             [:reason {:optional true :x-display {:widget "prose"}} [:maybe [:string {:max 1000}]]]
-            [:inspected_by {:optional true} [:maybe [:string {:max 80}]]]
+            [:inspected_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:condition {:optional true} [:maybe [:enum "unbroken" "broken"]]]]
    :filterable {:state #{:eq :in} :order_id #{:eq} :customer #{:eq}}
    :decided {:requested "A requested return may take two weeks to come back; past that, the mayor tells the owner."
