@@ -738,6 +738,43 @@
                 "have — follow reads a data field, :state or :id")))
     []))
 
+;; ── exists / none / count-rows: an index to ask, evidence on its kind ──
+
+(defn- check-rows-queries
+  "[exists-unfiltered]: every where field of an exists, none or
+  count-rows is declared :filterable on the kind it asks — :id and
+  :state are the row's own columns — an error, not a warning, because
+  an unindexed guard query runs on every write. [remedy-on-evidence-kind]:
+  a remedy whose :id is (evidence :b), b a binder, names a door of b's
+  kind (docs/spec-related-row-law.md §3, §6)."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)]
+      (doseq [[tk where] (mapcat expr/rows-queries (cons (:when guard) (vals (:vars guard))))
+              :let [target (get kinds tk)]
+              :when target
+              f (sort (keys where))
+              :when (not (or (contains? #{:id :state} f)
+                             (contains? (:filterable target) f)))]
+        (err kind :exists-unfiltered
+             (str "guard " (name (:name guard)) " on " (name door) " asks "
+                  (name tk) " where " (name f) ", a field " (name tk)
+                  " does not declare :filterable — an unindexed guard query "
+                  "runs on every write")))
+      (doseq [rmd (:remedies guard)
+              :when (map? rmd)
+              :let [[op b] (when (seq? (:id rmd)) (:id rmd))
+                    tk (get-in guard [:binders b :kind])]
+              :when (and (= 'evidence op) tk
+                         (not= (name tk) (namespace (:door rmd))))]
+        (err kind :remedy-on-evidence-kind
+             (str "guard " (name (:name guard)) " on " (name door) ": remedy "
+                  (pr-str (:door rmd)) " acts on (evidence " b "), a row of "
+                  (name tk) " — name a door of " (name tk))))))
+  [])
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -775,4 +812,5 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-unref'd-ids])})
+          check-link-where check-follow-fields check-rows-queries
+          check-unref'd-ids])})
