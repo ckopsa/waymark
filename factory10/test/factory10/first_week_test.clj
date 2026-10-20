@@ -65,9 +65,9 @@
        weekdays))
 
 (defn- counts
-  "The `$rows` holes of a shot's say."
+  "The `$rows` holes of a shot's say, its `$list`'s too."
   [shot]
-  (keep #(when (map? %) (get % "$rows")) (:say shot)))
+  (keep #(when (map? %) (get % "$rows")) (tree-seq coll? seq (:say shot))))
 
 (defn- example-kinds []
   ((requiring-resolve 'example.org/resources)))
@@ -84,9 +84,13 @@
    {:kind :invoice :states [:sent :paid :written_off] :terminal #{:paid :written_off}}])
 
 (defn- spoken
-  "The closing's say as the performer speaks it, each kind's count in `n`."
-  [closing n]
-  (scenes/fill-say (:say closing) (fn [{:keys [kind]}] (repeat (get n kind 0) "row"))))
+  "The closing's say as the performer speaks it, each kind's count in `n`
+  and each summed kind's amounts in `sums`."
+  ([closing n] (spoken closing n {}))
+  ([closing n sums]
+   (scenes/fill-say (:say closing)
+                    (fn [{:keys [kind sum]}]
+                      (if sum (get sums kind []) (repeat (get n kind 0) "row"))))))
 
 (deftest a-three-kind-seed-renders-its-week
   (let [brief "A six-person landscaping business in Provo. It trims hedges."
@@ -98,8 +102,9 @@
       (is (= {:collection "prospects"} (:open (first shots))))
       (is (= 8 (count (filter #(= {:collection "prospects"} (:open %)) shots)))))
     (testing "the opening says the business and its brief's first sentence"
-      (is (= "Example Landscaping: A six-person landscaping business in Provo."
-             (:say (first shots)))))
+      (is (= "Example Landscaping. A six-person landscaping business in Provo."
+             (:say (second shots))))
+      (is (= {:ms 3000} (:hold (second shots)))))
     (testing "seven day shots, each its weekday and a `$day` hole of the shot's window"
       (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
              (captions shots))))
@@ -117,8 +122,9 @@
              (spoken closing {"prospect" 3 "study" 1 "invoice" 1 "held_call" 2})))
       (is (= "That was the week: 1 prospect engaged, 2 invoices paid, 1 tap from you. Merge to make it real."
              (spoken closing {"prospect" 1 "invoice" 2 "held_call" 1})))
-      (is (= "That was the week: 0 taps from you. Merge to make it real."
-             (spoken closing {}))))
+      (is (= "A quiet week. Merge to make it real."
+             (spoken closing {})))
+      (is (not-any? :sum (counts closing)) "no kind declares an amount"))
     (testing "a noun's plural"
       (is (= ["prospects" "studies" "days" "work orders" "glass"]
              (map first-week/plural ["prospect" "study" "day" "work order" "glass"]))))
@@ -126,6 +132,25 @@
       (is (= ["friction" "turn" "payoff"] (keep :role shots))))
     (testing "a brief's first sentence is cut at 140 characters"
       (is (= 140 (count (first-week/brief-line (apply str (repeat 200 "a")))))))))
+
+(deftest a-kind-with-an-amount-sums-the-week's-money
+  (let [kinds (assoc-in three-kinds [2 :schema]
+                        [:map [:client :string] [:amount {:optional true} [:maybe [:int {:min 0}]]]])
+        closing (last (:shots (:scene (first-week/scene three-kind-seed
+                                                        (assoc filmed-on :resources kinds)))))]
+    (testing "the closing sums the week's invoices, after the ends and before the taps"
+      (is (= [["prospect" "engaged" nil "prospects engaged"]
+              ["study" "delivered" nil "studies delivered"]
+              ["invoice" nil "amount" "invoiced"]
+              ["held_call" nil nil "taps from you"]]
+             (map (juxt :kind :state :sum :many) (counts closing)))))
+    (testing "it says the money in whole dollars, a zero dropping its clause"
+      (is (= "That was the week: 2 prospects engaged, $1,250 invoiced, 1 tap from you. Merge to make it real."
+             (spoken closing {"prospect" 2 "held_call" 1} {"invoice" [1200 50.4]})))
+      (is (= "A quiet week. Merge to make it real." (spoken closing {} {"invoice" [0]}))))
+    (testing "the money field is a number named amount, total or fee"
+      (is (nil? (first-week/amount-field {:schema [:map [:total :string]]})))
+      (is (= "fee" (first-week/amount-field {:schema [:map [:fee {:optional true} :double]]}))))))
 
 (deftest the-template-renders-for-the-example-org
   (let [{:keys [scene clone]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)))

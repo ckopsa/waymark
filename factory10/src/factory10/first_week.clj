@@ -94,9 +94,9 @@
   "The closing's clauses (ticket 3173de32): for each kind the seed's
   steps make, in that order, each of its terminal states that is no
   loss, in the kind's state order, as the values of one :closing_kind;
-  at most four. A kind's noun is its declared :label, else its name with
+  at most `n`. A kind's noun is its declared :label, else its name with
   '_' as a space. `resources` are the org's declarations."
-  [seed resources]
+  [seed resources n]
   (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)]
     (->> (the-org-kinds seed)
          (mapcat (fn [k]
@@ -109,7 +109,47 @@
                           :each_state s
                           :each_one (str noun " " (words s))
                           :each_many (str (plural noun) " " (words s))})))))
-         (take 4))))
+         (take n))))
+
+(def amount-names
+  "The names a kind's money field goes by, when it is a number."
+  #{"amount" "total" "fee"})
+
+(def ^:private number-types
+  #{:int :double :float :long :number 'int? 'number? 'double? 'float? 'pos-int? 'nat-int?})
+
+(defn- number-type?
+  "Whether the malli type `t` is a number, through a :maybe."
+  [t]
+  (let [t (if (vector? t) t [t])]
+    (if (= :maybe (first t))
+      (number-type? (last t))
+      (contains? number-types (first t)))))
+
+(defn amount-field
+  "`resource`'s money field, read from its :schema: the first number
+  field named amount, total or fee; nil when it has none."
+  [resource]
+  (let [schema (:schema resource)]
+    (when (and (vector? schema) (= :map (first schema)))
+      (some (fn [entry]
+              (when (and (vector? entry)
+                         (amount-names (name (first entry)))
+                         (number-type? (last entry)))
+                (name (first entry))))
+            (rest schema)))))
+
+(defn- the-money
+  "The closing's money clause (ticket 8a21a8b9): the first kind the
+  seed's steps make that declares an amount field, as the values of one
+  :closing_money; none when no kind does."
+  [seed resources]
+  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)]
+    (->> (the-org-kinds seed)
+         (keep (fn [k]
+                 (when-some [f (some-> (get by-kind k) amount-field)]
+                   {:money_kind k :money_field f})))
+         (take 1))))
 
 (defn brief-line
   "The first sentence of `brief`, cut at 140 characters; nil when there
@@ -144,7 +184,8 @@
   from the day the captions' holes read (ticket bbf1f253). `brief` is
   the plan's brief: the opening says its first sentence beside the org's
   name, or the name alone without one. `resources` are the org's kind
-  declarations: the closing counts each kind's success ends by them.
+  declarations: the closing counts each kind's success ends by them, and
+  sums the money of the first kind with an amount field.
   `week`, when given, is the week the director writes (ticket fb9a1cff):
   a vector of 7 vectors of meanwhile calls, {as, tool, arguments,
   bind?}, day k's calls played as `meanwhile` shots right before day
@@ -181,15 +222,17 @@
                   (get roles k) (update (dec (count shots)) assoc :role (get roles k))
                   true (with-calls (get (vec week) (dec k))))))
         actors (keep call-as (apply concat week))
-        per-kind (mapcat #(fill (:closing_kind t) (merge values %))
-                         (the-clauses seed resources))
-        closing (mapv (fn [shot]
-                        (cond-> shot
-                          (sequential? (:say shot))
-                          (update :say #(vec (mapcat (fn [part]
-                                                       (if (= "{{kinds}}" part) per-kind [part]))
-                                                     %)))))
-                      (fill (:closing t) values))]
+        money (the-money seed resources)
+        ;; four clauses at most: the ends, the money, then the taps
+        per-kind (map #(fill (:closing_kind t) (merge values %))
+                      (the-clauses seed resources (- 3 (count money))))
+        per-money (map #(fill (:closing_money t) (merge values %)) money)
+        closing (walk/postwalk
+                 (fn [x]
+                   (if (and (vector? x) (not (map-entry? x)))
+                     (vec (mapcat #(case % "{{kinds}}" per-kind "{{money}}" per-money [%]) x))
+                     x))
+                 (fill (:closing t) values))]
     {:scene (assoc (cond-> (fill (:scene t) values)
                      (seq actors) (update :cast #(vec (distinct (concat % actors)))))
                    :shots (vec (concat (fill (if line (:opening t) (:opening_bare t)) values)

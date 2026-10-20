@@ -2,11 +2,12 @@
 ;; the director makes of an org's simulated first week on a clone,
 ;; before the person merges it. Epic cafa6106, M3d. factory10.first-week
 ;; renders it from the org's seed: :opening, then :day once for each of
-;; the :days the world seat plays (seats/world.edn), then :closing, its
-;; {{kinds}} part :closing_kind once for each success end of each kind the
-;; seed's steps make, at most four (ticket 3173de32).
-;; The opening is :opening_bare when the org has no brief. The holes come
-;; to 38 seconds; with the taps, about 45.
+;; the :days the world seat plays (seats/world.edn), then :closing, whose
+;; `$list` holds :closing_kind for {{kinds}} once for each success end of
+;; each kind the seed's steps make, :closing_money for {{money}} when one
+;; of them names an amount field, and the taps: four clauses at most
+;; (tickets 3173de32, 8a21a8b9). The opening is :opening_bare when the
+;; org has no brief. The holds come to 41 seconds.
 {:template
  {:params {:seed "The org's seed name, its seed.edn's :seed."
            :org_display "The org's name as a person reads it: its first domain's :label."
@@ -17,6 +18,8 @@
            :each_state "In :closing_kind: one of that kind's terminal states that is no loss."
            :each_one "In :closing_kind: the kind's noun and that state, for one row: prospect engaged."
            :each_many "In :closing_kind: the same, for many: prospects engaged."
+           :money_kind "In :closing_money: the first kind the seed's steps make with an amount field."
+           :money_field "In :closing_money: that field, a number named amount, total or fee."
            :owner "The cast id of the person filmed: the seed's approver, or its first cast member."
            :owner_display "That person's :display."
            :kind "The kind the world seat knocks on: the one the seed's first create makes, unless named."
@@ -37,9 +40,11 @@
   :devices ["phone"]
   :cast ["{{owner}}"]}
  :opening
- [{:open {:collection "{{kind_plural}}"} :say "{{org_display}}: {{brief_line}}"}]
+ [{:open {:collection "{{kind_plural}}"}}
+  {:hold {:ms 3000} :say "{{org_display}}. {{brief_line}}"}]
  :opening_bare
- [{:open {:collection "{{kind_plural}}"} :say "{{org_display}}."}]
+ [{:open {:collection "{{kind_plural}}"}}
+  {:hold {:ms 3000} :say "{{org_display}}."}]
  ;; one day: its weekday, then the org's day in one sentence, filled from
  ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say):
  ;; what moved since the last day caption, for a clone runs no seats and
@@ -49,18 +54,22 @@
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
          {"$day" {:window "shot" :domain "{{seed}}"}}]}]
- ;; the week's numbers: each kind's rows that ended the week in each
- ;; success end, a zero dropping its clause, then the held calls it asked
- ;; the person
+ ;; the week's numbers, most consequential first: each kind's rows that
+ ;; ended the week in each success end, the money a kind with an amount
+ ;; field invoiced, then the held calls it asked the person. A zero drops
+ ;; its clause, and a week of zeros is a quiet one.
  :closing_kind
- [{"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :since "{{day_one}}" :until "{{week_end}}"
-            :field "updated_at" :count true :one "{{each_one}}" :many "{{each_many}}"}}
-  ", "]
+ {"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :since "{{day_one}}" :until "{{week_end}}"
+           :field "updated_at" :count true :one "{{each_one}}" :many "{{each_many}}"}}
+ :closing_money
+ {"$rows" {:kind "{{money_kind}}" :since "{{day_one}}" :until "{{week_end}}"
+           :sum "{{money_field}}" :one "invoiced" :many "invoiced"}}
  :closing
  [{:hold {:ms 3000} :role "payoff"
-   :say ["That was the week: "
-         "{{kinds}}"
-         {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}" :count true
-                   :one "tap from you" :many "taps from you" :none "0 taps from you"}}
+   :say [{"$list" {:lead "That was the week: " :none "A quiet week"
+                   :items ["{{kinds}}"
+                           "{{money}}"
+                           {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}"
+                                     :count true :one "tap from you" :many "taps from you"}}]}}
          ". Merge to make it real."]}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}
