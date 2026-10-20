@@ -5,7 +5,9 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [factory10.law-text :refer [law-text]]))
+            [factory10.law-text :refer [law-text]]
+            [factorykit.conform]
+            [waymark10.declare :refer [defguard hold]]))
 
 (defn- example-dir
   "orgs/example, found from its seed at <org-dir>/resources/example/seed.edn."
@@ -44,3 +46,14 @@
               "a review study becomes drafting or a review study becomes signed off."))
         page)
     (is (nil? (re-find #"\w(yed|_ined|offed)\b" page)) page)))
+
+(defguard principal-signs-off
+  (hold "A study is signed off only on The Principal's tap."))
+
+(deftest a-hold-clause-reads-as-a-door-a-person-taps
+  (let [held (assoc-in study [:actions :sign_off :guards] [principal-signs-off])
+        page (str/join "\n" (#'factory10.law-text/held-section [held]))]
+    (is (str/includes? page "## Doors a person taps") page)
+    (is (str/includes? page "study **sign_off**: A study is signed off only on The Principal's tap.") page)
+    (is (#'factorykit.conform/held? (get-in held [:actions :sign_off]))
+        "conform's held? sees it")))
