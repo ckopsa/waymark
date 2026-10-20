@@ -118,8 +118,8 @@
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
   (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
@@ -756,6 +756,21 @@
         (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
     (t/allow)))
 
+;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
+;; sit mints it `born_from` the plan; a change opened for anything else,
+;; or one already closed or merged, is not this plan's pull request.
+;; Declarative: the reads are derived from the `follow`, and a
+;; scenario's :given rows answer them.
+
+(defguard the-change-was-opened-for-this-plan
+  (refuse "That change was not opened for this plan.")
+  '(or (not (is-set (input :change)))
+       (and (= (follow (input :change) :born_from) (str "org_plan:" (self)))
+            (not= (follow (input :change) :state) "closed")
+            (not= (follow (input :change) :state) "merged")))
+  {:open "Name the change the sit opened for this plan, or name none and propose with the plan's own."
+   :errors {:change "not a change opened for this plan"}})
+
 (def ^:private gone-change-states
   "The change states whose pull request is out of play."
   #{"closed" "merged"})
@@ -810,14 +825,38 @@
    :expect  {:refused :no-error-finding-is-open}})
 
 (defscenario a-plan-with-no-error-goes-up
-  "And with no error open, the onboarding seat puts it up."
+  "And with no error open, the onboarding seat puts it up, with the
+   change opened for it and audited at its head."
   {:kind    :org_plan
    :attempt :propose
+   :given   [{:kind :change :handle :its-own :state :open
+              :data {:repository "ckopsa/waymark"
+                     :title "An org's pull request"
+                     :born_from "org_plan:scenario:a-plan-with-no-error-goes-up"
+                     :head_sha (:findings_sha a-flipped-plan)}}]
    :row     {:state :drafting
-             :data (assoc a-plan :findings [(assoc an-error :severity "warning")])}
-   :input   {:law_page "# The law of greenleaf"}
+             :data (assoc a-plan :findings [(assoc an-error :severity "warning")]
+                          :findings_sha (:findings_sha a-flipped-plan))}
+   :input   {:change "{given/its-own}" :law_page "# The law of greenleaf"}
    :as      {:id "onboarding" :type :agent}
    :expect  {:allowed true}})
+
+(defscenario a-plan-does-not-go-up-with-another-plans-change
+  "The pull request a plan goes up with is the one opened for it: a
+   change born from another plan is refused."
+  {:kind    :org_plan
+   :attempt :propose
+   :given   [{:kind :change :handle :other :state :open
+              :data {:repository "ckopsa/waymark"
+                     :title "Another org's pull request"
+                     :born_from "org_plan:another-plan"
+                     :head_sha (:findings_sha a-flipped-plan)}}]
+   :row     {:state :drafting
+             :data (assoc a-plan :findings_sha (:findings_sha a-flipped-plan))}
+   :input   {:change "{given/other}" :law_page "# The law of greenleaf"}
+   :as      {:id "onboarding" :type :agent}
+   :expect  {:refused :the-change-was-opened-for-this-plan
+             :because "That change was not opened for this plan."}})
 
 (defscenario the-owner-answers
   "The owner answers the question the seat asked."
@@ -1350,7 +1389,7 @@
     :propose
     {:from #{:drafting} :to :proposed
      :guards [the-name-is-snake-case no-error-finding-is-open a-hire-names-its-seat
-              the-plan-was-audited-at-its-head]
+              the-change-was-opened-for-this-plan the-plan-was-audited-at-its-head]
      :handler put-the-pull-request-up
      :input [:map
              [:change {:optional true :kind :change
@@ -1366,10 +1405,9 @@
                                      :help "The page factory10.law-text renders from the org's directory, for the person to read on the plan."}}
               [:maybe [:string {:max 40000}]]]]
      ;; :edit-shape — the first pull request onto a blank row is not an
-     ;; edit of one. :ref-unjudged — the-plan-was-audited-at-its-head
-     ;; reads the named change through the :read hook, and keeps its
-     ;; declared reads empty so the scenarios stay check-tier
-     :waives #{:edit-shape :ref-unjudged}
+     ;; edit of one. The named change is judged by
+     ;; the-change-was-opened-for-this-plan (ticket b02c9808)
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The pull request is up for the owner to see."}
      :display {:label "Propose" :order 3
@@ -1677,6 +1715,7 @@
                :description "Let this plan go"}}}
    :scenarios [an-open-error-keeps-the-plan-down
                a-plan-with-no-error-goes-up
+               a-plan-does-not-go-up-with-another-plans-change
                the-owner-answers
                a-stranger-does-not-answer
                an-agent-does-not-go-live-alone
