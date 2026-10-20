@@ -473,6 +473,7 @@
    ;; plan_id is the guard's one indexed query; current and missed are
    ;; the feed's and the notice's
    :filterable {:state #{:eq :in} :plan_id #{:eq} :block_id #{:eq}
+                :starts_at #{:range}
                 :current #{:eq} :missed #{:eq}}
    :sortable {:fields [:starts_at] :default "starts_at"}
    :deviations
