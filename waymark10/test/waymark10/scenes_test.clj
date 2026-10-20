@@ -223,6 +223,12 @@
                       (assoc-in [:given 1 :arguments] {:kind "grant"})))))
     (testing "a grant id passes as written"
       (is (ready? (assoc well-formed :wearing {:colton "400e8eff-7f8f"}))))
+    (testing "a bind on a waymark_query that no `wearing` names"
+      (is (str/includes?
+           (why (-> well-formed
+                    (update :given conj {:as "planner" :tool "waymark_query"
+                                         :arguments {:kind "chore"} :bind "week"})))
+           "given 2: a bind names one row, and a waymark_query answers a collection")))
     (testing "a key that is not in the cast"
       (is (str/includes? (why (worn {:nobody "$pass"}))
                          "wearing `nobody`: `nobody` is not in the cast.")))

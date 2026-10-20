@@ -34,9 +34,7 @@
  {:title "The first week of {{org_display}}"
   :seed "{{seed}}"
   :devices ["phone"]
-  :cast ["{{owner}}"]
-  :given [{:as "{{owner}}" :tool "waymark_query" :bind "week"
-           :arguments {:kind "{{kind}}" :return "summary"}}]}
+  :cast ["{{owner}}"]}
  :opening
  [{:tap {:surface "nav.{{kind}}"} :say "{{org_display}}: {{brief_line}}"}]
  :opening_bare
