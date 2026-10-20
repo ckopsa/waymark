@@ -21,6 +21,7 @@
    :filterable {:state #{:eq :in} :crew #{:eq} :request_id #{:eq}}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:scheduled "A work order may stay scheduled for two weeks; past that, the crew lead tells Rosa Delgado."}
+   :expected-age {:scheduled 1209600}
    :actions
    {:complete {:from #{:scheduled} :to :done
                :guards [has-crew]
