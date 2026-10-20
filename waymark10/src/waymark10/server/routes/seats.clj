@@ -927,7 +927,8 @@
 (defn- cue-match
   "A function of a log row: the seat's cue for it, or nil (R-12.38).
   The cue is the notes of every `inbox.cues` entry that matches, in
-  the cues' order, joined with ` · `.
+  the cues' order, joined with ` · `; a cue with no note says
+  `seats/cue-note`'s default sentence.
 
   A cue matches by its kind and its action (an empty list is every
   action) and, when it states a `filter`, by the row AS IT STANDS NOW:
@@ -953,7 +954,7 @@
                 notes (keep (fn [c]
                               (when (or (empty? (:filter c))
                                         (and row (grants/row-matches? row [(:filter c)] rdef)))
-                                (:note c)))
+                                (seats/cue-note c a)))
                             named)]
             (when (seq notes)
               (str/join " · " notes))))))))
