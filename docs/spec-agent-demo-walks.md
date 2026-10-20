@@ -859,6 +859,10 @@ metric is read from one field of the take:
 | `bare_lists` | The day captions that list three or more things, split by `, `, and say no verb of the day phrasing (`went`, `was`, `were`, `came`, `chased`, `signed`, `sent`, `asked`, `paid`). | the day captions |
 | `quiet_days` | The day captions that end in `A quiet day.` | the day captions |
 | `asked_person` | The day captions that say `was asked`. | the day captions |
+| `week_bare_lists` | The day captions of a played first week that are bare lists, as `bare_lists` counts them. | the day captions |
+| `busy_days` | The day captions of a played first week that do not end in `A quiet day.` | the day captions |
+| `arc_moves` | The arc's roles (0 to 3) with a shot whose day holds a call that moved or was held on a kind other than `film.kind`. | `shot.role`, `shot.meanwhile`, `film.kind` |
+| `person_asks` | The meanwhile calls held for a person, or moved by the person (`film.cast`'s first) through a door a person holds. | `shot.meanwhile`, `film.cast` |
 
 The last three are the first week's metrics. A day caption is a
 `shot.caption` that opens with a weekday name (`Monday` to `Sunday`),
@@ -868,6 +872,22 @@ one of them is `unscored` on a take where no shot's `role` is
 `friction`, `turn` or `payoff`, and `unmeasured`, with `missing`
 naming `shot.caption`, on a take whose shots carry those roles and no
 day caption.
+
+The last four are the played week's (ticket 853b6707). A played week
+carries the director's calls as meanwhile shots, each
+`shot.meanwhile = {as, kind, action, outcome, held_by}`: `outcome` is
+`moved`, `held` (a held call) or `refused`, and `held_by` is who holds
+the door the call named. A day caption's day is the calls since the day
+caption before it; a role shot that is no day caption, as the closing,
+reads the last day and the calls since. `film.kind` is the kind the
+world knocks on and `film.cast` the scene's cast, the person first. The
+four judge a take whose shots carry the arc's roles and that a
+meanwhile shot played or that has seven day captions; on any other
+take they are `unscored`. A week of seven day captions and no meanwhile
+shot, as an older render, cannot be judged, and each of the four
+`miss`es with `missing` naming `shot.meanwhile`, so it is a finding,
+not a pass. A meanwhile shot is a call, not a frame: a shot rule leaves
+it `unscored`, and `arc` does not read it.
 
 A take is a map with `film`, the fields read once, `shots`, one
 map per shot in order, and `runs`, one map per caption run in order. A
@@ -917,7 +937,7 @@ this answer; it holds no operator, filter or exemption of its own.
 
 The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
 starts (`engine/start-runtime!`), in every application, because the
-kind is enrolled in every one. It makes eleven rules,
+kind is enrolled in every one. It makes fifteen rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
 (`type_px >= 28` per shot, `output: phone`, warn), `read-time`
@@ -927,7 +947,9 @@ per shot, warn), `focus-share` (`focus_share >= 0.25` per shot,
 `unless: zoom`, warn), `arc` (`arc = 1`, fail), and the first week's
 three: `caption-not-list` (`bare_lists = 0`, fail), `quiet-days`
 (`quiet_days <= 2`, fail) and `asked-person` (`asked_person >= 1`,
-fail). The seed makes a
+fail), and the played week's four, each fail: `no-bare-list`
+(`week_bare_lists = 0`), `busy-week` (`busy_days >= 5`), `week-arc`
+(`arc_moves = 3`) and `asks-the-person` (`person_asks >= 1`). The seed makes a
 rule only when none carries its name. An active `type-size` or
 `focus-share` row made before these fields existed gains the field
 the seed names at the next boot, through `restate`; a value a row
