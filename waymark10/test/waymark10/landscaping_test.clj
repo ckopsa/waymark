@@ -169,3 +169,30 @@
 
 (deftest the-fixture-pair-assembles
   (is (map? (ca/run-all {:kinds {:crew (:crew @world) :booking (:booking @world)}}))))
+
+(defn- assemble-with [guard]
+  (ca/run-all {:kinds {:crew (:crew @world)
+                       :booking (assoc-in (:booking @world) [:actions :schedule :guards] [guard])}}))
+
+(defn- free-guard [opts free]
+  (g/expr (merge {:name :crew-free :explain "That crew is busy. {free.name} is free."
+                  :when '(none [b :booking {:crew_id (= (input :crew_id))}])
+                  :evidence {:free free}}
+                 opts)))
+
+(deftest the-gate-judges-a-first-as-it-judges-exists
+  (testing "[exists-unfiltered]: a first's where asks a field its kind does not index"
+    (is (thrown-with-msg? Exception #"\[exists-unfiltered\]"
+                          (assemble-with (free-guard {} '(first [c :crew {:name (= "Elm")}] true))))))
+  (testing "[exists-unfiltered]: a first's pred asks a field its kind does not index"
+    (is (thrown-with-msg? Exception #"\[exists-unfiltered\]"
+                          (assemble-with
+                           (free-guard {} '(first [c :crew {:state (= "active")}]
+                                             (none [o :booking {:customer_name (= (get c :name))}])))))))
+  (testing "[remedy-on-evidence-kind]: (evidence :free) names a door of the first's kind"
+    (is (thrown-with-msg? Exception #"\[remedy-on-evidence-kind\]"
+                          (assemble-with (free-guard {:remedies [{:door :booking/reschedule :id '(evidence :free)}]}
+                                                     '(first [c :crew {:state (= "active")}] true)))))
+    (is (map? (assemble-with (free-guard {:remedies [{:door :crew/rest :id '(evidence :free)}]}
+                                         '(first [c :crew {:state (= "active")}] true))))
+        "a door of crew is the free crew's")))

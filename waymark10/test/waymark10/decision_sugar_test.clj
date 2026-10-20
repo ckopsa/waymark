@@ -241,15 +241,14 @@
         "an :engine-fields entry is stamped at birth, never offered at create"))
   (testing "the decider wall is one law in two objects"
     (doseq [[an a] (:actions sugared)]
-      ;; both sides carry a canonical form, so callable-hash reads the
-      ;; LAW and not the address it was handed (waymark-j82) — assert
-      ;; that first, or the comparison below would pass on any two
-      ;; bare fns quoted at one address
-      (is (some? (:waymark10/form (meta (:check (first (:guards a))))))
-          (str (name an) "'s decider wall carries its printed form"))
-      (is (= (fp/callable-hash "probe" (:check (first (:guards a))))
-             (fp/callable-hash "probe" (:check grants/someone-else-decides)))
-          (str (name an) "'s first guard IS someone-else-decides, by form")))))
+      ;; both sides carry a :when tree, so the fingerprint reads the LAW
+      ;; (docs/spec-related-row-law.md §6) — assert that first, or the
+      ;; comparison below would pass on two guards with no tree at all
+      (is (seq? (:when (first (:guards a))))
+          (str (name an) "'s decider wall carries its tree"))
+      (is (= (:when (first (:guards a)))
+             (:when grants/someone-else-decides))
+          (str (name an) "'s first guard IS someone-else-decides, by tree")))))
 
 (deftest the-minted-on-create-stamps-what-the-hand-written-one-stamped
   (let [now (java.time.Instant/parse "2026-08-24T18:00:00Z")
@@ -332,10 +331,16 @@
   ;; manager's; deny is unchanged. Re-pinned from the bench's run
   ;; 38853987049, where this assertion alone failed.
   ;;
+  ;; THE LAW MOVED AGAIN (ticket a9f4f61d, docs/spec-related-row-law.md
+  ;; §9 step 9): the decider wall, g/not-the-field, emits the tree
+  ;; (not= (data :requested_by) (me)) instead of a hand-built fn form.
+  ;; Re-pinned from the bench's run 39458878015.
+  ;;
   ;; THE STORAGE FACET MOVED (ticket 68ebaa0f): a filterable :eq field
   ;; carries a btree index by default. Re-pinned from the bench's run
-  ;; 39454221923, where this assertion alone failed.
-  "6cfed277b274183b298536d9ec0663cc05a0f989170da516695e79be425482e1")
+  ;; 39454221923, where this assertion alone failed; re-pinned over
+  ;; a9f4f61d's hash from the bench's run 39470505770 after the merge.
+  "729b614662ed880099956d78922ee9c00141d9d3296850cd248579b707b1b367")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

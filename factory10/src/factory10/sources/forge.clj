@@ -199,6 +199,27 @@
     compare of base...head is behind by at least one commit). Throws
     when the forge does not answer."))
 
+(defprotocol ForgePathDiff
+  "Whether a directory changed between two heads (ticket de085c93): the
+  forge's answer to `git diff --quiet <from> <to> -- <path>`, which a
+  base_follow mode asks of an org_dir. A protocol of its own: a source
+  that does not implement it answers no path-scoped compare."
+  (forge-path-changed? [s repository from-sha to-sha path]
+    "→ true when some file at or under `path` (a directory relative to
+    the repository root; \"\" for the whole tree) differs between
+    `from-sha` and `to-sha`. Read as from...to, so `from-sha` is meant to
+    be an ancestor of `to-sha`, as a take's sha is of the base's later
+    head. Throws when the forge does not answer."))
+
+(defn under-path?
+  "Whether the repository file `filename` lies at or under the directory
+  `dir`. A leading ./ and trailing slashes on `dir` are ignored; an empty
+  `dir` holds every file."
+  [dir filename]
+  (let [dir (-> (str dir) (str/replace #"^\./" "") (str/replace #"/+$" ""))
+        f (some-> filename str)]
+    (boolean (and f (or (= "" dir) (= f dir) (str/starts-with? f (str dir "/")))))))
+
 (def ForgePull
   "One pull request read by its number, outside the window (ticket
   949d18c5). The protocol is the kit's (`factorykit.forge/ForgePull`,

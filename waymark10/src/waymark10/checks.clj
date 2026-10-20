@@ -1904,7 +1904,8 @@
                              (when (map? (:vars lg)) (vals (:vars lg))))
                   :when (seq? form)
                   door (sort (:doors (expr/info form)))]
-            (when-not (contains? (:actions r) door)
+            ;; creation is logged as :create on every kind
+            (when-not (or (= :create door) (contains? (:actions r) door))
               (err r :did-unknown-door
                    (str where ": guard " (:name lg) " asks (did " door
                         "), but " door " is no door of this kind; its "

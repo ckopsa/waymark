@@ -193,12 +193,14 @@
 (defn- recordable
   "One evidence value, made storable. The JSONB scalars pass through;
   everything else records as its printed form — a LocalDate as its
-  ISO day, an Instant as its ISO moment, a keyword as its name. An
+  ISO day, an Instant as its ISO moment, a keyword as its name, a
+  var no hook could answer as the word unknown. An
   evidence value must never be the reason a write fails, which is
   also why the caller evaluates each var inside its own try."
   [v]
   (cond
     (nil? v)      nil
+    (expr/unknown? v) "unknown"
     (boolean? v)  v
     (number? v)   v
     (keyword? v)  (name v)

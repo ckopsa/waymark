@@ -83,7 +83,7 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :row :input :as :at :given :history :expect])
+  [:name :sentence :kind :attempt :row :input :as :at :given :history :history-mode :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -311,6 +311,10 @@
         (err sname "each :history entry names its :action as a keyword"))
       (when (str/blank? (str (:as h)))
         (err sname "each :history entry names who acted, :as \"principal-id\""))))
+  ;; how the conformance tier meets :history: :stage (the default) walks
+  ;; it through the real doors, :refuse declines to judge the scenario
+  (when (and (some? (:history-mode m)) (not (#{:stage :refuse} (:history-mode m))))
+    (err sname ":history-mode is :stage (the default) or :refuse"))
   (when (and (some? (:input m)) (not (map? (:input m))))
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
