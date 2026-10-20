@@ -2967,7 +2967,9 @@
             :else
             (try
               (first-week/land! eng (str (:id plan))
-                                (judge eng (wire/read-json (str take_report)))
+                                (judge eng (first-week/marked
+                                            (wire/read-json (str take_report))
+                                            (get-in plan [:data :first_week_scene])))
                                 {:film_url (str take_film_url)
                                  :head_sha (str take_sha)}
                                 (as-opts))

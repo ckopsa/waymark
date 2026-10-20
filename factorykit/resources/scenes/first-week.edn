@@ -33,6 +33,10 @@
   ;; the arc film rule reads friction, turn, payoff in order: on the
   ;; caption of these days, and on the closing
   :roles {2 "friction" 5 "turn"}
+  ;; every scene rendered from this template is a first week, and says so
+  ;; as :first-week: the film rules judge its take by the week's rules
+  ;; though its shots carry no role (ticket 78da0888)
+  :first-week true
   :note "Perform it only on a clone, never on an org that is live: the week it films was played by the world seat."}
  :scene
  {:title "The first week of {{org_display}}"

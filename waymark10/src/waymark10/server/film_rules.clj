@@ -160,13 +160,16 @@
 
 (def ^:private week-metrics
   "The metrics read from the first week's day captions. They judge only
-  a take whose shots carry the arc's roles."
+  a take `first-week?` holds."
   #{"bare_lists" "quiet_days" "asked_person"})
 
 (defn- first-week?
-  "True when a shot of `shots` carries one of the arc's roles."
-  [shots]
-  (boolean (some (set roles) (map (comp word :role) shots))))
+  "True when the take `tk` is a first week (ticket 78da0888): its scene
+  says so, `:scene {:first_week true}`, or a shot of it carries one of
+  the arc's roles."
+  [{:keys [scene shots]}]
+  (boolean (or (and (map? scene) (true? (:first_week scene)))
+               (some (set roles) (map (comp word :role) shots)))))
 
 ;; A played first week (ticket fb9a1cff) carries the director's calls
 ;; as meanwhile shots, each with what it did: `{:meanwhile {:as :kind
@@ -182,14 +185,14 @@
 
 (def ^:private played-metrics
   "The metrics read from a first week's captions and its meanwhile
-  calls. They judge a take whose shots carry the arc's roles, when a
-  meanwhile shot played its week or it has a whole week of day captions."
+  calls. They judge a take `first-week?` holds, when a meanwhile shot
+  played its week or it has a whole week of day captions."
   #{"week_bare_lists" "busy_days" "arc_moves" "person_asks"})
 
 (defn- week?
   "True when the take `tk` is a first week `played-metrics` judge."
-  [{:keys [shots]}]
-  (and (first-week? shots)
+  [{:keys [shots] :as tk}]
+  (and (first-week? tk)
        (boolean (or (some :meanwhile shots)
                     (<= week-days (count (day-captions shots)))))))
 
@@ -560,6 +563,9 @@
           ;; the knocked kind, and the scene's cast, the person first
           [:kind {:optional true} :string]
           [:cast {:optional true} [:vector :string]]]]
+        ;; the scene filmed: `first_week` marks a first week's take
+        [:scene {:optional true}
+         [:map [:first_week {:optional true} :boolean]]]
         [:shots {:optional true}
          [:vector
           [:map
@@ -831,9 +837,9 @@
      (cond
        ;; the output filter is the film's, so it is judged before any shot
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
-       ;; the week's rules judge the takes the arc's roles mark
+       ;; the week's rules judge the takes their scene or the arc's roles mark
        (and (or (week-metrics metric) (played-metrics metric))
-            (not (first-week? (:shots tk))))
+            (not (first-week? tk)))
        {:verdict "unscored"}
        ;; a first week is never unscored by them (ticket 179f7824): a take
        ;; short of a played week is unmeasured, and so missed by default
