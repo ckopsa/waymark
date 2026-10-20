@@ -344,6 +344,34 @@
     (testing "a string say is spoken as written"
       (is (= "Every chore." (scenes/fill-say "Every chore." rows-of))))))
 
+(deftest a-sum-hole-and-a-list-say-the-week
+  (let [since "2026-10-19" until "2026-10-26"
+        summed {"$rows" {:kind "invoice" :since since :until until :sum "amount"
+                         :one "invoiced" :many "invoiced"}}
+        taps {"$rows" {:kind "held_call" :since since :until until :count true
+                       :one "tap" :many "taps"}}
+        listed {"$list" {:lead "Week: " :none "Quiet" :items [summed taps]}}
+        rows-of (fn [{:keys [kind sum]}]
+                  (cond (= "amount" sum) [1200 50.4 nil]
+                        (= "held_call" kind) ["a"]
+                        :else []))]
+    (testing "a sum hole adds its field over the rows, in whole dollars"
+      (is (= "$1,250 invoiced." (scenes/fill-say [summed "."] rows-of)))
+      (is (= "$1,250." (scenes/fill-say [(update summed "$rows" dissoc :one :many) "."] rows-of))))
+    (testing "a zero sum drops its clause"
+      (is (= "Then the end." (scenes/fill-say ["Then " summed ", " "the end."] (constantly [])))))
+    (testing "a list joins what its holes say, and says its none when none does"
+      (is (= "Week: $1,250 invoiced, 1 tap. Done." (scenes/fill-say [listed ". Done."] rows-of)))
+      (is (= "Quiet. Done." (scenes/fill-say [listed ". Done."] (constantly [])))))
+    (testing "check judges a sum and a list"
+      (let [eng (fresh-engine)
+            h {"$rows" {:kind "chore" :since since :until until :sum "title" :one "x" :many "y"}}]
+        (is (nil? (scenes/say-refusal eng [{"$list" {:items [h] :lead "Week: "}}])))
+        (is (= "a `$rows` hole counts or sums, not both."
+               (scenes/say-refusal eng [(assoc-in h ["$rows" :count] true)])))
+        (is (= "a `$list`'s `items` are one or more `$rows` holes."
+               (scenes/say-refusal eng [{"$list" {:items ["x"]}}])))))))
+
 (deftest a-moves-hole-is-filled-from-the-log-in-its-window
   (let [eng (fresh-engine)
         seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
