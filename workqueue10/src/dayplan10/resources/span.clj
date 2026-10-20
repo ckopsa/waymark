@@ -31,8 +31,8 @@
   Spelled with the :fields lifecycle groups: four facts fixed at birth,
   no authoring phase, two engine-maintained clock facts."
   (:require [dayplan10.zone :as zone]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario described ref-to]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario described ref-to refuse]]
             [waymark10.server.invoke :as inv]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -158,19 +158,22 @@
       (t/allow)
       (t/deny {:vars {:current_end (zone/clock cur)}}))))
 
-(defguardfn neighbour-keeps-some-width
-  {:judges [:ends_at] :reads [:span]
-   :vars [:to :neighbour]
-   :remedies [:span/move :span/skip]
-   :explain "Extending to {to} would leave your {neighbour} span no time at all; shorten it (move) or skip it first."}
-  [row inp ctx]
-  (if (nil? (:find ctx))
-    (t/allow)
-    (let [^Instant e (:ends_at inp)
-          nb (next-span ctx row)]
-      (if (and nb (not (.isBefore e ^Instant (get-in nb [:data :ends_at]))))
-        (t/deny {:vars {:to (zone/clock e) :neighbour (window-label nb)}})
-        (t/allow)))))
+;; THE NEIGHBOUR IS ANY PLANNED SPAN THE EXTEND WOULD SWALLOW (ticket
+;; d3edec2c): a plan's planned spans never overlap, so a span starting
+;; at or after this end and ending by the new one exists exactly when
+;; the nearest such span would be left no time. The evidence `s` is the
+;; oldest match, not always the nearest, but every match is a span the
+;; extend would swallow, so either remedy on it is a way forward.
+
+(defguard neighbour-keeps-some-width
+  (refuse "Extending to {ends_at} would leave your {s.block_name} span ({s.starts_at}–{s.ends_at}) no time at all; shorten it (move) or skip it first.")
+  '(none [s :span {:plan_id   (= (data :plan_id))
+                   :state     (= "planned")
+                   :starts_at (>= (data :ends_at))
+                   :ends_at   (<= (input :ends_at))}])
+  {:remedies [{:door :span/move :id '(evidence :s)}
+              {:door :span/skip :id '(evidence :s)}]
+   :hidden {:s "Another span of this day is in the way."}})
 
 (defguardfn at-inside-window
   {:judges [:at :gap_minutes]
@@ -323,6 +326,15 @@
   {:block_id a-block :plan_id a-plan
    :starts_at (Instant/parse from) :ends_at (Instant/parse to)})
 
+(defn- served-window
+  "A window on the day a check-tier scenario serves from :given: the
+  staged block and day, the instants decoded as the literal row
+  carries them. The :given spans keep their wire strings, which the
+  served reads compare as text — the same order."
+  [from to]
+  (assoc (window from to)
+         :starts_at (Instant/parse from) :ends_at (Instant/parse to)))
+
 (defscenario an-overlap-is-refused
   "Two spans of one day never share a minute: a window that intersects
    a planned span of the same plan is refused, naming the span in the
@@ -408,13 +420,29 @@
                   {:kind :span :state :planned
                    :data (window "2099-01-06T13:00:00Z" "2099-01-06T14:00:00Z")})
    :row     {:state :planned
-             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
-   :input   {:ends_at "2099-01-06T14:00:00Z"}
+             :data (served-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:ends_at (Instant/parse "2099-01-06T14:00:00Z")}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
    :expect  {:refused :neighbour-keeps-some-width
              :because "no time at all"
              :remedies [:span/move :span/skip]}})
+
+(defscenario extend-may-lean-into-a-neighbour
+  "Extending into the neighbour but short of its end leaves it some
+   time; the door admits it, and the neighbour's start slides."
+  {:kind    :span
+   :attempt :extend
+   :given   (conj (staged-day "leaning neighbour" "2099-01-06"
+                              {:from "23:44" :to "23:45"})
+                  {:kind :span :state :planned
+                   :data (window "2099-01-06T13:00:00Z" "2099-01-06T14:00:00Z")})
+   :row     {:state :planned
+             :data (served-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:ends_at (Instant/parse "2099-01-06T13:30:00Z")}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
 
 (defscenario extend-reaches-later
   "Extend only ever reaches later; an earlier end is a move, and the
@@ -424,8 +452,8 @@
    :given   (staged-day "earlier end" "2099-01-06"
                         {:from "23:42" :to "23:43"})
    :row     {:state :planned
-             :data (window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
-   :input   {:ends_at "2099-01-06T11:00:00Z"}
+             :data (served-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:ends_at (Instant/parse "2099-01-06T11:00:00Z")}
    :at      "2026-09-05T12:00:00Z"
    :as      {:id "colton" :type :person}
    :expect  {:refused :extends-later
@@ -473,8 +501,9 @@
    ;; plan_id is the guard's one indexed query; current and missed are
    ;; the feed's and the notice's
    :filterable {:state #{:eq :in} :plan_id #{:eq} :block_id #{:eq}
-                :starts_at #{:range}
-                :current #{:eq} :missed #{:eq}}
+                :current #{:eq} :missed #{:eq}
+                ;; neighbour-keeps-some-width asks both instants
+                :starts_at #{:range} :ends_at #{:range}}
    :sortable {:fields [:starts_at] :default "starts_at"}
    :deviations
    ["missed reads the window alone — a derived law may read data fields and the clock, never the machine's state — so 'missed and still planned' is the read-side pairing ?missed=true&state=planned."]
