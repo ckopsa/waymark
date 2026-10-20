@@ -780,8 +780,8 @@
 
 (defn coverage
   "How much of a kind's refusing law any scenario names: [named
-  total] over the refusing guard leaves of every action and the
-  create door. Counted, never enforced — a usability warning here
+  total] over the refusing guard leaves of every action, the create
+  door and each extra create door under :creates. Counted, never enforced — a usability warning here
   would fire on every action in the tree on the day it landed, and a
   warning nobody can clear is a warning nobody reads."
   [rdef]
@@ -792,6 +792,7 @@
         walls (into #{}
                     (comp cat (mapcat refusing) (remove nil?))
                     (cons (:create-guards rdef)
-                          (map :guards (vals (:actions rdef)))))
+                          (concat (map :guards (:creates rdef))
+                                  (map :guards (vals (:actions rdef))))))
         named (into #{} (keep #(get-in % [:expect :refused])) (:scenarios rdef))]
     [(count (filter named walls)) (count walls)]))
