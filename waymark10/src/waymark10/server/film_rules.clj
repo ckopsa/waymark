@@ -486,6 +486,13 @@
                 :choices {"fail" "The film is not sent."
                           "warn" "The miss is reported beside the film."}}}
     (into [:enum] severities)]
+   [:unmeasured {:optional true
+                 :x-display
+                 {:label "A take it cannot measure"
+                  :help "What the rule counts when the take lacks a field its metric needs. Left empty, a fail rule counts it a miss and a warn rule a pass."
+                  :choices {"miss" "The film missed the rule."
+                            "pass" "The film passed the rule."}}}
+    [:maybe [:enum "miss" "pass"]]]
    [:why {:examples ["A film that leaves most of the frame grey reads as broken."]
           :x-display {:label "Why"
                       :help "One sentence: what a film that misses this rule gets wrong."}}
@@ -802,6 +809,13 @@
               :else {:verdict "pass"})
       worst (assoc :value (:value worst) :worst worst))))
 
+(defn- unmeasured-of
+  "What an unmeasured verdict counts as for `rule`: its own `unmeasured`,
+  else a miss for a fail rule and a pass for a warn one (ticket 179f7824)."
+  [rule]
+  (or (word (:unmeasured rule))
+      (if (= "fail" (word (:severity rule))) "miss" "pass")))
+
 (defn- judge-rule
   "One rule's entry in the answer: what the rule says, and its verdict."
   [rule tk]
@@ -812,13 +826,19 @@
       :op (word (:op rule))
       :threshold (:threshold rule)
       :severity (word (:severity rule))
+      :unmeasured (unmeasured-of rule)
       :why (:why rule)}
      (cond
        ;; the output filter is the film's, so it is judged before any shot
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
        ;; the week's rules judge the takes the arc's roles mark
-       (and (week-metrics metric) (not (first-week? (:shots tk)))) {:verdict "unscored"}
-       (and (played-metrics metric) (not (week? tk))) {:verdict "unscored"}
+       (and (or (week-metrics metric) (played-metrics metric))
+            (not (first-week? (:shots tk))))
+       {:verdict "unscored"}
+       ;; a first week is never unscored by them (ticket 179f7824): a take
+       ;; short of a played week is unmeasured, and so missed by default
+       (and (played-metrics metric) (not (week? tk)))
+       {:verdict "unmeasured" :missing ["shot.meanwhile"]}
        ;; a week no meanwhile shot played, as an older render's: the rule
        ;; cannot be judged, and that is a finding, not a pass
        (and (played-metrics metric) (not-any? :meanwhile (:shots tk)))
@@ -839,7 +859,8 @@
   `value` and `worst`, the run that carries it. The overall verdict is
   `red` when a fail rule
   misses, else `warn` when any rule misses, else `green`. An unmeasured
-  rule is not a pass: `unmeasured` names each one."
+  rule is not a pass: `unmeasured` names each one, and each rule's own
+  `unmeasured` says what it counts as, `miss` or `pass`."
   [rules tk]
   (let [tk (if (map? tk) tk {})
         tk (assoc tk :shots (if (sequential? (:shots tk)) (vec (:shots tk)) []))
