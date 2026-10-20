@@ -1,5 +1,6 @@
 (ns beta.org
-  "beta: a fixture org whose manifest says not live. Never loaded."
+  "beta: a fixture org whose manifest says not live. Never loaded as a
+  live org; WAYMARK10_ORG loads it from disk by name."
   (:require [waymark10.dsl :refer [defresource in-domain]]))
 
 (defresource cog

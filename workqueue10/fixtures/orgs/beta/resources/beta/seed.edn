@@ -1,0 +1,9 @@
+{:seed "beta"
+ :version 1
+ :org "beta"
+ :domains [{:name "beta" :label "Beta"}]
+ :cast {:owner {:id "owner" :display "Owner" :type :human}}
+ :seats []
+ :judgments []
+ :steps
+ [{:as :owner :kind :cog :ref :one :create {:title "One cog"}}]}
