@@ -4130,6 +4130,9 @@
                              :x-display {:label "Its last refusal"}}
               [:maybe [:string {:max 200}]]]]
      :record true
+     ;; :ref-unjudged — the engine's own hand names the sitting that
+     ;; missed, read off the sweep, and no person reaches this door
+     :waives #{:ref-unjudged}
      :guards [the-engines-own-hand]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Record undelivered" :order 20}}
@@ -4241,7 +4244,9 @@
     {:from #{:active} :to :active
      :input follow-successor-input
      :record true
-     :waives #{:edit-shape}
+     ;; :ref-unjudged — only the judgment's own supersede reaches this
+     ;; door, and it names itself and the successor its own guard judged
+     :waives #{:edit-shape :ref-unjudged}
      :guards [followed-by-a-supersede]
      :safety {:idempotent true :reversible false :confirm false}
      :handler follow-successor
@@ -4251,7 +4256,8 @@
     {:from #{:parked} :to :parked
      :input follow-successor-input
      :record true
-     :waives #{:edit-shape}
+     ;; :ref-unjudged — as follow_successor's
+     :waives #{:edit-shape :ref-unjudged}
      :guards [followed-by-a-supersede]
      :safety {:idempotent true :reversible false :confirm false}
      :handler follow-successor
