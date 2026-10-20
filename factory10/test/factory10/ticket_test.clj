@@ -1249,6 +1249,9 @@
                                   opts)))
      :groom! (fn [row input]
                (:row (inv/invoke! eng :ticket (str (:id row)) :groom input opts)))
+     :ungroom! (fn [row input principal]
+                 (:row (inv/invoke! eng :ticket (str (:id row)) :ungroom input
+                                    {:principal principal})))
      :block! (fn [row input]
                (:row (inv/invoke! eng :ticket (str (:id row)) :block input
                                   (assoc opts :if-match
@@ -1280,6 +1283,35 @@
       (let [after (groom! (draft! 2) {})]
         (is (= "open" (some-> (:state after) name)))
         (is (= 2 (get-in after [:data :priority])))))))
+
+;; ── an ungroom says why (ticket 1a7a763f) ────────────────────────────
+
+(deftest a-models-ungroom-names-its-reason
+  (let [{:keys [draft! groom! ungroom!]} (a-backlog-world)
+        queued! #(groom! (draft! 2) {})
+        seat (assoc (t/principal {:id "code-seat" :type :agent})
+                    :acts-for "colton")
+        person (t/principal {:id "colton" :display "Colton"})]
+    (testing "a model's ungroom with no reason is refused, naming the field"
+      (let [p (refused #(ungroom! (queued!) {} seat))]
+        (is (= 409 (:status p)) (pr-str p))
+        (is (str/includes? (pr-str p) "a-model-says-why-it-ungrooms") (pr-str p))
+        (is (str/includes? (pr-str p) "shelved_because")
+            "the refusal names the field that carries the reason")))
+    (testing "with a reason, it lands in draft and shelved_because reads it"
+      (let [why "The detail names no file; say which door the change lands on."
+            after (ungroom! (queued!) {:shelved_because why} seat)]
+        (is (= "draft" (some-> (:state after) name)))
+        (is (= why (get-in after [:data :shelved_because])))))
+    (testing "a person's ungroom with no reason passes"
+      (let [after (ungroom! (queued!) {} person)]
+        (is (= "draft" (some-> (:state after) name)))))))
+
+(deftest the-ungroom-door-stays-offered-to-a-seat
+  (is (= :available
+         (:status (refusal (at :open) (ctx (assoc the-seat :acts-for "colton"))
+                           :ungroom)))
+      "the reason is the input's to give, so the probe does not shut the door"))
 
 (deftest the-groom-door-stays-offered-on-a-p4-draft
   (is (= :available
