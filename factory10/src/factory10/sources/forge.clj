@@ -101,6 +101,7 @@
             [factory10.bench :as bench]
             [factory10.first-week :as first-week]
             [factory10.mirror :as mirror]
+            [factory10.resources.org-plan :as org-plan]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
             [factorykit.change :as change-kit]
@@ -2742,6 +2743,21 @@
                   " was not voided (" (ex-message e) ")")
           census)))))
 
+(defn- refilm-moved-head!
+  "The simulated plan whose take is not of `head`, its change's head now
+  → `refilm` as the engine's hand (ticket 87fc7996): a new head is
+  filmed again before go_live, no exception. A door the engine refuses
+  costs that plan one pass. → the census, with `:refilmed` counted."
+  [eng plan head census log-fn]
+  (try
+    (inv/invoke! eng :org_plan (str (:id plan)) :refilm
+                 {:head_sha head} (as-opts))
+    (update census :refilmed (fnil inc 0))
+    (catch Exception e
+      (log-fn "the moved head of " (org-of plan) " at " head
+              " was not sent to be filmed (" (ex-message e) ")")
+      census)))
+
 (defn findings-pass!
   "Every drafting, proposed or simulated org_plan whose change carries a head its
   findings were not recorded at → the artifact
@@ -2754,7 +2770,8 @@
   not answer, or a door the engine refuses, costs that plan one pass and
   nothing else. A filming plan whose change carries a head its take was
   not made at has the take voided, `:voided` counted, and its findings
-  land on a later pass. The findings are fitted to the plan's caps first
+  land on a later pass; a simulated plan's goes back to proposed the
+  same way (`refilm`, `:refilmed` counted, ticket 87fc7996). The findings are fitted to the plan's caps first
   (`capped-findings`), and a law page or scene past its cap is dropped
   (ticket 78f79ec1). → the census, with `:findings` counted."
   [eng source census log-fn]
@@ -2778,6 +2795,9 @@
            (cond
              (or (nil? door) (nil? head)) census
              (= :void_take door) (void-stale-take! eng plan head census log-fn)
+             (and (= :record_findings_simulated door)
+                  (not (org-plan/take-of? (get-in plan [:data :take_sha]) head)))
+             (refilm-moved-head! eng plan head census log-fn)
              (or (nil? repo) (nil? org)
                  (= head (str (get-in plan [:data :findings_sha]))))
              census
