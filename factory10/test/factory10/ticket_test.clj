@@ -30,7 +30,9 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.store.postgres :as pg]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -846,6 +848,25 @@
       (testing (name kind)
         (is (= #{"OLD"} (ids {"domain" "factory" "state" ""})))
         (is (= #{"HOME"} (ids {"domain" "household" "state" ""})))))))
+
+(deftest a-change-is-found-by-its-born-from
+  (let [rows [{:kind :change :id "MINE" :state :submitted :data {:born_from "ticket:T-1"}}
+              {:kind :change :id "OTHER" :state :submitted :data {:born_from "ticket:T-2"}}]
+        {:keys [conds]} (collections/parse-query change {"born_from" "ticket:T-1" "state" ""})
+        born (first (filter #(= :born_from (:field %)) conds))]
+    (is (some? born) "born_from is filterable")
+    (testing "the memory store"
+      (is (= #{"MINE"}
+             (into #{}
+                   (comp (filter (fn [row]
+                                   (every? #(@#'memory/cond-matches? row %) conds)))
+                         (map :id))
+                   rows))))
+    (testing "the postgres store: a promoted column, and the filter over it"
+      (is (some #(= "f_born_from" (:name %)) (:columns (store/kind-projection change))))
+      (let [[sql params] (@#'pg/leaf-cond-sql born)]
+        (is (str/includes? sql "born_from"))
+        (is (= ["ticket:T-1"] params))))))
 
 (deftest a-dashboard-slot-filters-by-domain
   (is (= [] (dash/slot-problems (fn [_kind] ticket) (fn [_kind _id] nil)

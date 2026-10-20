@@ -3,11 +3,15 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [waymark10.declare :as d]
             [waymark10.expr :as e]
+            [waymark10.fingerprint :as fp]
             [waymark10.gen-forms :as gf]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
-            [waymark10.types :as t])
+            [waymark10.server.judgment :as judgment]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant LocalDate)))
 
 (def trials 300)
@@ -318,6 +322,59 @@
     (is (some? (load (guarded '(not (did :close))))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[did-unknown-door\].*:prepair"
                           (load (guarded '(not (did :prepair))))))))
+
+;; ── str, and :pending :deny (docs/spec-related-row-law.md §7) ───────
+
+(deftest str-joins-its-parts
+  (is (= "ticket:T-1" (e/evaluate '(str "ticket:" (self)) {:self "T-1"})))
+  (is (= "a1true:x" (e/evaluate '(str "a" 1 true ":" (data :x)) {:data {:x "x"}})))
+  (is (= "2.5" (e/evaluate '(str 2.5M) {})))
+  (testing "unknown in, unknown out"
+    (is (e/unknown? (e/evaluate '(str "ticket:" (self)) {})))
+    (is (= :unknown (ev '(str "a" (var :u))))))
+  (testing "a missing part is a missing string"
+    (is (nil? (e/evaluate '(str "ticket:" (data :id)) {:data {}}))))
+  (testing "arity, order and the wire"
+    (is (seq (e/problems '(str))))
+    (is (empty? (e/problems '(str "ticket:" (self)))))
+    (is (= '(str "b" "a") (e/normalize '(str "b" "a")))
+        "order is meaning: str does not sort")
+    (is (= '(str "ticket:" (self))
+           (wire/wire->form (wire/form->wire '(str "ticket:" (self))))))))
+
+(deftest pending-deny-refuses-an-unknown-verdict
+  (let [law '(exists [c :change {:born_from (= (str "ticket:" (self)))
+                                 :state (= "submitted")}])
+        sentence {:severity :refuse :explain "Its change is not under review."}
+        strict (d/sentence-guard :its-change-is-under-review sentence law {:pending :deny})
+        lenient (d/sentence-guard :its-change-is-under-review sentence law)
+        row {:kind :ticket :id "T-1" :state :in_review :data {}}
+        probe {:mode :probe}]
+    (is (= :deny (:pending strict)))
+    (is (not (contains? lenient :pending)) "the default is left out")
+    (is (t/deny? (first (g/evaluate strict row nil probe)))
+        "the render probe, with no hook to ask, refuses")
+    (is (t/pending-input? (first (g/evaluate lenient row nil probe)))
+        "without it the unknown verdict stays pending")
+    (testing "a known verdict is unchanged"
+      (let [ctx {:rows-matching (fn [_kind conds _n]
+                                  (when (some #(= "ticket:T-1" (:value %)) conds)
+                                    ["C-1"]))}]
+        (is (t/allow? (first (g/evaluate strict row {} ctx))))
+        (is (t/deny? (first (g/evaluate strict (assoc row :id "T-2") {} ctx))))))
+    (testing "the fingerprint names :pending only when it is not the default"
+      (let [plain (g/expr {:name :x :when '(= (data :a) 1) :explain "X."})
+            allow (g/expr {:name :x :when '(= (data :a) 1) :explain "X." :pending :allow})]
+        (is (= (@#'fp/guard-fp "k.a" plain) (@#'fp/guard-fp "k.a" allow)))
+        (is (not (contains? (@#'fp/guard-fp "k.a" lenient) "pending")))
+        (is (= "deny" (get (@#'fp/guard-fp "k.a" strict) "pending")))))
+    (testing "a stored revision rebuilds with its :pending"
+      (is (= :deny (:pending (@#'judgment/rebuild-guard
+                              (@#'fp/guard-fp "ticket.complete" strict) strict)))))
+    (testing "anything else is refused at the def line"
+      (is (thrown? Exception (d/sentence-guard :x sentence law {:pending :maybe})))
+      (is (thrown? Exception (g/expr {:name :x :when '(= (data :a) 1) :explain "X."
+                                      :pending true}))))))
 
 ;; ── the boundary refuses ────────────────────────────────────────────
 

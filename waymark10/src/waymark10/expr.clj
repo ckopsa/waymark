@@ -60,11 +60,17 @@
   of a kind, asked through a where the guard's own scope fills, the
   row itself left out — earned by the landscaping booking's overlap.
   Authored as (exists [b :kind {field (op <expr>)}]); the binder is
-  erased at normalization, and (count [b :kind …]) is count-rows."
+  erased at normalization, and (count [b :kind …]) is count-rows.
+
+  str: its parts joined into one string, in order — earned by
+  factory10's its-change-is-under-review, which finds a change by its
+  stored born_from, (= (str \"ticket:\" (self))). An unknown part is
+  unknown, a missing one is nil (docs/spec-related-row-law.md §7)."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
+     str
      days date-of is-set
      every some count sum
      follow did me self
@@ -214,6 +220,11 @@
           (if (>= n 2)
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems (str "(" op " …) takes at least two expressions")))
+
+          str
+          (if (>= n 1)
+            (reduce (fn [p a] (check a env depth p)) problems args)
+            (conj problems "(str …) takes at least one expression"))
 
           ;; ≥1: normalization may dedup (and x x) down to (and x) when
           ;; x is not boolean-valued — the wrapper keeps the coercion
@@ -714,6 +725,20 @@
       (let [hit (boolean (some #(not= self (str %)) (match kind conds 2)))]
         (if (= op 'exists) hit (not hit))))))
 
+(defn- str-part
+  "One part of a (str …) as text, or nil for a value with no plain
+  spelling (a map, a list): a keyword by its name, a decimal by its
+  plain digits."
+  [v]
+  (cond
+    (string? v) v
+    (keyword? v) (name v)
+    (decimal? v) (.toPlainString ^java.math.BigDecimal v)
+    (or (boolean? v) (int? v) (instance? LocalDate v) (instance? Instant v)
+        (instance? java.util.UUID v))
+    (clojure.core/str v)
+    :else nil))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -826,6 +851,16 @@
                   (decimal? v) (.abs ^java.math.BigDecimal v)
                   (number? v) (clojure.core/abs v)
                   :else nil)))))
+
+        ;; unknown in is unknown out; a missing part is a missing string
+        str
+        (let [all (mapv #(evaluate % scope) args)]
+          (cond
+            (some unknown? all) unknown
+            (some nil? all) nil
+            :else (let [parts (mapv str-part all)]
+                    (when (every? some? parts)
+                      (apply clojure.core/str parts)))))
 
         ;; one hop through the scope's :read hook: a nil ref, an id no
         ;; row has and a row the caller may not see answer nil; no

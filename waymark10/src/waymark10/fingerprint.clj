@@ -115,7 +115,9 @@
       ;; the unseen-evidence sentences, likewise only when declared
       (seq (:hidden g)) (assoc "hidden" (into (sorted-map)
                                               (map (fn [[k s]] [(name k) s]))
-                                              (:hidden g))))
+                                              (:hidden g)))
+      ;; :pending projects only when it is not the default :allow
+      (= :deny (:pending g)) (assoc "pending" "deny"))
     {"name"           (name (:name g))
      "check"          (callable-hash (str address ".check")
                                      (or (:check g) (:accepts g)))

@@ -39,6 +39,9 @@
     :requires-token  capability token (\"role:manager\")
     :needs-input     probe override; defaults to (check ∧ judges)
     :severity        :refuse | :warning (acknowledgable, E1)
+    :pending         :allow (the default) | :deny — what an expression
+                     guard answers when its :when is unknown: pending,
+                     or its own refusal (docs/spec-related-row-law.md §7)
     :hold            true: a refusal is held for the person's tap
                      rather than answered 409 (waymark10.holds);
                      :agents: the same, for a guard that holds only an
@@ -242,6 +245,10 @@
               (str "guard " (pr-str (clojure.core/or name :guard)) ": " p))))
     (clojure.core/when (fn? vars)
       (throw (t/definition-error "a callable belongs in :vars-fn; :vars declares the names")))
+    (clojure.core/when-not (contains? #{nil :allow :deny} (:pending g))
+      (throw (t/definition-error
+              (str "guard " (pr-str (clojure.core/or name :guard))
+                   ": :pending is :allow or :deny, not " (pr-str (:pending g))))))
     (doseq [r (:remedies g)
             :let [p (remedy-problem r)]
             :when p]
@@ -407,8 +414,12 @@
         v (expr/evaluate (:when g) scope)]
     (cond
       ;; an unknown verdict is never a refusal: it is pending, as a
-      ;; probe without input is (docs/spec-related-row-law.md §5)
-      (expr/unknown? v) (t/allow {:pending-input true})
+      ;; probe without input is (docs/spec-related-row-law.md §5) —
+      ;; unless the guard says :pending :deny, and then it refuses (§7)
+      (expr/unknown? v) (if (= :deny (:pending g))
+                          (t/deny {:errors (not-empty
+                                            (into {} (map (fn [[k s]] [k [s]])) (:errors g)))})
+                          (t/allow {:pending-input true}))
       v (t/allow)
       :else
       (t/deny {:vars (not-empty

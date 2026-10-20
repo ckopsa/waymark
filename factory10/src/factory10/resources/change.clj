@@ -1078,6 +1078,9 @@
                 :head_branch #{:eq}
                 :head_sha #{:eq}
                 :author #{:eq}
+                ;; a guard finds the change built for a ticket by it:
+                ;; (exists [c :change {:born_from (= (str "ticket:" (self)))}])
+                :born_from #{:eq}
                 :domain #{:eq :in}}
    ;; a change born before domains stores none, and is factory's
    :absent-as {:domain "factory"}
