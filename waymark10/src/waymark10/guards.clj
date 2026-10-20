@@ -63,7 +63,11 @@
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Instant LocalDate ZoneId ZoneOffset)
+           (java.time.format DateTimeFormatter)
+           (java.time.temporal ChronoUnit)
+           (java.util Locale)))
 
 (set! *warn-on-reflection* true)
 
@@ -410,6 +414,123 @@
                             [(:id p) (:acted-by p)]))
       actor-of (assoc :actors (fn [door] (actor-of row door :every))))))
 
+;; ── instants on the reader's clock (ticket 2af2d5dc) ────────────────
+;; A declarative sentence's hole whose value is an instant renders as
+;; the reader reads a clock, in their member zone (the one
+;; waymark_invoke's `at` reads), else the house zone: "13:00" on the
+;; day the sentence speaks of (the row's day, else today), "Tue 13:00"
+;; within a week of it, "6 Jan 13:00" beyond. A var written as (clock
+;; x), (day x) or (iso x) chose its own form and is left as it is.
+
+(def ^:private house-zone
+  "The household's clock — the two names dayplan10.zone reads — else UTC."
+  (delay (clojure.core/or
+          (some (fn [^String n]
+                  (clojure.core/when-some [s (not-empty (System/getenv n))]
+                    (try (ZoneId/of s) (catch Exception _ nil))))
+                ["WORKQUEUE10_ZONE" "WORKQUEUE10_HA_ZONE"])
+          ZoneOffset/UTC)))
+
+(defn- zone-id ^ZoneId [z]
+  (if (instance? ZoneId z)
+    z
+    (clojure.core/when-some [s (some-> z str str/trim not-empty)]
+      (try (ZoneId/of ^String s) (catch Exception _ nil)))))
+
+(defn reader-zone
+  "The zone a sentence's instants render in for the principal acting
+  now: ctx :zone when the caller names one, else the member row the
+  principal is (then the person it acts for), as scheduled actions
+  read it, else the house zone."
+  ^ZoneId [ctx]
+  (clojure.core/or
+   (zone-id (:zone ctx))
+   (try
+     (clojure.core/when-some [rd (:read ctx)]
+       (let [find (:find ctx)
+             named (fn [who]
+                     (clojure.core/when-some [who (some-> who str not-empty)]
+                       (clojure.core/or (rd :member who)
+                                        (clojure.core/when find
+                                          (first (find :member {:subject who} {:limit 1}))))))
+             p (:principal ctx)
+             m (named (:id p))
+             person (clojure.core/or (some-> (get-in m [:data :acts_for]) str not-empty)
+                                     (some-> (:acts-for p) str not-empty))]
+         (some #(zone-id (get-in % [:data :zone]))
+               [m (clojure.core/when person (named person))])))
+     (catch Exception _ nil))
+   @house-zone))
+
+(defn- local-day
+  "A date, an instant or its wire string → the day it is in `zone`."
+  ^LocalDate [x ^ZoneId zone]
+  (cond (instance? LocalDate x) x
+        (some? (expr/instant-of x)) (.toLocalDate (.atZone (expr/instant-of x) zone))
+        (string? x) (try (LocalDate/parse ^String x) (catch Exception _ nil))))
+
+(defn- sentence-clock
+  "{:zone :day}: the reader's zone and the day a sentence speaks of
+  there — the row's :date, else the day its :starts_at falls on, else
+  the same of the call's input (the slot a draft is being given),
+  else today."
+  [row inp ctx]
+  (let [zone (reader-zone ctx)
+        d (:data row)]
+    {:zone zone
+     :day (clojure.core/or (local-day (:date d) zone)
+                           (local-day (:starts_at d) zone)
+                           (clojure.core/when (map? inp)
+                             (clojure.core/or (local-day (:date inp) zone)
+                                              (local-day (:starts_at inp) zone)))
+                           (local-day (clojure.core/or (:now ctx) (Instant/now)) zone))}))
+
+(def ^:private ^DateTimeFormatter clock-hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
+(def ^:private ^DateTimeFormatter clock-weekday
+  (DateTimeFormatter/ofPattern "EEE HH:mm" Locale/ENGLISH))
+(def ^:private ^DateTimeFormatter clock-day-month
+  (DateTimeFormatter/ofPattern "d MMM HH:mm" Locale/ENGLISH))
+
+(defn on-clock
+  "One sentence hole's value as the reader reads it: an instant on
+  `zone`'s clock — the hour alone on `day`, the weekday within a week
+  of it, the date beyond; anything else as it was."
+  [x ^ZoneId zone ^LocalDate day]
+  (if-some [i (expr/instant-of x)]
+    (let [z (.atZone i zone)
+          gap (Math/abs (.between ChronoUnit/DAYS day (.toLocalDate z)))]
+      (.format ^DateTimeFormatter (cond (zero? gap) clock-hh-mm
+                                        (< gap 7) clock-weekday
+                                        :else clock-day-month)
+               z))
+    x))
+
+(defn- clocked
+  "on-clock over a delayed sentence-clock, asked only for an instant."
+  [x clock]
+  (if (some? (expr/instant-of x))
+    (let [{:keys [zone day]} @clock] (on-clock x zone day))
+    x))
+
+(defn- chosen-form?
+  "A var that spells its own form for an instant."
+  [form]
+  (clojure.core/and (seq? form) (contains? '#{clock day iso} (first form))))
+
+(def ^:private input-hole #"\{([A-Za-z0-9_]+)\}")
+
+(defn- input-holes
+  "Each {field} of the sentence that names a field of the call's input
+  and no var of the guard's: the value the call gave, on the clock."
+  [g inp clock]
+  (into {}
+        (keep (fn [[_ k]]
+                (let [kw (keyword k)]
+                  (clojure.core/when (clojure.core/and (map? inp) (contains? inp kw)
+                                                       (clojure.core/not (contains? (:vars g) kw)))
+                    [kw (clocked (get inp kw) clock)]))))
+        (re-seq input-hole (str (:explain g)))))
+
 (defn- expr-check
   "The check a :when tree compiles to."
   [g row inp ctx]
@@ -425,19 +546,26 @@
                           (t/allow {:pending-input true}))
       v (t/allow)
       :else
-      (t/deny {:vars (not-empty
-                      (into {}
-                            (keep (fn [[k form]]
-                                    ;; a var no hook could answer is named,
-                                    ;; not printed as the sentinel object
-                                    (try (let [x (expr/evaluate form scope)]
-                                           [k (if (expr/unknown? x) "unknown" x)])
-                                         (catch Exception _ nil))))
-                            (:vars g)))
-               ;; the declared per-field sentences, as a code guard's
-               ;; {:errors {field ["…"]}} spells them
-               :errors (not-empty
-                        (into {} (map (fn [[k s]] [k [s]])) (:errors g)))}))))
+      (let [clock (delay (sentence-clock row inp ctx))
+            scope (cond-> scope
+                    (some chosen-form? (vals (:vars g))) (assoc :zone (:zone @clock)))]
+        (t/deny {:vars (not-empty
+                        (merge
+                         (input-holes g inp clock)
+                         (into {}
+                               (keep (fn [[k form]]
+                                       ;; a var no hook could answer is named,
+                                       ;; not printed as the sentinel object
+                                       (try (let [x (expr/evaluate form scope)]
+                                              [k (cond (expr/unknown? x) "unknown"
+                                                       (chosen-form? form) x
+                                                       :else (clocked x clock))])
+                                            (catch Exception _ nil))))
+                               (:vars g))))
+                 ;; the declared per-field sentences, as a code guard's
+                 ;; {:errors {field ["…"]}} spells them
+                 :errors (not-empty
+                          (into {} (map (fn [[k s]] [k [s]])) (:errors g)))})))))
 
 (declare evaluate)
 
@@ -597,10 +725,12 @@
           res)]
     (if (clojure.core/and (t/deny? v)
                           (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))))
-      (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)]
+      (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)
+            clock (delay (sentence-clock row inp ctx))]
         [(cond-> v
            (seq evidence) (update :evidence merge evidence)
-           (seq vars) (update :vars merge vars))
+           (seq vars) (update :vars merge
+                              (into {} (map (fn [[k x]] [k (clocked x clock)])) vars)))
          g])
       res)))
 

@@ -452,6 +452,27 @@
              :because "no time at all"
              :remedies [:span/move :span/skip]}})
 
+(defscenario extend-refusal-reads-the-readers-clock
+  "The squeeze refusal names its instants as the reader reads a clock:
+   in the member's own zone, on the span's day, the hour alone."
+  {:kind    :span
+   :attempt :extend
+   :given   (conj (staged-day "reader's clock" "2099-01-06"
+                              {:from "23:46" :to "23:47"})
+                  {:kind :member :handle :reader :state :active
+                   :data {:display "Scenario reader" :actor_type "human"
+                          :subject "colton" :zone "Atlantic/Azores"}}
+                  {:kind :span :state :planned
+                   :data (window "2099-01-06T14:00:00Z" "2099-01-06T15:00:00Z")})
+   :row     {:state :planned
+             :data (served-window "2099-01-06T09:00:00Z" "2099-01-06T12:00:00Z")}
+   :input   {:ends_at (Instant/parse "2099-01-06T15:00:00Z")}
+   :at      "2026-09-05T12:00:00Z"
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :neighbour-keeps-some-width
+             :because "(13:00–14:00) no time at all"
+             :remedies [:span/move :span/skip]}})
+
 (defscenario extend-may-lean-into-a-neighbour
   "Extending into the neighbour but short of its end leaves it some
    time; the door admits it, and the neighbour's start slides."
@@ -566,6 +587,7 @@
                a-window-ends-after-it-starts
                swap-needs-a-partner-on-this-day
                extend-never-squeezes-a-neighbour-to-nothing
+               extend-refusal-reads-the-readers-clock
                extend-reaches-later
                a-split-happens-inside-the-window
                a-gap-may-not-swallow-the-rest]

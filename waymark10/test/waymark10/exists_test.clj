@@ -187,7 +187,7 @@
   (let [[v d] (judge :schedule 0 newcomer half-nine (ctx-over bookings))]
     (is (= {:b "b1"} (:evidence v)) "b1 is older than b0, though b0 sorts first by id")
     (is (= (str "That crew is already at the Parks' yard from "
-                "2026-10-21T08:00:00Z to 2026-10-21T12:00:00Z.")
+                "08:00 to 12:00.")
            (g/render-reason d v newcomer)))
     (is (= [{:door :ex_booking/reschedule :id "b1"}]
            (g/resolve-remedies d newcomer half-nine (:evidence v)))
@@ -197,7 +197,7 @@
                          (ctx-over bookings (fn [_ id] (not= "b1" id))))]
         (is (= {:b "b0"} (:evidence v)))
         (is (= (str "That crew is already at the Okafors' hedge from "
-                    "2026-10-21T09:00:00Z to 2026-10-21T10:00:00Z.")
+                    "09:00 to 10:00.")
                (g/render-reason d v newcomer)))))
     (testing "every match hidden: the refusal stands and names none"
       (let [[v d] (judge :schedule 0 newcomer half-nine

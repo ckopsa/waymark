@@ -107,6 +107,9 @@
               :merge_from
               {:from #{:open} :to :open
                :input [:map [:source_id {:kind :ci_folder} :waymark/ref]]
+               ;; :ref-unjudged — a fixture of the ctx's invoke plumbing;
+               ;; which folder may be merged is not what it tests
+               :waives #{:ref-unjudged}
                :guards [guards-have-no-pen]
                :safety {:idempotent true :reversible false :confirm false}
                :handler merge-from}
@@ -142,6 +145,8 @@
     :actions {:move
               {:from #{:filed} :to :filed
                :input [:map [:folder_id {:kind :ci_folder} :waymark/ref]]
+               ;; :ref-unjudged — the merge cascade's move: any folder
+               :waives #{:ref-unjudged}
                :edit {:prefill [:folder_id] :fence false
                       :unfenced-reason "A move is a one-field verdict the
                       merge cascade issues without a rendered form."}

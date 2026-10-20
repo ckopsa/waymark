@@ -70,6 +70,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
+            [waymark10.schema :as schema]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
   (:import (java.time Instant)
@@ -724,6 +725,13 @@
             s (cond-> s
                 (seq ids) (-> (update :row fill-handles ids)
                               (update :input fill-handles ids)))
+            ;; a birth's guards read the input the door hands them:
+            ;; its declared defaults already filled
+            s (cond-> s
+                (= :create door)
+                (update :input #(schema/apply-defaults
+                                 (or (:create-schema rdef) (:schema rdef))
+                                 (or % {}))))
             row (scenario-row s)
             ctx (offline-ctx s (some reads-related? guards))]
         (if (and (= :action door)

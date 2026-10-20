@@ -227,7 +227,9 @@
 (defn apply-defaults
   "Fill ABSENT keys of a decoded map with the entries' declared
   :default values — an explicit null stays (the author said blank),
-  and a present value is never touched. Recurses into vector-of-map
+  and a present value is never touched. An entry that also declares
+  :default-on-null true says null is not a blank it keeps: an
+  explicit null fills with the default too. Recurses into vector-of-map
   items so an embedded item fills its own item defaults (a birthing
   sighting's quantity). Applied at the write doors (create + action
   input) BEFORE validation; stored documents leave the doors complete,
@@ -243,7 +245,9 @@
              item-form (when (and (vector? s) (= :vector (first s)))
                          (last s))
              v (if (and (contains? properties :default)
-                        (not (contains? v k)))
+                        (or (not (contains? v k))
+                            (and (:default-on-null properties)
+                                 (nil? (get v k)))))
                  (assoc v k (:default properties))
                  v)]
          (if (and (vector? item-form)
