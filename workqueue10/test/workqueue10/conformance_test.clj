@@ -71,6 +71,11 @@
    ;; report "could not be staged" for a law that held. The scenarios
    ;; own a fresh table here, as they do there.
    "contexts" "day_plans" "blocks" "spans" "decisions"
+   ;; …and the same again for the follow guards of ticket 5bd3ed13:
+   ;; judgment's and notice_rule's deferred scenarios stage a judgment
+   ;; and an mcp_server by FIXED names (each :unique by name), so a
+   ;; shard that staged them first would answer 409 here.
+   "judgments" "mcp_servers" "notifiers" "notice_rules"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

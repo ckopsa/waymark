@@ -50,7 +50,7 @@
   not look like one somebody is about to."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [waymark10.declare :refer [defscenario]]
+            [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
@@ -1588,6 +1588,54 @@
           (into {} (remove (comp nil? val))
                 (select-keys inp (map first notifier-person-fields)))))
 
+;; THE SERVER IT NAMES STILL SERVES (ticket 5bd3ed13). A restate may move
+;; the notifier to another server, and a retired one would take every
+;; send with it in silence: the notifier would count failures nobody
+;; reads.
+
+(defguard the-server-is-not-retired
+  (refuse "The server named is retired or gone, so nothing would be sent through it. Restore it, or name a server that is not retired.")
+  '(or (not (is-set (input :server)))
+       (and (is-set (follow (input :server) :id))
+            (not= (follow (input :server) :state) "retired")))
+  {:remedies [:mcp_server/restore]
+   :errors {:server "not a server that is still serving"}})
+
+(def ^:private a-notifier
+  {:name "Colton's phone"
+   :server "srv-1"
+   :tool "send_message"
+   :input_template {:text "{summary} {link}"}
+   :on [{:kind "held_call"}]
+   :audience "colton"})
+
+(defscenario a-notifier-is-not-moved-to-a-retired-server
+  "A retired server sends nothing, so a notifier restated onto one
+   would go quiet. The door refuses it and names the restore."
+  {:kind    :notifier
+   :attempt :restate
+   :given   [{:kind :mcp_server :handle :gone :state :retired
+              :data {:name "oldbot_{{run}}" :transport "http"
+                     :url "http://127.0.0.1:8100/mcp/"}}]
+   :row     {:state :active :data a-notifier}
+   :input   {:server "{given/gone}"}
+   :as      {:id "colton" :type :human}
+   :expect  {:refused :the-server-is-not-retired
+             :because "retired or gone"
+             :remedies [:mcp_server/restore]}})
+
+(defscenario a-notifier-is-moved-to-a-live-server
+  "And onto a server that serves, the restate is one tap."
+  {:kind    :notifier
+   :attempt :restate
+   :given   [{:kind :mcp_server :handle :live :state :live
+              :data {:name "newbot_{{run}}" :transport "http"
+                     :url "http://127.0.0.1:8101/mcp/"}}]
+   :row     {:state :active :data a-notifier}
+   :input   {:server "{given/live}"}
+   :as      {:id "colton" :type :human}
+   :expect  {:allowed true}})
+
 (defresource notifier
   {:kind :notifier
    :plural "notifiers"
@@ -1606,7 +1654,7 @@
    {:restate
     {:from #{:active :paused} :to :active
      :input notifier-restate-input
-     :guards [a-person-tells]
+     :guards [a-person-tells the-server-is-not-retired]
      :edit {:prefill [:name :server :tool :input_template :on :audience :link_base]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notifier
@@ -1630,6 +1678,8 @@
      :safety {:idempotent true :reversible false :confirm true
               :consequence "This notifier sends nothing again; a person creates a new one to be told again."}
      :display {:label "Retire" :style :danger :order 9}}}
+   :scenarios [a-notifier-is-not-moved-to-a-retired-server
+               a-notifier-is-moved-to-a-live-server]
    :deviations
    ["R-1 names `audience` a member ref. It is the member's principal id, the grant's own spelling of an audience, because R-4 compares it with the transition's actor and the actor is a principal id."
     "R-3 names the link to the row. This engine has no absolute address of its own, so the row carries `link_base`, and the link is the UI's page for the row at that address, `<link_base>/#/api/<plural>/<id>` — never the row's raw JSON."
@@ -2030,6 +2080,39 @@
           (into {} (remove (comp nil? val))
                 (select-keys inp (map first notice-rule-person-fields)))))
 
+;; THE NOTIFIER IT NAMES STILL SENDS (ticket 5bd3ed13). A retired
+;; notifier sends nothing again, so a rule restated onto one would tell
+;; nobody and say nothing about it.
+
+(defguard the-notifier-is-not-retired
+  (refuse "The notifier named is retired or gone, and a retired notifier sends nothing again. Name a notifier that is not retired.")
+  '(or (not (is-set (input :notifier)))
+       (and (is-set (follow (input :notifier) :id))
+            (not= (follow (input :notifier) :state) "retired")))
+  {:open "A retired notifier stays retired; a person creates a new one, and the rule names that."
+   :errors {:notifier "not a notifier that still sends"}})
+
+(defscenario a-rule-is-not-moved-to-a-retired-notifier
+  "A rule restated onto a retired notifier would tell nobody. The door
+   refuses it."
+  {:kind    :notice_rule
+   :attempt :restate
+   :given   [{:kind :mcp_server :handle :srv :state :live
+              :data {:name "tellbot_{{run}}" :transport "http"
+                     :url "http://127.0.0.1:8102/mcp/"}}
+             {:kind :notifier :handle :tired :state :retired
+              :data (assoc a-notifier :server "{given/srv}")}]
+   :row     {:state :active
+             :data {:name "Tell the asker"
+                    :kind "scheduled_action"
+                    :when {:to_state "done"}
+                    :address {:field "tell_done"}
+                    :notifier "{given/tired}"}}
+   :input   {:notifier "{given/tired}"}
+   :as      {:id "colton" :type :human}
+   :expect  {:refused :the-notifier-is-not-retired
+             :because "retired or gone"}})
+
 (defresource notice-rule
   {:kind :notice_rule
    :plural "notice_rules"
@@ -2048,7 +2131,8 @@
    {:restate
     {:from #{:active :paused} :to :active
      :input notice-rule-restate-input
-     :guards [a-person-tells address-names-a-member at-names-a-datetime]
+     :guards [a-person-tells address-names-a-member at-names-a-datetime
+              the-notifier-is-not-retired]
      :edit {:prefill [:name :kind :when :at :address :notifier]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notice-rule
@@ -2072,6 +2156,7 @@
      :safety {:idempotent true :reversible false :confirm true
               :consequence "This rule tells nobody again; a person creates a new one to tell again."}
      :display {:label "Retire" :style :danger :order 9}}}
+   :scenarios [a-rule-is-not-moved-to-a-retired-notifier]
    :deviations
    ["R-1 says a rule naming a non-ref or non-member field fails assembly. A rule is a row a person writes, not a declaration, so the check is the create and restate wall `address-names-a-member`, which refuses with the sentence."
     "R-2 names `member.notify.notifier` a ref. It is the notifier row's id as a string: a ref inside a nested map is not a ref the framework resolves, so an id that names no notifier falls back to the rule's own notifier at send time."]})

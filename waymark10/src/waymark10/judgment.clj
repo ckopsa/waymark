@@ -61,6 +61,7 @@
   `grant` or `seat` as readily as an application's kind. A judge on
   how an agent sat is the same declaration as a judge on a CI run."
   (:require [clojure.string :as str]
+            [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.collections :as collections]
@@ -311,6 +312,38 @@
          {:judgment successor :superseded id})))
     (assoc-in row [:data :successor] (:successor inp))))
 
+;; THE SUCCESSOR STILL STANDS (ticket 5bd3ed13). Every seat that says
+;; this judgment follows the successor, so a superseded one would hand
+;; them a judge already out of force.
+
+(defguard the-successor-still-stands
+  (refuse "The successor named is superseded or gone, and every seat that says this judgment would follow it out of force. Name a judgment that is not superseded, or leave the successor blank.")
+  '(or (not (is-set (input :successor)))
+       (and (is-set (follow (input :successor) :id))
+            (not= (follow (input :successor) :state) "superseded")))
+  {:open "A superseded judgment is not brought back; a judge the house wants again is a new row."
+   :errors {:successor "not a judgment that still stands"}})
+
+(def ^:private a-judgment
+  {:name "Why did CI go red"
+   :subject_kind "sitting"
+   :verdicts [{:name "infra" :sentence "The runner failed, not the work."}]
+   :remedy_max 240})
+
+(defscenario a-judgment-is-not-succeeded-by-a-retired-one
+  "Seats follow the successor, so a successor already superseded would
+   leave them under no judge in force. The door refuses it."
+  {:kind    :judgment
+   :attempt :supersede
+   :given   [{:kind :judgment :handle :old :state :superseded
+              :data (assoc a-judgment :name "Why did CI go red, before {{run}}")}]
+   :row     {:state :promoted
+             :data (assoc a-judgment :name "Why did CI go red {{run}}")}
+   :input   {:successor "{given/old}"}
+   :as      {:id "colton" :type :human}
+   :expect  {:refused :the-successor-still-stands
+             :because "superseded or gone"}})
+
 ;; ── :judgment — one row, one judge ──────────────────────────────────
 
 (defresource judgment
@@ -465,7 +498,7 @@
      :waives #{:edit-shape}
      ;; a supersede takes the judgment out from under every seat that
      ;; says it, so from a delegating seat it waits on the person
-     :guards [delegation/the-persons-judgment]
+     :guards [delegation/the-persons-judgment the-successor-still-stands]
      ;; every seat that says this judgment follows it to the successor,
      ;; through its own concealed door, in this transaction
      :touches [{:kind :seat :action :follow_successor}
@@ -474,4 +507,5 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The judgment stops being in force and stays on the record with every verdict written under it. There is no way back to draft; a judge the house wants again is a new row."}
      :display {:label "Supersede" :order 3
-               :description "Retire this judgment — its verdicts stay rows, and a successor may be named"}}}})
+               :description "Retire this judgment — its verdicts stay rows, and a successor may be named"}}}
+   :scenarios [a-judgment-is-not-succeeded-by-a-retired-one]})

@@ -143,9 +143,15 @@ declarations and the seed's seats:
 
 Each clears in code, one of two ways. Either the law says it:
 
-- a guard with `:hold true` on the door, so its refusal is held for
-  the person's tap (unheld_final, money_unbounded; for money, the
-  guard reads the amount and holds above the line);
+- a hold on the door, so an agent's call waits as a held_call for the
+  person's tap while a person's own call goes through. It is one
+  line, and the one way to write "wait for me":
+  `(defguard principal-signs-off (hold "A study is signed off only on The Principal's tap."))`
+  (unheld_final). Its law is optional; with one, it holds only while
+  the law is false, so for money it reads the amount and holds above
+  the line:
+  `(defguard big-spends-wait (hold "Spending $5,000 or more waits for your tap.") '(< (data :amount_usd) 5000))`
+  (money_unbounded);
 - the kind's `:expected-age {<state> <seconds>}` (no_wait_limit).
 
 Or the person's answer is written down as `:decided`, a sentence in
