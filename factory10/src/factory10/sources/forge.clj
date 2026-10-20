@@ -2966,13 +2966,14 @@
             (void-stale-take! eng plan head census log-fn)
             :else
             (try
-              (first-week/land! eng (str (:id plan))
-                                (judge eng (first-week/marked
-                                            (wire/read-json (str take_report))
-                                            (get-in plan [:data :first_week_scene])))
-                                {:film_url (str take_film_url)
-                                 :head_sha (str take_sha)}
-                                (as-opts))
+              (let [scene (get-in plan [:data :first_week_scene])
+                    tk (first-week/marked (wire/read-json (str take_report)) scene)]
+                (first-week/land! eng (str (:id plan))
+                                  (judge eng (first-week/line-up tk scene))
+                                  {:film_url (str take_film_url)
+                                   :head_sha (str take_sha)
+                                   :warnings (first-week/dropped-roles tk scene)}
+                                  (as-opts)))
               (update census :films (fnil inc 0))
               (catch Exception e
                 (log-fn "the film of " (org-of plan) " at " take_sha

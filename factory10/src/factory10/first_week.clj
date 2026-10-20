@@ -190,7 +190,9 @@
   a vector of 7 vectors of meanwhile calls, {as, tool, arguments,
   bind?}, day k's calls played as `meanwhile` shots right before day
   k's caption, and each one's `as` joining the scene's cast after the
-  owner. With no `week` the scene is the audit's, and none plays."
+  owner. With no `week` the scene is the audit's, and none plays.
+  Each shot carries `:id`, its 1-based position in the rendered scene
+  (ticket ef24488d), for the take shot that films it to name."
   [seed {:keys [clone_url head_sha day_one kind brief resources week]}]
   (let [t (template)
         owner (the-owner seed)
@@ -235,12 +237,21 @@
                  (fill (:closing t) values))]
     {:scene (assoc (cond-> (fill (:scene t) values)
                      (seq actors) (update :cast #(vec (distinct (concat % actors)))))
-                   :shots (vec (concat (fill (if line (:opening t) (:opening_bare t)) values)
-                                       (mapcat day (range 1 (inc days)))
-                                       closing)))
+                   :shots (vec (map-indexed
+                                (fn [i shot] (assoc shot :id (inc i)))
+                                (concat (fill (if line (:opening t) (:opening_bare t)) values)
+                                        (mapcat day (range 1 (inc days)))
+                                        closing))))
      :clone (fill (:clone t) values)
      :day_one (str day-one)
      :first-week (true? (get-in t [:template :first-week]))}))
+
+(defn- read-scene
+  "The plan's scene `scene-text`, edn text, as data; nil when it is
+  blank or does not read."
+  [scene-text]
+  (when (and (string? scene-text) (not (str/blank? scene-text)))
+    (try (edn/read-string scene-text) (catch Exception _ nil))))
 
 (defn marked
   "The take `tk` marked `:scene {:first_week true}` when it is a take of
@@ -249,12 +260,99 @@
   or it is a scene rendered before the mark, which the plan's takes are
   filmed of all the same. `tk` as given when the plan carries no scene."
   [tk scene-text]
-  (let [doc (when (and (string? scene-text) (not (str/blank? scene-text)))
-              (try (edn/read-string scene-text) (catch Exception _ nil)))]
+  (let [doc (read-scene scene-text)]
     (if (and (map? tk) (map? doc)
              (or (true? (:first-week doc)) (map? (:scene doc))))
       (assoc tk :scene (assoc (if (map? (:scene tk)) (:scene tk) {}) :first_week true))
       tk)))
+
+(defn- scene-shots
+  "The shots of the plan's scene `scene-text`, edn text; nil when it
+  carries none."
+  [scene-text]
+  (let [shots (get-in (read-scene scene-text) [:scene :shots])]
+    (when (sequential? shots) (vec shots))))
+
+(defn- framed
+  "The positions in `shots` of the shots that are not meanwhile shots."
+  [shots]
+  (keep-indexed (fn [i s] (when-not (and (map? s) (:meanwhile s)) i)) shots))
+
+(defn- ids? [taken]
+  (boolean (some #(and (map? %) (some? (:id %))) taken)))
+
+(defn- matches
+  "Each take shot's position in `taken` beside the position in `shots`
+  of the scene shot it films (ticket ef24488d): by the `:id` both carry,
+  or, for a take from before the id, by position once the meanwhile
+  shots are dropped from both."
+  [shots taken]
+  (if (ids? taken)
+    (let [at (into {} (keep-indexed (fn [j s] (when (and (map? s) (some? (:id s)))
+                                                [(str (:id s)) j])))
+                   shots)]
+      (keep-indexed (fn [i t] (when-some [j (when (map? t) (get at (str (:id t))))]
+                                [i j]))
+                    taken))
+    (map vector (framed taken) (framed shots))))
+
+(defn line-up
+  "The take `tk` with each scene shot's `:id` and `:role` copied onto
+  the take shot that films it, where that shot carries none (ticket
+  ef24488d), the shots matched as `matches` does. `tk` as given when the
+  plan carries no scene."
+  [tk scene-text]
+  (let [shots (scene-shots scene-text)]
+    (if (and (map? tk) (sequential? (:shots tk)) (seq shots))
+      (let [taken (vec (:shots tk))
+            copy (fn [t s]
+                   (cond-> t
+                     (and (nil? (:id t)) (some? (:id s))) (assoc :id (:id s))
+                     (and (nil? (:role t)) (some? (:role s))) (assoc :role (:role s))))]
+        (assoc tk :shots
+               (reduce (fn [v [i j]]
+                         (let [t (nth v i) s (nth shots j)]
+                           (if (and (map? t) (map? s)) (assoc v i (copy t s)) v)))
+                       taken
+                       (matches shots taken))))
+      tk)))
+
+(defn dropped-roles
+  "The `take-dropped-role` warning of the take `tk` against the plan's
+  scene `scene-text` (ticket ef24488d), in the audit's shape: each scene
+  shot with a role whose take shot carries none, and, for a take matched
+  by position, a take whose shots and the scene's do not number the
+  same, meanwhile shots dropped from both. [] when none was dropped."
+  [tk scene-text]
+  (let [shots (scene-shots scene-text)
+        taken (when (map? tk) (:shots tk))]
+    (if-not (and (seq shots) (sequential? taken))
+      []
+      (let [taken (vec taken)
+            filmed (into {} (map (fn [[i j]] [j (nth taken i)])) (matches shots taken))
+            lost (for [[j s] (map-indexed vector shots)
+                       :when (and (map? s) (not (:meanwhile s)) (some? (:role s))
+                                  (nil? (:role (let [t (get filmed j)] (when (map? t) t)))))]
+                   (let [r (:role s)]
+                     (str (if (keyword? r) (name r) r) " (shot " (or (:id s) (inc j)) ")")))
+            counts (when-not (ids? taken)
+                     (let [a (count (framed shots)) b (count (framed taken))]
+                       (when (not= a b)
+                         (str "the scene has " a " shots and the take " b
+                              ", meanwhile shots aside"))))
+            said (remove nil? [(when (seq lost)
+                                 (str "the take dropped the role of " (str/join ", " lost)))
+                               counts])]
+        (if (empty? said)
+          []
+          [{:key "take-dropped-role"
+            :severity "warning"
+            :class "film"
+            :subject "film"
+            :sentence (let [s (str "The take does not line up with its scene: "
+                                   (str/join "; " said) ".")]
+                        (subs s 0 (min 240 (count s))))
+            :remedy "Film it again with each scene shot's id and role on the take shot that films it."}])))))
 
 (defn- read-brief
   "The brief in the org's org.edn at `org-dir`, its :brief; nil when it
@@ -357,12 +455,13 @@
   door and its input. No fail rule missed attaches `film_url`; a red
   film records its missed fail rules, at `head_sha`. A fail rule the
   film could not measure is missed, unless its `unmeasured` is `pass`."
-  [answer {:keys [film_url head_sha]}]
+  [answer {:keys [film_url head_sha warnings]}]
   (if-some [missed (seq (filter missed? (:rules answer)))]
     {:action :record_film_findings
-     :input {:head_sha head_sha :findings (mapv finding-of missed)}}
+     :input {:head_sha head_sha :findings (into (mapv finding-of missed) warnings)}}
     {:action :attach_film
-     :input {:film_url film_url}}))
+     :input (cond-> {:film_url film_url}
+              (seq warnings) (assoc :findings (vec warnings)))}))
 
 (defn land!
   "Lands the film on the plan `plan-id` through the door `landing`

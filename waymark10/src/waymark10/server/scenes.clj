@@ -882,7 +882,7 @@
   (if-not (map? shot)
     (fail "a shot is a map with one verb.")
     (let [named (filter (set verbs) (keys shot))
-          stray (remove (into #{"say" "expect" "bind" "role" "speed" "trim"} verbs)
+          stray (remove (into #{"say" "expect" "bind" "role" "speed" "trim" "id"} verbs)
                         (keys shot))
           verb (first named)]
       (cond
