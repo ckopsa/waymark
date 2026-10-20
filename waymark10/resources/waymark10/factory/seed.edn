@@ -13,7 +13,9 @@
 ;; already has members, and the marker skips it on every later boot.
 ;; Every step walks a door as the owner, except the :find, which names
 ;; domain `factory`: the boot makes that row before the seed runs, and
-;; the mayor and the two judges sit in it.
+;; the mayor and the two judges sit in it. Each fired seat then gets its
+;; schedule on the pull link (`:schedule`), so the owner's fire on it
+;; reaches localfire with no schedule made by hand.
 {:seed "factory"
  :version 1
  :live-ok true
@@ -97,4 +99,11 @@
    :with {:held_for [[:ref :model]]}}
   {:as :owner :template "sitting-judge" :ref :sitting-judge
    :params {:judgment [:ref :sitting] :domain "factory" :domain_id [:ref :factory]}
-   :with {:held_for [[:ref :model]]}}]}
+   :with {:held_for [[:ref :model]]}}
+  ;; each seat's schedule, its runner the pull link: the engine writes
+  ;; it, and an interactive seat (the mayor, as its template seats it)
+  ;; gets none
+  {:schedule :mayor :runners [[:ref :pull]]}
+  {:schedule :code-seat :runners [[:ref :pull]]}
+  {:schedule :draft-judge :runners [[:ref :pull]]}
+  {:schedule :sitting-judge :runners [[:ref :pull]]}]}
