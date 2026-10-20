@@ -120,7 +120,15 @@
   A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
   :where {:name \"factory\"} :ref :factory}` makes no row and names the
   first one the query answers, so a later step's `[:ref :factory]` is
-  its id. A query that answers none refuses the seed."
+  its id. A query that answers none refuses the seed.
+
+  A STEP MAY GIVE A SEEDED SEAT ITS SCHEDULE: `{:schedule :draft-judge
+  :runners [[:ref :pull]]}` mints the seat's schedule row as the
+  engine (`schedules/ensure-schedule!`, the same row the schedules
+  consumer mints at a seat's birth, which a seed's births never wait
+  on) and seeds its runner list with the links it names, so an owner's
+  fire on the seat goes out through them. An interactive seat has no
+  schedule, and the step makes none for it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -130,6 +138,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
+            [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [jsonista.core :as json])
@@ -769,6 +779,21 @@
     ;; the grant an agent of the cast wears: the approval effect's mint
     (:grant step)
     (mint-grant! eng (value-of ctx (:grant step)))
+
+    ;; a seeded seat's schedule, written as the engine: the kind admits
+    ;; no other hand. Its runner list goes in through the seed door of
+    ;; the state the row stands in, which leaves a list already named.
+    (:schedule step)
+    (let [seat (load-row eng :seat (:id (ref-of refs (:schedule step))))]
+      (when-not (seats/interactive-seat? seat)
+        (let [row (sch/ensure-schedule! eng seat)
+              runners (mapv str (value-of ctx (or (:runners step) [])))
+              door (get sch/seed-doors (keyword (name (:state row))))]
+          (if (and (seq runners) door)
+            (:row (inv/invoke! eng :schedule (str (:id row)) door
+                               {:runners runners}
+                               {:principal sch/system-actor}))
+            row))))
 
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
