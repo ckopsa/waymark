@@ -443,7 +443,12 @@
             fired (seat "fired" {:inbox inbox})]
         (is (empty? (silent [clerk desk] nil)))
         (is (seq (silent [clerk fired] nil))
-            "a fired seat's inbox tells a model, not the person")))))
+            "a fired seat's inbox tells a model, not the person")))
+    (testing "a mayor that cues its inbox on its wakes, with no note, clears it"
+      (let [wakes [{:kind "order" :actions ["place"]}]
+            mayor (seat "mayor" {:mode "interactive" :wake_on wakes
+                                 :inbox {:cues wakes}})]
+        (is (empty? (silent [clerk mayor] nil)))))))
 
 (def ^:private draft-ticket
   {:kind :ticket

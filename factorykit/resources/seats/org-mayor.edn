@@ -15,7 +15,7 @@
            :budget_usd_per_week "The mayor's fuel for seven days, in dollars, as a decimal: 8M."
            :kinds "The org's own kinds as scope entries, one for each: {:kind \"request\" :actions []}. Name only the doors the org's seed gives the mayor; none reads the kind."
            :wakes "The wake_on entries that bring the mayor to the rows it leaves, one for each kind whose doors it holds: {:kind \"item\" :actions [\"create\"]}. [] when it holds none."}
-  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's."}
+  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's. Its inbox cues the same :wakes, each with the engine's default sentence: the default inbox still decides what it hears, and each arrival it wakes on tells the person, so no state it is brought to is silent."}
  :seat
  {:name "{{org}}-mayor"
   :mode "interactive"
@@ -30,4 +30,5 @@
   :scope ["{{kinds}}"
           {:kind "seat" :actions [] :filter {:domain "{{domain_id}}"}}
           {:kind "held_call" :actions []}]
-  :wake_on ["{{wakes}}"]}}
+  :wake_on ["{{wakes}}"]
+  :inbox {:cues ["{{wakes}}"]}}}
