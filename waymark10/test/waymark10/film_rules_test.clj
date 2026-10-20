@@ -448,6 +448,13 @@
     (is (== 0 (film-rules/measure (update a-take :shots (comp vec reverse)) "arc")))
     (is (== 0 (film-rules/measure
                (assoc-in a-take [:shots 2 :goal_state] "open") "arc"))))
+  (testing "the arc reads only the shots that carry a role, as a rendered week has"
+    (let [bare {:caption "A quiet day."}
+          [f t p] (:shots a-take)
+          week (assoc a-take :shots [bare f bare t bare bare p])]
+      (is (== 1 (film-rules/measure week "arc")))
+      (is (== 0 (film-rules/measure
+                 (assoc week :shots [bare t bare f bare p]) "arc")))))
   (testing "a missing field and an unknown metric read as nil"
     (is (nil? (film-rules/measure (update a-take :film dissoc :frame) "frame_fill")))
     (is (= [nil] (film-rules/measure {:shots [{:hold_s 4 :words 0}]}

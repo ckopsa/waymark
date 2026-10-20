@@ -161,6 +161,59 @@
                               (assoc opts :idempotency-key (str (random-uuid))))]
         (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
 
+(def ^:private a-week
+  "Seven days of meanwhile calls on the example org: Ana's requests, the
+  owner's move on one an earlier day bound, two quiet days."
+  [[{:as "ana" :tool "waymark_invoke" :bind "edge"
+     :arguments {:kind "request" :action "create"
+                 :input {:title "Edge the front walk" :customer "Ana Ruiz"}}}]
+   [{:as "ana" :tool "waymark_invoke"
+     :arguments {:kind "request" :action "create"
+                 :input {:title "The hedge is still not trimmed" :customer "Ana Ruiz"}}}]
+   [{:as "owner" :tool "waymark_invoke"
+     :arguments {:kind "request" :action "accept" :id "$edge"}}]
+   []
+   [{:as "ana" :tool "waymark_invoke"
+     :arguments {:kind "request" :action "create"
+                 :input {:title "Thanks, see you Tuesday" :customer "Ana Ruiz"}}}
+    {:as "owner" :tool "waymark_invoke"
+     :arguments {:kind "request" :action "decline" :id "$edge"}}]
+   []
+   [{:as "owner" :tool "waymark_invoke"
+     :arguments {:kind "work_order" :action "create"
+                 :input {:title "Edge the front walk" :crew "crew"}}}]])
+
+(deftest the-director's-week-plays-before-each-day's-caption
+  (let [{:keys [scene]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                                      :week a-week))
+        shots (:shots scene)
+        caption? #(and (sequential? (:say %)) (some (fn [p] (and (map? p) (get p "$day"))) (:say %)))]
+    (testing "each day's calls play as meanwhile shots, in order, right before its caption"
+      (is (= (mapcat (fn [calls weekday] (concat calls [weekday]))
+                     a-week
+                     ["Monday. " "Tuesday. " "Wednesday. " "Thursday. " "Friday. " "Saturday. " "Sunday. "])
+             (keep #(cond (:meanwhile %) (:meanwhile %) (caption? %) (first (:say %))) shots)))
+      (is (every? (fn [[a b]] (or (not (:meanwhile b)) (:meanwhile a) (:open a)))
+                  (partition 2 1 shots))
+          "a day's calls follow its open, not the day before's caption"))
+    (testing "the calls' cast joins the scene's, the owner first"
+      (is (= ["owner" "ana"] (:cast scene))))
+    (testing "the arc and the captions stand as without a week"
+      (is (= ["friction" "turn" "payoff"] (keep :role shots)))
+      (is (= (captions (:shots (:scene (first-week/scene seed (assoc filmed-on :resources (example-kinds))))))
+             (captions shots))))
+    (testing "an empty week is the scene with none"
+      (is (= (first-week/scene seed (assoc filmed-on :resources (example-kinds)))
+             (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                           :week (vec (repeat 7 [])))))))
+    (testing "it checks ready, its calls judged by their shape"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene scene opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
 (deftest the-audit-renders-the-example-org's-scene-at-its-head
   (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
                                    (:day_one filmed-on))
