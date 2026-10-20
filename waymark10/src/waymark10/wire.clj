@@ -59,6 +59,12 @@
                          (cond-> ["follow"]
                            (= 3 (count args)) (conj (name (first args)))
                            true (conj (form->wire ref) (name field))))
+        (contains? '#{exists none count-rows} op)
+        (let [[kind where] args]
+          [(name op) (name kind)
+           (into {} (map (fn [[f [cop & xs]]]
+                           [(name f) (into [(name cop)] (map form->wire) xs)]))
+                 where)])
         :else (into [(name op)] (map form->wire) args)))
 
     :else form))
@@ -126,6 +132,16 @@
                   kind (cons (keyword kind))
                   true (cons 'follow))
                 (refuse "(follow …) wire node takes [kind] ref field-name"
+                        {:tree tree})))
+
+            (contains? '#{exists none count-rows} op)
+            (let [[kind where] args]
+              (if (and (= 2 (count args)) (string? kind) (map? where))
+                (list op (keyword kind)
+                      (into {} (map (fn [[f [h & xs]]]
+                                      [(keyword (name f)) (cons (symbol (str h)) (map decode xs))]))
+                            where))
+                (refuse (str "(" op " …) wire node takes a kind and a where object")
                         {:tree tree})))
 
             :else (cons op (map decode args))))))
