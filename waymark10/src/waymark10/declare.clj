@@ -40,6 +40,7 @@
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.scenario :as scenario]
             [waymark10.types :as t]))
@@ -349,6 +350,19 @@
                  (pr-str f) " declares nothing"))))
   {:severity :warning :explain sentence})
 
+(defn hold
+  "The person-tap sentence of a defguard: the door waits for a person.
+  An agent's call is held as a held_call, and the person's Allow runs
+  it; a person's own call goes through. The law after it is optional:
+  with one, the door holds only while the law is false."
+  [sentence & more]
+  (when (or (not (string? sentence)) (str/blank? sentence))
+    (werr "hold takes the sentence the held call shows — a guard explains itself"))
+  (when (seq more)
+    (werr (str "hold takes only its sentence; " (pr-str more)
+               " declares nothing yet — the tap waits for the agent's own person")))
+  {:severity :refuse :explain sentence :hold true})
+
 (defn- rewrite-sentence-law
   "The defguard-gate desugars, applied before g/expr validates: the
   result is a form already inside the expression vocabulary."
@@ -377,16 +391,27 @@
 
 (def ^:private sentence-placeholder #"\{([A-Za-z0-9_]+)\}")
 
+(declare law-guard hold-guard)
+
 (defn sentence-guard
-  "Build the plain expression-guard map a sentence + law pair means.
-  Construction-validated here (the defaction pattern): the def line is
-  where a malformed guard fails."
+  "Build the guard map a sentence + law pair means: the plain
+  expression guard for (refuse …) and (warn …), and the person-tap
+  code guard for (hold …), whose law is optional. Construction-
+  validated here (the defaction pattern): the def line is where a
+  malformed guard fails."
   [gname clause law & [opts]]
   (when-not (and (map? clause) (#{:refuse :warning} (:severity clause))
                  (string? (:explain clause)))
     (throw (t/definition-error
             (str "defguard " (name gname)
-                 ": the first argument is the sentence — (refuse \"…\") or (warn \"…\")"))))
+                 ": the first argument is the sentence — (refuse \"…\"), (warn \"…\") or (hold \"…\")"))))
+  (if (:hold clause)
+    (hold-guard gname clause law opts)
+    (law-guard gname clause law opts)))
+
+(defn- law-guard
+  "The plain expression guard a refuse or warn sentence and its law mean."
+  [gname clause law opts]
   (when-not (seq? law)
     (throw (t/definition-error
             (str "defguard " (name gname)
@@ -439,6 +464,50 @@
               ;; the default, :allow, is left out, so no fingerprint moves
               (= :deny (:pending clause)) (assoc :pending :deny)))))
 
+(def ^:private hold-open
+  "No door clears this one. The call waits as a held_call for the person's tap, and the person's Allow runs it.")
+
+(defn- hold-guard
+  "The code guard a (hold \"…\") sentence means: the person-wall shape
+  inbox_item's `the-correction-is-a-persons` spells by hand. `:hold
+  true`, reads :principal and :within; every hand but an agent's
+  passes, and an agent passes only as the engine's replay of a held
+  call its person allowed, for the kind and door the call stands on
+  (the ctx's :self and :door). With a law, the hold stands only while
+  the law is false; the law true, every hand passes."
+  [gname clause law opts]
+  (when-not (or (nil? law) (seq? law))
+    (throw (t/definition-error
+            (str "defguard " (name gname)
+                 ": a hold's law is a quoted expression, '(expr), or nothing"))))
+  (when-not (and (or (nil? opts) (map? opts)) (every? #{:open} (keys opts)))
+    (throw (t/definition-error
+            (str "defguard " (name gname)
+                 ": the map after a hold's law is {:open \"…\"}; " (pr-str opts) " is not"))))
+  (let [sentence (:explain clause)
+        inner (when law (law-guard gname {:severity :refuse :explain sentence} law nil))
+        check (fn [row inp ctx]
+                (let [self (:self ctx)
+                      door (or (:door ctx) (:action self))
+                      [v] (when inner (g/evaluate inner row inp ctx))]
+                  (cond
+                    (and v (t/allow? v)) v
+                    (not= :agent (:type (:principal ctx))) (t/allow)
+                    (and (:kind self) door
+                         (holds/approved-hold? ctx (:kind self) door (:id row))) (t/allow)
+                    (seq (:vars v)) (t/deny {:vars (:vars v)})
+                    :else (t/deny))))]
+    (g/guard (cond-> {:name gname
+                      :explain sentence
+                      :hold true
+                      :reads (into [:principal :within]
+                                   (remove #{:principal :within})
+                                   (:reads inner))
+                      :open (or (:open opts) hold-open)
+                      :check (with-meta check {:waymark10/form (list 'hold sentence law)})}
+               (seq (:judges inner)) (assoc :judges (:judges inner))
+               (seq (:vars inner)) (assoc :vars (vec (keys (:vars inner))))))))
+
 (defmacro defguard
   "A sentence-first expression guard:
 
@@ -458,7 +527,16 @@
   {c.field} part reads as when binder c matched only rows the caller
   cannot see (left out, that sentence drops). `:pending :deny` makes an
   unknown verdict (a read no hook could answer, as on the render probe)
-  refuse; the default, :allow, answers pending."
+  refuse; the default, :allow, answers pending.
+
+  A person's tap is one line, its law optional:
+
+     (defguard principal-signs-off
+       (hold \"A study is signed off only on The Principal's tap.\"))
+
+  holds every agent's call on the door it sits on for the person's
+  tap; with a law, '(< (data :amount_usd) 5000), it holds only while
+  the law is false."
   [name clause & [law opts]]
   `(def ~name (sentence-guard ~(keyword name) ~clause ~law ~opts)))
 

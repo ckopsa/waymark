@@ -8,6 +8,11 @@
   (refuse "An item is done by someone; name who first.")
   '(present? :assignee))
 
+;; A door that waits for the owner's tap is one line, its law optional
+;; (with one, it holds only while the law is false). Refer `hold` from
+;; waymark10.dsl and put the guard in that door's :guards:
+;;   (defguard owner-drops (hold "An item is dropped only on the owner's tap."))
+
 (defresource item
   {:kind :item
    :plural "items"

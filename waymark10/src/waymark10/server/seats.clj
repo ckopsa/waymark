@@ -2248,7 +2248,8 @@
   "One cue of a seat's inbox (ticket ab77e635): a `wake_on`-shaped
   entry, and the note the inbox door attaches to each event the entry
   matches. An empty `actions` is every action of the kind, as it is in
-  `only`."
+  `only`. A cue with no `note` is a wake entry as it stands, and the
+  door attaches `cue-note`'s default sentence (ticket 1f3aa7cd)."
   [:map
    [:kind {:x-options {:from :kinds}
            :x-display {:label "Kind"
@@ -2263,9 +2264,10 @@
                          :spelled-by-hand grants/filter-spelled-by-hand
                          :help "Which rows this cue is about: field=value pairs in the shape of that kind's own query, the collection grammar's eq. The row is read as it stands when the inbox serves the event. Omit it and every row of the kind matches."}}
     [:maybe grants/filter-map-schema]]
-   [:note {:examples ["An ask from household: groom it."]
+   [:note {:optional true
+           :examples ["An ask from household: groom it."]
            :x-display {:label "Note"
-                       :help "What this seat does about such an event, in one line. The inbox attaches it to each event this cue matches."}}
+                       :help "What this seat does about such an event, in one line. The inbox attaches it to each event this cue matches. Leave it out and the event carries a default sentence: that the row arrived and may wait on your tap."}}
     [:string {:min 1 :max 280}]]])
 
 (def inbox-field
@@ -4128,6 +4130,9 @@
                              :x-display {:label "Its last refusal"}}
               [:maybe [:string {:max 200}]]]]
      :record true
+     ;; :ref-unjudged — the engine's own hand names the sitting that
+     ;; missed, read off the sweep, and no person reaches this door
+     :waives #{:ref-unjudged}
      :guards [the-engines-own-hand]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Record undelivered" :order 20}}
@@ -4239,7 +4244,9 @@
     {:from #{:active} :to :active
      :input follow-successor-input
      :record true
-     :waives #{:edit-shape}
+     ;; :ref-unjudged — only the judgment's own supersede reaches this
+     ;; door, and it names itself and the successor its own guard judged
+     :waives #{:edit-shape :ref-unjudged}
      :guards [followed-by-a-supersede]
      :safety {:idempotent true :reversible false :confirm false}
      :handler follow-successor
@@ -4249,7 +4256,8 @@
     {:from #{:parked} :to :parked
      :input follow-successor-input
      :record true
-     :waives #{:edit-shape}
+     ;; :ref-unjudged — as follow_successor's
+     :waives #{:edit-shape :ref-unjudged}
      :guards [followed-by-a-supersede]
      :safety {:idempotent true :reversible false :confirm false}
      :handler follow-successor
@@ -6840,6 +6848,18 @@
       (nil? stated) default
       (some? (:only stated)) stated
       :else (merge default (dissoc stated :only)))))
+
+(defn cue-note
+  "The words a cue attaches to an event of `action` it matches: its
+  stated `note`, else a default sentence built from the entry, so a
+  cue spelled as a `wake_on` entry still tells the person (ticket
+  1f3aa7cd). A cue that names actions says by which one the row
+  arrived; one with no actions says only that it moved."
+  [cue action]
+  (or (some-> (:note cue) str not-empty)
+      (if (seq (:actions cue))
+        (str "A " (:kind cue) " arrived by " action ": it may wait on your tap.")
+        (str "A " (:kind cue) " moved: it may wait on your tap."))))
 
 (def inbox-keys-max
   "How many inbox keys of one sitting answer at one time. A same-session
