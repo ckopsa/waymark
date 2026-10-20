@@ -663,7 +663,10 @@
 
   `history` (the subject row's declared log, oldest first) is walked
   BEFORE the walk to `state`: each entry's door is knocked on as the
-  principal it names, so the log a `did` guard reads is the real one.
+  principal it names, with the entry's :input (its handles already
+  filled) as the body, so the log a `did` guard reads is the real one.
+  An :acted-by entry is not staged here: an acted-as move needs a
+  clone and a seeded cast, so the check tier judges it.
   The walker's own steps fill any gap — to an entry's :from, then to
   `state` — and log as the walker, which no entry names. An entry that
   cannot be staged answers {:error …} naming it."
@@ -704,12 +707,13 @@
                          (reduced (unstageable i h (str "this engine's " (name kind)
                                                         " declares no " (name (:action h)) " door")))
                          (some? (:acted-by h))
-                         (reduced (unstageable i h (str "the walker has no seat for " (pr-str (:acted-by h))
-                                                        " to act as " (pr-str (:as h)) " through")))
+                         (reduced (unstageable i h (str "An acted-as history entry is judged in the check"
+                                                        " tier; mark the scenario :check-tier :given or"
+                                                        " move it there.")))
                          (:error there)
                          (reduced (unstageable i h (:error there)))
                          :else
-                         (let [r (invoke-http ctx kind id (:action h) nil
+                         (let [r (invoke-http ctx kind id (:action h) (:input h)
                                               {:headers {"x-waymark-principal" (str (:as h))
                                                          "x-waymark-actor-type" "person"}})]
                            (if-not (= 200 (:status r))
@@ -831,7 +835,8 @@
                                   (get-in s [:row :state])
                                   (scenario/fill-handles (get-in s [:row :data])
                                                          staged)
-                                  (:history s))]
+                                  (mapv #(cond-> % (:input %) (update :input scenario/fill-handles staged))
+                                        (:history s)))]
                      (if (:error subject)
                        [::unstaged (:error subject)]
                        (invoke-http ctx (:kind s) (:id subject) (:attempt s)

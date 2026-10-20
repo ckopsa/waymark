@@ -494,6 +494,19 @@
       (is (re-find #"Seat tried: holder, which would not be woken"
                    (str (get-in (first filed) [:data :detail])))))))
 
+(deftest with-no-org-plan-kind-the-pass-runs-as-today
+  ;; a waymark10-only engine: no org is live, so nothing is hired and
+  ;; the aged row's draft is filed as before
+  (let [eng (pass-engine)
+        row-id (aged-ticket! eng)
+        eng (later eng)]
+    (is (not (contains? (inv/resources eng) :org_plan)))
+    (live/pass! eng)
+    (is (= 1 (count (filed-for eng row-id))))
+    (testing "a second pass files nothing more"
+      (live/pass! eng)
+      (is (= 1 (count (filed-for eng row-id)))))))
+
 (defn- at-clock
   "The engine at `seconds` past `t0`."
   [eng ^Instant t0 seconds]

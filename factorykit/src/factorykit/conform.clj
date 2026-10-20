@@ -18,16 +18,19 @@
   manifest  org.edn is there, a map, naming the org and its :live
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
-            names fills with no hole left
+            names fills with no hole left — its `:rehearsal :seats`
+            too, joined as a clone joins them (ticket 290faa7a)
   resource  every kind passed the defresource gate
   registry  the kinds assemble beside the ones the engine enrols
   crack     cracks/audit over the org's kinds and its seed's seats,
-            pure: declarations and seat maps, no store
+            the rehearsal's among them, pure: declarations and seat
+            maps, no store
   sentence  every guard explains itself, and every confirm door says
             its consequence
   boot      a memory engine answers discover, schema, query, get and
             a dry run of each create, for every kind
-  scope     every seat's scope, and every cast member's :scope, names
+  scope     every seat's scope, and every cast member's :scope (the
+            rehearsal's seats and cast as well), names
             kinds and actions the booted engine serves; a seat whose
             seed entry names an :owner
             names a cast member, and sits inside that member's :scope,
@@ -538,7 +541,10 @@
                 (str "resources/" org "/seed.edn does not read: " (root-message seed))
                 "Write the seed as docs/orgkit.md § The seed says.")]
       (let [{rs :resources :as loaded} (load-org dir org)
-            {:keys [seats] :as seeded} (seed-seats seed)]
+            ;; the seed, cast and seats, as a clone joins its :rehearsal
+            ;; to them (ticket 290faa7a): judged by seed, crack and scope
+            cloned (org-boot/rehearsed seed {:clone? true})
+            {:keys [seats] :as seeded} (seed-seats cloned)]
         (if-not rs
           (:findings loaded)
           (let [booted (boot org rs seed)]
@@ -554,8 +560,8 @@
                   (sentence-findings rs)
                   (:findings booted)
                   (when-some [eng (:engine booted)]
-                    (scope-findings eng seats seed))
-                  (decision-findings rs seats seed)
+                    (scope-findings eng seats cloned))
+                  (decision-findings rs (:seats (seed-seats seed)) seed)
                   (world-findings org rs seed
                                   (try (org-boot/manifest dir) (catch Throwable _ nil)))))))))))
 
