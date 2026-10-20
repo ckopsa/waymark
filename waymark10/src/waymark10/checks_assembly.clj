@@ -20,6 +20,7 @@
   v10 spelling yet; each check arrives with its feature."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
+            [waymark10.expr :as expr]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -714,6 +715,89 @@
                         " does not depart from " landed ", where the step's "
                         ":do lands — it is not this step's reverse")))))))))
 
+;; ── follow: the field is on the kind it reaches ─────────────────────
+
+(defn- garnish-keys
+  "The data fields a kind's refs maintain beside its schema's own: each
+  ref's :label and the targets of its :carry — written onto the row by
+  the engine, so a follow reads them like any data field."
+  [form]
+  (into #{}
+        (mapcat (fn [[_ {:keys [properties]}]]
+                  (cond-> []
+                    (keyword? (:label properties)) (conj (:label properties))
+                    (map? (:carry properties)) (into (vals (:carry properties))))))
+        (schema/entry-map form)))
+
+(defn- check-follow-fields
+  "[follow-unknown-field]: every follow reads a field its target kind
+  has — a data field, a ref's maintained label or carry, :state or :id
+  (docs/spec-related-row-law.md §6). Judged here, where the target's
+  schema is known; a target that is not registered is check-refs' to
+  name."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk _ field] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :let [target (get kinds tk)]
+            :when (and target
+                       (not (contains? #{:state :id} field))
+                       (not (contains? (into (set (schema/entry-keys (:schema target)))
+                                             (garnish-keys (:schema target)))
+                                       field)))]
+      (err kind :follow-unknown-field
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (name tk) "." (name field) ", a field " (name tk) " does not "
+                "have — follow reads a data field, :state or :id")))
+    []))
+
+;; ── exists / none / count-rows: an index to ask, evidence on its kind ──
+
+(defn- check-rows-queries
+  "[exists-unfiltered]: every where field of an exists, none or
+  count-rows is declared :filterable on the kind it asks — :id and
+  :state are the row's own columns — an error, not a warning, because
+  an unindexed guard query runs on every write. [remedy-on-evidence-kind]:
+  a remedy whose :id is (evidence :b), b a binder, names a door of b's
+  kind (docs/spec-related-row-law.md §3, §6). A `first` in :evidence is
+  judged as a binder is: its where and its pred's wheres must ask
+  indexed fields, and (evidence :name) must name a door of its kind."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :let [firsts (when (map? (:evidence guard))
+                           (into {} (filter (comp map? val)) (:evidence guard)))]
+            :when (or (:when guard) (seq firsts))]
+      (doseq [[tk where] (concat (mapcat expr/rows-queries (cons (:when guard) (vals (:vars guard))))
+                                 (mapcat (fn [{:keys [kind where pred]}]
+                                           (cons [kind where] (expr/rows-queries pred)))
+                                         (vals firsts)))
+              :let [target (get kinds tk)]
+              :when target
+              f (sort (keys where))
+              :when (not (or (contains? #{:id :state} f)
+                             (contains? (:filterable target) f)))]
+        (err kind :exists-unfiltered
+             (str "guard " (name (:name guard)) " on " (name door) " asks "
+                  (name tk) " where " (name f) ", a field " (name tk)
+                  " does not declare :filterable — an unindexed guard query "
+                  "runs on every write")))
+      (doseq [rmd (:remedies guard)
+              :when (map? rmd)
+              :let [[op b] (when (seq? (:id rmd)) (:id rmd))
+                    tk (or (get-in guard [:binders b :kind])
+                           (get-in firsts [b :kind]))]
+              :when (and (= 'evidence op) tk
+                         (not= (name tk) (namespace (:door rmd))))]
+        (err kind :remedy-on-evidence-kind
+             (str "guard " (name (:name guard)) " on " (name door) ": remedy "
+                  (pr-str (:door rmd)) " acts on (evidence " b "), a row of "
+                  (name tk) " — name a door of " (name tk))))))
+  [])
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -751,4 +835,5 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-unref'd-ids])})
+          check-link-where check-follow-fields check-rows-queries
+          check-unref'd-ids])})

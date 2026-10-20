@@ -83,6 +83,10 @@
              :hide (boolean (get entry "hide"))
              :severity (keyword (or (get entry "severity") "refuse"))
              :requires-token (get entry "requires_token")
+             :errors (not-empty (into {}
+                                      (map (fn [[k s]] [(keyword k) s]))
+                                      (get entry "errors")))
+             :pending (some-> (get entry "pending") keyword)
              :becomes-available-at (:becomes-available-at resident)})
     (catch Exception e
       (binding [*out* *err*]

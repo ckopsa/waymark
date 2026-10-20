@@ -23,6 +23,7 @@
   where it started."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.expr :as e]
             [waymark10.fingerprint :as fp]
             [waymark10.resource :as r]
             [workqueue10.main :as main]))
@@ -167,3 +168,78 @@
                  ": declaring how its work ENDS left its fingerprint"
                  " unmoved — :over is law the ending wall reads, and"
                  " fingerprint-of must project it"))))))
+
+(defn- when-trees
+  "Every declarative :when tree a kind carries, wherever it sits."
+  [res]
+  (->> (tree-seq (some-fn map? vector? set?)
+                 #(if (map? %) (vals %) (seq %))
+                 (into {} res))
+       (keep #(when (map? %) (:when %)))
+       (filter #(and (seq? %) (e/well-formed? %)))
+       distinct))
+
+(defn- when-guards
+  "Every map a kind carries that declares a :when tree — the guard
+  itself, so its :pending posture rides beside the tree."
+  [res]
+  (->> (tree-seq (some-fn map? vector? set?)
+                 #(if (map? %) (vals %) (seq %))
+                 (into {} res))
+       (filter #(and (map? %) (seq? (:when %)) (e/well-formed? (:when %))))
+       distinct))
+
+(def ^:private principals
+  "Who acts now, each judged: an agent and a person."
+  [{:principal "seat:fingerprint-pin" :faces #{"seat:fingerprint-pin"}}
+   {:principal "person:fingerprint-pin" :faces #{"person:fingerprint-pin"}}])
+
+(defn- history-actors
+  "A scenario's :history as the scope's :actors — every face of every
+  actor of a door, as the guard scope's log answers it."
+  [history]
+  (fn [door]
+    (into #{}
+          (comp (filter #(= (name door) (name (:action %))))
+                (mapcat (juxt :as :acted-by))
+                (remove nil?)
+                (map str))
+          history)))
+
+(defn- judged-scopes
+  "One scope per principal per scenario history of the kind — an empty
+  log when the kind declares no scenario."
+  [res]
+  (for [p principals
+        h (or (seq (keep :history (:scenarios res))) [[]])]
+    (assoc p :data {} :input {} :vars {} :actors (history-actors h))))
+
+(deftest the-unknown-verdict-moves-no-existing-law
+  ;; docs/spec-related-row-law.md §9 step 1: the third verdict is new
+  ;; language, and nothing the household already declares may change
+  ;; by it. The fingerprint hashes the normalized tree and neither
+  ;; normalize nor fingerprint-of learned the sentinel, so no hash
+  ;; moves; the verdict is pinned here: given who acts and the log a
+  ;; tree reads, no :when answers unknown — the two-valued verdict it
+  ;; always gave. (me) and did read the principal and :actors, so each
+  ;; tree is judged by an agent and a person over each scenario's
+  ;; :history (step 9).
+  (let [resources (main/check-resources)
+        trees (mapcat (fn [res] (map #(vector (name (:kind res)) % res) (when-trees res)))
+                      resources)]
+    (is (seq trees) "no kind declares a :when — this test has gone stale")
+    (doseq [[kind w res] trees
+            scope (judged-scopes res)]
+      (testing (str kind " " (:principal scope) " " (pr-str w))
+        (is (= (e/evaluate w scope) (e/evaluate (e/normalize w) scope)))
+        (is (not (e/unknown? (e/evaluate w scope))))))
+    (testing "with an empty scope, an unknown verdict is never a refusal (§5)"
+      (doseq [res resources
+              g (when-guards res)
+              :let [w (:when g)]
+              scope [{} {:data {} :input {} :vars {}}]]
+        (testing (str (name (:kind res)) " " (pr-str w))
+          (is (= (e/evaluate w scope) (e/evaluate (e/normalize w) scope)))
+          (when (e/unknown? (e/evaluate w scope))
+            (is (not= :deny (:pending g))
+                "an unknown verdict reads pending, not a refusal")))))))

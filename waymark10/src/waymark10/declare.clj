@@ -381,7 +381,7 @@
   "Build the plain expression-guard map a sentence + law pair means.
   Construction-validated here (the defaction pattern): the def line is
   where a malformed guard fails."
-  [gname clause law]
+  [gname clause law & [opts]]
   (when-not (and (map? clause) (#{:refuse :warning} (:severity clause))
                  (string? (:explain clause)))
     (throw (t/definition-error
@@ -392,21 +392,52 @@
             (str "defguard " (name gname)
                  ": a guard is a verdict — give it its law: "
                  "(defguard " (name gname) " (refuse \"…\") '(expr))"))))
-  (let [w (rewrite-sentence-law law)
+  (when-not (and (or (nil? opts) (map? opts))
+                 (every? #{:remedies :open :errors :evidence :vars :hidden :pending} (keys opts))
+                 (contains? #{nil :allow :deny} (:pending opts)))
+    (throw (t/definition-error
+            (str "defguard " (name gname)
+                 ": the map after the law is {:remedies … :open … :errors {field \"…\"}"
+                 " :vars {name expr} :hidden {binder \"…\"} :pending :allow|:deny}; "
+                 (pr-str opts) " is not"))))
+  (when-some [vs (:vars opts)]
+    (when-not (and (map? vs) (every? keyword? (keys vs)) (every? seq? (vals vs)))
+      (throw (t/definition-error
+              (str "defguard " (name gname)
+                   ": :vars is {name '(expr)}, each read by {name} in the sentence")))))
+  (when-some [hs (:hidden opts)]
+    (let [binders (into (set (keys (expr/rows-binders law)))
+                        (when (map? (:evidence opts)) (keys (:evidence opts))))]
+      (when-not (and (map? hs)
+                     (every? binders (keys hs))
+                     (every? #(and (string? %) (not (str/blank? %))) (vals hs)))
+        (throw (t/definition-error
+                (str "defguard " (name gname)
+                     ": :hidden is {binder \"sentence\"}, a binder of the law: "
+                     "the sentence its {binder.field} part reads as when no match is visible"))))))
+  (let [clause (merge clause (dissoc opts :vars :hidden))
+        w (rewrite-sentence-law law)
         inputs (:inputs (expr/info (expr/normalize w)))
+        own (into {} (map (fn [[k f]] [k (rewrite-sentence-law f)])) (:vars opts))
         vars (into {}
                    (keep (fn [[_ p]]
                            (let [k (keyword p)]
-                             (when-not (contains? inputs k)
+                             (when-not (or (contains? inputs k) (contains? own k))
                                [k (list 'data k)]))))
-                   (re-seq sentence-placeholder (:explain clause)))]
+                   (re-seq sentence-placeholder (:explain clause)))
+        vars (merge vars own)]
     (g/expr (cond-> {:name gname
                      :when w
                      :explain (:explain clause)
                      :severity (:severity clause)}
               (seq vars) (assoc :vars vars)
               (:remedies clause) (assoc :remedies (:remedies clause))
-              (:open clause) (assoc :open (:open clause))))))
+              (:open clause) (assoc :open (:open clause))
+              (:errors clause) (assoc :errors (:errors clause))
+              (:evidence clause) (assoc :evidence (:evidence clause))
+              (:hidden opts) (assoc :hidden (:hidden opts))
+              ;; the default, :allow, is left out, so no fingerprint moves
+              (= :deny (:pending clause)) (assoc :pending :deny)))))
 
 (defmacro defguard
   "A sentence-first expression guard:
@@ -418,9 +449,18 @@
 
   Def's the plain guard map the inline g/expr spelling produces —
   construction-validated at the def line. (waymark10.guards/defguard
-  remains the CODE-guard macro; this one speaks sentences and trees.)"
-  [name clause & [law]]
-  `(def ~name (sentence-guard ~(keyword name) ~clause ~law)))
+  remains the CODE-guard macro; this one speaks sentences and trees.)
+
+  A map after the law carries the way out and the per-field sentences:
+  {:remedies […] :open \"…\" :errors {:meal_id \"not an on-list meal\"}}.
+  :vars {:count '(count [c :kind where])} names what {count} reads,
+  each evaluated as the law is; :hidden {:c \"…\"} is the sentence a
+  {c.field} part reads as when binder c matched only rows the caller
+  cannot see (left out, that sentence drops). `:pending :deny` makes an
+  unknown verdict (a read no hook could answer, as on the render probe)
+  refuse; the default, :allow, answers pending."
+  [name clause & [law opts]]
+  `(def ~name (sentence-guard ~(keyword name) ~clause ~law ~opts)))
 
 ;; ── sentence-first scenarios (waymark-442.2) ────────────────────────
 ;; The same shape as defguard, one turn outward: a guard's sentence

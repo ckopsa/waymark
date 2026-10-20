@@ -18,16 +18,19 @@
   manifest  org.edn is there, a map, naming the org and its :live
   load      the org's module loads, and `resources` answers its kinds
   seed      the seed reads, names the org, and every seat template it
-            names fills with no hole left
+            names fills with no hole left — its `:rehearsal :seats`
+            too, joined as a clone joins them (ticket 290faa7a)
   resource  every kind passed the defresource gate
   registry  the kinds assemble beside the ones the engine enrols
   crack     cracks/audit over the org's kinds and its seed's seats,
-            pure: declarations and seat maps, no store
+            the rehearsal's among them, pure: declarations and seat
+            maps, no store
   sentence  every guard explains itself, and every confirm door says
             its consequence
   boot      a memory engine answers discover, schema, query, get and
             a dry run of each create, for every kind
-  scope     every seat's scope, and every cast member's :scope, names
+  scope     every seat's scope, and every cast member's :scope (the
+            rehearsal's seats and cast as well), names
             kinds and actions the booted engine serves; a seat whose
             seed entry names an :owner
             names a cast member, and sits inside that member's :scope,
@@ -39,6 +42,11 @@
             (money_unbounded). Each sentence is a question to put to
             the person; each clears in code — a :hold guard, an
             :expected-age, or the person's answer as :decided
+  no-outside-world
+            the org's rehearsal has an outside world (ticket
+            a4149376): a :rehearsal cast member whose :scope creates
+            one of the org's kinds, and a world seat under
+            :rehearsal :seats; org.edn's :world :none waives it
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -453,6 +461,32 @@
           (no-wait-limit-findings rs)
           (money-unbounded-findings rs seats)))
 
+;; ── world ───────────────────────────────────────────────────────────
+
+(defn- world-findings
+  "The org's outside world, which only its clone loads (ticket
+  a4149376): a `:rehearsal` cast member whose :scope creates one of the
+  org's kinds, and a world seat under `:rehearsal :seats` — the world
+  template, or a whole seat that acts as cast. Without both, nobody
+  files, sends or pays anything in the filmed week. `:world :none` in
+  the manifest waives it, for an org that only works inside."
+  [org rs seed manifest]
+  (let [kinds (set (map (comp text :kind) rs))
+        {:keys [cast seats]} (:rehearsal seed)
+        outside? (some (fn [[_ m]]
+                         (some #(and (kinds (text (:kind %)))
+                                     (some #{"create" "*"} (map text (:actions %))))
+                               (:scope m)))
+                       cast)
+        world? (some #(or (= "world" (text (:template %)))
+                          (true? (get-in % [:seat :acts_as_cast])))
+                     seats)]
+    (when-not (or (= :none (when (map? manifest) (:world manifest)))
+                  (and outside? world?))
+      [(finding :no-outside-world [org] org
+                "Nobody outside the business starts work in the first week, so the film has nothing to show."
+                "Ask: \"Who outside your business starts work for you, and what do they send?\" Write each as a :rehearsal :cast member whose :scope creates what they send, and the world seat, as orgs/example does; or :world :none in org.edn.")])))
+
 ;; ── the suite ───────────────────────────────────────────────────────
 
 (defn- name-findings
@@ -507,7 +541,10 @@
                 (str "resources/" org "/seed.edn does not read: " (root-message seed))
                 "Write the seed as docs/orgkit.md § The seed says.")]
       (let [{rs :resources :as loaded} (load-org dir org)
-            {:keys [seats] :as seeded} (seed-seats seed)]
+            ;; the seed, cast and seats, as a clone joins its :rehearsal
+            ;; to them (ticket 290faa7a): judged by seed, crack and scope
+            cloned (org-boot/rehearsed seed {:clone? true})
+            {:keys [seats] :as seeded} (seed-seats cloned)]
         (if-not rs
           (:findings loaded)
           (let [booted (boot org rs seed)]
@@ -523,8 +560,10 @@
                   (sentence-findings rs)
                   (:findings booted)
                   (when-some [eng (:engine booted)]
-                    (scope-findings eng seats seed))
-                  (decision-findings rs seats seed)))))))))
+                    (scope-findings eng seats cloned))
+                  (decision-findings rs (:seats (seed-seats seed)) seed)
+                  (world-findings org rs seed
+                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))))))))))
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its

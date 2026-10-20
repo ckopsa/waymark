@@ -201,6 +201,44 @@
                 (fn [a] (update a :guards #(mapv (partial map-leaf-guards bind) %))))
         (update :create-guards #(mapv (partial map-leaf-guards bind) (or % []))))))
 
+(defn- bind-guard-follows
+  "One guard tree with each leaf's follows bound; a composite whose
+  parts moved sums its :reads again, as g/and and g/or built it."
+  [kind-of guard]
+  (if-some [k (cond (:all guard) :all (:any guard) :any)]
+    (let [parts (mapv (partial bind-guard-follows kind-of) (get guard k))]
+      (if (= parts (get guard k))
+        guard
+        (assoc guard k parts :reads (vec (distinct (mapcat :reads parts))))))
+    (g/bind-follows guard kind-of)))
+
+(defn- ref-kinds
+  "field → target kind, for the single-id refs of a :map schema."
+  [form]
+  (into {}
+        (keep (fn [{:keys [field kind listed]}] (when-not listed [field kind])))
+        (when form (schema/ref-fields form))))
+
+(defn- bind-follow-kinds
+  "Write the target kind into every (follow <ref> :field) of the kind's
+  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
+  the row's schema, (input :f) the door's own input. A ref that names
+  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  [rmap]
+  (let [data-kinds (ref-kinds (:schema rmap))
+        bind (fn [input-form guards]
+               (let [input-kinds (ref-kinds input-form)
+                     kind-of (fn [[op f]]
+                               (get (if (= 'data op) data-kinds input-kinds) f))]
+                 (mapv (partial bind-guard-follows kind-of) guards)))]
+    (cond-> (-> rmap
+                (update :actions update-vals
+                        (fn [a] (update a :guards #(bind (:input a) %))))
+                (update :create-guards
+                        #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
+      (:creates rmap)
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
   and property vectors: [:vector [:waymark/vocab {:open true}]] →
@@ -2047,6 +2085,7 @@
         ;; mapped, and replay-history reads the log through the chain
         (update :renames #(merge {:states {} :actions {}} %))
         normalize-derived
+        bind-follow-kinds
         bind-require-specs
         merge-vocab-filters))))
 
@@ -2095,14 +2134,33 @@
   namespace that owns it. A kind may also self-declare :domain; the
   stamp only fills the blank, it never overrides. Domain placement is
   advertisement (well-known carries it, the generic UI's global nav
-  reads it), not fingerprinted law — the :nav precedent."
-  [domain resources]
-  (when-not (and (keyword? domain)
-                 (re-matches #"[a-z][a-z0-9_]*" (name domain)))
-    (throw (t/definition-error
-            (str "in-domain: domain must be a snake_case keyword token, got "
-                 (pr-str domain)))))
-  (mapv #(update % :domain (fn [d] (or d domain))) resources))
+  reads it), not fingerprinted law — the :nav precedent.
+
+  With `defaults`, an org's template stamps those keys too, each only
+  where the kind does not say it itself: `:default-expected-age`, the
+  seconds a row may rest in a non-terminal state that names no age
+  (nil opts out), and `:row-domain`."
+  ([domain resources] (in-domain domain nil resources))
+  ([domain defaults resources]
+   (when-not (and (keyword? domain)
+                  (re-matches #"[a-z][a-z0-9_]*" (name domain)))
+     (throw (t/definition-error
+             (str "in-domain: domain must be a snake_case keyword token, got "
+                  (pr-str domain)))))
+   (when-some [extra (seq (remove #{:default-expected-age :row-domain} (keys defaults)))]
+     (throw (t/definition-error
+             (str "in-domain: defaults name " (vec extra)
+                  "; they may name :default-expected-age and :row-domain"))))
+   (let [age (:default-expected-age defaults)]
+     (when-not (or (nil? age) (pos-int? age))
+       (throw (t/definition-error
+               (str "in-domain: :default-expected-age is a positive integer of seconds or nil, got "
+                    (pr-str age))))))
+   (mapv (fn [r]
+           (reduce-kv (fn [r k v] (if (contains? r k) r (assoc r k v)))
+                      (update r :domain (fn [d] (or d domain)))
+                      defaults))
+         resources)))
 
 (defmacro defhandler
   "An imperative-residue handler whose identity is its canonical

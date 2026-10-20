@@ -1264,6 +1264,23 @@
       (or (kit/behind? (:behind_by answer))
           (contains? #{"behind" "diverged"} (word (:status answer))))))
 
+  forge/ForgePathDiff
+  (forge-path-changed? [this repository from-sha to-sha path]
+    ;; GitHub's compare of the two heads, its `files` filtered by the
+    ;; path (ticket de085c93). A rename counts at either name. GitHub
+    ;; lists at most 300 files: a full list with no match cannot say
+    ;; the path is untouched, so it answers changed.
+    (if (= from-sha to-sha)
+      false
+      (let [answer (call! this "GET"
+                          (str "/repos/" repository "/compare/" from-sha "..." to-sha)
+                          {})
+            files (:files answer)]
+        (boolean
+         (or (some #(forge/under-path? path %)
+                   (mapcat (juxt :filename :previous_filename) files))
+             (>= (count files) 300))))))
+
   forge/ForgeRerun
   (forge-runs [this repository head-sha]
     (latest-runs! this repository head-sha))
@@ -1453,6 +1470,15 @@
   read walks (ticket 47217098). Any other pair of commits has diverged."
   [state repo head sha]
   (swap! state update-in [:repos repo :ancestors head] (fnil conj #{}) sha))
+
+(defn seed-diff!
+  "Say which files differ between `from` and `to`, for the compare
+  route's `files` the path read walks (ticket de085c93). A pair never
+  seeded differs in no file. Each file is a filename, or a map with
+  :filename and :previous_filename for a rename."
+  [state repo from to files]
+  (swap! state assoc-in [:repos repo :diffs [from to]]
+         (mapv #(if (map? %) % {:filename %}) files)))
 
 (defn fail-path!
   "Make every request whose path `pattern` finds throw, as a GitHub
@@ -1695,7 +1721,8 @@
         (let [[_ r from to] (re-matches compare-path path)]
           {:status (cond (= from to) "identical"
                          (contains? (get-in st [:repos r :ancestors to]) from) "ahead"
-                         :else "diverged")})
+                         :else "diverged")
+           :files (vec (get-in st [:repos r :diffs [from to]]))})
 
         (re-matches branch-path path)
         (let [m (re-matches branch-path path)]

@@ -14,16 +14,22 @@
   a ported declaration demands it, never speculatively.
 
   Evaluation is total: no calls, no recursion, no names beyond the
-  scope, no reads. Ordering comparisons with a nil operand are false
+  scope, and no reads but the scope's own :read hook, which `follow`
+  asks for one row (and is unknown without). Ordering comparisons with a nil operand are false
   (a missing value satisfies no ordering claim); arithmetic over nil
   propagates nil. Numbers are longs and exact decimals — a float
   literal is refused at validation, not rounded.
+
+  A scope may carry the `unknown` sentinel (a read no hook could
+  answer, docs/spec-related-row-law.md §5). Every op propagates it,
+  three-valued: `(and false unknown)` is false, `(and true unknown)`
+  is unknown, `(or true unknown)` is true. No form can spell it.
 
   Two spellings that mean the same thing normalize to the same tree
   (see `normalize`), so reformatting a law never mints a revision.
 
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
-  :its (innermost-first seq of quantifier items)}."
+  :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn])
   (:import (java.time LocalDate Instant Period ZoneOffset)))
 
@@ -38,15 +44,51 @@
   count/sum (batch C): the waymark8 quantifier pair, earned by the
   blast-radius meter's own acceptance declarations (a flip count over
   a collection fact and a summed quantity are the shapes the meter's
-  test laws speak) — recorded in docs/waymark10-c-notes.md."
+  test laws speak) — recorded in docs/waymark10-c-notes.md.
+
+  follow: one hop to a field of the row a ref names
+  (docs/spec-related-row-law.md §2), earned by the household meal
+  list's meal-is-listed.
+
+  did/me/self (docs/spec-related-row-law.md §4): separation of duties —
+  who took a door on this row, who acts now, and which row this is.
+  They read the scope's :actors, :faces, :principal and :self, which
+  the guard scope fills from its ctx; a scope without them answers
+  unknown.
+
+  exists/none/count-rows (docs/spec-related-row-law.md §3): other rows
+  of a kind, asked through a where the guard's own scope fills, the
+  row itself left out — earned by the landscaping booking's overlap.
+  Authored as (exists [b :kind {field (op <expr>)}]); the binder is
+  erased at normalization, and (count [b :kind …]) is count-rows.
+
+  str: its parts joined into one string, in order — earned by
+  factory10's its-change-is-under-review, which finds a change by its
+  stored born_from, (= (str \"ticket:\" (self))). An unknown part is
+  unknown, a missing one is nil (docs/spec-related-row-law.md §7)."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
+     str
      days date-of is-set
-     every some count sum})
+     every some count sum
+     follow did me self
+     exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
+
+(deftype Unknown []
+  Object
+  (toString [_] "#waymark/unknown"))
+
+(def unknown
+  "The third verdict: what a read with no hook to answer it evaluates
+  to. Neither true nor false, and never a refusal — a guard whose
+  :when is unknown answers pending. Only a scope can carry it."
+  (Unknown.))
+
+(defn unknown? [v] (instance? Unknown v))
 
 (defn- scalar-literal? [x]
   (or (nil? x) (boolean? x) (string? x)
@@ -59,6 +101,20 @@
   (and (string? s)
        (try (LocalDate/parse ^String s) true
             (catch Exception _ false))))
+
+(defn- follow-ref?
+  "The one ref a follow may start from: (data :f) or (input :f)."
+  [x]
+  (and (seq? x) (contains? '#{data input} (first x))
+       (= 2 (count x)) (keyword? (second x))))
+
+(defn- rows-binder?
+  "[name :kind where]: the binder of exists, none and count over a kind."
+  [x]
+  (and (vector? x) (= 3 (count x)) (simple-symbol? (first x))
+       (keyword? (second x)) (map? (nth x 2))))
+
+(declare check-where)
 
 (defn- check
   "Accumulate problem strings for `form`. `env` is the set of bound
@@ -95,6 +151,14 @@
           now
           (if (zero? n) problems (conj problems "(now) takes no arguments"))
 
+          (me self)
+          (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
+
+          did
+          (if (and (pos? n) (every? keyword? args))
+            problems
+            (conj problems "(did :door …) takes one or more keyword door names"))
+
           it
           (cond
             (not (and (= n 1) (nat-int? (first args))))
@@ -119,6 +183,34 @@
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
 
+          ;; authored (follow <ref> :field); normalized at the def site
+          ;; to (follow :kind <ref> :field)
+          follow
+          (let [[kind ref field] (if (= n 3) args (cons nil args))]
+            (cond
+              (not (<= 2 n 3))
+              (conj problems "(follow <ref> :field) takes a ref and a field")
+              (and (= n 3) (not (keyword? kind)))
+              (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
+              (not (follow-ref? ref))
+              (conj problems (str "(follow …) starts from (data :f) or (input :f) — "
+                                  "one hop; got " (pr-str ref)))
+              (not (keyword? field))
+              (conj problems "(follow …) reads one keyword field of the row it reaches")
+              :else problems))
+
+          ;; authored (exists [b :kind {field (op <expr>)}]); normalized
+          ;; to (exists :kind {…}), the binder erased
+          (exists none count-rows)
+          (cond
+            (and (= n 1) (not= op 'count-rows) (rows-binder? (first args)))
+            (check-where (nth (first args) 2) env depth problems)
+            (and (= n 2) (keyword? (first args)) (map? (second args)))
+            (check-where (second args) env depth problems)
+            :else
+            (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
+                                "takes one binder vector")))
+
           (= not= < <= > >=)
           (if (= n 2)
             (reduce (fn [p a] (check a env depth p)) problems args)
@@ -128,6 +220,11 @@
           (if (>= n 2)
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems (str "(" op " …) takes at least two expressions")))
+
+          str
+          (if (>= n 1)
+            (reduce (fn [p a] (check a env depth p)) problems args)
+            (conj problems "(str …) takes at least one expression"))
 
           ;; ≥1: normalization may dedup (and x x) down to (and x) when
           ;; x is not boolean-valued — the wrapper keeps the coercion
@@ -143,6 +240,10 @@
 
           (every some count sum)
           (cond
+            ;; (count [b :kind where]) counts other rows (count-rows)
+            (and (= op 'count) (= n 1) (rows-binder? (first args)))
+            (check-where (nth (first args) 2) env depth problems)
+
             ;; (count <coll>) alone counts the items — the one 1-ary
             ;; quantifier spelling (batch C)
             (and (= op 'count) (= n 1))
@@ -172,6 +273,32 @@
     (conj problems (str "value " (pr-str form) " ("
                         (some-> form class .getSimpleName)
                         ") is not in the law's vocabulary"))))
+
+(def ^:private where-ops
+  "What a where condition may ask: the edge's join-ops, not=, and (in v …)."
+  '#{= not= < <= > >= in})
+
+(defn- check-where
+  "A where map: each target field to (op <expr>) or (in <expr> …). The
+  exprs read the guard's own scope; the binder is not in it, so these
+  are filters, not joins."
+  [where env depth problems]
+  (reduce
+   (fn [p [field c]]
+     (let [[cop & xs] (when (seq? c) c)]
+       (cond
+         (not (keyword? field))
+         (conj p (str "where field " (pr-str field) " is not a keyword"))
+         (not (contains? where-ops cop))
+         (conj p (str "where " field " takes (op <expr>), op one of "
+                      (pr-str (sort-by str where-ops)) "; got " (pr-str c)))
+         (and (not= 'in cop) (not= 1 (count xs)))
+         (conj p (str "where " field " (" cop " …) compares one expression"))
+         (and (= 'in cop) (empty? xs))
+         (conj p (str "where " field " (in …) takes one or more expressions"))
+         :else (reduce (fn [p x] (check x env depth p)) p xs))))
+   problems
+   (if (map? where) where {})))
 
 (defn problems
   "Vector of problem strings for a form; empty when well-formed.
@@ -227,6 +354,12 @@
     (seq? form)
     (let [[op & args] form]
       (cond
+        ;; (exists [b :kind where]): the binder is erased whole — the
+        ;; where may not read it — and count over a kind is count-rows
+        (and (contains? '#{exists none count} op) (rows-binder? (first args)))
+        (let [[_ kind where] (first args)]
+          (list (if (= op 'count) 'count-rows op) kind (debruijn where env depth)))
+
         (and (contains? quantifier-ops op) (vector? (first args)))
         (let [[binder coll] (first args)
               pred (second args)]
@@ -245,6 +378,9 @@
         :else
         (cons op (map #(debruijn % env depth) args))))
 
+    (map? form)
+    (into {} (map (fn [[k v]] [k (debruijn v env depth)])) form)
+
     :else form))
 
 (defn- norm-decimal ^java.math.BigDecimal [^java.math.BigDecimal d]
@@ -260,7 +396,7 @@
   "Ops whose value is always a boolean — the only operands and/or/not
   may collapse around without changing the value domain: (and x x)
   means (boolean x), which is x itself only when x is already boolean."
-  '#{= not= < <= > >= and or not is-set every some})
+  '#{= not= < <= > >= and or not is-set every some did exists none})
 
 (defn- boolean-valued? [form]
   (and (seq? form) (contains? boolean-valued-ops (first form))))
@@ -298,6 +434,24 @@
             (and (seq? a) (= '= (first a)))    (cons 'not= (rest a))
             (and (seq? a) (= 'not= (first a))) (cons '= (rest a))
             :else (list 'not a)))
+
+        ;; a where's operands normalize and (in …) is a set; the
+        ;; binder was erased in debruijn
+        (exists none count-rows)
+        (if (map? (second args))
+          (list op (first args)
+                (into {}
+                      (map (fn [[f [cop & xs]]]
+                             (let [xs (map norm xs)]
+                               [f (cons cop (if (= 'in cop)
+                                              (sort-by sort-key (distinct xs))
+                                              xs))])))
+                      (second args)))
+          (cons op args))
+
+        ;; a door named twice, or in another order, is the same question
+        did
+        (cons op (sort (distinct args)))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -372,6 +526,26 @@
 ;; ── evaluation (total) ──────────────────────────────────────────────
 
 (defn- truthy? [v] (boolean v))
+
+(defn- kleene-and
+  "False when any operand is known false; else unknown when any is
+  unknown; else true. Stops at the first false."
+  [vs]
+  (reduce (fn [acc v]
+            (cond (unknown? v) unknown
+                  (truthy? v) acc
+                  :else (reduced false)))
+          true vs))
+
+(defn- kleene-or
+  "True when any operand is known true; else unknown when any is
+  unknown; else false. Stops at the first true."
+  [vs]
+  (reduce (fn [acc v]
+            (cond (unknown? v) unknown
+                  (truthy? v) (reduced true)
+                  :else acc))
+          false vs))
 
 (defn- num-compare
   "Exact comparison across long/decimal. Returns an int."
@@ -464,26 +638,32 @@
 (declare evaluate)
 
 (defn- eval-quantifier [op coll-expr pred scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())
-        pred-of (fn [item]
-                  (truthy? (evaluate pred (update scope :its conj item))))]
-    (case op
-      every (boolean (every? pred-of items))
-      some  (boolean (some pred-of items)))))
+  (let [items (evaluate coll-expr scope)]
+    (if (unknown? items)
+      unknown
+      (let [items (if (sequential? items) items ())
+            pred-of (fn [item] (evaluate pred (update scope :its conj item)))]
+        (case op
+          every (kleene-and (map pred-of items))
+          some  (kleene-or (map pred-of items)))))))
 
 (defn- eval-count
   "(count <coll>) — the item count; with a predicate, the count of
   items satisfying it. A missing/non-sequential collection has no
-  items: 0 (the quantifier empty-collection rule, numerically)."
-  ^long [coll-expr pred scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())]
-    (if (nil? pred)
-      (long (clojure.core/count items))
-      (long (clojure.core/count
-             (filter #(truthy? (evaluate pred (update scope :its conj %)))
-                     items))))))
+  items: 0 (the quantifier empty-collection rule, numerically). An
+  unknown collection, or an unknown predicate on any item, is an
+  unknown count."
+  [coll-expr pred scope]
+  (let [items (evaluate coll-expr scope)]
+    (cond
+      (unknown? items) unknown
+      (not (sequential? items)) 0
+      (nil? pred) (long (clojure.core/count items))
+      :else
+      (let [vs (mapv #(evaluate pred (update scope :its conj %)) items)]
+        (if (some unknown? vs)
+          unknown
+          (long (clojure.core/count (filter truthy? vs))))))))
 
 (defn- eval-sum
   "(sum <coll> <expr>) — the exact sum of the body over the items.
@@ -491,19 +671,82 @@
   the whole sum nil (a missing addend is a missing sum — arithmetic's
   nil propagation, not a silent skip)."
   [coll-expr body scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())]
-    (reduce (fn [acc item]
-              (let [v (evaluate body (update scope :its conj item))]
-                (if (number? v) (num-add acc v) (reduced nil))))
-            0 items)))
+  (let [items (evaluate coll-expr scope)]
+    (if (unknown? items)
+      unknown
+      (let [vs (mapv #(evaluate body (update scope :its conj %))
+                     (if (sequential? items) items ()))]
+        (if (some unknown? vs)
+          unknown
+          (reduce (fn [acc v]
+                    (if (number? v) (num-add acc v) (reduced nil)))
+                  0 vs))))))
+
+(defn where-conds
+  "A canonical where under `scope`, as the condition list the scope's
+  :rows-matching and :count-matching hooks take: [{:field :f :op :=
+  :value v} | {:field :f :op :in :values [v …]} …], in field order.
+  unknown when an operand is; nil when one is nil — a missing value
+  matches no row."
+  [where scope]
+  (let [conds (mapv (fn [[field [cop & xs]]]
+                      [field cop (mapv #(evaluate % scope) xs)])
+                    (sort-by key where))
+        vs (mapcat last conds)]
+    (cond
+      (some unknown? vs) unknown
+      (some nil? vs) nil
+      :else (mapv (fn [[field cop vs]]
+                    (if (= 'in cop)
+                      {:field field :op :in :values vs}
+                      {:field field :op (keyword cop) :value (first vs)}))
+                  conds))))
+
+(defn- eval-rows
+  "(exists :kind where), (none …) and (count-rows …) through the
+  scope's :rows-matching and :count-matching hooks, the row itself
+  (:self) left out, so moving a row never collides with its old self.
+  No hook is unknown; a nil operand matches no row."
+  [op kind where scope]
+  (let [conds (where-conds where scope)
+        self (:self scope)
+        match (:rows-matching scope)]
+    (cond
+      (unknown? conds) unknown
+      (nil? conds) (case op exists false none true count-rows 0)
+      (nil? match) unknown
+      (= op 'count-rows)
+      (if-some [tally (:count-matching scope)]
+        (let [n (long (or (tally kind conds) 0))
+              mine? (and self (seq (match kind (conj conds {:field :id :op := :value self}) 1)))]
+          (if mine? (max 0 (dec n)) n))
+        unknown)
+      :else
+      (let [hit (boolean (some #(not= self (str %)) (match kind conds 2)))]
+        (if (= op 'exists) hit (not hit))))))
+
+(defn- str-part
+  "One part of a (str …) as text, or nil for a value with no plain
+  spelling (a map, a list): a keyword by its name, a decimal by its
+  plain digits."
+  [v]
+  (cond
+    (string? v) v
+    (keyword? v) (name v)
+    (decimal? v) (.toPlainString ^java.math.BigDecimal v)
+    (or (boolean? v) (int? v) (instance? LocalDate v) (instance? Instant v)
+        (instance? java.util.UUID v))
+    (clojure.core/str v)
+    :else nil))
 
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
   Total: terminates on every well-formed form and never throws over
   JSON-shaped scope values; missing/mistyped values flow as nil
-  (arithmetic) or false (ordering, quantifier predicates)."
+  (arithmetic) or false (ordering, quantifier predicates). An unknown
+  operand makes the result unknown unless the known operands decide
+  it (and/or and the quantifiers)."
   [form scope]
   (cond
     (scalar-literal? form) form
@@ -517,35 +760,55 @@
         var   (clojure.core/get (:vars scope) (first args))
         now   (:now scope)
         it    (nth (:its scope) (long (first args)) nil)
+        me    (if (contains? scope :principal) (:principal scope) unknown)
+        self  (if (contains? scope :self) (:self scope) unknown)
+
+        ;; true when a face of the principal acting now is a face of
+        ;; any logged actor of one of the doors; no log to ask is unknown
+        did
+        (if-some [actors (:actors scope)]
+          (let [faces (set (:faces scope))]
+            (boolean (some (fn [door] (some faces (actors door))) args)))
+          unknown)
 
         get
         (let [v (evaluate (first args) scope)]
-          (when (map? v) (clojure.core/get v (second args))))
+          (cond (unknown? v) unknown
+                (map? v) (clojure.core/get v (second args))))
 
         date
         (try (LocalDate/parse ^String (first args))
              (catch Exception _ nil))
 
-        days    (whole-days (evaluate (first args) scope))
+        days    (let [v (evaluate (first args) scope)]
+                  (if (unknown? v) unknown (whole-days v)))
         date-of (let [v (evaluate (first args) scope)]
                   (if (instance? Instant v)
                     (.toLocalDate (.atOffset ^Instant v ZoneOffset/UTC))
                     v))
-        is-set  (some? (evaluate (first args) scope))
+        is-set  (let [v (evaluate (first args) scope)]
+                  (if (unknown? v) unknown (some? v)))
 
-        not (clojure.core/not (truthy? (evaluate (first args) scope)))
-        and (boolean (every? #(truthy? (evaluate % scope)) args))
-        or  (boolean (some #(truthy? (evaluate % scope)) args))
+        not (let [v (evaluate (first args) scope)]
+              (if (unknown? v) unknown (clojure.core/not (truthy? v))))
+        and (kleene-and (map #(evaluate % scope) args))
+        or  (kleene-or (map #(evaluate % scope) args))
 
-        =    (val-eq (evaluate (first args) scope) (evaluate (second args) scope))
-        not= (clojure.core/not
-              (val-eq (evaluate (first args) scope) (evaluate (second args) scope)))
+        (= not=)
+        (let [a (evaluate (first args) scope)
+              b (evaluate (second args) scope)]
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (= op '=) (val-eq a b)
+            :else (clojure.core/not (val-eq a b))))
 
         (< <=)
         (let [a (evaluate (first args) scope)
               b (evaluate (second args) scope)]
-          (if (or (nil? a) (nil? b))
-            false
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (or (nil? a) (nil? b)) false
+            :else
             (if-some [c (val-compare a b)]
               (case op < (neg? (long c)) <= (clojure.core/not (pos? (long c))))
               false)))
@@ -554,35 +817,77 @@
         (> >=)
         (let [a (evaluate (first args) scope)
               b (evaluate (second args) scope)]
-          (if (or (nil? a) (nil? b))
-            false
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (or (nil? a) (nil? b)) false
+            :else
             (if-some [c (val-compare a b)]
               (case op > (pos? (long c)) >= (clojure.core/not (neg? (long c))))
               false)))
 
-        + (reduce add2 (map #(evaluate % scope) args))
-        - (if (= 1 (count args))
-            (let [v (evaluate (first args) scope)]
-              (when (number? v) (num-sub 0 v)))
-            (sub2 (evaluate (first args) scope) (evaluate (second args) scope)))
-        * (reduce mul2 (map #(evaluate % scope) args))
-
-        (min max)
-        (let [vs (into [] (comp (map #(evaluate % scope)) (filter some?)) args)]
-          (when (and (seq vs) (every? number? vs))
+        (+ - * min max abs)
+        (let [all (mapv #(evaluate % scope) args)]
+          (if (some unknown? all)
+            unknown
+            (case op
+              + (reduce add2 all)
+              - (if (= 1 (count all))
+                  (let [v (first all)]
+                    (when (number? v) (num-sub 0 v)))
+                  (sub2 (first all) (second all)))
+              * (reduce mul2 all)
+              (min max)
+              (let [vs (filterv some? all)]
+                (when (and (seq vs) (every? number? vs))
             (reduce (fn [acc v]
                       (let [c (num-compare acc v)]
                         (case op
                           min (if (pos? c) v acc)
                           max (if (neg? c) v acc))))
                     vs)))
+              abs
+              (let [v (first all)]
+                (cond
+                  (decimal? v) (.abs ^java.math.BigDecimal v)
+                  (number? v) (clojure.core/abs v)
+                  :else nil)))))
 
-        abs
-        (let [v (evaluate (first args) scope)]
+        ;; unknown in is unknown out; a missing part is a missing string
+        str
+        (let [all (mapv #(evaluate % scope) args)]
           (cond
-            (decimal? v) (.abs ^java.math.BigDecimal v)
-            (number? v) (clojure.core/abs v)
-            :else nil))
+            (some unknown? all) unknown
+            (some nil? all) nil
+            :else (let [parts (mapv str-part all)]
+                    (when (every? some? parts)
+                      (apply clojure.core/str parts)))))
+
+        ;; one hop through the scope's :read hook: a nil ref, an id no
+        ;; row has and a row the caller may not see answer nil; no
+        ;; hook, or no kind written in yet, is unknown
+        follow
+        (if (= 3 (count args))
+          (let [[kind ref field] args
+                id (evaluate ref scope)
+                read (:read scope)]
+            (cond
+              (unknown? id) unknown
+              (nil? id) nil
+              (nil? read) unknown
+              :else
+              (when-some [row (read kind id)]
+                (case field
+                  :state (some-> (:state row) name)
+                  :id    (some-> (:id row) str)
+                  (clojure.core/get (:data row) field)))))
+          unknown)
+
+        ;; other rows of a kind, through the scope's hooks (§3); the
+        ;; authored spelling erases its binder first
+        (exists none count-rows)
+        (if (vector? (first args))
+          (evaluate (normalize form) scope)
+          (eval-rows op (first args) (second args) scope))
 
         (every some count sum)
         (if (vector? (first args))
@@ -601,6 +906,10 @@
 
 (defn info
   "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
+  A form that asks who acts adds :doors (from did), :uses-me and
+  :uses-self; a form that asks no such thing carries none of them.
+  A form that follows adds :follows, the kinds written into its follows;
+  one that asks exists/none/count-rows adds :queries, the kinds asked.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -611,12 +920,27 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
+                  follow (reduce #(walk %2 %1)
+                                 (cond-> acc
+                                   (= 3 (count args)) (update :follows (fnil conj #{}) (first args)))
+                                 (remove keyword? args))
+                  did   (update acc :doors (fnil into #{}) args)
+                  me    (assoc acc :uses-me true)
+                  self  (assoc acc :uses-self true)
                   (date it) acc
+                  (exists none count-rows)
+                  (if (vector? (first args))
+                    (walk (normalize form) acc)
+                    (reduce #(walk %2 %1)
+                            (update acc :queries (fnil conj #{}) (first args))
+                            (mapcat rest (vals (second args)))))
                   (every some count sum)
-                  (let [args (if (vector? (first args))
-                               [(second (first args)) (second args)]
-                               args)]
-                    (reduce #(walk %2 %1) acc (remove nil? args)))
+                  (if (rows-binder? (first args))
+                    (walk (normalize form) acc)
+                    (let [args (if (vector? (first args))
+                                 [(second (first args)) (second args)]
+                                 args)]
+                      (reduce #(walk %2 %1) acc (remove nil? args))))
                   (reduce #(walk %2 %1)
                           acc
                           (remove keyword? args))))
@@ -628,9 +952,13 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now]} (info form)
+  (let [{:keys [vars data inputs uses-now doors uses-me uses-self queries]} (info form)
         undeclared (remove over vars)]
     (cond-> []
+      (or (seq doors) uses-me uses-self)
+      (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
+      (seq queries)
+      (conj "derived expressions read declared inputs, not other rows: (exists …), (none …), (count-rows …)")
       (seq data)
       (conj (str "derived expressions read declared inputs, not (data …): "
                  (pr-str (sort data))))
@@ -652,3 +980,95 @@
       (seq vars)
       (conj (str "guard expressions read (data …)/(input …)/(now), not (var …): "
                  (pr-str (sort vars)))))))
+
+;; ── follow: the kind written in (docs/spec-related-row-law.md §2) ──
+
+(defn follows
+  "Every follow in the form, as [kind ref field]; kind is nil where
+  none is written in yet."
+  [form]
+  (cond
+    (seq? form)
+    (let [[op & args] form
+          inner (mapcat follows args)]
+      (if (= 'follow op)
+        (cons (if (= 3 (count args)) (vec args) (into [nil] args)) inner)
+        inner))
+    (vector? form) (mapcat follows form)
+    (map? form) (mapcat follows (vals form))
+    :else nil))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field): `kind-of`
+  answers the ref form's kind, or nil to leave that follow as written.
+  The stored tree then evaluates under a later revision without the
+  resident schema, and retargeting a ref moves the fingerprint."
+  [form kind-of]
+  (cond
+    (seq? form)
+    (let [[op & args] form]
+      (if (and (= 'follow op) (= 2 (count args)))
+        (if-some [kind (kind-of (first args))]
+          (list 'follow kind (first args) (second args))
+          form)
+        (cons op (map #(bind-follows % kind-of) args))))
+    (vector? form) (mapv #(bind-follows % kind-of) form)
+    (map? form) (into {} (map (fn [[k v]] [k (bind-follows v kind-of)])) form)
+    :else form))
+
+;; ── exists / none / count-rows: the binder kept for evidence (§3) ───
+
+(defn rows-binders
+  "The binders of an authored form's exists/none/count over a kind, as
+  name keyword → {:kind :where}, the where normalized. The canonical
+  tree erases the names; a refusal binds its evidence under them."
+  [form]
+  (letfn [(walk [acc x]
+            (cond
+              (seq? x)
+              (let [[op b] x
+                    acc (if (and (contains? '#{exists none count} op) (rows-binder? b))
+                          (assoc acc (keyword (first b))
+                                 {:kind (second b)
+                                  :where (nth (normalize (list 'exists b)) 2)})
+                          acc)]
+                (reduce walk acc (rest x)))
+              (vector? x) (reduce walk acc x)
+              (map? x) (reduce walk acc (vals x))
+              :else acc))]
+    (walk {} form)))
+
+(defn rows-queries
+  "Every exists/none/count-rows in a canonical form, as [kind where]."
+  [form]
+  (cond
+    (seq? form)
+    (let [[op & args] form
+          inner (mapcat rows-queries args)]
+      (if (contains? '#{exists none count-rows} op)
+        (cons (vec args) inner)
+        inner))
+    (vector? form) (mapcat rows-queries form)
+    (map? form) (mapcat rows-queries (vals form))
+    :else nil))
+
+;; ── first: the one correlated form, evidence-only (§3) ──────────────
+
+(defn first-form?
+  "(first [c :kind where] pred): a guard's :evidence may name one; a
+  verdict may not — `first` is not in `ops`."
+  [x]
+  (and (seq? x) (= 'first (first x)) (= 3 (count x)) (rows-binder? (second x))))
+
+(defn normalize-first
+  "(first [c :kind where] pred) → {:kind :where :pred}, canonical: the
+  where as exists normalizes it (it may not read c), the pred with c
+  erased to (it 0), so the pred's own wheres may read the candidate —
+  that is what makes it correlated. A canonical map passes through."
+  [form]
+  (if (map? form)
+    form
+    (let [[_ [c kind where] pred] form]
+      {:kind kind
+       :where (nth (normalize (list 'exists [c kind where])) 2)
+       :pred (norm (debruijn pred {c 0} 1))})))

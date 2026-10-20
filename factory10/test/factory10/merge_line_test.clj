@@ -1055,3 +1055,26 @@
                  (held-behind 3 true :mergeable "conflicted")
                  (held-behind 4 true :draft true)])
     (is (= [] (numbers-of r "bench__update_branch")))))
+
+;; ── a filmed org_plan's change waits for go_live (ticket 8288529f) ──
+
+(deftest a-simulated-plans-change-follows-its-base-only-as-the-plan-says
+  (let [plan (fn [state & [follow]]
+               {:state state :data (cond-> {} follow (assoc :base_follow follow))})
+        pass! (fn [p]
+                (let [r (update-rig {:state "updated"} (atom []))]
+                  (held-pass! (assoc-in r [:ctx :plan-of] {"change-9" p})
+                              (atom {}) (atom []) [(held-behind 9 true)])
+                  (numbers-of r "bench__update_branch")))]
+    (testing "under the default, a simulated plan's change is left behind"
+      (is (= [] (pass! (plan :simulated))))
+      (is (= [] (pass! (plan :simulated "at_go_live")))))
+    (testing "under always, it is brought forward"
+      (is (= [9] (pass! (plan :simulated "always")))))
+    (testing "under when_org_dir_changes, it is brought forward too (ticket ce8a4e17)"
+      (is (= [9] (pass! (plan :simulated "when_org_dir_changes")))))
+    (testing "once the plan is going_live, the default brings it forward too"
+      (is (= [9] (pass! (plan :going_live))))
+      (is (= [9] (pass! (plan :going_live "at_go_live")))))
+    (testing "a change no plan names is brought forward as before"
+      (is (= [9] (pass! nil))))))

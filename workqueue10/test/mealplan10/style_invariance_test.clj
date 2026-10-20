@@ -519,6 +519,10 @@
 
 (def old-grocery-list
   {:kind :grocery_list
+   ;; scenarios are never fingerprinted; the old spelling cites the
+   ;; same objects so the normalized maps stay equal
+   :scenarios [glist/a-list-for-a-finalized-plan-is-ready
+               glist/a-list-follows-its-plan]
    :states [:draft :ready :done :discarded]
    :initial :draft
    :terminal #{:done :discarded}
@@ -860,7 +864,9 @@
   ;; re-pinned 2026-09-28 (waymark-fp62.4.1.2): :over joined the kind
   ;; fingerprint, so the meal's declared endings are law now — a
   ;; one-time re-mint, not style drift
-  {:meal      "011803649a07a40279115fefb9e6fbbe2afb4aebdc794a7de44f4a8eba0cf5e7"
+  ;; re-pinned 2026-10-20 (ticket 68ebaa0f): :eq filterable fields
+  ;; carry a btree index by default — the storage facet moved once
+  {:meal      "a9a2524bb2ef33f862258e9751e86fd7630c2b279d6b0faa8e6f637d79290175"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift.
@@ -869,7 +875,9 @@
    ;; reopen walks it back — an intentional law change, not style drift
    ;; Re-pinned 2026-09-28 (waymark-fp62.4.1.2): :over joined the kind
    ;; fingerprint — a one-time re-mint, not style drift
-   :prep_task "87ebdf7e32386d89c523e25a2a3686388e158349b7db837a1f252ead2719f93f"})
+   ;; Re-pinned 2026-10-20 (ticket 68ebaa0f): the default btree index
+   ;; over :eq filterable fields — the storage facet moved once
+   :prep_task "0e67387e7762f23a3a4bf64b46eca5678f5c45e72025f19a7d797781eb28ff01"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals
   (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))

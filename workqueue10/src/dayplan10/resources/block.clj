@@ -37,30 +37,31 @@
   Spelled :schema + :create-schema + :actions rather than the :fields
   groups the spec sketched: the windows are a create-only input the
   hook consumes, and a :fields :at-create row has no optional spelling."
-  (:require [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
-            [waymark10.types :as t]))
+  (:require [waymark10.dsl :refer [defhandler defresource defscenario]]
+            [waymark10.guards :as g]))
 
 ;; ── the create wall ─────────────────────────────────────────────────
 
-(defguardfn on-an-open-days-plan
-  {:judges [:plan_id] :reads [:day_plan]
-   :vars [:why]
-   :explain "A block sits on a day that is still being planned or lived: {why}."}
-  [_row inp ctx]
-  (if (nil? (:read ctx))
-    (t/allow)
-    (let [plan ((:read ctx) :day_plan (:plan_id inp))]
-      (cond
-        (nil? plan)
-        (t/deny {:vars {:why "no plan stands at that id — create the day first"}
-                 :errors {:plan_id ["plan not found"]}})
+;; Declarative related-row law (docs/spec-related-row-law.md §7): two
+;; walls, each one follow over :plan_id — the day stands, and it is
+;; not closed. A missing plan is the first wall's alone: (not= nil
+;; "closed") holds.
 
-        (= :closed (:state plan))
-        (t/deny {:vars {:why (str "the plan for " (get-in plan [:data :date])
-                                  " is closed, and a closed day takes no new block")}})
+(def on-an-open-days-plan
+  (g/expr {:name :on-an-open-days-plan
+           :severity :refuse
+           :when '(is-set (follow (input :plan_id) :id))
+           :explain "A block sits on a day that is still being planned or lived: no plan stands at that id — create the day first."
+           :errors {:plan_id "plan not found"}
+           :remedies [:day_plan/create]}))
 
-        :else (t/allow)))))
+(def the-days-plan-is-not-closed
+  (g/expr {:name :the-days-plan-is-not-closed
+           :severity :refuse
+           :when '(not= (follow (input :plan_id) :state) "closed")
+           :vars {:date '(follow (input :plan_id) :date)}
+           :explain "A block sits on a day that is still being planned or lived: the plan for {date} is closed, and a closed day takes no new block."
+           :remedies [{:door :day_plan/reopen :id '(input :plan_id)}]}))
 
 ;; ── the birth ───────────────────────────────────────────────────────
 
@@ -87,9 +88,9 @@
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
-;; The create wall reads the plan (:reads [:day_plan]), so this is
-;; CONFORMANCE-tier: attempted through the real door, where the plan
-;; id below names nothing and the refusal is the one a client sees.
+;; The create walls read the plan only through follow, so both are
+;; CHECK-tier: the first names a plan nothing stages, the second
+;; stages a closed day as a :given row.
 
 (defscenario a-block-sits-on-a-plan-that-exists
   "A block for a plan nobody made is refused naming the fix — create
@@ -101,6 +102,20 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :on-an-open-days-plan
              :because "create the day first"}})
+
+(defscenario a-closed-day-takes-no-block
+  "A day already closed takes no new block, and the refusal names the
+   day — reopen it first."
+  {:kind    :block
+   :attempt :create
+   :given   [{:kind :day_plan :handle :day :state :closed
+              :data {:date "2099-01-05" :member "01HZQ7Y7F2R3W4V5X6Y7Z8A9D2"
+                     :shape "workday"}}]
+   :input   {:plan_id "{given/day}"
+             :context_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-days-plan-is-not-closed
+             :because "the plan for 2099-01-05 is closed"}})
 
 ;; ── the declaration ─────────────────────────────────────────────────
 
@@ -163,8 +178,8 @@
                               :x-display {:label "Windows"
                                           :help "The windows the block opens with, each a start and an end on the day; leave it empty to add spans one at a time."}}
                     [:maybe [:vector window-form]]]]
-   :create-guards [on-an-open-days-plan]
-   :scenarios [a-block-sits-on-a-plan-that-exists]
+   :create-guards [on-an-open-days-plan the-days-plan-is-not-closed]
+   :scenarios [a-block-sits-on-a-plan-that-exists a-closed-day-takes-no-block]
    :on-create stamp-and-mint
    ;; skipping the block lets its planned spans — and its planned or
    ;; started decisions — go with it

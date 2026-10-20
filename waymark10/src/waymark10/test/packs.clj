@@ -659,27 +659,74 @@
   The walker stages; the scenario's own principal only ever ATTEMPTS.
   Staging as the declared principal would prove a different sentence
   (that this person may create the setup), and a scenario that wants
-  to say that says it as its own attempt."
-  [ctx kind state data]
-  (if-some [rd (rdef ctx kind)]
-    (let [made (req ctx :post (str "/api/" (:plural rd)) (or data {}))]
-      (if-not (#{200 201} (:status made))
-        {:error (str "the " (name kind) " it names could not be created ("
-                     (:status made) ": " (pr-str ((:text ctx) made)) ")")}
-        (let [id (last (str/split (str (:self (json ctx made))) #"/"))]
-          (if-some [path (machine/path-to rd state)]
-            (loop [steps path]
-              (if-some [step (first steps)]
-                (let [r (invoke-http ctx kind id (:name step) nil)]
-                  (if-not (= 200 (:status r))
-                    {:error (str "walking that " (name kind) " to " (name state)
-                                 " stopped at " (name (:name step)) " ("
-                                 (:status r) ": " (pr-str ((:text ctx) r)) ")")}
-                    (recur (rest steps))))
-                {:id id}))
-            {:error (str (name state) " is unreachable from "
-                         (name (:initial rd)) " by declared transitions")}))))
-    {:error (str "this engine serves no kind " kind)}))
+  to say that says it as its own attempt.
+
+  `history` (the subject row's declared log, oldest first) is walked
+  BEFORE the walk to `state`: each entry's door is knocked on as the
+  principal it names, with the entry's :input (its handles already
+  filled) as the body, so the log a `did` guard reads is the real one.
+  An :acted-by entry is not staged here: an acted-as move needs a
+  clone and a seeded cast, so the check tier judges it.
+  The walker's own steps fill any gap — to an entry's :from, then to
+  `state` — and log as the walker, which no entry names. An entry that
+  cannot be staged answers {:error …} naming it."
+  ([ctx kind state data] (stage-declared-row ctx kind state data nil))
+  ([ctx kind state data history]
+   (if-some [rd (rdef ctx kind)]
+     (let [made (req ctx :post (str "/api/" (:plural rd)) (or data {}))]
+       (if-not (#{200 201} (:status made))
+         {:error (str "the " (name kind) " it names could not be created ("
+                      (:status made) ": " (pr-str ((:text ctx) made)) ")")}
+         (let [id (last (str/split (str (:self (json ctx made))) #"/"))
+               walk (fn [from to]
+                      (if-some [path (machine/path-to (assoc rd :initial from) to)]
+                        (loop [steps path]
+                          (if-some [step (first steps)]
+                            (let [r (invoke-http ctx kind id (:name step) nil)]
+                              (if-not (= 200 (:status r))
+                                {:error (str "walking that " (name kind) " to " (name to)
+                                             " stopped at " (name (:name step)) " ("
+                                             (:status r) ": " (pr-str ((:text ctx) r)) ")")}
+                                (recur (rest steps))))
+                            {:state to}))
+                        {:error (str (name to) " is unreachable from "
+                                     (name from) " by declared transitions")}))
+               unstageable (fn [i h why]
+                             {:error (str "its :history entry " (inc i) ", " (pr-str h)
+                                          ", cannot be staged by the conformance tier: " why)})
+               at (reduce
+                   (fn [here [i h]]
+                     (let [ad (action-def ctx kind (:action h))
+                           from (when ad
+                                  (first (sort-by #(or (some-> (machine/path-to (assoc rd :initial here) %) count)
+                                                       Long/MAX_VALUE)
+                                                  (sort (:from ad)))))
+                           there (when from (walk here from))]
+                       (cond
+                         (nil? ad)
+                         (reduced (unstageable i h (str "this engine's " (name kind)
+                                                        " declares no " (name (:action h)) " door")))
+                         (some? (:acted-by h))
+                         (reduced (unstageable i h (str "An acted-as history entry is judged in the check"
+                                                        " tier; mark the scenario :check-tier :given or"
+                                                        " move it there.")))
+                         (:error there)
+                         (reduced (unstageable i h (:error there)))
+                         :else
+                         (let [r (invoke-http ctx kind id (:action h) (:input h)
+                                              {:headers {"x-waymark-principal" (str (:as h))
+                                                         "x-waymark-actor-type" "person"}})]
+                           (if-not (= 200 (:status r))
+                             (reduced (unstageable i h (str "its door answered " (:status r) " ("
+                                                            (pr-str ((:text ctx) r)) ")")))
+                             (or (some-> (:state (json ctx r)) keyword) (:to ad) here))))))
+                   (:initial rd)
+                   (map-indexed vector history))]
+           (if (:error at)
+             at
+             (let [done (walk at state)]
+               (if (:error done) done {:id id}))))))
+     {:error (str "this engine serves no kind " kind)})))
 
 (defn- wire-verdict
   "The verdict a CLIENT sees, read off the envelope — which is the
@@ -735,7 +782,13 @@
   it, and the attempt presents it — `leash!`, the same thing the suites
   write by hand. Without it the router's default deny answers 404
   before any wall speaks. `:as {:leashed false}` opts out, so the
-  unleashed agent's 404 is still a scenario of its own."
+  unleashed agent's 404 is still a scenario of its own.
+
+  `:history` is the subject row's log, staged before the attempt
+  (`stage-declared-row`), so a deferred `did` guard reads a real log
+  and never an empty one. An entry that cannot be staged refuses the
+  scenario with a sentence naming it; `:history-mode :refuse` opts out
+  of staging and refuses the scenario outright."
   [ctx rdef' s]
   (let [staged (reduce
                 (fn [ids gv]
@@ -747,8 +800,20 @@
                       (cond-> ids
                         (:handle gv) (assoc (name (:handle gv)) (:id out))))))
                 {} (:given s))]
-    (if (:error staged)
+    (cond
+      (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
+
+      (and (seq (:history s)) (= :refuse (:history-mode s)))
+      (scenario/violation s {:unreadable (str "it declares :history-mode :refuse, so the"
+                                              " conformance tier does not stage its :history"
+                                              " and will not judge it over an empty log")})
+
+      (and (seq (:history s)) (scenario/create-door? rdef' (:attempt s)))
+      (scenario/violation s {:unreadable (str "its :history cannot be staged by the conformance"
+                                              " tier: a create has no row for it to be the log of")})
+
+      :else
       (let [p (:as s)
             leashed? (and (= :agent (:type p)) (not (false? (:leashed p))))
             leash (when leashed?
@@ -769,12 +834,14 @@
                                   ctx (:kind s)
                                   (get-in s [:row :state])
                                   (scenario/fill-handles (get-in s [:row :data])
-                                                         staged))]
+                                                         staged)
+                                  (mapv #(cond-> % (:input %) (update :input scenario/fill-handles staged))
+                                        (:history s)))]
                      (if (:error subject)
-                       ::unstaged
+                       [::unstaged (:error subject)]
                        (invoke-http ctx (:kind s) (:id subject) (:attempt s)
                                     input {:headers hs}))))]
-        (case resp
+        (case (if (vector? resp) (first resp) resp)
           ::unleashed
           (scenario/violation
            s {:unreadable (str "the walker could not leash the agent to "
@@ -782,7 +849,8 @@
                                " — the grant's mint or its acceptance refused")})
           ::unstaged
           (scenario/violation
-           s {:unreadable "the row it describes could not be staged through its own door"})
+           s {:unreadable (str "the row it describes could not be staged through its own door: "
+                               (second resp))})
           (scenario/violation s (wire-verdict ctx resp)))))))
 
 (defn- law-scenario-violations

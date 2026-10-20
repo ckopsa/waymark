@@ -24,6 +24,7 @@
    :default-filters {:state "new"}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:new "A request may stay new for a day; past that, the office clerk tells Rosa Delgado."}
+   :expected-age {:new 86400}
    :actions
    {:accept  {:from #{:new} :to :accepted
               :guards [has-detail]

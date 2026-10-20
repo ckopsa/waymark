@@ -60,6 +60,9 @@
   site, which is the point."
   [;; identity & machine
    :kind :states :initial :terminal :plural :nav :domain :adoption
+   ;; :stored-only: the live cracks pass places a row by its stored
+   ;; `domain` (or :absent-as) alone, never by the kind's :domain
+   :row-domain
    ;; how a row's work ENDS, in the household's own words (spec-feed.md,
    ;; waymark-iqa.24/.25): which states — or, for a mirror kind whose
    ;; lifecycle is data rather than machine, which values of which
@@ -154,6 +157,10 @@
    ;; its name, or no age. It moves no row. Never in the fingerprint —
    ;; :waits' precedent
    :expected-age
+   ;; seconds a row may rest in a non-terminal state that :expected-age
+   ;; and the defaults for its name do not cover; an org's in-domain
+   ;; stamps it from its template, nil opts out. Never in the fingerprint
+   :default-expected-age
    ;; the person's answers to the org audit's questions about this
    ;; kind's states (ticket e1ed02c7): {<state> "one sentence"} — how
    ;; long a row may wait there, and who is told. factory10.law-text
@@ -174,6 +181,10 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; {field :btree|:none}: whether a promoted filterable field carries
+   ;; a btree index — by default one filterable by :eq or :in does
+   ;; (ticket 68ebaa0f). In the fingerprint through the storage facet
+   :index
    ;; the kind's SAFE collection doors (ticket 80c6c9e2): {name {:input
    ;; <malli> :summary "…" :handler (fn [engine body ctx])}}. Each is
    ;; POST /api/{plural}/-/{name}, a route that reads and writes

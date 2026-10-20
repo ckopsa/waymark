@@ -33,7 +33,8 @@ and evaluated. Trees appear in three places, with three small dialects:
 | **Sentence guard** (`defguard` + `refuse`/`warn`) | `(var :field)` — sugar for `(data :field)` | `(now)` | see §4 |
 
 The guard's own declarations are **derived from the tree, never sniffed**:
-`(input …)` reads become `:judges`, `(now)` becomes `:reads [:now]`. A
+`(input …)` reads become `:judges`, `(now)` becomes `:reads [:now]`, and
+every `follow` adds its normalized kind to `:reads` (§2). A
 derived `:expr` may only `(var …)` what `:over` lists — an out-of-scope name
 refuses at the def line.
 
@@ -56,6 +57,7 @@ From `waymark10.expr/ops`; anything else is refused with
 | `days` | `(days 7)` — a whole-day span, for date arithmetic: `(+ (var :start_date) (days 6))` |
 | `date-of` | an `Instant` → its UTC `LocalDate`: `(date-of (now))`, `(date-of (var :now))` |
 | `is-set` | `(is-set (data :field))` — present and non-nil |
+| `follow` | `(follow (input :meal_id) :state)` — one hop to a field of the row a ref names (guard scope; docs/spec-related-row-law.md §2). The ref is literally `(data :f)` or `(input :f)`, where `:f` is a `:waymark/ref` (or `[:maybe :waymark/ref]`) entry carrying `:kind`; the field is a data field of the target kind, `:state` or `:id`. One hop only: a `follow` cannot start from a `follow`. At the def site the kind is written in: the normalized spelling is `(follow :meal (input :meal_id) :state)`, so retargeting a ref moves the fingerprint |
 | `every some count sum` | over a collection, binder-first: `(every [d (var :days)] (is-set (get d :meal_id)))`, `(count [i (var :items)] (get i :urgent))` — or just `(count (var :items))` for the plain size — `(sum [l (var :lines)] (get l :amount))` |
 
 **Totality rules** (why a law never throws):
@@ -65,6 +67,15 @@ From `waymark10.expr/ops`; anything else is refused with
   sum); **orderings over `nil` or incomparable values are `false`**.
 - A missing or non-sequential collection quantifies as empty: `every` → true,
   `some` → false, `count` → 0, `sum` → 0.
+- **`follow` values and nil.** `:state` answers the state's name as a
+  string (`"on_list"`), `:id` the row id as a string, a data field its wire
+  value as `(data …)` does. A nil ref, an id no row has, and a row the
+  caller's grant cannot see all answer `nil` — so `(= (follow … :state)
+  "on_list")` is false, and existence alone is `(is-set (follow r :id))`;
+  an optional ref is guarded by the author: `(or (not (is-set (input
+  :parent))) …)`. A scope with no `:read` hook, or a `follow` with no kind
+  written in, answers unknown (docs/spec-related-row-law.md §5). Each
+  distinct `(kind, id)` is read once per verdict.
 - Binder names are erased to de Bruijn indices at normalization — two
   alpha-equivalent laws are one law and one fingerprint.
 
@@ -102,6 +113,33 @@ shows:
   (refuse "A transaction goes to review with its value type, amount, and effective date set.")
   '(present? :value_type :amount :effective_date))
 ```
+
+A map after the law carries the way out, the per-field sentences and what
+the sentence reads — `{:remedies … :open … :errors {field "…"} :evidence …
+:vars {name '(expr)} :hidden {binder "…"}}`, any of them, no other key:
+
+- `:remedies` — the doors that change the verdict, e.g.
+  `[{:door :meal/accept :id '(input :meal_id)}]`;
+- `:open` — the sentence that says no door does;
+- `:errors` — a field-error sentence per input field, so a declarative
+  refusal keeps the per-field error a code guard returns;
+- `:vars` — `{name '(expr)}`, each evaluated as the law is and read by
+  `{name}` in the sentence, e.g. `{:count '(count [o :booking {…}])}`;
+- `:hidden` — `{binder "…"}`, keyed by a binder of the law: the sentence
+  that stands in for each sentence reading `{binder.field}` when every
+  match is outside the caller's grant. Without it that sentence drops;
+  when none would remain, the engine says "What stops this is outside
+  what you can see." (docs/spec-related-row-law.md §3).
+
+```clojure
+(defguard meal-is-listed
+  (refuse "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first.")
+  '(= (follow (input :meal_id) :state) "on_list")
+  {:remedies [{:door :meal/accept :id '(input :meal_id)}]
+   :errors {:meal_id "not an on-list meal"}})
+```
+
+`:judges [:meal_id]` and `:reads [:meal]` are derived from the tree.
 
 ## 5 · Colocated entry properties — field law that rides the schema entry
 
@@ -209,6 +247,17 @@ unset.
 An acceptance-set guard (`guard` with `:accepts (fn [row ctx] …)` and
 `:reads`) does the same through its set: the rendered enum, the picker, and
 the enforcement are one declaration.
+
+A code guard's kind reads choose its scenarios' tier. By default a guard
+that declares `:reads [:kind …]` defers its door to the CONFORMANCE tier:
+its scenarios run over the real engine, in the suite. A guard may opt in
+to the CHECK tier with `:check-tier :given`, saying its `(:read ctx)` and
+`(:find ctx)` calls are safe to answer from a scenario's `:given` rows;
+the scenario then lends it those rows, the way a `:when` guard's follows
+are served (`mealplan10`'s `side-fits-day` does, so `add_side_dish`'s
+scenarios run with no database). Only a guard whose every read is a kind
+may say it: one that reads `:storage`, `:within`, the clock or anything
+else but kinds, or a `:when` guard, is refused at its def line.
 
 ## 7 · `:fields` lifecycle groups — the schema by phase
 

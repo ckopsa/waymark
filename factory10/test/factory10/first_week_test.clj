@@ -257,6 +257,21 @@
       (is (not (str/includes? text "{{")))
       (is (<= (count text) 65536)))))
 
+(deftest a-take-of-the-plan's-scene-is-marked-a-first-week
+  (let [text (first-week/org-scene (example-dir) (:head_sha filmed-on)
+                                   (:day_one filmed-on))
+        tk {:shots [{:caption "Monday. A quiet day."}]}]
+    (testing "the scene the audit renders says it is a first week"
+      (is (true? (:first-week (edn/read-string text)))))
+    (testing "a take of it is marked, its shots as they were"
+      (is (= (assoc tk :scene {:first_week true}) (first-week/marked tk text))))
+    (testing "a scene rendered before the mark marks its take all the same"
+      (is (= {:first_week true}
+             (:scene (first-week/marked tk (pr-str (dissoc (edn/read-string text) :first-week)))))))
+    (testing "a plan with no scene leaves the take as it is"
+      (is (= tk (first-week/marked tk nil)))
+      (is (= tk (first-week/marked tk ""))))))
+
 (def ^:private rules
   [{:name "chrome-leaks" :metric "chrome_leaks" :op "=" :threshold 0
     :scope "film" :severity "fail" :origin "craft"
@@ -302,3 +317,100 @@
       (is (= "error" (get-in row [:data :findings 0 :severity])))
       (is (= (:head_sha film) (get-in row [:data :findings_sha]))))
     (is (nil? (get-in row [:data :film_url])))))
+
+;; ── a take's shots against its scene's (ticket ef24488d)
+
+(deftest a-take's-shots-line-up-with-its-scene's-ids-and-roles
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds) :week a-week))
+        text (pr-str doc)
+        shots (:shots (:scene doc))
+        filmed #(if (:meanwhile %) {:meanwhile {:as (get-in % [:meanwhile :as])}} {:hold_s 1.0})]
+    (testing "each scene shot carries its 1-based position as its id, a meanwhile shot too"
+      (is (some :meanwhile shots))
+      (is (= (range 1 (inc (count shots))) (map :id shots))))
+    (testing "a take naming each shot's id carries its scene shot's role, and drops none"
+      (let [tk {:shots (mapv #(assoc (filmed %) :id (:id %)) shots)}
+            lined (first-week/line-up tk text)]
+        (is (= (map :role shots) (map :role (:shots lined))))
+        (is (= ["friction" "turn" "payoff"] (keep :role (:shots lined))))
+        (is (= [] (first-week/dropped-roles lined text)))
+        (is (= ["take-dropped-role"] (map :key (first-week/dropped-roles tk text))))))
+    (testing "a take from before the id lines up by position, its meanwhile shots aside"
+      (let [tk {:shots (vec (cons {:meanwhile {:as "ana"}}
+                                  (map filmed (remove :meanwhile shots))))}
+            lined (first-week/line-up tk text)]
+        (is (= (map :id (remove :meanwhile shots)) (map :id (remove :meanwhile (:shots lined)))))
+        (is (= (keep :role shots) (keep :role (:shots lined))))
+        (is (= [] (first-week/dropped-roles lined text)))))
+    (testing "a take whose count is not the scene's is a take-dropped-role warning naming both"
+      (let [[w] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} text)]
+        (is (= "warning" (:severity w)))
+        (is (str/includes? (:sentence w)
+                           (str "the scene has " (count (remove :meanwhile shots)) " shots and the take 1")))))
+    (testing "a plan with no scene drops nothing"
+      (is (= [] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} nil))))))
+
+(deftest a-green-film's-warning-lands-beside-it
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge rules {:film {:chrome_leaks 0 :dead_air_s 0.5}})
+        warning {:key "take-dropped-role" :severity "warning" :class "film"
+                 :subject "film" :sentence "The take does not line up with its scene."}
+        row (:row (first-week/land! e id answer (assoc film :warnings [warning])
+                                    {:principal the-forge}))]
+    (is (= "simulated" (some-> row :state name)))
+    (is (= ["take-dropped-role"] (mapv :key (get-in row [:data :findings]))))
+    (is (nil? (get-in row [:data :next_step])) "a warning moves no step")))
+
+;; ── a first week the rules cannot pass by not measuring it (ticket 179f7824)
+
+(def ^:private week-rules
+  (filterv #(#{"busy-week" "quiet-days"} (:name %)) film-rules/seed-rules))
+
+(defn- week-take
+  "A first week's take: shots that run the arc's roles, with a day
+  caption for each of `days` between the friction and the payoff."
+  [days]
+  {:film {:output "phone"}
+   :shots (-> [{:role "friction"
+                :caption "Example Landscaping: A six-person landscaping business."}]
+              (into (map (fn [c] {:role "turn" :caption c}) days))
+              (conj {:role "payoff" :goal_state "done" :caption "That was the week."}))})
+
+(def ^:private quiet-week
+  (mapv #(str % ". A quiet day.")
+        ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"]))
+
+(deftest a-quiet-first-week-returns-the-plan-to-drafting
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge week-rules (week-take quiet-week))
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= "drafting" (some-> row :state name)))
+    (is (= ["film/busy-week" "film/quiet-days"]
+           (mapv :key (get-in row [:data :findings]))))
+    (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-first-week-the-film-cannot-measure-returns-the-plan-to-drafting
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge week-rules (week-take []))
+        row (:row (first-week/land! e id answer film {:principal the-forge}))
+        findings (get-in row [:data :findings])]
+    (is (= ["busy-week" "quiet-days"] (:unmeasured answer)))
+    (is (= "drafting" (some-> row :state name)))
+    (is (= ["film/busy-week" "film/quiet-days"] (mapv :key findings)))
+    (testing "each finding says what could not be measured, and its remedy names the fields"
+      (is (every? #(str/starts-with? (:sentence %) "The film could not measure ") findings))
+      (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
+      (is (str/includes? (:remedy (second findings)) "shot.caption")))
+    (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-warn-rule-the-film-cannot-measure-does-not-block-it
+  (let [e (eng)
+        id (proposed! e)
+        answer (film-rules/judge rules {:film {:chrome_leaks 0}})
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= ["dead-air"] (:unmeasured answer)))
+    (is (= "simulated" (some-> row :state name)))
+    (is (= (:film_url film) (get-in row [:data :film_url])))))

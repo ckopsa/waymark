@@ -39,6 +39,9 @@
     :requires-token  capability token (\"role:manager\")
     :needs-input     probe override; defaults to (check ∧ judges)
     :severity        :refuse | :warning (acknowledgable, E1)
+    :pending         :allow (the default) | :deny — what an expression
+                     guard answers when its :when is unknown: pending,
+                     or its own refusal (docs/spec-related-row-law.md §7)
     :hold            true: a refusal is held for the person's tap
                      rather than answered 409 (waymark10.holds);
                      :agents: the same, for a guard that holds only an
@@ -56,6 +59,7 @@
             [waymark10.expr :as expr]
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -137,9 +141,11 @@
     (:id r) (conj (:id r))))
 
 (defn evidence-names
-  "The evidence names a guard declares its refusal returns."
+  "The evidence names a guard declares its refusal returns — and the
+  binder of each exists/none/count-rows it asks, which binds its match."
   [g]
-  (let [e (:evidence g)] (set (if (map? e) (keys e) e))))
+  (let [e (:evidence g)]
+    (into (set (if (map? e) (keys e) e)) (keys (:binders g)))))
 
 (defn- bound-value [[op k] row inp evidence]
   (case op
@@ -188,6 +194,33 @@
                    (seq fields) (assoc :fields fields)))))
            (:remedies g)))))
 
+(def context-reads
+  "The `:reads` a guard may declare that name no kind: the store
+  itself, the log, the clock, the caller, the wiring, the call. Every
+  other read is a kind keyword — the one read `:check-tier :given`
+  admits."
+  #{:storage :transitions :now :principal :services :services.features
+    :within :grant :facts :rate})
+
+(defn- check-tier-problem
+  "Why this guard may not carry its :check-tier, or nil. The one value
+  is :given — the guard's (:read ctx)/(:find ctx) calls are safe to
+  answer from a scenario's :given rows — and only a code guard whose
+  every read is a kind may say it (docs/waymark10-vocabulary.md §6)."
+  [{:keys [check-tier reads] :as g}]
+  (clojure.core/when (some? check-tier)
+    (cond
+      (not= :given check-tier)
+      (str ":check-tier is :given, not " (pr-str check-tier))
+
+      (:when g)
+      ":check-tier is for a code guard; a :when guard's reads are served by its tree already — drop :check-tier"
+
+      (clojure.core/or (empty? reads) (clojure.core/not (not-any? context-reads reads)))
+      (str ":check-tier :given answers kind reads from a scenario's :given rows, and this guard reads "
+           (pr-str (vec reads))
+           " — only a guard whose every read is a kind can opt in"))))
+
 (defn guard
   "Validate and default a guard map. Every invariant here is an
   import-time refusal."
@@ -207,8 +240,15 @@
               "a guard must advertise (accepts/when) or enforce (check) — this one does neither")))
     (clojure.core/when (clojure.core/and vars-fn (empty? vars))
       (throw (t/definition-error ":vars-fn must be accompanied by the :vars names it supplies")))
+    (clojure.core/when-some [p (check-tier-problem g)]
+      (throw (t/definition-error
+              (str "guard " (pr-str (clojure.core/or name :guard)) ": " p))))
     (clojure.core/when (fn? vars)
       (throw (t/definition-error "a callable belongs in :vars-fn; :vars declares the names")))
+    (clojure.core/when-not (contains? #{nil :allow :deny} (:pending g))
+      (throw (t/definition-error
+              (str "guard " (pr-str (clojure.core/or name :guard))
+                   ": :pending is :allow or :deny, not " (pr-str (:pending g))))))
     (doseq [r (:remedies g)
             :let [p (remedy-problem r)]
             :when p]
@@ -217,16 +257,19 @@
     (clojure.core/when-some [e (:evidence g)]
       (clojure.core/when-not
        (clojure.core/or (clojure.core/and (map? e) (every? keyword? (keys e))
-                                          (every? fn? (vals e)))
+                                          (every? #(clojure.core/or (fn? %) (expr/first-form? %)
+                                                                    (clojure.core/and (map? %) (contains? % :pred)))
+                                                  (vals e)))
                         (clojure.core/and (sequential? e) (every? keyword? e)))
         (throw (t/definition-error
                 (str "guard " (pr-str (clojure.core/or name :guard))
-                     ": :evidence is [name …] or {name (fn [row ctx])}")))))
+                     ": :evidence is [name …] or {name (fn [row ctx]) | '(first [c :kind where] pred)}")))))
     ;; a hold is registered when its module loads, so the router's one
     ;; question (holds/hold?) knows it without a list kept by hand
     (clojure.core/when (#{true :agents} (:hold g))
       (holds/register! (clojure.core/or name :guard)))
-    (merge g
+    (cond->
+     (merge g
            {:name (clojure.core/or name :guard)
             :judges (vec judges)
             :reads (vec reads)
@@ -236,7 +279,13 @@
             :needs-input (if (some? needs-input)
                            (boolean needs-input)
                            (clojure.core/and (clojure.core/or (some? check) (some? when))
-                                             (boolean (seq judges))))})))
+                                             (boolean (seq judges))))})
+      ;; a first in :evidence, canonical: its binder erased (§3)
+      (map? (:evidence g))
+      (update :evidence (fn [e]
+                          (into {}
+                                (map (fn [[k v]] [k (if (fn? v) v (expr/normalize-first v))]))
+                                e))))))
 
 (defn leaf? [g] (clojure.core/and (nil? (:all g)) (nil? (:any g))))
 
@@ -301,18 +350,91 @@
                     (let [s (str value)]
                       (some #(= s (str %)) allowed)))))
 
+(defn- memo-read
+  "The ctx's :read hook, memoized for one verdict: a law that follows
+  the same ref three times costs one read (docs/spec-related-row-law.md
+  §2). nil when the ctx lends no hook."
+  [read]
+  (clojure.core/when read
+    (let [seen (atom {})]
+      (fn [kind id]
+        (let [k [kind (str id)]]
+          (if-some [e (find @seen k)]
+            (val e)
+            (let [v (read kind id)]
+              (swap! seen assoc k v)
+              v)))))))
+
+(defn actors-of
+  "The `:actor-of` answer over `recs`, a row's log newest first.
+  `(actors-of recs door)` is the newest actor id of `door` (unless,
+  four-eyes). `(actors-of recs door :every)` is every face of every
+  actor of it, as strings: the actor's id and, for an acted-as
+  transition, the seat's `acted_by` (docs/spec-related-row-law.md §4)."
+  ([recs door]
+   (some (fn [rec]
+           (clojure.core/when (= (:action rec) door)
+             (get-in rec [:actor :id])))
+         recs))
+  ([recs door _every]
+   (into #{}
+         (comp (filter #(= (:action %) door))
+               (mapcat (fn [rec] [(get-in rec [:actor :id])
+                                  (get-in rec [:actor :acted_by])]))
+               (remove nil?)
+               (map str))
+         recs)))
+
+(defn- expr-scope
+  "The scope a :when tree reads: the row, the input, the clock, and —
+  for (did …), (me), (self) — who acts now (both faces of an acted-as
+  principal), which row this is, and the log through `:actor-of`; for
+  (follow …), the ctx's :read hook memoized for this verdict; for
+  (exists …), (none …), (count-rows …), its :rows-matching and
+  :count-matching. A
+  ctx without a principal or a log leaves its key out, and the form
+  that asks for it answers unknown."
+  [row inp ctx]
+  (let [p (:principal ctx)
+        actor-of (:actor-of ctx)]
+    (cond-> {:data (:data row) :input inp :now (:now ctx)
+             :read (memo-read (:read ctx))
+             :rows-matching (:rows-matching ctx)
+             :count-matching (:count-matching ctx)}
+      (some? (:id row)) (assoc :self (str (:id row)))
+      p (assoc :principal (some-> (:id p) str)
+               :faces (into #{} (comp (remove nil?) (map str))
+                            [(:id p) (:acted-by p)]))
+      actor-of (assoc :actors (fn [door] (actor-of row door :every))))))
+
 (defn- expr-check
   "The check a :when tree compiles to."
   [g row inp ctx]
-  (let [scope {:data (:data row) :input inp :now (:now ctx)}]
-    (if (expr/evaluate (:when g) scope)
-      (t/allow)
+  (let [scope (expr-scope row inp ctx)
+        v (expr/evaluate (:when g) scope)]
+    (cond
+      ;; an unknown verdict is never a refusal: it is pending, as a
+      ;; probe without input is (docs/spec-related-row-law.md §5) —
+      ;; unless the guard says :pending :deny, and then it refuses (§7)
+      (expr/unknown? v) (if (= :deny (:pending g))
+                          (t/deny {:errors (not-empty
+                                            (into {} (map (fn [[k s]] [k [s]])) (:errors g)))})
+                          (t/allow {:pending-input true}))
+      v (t/allow)
+      :else
       (t/deny {:vars (not-empty
                       (into {}
                             (keep (fn [[k form]]
-                                    (try [k (expr/evaluate form scope)]
+                                    ;; a var no hook could answer is named,
+                                    ;; not printed as the sentinel object
+                                    (try (let [x (expr/evaluate form scope)]
+                                           [k (if (expr/unknown? x) "unknown" x)])
                                          (catch Exception _ nil))))
-                            (:vars g)))}))))
+                            (:vars g)))
+               ;; the declared per-field sentences, as a code guard's
+               ;; {:errors {field ["…"]}} spells them
+               :errors (not-empty
+                        (into {} (map (fn [[k s]] [k [s]])) (:errors g)))}))))
 
 (declare evaluate)
 
@@ -339,11 +461,14 @@
                        (get-in g [:require/spec :expr]))
      (if (nil? inp)
        [(t/allow {:pending-input true}) g]
-       [(if (expr/evaluate (get-in g [:require/spec :expr])
-                           {:vars (assoc inp :now (:now ctx))})
-          (t/allow)
-          (t/deny))
-        g])
+       (let [v (expr/evaluate (get-in g [:require/spec :expr])
+                              {:vars (assoc inp :now (:now ctx))})]
+         ;; an unknown spec is pending, never truthy and never a
+         ;; refusal (docs/spec-related-row-law.md §5)
+         [(cond (expr/unknown? v) (t/allow {:pending-input true})
+                v (t/allow)
+                :else (t/deny))
+          g]))
 
      (:when g)
      (if (clojure.core/and (= :probe (:mode ctx)) (nil? inp) (:needs-input g))
@@ -384,20 +509,97 @@
                 [(t/deny {:vars (zipmap (:judges g) values)}) g]))
             [(t/allow) g]))))))
 
+(defn- evidence-firsts
+  "The `first`s of a guard's :evidence map, canonical {name {:kind
+  :where :pred}} (docs/spec-related-row-law.md §3): each bound as a
+  binder's match is, to the oldest grant-visible row of one page (50)
+  its where matches for which its pred holds, that row as (it 0).
+  Evidence-only: asked when the guard refuses, never in a verdict."
+  [g]
+  (let [e (:evidence g)]
+    (when (map? e) (filter (comp map? val) e))))
+
+(defn- row-face
+  "A row as a `first`'s pred reads its candidate: (get c :id),
+  (get c :state), (get c :field)."
+  [row]
+  (assoc (:data row) :id (str (:id row)) :state (some-> (:state row) name)))
+
+(defn- binder-evidence
+  "Each exists/none/count-rows binder of a refusing guard, bound to its
+  evidence (docs/spec-related-row-law.md §3): the oldest match by
+  created_at, the id breaking a tie, among the rows the caller's grant
+  can see — {:evidence {name id}} for (evidence :b) in a remedy, and
+  {:vars {\"b.field\" value}} for {b.field} in the sentence, a secret
+  field rendered empty. A binder whose every match is hidden, or a ctx
+  with no hook to ask, binds nothing: the refusal stands and names none."
+  [g row inp ctx]
+  (let [scope (expr-scope row inp ctx)
+        match (:rows-matching ctx)
+        read (:read scope)
+        sees? (clojure.core/or (get-in ctx [:grant :row?]) (constantly true))
+        secret (fn [kind]
+                 (clojure.core/or (when-some [rdef-of (:rdef-of ctx)]
+                                    (some-> (rdef-of kind) :schema schema/secret-fields))
+                                  #{}))]
+    (when (clojure.core/and match read)
+      (reduce
+       (fn [acc [b {:keys [kind where pred]}]]
+         (let [conds (expr/where-conds where scope)
+               hit (when (vector? conds)
+                     (->> (match kind conds 50)
+                          (map str)
+                          (remove #{(:self scope)})
+                          (filter #(sees? kind %))
+                          (keep #(read kind %))
+                          ;; a stored row stamps :created-at; a literal
+                          ;; one may spell the column
+                          (sort-by (juxt #(clojure.core/or (:created-at %) (:created_at %))
+                                         (comp str :id)))
+                          ;; a first's pred, over each candidate as (it 0)
+                          (filter #(clojure.core/or
+                                    (nil? pred)
+                                    (true? (expr/evaluate pred (update scope :its conj (row-face %))))))
+                          first))]
+           (if (nil? hit)
+             acc
+             (let [hidden (secret kind)
+                   at (fn [k] (str (name b) "." (name k)))]
+               (-> acc
+                   (assoc-in [:evidence b] (str (:id hit)))
+                   (update :vars merge
+                           (into {(at :id) (str (:id hit))
+                                  (at :state) (some-> (:state hit) name)}
+                                 (map (fn [[k v]] [(at k) (if (hidden k) "" v)]))
+                                 (:data hit))))))))
+       {}
+       (concat (:binders g) (evidence-firsts g))))))
+
 (defn- with-evidence
   "A denying leaf's evidence: the verdict's own, else what the guard's
-  :evidence fns find over (row, ctx), each nil left out. A render ctx
-  without read hooks lends its :evidence-reads, so an envelope's
-  refusal names what the POST's would."
-  [[v g :as res] row ctx]
-  (if (clojure.core/and (t/deny? v) (map? (:evidence g)) (nil? (:evidence v)))
-    (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
-          ev (into {}
-                   (keep (fn [[k f]]
-                           (clojure.core/when-some [x (f row ctx)] [k x])))
-                   (:evidence g))]
-      (if (seq ev) [(assoc v :evidence ev) g] res))
-    res))
+  :evidence fns find over (row, ctx), each nil left out — and, for a
+  guard that asks exists/none/count-rows, each binder's match
+  (binder-evidence). A render ctx without read hooks lends its
+  :evidence-reads, so an envelope's refusal names what the POST's would."
+  [[v g :as res] row inp ctx]
+  (let [[v g :as res]
+        (if (clojure.core/and (t/deny? v) (map? (:evidence g)) (nil? (:evidence v)))
+          (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
+                ev (into {}
+                         (keep (fn [[k f]]
+                                 (clojure.core/when (fn? f)
+                                   (clojure.core/when-some [x (f row ctx)] [k x]))))
+                         (:evidence g))]
+            (if (seq ev) [(assoc v :evidence ev) g] res))
+          res)]
+    (if (clojure.core/and (t/deny? v)
+                          (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))))
+      (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)]
+        [(cond-> v
+           (seq evidence) (update :evidence merge evidence)
+           (seq vars) (update :vars merge vars))
+         g])
+      res)))
 
 (defn evaluate
   "→ [verdict denier]. The denier is the leaf whose explain renders
@@ -423,7 +625,7 @@
         first-deny))
 
     (:relation g) (evaluate-relation g row inp ctx)
-    :else (with-evidence (evaluate-leaf g row inp ctx) row ctx)))
+    :else (with-evidence (evaluate-leaf g row inp ctx) row inp ctx)))
 
 ;; ── reasons and structured hope ─────────────────────────────────────
 
@@ -463,14 +665,58 @@
                        (str (get vars k))
                        whole))))))
 
+(def ^:private sentence-break #"(?<=[.!?])\s+")
+
+(def ^:private unseen-sentence
+  "What stops this is outside what you can see.")
+
+(defn- binder-of
+  "The binder a {b.field} placeholder reads, when b is one of the
+  guard's, else nil."
+  [binders k]
+  (let [[b f] (str/split k #"\." 2)]
+    (clojure.core/when (clojure.core/and f (contains? binders b)) b)))
+
+(defn- without-unseen
+  "The explain with each sentence that reads a binder bound to no row
+  the caller may see replaced by that binder's :hidden sentence, or
+  left out (docs/spec-related-row-law.md §3). When no sentence would
+  remain, the engine's own sentence stands."
+  [g template vars binders]
+  (let [unseen (into #{} (remove #(contains? vars (str % ".id"))) binders)]
+    (if (empty? unseen)
+      template
+      (let [reads (fn [s] (some (fn [[_ k]] (unseen (binder-of binders k)))
+                                (re-seq placeholder s)))
+            kept (keep (fn [s]
+                         (if-some [b (reads s)]
+                           (get-in g [:hidden (keyword b)])
+                           s))
+                       (str/split template sentence-break))]
+        (if (seq kept) (str/join " " kept) unseen-sentence)))))
+
 (defn render-reason
   "The denier's explain, formatted from deny vars over vars-fn
   garnish (deny vars win). Garnish must never block: vars-fn errors
-  are swallowed."
+  are swallowed. A binder's {b.field} never renders literally: an
+  unseen binder's sentence goes (without-unseen), a field its match
+  lacks reads empty."
   [g deny row]
   (let [garnish (clojure.core/when (clojure.core/and (:vars-fn g) (some? row))
-                  (try ((:vars-fn g) row) (catch Exception _ nil)))]
-    (format-map (:explain g) (merge garnish (:vars deny)))))
+                  (try ((:vars-fn g) row) (catch Exception _ nil)))
+        vars (merge garnish (:vars deny))
+        binders (into #{} (map (comp clojure.core/name key))
+                      (concat (:binders g) (evidence-firsts g)))]
+    (if (empty? binders)
+      (format-map (:explain g) vars)
+      (let [template (without-unseen g (:explain g) vars binders)]
+        (format-map template
+                    (into vars
+                          (keep (fn [[_ k]]
+                                  (clojure.core/when (clojure.core/and (binder-of binders k)
+                                                                       (clojure.core/not (contains? vars k)))
+                                    [k ""])))
+                          (re-seq placeholder template)))))))
 
 (defn becomes-available
   "Structured hope: {:at iso} from deny retry-at or the declared
@@ -486,12 +732,27 @@
 
 ;; ── declared verdicts: g/expr ───────────────────────────────────────
 
+(defn- derived-reads
+  "What a :when tree and its :vars read beyond the row: (did …) the log
+  and the actor, (me) the actor, (now) the clock — in that order, once
+  each — then every kind a (follow …) reaches, sorted; so a tree that
+  asks none of them keeps the :reads it had."
+  [w vars]
+  (let [infos (cons (expr/info w) (map expr/info (vals vars)))
+        reads? (fn [k] (boolean (some k infos)))]
+    (into (vec (distinct (cond-> []
+                           (reads? (comp seq :doors)) (conj :transitions :principal)
+                           (reads? :uses-me) (conj :principal)
+                           (reads? :uses-now) (conj :now))))
+          (sort (into #{} (mapcat #(concat (:follows %) (:queries %))) infos)))))
+
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the
   fingerprint stores the tree, the reviewer diffs the leaf, and (9.0)
   the judgment overlay evaluates any stored revision. :judges derives
-  from the tree's (input …) reads, :reads from (now) — declared by
-  the law itself."
+  from the tree's (input …) reads, :reads from (did …), (me), (now)
+  and each (follow …)'s kind — declared by the law itself. :errors is
+  {field \"sentence\"}, the per-field error a refusal carries."
   [{:keys [when vars judges reads name] :as opts}]
   (clojure.core/when-not (seq? when)
     (throw (t/definition-error "guard/expr takes a :when expression form")))
@@ -512,14 +773,45 @@
                             [k f])))
                    vars)
         winfo (expr/info w)]
+    (clojure.core/when-some [es (:errors opts)]
+      (clojure.core/when-not
+       (clojure.core/and (map? es) (every? keyword? (keys es))
+                         (every? #(clojure.core/and (string? %) (clojure.core/not (str/blank? %)))
+                                 (vals es)))
+        (throw (t/definition-error
+                (str "guard " name " :errors is {field \"sentence\"} — the "
+                     "per-field error the refusal carries")))))
     (guard (merge (dissoc opts :when :vars)
                   {:when w
                    :vars vars
                    :judges (clojure.core/or judges (vec (sort (:inputs winfo))))
-                   :reads (clojure.core/or reads
-                                           (if (clojure.core/or (:uses-now winfo)
-                                                                (some (comp :uses-now expr/info) (vals vars)))
-                                             [:now] []))}))))
+                   :reads (clojure.core/or reads (derived-reads w vars))}
+                  ;; the binder names the tree erased, kept for evidence
+                  (clojure.core/when-some [bs (not-empty (expr/rows-binders when))]
+                    {:binders bs})
+                  ;; the gate names it: [reads-handwritten]
+                  (clojure.core/when (some? reads) {:reads-written true})))))
+
+(defn bind-follows
+  "Write the target kind into every (follow <ref> :field) of an
+  expression guard (`kind-of`: the ref form → its kind, or nil), then
+  derive :reads again. A guard with nothing to bind comes back as it
+  was, so no law that does not follow moves."
+  [g kind-of]
+  (let [forms (concat (cons (:when g) (vals (:vars g)))
+                      (map :where (vals (:binders g))))]
+    (if (clojure.core/or (nil? (:when g))
+                         (not-any? (comp nil? first) (mapcat expr/follows forms)))
+      g
+      (let [bind #(expr/normalize (expr/bind-follows % kind-of))
+            w (bind (:when g))
+            vars (into {} (map (fn [[k f]] [k (bind f)])) (:vars g))
+            binders (into {}
+                          (map (fn [[b q]] [b (update q :where expr/bind-follows kind-of)]))
+                          (:binders g))]
+        (cond-> (assoc g :when w :vars vars)
+          (seq binders) (assoc :binders binders)
+          (clojure.core/not (:reads-written g)) (assoc :reads (derived-reads w vars)))))))
 
 (defn relation
   "Multi-field admission: :accepts produces admissible tuples, or :op
@@ -688,36 +980,21 @@
 
 (defn unless
   "Bar the principal a log fact names: unless (actor-of :propose).
-  The (:actor-of ctx) engine hook resolves the last actor of the
-  named transition (phase 2 wires it; nil actor allows)."
+  The tree is (not (did transition)) (docs/spec-related-row-law.md §4):
+  any face of any logged actor of the transition on this row is
+  barred, not only the newest; no log to ask answers pending."
   [transition & [{:keys [explain hide name]}]]
   (clojure.core/when (str/blank? (clojure.core/name transition))
     (throw (t/definition-error "unless names a transition of this resource")))
-  (guard {:name (clojure.core/or name (keyword (str "unless:actor-of:"
-                                                    (clojure.core/name transition))))
-          :unless transition
-          :explain (clojure.core/or explain
-                                    (str "You performed "
-                                         (str/replace (clojure.core/name transition) "_" " ")
-                                         " on this resource; a different principal must do this."))
-          :reads [:transitions :principal]
-          :hide (boolean hide)
-          :check (with-meta
-                   (fn [row _ ctx]
-                     (let [actor (clojure.core/when-some [f (:actor-of ctx)]
-                                   (f row transition))]
-                       (if (clojure.core/and (some? actor)
-                                             (= actor (:id (:principal ctx))))
-                         (t/deny)
-                         (t/allow))))
-                   {:waymark10/form
-                    (list 'fn '[row _ ctx]
-                          (list 'let ['actor (list 'when-some ['f '(:actor-of ctx)]
-                                                   (list 'f 'row transition))]
-                                '(if (and (some? actor)
-                                          (= actor (:id (:principal ctx))))
-                                   (t/deny)
-                                   (t/allow))))})}))
+  (expr {:name (clojure.core/or name (keyword (str "unless:actor-of:"
+                                                   (clojure.core/name transition))))
+         :unless transition
+         :explain (clojure.core/or explain
+                                   (str "You performed "
+                                        (str/replace (clojure.core/name transition) "_" " ")
+                                        " on this resource; a different principal must do this."))
+         :hide (boolean hide)
+         :when (list 'not (list 'did transition))}))
 
 (defn four-eyes
   "Whoever performed `of` cannot do this."
@@ -875,42 +1152,27 @@
 ;; drawing, generalized, so the :decision sugar and the hand-written
 ;; guard are one law with two spellings.
 ;;
-;; Both mint their :check's canonical form EXPLICITLY — the rule these
-;; two set first and waymark-j82 carried to every factory above (role,
-;; owner, feature-flag, require, unless, rate-limit). A guard the sugar
-;; mints is the one place a formless :check would be intolerable: it
-;; would file the law under the address callable-hash falls back to,
-;; and warn an author about a body they did not write and cannot fix.
-;; So the form is data here, built to print exactly as the equivalent
-;; defguard body would — which is also what lets grants.clj's own
-;; someone-else-decides become a call to this factory without moving
-;; approval_request's fingerprint by one byte.
+;; Both emit a :when TREE (docs/spec-related-row-law.md §4, §6): the
+;; field read against (me), so the fingerprint stores the law itself
+;; rather than a hand-built fn form, and the decision record names it
+;; instead of filing it opaque. grants.clj's someone-else-decides is a
+;; call to this factory, so it and the sugar's wall stay one law.
 
 (defn not-the-field
   "The field four-eyes wall: whoever this row names in `field` cannot
   be the principal acting now. \"Not you\", where you is written down
   in the document rather than remembered from the log."
   [field & [{:keys [explain hide name open]}]]
-  (guard
+  (expr
    (cond-> {:name (clojure.core/or name
                                    (keyword (str "not-the-" (clojure.core/name field))))
-            :reads [:principal]
             :explain (clojure.core/or
                       explain
                       (str "The "
                            (str/replace (clojure.core/name field) "_" " ")
                            " of this row cannot be the one to decide it; "
                            "another principal must."))
-            :check (with-meta
-                     (fn [row _inp ctx]
-                       (if (= (:id (:principal ctx)) (get-in row [:data field]))
-                         (t/deny) (t/allow)))
-                     {:waymark10/form
-                      (list 'fn '[row _inp ctx]
-                            (list 'if
-                                  (list '= '(:id (:principal ctx))
-                                        (list 'get-in 'row [:data field]))
-                                  '(t/deny) '(t/allow)))})}
+            :when (list 'not= (list 'data field) '(me))}
      open (assoc :open open)
      hide (assoc :hide true))))
 
@@ -922,27 +1184,16 @@
   nobody names no decider, and the wall refuses rather than opening:
   an unassigned verdict waits for an assignment."
   [field & [{:keys [explain hide name]}]]
-  (guard
+  (expr
    (cond-> {:name (clojure.core/or name
                                    (keyword (str "is-the-" (clojure.core/name field))))
-            :reads [:principal]
             :explain (clojure.core/or
                       explain
                       (str "Only this row's "
                            (str/replace (clojure.core/name field) "_" " ")
                            " may decide it."))
-            :check (with-meta
-                     (fn [row _inp ctx]
-                       (let [named (get-in row [:data field])]
-                         (if (clojure.core/and (some? named)
-                                               (= (:id (:principal ctx)) named))
-                           (t/allow) (t/deny))))
-                     {:waymark10/form
-                      (list 'fn '[row _inp ctx]
-                            (list 'let ['named (list 'get-in 'row [:data field])]
-                                  (list 'if (list 'and '(some? named)
-                                                  '(= (:id (:principal ctx)) named))
-                                        '(t/allow) '(t/deny))))})}
+            :when (list 'and (list 'is-set (list 'data field))
+                        (list '= (list 'data field) '(me)))}
      hide (assoc :hide true))))
 
 ;; ── the grantable person-wall (waymark-sfe) ─────────────────────────

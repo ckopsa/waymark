@@ -57,9 +57,11 @@
 
   AN EXPECTED AGE is declared per kind and state, in seconds, under the
   declaration's `:expected-age`. A state with none takes the default
-  for its NAME (`default-ages`), and a state with neither has no
-  expected age. That is deliberate: a row may rest in `draft`, `done`
-  or `active` for as long as it likes.
+  for its NAME (`default-ages`); a non-terminal state with neither takes
+  the kind's `:default-expected-age`, which an org's `in-domain` stamps
+  from its template (a day, unless the org says otherwise or nil), and
+  a state with none of these has no expected age. That is deliberate: a
+  row may rest in `draft`, `done` or `active` for as long as it likes.
 
   AN ORG'S HIRING GAPS (`hiring-gaps`, ticket 6a3fac3e) read the same
   aged rows, for the rows of an org's domains only, grouped by domain,
@@ -67,9 +69,15 @@
   holds a door out of the state for one of its rows (`no_holder`), or
   when it has `pressure-rows` aged rows and the oldest has sat
   `pressure-factor` expected ages (`pressure`): a door nobody holds, or
-  a queue its seats cannot keep up with. They are named, not filed.
+  a queue its seats cannot keep up with. The orgs are the names of the
+  live found `org_plan`s, and `pass!` opens one hire plan per gap by
+  org_plan's `open_hire` door as the engine (ticket 29b819dd): a hire
+  that stands already (`hire_open`) or was turned down (`hire_quiet`)
+  is the normal answer and says nothing. An aged crack its gap takes is
+  neither filed nor woken on (`not-hired`): the hire plan is the note.
+  An engine that serves no `org_plan` hires nothing.
 
-  `find-cracks`, `hiring-gaps`, `unfiled` and `ticket-of` are pure over a world of
+  `find-cracks`, `hiring-gaps`, `not-hired`, `unfiled` and `ticket-of` are pure over a world of
   rows, so a test judges them with no engine. `pass!` reads that world
   and files; nothing in it re-throws."
   (:require [clojure.string :as str]
@@ -156,11 +164,14 @@
 (defn expected-age
   "Seconds a row of this kind may sit in `state` with no write: the
   kind's own `:expected-age` for the state, or the default for the
-  state's name, or nil when it has neither."
+  state's name, or — for a state that is not terminal — the kind's
+  `:default-expected-age`, or nil when it has none of these."
   [rdef state]
   (let [s (text state)]
     (or (some (fn [[k v]] (when (= s (text k)) v)) (:expected-age rdef))
-        (get default-ages s))))
+        (get default-ages s)
+        (when-not (some #(= s (text %)) (:terminal rdef))
+          (:default-expected-age rdef)))))
 
 (defn- crack [word kind id m]
   (merge {:crack word
@@ -289,10 +300,14 @@
 
 (defn row-domain
   "The name of the domain a row is in: its stored `domain`, or what its
-  kind's declaration says an absent one counts as, or nil."
+  kind's declaration says an absent one counts as, or the kind's own
+  `:domain` token (`in-domain`'s stamp), or nil. A kind that says
+  `:row-domain :stored-only` takes no fallback to its `:domain`."
   [rdef row]
   (or (some-> (fget (:data row) "domain") text not-empty)
-      (some-> (get-in rdef [:absent-as :domain]) text not-empty)))
+      (some-> (get-in rdef [:absent-as :domain]) text not-empty)
+      (when-not (= :stored-only (:row-domain rdef))
+        (some-> (:domain rdef) text not-empty))))
 
 (defn hiring-gaps
   "An org's hiring gaps in a world of rows (the world `find-cracks`
@@ -571,6 +586,27 @@
              [#{} []]
              cracks))))
 
+(defn not-hired
+  "The cracks `gaps` leave: an aged crack whose row is in a gap's org,
+  kind and state is that gap's hire plan's to tell, so it is dropped;
+  every other crack stays, in order. `world` is `find-cracks`'s."
+  [{:keys [rdefs rows]} gaps cracks]
+  (if (empty? gaps)
+    (vec cracks)
+    (let [gapped (into #{} (map (juxt :org :kind :state)) gaps)
+          by-kind (into {} (map (juxt (comp text :kind) identity)) rdefs)
+          by-id (into {} (for [[kind rs] rows, row rs]
+                           [[(text kind) (str (:id row))] row]))]
+      (into []
+            (remove (fn [c]
+                      (let [rdef (get by-kind (:kind c))
+                            row (get by-id [(:kind c) (:id c)])]
+                        (boolean
+                         (and (= "aged" (:crack c)) rdef row
+                              (contains? gapped [(row-domain rdef row)
+                                                 (:kind c) (:state c)]))))))
+            cracks))))
+
 (defn wake-text
   "What the fire that wakes a seat on a crack's row carries: the row, as
   a transition wake names one (`wakes/wake-text`), so the session walks
@@ -831,23 +867,82 @@
                                                   ", which would not be woken"))
                              now))))))
 
+(defn- org-domains
+  "The names of the orgs a live found org_plan stands for (a plan with
+  no purpose is a found one). None when the engine serves no org_plan."
+  [eng]
+  (into []
+        (comp (filter #(contains? #{"" "found"}
+                                  (text (or (fget (:data %) :purpose) ""))))
+              (keep #(some-> (fget (:data %) :name) text not-empty))
+              (distinct))
+        (rows-in eng :org_plan {:state :live} {})))
+
+(defn- seat-domains
+  "Seat id → the name of its domain (`seats/domain-name-of`), read from
+  the store, for `hiring-gaps`."
+  [eng seat-rows]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into {}
+              (map (fn [seat]
+                     [(str (:id seat))
+                      (seats/domain-name-of #(store/load-row st tx %1 (str %2) {}) seat)]))
+              seat-rows)))))
+
+(def ^:private quiet-hires
+  "The open_hire refusals a later pass expects, and says nothing of: a
+  hire for the gap stands already, or was turned down and is quiet."
+  #{"hire_open" "hire_quiet"})
+
+(defn- open-hire!
+  "One gap's hire plan, by org_plan's `open_hire` door as the engine.
+  → true when one opened, nil when the door refused."
+  [eng gap]
+  (try
+    (inv/create! eng :org_plan {:name (:org gap) :gap (dissoc gap :org)}
+                 {:principal schedules/system-actor :action :open_hire})
+    true
+    (catch Exception e
+      (when-not (contains? quiet-hires (some-> (:guard (ex-data e)) text))
+        (warn! "no hire plan opened for " (:key gap) " — " (ex-message e)))
+      nil)))
+
+(defn- gaps-of
+  "The hiring gaps of the live orgs in this world, or none when no org
+  is live or the read fails."
+  [eng w]
+  (try
+    (let [orgs (org-domains eng)]
+      (if (seq orgs)
+        (hiring-gaps (assoc w :seat-domains (seat-domains eng (:seats w))) orgs)
+        []))
+    (catch Exception e
+      (warn! "the hiring gaps would not read — " (ex-message e))
+      [])))
+
 (defn pass!
-  "One pass: read the rows, find the cracks, and send a note for each
-  one no standing ticket names — a wake for the seat that holds the
-  row, or a draft ticket — at most `file-cap` of them. A crack that
-  waits on a woken seat sends nothing and takes none of the cap. → how
-  many notes went out."
+  "One pass: read the rows, open one hire plan for each hiring gap of a
+  live org, find the cracks, and send a note for each one no standing
+  ticket and no gap names — a wake for the seat that holds the row, or
+  a draft ticket — at most `file-cap` of them. A crack that waits on a
+  woken seat sends nothing and takes none of the cap. → how many notes
+  went out, hire plans counted."
   [eng]
   (if-not (and (serves? eng :ticket) (serves? eng :seat))
     0
     (let [w (world eng)
-          fresh (unfiled (find-cracks w) (standing-tickets eng))]
-      (reduce (fn [n c]
-                (if (<= (long file-cap) (long n))
-                  (reduced n)
-                  (if (send! eng c (:now w)) (inc (long n)) n)))
-              0
-              fresh))))
+          gaps (gaps-of eng w)
+          hired (reduce (fn [n g] (if (open-hire! eng g) (inc (long n)) n)) 0 gaps)
+          fresh (unfiled (not-hired w gaps (find-cracks w)) (standing-tickets eng))]
+      (+ (long hired)
+         (long (reduce (fn [n c]
+                         (if (<= (long file-cap) (long n))
+                           (reduced n)
+                           (if (send! eng c (:now w)) (inc (long n)) n)))
+                       0
+                       fresh))))))
 
 (defn start-sweeper!
   "Every `:interval-ms`, `pass!`. The first pass is one interval after

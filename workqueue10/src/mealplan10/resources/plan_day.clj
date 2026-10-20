@@ -51,8 +51,9 @@
   honestly reads 0 — no meal, no lines feeding the night."
   (:require [mealplan10.themes :as themes]
             [waymark10.dsl :refer [defacceptsfn defaction defderived
-                                   defguardfn defresource defhandler
-                                   expr-guard guard]]
+                                   defguard defguardfn defresource
+                                   defhandler defscenario expr-guard
+                                   guard refuse]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek LocalDate)))
 
@@ -74,19 +75,13 @@
 
 ;; the parent plan's phase gates every day edit (the promoted spelling
 ;; of "day actions are :from #{:draft}" — widened to the live week by
-;; the family's own call)
-(defguardfn plan-editable
-  {:reads [:plan]
-   :explain "Days change while the week is being built (draft) or lived (active) — a finalized plan under review is frozen."
-   :remedies [:plan/reopen :plan/begin]}
-  [row _inp ctx]
-  (if-some [read (:read ctx)]
-    (let [plan (read :plan (get-in row [:data :plan_id]))]
-      (cond
-        (nil? plan) (t/deny {:errors {:plan_id ["plan not found"]}})
-        (contains? #{:draft :active} (:state plan)) (t/allow)
-        :else (t/deny)))
-    (t/allow)))
+;; the family's own call). Declarative (docs/spec-related-row-law.md
+;; §7): a missing plan follows to nil and refuses with the same sentence
+(defguard plan-editable
+  (refuse "Days change while the week is being built (draft) or lived (active) — a finalized plan under review is frozen.")
+  '(or (= (follow (data :plan_id) :state) "draft")
+       (= (follow (data :plan_id) :state) "active"))
+  {:remedies [:plan/reopen :plan/begin]})
 
 ;; the create door's own gate: a day belongs inside its plan's window
 (defguardfn date-in-plan-range
@@ -132,17 +127,11 @@
         (when-some [rotation (read :rotation rid)]
           (vec (get-in rotation [:data :themes])))))))
 
-(defguardfn meal-is-listed
-  {:judges [:meal_id] :reads [:meal]
-   :explain "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first."
-   :remedies [{:door :meal/accept :id '(input :meal_id)}]}
-  [_row inp ctx]
-  (if-some [read (:read ctx)]
-    (let [meal (read :meal (:meal_id inp))]
-      (if (and meal (= :on_list (:state meal)))
-        (t/allow)
-        (t/deny {:errors {:meal_id ["not an on-list meal"]}})))
-    (t/allow)))
+(defguard meal-is-listed
+  (refuse "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first.")
+  '(= (follow (input :meal_id) :state) "on_list")
+  {:remedies [{:door :meal/accept :id '(input :meal_id)}]
+   :errors {:meal_id "not an on-list meal"}})
 
 ;; one acceptance set, two consumers: THIS day's picker offers exactly
 ;; the on-list meals that serve its night (a rotating Sunday binds
@@ -163,10 +152,13 @@
               (find' :meal {:state :on_list}
                      {:limit 500}))))))
 
-;; the same admitted set, judging the side's field
+;; the same admitted set, judging the side's field. Its one read is a
+;; :find over :meal, which a scenario's :given rows answer, so it opts
+;; into the check tier and add_side_dish's scenarios need no database
 (defacceptsfn side-fits-day
   {:judges [:side_id]
    :reads [:meal]
+   :check-tier :given
    :explain "That side doesn't serve this day's theme night."
    :remedies [:plan_day/assign_off_theme]}
   [row ctx]
@@ -180,17 +172,11 @@
               (find' :meal {:state :on_list}
                      {:limit 500}))))))
 
-(defguardfn side-is-listed
-  {:judges [:side_id] :reads [:meal]
-   :explain "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first."
-   :remedies [:meal/accept]}
-  [_row inp ctx]
-  (if-some [read (:read ctx)]
-    (let [meal (read :meal (:side_id inp))]
-      (if (and meal (= :on_list (:state meal)))
-        (t/allow)
-        (t/deny {:errors {:side_id ["not an on-list meal"]}})))
-    (t/allow)))
+(defguard side-is-listed
+  (refuse "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first.")
+  '(= (follow (input :side_id) :state) "on_list")
+  {:remedies [:meal/accept]
+   :errors {:side_id "not an on-list meal"}})
 
 (def has-free-side-slot
   ;; declarative now — the day's own fields, no date lookup
@@ -339,6 +325,99 @@
    :handler remove-day-side
    :display {:label "Remove side dish" :order 7}})
 
+;; ── law scenarios ───────────────────────────────────────────────────
+;; Check-tier: assign_off_theme carries only plan-editable and
+;; meal-is-listed, both declarative, so the :given week and meal answer
+;; their follows with no database. add_side_dish is check-tier too: its
+;; code acceptance set side-fits-day declares :check-tier :given, so the
+;; :given sides answer its :find beside side-is-listed's follow.
+
+(def ^:private week
+  {:kind :plan :handle :week :state :draft
+   :data {:start_date "2099-01-04" :weeks 1}})
+
+(def ^:private soup
+  {:kind :meal :handle :soup :state :on_list :data {:name "Soup"}})
+
+(def ^:private monday
+  {:state :undecided
+   :data {:plan_id "{given/week}" :date "2099-01-05" :theme "Mexican"}})
+
+(defscenario a-listed-meal-goes-on-a-week-being-built
+  "A meal on the family list goes on a night of a draft week."
+  {:kind    :plan_day
+   :attempt :assign_off_theme
+   :given   [week soup]
+   :row     monday
+   :input   {:meal_id "{given/soup}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-finalized-week-is-frozen
+  "A week finalized for review keeps its nights as they are; reopen
+   it, or begin it, first."
+  {:kind    :plan_day
+   :attempt :assign_off_theme
+   :given   [(assoc week :state :planned) soup]
+   :row     monday
+   :input   {:meal_id "{given/soup}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :plan-editable
+             :remedies [:plan/reopen :plan/begin]}})
+
+(defscenario a-suggestion-is-not-dinner-yet
+  "A meal only suggested does not go on a night until it is accepted."
+  {:kind    :plan_day
+   :attempt :assign_off_theme
+   :given   [week (assoc soup :state :suggested)]
+   :row     monday
+   :input   {:meal_id "{given/soup}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :meal-is-listed
+             :because "not on the family meal list"}})
+
+(def ^:private rice
+  {:kind :meal :handle :rice :state :on_list
+   :data {:name "Rice" :themes ["Mexican"]}})
+
+(def ^:private planned-monday
+  (assoc monday :state :planned))
+
+(defscenario a-side-that-serves-the-night-goes-on
+  "A listed side that serves the day's theme night goes beside its meal."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week rice]
+   :row     planned-monday
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario an-off-theme-side-stays-off
+  "A side that does not serve the day's theme night does not go on it."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week (assoc-in rice [:data :themes] ["Italian"])]
+   :row     planned-monday
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :side-fits-day
+             :because "serve this day's theme night"}})
+
+(defscenario a-suggested-side-is-not-dinner-yet
+  "A side only suggested does not go on a night until it is accepted,
+   even on a rotating Sunday that binds no theme."
+  {:kind    :plan_day
+   :attempt :add_side_dish
+   :given   [week (assoc rice :state :suggested)]
+   :row     (-> planned-monday
+                (assoc-in [:data :date] "2099-01-04")
+                (assoc-in [:data :theme] themes/rotating))
+   :input   {:side_id "{given/rice}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :side-is-listed
+             :because "not on the family meal list"}})
+
 (defresource plan-day
   {:kind :plan_day
    :states [:undecided :planned :eating_out]
@@ -420,4 +499,10 @@
     :mark_eating_out mark-eating-out
     :clear_day clear-day-action
     :add_side_dish add-side-dish
-    :remove_side_dish remove-side-dish}})
+    :remove_side_dish remove-side-dish}
+   :scenarios [a-listed-meal-goes-on-a-week-being-built
+               a-finalized-week-is-frozen
+               a-suggestion-is-not-dinner-yet
+               a-side-that-serves-the-night-goes-on
+               an-off-theme-side-stays-off
+               a-suggested-side-is-not-dinner-yet]})

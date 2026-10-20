@@ -123,7 +123,6 @@
             [waymark10.holds :as holds]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -182,19 +181,23 @@
 
 (defn- state-name [row] (some-> (:state row) name))
 
-(defn- plans-of
-  "Every org_plan of the org `org` in a state that is not retired,
-  decoded."
-  [eng org]
-  (let [st (:storage eng)
-        rd (get (inv/resources eng) :org_plan)]
-    (into []
-          (comp (map #(inv/decode-row rd %))
-                (filter #(= org (str (get-in % [:data :name])))))
-          (store/with-tx st
-            (fn [tx]
-              (mapcat #(store/query-rows st tx :org_plan {:state %} {:limit 1000})
-                      ["live" "drafting" "proposed" "filming" "simulated" "going_live"]))))))
+(defn plans-named
+  "Every org_plan of the org `org`, decoded, read through the ctx
+  `:find` hook — the same transaction as the write — as
+  schedules/one-per-seat? does; a ctx without the hook answers nil, so
+  the render probe stays storage-free."
+  [ctx org]
+  (when-some [find' (:find ctx)]
+    (find' :org_plan {:name (str org)} {:limit 1000})))
+
+(defn live-plan-of
+  "The live found plan among `plans`, or nil."
+  [plans]
+  (first (filter #(and (= "live" (state-name %)) (= "found" (purpose-of %)))
+                 plans)))
+
+(defn- same-gap? [gap plan]
+  (= (str (:key gap)) (str (get-in plan [:data :gap :key]))))
 
 (def ^:private quiet-seconds
   "How long a refused hire keeps its gap quiet: a week."
@@ -204,17 +207,58 @@
   (cond (instance? Instant v) v
         (some? v) (try (Instant/parse (str v)) (catch Exception _ nil))))
 
-(defn- retired-hires-of
-  "Every retired hire plan of the org `org`, decoded."
-  [eng org]
-  (let [st (:storage eng)
-        rd (get (inv/resources eng) :org_plan)]
-    (into []
-          (comp (map #(inv/decode-row rd %))
-                (filter #(and (= org (str (get-in % [:data :name])))
-                              (= "hire" (purpose-of %)))))
-          (store/with-tx st
-            (fn [tx] (store/query-rows st tx :org_plan {:state "retired"} {:limit 1000}))))))
+;; the open_hire door's own law: any caller of the door — open-hire!,
+;; or the live cracks pass walking it generically — is judged the same
+
+(defguardfn the-org-is-live
+  {:name :no_live_org
+   :judges [:name]
+   :reads [:org_plan]
+   :vars [:org]
+   :explain "No live plan founds {org}: a hire plan is opened on an org that is live."}
+  [_row inp ctx]
+  (let [plans (plans-named ctx (:name inp))]
+    (if (and (some? plans) (nil? (live-plan-of plans)))
+      (t/deny {:vars {:org (str (:name inp))}})
+      (t/allow))))
+
+(defguardfn one-hire-per-gap
+  {:name :hire_open
+   :judges [:gap]
+   :reads [:org_plan]
+   :vars [:gap :state]
+   :explain "A hire plan for {gap} stands already, in {state}."}
+  [_row inp ctx]
+  (if-some [open (first (filter #(and (= "hire" (purpose-of %))
+                                      (contains? standing-hire-states (state-name %))
+                                      (same-gap? (:gap inp) %))
+                                (plans-named ctx (:name inp))))]
+    (t/deny {:vars {:gap (str (get-in inp [:gap :key])) :state (state-name open)}
+             :evidence {:hire (str (:id open))}})
+    (t/allow)))
+
+(defguardfn a-turned-down-gap-is-quiet
+  {:name :hire_quiet
+   :judges [:gap]
+   :reads [:org_plan]
+   :vars [:gap :until]
+   :explain "The owner turned down a hire for {gap}: it is quiet until {until}."}
+  [_row inp ctx]
+  (let [^Instant now (or (instant-of (:now ctx)) (Instant/now))]
+    (if-some [quiet (first (filter #(and (= "retired" (state-name %))
+                                         (= "hire" (purpose-of %))
+                                         (same-gap? (:gap inp) %)
+                                         (some-> (instant-of (get-in % [:data :quiet_until]))
+                                                 (.isAfter now)))
+                                   (plans-named ctx (:name inp))))]
+      (t/deny {:vars {:gap (str (get-in inp [:gap :key]))
+                      :until (str (instant-of (get-in quiet [:data :quiet_until])))}
+               :evidence {:hire (str (:id quiet))}})
+      (t/allow))))
+
+(def ^:private hire-refusals
+  "The open_hire door's own guards, by the reason open-hire! answers."
+  #{:no_live_org :hire_open :hire_quiet})
 
 (defn open-hire!
   "The engine opens a hire plan for the org `name` on one `gap`. →
@@ -222,52 +266,22 @@
   `engine_only` when the hand is not the engine's, `no_live_org` when
   the org has no live found plan, `hire_open` when a hire plan for
   the same gap key stands in drafting, proposed, filming or simulated,
-  and `hire_quiet` while a retired one for it is quiet (M4b). The plan
-  is born in drafting with the live plan's owner and directory, and
-  the brief written from the gap."
+  and `hire_quiet` while a retired one for it is quiet (M4b). Those
+  three are the open_hire door's guards, and the live plan's owner and
+  directory are its on-create's: this is the door's thin caller."
   [eng {org :name gap :gap} {:keys [principal] :as opts}]
   (if-not (= :system (:type principal))
     {:refused :engine_only
      :why "Only the engine's hand opens a hire plan: it opens one for each gap its own audit finds."}
-    (let [plans (plans-of eng org)
-          live (first (filter #(and (= "live" (state-name %))
-                                    (= "found" (purpose-of %)))
-                              plans))
-          open (first (filter #(and (= "hire" (purpose-of %))
-                                    (contains? standing-hire-states (state-name %))
-                                    (= (str (:key gap))
-                                       (str (get-in % [:data :gap :key]))))
-                              plans))
-          now (or (:now opts) (some-> (:now-fn eng) (apply [])) (Instant/now))
-          quiet (when-not (or (nil? live) (some? open))
-                  (first (filter #(and (= (str (:key gap))
-                                          (str (get-in % [:data :gap :key])))
-                                       (some-> (instant-of (get-in % [:data :quiet_until]))
-                                               (.isAfter ^Instant now)))
-                                 (retired-hires-of eng org))))]
-      (cond
-        (nil? live)
-        {:refused :no_live_org
-         :why (str "No live plan founds " org ": a hire plan is opened on an org that is live.")}
-
-        (some? open)
-        {:refused :hire_open
-         :hire (str (:id open))
-         :why (str "A hire plan for " (:key gap) " stands already, in " (state-name open) ".")}
-
-        (some? quiet)
-        {:refused :hire_quiet
-         :hire (str (:id quiet))
-         :why (str "The owner turned down a hire for " (:key gap) ": it is quiet until "
-                   (instant-of (get-in quiet [:data :quiet_until])) ".")}
-
-        :else
-        (inv/create! eng :org_plan
-                     {:name org
-                      :org_dir (get-in live [:data :org_dir])
-                      :owner (str (get-in live [:data :owner]))
-                      :gap gap}
-                     (assoc opts :action :open_hire))))))
+    (try
+      (inv/create! eng :org_plan {:name org :gap gap} (assoc opts :action :open_hire))
+      (catch clojure.lang.ExceptionInfo e
+        (let [{:keys [guard detail evidence]} (ex-data e)
+              reason (some-> guard name keyword)]
+          (if (contains? hire-refusals reason)
+            (cond-> {:refused reason :why (or detail (ex-message e))}
+              (:hire evidence) (assoc :hire (:hire evidence)))
+            (throw e)))))))
 
 ;; ── the findings walk (M2c) ─────────────────────────────────────────
 
@@ -365,10 +379,17 @@
       (assoc-in [:data :take_landed_at] nil)))
 
 (defhandler attach-the-film [row inp ctx]
-  ;; The take is landed: the film pass does not judge it again.
-  (-> row
-      (assoc-in [:data :film_url] (:film_url inp))
-      (assoc-in [:data :take_landed_at] (:now ctx))))
+  ;; The take is landed: the film pass does not judge it again. A green
+  ;; take's warnings (ticket ef24488d) join the findings as a red one's
+  ;; rules do, a key already on the plan replaced; a warning moves no step.
+  (let [film (vec (:findings inp))
+        theirs (into #{} (map :key) film)]
+    (cond-> (-> row
+                (assoc-in [:data :film_url] (:film_url inp))
+                (assoc-in [:data :take_landed_at] (:now ctx)))
+      (seq film)
+      (update-in [:data :findings]
+                 #(into (vec (remove (fn [f] (contains? theirs (:key f))) %)) film)))))
 
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
@@ -484,12 +505,19 @@
   (let [take-sha (get-in row [:data :take_sha])
         refilm {:key "take_left" :severity "warning" :class "film"
                 :subject "film"
-                :sentence (str "The change's head moved to " (short-sha (:head_sha inp))
-                               " after the film of "
-                               (if (str/blank? (str take-sha))
-                                 "an earlier head"
-                                 (short-sha take-sha))
-                               ", so the plan is proposed again to film the new head.")
+                :sentence (if (true? (:org_changed inp))
+                            ;; ticket ce8a4e17: the base move changed the org
+                            (str "The base move brought the change's head to "
+                                 (short-sha (:head_sha inp))
+                                 " and changed the org since the film of "
+                                 (short-sha take-sha)
+                                 ", so it must be filmed again: the plan is proposed again to film the new head.")
+                            (str "The change's head moved to " (short-sha (:head_sha inp))
+                                 " after the film of "
+                                 (if (str/blank? (str take-sha))
+                                   "an earlier head"
+                                   (short-sha take-sha))
+                                 ", so the plan is proposed again to film the new head."))
                 :remedy "Let the director film the new head: go_live merges only the head that was filmed."}
         found (conj (vec (remove #(= "take_left" (str (:key %)))
                                  (get-in row [:data :findings])))
@@ -503,6 +531,18 @@
         (assoc-in [:data :approved_head] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
+
+(defhandler carry-the-take [row inp _ctx]
+  ;; A BASE MOVE THAT LEFT THE ORG ALONE (ticket ce8a4e17). The film is
+  ;; of the org, and the org at the new head is the org that was filmed:
+  ;; the take and the findings move to the new head, and a yes with
+  ;; them, so nothing is filmed again.
+  (let [head (:head_sha inp)]
+    (cond-> (-> row
+                (assoc-in [:data :take_sha] head)
+                (assoc-in [:data :findings_sha] head))
+      (some? (get-in row [:data :approved_head]))
+      (assoc-in [:data :approved_head] head))))
 
 (defhandler relink-the-change [row inp _ctx]
   ;; A CHANGE MERGED BEFORE GO_LIVE (ticket 87fc7996). The plan names
@@ -867,11 +907,18 @@
 
 (defn- stamp-the-hire
   "The open_hire door's birth: a hire plan, its brief written from its
-  gap."
-  [row _ctx]
-  (-> row
-      (assoc-in [:data :purpose] "hire")
-      (assoc-in [:data :brief] (hire-brief (get-in row [:data :gap])))))
+  gap, with the live plan's owner and directory unless the caller
+  named them."
+  [row ctx]
+  (let [live (live-plan-of (plans-named ctx (get-in row [:data :name])))]
+    (cond-> (-> row
+                (assoc-in [:data :purpose] "hire")
+                (assoc-in [:data :brief] (hire-brief (get-in row [:data :gap]))))
+      (and live (str/blank? (str (get-in row [:data :owner]))))
+      (assoc-in [:data :owner] (str (get-in live [:data :owner])))
+
+      (and live (str/blank? (str (get-in row [:data :org_dir]))))
+      (assoc-in [:data :org_dir] (get-in live [:data :org_dir])))))
 
 (def ^:private mayor-schema
   [:map
@@ -1041,6 +1088,7 @@
              {:in #{:filming} :by :engine :via :record_film_findings :to :drafting}
              {:in #{:filming} :by :engine :via :void_take :to :proposed}
              {:in #{:simulated} :by :engine :via :refilm :to :proposed}
+             {:in #{:going_live} :by :engine :via :refilm :to :proposed}
              {:in #{:going_live} :by :engine :via :relink_change :to :simulated}]
    ;; going_live waits a day at most on the merge and the mayor's seat
    :expected-age {:drafting 86400 :proposed 21600 :filming 3600 :simulated 604800
@@ -1058,6 +1106,7 @@
    :creates [{:action :open_hire
               :input hire-input
               :by #{:engine}
+              :guards [the-org-is-live one-hire-per-gap a-turned-down-gap-is-quiet]
               :on-create stamp-the-hire
               :display {:label "Open a hire plan"}}]
    :schema
@@ -1080,6 +1129,16 @@
                 :label "The org's directory"
                 :help "Where the org's declarations live in the repository: orgs/ and the org's name, unless the filer named another."}}
      [:maybe [:string {:max 200}]]]
+    ;; read by the bench's held-forward pass (ticket 8288529f); none
+    ;; means at_go_live, so a stored plan needs no migration
+    [:base_follow {:optional true
+                   :x-display
+                   {:label "Keep the branch current"
+                    :help "at_go_live (the default): the plan's branch is brought up to its base only from go_live on, so a filmed plan is not refilmed by every base move. always: it is brought up on every base move. when_org_dir_changes: it is brought up on every base move, and refilmed only when the move changed the org's directory."
+                    :choices {"at_go_live" "From go_live on"
+                              "always" "On every base move"
+                              "when_org_dir_changes" "On every base move, refilmed only when the org changed"}}}
+     [:maybe [:enum "at_go_live" "always" "when_org_dir_changes"]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR (M2b), and read by propose.
     [:findings {:optional true
                 :x-display
@@ -1240,7 +1299,14 @@
     [:org_dir {:optional true
                :x-display {:raw true :label "The org's directory"
                            :help "Where the org's declarations will live. Leave it empty for orgs/ and the org's name."}}
-     [:maybe [:string {:max 200}]]]]
+     [:maybe [:string {:max 200}]]]
+    [:base_follow {:optional true
+                   :x-display {:label "Keep the branch current"
+                               :help "Leave it empty for at_go_live: the branch follows its base only from go_live on. always: it follows every base move, and each move refilms the plan. when_org_dir_changes: it follows every base move, and only a move that changed the org's directory refilms the plan."
+                               :choices {"at_go_live" "From go_live on"
+                                         "always" "On every base move"
+                                         "when_org_dir_changes" "On every base move, refilmed only when the org changed"}}}
+     [:maybe [:enum "at_go_live" "always" "when_org_dir_changes"]]]]
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
@@ -1341,7 +1407,11 @@
      :input [:map
              [:film_url {:x-display {:raw true :label "The film"
                                      :help "Where the film of the org's simulated first week is served, for the owner to watch."}}
-              [:string {:min 1 :max 500}]]]
+              [:string {:min 1 :max 500}]]
+             [:findings {:optional true
+                         :x-display {:hidden true
+                                     :label "The film's warnings"}}
+              [:vector {:max 20} finding-schema]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The film is on the plan for the owner to watch."}
@@ -1517,21 +1587,62 @@
     ;; A NEW HEAD IS FILMED AGAIN (ticket 87fc7996). The engine's hand
     ;; alone: the findings pass sends a simulated plan whose change's
     ;; head is not its take back to proposed, and the director films
-    ;; the new head before go_live can merge it.
+    ;; the new head before go_live can merge it. A going_live plan whose
+    ;; base move changed its org takes the same door, with `org_changed`
+    ;; (ticket ce8a4e17).
     :refilm
-    {:from #{:simulated} :to :proposed
+    {:from #{:simulated :going_live} :to :proposed
      :guards [the-engine-records-the-findings]
      :handler refilm-the-head
      :input [:map
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The new head"}}
-              [:string {:min 7 :max 64}]]]
+              [:string {:min 7 :max 64}]]
+             [:org_changed {:optional true
+                            :x-display {:hidden true :raw true
+                                        :label "The base move changed the org"}}
+              :boolean]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The film is cleared: the plan is proposed again, for the director to film its new head."}
      :display {:label "Refilm" :order 13
-               :description "A new head on a simulated plan's change is filmed again before go_live"}}
+               :description "A new head on a simulated plan's change, or a base move that changed a going_live plan's org, is filmed again before go_live"}}
+
+    ;; A BASE MOVE THAT LEFT THE ORG ALONE (ticket ce8a4e17). The engine's
+    ;; hand alone: the findings pass moves the take, the findings and the
+    ;; owner's yes to the new head, and the merge waits on CI only.
+    :carry_take
+    {:from #{:going_live} :to :going_live
+     :guards [the-engine-records-the-findings]
+     :handler carry-the-take
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              schema/commit-sha]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take and the owner's yes are of the new head: the org there is the org that was filmed."}
+     :display {:label "Take carried" :order 14
+               :description "A base move that left the org alone keeps the film and the yes"}}
+
+    ;; The same, for a simulated plan under base_follow
+    ;; when_org_dir_changes: it stays simulated with its take.
+    :carry_take_simulated
+    {:from #{:simulated} :to :simulated
+     :guards [the-engine-records-the-findings]
+     :handler carry-the-take
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              schema/commit-sha]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take is of the new head: the org there is the org that was filmed."}
+     :display {:label "Take carried" :order 15
+               :description "A base move that left the org alone keeps the film"}}
 
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.

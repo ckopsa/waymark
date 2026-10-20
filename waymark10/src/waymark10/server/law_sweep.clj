@@ -90,6 +90,7 @@
   going to be read in."
   (:require [clojure.string :as str]
             [waymark10.fingerprint :as fp]
+            [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
             [waymark10.schema :as schema]
@@ -131,16 +132,15 @@
   A sweep does: a guard barring whoever created the row is exactly the
   kind of law a proposal moves."
   [eng]
-  (fn [row transition]
+  (fn [row transition & every]
     (let [st (:storage eng)]
       (store/with-tx st
         (fn [tx]
-          (some (fn [rec]
-                  (when (= (:action rec) transition)
-                    (get-in rec [:actor :id])))
-                (store/transitions st tx {:kind (:kind row)
-                                          :resource-id (:id row)}
-                                   {:newest-first true})))))))
+          (apply g/actors-of
+                 (store/transitions st tx {:kind (:kind row)
+                                           :resource-id (:id row)}
+                                    {:newest-first true})
+                 transition every))))))
 
 (defn probe-ctx
   "The one ctx BOTH probes share, and that identity is the whole
