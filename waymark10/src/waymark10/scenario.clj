@@ -37,7 +37,8 @@
   when every guard on the attempted action declares :reads ⊆
   offline-reads or is DECLARATIVE — its :reads derived from a :when
   tree whose follow, exists and did the scenario answers from its own
-  :given rows and :history (docs/spec-related-row-law.md §5) — AND it
+  :given rows and :history (docs/spec-related-row-law.md §5), or is a
+  code guard that declared `:check-tier :given` over kind reads — AND it
   stages :given rows only for such a guard to read. Both conditions are read
   off DECLARATIONS, which is guards.clj's own posture ('call shape
   comes from :reads/:judges declarations, never from arity
@@ -376,6 +377,15 @@
   [gd]
   (boolean (and (:when gd) (not (:reads-written gd)))))
 
+(defn- given-served?
+  "A code guard that declared `:check-tier :given`: its kind reads are
+  safe to answer from the scenario's :given rows, as a declarative
+  leaf's are. guards/guard admits the key only where every read is a
+  kind, so the default — a code guard's kind reads defer its door —
+  holds for every guard that says nothing."
+  [gd]
+  (= :given (:check-tier gd)))
+
 (defn- unserved-reads
   "What this guard tree reads that the check tier cannot answer: a
   declarative leaf nothing, any other leaf its :reads beyond
@@ -383,6 +393,7 @@
   [gd]
   (cond
     (declarative? gd) []
+    (given-served? gd) []
     (or (seq (:all gd)) (seq (:any gd))) (mapcat unserved-reads (concat (:all gd) (:any gd)))
     :else (remove offline-reads (:reads gd))))
 
@@ -392,7 +403,8 @@
   serve?"
   [gd]
   (boolean
-   (or (and (declarative? gd) (some (complement offline-reads) (:reads gd)))
+   (or (and (or (declarative? gd) (given-served? gd))
+            (some (complement offline-reads) (:reads gd)))
        (some reads-related? (concat (:all gd) (:any gd))))))
 
 (defn check-tier?
@@ -548,8 +560,9 @@
   and must not collect the probe's pending-input short-circuit; :rate
   nil because an engine without a rate coordinator is what
   guards/rate-limit already allows for. The read hooks are lent only
-  when `related?` — a declarative guard on the door reads other rows
-  or the log — and then from the scenario (scenario-reads); otherwise
+  when `related?` — a declarative or :check-tier :given guard on the
+  door reads other rows or the log — and then from the scenario
+  (scenario-reads); otherwise
   there are none, and a code guard that reaches for one gets the
   offline answer it declared it could give."
   [s related?]

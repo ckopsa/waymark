@@ -6,8 +6,10 @@
   of kinds: a meal, and the day that plans and serves it."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.declare :refer [defguard defscenario refuse]]
+            [waymark10.guards :as g]
             [waymark10.resource :as r]
-            [waymark10.scenario :as scenario]))
+            [waymark10.scenario :as scenario]
+            [waymark10.types :as t]))
 
 ;; ── the world ───────────────────────────────────────────────────────────────────
 
@@ -150,6 +152,46 @@
     (is (seq (scenario/judge @day (update a-meal-is-planned-once :given (comp vec (partial take 1)))))))
   (testing "without the meal row, follow finds nothing"
     (is (seq (scenario/judge @day (assoc a-listed-meal-is-planned :given []))))))
+
+;; ── a code guard opts into the check tier ──────────────────────────────────────
+
+(def ^:private soup-only
+  {:name :sr-soup-only :judges [:meal_id] :reads [:sr_meal]
+   :explain "Only soup goes on a day."
+   :check (fn [_row inp ctx]
+            (if-some [read (:read ctx)]
+              (if (= "Soup" (get-in (read :sr_meal (:meal_id inp)) [:data :name]))
+                (t/allow)
+                (t/deny))
+              (t/allow)))})
+
+(defn- planning-under [gd]
+  (assoc-in @day [:actions :plan :guards] [(g/guard gd)]))
+
+(deftest a-code-guard-defers-unless-it-opts-in
+  (testing "by default, a code guard's kind reads defer its door"
+    (let [rd (planning-under soup-only)]
+      (is (not (scenario/check-tier? rd a-listed-meal-is-planned)))
+      (is (= "stages 1 given row" (scenario/deferral-reason rd a-listed-meal-is-planned)))))
+  (testing ":check-tier :given serves its reads from the :given rows"
+    (let [rd (planning-under (assoc soup-only :check-tier :given))]
+      (is (scenario/check-tier? rd a-listed-meal-is-planned))
+      (is (= [] (scenario/judge rd a-listed-meal-is-planned)))
+      (is (seq (scenario/judge rd (assoc-in a-listed-meal-is-planned [:given 0 :data :name] "Stew")))))))
+
+(deftest check-tier-is-for-kind-reads-alone
+  (testing "accepted where every read is a kind"
+    (is (= :given (:check-tier (g/guard (assoc soup-only :check-tier :given))))))
+  (doseq [reads [[:storage] [:sr_meal :within] [:principal] []]]
+    (testing (str "refused on :reads " (pr-str reads))
+      (is (thrown-with-msg? Exception #"only a guard whose every read is a kind can opt in"
+                            (g/guard (assoc soup-only :reads reads :check-tier :given))))))
+  (testing "refused with any value but :given"
+    (is (thrown-with-msg? Exception #":check-tier is :given"
+                          (g/guard (assoc soup-only :check-tier :always)))))
+  (testing "refused on a :when guard"
+    (is (thrown-with-msg? Exception #"a :when guard's reads are served by its tree"
+                          (g/guard (assoc soup-only :when '(= 1 1) :check-tier :given))))))
 
 (deftest history-is-a-closed-log
   (is (thrown? Exception

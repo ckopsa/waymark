@@ -240,6 +240,17 @@ An acceptance-set guard (`guard` with `:accepts (fn [row ctx] …)` and
 `:reads`) does the same through its set: the rendered enum, the picker, and
 the enforcement are one declaration.
 
+A code guard's kind reads choose its scenarios' tier. By default a guard
+that declares `:reads [:kind …]` defers its door to the CONFORMANCE tier:
+its scenarios run over the real engine, in the suite. A guard may opt in
+to the CHECK tier with `:check-tier :given`, saying its `(:read ctx)` and
+`(:find ctx)` calls are safe to answer from a scenario's `:given` rows;
+the scenario then lends it those rows, the way a `:when` guard's follows
+are served (`mealplan10`'s `side-fits-day` does, so `add_side_dish`'s
+scenarios run with no database). Only a guard whose every read is a kind
+may say it: one that reads `:storage`, `:within`, the clock or anything
+else but kinds, or a `:when` guard, is refused at its def line.
+
 ## 7 · `:fields` lifecycle groups — the schema by phase
 
 The third authoring dialect (besides `:schema` + `:actions` and `:flow`
