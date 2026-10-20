@@ -21,7 +21,7 @@
     :absent-as :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
-    :on-create :mirror :at-rest-migrate :on-rehearse
+    :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
     :retain
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
