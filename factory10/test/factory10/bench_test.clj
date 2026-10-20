@@ -2786,6 +2786,54 @@
         (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))
         (is (= "drafting" (name (:state (plan-row eng plan)))))))))
 
+;; ── a plan whose change merged gets a fresh one (ticket 87fc7996) ──────
+
+(deftest an-onboarding-sit-on-a-plan-whose-change-merged-names-a-fresh-change
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        plan (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                          {:principal colton}))))
+        spent (str "waymark/" plan)
+        ;; the plan's first change, adopted by the forge: GitHub's id
+        ;; over change_id, born_from still the plan's
+        merged (str (:id (a-change! eng {:born_from (str "org_plan:" plan)
+                                         :head_branch spent})))
+        _ (walk/proposed! eng plan colton {:change merged})
+        _ (inv/invoke! eng :org_plan plan :hand_in_film
+                       {:film_url "https://example.com/greenleaf.mp4"
+                        :take_report "{}" :head_sha a-head}
+                       {:principal colton})
+        _ (inv/invoke! eng :org_plan plan :attach_film
+                       {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
+        _ (walk/flipped! eng plan a-head)
+        _ (inv/invoke! eng :change merged :merge {} walk/the-engine)
+        _ (open-seat! eng {:scope onboarding-scope :walk "org_plan"})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))
+        minted (some-> (get-in answer [:change :id]) str)]
+    (testing "the sit mints a fresh change from the base, on a branch of its own"
+      (is (some? minted) "the sit answers a change beside the plan")
+      (is (not= merged minted) "not the merged change")
+      (is (= (str spent "-2")
+             (some-> (get-in answer [:change :data :head_branch]) str))
+          "the merged change's branch is spent")
+      (is (= "main" (some-> (get-in answer [:change :data :base_branch]) str)))
+      (is (= (str "org_plan:" plan)
+             (some-> (get-in answer [:change :data :born_from]) str))))
+    (testing "relink_change names it on the plan, which stays simulated"
+      (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))
+      (is (= "simulated" (name (:state (plan-row eng plan))))))
+    (testing "a second sit keeps the fresh change"
+      (let [again (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+        (is (= minted (some-> (get-in again [:change :id]) str)))
+        (is (= minted (some-> (get-in (plan-row eng plan) [:data :change]) str)))))))
+
 ;; ── only go_live merges an org's pull request (ticket 7aff6a5c) ────────
 
 (defn- simulated-world
