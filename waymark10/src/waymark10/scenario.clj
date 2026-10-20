@@ -93,8 +93,9 @@
 (def row-keys [:state :data])
 (def given-keys [:kind :state :data :handle])
 ;; one entry of the log the scenario's row is to have, oldest first:
-;; who did which door, and for an acted-as move the seat behind them
-(def history-keys [:action :as :acted-by])
+;; who did which door with what body, and for an acted-as move the seat
+;; behind them
+(def history-keys [:action :as :input :acted-by])
 ;; :leashed (waymark-zs9) is the conformance tier's one opt-out: an
 ;; :agent is attempted holding a grant over exactly the door it knocks
 ;; on, unless the scenario says `:leashed false` — which is how "an
@@ -297,7 +298,9 @@
      #{} (:given m)))
   ;; every handle the scenario NAMES is a handle it staged
   (let [staged (into #{} (keep #(some-> (:handle %) name)) (:given m))
-        named (into (handle-refs (:input m)) (handle-refs (get-in m [:row :data])))]
+        named (-> (handle-refs (:input m))
+                  (into (handle-refs (get-in m [:row :data])))
+                  (into (mapcat #(handle-refs (:input %))) (filter map? (:history m))))]
     (when-some [bad (seq (sort (remove staged named)))]
       (err sname (str "names {given/" (first bad) "}, which no :given row"
                       " declares as its :handle"))))
@@ -310,7 +313,9 @@
       (when-not (keyword? (:action h))
         (err sname "each :history entry names its :action as a keyword"))
       (when (str/blank? (str (:as h)))
-        (err sname "each :history entry names who acted, :as \"principal-id\""))))
+        (err sname "each :history entry names who acted, :as \"principal-id\""))
+      (when (and (some? (:input h)) (not (map? (:input h))))
+        (err sname "a :history entry's :input is its door's input body as a literal map"))))
   ;; how the conformance tier meets :history: :stage (the default) walks
   ;; it through the real doors, :refuse declines to judge the scenario
   (when (and (some? (:history-mode m)) (not (#{:stage :refuse} (:history-mode m))))
