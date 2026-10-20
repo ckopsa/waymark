@@ -257,6 +257,23 @@
 (defn- sealed-data ^PGobject [sealed kind row]
   (jsonb (at-rest/seal-fields (get @sealed kind) (:data row))))
 
+(defn- remigrate!
+  "The data backfill, run by ensure-kind! at every boot before reseal!:
+  a row the kind's :data-migrate changes is rewritten once, with or
+  without an at-rest key. Idempotent and fenced on version as reseal!
+  is; it bumps no version and logs no transition."
+  [ds table migrate]
+  (when migrate
+    (with-open [conn (jdbc/get-connection ds)]
+      (doseq [r (jdbc/execute! conn [(str "SELECT id, version, data FROM " table)]
+                               jdbc-opts)
+              :let [data (read-jsonb (:data r))
+                    after (migrate data)]
+              :when (not= data after)]
+        (jdbc/execute-one! conn [(str "UPDATE " table
+                                      " SET data = ? WHERE id = ? AND version = ?")
+                                 (jsonb after) (:id r) (:version r)])))))
+
 (defn- reseal!
   "The at-rest backfill, run by ensure-kind! at every boot: a row whose
   declared fields hold plaintext is rewritten sealed once a key is set,
@@ -752,6 +769,7 @@
            (store/definition-checked-name (:plural rmap)))
     (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
     (swap! promoted assoc (:kind rmap) (promoted-types rmap))
+    (remigrate! ds (table-for tables (:kind rmap)) (:data-migrate rmap))
     (reseal! ds (table-for tables (:kind rmap)) (get @sealed (:kind rmap))
              (:at-rest-migrate rmap))
     nil)
