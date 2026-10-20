@@ -85,8 +85,8 @@
   factory is the day job's work, not the family's."
   (:require [clojure.string :as str]
             [factorykit.ask :as ask]
-            [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+            [waymark10.dsl :refer [defguard defguardfn defhandler defresource
+                                   defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
@@ -403,82 +403,50 @@
 
 ;; ── the walls ───────────────────────────────────────────────────────
 ;;
-;; Three read other tickets and are CONFORMANCE-tier: each declares
-;; `:reads [:ticket]` and asks the ctx hook for the rows. None of them
-;; stands on `reopen`, so that door's scenarios stay check-tier. A ctx with no
-;; hook — the render probe — is answered with an ALLOW, which is the
-;; framework's own posture (change's bench walls, one kind over): the
-;; envelope advertises optimistically and the door judges again with a
-;; real hook behind it. Their law is proved in factory10.ticket-test
-;; over a fake hook. The fourth reads :principal and :within, both of
-;; which the check tier answers, and its scenarios below are check-tier.
+;; The parent's wall and the children's are DECLARATIVE
+;; (docs/spec-related-row-law.md §7): a `follow` and a `none`, whose
+;; reads the engine derives and a scenario's :given rows answer. A ctx
+;; with no hook — the render probe — leaves the verdict unknown, which
+;; is pending and so advertised: the envelope advertises optimistically
+;; and the door judges again with a real hook behind it. The walls that
+;; walk the parent chain and the waits read other tickets in code and
+;; declare `:reads [:ticket]`; the two on `reparent` say `:check-tier
+;; :given`, so that door's scenarios need no database. None of them
+;; stands on `reopen`, so that door's scenarios stay check-tier. Their
+;; law is proved in factory10.ticket-test over a fake hook. A wall that
+;; reads only :principal and :within is check-tier, and so are its
+;; scenarios below.
 
-(defguardfn the-parent-is-open-at-birth
-  {:judges [:parent]
-   :reads [:ticket]
-   :vars [:parent]
-   :remedies [:ticket/reopen]
-   :explain "The parent {parent} has ended, and a ticket born under an ended parent is work nobody will find. Reopen the parent first, or leave the parent empty."}
-  [_row inp ctx]
-  (let [read' (:read ctx)
-        parent (some-> (:parent inp) str not-empty)]
-    (if (or (nil? read') (nil? parent))
-      (t/allow)
-      (let [p (read' :ticket parent)]
-        (cond
-          (nil? p)
-          (t/deny {:vars {:parent parent}
-                   :errors {:parent ["ticket not found"]}})
-          (contains? ended (state-of p))
-          (t/deny {:vars {:parent parent}})
-          :else (t/allow))))))
+(defguard the-parent-is-open-at-birth
+  (refuse "The parent {parent} has ended, and a ticket born under an ended parent is work nobody will find. Reopen the parent first, or leave the parent empty.")
+  '(or (not (is-set (input :parent)))
+       (and (is-set (follow (input :parent) :id))
+            (not= (follow (input :parent) :state) "done")
+            (not= (follow (input :parent) :state) "dropped")))
+  {:remedies [:ticket/reopen]
+   :errors {:parent "not an open ticket"}})
 
 ;; THE REFUSAL NAMES ONE CHILD (ticket 20ee6b97): the oldest unfinished
-;; child by `created_at`, as evidence, and both remedies bind its id.
-;; A bare remedy on the ticket's own kind falls back to the refused row,
-;; so a pursuit of a parent's `complete` tried the parent again and met
-;; nothing but cycles. One child is enough: a re-plan after each move
-;; finds the next. The count is over every child, as it was; the child
-;; named is one the CALLER can see — the grant on the ctx is the judge,
-;; and a ctx with no grant sees them all — so a refusal never names a
-;; row its reader could not open.
+;; child by `created_at`, as evidence `c`, and both remedies bind its
+;; id. A bare remedy on the ticket's own kind falls back to the refused
+;; row, so a pursuit of a parent's `complete` tried the parent again and
+;; met nothing but cycles. One child is enough: a re-plan after each
+;; move finds the next. The count is over every child, as it was; the
+;; child named is one the CALLER can see — the engine binds evidence
+;; among the rows the grant on the ctx admits, and a ctx with no grant
+;; sees them all — so a refusal never names a row its reader could not
+;; open, and `:hidden` is the sentence that says so. The states are
+;; `unfinished`, spelled as the law's words.
 
-(defn- oldest-first
-  "Rows by `created_at`, the id breaking a tie or standing in where a
-  row carries no timestamp."
-  [rows]
-  (sort (fn [a b]
-          (let [ca (:created-at a)
-                cb (:created-at b)
-                c (if (and ca cb) (compare ca cb) 0)]
-            (if (zero? c) (compare (str (:id a)) (str (:id b))) c)))
-        rows))
-
-(defguardfn children-are-finished
-  {:reads [:ticket :grant]
-   :vars [:count :which]
-   :evidence [:child_id]
-   :remedies [{:door :ticket/complete :id '(evidence :child_id)}
-              {:door :ticket/drop :id '(evidence :child_id)}]
-   :explain "{count} of this ticket's children are not finished.{which} A parent ends after its children: complete or drop each one first, and then this door opens."}
-  [row _inp ctx]
-  (if-some [find' (:find ctx)]
-    (let [waiting (filter (comp unfinished state-of)
-                          (find' :ticket {:parent (str (:id row))} {:limit 500}))
-          row? (:row? (:grant ctx))
-          child (first (oldest-first
-                        (cond->> waiting
-                          row? (filter #(row? :ticket (:id %))))))]
-      (if (seq waiting)
-        (t/deny (cond-> {:vars {:count (count waiting)
-                                :which (if child
-                                         (str " The oldest is \""
-                                              (get-in child [:data :title])
-                                              "\".")
-                                         " They are outside what you can see.")}}
-                  child (assoc :evidence {:child_id (str (:id child))})))
-        (t/allow)))
-    (t/allow)))
+(defguard children-are-finished
+  (refuse "{count} of this ticket's children are not finished. The oldest is \"{c.title}\". A parent ends after its children: complete or drop each one first, and then this door opens.")
+  '(none [c :ticket {:parent (= (self))
+                     :state (in "open" "in_review" "blocked" "deferred")}])
+  {:remedies [{:door :ticket/complete :id '(evidence :c)}
+              {:door :ticket/drop :id '(evidence :c)}]
+   :vars {:count '(count [n :ticket {:parent (= (self))
+                                     :state (in "open" "in_review" "blocked" "deferred")}])}
+   :hidden {:c "They are outside what you can see."}})
 
 ;; NO DEPENDENCY MAY MAKE A CYCLE (ticket d069bc3b). A ticket waits on
 ;; two kinds of other ticket: its blockers, to be worked, and its
@@ -618,6 +586,7 @@
 (defguardfn the-parent-is-not-waited-on
   {:judges [:parent]
    :reads [:ticket]
+   :check-tier :given
    :vars [:which]
    ;; the merge-order guard's acknowledgment, one field over: which
    ;; tickets sit above the parent is read from their rows at the write
@@ -643,6 +612,7 @@
 (defguardfn the-parent-is-not-below-it
   {:judges [:parent]
    :reads [:ticket]
+   :check-tier :given
    :vars [:which]
    ;; the-parent-is-not-waited-on's acknowledgment: the chain above the
    ;; parent named is read from the rows at the write
@@ -1033,23 +1003,21 @@
   wear it as well as `review` and `return`."
   (ask/only-its-change-moves-it link))
 
-(defguardfn its-change-is-under-review
-  {:reads [:change]
-   :open "No door clears this one. A ticket goes out for review behind a change of its own that is submitted: the change's submit sends it, and so does a groom, unblock or resume that puts its stuck pull request back under review."
-   :explain "A ticket follows its change out for review, and no change born from this ticket is submitted. It stays in the queue for the seat that builds it."}
-  [row _inp ctx]
-  ;; `only-its-change-moves-it` cannot judge this door: the engine walks
-  ;; it as a ctx :follow-up, after the write that queued it committed,
-  ;; and a follow-up carries no `:within` (ticket 7e01dbe5). The wall is
-  ;; the FACT instead, read from the committed rows, so a hand that
-  ;; takes the door moves the ticket only where its change already is.
-  ;; A ctx with no hook, the render probe, is refused: the door is
-  ;; advertised only where a submitted change was found.
-  (if-some [find' (:find ctx)]
-    (if (seq (changes-born-from row ["submitted"] find'))
-      (t/allow)
-      (t/deny))
-    (t/deny)))
+;; `only-its-change-moves-it` cannot judge `rejoin_review`: the engine
+;; walks it as a ctx :follow-up, after the write that queued it
+;; committed, and a follow-up carries no `:within` (ticket 7e01dbe5).
+;; The wall is the FACT instead, read from the committed rows, so a hand
+;; that takes the door moves the ticket only where its change already
+;; is. A ctx with no hook, the render probe, is refused (`:pending
+;; :deny`): the door is advertised only where a submitted change was
+;; found.
+
+(defguard its-change-is-under-review
+  (refuse "A ticket follows its change out for review, and no change born from this ticket is submitted. It stays in the queue for the seat that builds it.")
+  '(exists [c :change {:born_from (= (str "ticket:" (self)))
+                       :state (= "submitted")}])
+  {:open "No door clears this one. A ticket goes out for review behind a change of its own that is submitted: the change's submit sends it, and so does a groom, unblock or resume that puts its stuck pull request back under review."
+   :pending :deny})
 
 (defguardfn only-a-childs-ending-finishes-it
   {:reads [:within]
@@ -1352,6 +1320,91 @@
    :as      {:id "colton" :type :person}
    :expect  {:refused :only-its-change-moves-it
              :because "moved by the change"}})
+
+;; Check-tier with :given rows: the walls on `reparent`, `rejoin_review`
+;; and `drop` are declarative, or code that says `:check-tier :given`,
+;; or read :principal only, so the scenario's own rows answer them. The
+;; check tier gives the row the id `scenario:<name>`, which is how a
+;; :given row names it as its parent or the ticket it was born from.
+
+(defscenario a-ticket-is-not-moved-under-an-ended-parent
+  "A ticket under an ended parent is work nobody will find. The door
+   refuses it, and names the reopen that would stand the parent up
+   again."
+  {:kind    :ticket
+   :attempt :reparent
+   :given   [{:kind :ticket :handle :ended :state :done :data a-done-ticket}]
+   :row     {:state :open :data a-draft-ticket}
+   :input   {:parent "{given/ended}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-parent-is-open-at-birth
+             :because "has ended"
+             :remedies [:ticket/reopen]}})
+
+(defscenario a-ticket-is-moved-under-an-open-parent
+  "And under a parent that stands, the move is one tap."
+  {:kind    :ticket
+   :attempt :reparent
+   :given   [{:kind :ticket :handle :standing :state :open :data a-draft-ticket}]
+   :row     {:state :open :data a-draft-ticket}
+   :input   {:parent "{given/standing}"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-parent-is-not-dropped-over-an-open-child
+  "A parent ends after its children. The refusal counts the ones not
+   finished and names the oldest, so its reader knows which to end
+   first."
+  {:kind    :ticket
+   :attempt :drop
+   :given   [{:kind :ticket :handle :child :state :open
+              :data (assoc a-draft-ticket
+                           :title "The open child"
+                           :parent "scenario:a-parent-is-not-dropped-over-an-open-child")}]
+   :row     {:state :open :data a-draft-ticket}
+   :input   {:close_reason "Not wanted any more."}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :children-are-finished
+             :because "1 of this ticket's children are not finished. The oldest is \"The open child\"."}})
+
+(defscenario a-parent-is-dropped-once-its-children-have-ended
+  "And once every child has ended, the parent ends too."
+  {:kind    :ticket
+   :attempt :drop
+   :given   [{:kind :ticket :handle :child :state :done
+              :data (assoc a-done-ticket
+                           :parent "scenario:a-parent-is-dropped-once-its-children-have-ended")}]
+   :row     {:state :open :data a-draft-ticket}
+   :input   {:close_reason "Not wanted any more."}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-submitted-change-takes-its-ticket-back-out
+  "A ticket follows its change: when the change born from it is
+   submitted, the ticket goes back out for review with it."
+  {:kind    :ticket
+   :attempt :rejoin_review
+   :given   [{:kind :change :handle :its-change :state :submitted
+              :data {:repository "ckopsa/waymark"
+                     :title "The code seat walks ticket rows"
+                     :born_from "ticket:scenario:a-submitted-change-takes-its-ticket-back-out"}}]
+   :row     {:state :open :data a-draft-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-ticket-stays-in-the-queue-while-its-change-is-unsubmitted
+  "A change still being built is not under review, so the ticket stays
+   in the queue for the seat that builds it."
+  {:kind    :ticket
+   :attempt :rejoin_review
+   :given   [{:kind :change :handle :its-change :state :open
+              :data {:repository "ckopsa/waymark"
+                     :title "The code seat walks ticket rows"
+                     :born_from "ticket:scenario:a-ticket-stays-in-the-queue-while-its-change-is-unsubmitted"}}]
+   :row     {:state :open :data a-draft-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :its-change-is-under-review
+             :because "no change born from this ticket is submitted"}})
 
 ;; ── the fields, spelled once and read by three doors ────────────────
 
