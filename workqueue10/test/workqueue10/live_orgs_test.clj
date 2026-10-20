@@ -83,6 +83,25 @@
                 (dev/rows eng :ticket))
           (pr-str (map #(get-in % [:data :title]) (dev/rows eng :ticket)))))))
 
+(deftest WAYMARK10_ORG-boots-an-org-only-on-disk
+  (testing "beta is no deps root, and not live"
+    (is (nil? (io/resource "beta/org.clj")))
+    (is (false? (org/live? (io/file fixtures "beta")))))
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (main/with-org (main/factory-only-resources) "beta" fixtures)
+                            :suppress-mirror-refresh true})
+        result (main/org-on-boot! eng "beta" {:params {} :orgs-dir fixtures})]
+    (testing "its kinds are served"
+      (is (contains? (discovered-kinds eng) "cog")))
+    (testing "its seed loads"
+      (is (true? (:seeded result)) (pr-str result))
+      (is (contains? (names eng :domain) "beta"))
+      (is (= 1 (count (dev/rows eng :cog))))))
+  (testing "an org neither place holds says both"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"not on the classpath, nor in `fixtures/orgs/nowhere`"
+                          (main/with-org [] "nowhere" fixtures)))))
+
 (deftest the-orgs-dir-is-the-variable-or-the-image's-orgs
   (is (= (io/file fixtures) (org/orgs-dir fixtures)))
   (is (= (io/file "../orgs") (org/orgs-dir nil)))
