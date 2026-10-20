@@ -1870,6 +1870,29 @@
                             " names no transition of this resource — the log "
                             "fact could never have an actor"))))))
 
+(defn- check-did-doors
+  "`(did :door …)` asks the log who took a door on this row; a door
+  the kind does not declare could never have an actor, so it is
+  refused where it is written (docs/spec-related-row-law.md §4)."
+  [r]
+  (let [validate
+        (fn [where lg]
+          (doseq [form (cons (:when lg)
+                             (when (map? (:vars lg)) (vals (:vars lg))))
+                  :when (seq? form)
+                  door (sort (:doors (expr/info form)))]
+            (when-not (contains? (:actions r) door)
+              (err r :did-unknown-door
+                   (str where ": guard " (:name lg) " asks (did " door
+                        "), but " door " is no door of this kind; its "
+                        "doors are " (vec (sort (keys (:actions r)))))))))]
+    (doseq [a (machine/actions-seq r)
+            lg (leaf-guards a)]
+      (validate (str "action " (name (:name a))) lg))
+    (doseq [top (:create-guards r)
+            lg (g/iter-leaves top)]
+      (validate "create guard" lg))))
+
 (defn- check-require [r]
   (let [validate
         (fn [where lg]
@@ -2270,7 +2293,7 @@
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
-          check-derived check-renames check-unless check-require
+          check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings
