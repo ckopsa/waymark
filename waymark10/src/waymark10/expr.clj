@@ -19,6 +19,11 @@
   propagates nil. Numbers are longs and exact decimals — a float
   literal is refused at validation, not rounded.
 
+  A scope may carry the `unknown` sentinel (a read no hook could
+  answer, docs/spec-related-row-law.md §5). Every op propagates it,
+  three-valued: `(and false unknown)` is false, `(and true unknown)`
+  is unknown, `(or true unknown)` is true. No form can spell it.
+
   Two spellings that mean the same thing normalize to the same tree
   (see `normalize`), so reformatting a law never mints a revision.
 
@@ -47,6 +52,18 @@
      every some count sum})
 
 (def ^:private quantifier-ops '#{every some count sum})
+
+(deftype Unknown []
+  Object
+  (toString [_] "#waymark/unknown"))
+
+(def unknown
+  "The third verdict: what a read with no hook to answer it evaluates
+  to. Neither true nor false, and never a refusal — a guard whose
+  :when is unknown answers pending. Only a scope can carry it."
+  (Unknown.))
+
+(defn unknown? [v] (instance? Unknown v))
 
 (defn- scalar-literal? [x]
   (or (nil? x) (boolean? x) (string? x)
@@ -373,6 +390,26 @@
 
 (defn- truthy? [v] (boolean v))
 
+(defn- kleene-and
+  "False when any operand is known false; else unknown when any is
+  unknown; else true. Stops at the first false."
+  [vs]
+  (reduce (fn [acc v]
+            (cond (unknown? v) unknown
+                  (truthy? v) acc
+                  :else (reduced false)))
+          true vs))
+
+(defn- kleene-or
+  "True when any operand is known true; else unknown when any is
+  unknown; else false. Stops at the first true."
+  [vs]
+  (reduce (fn [acc v]
+            (cond (unknown? v) unknown
+                  (truthy? v) (reduced true)
+                  :else acc))
+          false vs))
+
 (defn- num-compare
   "Exact comparison across long/decimal. Returns an int."
   ^long [a b]
@@ -464,26 +501,32 @@
 (declare evaluate)
 
 (defn- eval-quantifier [op coll-expr pred scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())
-        pred-of (fn [item]
-                  (truthy? (evaluate pred (update scope :its conj item))))]
-    (case op
-      every (boolean (every? pred-of items))
-      some  (boolean (some pred-of items)))))
+  (let [items (evaluate coll-expr scope)]
+    (if (unknown? items)
+      unknown
+      (let [items (if (sequential? items) items ())
+            pred-of (fn [item] (evaluate pred (update scope :its conj item)))]
+        (case op
+          every (kleene-and (map pred-of items))
+          some  (kleene-or (map pred-of items)))))))
 
 (defn- eval-count
   "(count <coll>) — the item count; with a predicate, the count of
   items satisfying it. A missing/non-sequential collection has no
-  items: 0 (the quantifier empty-collection rule, numerically)."
-  ^long [coll-expr pred scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())]
-    (if (nil? pred)
-      (long (clojure.core/count items))
-      (long (clojure.core/count
-             (filter #(truthy? (evaluate pred (update scope :its conj %)))
-                     items))))))
+  items: 0 (the quantifier empty-collection rule, numerically). An
+  unknown collection, or an unknown predicate on any item, is an
+  unknown count."
+  [coll-expr pred scope]
+  (let [items (evaluate coll-expr scope)]
+    (cond
+      (unknown? items) unknown
+      (not (sequential? items)) 0
+      (nil? pred) (long (clojure.core/count items))
+      :else
+      (let [vs (mapv #(evaluate pred (update scope :its conj %)) items)]
+        (if (some unknown? vs)
+          unknown
+          (long (clojure.core/count (filter truthy? vs))))))))
 
 (defn- eval-sum
   "(sum <coll> <expr>) — the exact sum of the body over the items.
@@ -491,19 +534,25 @@
   the whole sum nil (a missing addend is a missing sum — arithmetic's
   nil propagation, not a silent skip)."
   [coll-expr body scope]
-  (let [items (evaluate coll-expr scope)
-        items (if (sequential? items) items ())]
-    (reduce (fn [acc item]
-              (let [v (evaluate body (update scope :its conj item))]
-                (if (number? v) (num-add acc v) (reduced nil))))
-            0 items)))
+  (let [items (evaluate coll-expr scope)]
+    (if (unknown? items)
+      unknown
+      (let [vs (mapv #(evaluate body (update scope :its conj %))
+                     (if (sequential? items) items ()))]
+        (if (some unknown? vs)
+          unknown
+          (reduce (fn [acc v]
+                    (if (number? v) (num-add acc v) (reduced nil)))
+                  0 vs))))))
 
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
   Total: terminates on every well-formed form and never throws over
   JSON-shaped scope values; missing/mistyped values flow as nil
-  (arithmetic) or false (ordering, quantifier predicates)."
+  (arithmetic) or false (ordering, quantifier predicates). An unknown
+  operand makes the result unknown unless the known operands decide
+  it (and/or and the quantifiers)."
   [form scope]
   (cond
     (scalar-literal? form) form
@@ -520,32 +569,42 @@
 
         get
         (let [v (evaluate (first args) scope)]
-          (when (map? v) (clojure.core/get v (second args))))
+          (cond (unknown? v) unknown
+                (map? v) (clojure.core/get v (second args))))
 
         date
         (try (LocalDate/parse ^String (first args))
              (catch Exception _ nil))
 
-        days    (whole-days (evaluate (first args) scope))
+        days    (let [v (evaluate (first args) scope)]
+                  (if (unknown? v) unknown (whole-days v)))
         date-of (let [v (evaluate (first args) scope)]
                   (if (instance? Instant v)
                     (.toLocalDate (.atOffset ^Instant v ZoneOffset/UTC))
                     v))
-        is-set  (some? (evaluate (first args) scope))
+        is-set  (let [v (evaluate (first args) scope)]
+                  (if (unknown? v) unknown (some? v)))
 
-        not (clojure.core/not (truthy? (evaluate (first args) scope)))
-        and (boolean (every? #(truthy? (evaluate % scope)) args))
-        or  (boolean (some #(truthy? (evaluate % scope)) args))
+        not (let [v (evaluate (first args) scope)]
+              (if (unknown? v) unknown (clojure.core/not (truthy? v))))
+        and (kleene-and (map #(evaluate % scope) args))
+        or  (kleene-or (map #(evaluate % scope) args))
 
-        =    (val-eq (evaluate (first args) scope) (evaluate (second args) scope))
-        not= (clojure.core/not
-              (val-eq (evaluate (first args) scope) (evaluate (second args) scope)))
+        (= not=)
+        (let [a (evaluate (first args) scope)
+              b (evaluate (second args) scope)]
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (= op '=) (val-eq a b)
+            :else (clojure.core/not (val-eq a b))))
 
         (< <=)
         (let [a (evaluate (first args) scope)
               b (evaluate (second args) scope)]
-          (if (or (nil? a) (nil? b))
-            false
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (or (nil? a) (nil? b)) false
+            :else
             (if-some [c (val-compare a b)]
               (case op < (neg? (long c)) <= (clojure.core/not (pos? (long c))))
               false)))
@@ -554,35 +613,40 @@
         (> >=)
         (let [a (evaluate (first args) scope)
               b (evaluate (second args) scope)]
-          (if (or (nil? a) (nil? b))
-            false
+          (cond
+            (or (unknown? a) (unknown? b)) unknown
+            (or (nil? a) (nil? b)) false
+            :else
             (if-some [c (val-compare a b)]
               (case op > (pos? (long c)) >= (clojure.core/not (neg? (long c))))
               false)))
 
-        + (reduce add2 (map #(evaluate % scope) args))
-        - (if (= 1 (count args))
-            (let [v (evaluate (first args) scope)]
-              (when (number? v) (num-sub 0 v)))
-            (sub2 (evaluate (first args) scope) (evaluate (second args) scope)))
-        * (reduce mul2 (map #(evaluate % scope) args))
-
-        (min max)
-        (let [vs (into [] (comp (map #(evaluate % scope)) (filter some?)) args)]
-          (when (and (seq vs) (every? number? vs))
+        (+ - * min max abs)
+        (let [all (mapv #(evaluate % scope) args)]
+          (if (some unknown? all)
+            unknown
+            (case op
+              + (reduce add2 all)
+              - (if (= 1 (count all))
+                  (let [v (first all)]
+                    (when (number? v) (num-sub 0 v)))
+                  (sub2 (first all) (second all)))
+              * (reduce mul2 all)
+              (min max)
+              (let [vs (filterv some? all)]
+                (when (and (seq vs) (every? number? vs))
             (reduce (fn [acc v]
                       (let [c (num-compare acc v)]
                         (case op
                           min (if (pos? c) v acc)
                           max (if (neg? c) v acc))))
                     vs)))
-
-        abs
-        (let [v (evaluate (first args) scope)]
-          (cond
-            (decimal? v) (.abs ^java.math.BigDecimal v)
-            (number? v) (clojure.core/abs v)
-            :else nil))
+              abs
+              (let [v (first all)]
+                (cond
+                  (decimal? v) (.abs ^java.math.BigDecimal v)
+                  (number? v) (clojure.core/abs v)
+                  :else nil)))))
 
         (every some count sum)
         (if (vector? (first args))
