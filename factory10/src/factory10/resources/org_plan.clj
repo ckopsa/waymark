@@ -1102,6 +1102,15 @@
                 :label "The org's directory"
                 :help "Where the org's declarations live in the repository: orgs/ and the org's name, unless the filer named another."}}
      [:maybe [:string {:max 200}]]]
+    ;; read by the bench's held-forward pass (ticket 8288529f); none
+    ;; means at_go_live, so a stored plan needs no migration
+    [:base_follow {:optional true
+                   :x-display
+                   {:label "Keep the branch current"
+                    :help "at_go_live (the default): the plan's branch is brought up to its base only from go_live on, so a filmed plan is not refilmed by every base move. always: it is brought up on every base move."
+                    :choices {"at_go_live" "From go_live on"
+                              "always" "On every base move"}}}
+     [:maybe [:enum "at_go_live" "always"]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOOR (M2b), and read by propose.
     [:findings {:optional true
                 :x-display
@@ -1262,7 +1271,13 @@
     [:org_dir {:optional true
                :x-display {:raw true :label "The org's directory"
                            :help "Where the org's declarations will live. Leave it empty for orgs/ and the org's name."}}
-     [:maybe [:string {:max 200}]]]]
+     [:maybe [:string {:max 200}]]]
+    [:base_follow {:optional true
+                   :x-display {:label "Keep the branch current"
+                               :help "Leave it empty for at_go_live: the branch follows its base only from go_live on. always: it follows every base move, and each move refilms the plan."
+                               :choices {"at_go_live" "From go_live on"
+                                         "always" "On every base move"}}}
+     [:maybe [:enum "at_go_live" "always"]]]]
    :actions
    {:ask
     {:from #{:drafting} :to :drafting

@@ -1410,6 +1410,22 @@
 ;; so at most once per base move. A conflict is not resolved: it is
 ;; written on the row as `conflicts` through the ctx's
 ;; `:held-conflict!`, and the change stays held.
+;;
+;; A FILMED PLAN'S CHANGE WAITS FOR go_live (ticket 8288529f). Each move
+;; of an org_plan's change refilms the plan, so a change a `simulated`
+;; plan names is left behind its base unless that plan's `base_follow`
+;; says `always`; the default, `at_go_live` (or none), brings it forward
+;; only from `going_live` on. The ctx's `:plan-of` answers the plan a
+;; change id names.
+
+(defn follows-base?
+  "Does the held-forward pass bring forward the change `plan` names?
+  Yes without a plan, under `base_follow` `always`, and in every state
+  but `simulated`."
+  [plan]
+  (or (nil? plan)
+      (= "always" (some-> (get-in plan [:data :base_follow]) name))
+      (not= "simulated" (some-> (:state plan) name))))
 
 (defn held-only-behind?
   "Is this change held only for being behind its base? Its head is the
@@ -1430,14 +1446,18 @@
   the rig's `update_branch`, once for its head (`seen` keeps it under
   `[:updated id]`). A conflict goes to the ctx's `:held-conflict!` as
   id, conflicts; no answer or a missing power is not remembered, so the
-  next pass asks again. → the number of `update_branch` calls made."
+  next pass asks again. A change whose plan (the ctx's `:plan-of`) does
+  not `follows-base?` is left behind. → the number of `update_branch`
+  calls made."
   [ctx seen changes]
   (let [conflict! (or (:held-conflict! ctx) (constantly false))
+        plan-of (or (:plan-of ctx) (constantly nil))
         asked (volatile! 0)]
     (doseq [change changes
             :let [id (str (:id change))
                   head (str (get-in change [:data :head_sha]))]
             :when (and (held-only-behind? change)
+                       (follows-base? (plan-of id))
                        (not= head (get @seen [:updated id])))]
       (vswap! asked inc)
       (let [answer (ask ctx :update_branch (update-args change))
@@ -2349,8 +2369,10 @@
                               by-repo)
                         @trains)]
     (try
-      (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)]
+      (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)
+            filmed (org-plans eng ["simulated"])]
         (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
+                              :plan-of #(get filmed %)
                               :held-conflict! (fn [id conflicts]
                                                 (mark-row! eng :change id
                                                            {:conflicts conflicts} #{}))}
