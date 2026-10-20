@@ -331,7 +331,11 @@
   ;; approve gained roles/a-manager — widening authority is a
   ;; manager's; deny is unchanged. Re-pinned from the bench's run
   ;; 38853987049, where this assertion alone failed.
-  "8799b1d8ad84a8059b4b940ee00dd312301910a6483f4b52abbb3dedbe44360a")
+  ;;
+  ;; THE STORAGE FACET MOVED (ticket 68ebaa0f): a filterable :eq field
+  ;; carries a btree index by default. Re-pinned from the bench's run
+  ;; 39454221923, where this assertion alone failed.
+  "6cfed277b274183b298536d9ec0663cc05a0f989170da516695e79be425482e1")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

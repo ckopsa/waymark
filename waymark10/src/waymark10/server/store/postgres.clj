@@ -329,8 +329,10 @@
   fails both, SQL semantics), :set? (IS [NOT] NULL over the extracted
   text), and :contains (ILIKE over the text, the value's wildcards
   escaped). cols is the kind's promoted columns, {field sql-type}: a
-  field promoted at the cond's cast is read off its f_ column."
-  [cols {:keys [target field cast op value values absent?]}]
+  field promoted at the cond's cast is read off its f_ column; with
+  no cols every field reads off the document."
+  ([c] (leaf-cond-sql {} c))
+  ([cols {:keys [target field cast op value values absent?]}]
   (if (= :in-any op)
     ;; the ?| operator (JDBC-escaped ??|), not jsonb_exists_any: the
     ;; planner matches INDEXES through operators only, so the function
@@ -384,7 +386,7 @@
         ;; comparison itself stays the one an index can serve
         (if absent?
           [(str "(" sql " OR " lval " IS NULL)") params]
-          [sql params])))))
+          [sql params]))))))
 
 (defn- cond-sql
   "One cond → [sql-fragment params]. An :any-of cond is the OR of its
@@ -732,10 +734,20 @@
     (jdbc/with-transaction [tx ds]
       (f tx)))
 
-  (ensure-kind! [_ rmap]
-    (with-open [conn (jdbc/get-connection ds)]
-      (doseq [stmt (concat prerequisites (kind-ddl rmap))]
-        (jdbc/execute! conn [stmt])))
+  (ensure-kind! [this rmap]
+    (let [[create & indexes] (kind-ddl rmap)
+          table (store/definition-checked-name (:plural rmap))]
+      (with-open [conn (jdbc/get-connection ds)]
+        (doseq [stmt (concat prerequisites [create])]
+          (jdbc/execute! conn [stmt])))
+      ;; an index over an f_ column the live table lacks yet waits for
+      ;; the migrate gate, whose plan adds the column and then the
+      ;; index (68ebaa0f): building it here would fail the boot first
+      (let [live (set (keys (:columns (table-snapshot this table))))]
+        (with-open [conn (jdbc/get-connection ds)]
+          (doseq [stmt indexes
+                  :when (every? live (map second (re-seq #"[(,]\s*(f_\w+)" stmt)))]
+            (jdbc/execute! conn [stmt])))))
     (swap! tables assoc (:kind rmap)
            (store/definition-checked-name (:plural rmap)))
     (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
