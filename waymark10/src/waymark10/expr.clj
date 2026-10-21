@@ -173,9 +173,10 @@
             (catch Exception _ false))))
 
 (defn- follow-ref?
-  "The one ref a follow may start from: (data :f) or (input :f)."
+  "The one ref a follow may start from: (data :f), (input :f), or a
+  line's (line :f) — a line field's default (ledger step 6c)."
   [x]
-  (and (seq? x) (contains? '#{data input} (first x))
+  (and (seq? x) (contains? '#{data input line} (first x))
        (= 2 (count x)) (keyword? (second x))))
 
 (defn- rows-binder?
@@ -301,7 +302,7 @@
               (and (= n 3) (not (keyword? kind)))
               (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
               (not (follow-ref? ref))
-              (conj problems (str "(follow …) starts from (data :f) or (input :f) — "
+              (conj problems (str "(follow …) starts from (data :f), (input :f) or (line :f) — "
                                   "one hop; got " (pr-str ref)))
               (not (keyword? field))
               (conj problems "(follow …) reads one keyword field of the row it reaches")
@@ -993,8 +994,15 @@
                      (if (sequential? items) items ()))]
         (if (some unknown? vs)
           unknown
+          ;; money sums as money (ledger step 6c's totals), from its
+          ;; first addend; a bare number beside it is not money
           (reduce (fn [acc v]
-                    (if (number? v) (num-add acc v) (reduced nil)))
+                    (cond
+                      (money/money? v) (let [s (if (= 0 acc) v (money-add acc v 1))]
+                                         (if (unknown? s) (reduced s) s))
+                      (and (number? v) (not (money/money? acc))) (num-add acc v)
+                      (number? v) (reduced (money-add acc v 1))
+                      :else (reduced nil)))
                   0 vs))))))
 
 (defn where-conds

@@ -11,9 +11,11 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.lines :as lines]
+            [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.modules :as modules]
             [waymark10.resource :as r]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
@@ -68,6 +70,7 @@
         (fn [tx]
           (doseq [table ["ln_products" "ln_orders" "ln_order_lines"
                          "ln_stocks" "ln_sales" "ln_sale_lines" "postings"
+                         "ln_priceds" "ln_tills" "ln_till_lines"
                          "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
@@ -148,6 +151,95 @@
                                     {:order oid :n 5 :product mug :qty 1}
                                     {:principal elena})))
           (is (= 1 (count (lines-of oid)))))))))
+
+;; ── ledger step 6c: a line's defaults through follow, :totals in the door ─
+
+(defn- usd [s] (money/money s "USD"))
+
+(def ^:private priced
+  (r/resource {:kind :ln_priced
+               :plural "ln_priceds"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]] [:price :waymark/money]]}))
+
+(def ^:private till-decl
+  {:kind :ln_till
+   :plural "ln_tills"
+   :states [:open]
+   :initial :open
+   :terminal #{}
+   :allow-dead #{:open}
+   :summary "{data.note} · {state}"
+   :schema [:map [:note [:string {:max 40}]]]
+   :lines {:kind :ln_till_line
+           :parent :till
+           :fields [[:item {:kind :ln_priced} :waymark/ref]
+                    [:qty [:int {:min 1}]]
+                    [:unit_price :waymark/money]]
+           :defaults {:unit_price '(follow (line :item) :price)}
+           :totals {:total '(sum [l (lines)] (* (line :qty) (line :unit_price)))}}
+   :actions {:revise {:from #{:open} :to :open
+                      :input [:map [:note [:string {:max 40}]]]
+                      :edit {:prefill [:note]}
+                      :handler (r/field-writer [:note])
+                      :safety {:idempotent true :reversible false :confirm false}
+                      :display {:label "Revise"}}}})
+
+(def ^:private till (r/resource till-decl))
+
+(def ^:private till-line (lines/line-kind till))
+
+(deftest step-6c-a-total-is-a-read-only-field-and-a-default-names-a-line-field
+  (testing "a total is the parent's engine-written field, filterable"
+    (is (get-in (schema/entry-map (:schema till)) [:total :properties :engine-written]))
+    (is (contains? (:filterable till) :total)))
+  (testing "a defaulted line field may be left out of the lines input"
+    (is (empty? (schema/closed-errors (:create-schema till)
+                                      {:note "x" :lines [{:item "i" :qty 1}]}))))
+  (testing "a default for no line field is refused at the def site"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (r/resource (assoc-in till-decl [:lines :defaults]
+                                       {:nope '(follow (line :item) :price)}))))))
+
+(deftest step-6c-money-sums-as-money
+  (is (== 4.00M (:amount (expr/evaluate
+                          (expr/normalize '(sum [l (lines)] (* (line :qty) (line :p))))
+                          {:lines [{:qty 2 :p (usd "1.25")} {:qty 1 :p (usd "1.50")}]})))))
+
+(deftest step-6c-a-total-is-computed-in-the-door-from-prices-that-came-through-follow
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [priced till till-line]})
+            mint #(str (get-in (inv/create! eng :ln_priced {:name %1 :price (usd %2)}
+                                            {:principal elena})
+                               [:row :id]))
+            mug (mint "mug" "4.50")
+            tea (mint "tea" "3.00")
+            total #(some-> (get-in % [:row :data :total]) :amount)
+            res (inv/create! eng :ln_till
+                             {:note "first"
+                              :lines [{:item mug :qty 2}
+                                      {:item tea :qty 1 :unit_price (usd "2.50")}]}
+                             {:principal elena})
+            tid (get-in res [:row :id])]
+        (testing "a line without a price takes its product's, and the total sums the lines"
+          (is (== 11.50M (total res))))
+        (testing "after an edit the total is the sum of the new lines"
+          (is (== 12.00M (total (inv/invoke! eng :ln_till tid :revise
+                                             {:note "second" :lines [{:item tea :qty 4}]}
+                                             {:principal elena :if-match "1"})))))
+        (testing "an edit that names no lines keeps the stored total"
+          (is (== 12.00M (total (inv/invoke! eng :ln_till tid :revise {:note "third"}
+                                             {:principal elena :if-match "2"})))))
+        (testing "a write to a total is refused"
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (inv/create! eng :ln_till {:note "hand" :total (usd "1.00")}
+                                    {:principal elena}))))))))
 
 ;; ── ledger step 6b: (lines), (line :f), and :each in :posts ─────────────
 
