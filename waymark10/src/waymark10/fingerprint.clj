@@ -193,6 +193,28 @@
                                                        (:input r))))]))
         rules))
 
+(defn- on-event-fp
+  "The kind's inbound events (docs/spec-integrations.md § 3, § 8): each
+  moves a door or makes a row, so each is law. Entries keep their order
+  (the first whose match names one row runs); expressions ride as
+  trees, an undeclared key stays absent."
+  [es]
+  (mapv (fn [e]
+          (let [forms (fn [m] (into (sorted-map)
+                                    (map (fn [[f x]] [(name f) (form-tree x)]))
+                                    m))]
+            (cond-> {"source" (name (:source e))
+                     "type"   (:type e)}
+              (some? (:door e))  (assoc "door" (name (:door e)))
+              (seq (:match e))   (assoc "match" (forms (:match e)))
+              (seq (:input e))   (assoc "input" (forms (:input e)))
+              (some? (:retry-unmatched-for e))
+              (assoc "retry_unmatched_for" (:retry-unmatched-for e))
+              (seq (:tell e))    (assoc "tell" (mapv name (:tell e)))
+              (some? (:via e))   (assoc "via" (name (:via e)))
+              (some? (:makes e)) (assoc "makes" (name (:makes e))))))
+        es))
+
 (defn- safety-fp [s]
   {"idempotent" (boolean (:idempotent s))
    "reversible" (boolean (:reversible s))
@@ -416,6 +438,12 @@
       (seq (:recurs rmap))
       (assoc "recurs" (recurs-fp (:recurs rmap)))
 
+      ;; :on-event moves doors on an outside event's word (spec-
+      ;; integrations § 8), so the mapping is law. Non-empty-only, so
+      ;; every event-free kind hashes byte-identical to before
+      (seq (:on-event rmap))
+      (assoc "on_event" (on-event-fp (:on-event rmap)))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
@@ -435,7 +463,7 @@
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
-                              "create" "over" "recurs"})
+                              "create" "over" "recurs" "on_event"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
