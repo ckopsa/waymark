@@ -736,13 +736,27 @@
    ;; an outside system as a row and a principal, `integration:<id>`,
    ;; with a grant a person approves; and its receiver (build step 2),
    ;; POST /api/-/events/<name>, keeping one integration_event receipt
-   ;; per event. The applier and the effect runner are later steps.
+   ;; per event; and its applier (build step 3), which runs the door an
+   ;; `:on-event` names, once, as the integration. The effect runner is
+   ;; a later step. The applier is elected for the walkthroughs'
+   ;; reason: two engines applying one receipt would race to land it.
    {:module :integrations
     :routes integrations-routes/routes
     :enrols [{:kind :integration :enroll :always
-              :kinds (fn [_] [integrations/integration])}
+              ;; its scope_wanted is read from the app's own law
+              :kinds (fn [rs] [(integrations/integration-for rs)])}
              {:kind :integration_event :enroll :always
-              :kinds (fn [_] [integrations/integration-event])}]}
+              :kinds (fn [_] [integrations/integration-event])}]
+    :hooks [{:hook :integration-applier
+             :after [:dispatcher]
+             :elected :integration-applier
+             :start (fn [eng running]
+                      (integrations/start-applier!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)
+                            :sweep-ms (get-in eng [:services :integrations :sweep-ms]
+                                              30000)}))
+             :stop integrations/stop-applier!}]}
 
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}

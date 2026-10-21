@@ -250,6 +250,10 @@
    ;; entries, default off — write amplification on the one write path
    ;; is bytes on every transition of every kind forever
    :retain
+   ;; which outside event moves which door (docs/spec-integrations.md
+   ;; § 3): [{:source :type :match :door :input …}], judged and its
+   ;; forms normalized at the def site (resource/check-on-event!)
+   :on-event
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

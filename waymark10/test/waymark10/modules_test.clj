@@ -456,6 +456,9 @@
             :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
             :curtain :presence :intents
             :discovery
+            ;; the integrations' applier (docs/spec-integrations.md
+            ;; § 3, build step 3): elected, waiting on :dispatcher
+            :integration-applier
             ;; the belief module's one surface: :belief-sweeper
             ;; (waymark-bug) refolds every hypothesis's posterior
             ;; nightly, gated on a hypothesis kind being served. It is

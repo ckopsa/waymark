@@ -4,12 +4,14 @@
   duplicate changes nothing. Memory storage, real rows through the
   engine."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :refer [defhandler defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
            (java.time Instant)))
 
@@ -132,3 +134,206 @@
                               {:integration iid :event_id "evt_forged" :bytes 0}
                               {:principal mom})))
     (is (empty? (receipts eng)))))
+
+;; ── the applier (build step 3) ──────────────────────────────────────
+
+(defhandler keep-the-amount [row inp _ctx]
+  (assoc-in row [:data :amount_cents] (:amount_cents inp)))
+
+(defresource job
+  {:kind :shop_order
+   :states [:open :paid]
+   :initial :open
+   :terminal #{:paid}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map
+            [:payment_ref [:string {:min 1 :max 120}]]
+            [:amount_cents {:optional true} [:maybe :int]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_paid {:from #{:open} :to :paid
+                         :input [:map [:amount_cents [:int {:min 1}]]]
+                         :waives #{:edit-shape}
+                         :handler keep-the-amount
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A paid job keeps its payment."}}}
+   :on-event [{:source :stripe
+               :type "payment_intent.succeeded"
+               :match {:payment_ref '(event "data" "object" "id")}
+               :door :mark_paid
+               :input {:amount_cents '(event "data" "object" "amount_received")}}]})
+
+(defn- job-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [job]
+                  :now-fn (fn [] clock)}))
+
+(defn- row-of [eng kind id]
+  (let [st (:storage eng)]
+    (some->> (store/with-tx st #(store/load-row st % kind (str id) {}))
+             (inv/decode-row (get (inv/resources eng) kind)))))
+
+(defn- job! [eng ref]
+  (str (get-in (inv/create! eng :shop_order {:payment_ref ref} {:principal colton}) [:row :id])))
+
+(defn- paid
+  ([id ref] (paid id ref 1800))
+  ([id ref amount]
+   (str "{\"id\":\"" id "\",\"type\":\"payment_intent.succeeded\","
+        "\"data\":{\"object\":{\"id\":\"" ref "\",\"amount_received\":" amount "}}}")))
+
+(defn- applied!
+  "Post a signed event, apply its receipt, and answer the receipt."
+  [eng body]
+  (let [rid (:receipt (post eng "stripe" (signed body) body))]
+    (integrations/apply! eng rid)
+    (row-of eng :integration_event rid)))
+
+(deftest the-law-names-what-the-integration-may-do
+  (let [eng (job-engine)
+        irow (row-of eng :integration (live! eng nil))]
+    (is (= "shop_order" (str (get-in irow [:data :scope_wanted 0 :kind]))))
+    (is (= ["mark_paid"] (mapv str (get-in irow [:data :scope_wanted 0 :actions]))))
+    (is (some? (get-in irow [:data :grant])) "and the approve minted its grant")))
+
+(deftest a-refused-door-is-a-refused-receipt-with-the-refusal-whole
+  (let [eng (job-engine)
+        _ (live! eng nil)
+        jid (job! eng "pi_1")
+        first-one (applied! eng (paid "evt_1" "pi_1"))]
+    (testing "the first event moves the row it matches"
+      (is (= :applied (:state first-one)))
+      (is (= jid (get-in first-one [:data :target])))
+      (is (= "shop_order.mark_paid" (get-in first-one [:data :door])))
+      (is (some? (get-in first-one [:data :transition])))
+      (is (= :paid (:state (row-of eng :shop_order jid))))
+      (is (= 1800 (get-in (row-of eng :shop_order jid) [:data :amount_cents]))))
+    (testing "applying it again moves nothing"
+      (integrations/apply! eng (str (:id first-one)))
+      (is (= first-one (row-of eng :integration_event (:id first-one)))))
+    (testing "a door that refuses the event is a refused receipt, the refusal kept whole"
+      (let [jid (job! eng "pi_3")
+            refused (applied! eng (paid "evt_2" "pi_3" 0))
+            doc (wire/read-json (get-in refused [:data :refusal]))
+            at (fn [k] (or (get doc k) (get doc (name k))))]
+        (is (= :refused (:state refused)))
+        (is (= jid (get-in refused [:data :target])))
+        (is (string? (at :type)) (pr-str doc))
+        (is (string? (at :title)) (pr-str doc))
+        (is (integer? (at :status)) (pr-str doc))
+        (is (= ["mom"] (get-in refused [:data :tell])) "with no :tell, the approver hears it")
+        (is (= :open (:state (row-of eng :shop_order jid))) "and the row did not move")))))
+
+(deftest a-receipt-no-door-takes-says-why
+  (let [eng (job-engine)
+        _ (live! eng nil)]
+    (testing "no row matches"
+      (is (= :unmatched (:state (applied! eng (paid "evt_3" "pi_9"))))))
+    (testing "more than one row matches"
+      (job! eng "pi_2")
+      (job! eng "pi_2")
+      (is (= :ambiguous (:state (applied! eng (paid "evt_4" "pi_2"))))))
+    (testing "no entry names the type"
+      (is (= :ignored (:state (applied! eng "{\"id\":\"evt_5\",\"type\":\"charge.refunded\"}")))))))
+
+(deftest retry-applies-under-the-law-of-now-and-dismiss-lets-go
+  (let [eng (job-engine)
+        _ (live! eng nil)
+        early (applied! eng (paid "evt_6" "pi_6"))
+        rid (str (:id early))
+        jid (job! eng "pi_6")]
+    (is (= :unmatched (:state early)))
+    (inv/invoke! eng :integration_event rid :retry {} {:principal mom})
+    (integrations/apply! eng rid)
+    (is (= :applied (:state (row-of eng :integration_event rid))))
+    (is (= :paid (:state (row-of eng :shop_order jid))))
+    (let [gone (str (:id (applied! eng (paid "evt_7" "pi_7"))))]
+      (inv/invoke! eng :integration_event gone :dismiss
+                   {:reason "That payment was for another shop."} {:principal mom})
+      (is (= :dismissed (:state (row-of eng :integration_event gone))))
+      (is (= "That payment was for another shop."
+             (get-in (row-of eng :integration_event gone) [:data :reason]))))))
+
+;; ── the option kept: the inbox (build step 4) ──────────────────────────
+
+(defresource payment-notice
+  {:kind :payment_notice
+   :states [:new :read]
+   :initial :new
+   :terminal #{:read}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map
+            [:payment_ref [:string {:min 1 :max 120}]]
+            [:amount_cents {:optional true} [:maybe :int]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_read {:from #{:new} :to :read
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A read notice stays read."}}}})
+
+(defresource inbox-order
+  {:kind :inbox_order
+   :states [:open :paid]
+   :initial :open
+   :terminal #{:paid}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map [:payment_ref [:string {:min 1 :max 120}]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_paid {:from #{:open} :to :paid
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A paid order stays paid."}}}
+   :on-event [{:source :stripe
+               :type "payment_intent.succeeded"
+               :via :inbox
+               :makes :payment_notice
+               :input {:payment_ref '(event "data" "object" "id")
+                       :amount_cents '(event "data" "object" "amount_received")}}]})
+
+(defn- inbox-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [payment-notice inbox-order]
+                  :now-fn (fn [] clock)}))
+
+(defn- notices [eng]
+  (let [rd (get (inv/resources eng) :payment_notice)
+        st (:storage eng)]
+    (mapv #(inv/decode-row rd %)
+          (store/with-tx st
+            (fn [tx] (store/query-rows st tx :payment_notice {} {:limit 100}))))))
+
+(deftest an-inbox-event-becomes-a-row-and-runs-no-door
+  (let [eng (inbox-engine)
+        irow (row-of eng :integration (live! eng {:scheme "none"}))
+        body (paid "evt_8" "pi_8" 2500)
+        answer (post eng "stripe" {} body)]
+    (testing "the law asks for the made kind's create"
+      (is (= [{:kind "payment_notice" :actions ["create"]}]
+             (mapv (fn [w] {:kind (str (:kind w)) :actions (mapv str (:actions w))})
+                   (get-in irow [:data :scope_wanted])))))
+    (testing "a source that says it signs with scheme none is kept unsigned"
+      (is (= 202 (:status answer))))
+    (let [rid (:receipt answer)
+          _ (integrations/apply! eng rid)
+          r (row-of eng :integration_event rid)
+          [n :as ns] (notices eng)]
+      (testing "its body becomes a row of the named kind, as the integration"
+        (is (= :applied (:state r)) (pr-str (:data r)))
+        (is (= "payment_notice.create" (get-in r [:data :door])))
+        (is (= 1 (count ns)))
+        (is (= (str (:id n)) (get-in r [:data :target])))
+        (is (= :new (:state n)))
+        (is (= "pi_8" (get-in n [:data :payment_ref])))
+        (is (= 2500 (get-in n [:data :amount_cents]))))
+      (testing "applying it again makes nothing more"
+        (integrations/apply! eng rid)
+        (is (= 1 (count (notices eng))))))))
+
+(deftest an-unsigned-source-is-a-finding
+  (let [eng (job-engine)
+        rdefs (vals (inv/resources eng))
+        signed-row (row-of eng :integration (live! eng nil))
+        unsigned-row (assoc-in signed-row [:data :signature] {:scheme "none"})]
+    (is (= [] (integrations/findings rdefs [signed-row])) "a signing source says nothing")
+    (let [[f :as fs] (integrations/findings rdefs [signed-row unsigned-row])]
+      (is (= 1 (count fs)))
+      (is (.startsWith ^String f "[source-unsigned] warning: integration stripe"))
+      (is (.contains ^String f "shop_order.mark_paid") "it names the doors its events run unread")
+      (is (.contains ^String f ":via :inbox") "and the remedy"))))

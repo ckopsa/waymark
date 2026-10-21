@@ -175,9 +175,11 @@
   either direction fails here and is read. Member reinstate's hold
   (HC2, ticket bed1f2f6) is declared `:hold :agents`: it holds only an
   agent's call, so a suspended member's exit stays a seat's (9b8e9749).
-  integration_event's `received` has no exit until the applier, build
-  step 3 of docs/spec-integrations.md (f070a638)."
-  {"cadence_only" 2 "no_exit" 78 "remedy_unheld" 34 "silent_person_exit" 20})
+  integration_event's `received` is the applier's alone, and its
+  `refused`, `unmatched` and `ambiguous` leave only by a person's retry
+  or dismiss, which no seeded seat holds (docs/spec-integrations.md § 3,
+  ab9a557c)."
+  {"cadence_only" 2 "no_exit" 81 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
