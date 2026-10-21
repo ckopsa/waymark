@@ -2450,17 +2450,200 @@
              " hear? Give it a deadline (an :expected-age :until), a guard, or"
              " :record-only true to say it is kept, not acted on.")))))
 
+;; ── integrations (docs/spec-integrations.md § 8) ─────────────────────
+
+(def integration-findings
+  "§ 8's nine findings: each its level, its remedy and, where a person
+  can answer what the law cannot, its one plain question, whose {field},
+  {power} and {door} are filled from what was found."
+  {:integration-in-prose
+   {:level :info
+    :remedy "Declare the integration, then the event or effect that writes the field."
+    :question "When your payment processor says a payment cleared, what should happen?"}
+   :typed-after-the-fact
+   {:level :warning
+    :remedy "Give the kind an :on-event for it, or make the door an effect that writes the reference."
+    :question "Who types {field} today, and where do they copy it from?"}
+   :effect-no-key
+   {:level :error
+    :remedy "Key it on what makes it once: the row's id, plus a count if it repeats."
+    :question "If this ran twice, how many {power}s should there be?"}
+   :effect-no-failure-state
+   {:level :error
+    :remedy "Name the state a row waits in when the call fails."
+    :question "When {power} fails, who should pick it up?"}
+   :event-match-unfiltered
+   {:level :error
+    :remedy "Declare it filterable."}
+   :event-door-unreachable
+   {:level :error
+    :remedy "Fill the input from the event, or fix the door's :from."}
+   :unwinds-no-compensate
+   {:level :error
+    :remedy "Name its undo."
+    :question "What has to be reversed when this {door} happens?"}
+   :refused-event-untold
+   {:level :warning
+    :remedy "Name a seat to tell."
+    :question "Who should hear when a payment cannot be applied?"}
+   :source-unsigned
+   {:level :warning
+    :remedy "Use a signing source, or keep it on :via :inbox so a seat reads each event."}})
+
+(defn integration-finding
+  "One § 8 finding as the battery says it: `[name] level: ` (an error's
+  name rides its DefinitionError instead), what was found, its remedy,
+  and its question with the holes filled from `vars`."
+  [finding says vars]
+  (let [{:keys [level remedy question]} (get integration-findings finding)]
+    (str (when-not (= :error level) (str "[" (name finding) "] " (name level) ": "))
+         says ". " remedy
+         (when question
+           (str " Ask: "
+                (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
+                           question vars))))))
+
+(defn- inbox? [e] (= :inbox (:via e)))
+
+(defn- ref-field? [k] (str/ends-with? (name k) "_ref"))
+
+(def ^:private outside-words #"(?i)\b(processor|carrier|insurer)s?\b")
+
+(defn- required-input [a]
+  (when (:input a)
+    (for [[k {:keys [properties]}] (schema/entry-map (:input a))
+          :when (not (:optional properties))]
+      k)))
+
+(defn- integration-fields
+  "The fields an :on-event finds a row by or fills, or an :effect writes."
+  [r]
+  (into #{}
+        (concat (for [e (:on-event r) k (concat (keys (:match e)) (keys (:input e)))] k)
+                (for [[_ a] (:actions r) k (keys (get-in a [:effect :writes]))] k))))
+
+(defn- prose-strings [x] (filter string? (tree-seq coll? seq x)))
+
+(defn- check-integration-in-prose
+  "[integration-in-prose], info: a `*_ref` field no :on-event or :effect
+  writes, or a kind whose prose names an outside system (a processor,
+  carrier or insurer) and that declares no :on-event or :effect."
+  [r]
+  (let [fields (when (:schema r) (schema/entry-map (:schema r)))
+        written (integration-fields r)
+        declared? (or (seq (:on-event r)) (some (comp :effect val) (:actions r)))
+        prose (concat (prose-strings (:display r))
+                      (for [[_ a] (:actions r) :when (not (:engine a)) s (prose-strings (:display a))] s)
+                      (for [[_ {:keys [properties]}] fields s (prose-strings properties)] s))
+        word (some #(some-> (re-find outside-words %) second str/lower-case) prose)]
+    (concat
+     (for [f (sort (filter ref-field? (keys fields)))
+           :when (not (contains? written f))]
+       (integration-finding :integration-in-prose
+                            (str "field " (name f) " holds an outside system's reference, and no :on-event or :effect writes it")
+                            {}))
+     (when (and word (not declared?))
+       [(integration-finding :integration-in-prose
+                             (str "the kind's prose names a " word ", and it declares no :on-event or :effect")
+                             {})]))))
+
+(defn- check-typed-after-the-fact
+  "[typed-after-the-fact], warning: a door whose whole input is outside
+  references — a person copying them from another system's screen —
+  that no :on-event moves and that is no effect."
+  [r]
+  (let [moved (set (keep :door (remove inbox? (:on-event r))))]
+    (for [[aname a] (:actions r)
+          :when (not (or (:engine a) (:effect a) (contains? moved aname)))
+          :let [ks (sort (input-keys a))]
+          :when (and (seq ks) (every? ref-field? ks))]
+      (integration-finding :typed-after-the-fact
+                           (str "door " (name aname) " takes only " (str/join ", " (map name ks))
+                                ", typed in from an outside system")
+                           {:field (str/join " and " (map name ks))}))))
+
+(defn- check-effects
+  "[effect-no-key] and [effect-no-failure-state], errors: an :effect
+  that does not say what makes it once, or where a row waits when its
+  call fails. [unwinds-no-compensate], an error: an :unwinds entry that
+  names an effect with no undo."
+  [r]
+  (doseq [[aname a] (:actions r)
+          :when (not (:engine a))
+          :let [eff (:effect a)]
+          :when eff]
+    (when (nil? (:idempotency-key eff))
+      (err r :effect-no-key
+           (integration-finding :effect-no-key
+                                (str (name aname) " :effect has no :idempotency-key")
+                                {:power (:power eff)})))
+    (when (nil? (:fails-to eff))
+      (err r :effect-no-failure-state
+           (integration-finding :effect-no-failure-state
+                                (str (name aname) " :effect has no :fails-to")
+                                {:power (:power eff)}))))
+  (doseq [[aname a] (:actions r)
+          :when (not (:engine a))
+          {e :effect} (:unwinds a)
+          :when (nil? (get-in r [:actions e :effect :compensate]))]
+    (err r :unwinds-no-compensate
+         (integration-finding :unwinds-no-compensate
+                              (str (name aname) " :unwinds " (name e) ", which declares no :compensate")
+                              {:door (name aname)}))))
+
+(defn- check-events
+  "[event-match-unfiltered] and [event-door-unreachable], errors: an
+  :on-event whose :match names a field the kind cannot find a row by,
+  or whose :door no event could walk — no :from, or a required input
+  the entry does not fill. [refused-event-untold], a warning: an entry
+  that names no seat to :tell. The battery reads law, not rows: an
+  approver seat on the integration's row is not in sight here, so the
+  entry's own :tell is what answers."
+  [r]
+  (into []
+        (mapcat
+         (fn [{:keys [door] :as e}]
+           (let [a (get-in r [:actions door])
+                 label (str ":on-event " (name (:source e)) " " (:type e))]
+             (doseq [f (sort (keys (:match e)))]
+               (when-not (some #{:eq :in} (get-in r [:filterable f]))
+                 (err r :event-match-unfiltered
+                      (integration-finding :event-match-unfiltered
+                                           (str label " :match names " (name f) ", which is not filterable by :eq")
+                                           {}))))
+             (when (and (not (keyword? (:from a))) (empty? (:from a)))
+               (err r :event-door-unreachable
+                    (integration-finding :event-door-unreachable
+                                         (str label " runs " (name door) ", which no state opens")
+                                         {})))
+             (when-some [miss (seq (sort (remove (set (keys (:input e))) (required-input a))))]
+               (err r :event-door-unreachable
+                    (integration-finding :event-door-unreachable
+                                         (str label " runs " (name door) " without "
+                                              (str/join ", " (map name miss)) ", which its input requires")
+                                         {})))
+             (when (empty? (:tell e))
+               [(integration-finding :refused-event-untold
+                                     (str label " runs " (name door) " and names no seat to :tell when it is refused")
+                                     {})]))))
+        (remove inbox? (:on-event r))))
+
 (defn run-all
-  "The full battery in waymark9 order; throws the first error, returns
+  "The full battery in waymark9 order, after § 8's integration findings
+  (docs/spec-integrations.md); throws the first error, returns
   {:warnings [str …] :info [str …]}. [convertible-guard],
-  [stays-code] and [date-unread] are info (docs/spec-related-row-law.md
-  §6): counted, not enforced, so they never land among the warnings."
+  [stays-code], [date-unread] and [integration-in-prose] are info
+  (docs/spec-related-row-law.md §6): counted, not enforced, so they
+  never land among the warnings."
   [rmap]
-  {:info (into (vec (check-convertible-guard rmap)) (check-date-unread rmap))
+  {:info (-> (vec (check-convertible-guard rmap))
+             (into (check-date-unread rmap))
+             (into (check-integration-in-prose rmap)))
    :warnings
    (into []
          (mapcat #(% rmap))
-         [check-tokens check-reachability check-terminal-no-exit
+         [check-effects check-events check-typed-after-the-fact
+          check-tokens check-reachability check-terminal-no-exit
           check-allow-undo
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
