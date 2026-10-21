@@ -120,8 +120,14 @@
   :on_hand]), or (balance [:house :fees]) — through the scope's
   :balance hook, which the write answers under the row's lock. A row
   part that names no row, or no hook to ask, is unknown, as on the
-  probe."
-  '#{data input var now it get date balance
+  probe.
+
+  lines/line (docs/spec-ledger-money.md §6, ledger step 6b): (lines) is
+  the door's lines — the input's when the door takes `lines`, the
+  stored set otherwise — from the scope's :lines, and unknown without
+  it. (line :f) is a field of the innermost line: inside an :each entry
+  of :posts, or inside a sum/count over (lines)."
+  '#{data input var now it get date balance lines line
      = not= < <= > >=
      and or not
      + - * / min max abs
@@ -220,6 +226,19 @@
 
           (me self)
           (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
+
+          lines
+          (if (zero? n) problems (conj problems "(lines) takes no arguments"))
+
+          ;; a line is read where one is bound: inside :each, or inside
+          ;; a quantifier over (lines)
+          line
+          (cond
+            (not (and (= n 1) (keyword? (first args))))
+            (conj problems "(line :field) takes exactly one keyword field name")
+            (zero? (+ depth (count env)))
+            (conj problems "(line :field) reads a line inside :each, or inside a sum/count over (lines)")
+            :else problems)
 
           did
           (if (and (pos? n) (every? keyword? args))
@@ -417,9 +436,10 @@
 (defn problems
   "Vector of problem strings for a form; empty when well-formed.
   Accepts both authored (named binders) and canonical (de Bruijn)
-  spellings."
-  [form]
-  (check form #{} 0 []))
+  spellings. `depth` counts the quantifiers the form stands inside — an
+  :each entry's forms stand inside one."
+  ([form] (problems form 0))
+  ([form depth] (check form #{} depth [])))
 
 (defn well-formed? [form]
   (empty? (problems form)))
@@ -1139,6 +1159,15 @@
         it    (nth (:its scope) (long (first args)) nil)
         me    (if (contains? scope :principal) (:principal scope) unknown)
         self  (if (contains? scope :self) (:self scope) unknown)
+        ;; the door's lines (ledger step 6b), read only when asked
+        lines (if (contains? scope :lines)
+                (let [ls (:lines scope)] (vec (if (delay? ls) @ls ls)))
+                unknown)
+        ;; a field of the innermost line; none bound is nil
+        line  (let [l (first (:its scope))
+                    f (first args)]
+                (when (map? l)
+                  (if (contains? l f) (clojure.core/get l f) (clojure.core/get l (name f)))))
         ;; a value in an outside event's body, by its path; no event
         ;; to read is unknown
         event (if (contains? scope :event)
@@ -1390,7 +1419,8 @@
   A form that follows adds :follows, the kinds written into its follows;
   one that asks exists/none/count-rows adds :queries, the kinds asked;
   one that reads (balance …) adds :balances, the kinds whose rows it reads.
-  A calendar reader adds :uses-calendar, and (today) :uses-today.
+  A calendar reader adds :uses-calendar, and (today) :uses-today;
+  (lines) and (line …) add :uses-lines.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -1416,6 +1446,7 @@
                   (local-date business-days business-day? next-business-day working?)
                   (reduce #(walk %2 %1) (assoc acc :uses-calendar true) args)
                   (date it) acc
+                  (lines line) (assoc acc :uses-lines true)
                   (exists none count-rows)
                   (if (vector? (first args))
                     (walk (normalize form) acc)

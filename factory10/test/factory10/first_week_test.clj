@@ -391,6 +391,48 @@
       (is (not-any? :card (:shots (:scene (first-week/scene seed (assoc filmed-on
                                                                         :resources (example-kinds))))))))))
 
+(def ^:private a-business-week
+  "A week.edn starting on a Monday with five days, played for a work
+  order done (ticket 6c3d93db)."
+  {:day-one "2026-10-26"
+   :goal {:kind "work_order" :state "done"}
+   :days (vec (for [d (range 1 6)]
+                {:day d
+                 :calls [{:as :world :kind "request" :action "create"
+                          :input {:title (str "Job " d)}}]}))})
+
+(deftest a-scene-takes-its-days-from-the-org's-week
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-business-week))
+        shots (:shots (:scene doc))
+        coll (get-in (first shots) [:open :collection])]
+    (testing "day 1 is the week's :day-one, not the day it was rendered"
+      (is (= "2026-10-26" (:day_one doc))))
+    (testing "one day per entry, captioned with its date's weekday: no weekend"
+      (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday"])
+             (captions shots))))
+    (testing "the opening opens the collection of the first call's kind"
+      (is (some #(= coll (or (:plural %) (str (name (:kind %)) "s"))) (example-kinds)))
+      (is (str/starts-with? coll "request")))
+    (testing "the payoff counts the week's goal first, then the taps"
+      (let [rows (counts (last shots))]
+        (is (= ["work_order" "done"] ((juxt :kind :state) (first rows))))
+        (is (= "held_call" (:kind (last rows))))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
+(deftest a-seed-with-no-create-opens-a-kind-never-an-empty-name
+  (let [shots (:shots (:scene (first-week/scene (assoc seed :steps [])
+                                                (assoc filmed-on :resources (example-kinds)))))
+        coll (get-in (first shots) [:open :collection])]
+    (is (not (str/blank? coll)))
+    (is (not= "s" coll))))
+
 (def ^:private dry-week
   [{:day 1 :as "world" :kind "booking" :action "create" :outcome "moved"}
    {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "moved"}

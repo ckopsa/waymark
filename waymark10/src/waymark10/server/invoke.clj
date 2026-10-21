@@ -1091,6 +1091,26 @@
   [row]
   (vary-meta row assoc ::unchanged true))
 
+(defn- stored-lines
+  "The line rows one parent holds now, as their data in place order —
+  what (lines) reads at a door that does not take `lines` (ledger step
+  6b, docs/spec-ledger-money.md §6)."
+  [engine tx rdef parent-id]
+  (let [{child :kind via :parent} (:lines rdef)
+        crdef (get (resources engine) child)]
+    (mapv #(:data (if crdef (decode-row crdef %) %))
+          (store/search-rows (:storage engine) tx child
+                             [{:target :data :field via :op := :value (str parent-id)}]
+                             {:order-by :n}))))
+
+(defn- door-lines
+  "(lines) at a door: the input's when the door takes `lines`, the
+  stored set otherwise."
+  [engine tx rdef row inp]
+  (if (and (map? inp) (contains? inp :lines))
+    (vec (:lines inp))
+    (stored-lines engine tx rdef (:id row))))
+
 (defn- posting-entries
   "The entries a landing door posts (ledger step 4): its :posts over the
   row as it leaves it, then — when it is the :undo of a posting door
@@ -1100,8 +1120,9 @@
   (vec
    (concat
     (when-some [ps (seq (:posts defn))]
-      (try (posts/entries ps {:data (:data materialized) :input inp
-                              :now (:now ctx) :self (str (:id row))})
+      (try (posts/entries ps (cond-> {:data (:data materialized) :input inp
+                                      :now (:now ctx) :self (str (:id row))}
+                               (:lines rdef) (assoc :lines (door-lines engine tx rdef row inp))))
            (catch clojure.lang.ExceptionInfo e
              (if (:posts-refused (ex-data e))
                (throw (p/schema-invalid (:name defn) {:posts [(ex-message e)]}))
@@ -1345,12 +1366,22 @@
                          (:why call) (assoc :why (:why call)))
                        {:principal principal})))))
 
+(declare write-lines!)
+
+(defn- sans-lines
+  "The input as the row's own data reads it: a kind that declares
+  :lines (ledger step 6a) takes its `lines` into line rows, never into
+  the parent's data."
+  [rdef inp]
+  (cond-> inp (and (:lines rdef) (map? inp)) (dissoc :lines)))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
-  `unchanged` on an in-state door, which writes nothing."
+  `unchanged` on an in-state door, which writes nothing. A door that
+  took `lines` replaces its row's lines in this transaction."
   [engine tx rdef row defn inp ctx opts]
   (let [handled (if-some [h (:handler defn)]
-                  (let [out (h row inp ctx)]
+                  (let [out (h row (sans-lines rdef inp) ctx)]
                     (when-not (map? out)
                       (throw (t/definition-error
                               (str "handler for " (name (:name defn))
@@ -1370,7 +1401,11 @@
         ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
         (when (and (:unwinds defn) (not (:effect defn)))
           (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
-        (land! engine tx rdef row defn inp ctx handled opts)))))
+        (let [res (land! engine tx rdef row defn inp ctx handled opts)]
+          (when (and (:lines rdef) (map? inp) (contains? inp :lines))
+            (write-lines! engine tx rdef (:id row) (:lines inp)
+                          (:principal opts) true))
+          res)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -1696,7 +1731,11 @@
                           ;; a77bf705): a guard several doors carry
                           ;; reads which one judges it from here, and
                           ;; not from the shape of the body
-                          (assoc :door action-name))]
+                          (assoc :door action-name)
+                          ;; the row's stored lines (ledger step 6b),
+                          ;; read only when a guard asks for (lines)
+                          (cond-> (:lines rdef)
+                            (assoc :stored-lines (delay (stored-lines engine tx rdef id)))))]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)
@@ -2743,6 +2782,28 @@
                                                                (update :version inc)))
                                           (:version row)))))))
 
+(defn- write-lines!
+  "Ledger step 6a (docs/spec-ledger-money.md §6): the line rows of one
+  parent, written in the door's transaction through the quiet birth
+  door. The parent's transition is the write the log records, and its
+  :inputs carry the lines; a transition per line would say it twice.
+  `replace?` (an edit) deletes the stored set first, so the door's list
+  IS the set. Each line is stamped with its parent and its place, `n`."
+  [engine tx rdef parent-id lines principal replace?]
+  (let [{child :kind via :parent} (:lines rdef)
+        st (:storage engine)
+        pid (str parent-id)]
+    (when replace?
+      (when-some [ids (seq (store/ids-matching
+                            st tx child
+                            [{:target :data :field via :cast "text"
+                              :op := :value pid}]
+                            10000))]
+        (store/delete-rows! st tx child (vec ids))))
+    (doseq [[n line] (map-indexed vector lines)]
+      (insert-quiet! engine tx child (assoc line via pid :n n)
+                     {:principal principal}))))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
@@ -2822,8 +2883,11 @@
                            :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
             (create-guard-pass door-guards
-                               inp (dissoc ctx :invoke :create :inner-sink
-                                           :power :follow-up :follow-sink)
+                               inp (cond-> (dissoc ctx :invoke :create :inner-sink
+                                                   :power :follow-up :follow-sink)
+                                     ;; a birth holds no lines yet: (lines)
+                                     ;; reads the input's (ledger step 6b)
+                                     (:lines rdef) (assoc :stored-lines []))
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS
@@ -2838,7 +2902,8 @@
                    :version 1
                    ;; each account is born at zero (ledger step 3c),
                    ;; so "under 5" finds a row nothing posted to yet
-                   :data (merge (money/opening-balances (:accounts rdef)) inp)
+                   :data (merge (money/opening-balances (:accounts rdef))
+                                (sans-lines rdef inp))
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}
@@ -2884,6 +2949,11 @@
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
+              ;; its lines (ledger step 6a) follow it in, in this
+              ;; transaction: a refused line already refused the door
+              _ (when (and (:lines rdef) (seq (:lines inp)))
+                  (write-lines! engine tx rdef (:id row) (:lines inp)
+                                principal false))
               record (store/append-transition!
                       (:storage engine) tx
                       {:kind kind

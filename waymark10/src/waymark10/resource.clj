@@ -2033,6 +2033,61 @@
                 (money/account-field n a))))
     rmap))
 
+(defn- project-lines
+  "`:lines` (docs/spec-ledger-money.md §6, ledger step 6a): the kind's
+  line items, a child kind the engine makes (waymark10.lines/line-kind)
+  and writes only through this kind's doors. Here the parent gains what
+  that asks of it: the :owns edge at the child, and a `lines` input — a
+  list of line maps, each closed over the line's :fields — on its create
+  door and on each edit door. A declaration normalized twice keeps one
+  of each."
+  [rmap]
+  (if-some [ls (:lines rmap)]
+    (let [kind (:kind rmap)
+          bad #(throw (t/definition-error (str (name kind) ": :lines " %)
+                                          {:check :lines}))
+          _ (when-not (map? ls) (bad "is a map {:kind :parent :fields}"))
+          {child :kind via :parent fields :fields} ls
+          via (or via kind)]
+      (when-some [extra (seq (remove #{:kind :parent :fields} (keys ls)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a line kind reads :kind, :parent and :fields")))
+      (when-not (and (keyword? child) (keyword? via))
+        (bad "names its line :kind, and its :parent field, as keywords"))
+      (when-not (and (vector? fields) (seq fields))
+        (bad "declares its line :fields, a vector of schema entries"))
+      (when-some [f (some (set (keys (schema/entry-map (into [:map] fields))))
+                          [via :n])]
+        (bad (str "field " (name f) " is the engine's: the line's parent"
+                  " ref and its place `n` are stamped, never entered")))
+      (when (contains? (schema/entry-map (:schema rmap)) :lines)
+        (bad "meets a field named lines; the doors' lines input takes that name"))
+      (let [entry [:lines {:optional true
+                           :x-display {:label "Lines"
+                                       :help "The whole list of lines. On an edit it replaces the stored lines; left out, they stay."}}
+                   [:vector (into [:map] fields)]]
+            add (fn [form]
+                  (if (or (not (and (vector? form) (= :map (first form))))
+                          (contains? (schema/entry-map form) :lines))
+                    form
+                    (conj form entry)))]
+        (-> rmap
+            (assoc :lines {:kind child :parent via :fields (vec fields)})
+            (update :owns (fn [o]
+                            (let [o (vec o)]
+                              (if (some #(= child (:kind %)) o)
+                                o
+                                (conj o {:kind child :via via})))))
+            (assoc :create-schema (add (or (:create-schema rmap) (:schema rmap))))
+            (update :actions
+                    (fn [as]
+                      (into (or (empty as) {})
+                            (map (fn [[n a]]
+                                   [n (cond-> a
+                                        (and (:edit a) (:input a)) (update :input add))]))
+                            as))))))
+    rmap))
+
 (def ^:private on-event-keys
   #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
 
@@ -2164,6 +2219,7 @@
         project-accounts
         project-colocated
         desugar-owns
+        project-lines
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)
