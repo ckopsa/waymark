@@ -2028,11 +2028,9 @@
                           (bad e ":makes is for :via :inbox"))
                         (when-not (contains? (:actions rmap) door)
                           (bad e (str ":door " (pr-str door) " is not an action of this kind")))
+                        ;; [event-match-unfiltered] is the battery's (checks.clj)
                         (when-not (and (map? match) (seq match))
-                          (bad e ":match maps one or more fields of this kind to the value each must equal"))
-                        (doseq [f (keys match)]
-                          (when-not (some #{:eq :in} (get-in rmap [:filterable f]))
-                            (bad e (str ":match names " (pr-str f) ", which is not filterable by :eq"))))))
+                          (bad e ":match maps one or more fields of this kind to the value each must equal"))))
                   (when-not (or (nil? input) (and (map? input) (every? keyword? (keys input))))
                     (bad e ":input maps the door's input fields to expressions"))
                   (when-not (or (nil? retry-unmatched-for) (pos-int? retry-unmatched-for))
