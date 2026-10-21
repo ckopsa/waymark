@@ -27,7 +27,7 @@
 
 (deftest a-live-seed-gets-no-demo-clock
   (let [opts {:storage ::storage :resources []}]
-    (is (= [opts] (clocked-engine "live-test" vector opts))
+    (is (= [opts] (clocked-engine "live-test" false vector opts))
         "the engine is built from the opts as they are")))
 
 (deftest a-live-seed-boots-without-factory10

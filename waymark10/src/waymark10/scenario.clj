@@ -70,10 +70,12 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
+            [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
-  (:import (java.time Instant)
+  (:import (java.time Instant LocalDate)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -84,7 +86,7 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :row :input :as :at :given :history :history-mode :expect])
+  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :given :history :history-mode :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -104,6 +106,9 @@
 ;; on, unless the scenario says `:leashed false` — which is how "an
 ;; unleashed agent sees nothing" stays a sentence a scenario can say.
 (def principal-keys [:id :type :roles :leashed])
+;; the house's calendar a scenario declares (docs/spec-calendar-time.md
+;; §6): the same values a work_calendar row keeps
+(def calendar-keys [:zone :workdays :hours :holidays])
 
 (def offline-reads
   "The external dependencies a STORAGE-FREE judgment can honestly
@@ -130,8 +135,12 @@
 
   `:facts` (waymark-442.7) is what `guards/require` declares: its check
   consults the maintained fact on the row it is handed, and a scenario
-  states that row whole in `:row`, so the verdict needs no storage."
-  #{:now :principal :services.features :within :grant :facts})
+  states that row whole in `:row`, so the verdict needs no storage.
+
+  `:calendar` (docs/spec-calendar-time.md §6) is the house's calendar,
+  which the scenario declares beside its moment, so `(today)`,
+  `business-days` and `working?` are judged here and not deferred."
+  #{:now :principal :services.features :within :grant :facts :calendar})
 
 (def out-of-state
   "The reserved denier name: a row whose state is outside the
@@ -160,6 +169,41 @@
     (try (Instant/parse ^String at)
          (catch DateTimeParseException _
            (err sname (str ":at " (pr-str at) " is not an ISO instant"))))))
+
+(defn- calendar-answer
+  "What the :calendar hook answers for the scenario's declared
+  calendar — the very shape a work_calendar row answers — or nil when
+  its zone names none."
+  [cal]
+  (work-calendar/answer
+   {:id "scenario"
+    :data {:zone (:zone cal)
+           :workdays (map name (:workdays cal))
+           :hours (:hours cal)
+           :holidays (map #(if (map? %) % {:on %}) (:holidays cal))}}))
+
+(defn- calendar!
+  [sname cal]
+  (when (some? cal)
+    (when-not (map? cal)
+      (err sname ":calendar is the house's calendar {:zone … :workdays … :hours … :holidays …}"))
+    (closed! sname "calendar" calendar-keys cal)
+    (when (nil? (calendar-answer cal))
+      (err sname (str ":calendar :zone " (pr-str (:zone cal)) " names no time zone")))
+    (when-not (and (coll? (:workdays cal ())) (every? #(or (string? %) (keyword? %)) (:workdays cal)))
+      (err sname ":calendar :workdays is a set of weekday tokens, #{:mon :tue …}"))
+    (when-some [bad (seq (remove (set work-calendar/weekdays) (map name (:workdays cal))))]
+      (err sname (str ":calendar :workdays names " (pr-str (first bad))
+                      ", which is not one of " work-calendar/weekdays)))
+    (when (and (some? (:hours cal)) (nil? (:hours (calendar-answer cal))))
+      (err sname ":calendar :hours is {:from \"HH:MM\" :to \"HH:MM\"}"))
+    (when-not (coll? (:holidays cal ()))
+      (err sname ":calendar :holidays is a vector of dates, \"2027-05-31\" or {:on … :name …}"))
+    (doseq [h (:holidays cal)]
+      (let [on (if (map? h) (:on h) h)]
+        (when-not (and (string? on)
+                       (try (LocalDate/parse ^String on) (catch DateTimeParseException _ nil)))
+          (err sname (str ":calendar :holidays names " (pr-str h) ", which is not a date")))))))
 
 (defn- principal!
   [sname as]
@@ -287,6 +331,30 @@
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
     expect))
 
+;; a recurrence scenario's verdict (docs/spec-calendar-time.md §6): the
+;; occurrence list's first and last dates, its length, or the whole list
+(def occurrences-keys [:first :last :count :dates])
+
+(defn- iso-date? [v]
+  (and (string? v)
+       (some? (try (LocalDate/parse ^String v) (catch DateTimeParseException _ nil)))))
+
+(defn- occurrences-expect! [sname expect]
+  (when-not (and (map? expect) (= [:occurrences] (vec (keys expect))) (map? (:occurrences expect)))
+    (err sname "a recurrence scenario expects its list: :expect {:occurrences {:first … :last … :count …}}"))
+  (let [o (:occurrences expect)]
+    (closed! sname "occurrences" occurrences-keys o)
+    (when (empty? o)
+      (err sname ":expect :occurrences names at least one of :first, :last, :count and :dates"))
+    (doseq [k [:first :last]
+            :when (and (contains? o k) (not (iso-date? (get o k))))]
+      (err sname (str ":occurrences " k " is a date, \"2027-04-06\"")))
+    (when (and (contains? o :count) (not (nat-int? (:count o))))
+      (err sname ":occurrences :count is how many dates the list holds"))
+    (when (and (contains? o :dates) (not (and (vector? (:dates o)) (every? iso-date? (:dates o)))))
+      (err sname ":occurrences :dates is the whole list, a vector of dates"))
+    expect))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -306,8 +374,13 @@
   (when-not (map? m) (err sname "a scenario is a map of the closed scenario keys"))
   (closed! sname "scenario" scenario-keys m)
   (when-not (keyword? (:kind m)) (err sname ":kind names the resource this scenario judges"))
-  (when-not (keyword? (:attempt m))
-    (err sname ":attempt names the action, or the create door by its own name"))
+  (if (some? (:recurs m))
+    (do (when-not (keyword? (:recurs m))
+          (err sname ":recurs names the rule whose dates this scenario lists, by its :name"))
+        (when (some? (:attempt m))
+          (err sname "a recurrence scenario lists a rule's dates and attempts no door — drop :attempt")))
+    (when-not (keyword? (:attempt m))
+      (err sname ":attempt names the action, or the create door by its own name")))
   (row! sname ":row" row-keys (:row m))
   (when (some? (:given m))
     (when-not (vector? (:given m))
@@ -359,7 +432,10 @@
   (when (and (some? (:input m)) (not (map? (:input m))))
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
-  (expect! sname (:expect m))
+  (calendar! sname (:calendar m))
+  (if (some? (:recurs m))
+    (occurrences-expect! sname (:expect m))
+    (expect! sname (:expect m)))
   (cond-> (assoc m
                  :name sname
                  :sentence sentence
@@ -472,10 +548,13 @@
   related rows — a :given row nothing declarative reads is a row to
   stage for real."
   [rdef s]
-  (let [{:keys [guards missing]} (attempted rdef s)]
-    (boolean (and (nil? missing)
-                  (empty? (mapcat unserved-reads guards))
-                  (or (empty? (:given s)) (some reads-related? guards))))))
+  ;; a recurrence scenario lists a pure function's dates: no door, no
+  ;; reads, always here (docs/spec-calendar-time.md §6)
+  (or (some? (:recurs s))
+      (let [{:keys [guards missing]} (attempted rdef s)]
+        (boolean (and (nil? missing)
+                      (empty? (mapcat unserved-reads guards))
+                      (or (empty? (:given s)) (some reads-related? guards)))))))
 
 (defn deferral-reason
   "Why a scenario waits for the suite, in the author's own terms —
@@ -623,14 +702,28 @@
   door reads other rows or the log — and then from the scenario
   (scenario-reads); otherwise
   there are none, and a code guard that reaches for one gets the
-  offline answer it declared it could give."
+  offline answer it declared it could give.
+
+  The :calendar hook is lent when the scenario declares a :calendar,
+  and answers that one calendar for every ref: a scenario names one
+  house. Without one there is no hook, and the engine makes up no
+  plausible calendar — structural has already refused the law that
+  reads it."
   [s related?]
   (cond-> {:mode :invoke
            :now (some-> ^String (:at s) Instant/parse)
            :principal (:as s)
            :services {:features []}
            :rate nil}
+    (:calendar s) (assoc :calendar (let [c (calendar-answer (:calendar s))]
+                                     (fn ([] c) ([_ref] c))))
     related? (merge (scenario-reads s))))
+
+(defn- reads-calendar?
+  "Does this guard tree read the house's calendar?"
+  [gd]
+  (boolean (or (contains? (set (:reads gd)) :calendar)
+               (some reads-calendar? (concat (:all gd) (:any gd))))))
 
 (defn- scenario-row
   "The row as a literal document, wearing the shape storage would
@@ -678,7 +771,11 @@
              (when (and (nil? (:at s))
                         (some #(contains? (set (:reads %)) :now) guards))
                (str "declares no :at, but " (:attempt s)
-                    " consults the clock — a scenario over a timed law names its moment"))])))))
+                    " consults the clock — a scenario over a timed law names its moment"))
+             (when (and (nil? (:calendar s))
+                        (some reads-calendar? guards))
+               (str "declares no :calendar, but " (:attempt s)
+                    " reads the house's calendar — a scenario over calendar law names its calendar"))])))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -725,11 +822,8 @@
          (str/replace (str/trim (:sentence s)) #"\s+" " ")
          " — " c)))
 
-(defn judge
-  "Judge one CHECK-TIER scenario against its declaration, with no
-  storage of any kind → a vector of violation strings (empty when the
-  law kept its promise). The tier is the caller's question; this
-  judges what it is handed."
+(defn- judge-door
+  "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
   (or (structural rdef s)
       (let [s (fill-run s check-run)
@@ -763,6 +857,41 @@
           (vec (remove nil?
                        [(violation s (verdict guards row (:input s) ctx))]))))))
 
+(defn- judge-recurrence
+  "One recurrence scenario judged: the rule's occurrences for its :row
+  under its :calendar, against :expect :occurrences — sentence first,
+  the dates that differ after."
+  [rdef s]
+  (let [head (str (name (:name s)) " [" (name (:kind s)) "/recurs " (name (:recurs s)) "] ")
+        rule (some #(when (= (:recurs s) (:name %)) %) (:recurs rdef))]
+    (if (nil? rule)
+      [(str head ":recurs names " (:recurs s) ", which is no rule of " (name (:kind s))
+            " — its rules are " (pr-str (vec (sort (map :name (:recurs rdef))))))]
+      (let [got (recurs/occurrences rule (get-in s [:row :data] {})
+                                    (some-> (:calendar s) calendar-answer))
+            seen {:first (some-> (first got) str)
+                  :last (some-> (peek got) str)
+                  :count (count got)
+                  :dates (mapv str got)}
+            want (get-in s [:expect :occurrences])
+            off (for [k occurrences-keys
+                      :when (and (contains? want k) (not= (get want k) (get seen k)))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (if (empty? off)
+          []
+          [(str head (str/replace (str/trim (:sentence s)) #"\s+" " ")
+                " — the occurrences answer " (str/join "; " off))])))))
+
+(defn judge
+  "Judge one CHECK-TIER scenario against its declaration, with no
+  storage of any kind → a vector of violation strings (empty when the
+  law kept its promise). The tier is the caller's question; this
+  judges what it is handed."
+  [rdef s]
+  (if (some? (:recurs s))
+    (judge-recurrence rdef s)
+    (judge-door rdef s)))
+
 ;; ── the report both callers print ───────────────────────────────────
 
 (defn report
@@ -780,8 +909,8 @@
 
 (defn coverage
   "How much of a kind's refusing law any scenario names: [named
-  total] over the refusing guard leaves of every action and the
-  create door. Counted, never enforced — a usability warning here
+  total] over the refusing guard leaves of every action, the create
+  door and each extra create door under :creates. Counted, never enforced — a usability warning here
   would fire on every action in the tree on the day it landed, and a
   warning nobody can clear is a warning nobody reads."
   [rdef]
@@ -792,6 +921,7 @@
         walls (into #{}
                     (comp cat (mapcat refusing) (remove nil?))
                     (cons (:create-guards rdef)
-                          (map :guards (vals (:actions rdef)))))
+                          (concat (map :guards (:creates rdef))
+                                  (map :guards (vals (:actions rdef))))))
         named (into #{} (keep #(get-in % [:expect :refused])) (:scenarios rdef))]
     [(count (filter named walls)) (count walls)]))

@@ -160,6 +160,7 @@
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
+            [waymark10.server.integrations :as integrations]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
@@ -186,6 +187,7 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.judgment :as judgment]
             [waymark10.verdict :as verdict]
             [waymark10.test.packs :as packs]
@@ -361,7 +363,13 @@
              ;; spec's own reason: a household engine with no seat must
              ;; still groom a ticket at 08:30.
              {:kind :scheduled_action :enroll :always
-              :kinds (fn [_] [scheduled/scheduled-action])}]
+              :kinds (fn [_] [scheduled/scheduled-action])}
+             ;; the work calendar (docs/spec-calendar-time.md §3):
+             ;; which days the house works, its hours and its holidays,
+             ;; as a row the law reads at judgment. Core's, because the
+             ;; :calendar hook that reads it rides every invoke ctx.
+             {:kind :work_calendar :enroll :always
+              :kinds (fn [_] [work-calendar/work-calendar])}]
     ;; the three surfaces no waymark engine is a waymark engine
     ;; without: the outbox reader every other surface rides, the
     ;; law-refresh consumer (a core need in any multi-process
@@ -723,6 +731,14 @@
              :start (fn [eng _] (mirror/start-discovery! eng))
              :stop mirror/stop-discovery!}]
     :pack packs/mirror}
+   ;; the integration (docs/spec-integrations.md § 2, build step 1):
+   ;; an outside system as a row and a principal, `integration:<id>`,
+   ;; with a grant a person approves. The receiver and the effect
+   ;; runner are later steps of the same spec; this is the kind alone.
+   {:module :integrations
+    :enrols [{:kind :integration :enroll :always
+              :kinds (fn [_] [integrations/integration])}]}
+
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
 

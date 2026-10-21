@@ -113,12 +113,18 @@
            ;; …and the quest (docs/spec-quests.md), core's beside the
            ;; walkthrough: its goal is judged as an invitation's step is
            :quest
+           ;; …and the integration (docs/spec-integrations.md § 2): an
+           ;; outside system as a row and a principal, :always
+           :integration
            ;; …and the scene and the take (docs/spec-scenes.md): a demo
            ;; written as shots, and one performance of it
            :scene :take
            ;; …and the secret: a value the owner enters once, which a
            ;; power call on core's own mcp_server names by reference
-           :secret}
+           :secret
+           ;; …and the work calendar (docs/spec-calendar-time.md §3),
+           ;; core's because the :calendar hook rides every invoke ctx
+           :work_calendar}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -147,7 +153,8 @@
              :notice_rule :transcript :transcript_entry :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :quest :secret :film_rule :scene :take}
+             :walkthrough :quest :secret :film_rule :scene :take
+             :work_calendar}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"

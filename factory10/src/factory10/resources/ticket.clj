@@ -646,6 +646,21 @@
       (t/deny)
       (t/allow))))
 
+(defguardfn a-model-says-why-it-ungrooms
+  ;; ticket 1a7a763f: a seat sent a ticket back three times and said
+  ;; nothing. The reason is the input's to give, so the render probe,
+  ;; which carries none, keeps the door offered; a person's hand may
+  ;; leave it out, since a person ungrooming from the board knows why.
+  {:reads [:principal]
+   :needs-input true
+   :remedies [{:door :ticket/ungroom :fields [:shelved_because]}]
+   :explain "A model's ungroom names its reason in `shelved_because`: what blocks this ticket as written, and what would unblock it. The draft-judge and the mayor read it before they restate and groom it again; a ticket sent back with none sits with nothing to act on."}
+  [_row inp ctx]
+  (if (and (= :agent (:type (:principal ctx)))
+           (str/blank? (str (:shelved_because inp))))
+    (t/deny)
+    (t/allow)))
+
 ;; AN EPIC NAMES ITS SHOWCASE (ticket cbf84f80). The guard reads the
 ;; row and nothing else, so groom's scenarios stay check-tier: the epic
 ;; it knows is the one whose title says `[epic]`. A parent that is an
@@ -2091,7 +2106,20 @@
                :description "It is stated well enough to build as written — into the queue"}}
 
     :ungroom
-    {:guards [a-person-or-their-delegate-grooms]
+    {:guards [a-person-or-their-delegate-grooms a-model-says-why-it-ungrooms]
+     :handler note-the-shelving
+     ;; the log keeps the reason, as shelve's does (ticket 1a7a763f)
+     :record true
+     :input [:map
+             [:shelved_because {:optional true
+                                :examples ["The detail names no door to change; it builds once it says which one."]
+                                :x-display
+                                {:widget "prose"
+                                 :label "Why it goes back to draft"
+                                 :help "One sentence for whoever grooms it next: what blocks this ticket as written, and what would unblock it. A model's ungroom must say it; a person's may leave it out. It is at most 480 characters."}}
+              [:maybe [:string {:min 1 :max 480}]]]]
+     ;; one tap, fenced on no version, as groom is
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Back to draft" :order 9
                :description "Out of the queue — the statement needs work before a seat builds it"}}

@@ -14,7 +14,8 @@
   `born_from` is filterable by :eq, so a declarative guard finds a
   ticket's change by it. Ticket 14d32fc4 moved it: submit's
   `the-repository-has-a-policy` is an `exists` over `repo_policy`, and
-  its three other walls say `:check-tier :given`."
+  its three other walls say `:check-tier :given`. Ticket e0ff6d71 moved
+  it: `line_why` may say `org_plan_retired`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -43,7 +44,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "4aa11c0e940815f2f94cf5855cb45a14cd9407cf9b420f98a6795b5380377919")
+  "0393f05e358b3c2c9941280fe694fca455945e1d9437aa3d4e9a4d7690fc9eb3")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

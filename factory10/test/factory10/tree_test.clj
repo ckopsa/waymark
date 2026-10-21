@@ -470,12 +470,12 @@
                :merge_strategy
                :train_size :formatter :deny
                :test :check :hosted_workflows :hosted_ok :person_paths
-               :orientation :enrolled_at :note :source_note
+               :lanes :checks :orientation :enrolled_at :note :source_note
                :forge_cursor :forge_retry :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at :line_train
+               :line_waiting :line_at :line_train :lane_trains
                :deploy_check :deploy_wait_seconds :deploy_waits_on
                :deploy_waiting_since :deployed_head :deployed_at
                :deploy_state :deploy_note
@@ -494,7 +494,7 @@
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at :line_train
+               :line_waiting :line_at :line_train :lane_trains
                :deploy_waits_on :deploy_waiting_since :deployed_head
                :deployed_at :deploy_state :deploy_note
                :floor_noted_at :floor_count :floor_ticket}

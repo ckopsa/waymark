@@ -1078,3 +1078,99 @@
       (is (= [9] (pass! (plan :going_live "at_go_live")))))
     (testing "a change no plan names is brought forward as before"
       (is (= [9] (pass! nil))))))
+
+;; ── a train per lane (ticket 55d584f2) ──────────────────────────────
+
+(defn- lane-policy [& {:as extra}]
+  (update (train-policy) :data merge
+          {:lanes [{:name "docs" :paths ["docs/**"]}]} extra))
+
+(defn- in-lane [lane n]
+  (a-change wm n n :touched_paths [(if (= "docs" lane)
+                                     (str "docs/note-" n ".md")
+                                     (str "factory10/src/f" n ".clj"))]))
+
+(defn- two-lanes []
+  [(in-lane "engine" 1) (in-lane "engine" 2) (in-lane "docs" 3) (in-lane "docs" 4)])
+
+(defn- lane-rig
+  "`train-rig`, but each train's run is named for its branch, and
+  train_status answers what `statuses` holds under that run."
+  [statuses]
+  (let [r (train-rig (atom {}))
+        rpc (get-in r [:ctx :services :bench-rpc])
+        answer (fn [tool args result]
+                 (swap! (:calls r) conj [tool args])
+                 {:structuredContent {:result result}})]
+    (assoc-in r [:ctx :services :bench-rpc]
+              (fn [svc {tool :name args :arguments :as call}]
+                (case tool
+                  "bench__train_checks"
+                  (answer tool args {:run_id (:branch args) :head "train-head"})
+                  "bench__train_status"
+                  (answer tool args (get statuses (:run_id args)
+                                         {:state "pending" :head "train-head"}))
+                  (rpc svc call))))))
+
+(defn- standing
+  "The policy as the pass that filled `trains` leaves it."
+  [pol trains]
+  (update pol :data merge (get (bench/train-marks {wm pol} trains) wm)))
+
+(deftest two-lanes-build-two-trains-that-land-on-their-own
+  (let [r (lane-rig {"train/ckopsa/waymark/3" {:state "success" :head "train-head"}})
+        seen (atom {})
+        pol (lane-policy)
+        t1 (train-pass! r seen (two-lanes) pol)]
+    (is (= [[1 2] [3 4]] (mapv :prs (args-of r "bench__train_build")))
+        "each lane's green changes ride their own train, and no train mixes lanes")
+    (is (= #{wm [wm "docs"]} (set (keys t1))))
+    (is (= "docs" (:lane (get t1 [wm "docs"]))))
+    (is (nil? (:lane (get t1 wm))) "the engine lane's train stands as one always stood")
+    (let [t2 (train-pass! r seen (two-lanes) (standing pol t1))]
+      (is (= ["train/ckopsa/waymark/3"] (mapv :branch (args-of r "bench__train_land")))
+          "the docs train lands while the engine train still runs")
+      (is (nil? (get t2 [wm "docs"])))
+      (is (= (get t1 wm) (get t2 wm)))
+      (is (= {wm {:line_train (get t1 wm) :lane_trains nil}}
+             (bench/train-marks {wm (standing pol t1)} t2))
+          "the landed lane leaves the policy, and the engine train stays"))))
+
+(deftest a-red-train-in-one-lane-does-not-hold-the-other
+  (let [r (lane-rig {"train/ckopsa/waymark/1" {:state "success" :head "train-head"}
+                     "train/ckopsa/waymark/3" {:state "failure" :head "train-head"}})
+        seen (atom {})
+        pol (lane-policy)
+        t1 (train-pass! r seen (two-lanes) pol)
+        t2 (train-pass! r seen (two-lanes) (standing pol t1))]
+    (is (= ["train/ckopsa/waymark/1"] (mapv :branch (args-of r "bench__train_land")))
+        "the engine train lands though the docs train went red")
+    (is (nil? (get t2 wm)))
+    (is (= [3] (:prs (last (args-of r "bench__train_build"))))
+        "the docs train looks for its red inside its lane")
+    (is (= "docs" (:lane (get t2 [wm "docs"]))))
+    (is (not (get @seen [:train-done wm])))))
+
+(deftest a-train-s-dispatch-names-its-lane
+  (let [r (lane-rig {})
+        _ (train-pass! r (atom {}) (two-lanes) (lane-policy))
+        sent (into {} (map (juxt :branch identity)) (args-of r "bench__train_checks"))]
+    (is (= "docs" (:lane (get sent "train/ckopsa/waymark/3")))
+        "a docs train's dispatch carries lane=docs")
+    (is (contains? #{nil "engine"} (:lane (get sent "train/ckopsa/waymark/1")))
+        "an engine train's dispatch carries none or engine")))
+
+(deftest with-no-lanes-one-train-carries-every-path
+  (let [r (train-rig (atom {}))
+        trains (train-pass! r (atom {}) (two-lanes) (train-policy))]
+    (is (= [[1 2 3 4]] (mapv :prs (args-of r "bench__train_build"))))
+    (is (= [wm] (keys trains)))))
+
+(deftest the-line-place-counts-within-the-lane
+  (let [pol (lane-policy)
+        m (bench/line-marks (bench/merge-lines (two-lanes) {wm pol} (constantly nil) {})
+                            {} {} [] {} #(bench/lane-of % pol))]
+    (is (= [1 2 1 2]
+           (mapv #(get-in m [:changes (str "change-" %) :line_place]) [1 2 3 4])))
+    (is (= 3 (get-in m [:policies wm :line_waiting]))
+        "the line itself still counts every change")))

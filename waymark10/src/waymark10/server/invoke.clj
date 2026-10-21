@@ -160,6 +160,7 @@
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -272,7 +273,7 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
-(defn render-hooks
+(defn- read-hooks
   "The render probe's :read/:find/:sum — make-ctx's enforcement hooks
   twinned for the READ path, each call over a short transaction of
   its own. An engine booted with :probe-reads true hands one instance
@@ -340,6 +341,15 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
+(defn render-hooks
+  "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
+  §3) over their own :read and :find: the render probe and the
+  law-sweep name the governing work_calendar from the same memo the
+  rest of their reads ride."
+  [engine]
+  (let [hooks (read-hooks engine)]
+    (assoc hooks :calendar (work-calendar/hook (:read hooks) (:find hooks)))))
+
 (defn- law-conds
   "An exists/none/count-rows where as the store's conds
   (docs/spec-related-row-law.md §3): :state and :id are the row's own
@@ -368,6 +378,22 @@
 
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
          create-guard-pass)
+
+(defn- tx-calendar
+  "The `:calendar` hook (docs/spec-calendar-time.md §3) over the
+  write's own transaction, as make-ctx's :read and :find read it: a
+  holiday added in this transaction moves this write's verdict."
+  [engine tx]
+  (work-calendar/hook
+   (fn [target-kind id]
+     (when-some [trdef (get (resources engine) target-kind)]
+       (some->> (store/load-row (:storage engine) tx target-kind (str id) {})
+                (decode-row trdef))))
+   (fn [target-kind where opts]
+     (when-some [trdef (get (resources engine) target-kind)]
+       (mapv #(decode-row trdef %)
+             (store/query-rows (:storage engine) tx target-kind
+                               (or where {}) (merge {:limit 100} opts)))))))
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -471,6 +497,11 @@
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
+             ;; THIS write, `{:kind :action}`, as a guard reads it: a
+             ;; declarative (hold "…") knows the door its replay stands
+             ;; on from here (ticket 8e02609c), and without it no
+             ;; allowed held call ever cleared the hold that minted it
+             :self self
              ;; the key this invoke rides under, as the transition
              ;; will carry it — see the docstring
              :idempotency-key idempotency-key
@@ -659,6 +690,13 @@
                                (when-some [trdef (get (resources engine) target-kind)]
                                  (store/count-matching (:storage engine) tx target-kind
                                                        (law-conds trdef conds))))
+             ;; the house's calendar (docs/spec-calendar-time.md §3):
+             ;; the row's work_calendar ref, or nothing for the
+             ;; default, → the calendar that governs, or nil
+             :calendar (tx-calendar engine tx)
+             ;; the house's :rounding (docs/spec-ledger-money.md §2),
+             ;; which (round m) reads
+             :rounding (:rounding engine)
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render
@@ -1037,14 +1075,14 @@
            record-key?]
     :or {record-key? true}}]
   (let [now (:now ctx)
-        _ (when-some [facts (seq (derived/tampered rdef row handled now))]
+        _ (when-some [facts (seq (derived/tampered rdef row handled now (:calendar ctx)))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
         ;; ref labels + one-of clears (phase 8): engine passes, never
         ;; handler work — the handler sets the ref, the engine writes
         ;; the label and clears the other arm
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
-        materialized (derived/materialize rdef handled now)
+        materialized (derived/materialize rdef handled now (:calendar ctx))
         advanced (-> materialized
                      (assoc :state (:to defn))
                      (update :version inc))
@@ -2518,7 +2556,7 @@
   grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
                                idempotency-key mint? depth within grant
-                               action]
+                               action recurs-from]
                         :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
         {model :model create-action :action door-guards :guards
@@ -2594,11 +2632,16 @@
                                                 :body body :opts opts})
                             nil))
               row (if-some [oc on-create] (oc row octx) row)
+              ;; a :recurs run's made row keeps the key it was made
+              ;; under (scheduled/run-key): the engine's field, past the
+              ;; closed create model no hand may write it through
+              row (cond-> row
+                    recurs-from (assoc-in [:data :recurs_from] recurs-from))
               ;; ref labels + one-of at birth too: before nil, every
               ;; set ref is newly set
               row (update row :data
                           #(labels-and-groups engine tx rdef % nil))
-              row (derived/materialize rdef row now)
+              row (derived/materialize rdef row now (:calendar ctx))
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))

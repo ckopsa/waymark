@@ -354,14 +354,24 @@
   "The person-tap sentence of a defguard: the door waits for a person.
   An agent's call is held as a held_call, and the person's Allow runs
   it; a person's own call goes through. The law after it is optional:
-  with one, the door holds only while the law is false."
+  with one, the door holds only while the law is false.
+
+  `(hold \"…\" :for :role \"x\")` names whose tap it waits for when it
+  is not the agent's own person: the held call waits for a member
+  holding role x (a seed's cast roles), and the Allow door refuses a
+  person without it."
   [sentence & more]
   (when (or (not (string? sentence)) (str/blank? sentence))
     (werr "hold takes the sentence the held call shows — a guard explains itself"))
-  (when (seq more)
-    (werr (str "hold takes only its sentence; " (pr-str more)
-               " declares nothing yet — the tap waits for the agent's own person")))
-  {:severity :refuse :explain sentence :hold true})
+  (let [[for-k role-k role & extra] more]
+    (when (and (seq more)
+               (not (and (= :for for-k) (= :role role-k)
+                         (string? role) (not (str/blank? role))
+                         (empty? extra))))
+      (werr (str "hold takes only its sentence, or its sentence and "
+                 ":for :role \"…\"; " (pr-str more) " declares nothing")))
+    (cond-> {:severity :refuse :explain sentence :hold true}
+      (seq more) (assoc :for-role role))))
 
 (defn- rewrite-sentence-law
   "The defguard-gate desugars, applied before g/expr validates: the
@@ -485,7 +495,11 @@
             (str "defguard " (name gname)
                  ": the map after a hold's law is {:open \"…\"}; " (pr-str opts) " is not"))))
   (let [sentence (:explain clause)
+        role (:for-role clause)
         inner (when law (law-guard gname {:severity :refuse :explain sentence} law nil))
+        ;; a role hold says whose tap it waits for as its evidence; the
+        ;; router writes it on the held call's door
+        held (fn [m] (t/deny (cond-> m role (assoc :evidence {:role role}))))
         check (fn [row inp ctx]
                 (let [self (:self ctx)
                       door (or (:door ctx) (:action self))
@@ -495,16 +509,21 @@
                     (not= :agent (:type (:principal ctx))) (t/allow)
                     (and (:kind self) door
                          (holds/approved-hold? ctx (:kind self) door (:id row))) (t/allow)
-                    (seq (:vars v)) (t/deny {:vars (:vars v)})
-                    :else (t/deny))))]
+                    (seq (:vars v)) (held {:vars (:vars v)})
+                    :else (held {}))))]
     (g/guard (cond-> {:name gname
                       :explain sentence
                       :hold true
                       :reads (into [:principal :within]
                                    (remove #{:principal :within})
                                    (:reads inner))
-                      :open (or (:open opts) hold-open)
+                      :open (or (:open opts)
+                                (if role
+                                  (str "No door clears this one. The call waits as a held_call for "
+                                       "a member holding the " role " role, and their Allow runs it.")
+                                  hold-open))
                       :check (with-meta check {:waymark10/form (list 'hold sentence law)})}
+               role (assoc :hold-role role)
                (seq (:judges inner)) (assoc :judges (:judges inner))
                (seq (:vars inner)) (assoc :vars (vec (keys (:vars inner))))))))
 

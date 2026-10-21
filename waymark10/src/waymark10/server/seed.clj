@@ -575,6 +575,18 @@
                  g))
              given (:aliases tmpl)))
 
+(defn- defaulted
+  "`given` with each param a template's :defaults names, param →
+  default, filled when the caller did not give it: a keyword default
+  takes the value of the param it names, when that one is given; any
+  other default is the value itself."
+  [tmpl given]
+  (reduce-kv (fn [g k d]
+               (cond (contains? g k) g
+                     (keyword? d) (if (contains? g d) (assoc g k (get g d)) g)
+                     :else (assoc g k d)))
+             given (:defaults tmpl)))
+
 (defn- items
   "A list param's value as its items: a comma-separated text split and
   trimmed, a collection as itself."
@@ -597,7 +609,9 @@
   a hole is repeated once for each item, the hole taking that item, so
   a scope gets one entry per kind. Elsewhere the hole takes the list's
   text. Its :aliases, old name → new, let a caller that still gives the
-  old param fill the new one."
+  old param fill the new one. Its :defaults, param → default, make a
+  param optional: one not given takes the value of the param a keyword
+  default names, or the default itself."
   ([body given] (filled body given nil))
   ([body given tmpl]
    (let [lists (set (:lists tmpl))
@@ -605,7 +619,7 @@
                                [k (cond (unresolved? v) (str v)
                                         (and (lists k) (coll? v)) (str/join "," v)
                                         :else v)]))
-                     (aliased tmpl given))
+                     (defaulted tmpl (aliased tmpl given)))
          raw (fn [g x]
                (when-some [k (whole-hole x)]
                  (let [v (get g k)]
@@ -634,9 +648,10 @@
 
 (defn- fill
   "A template's body with each `{{hole}}` its params name filled from
-  `given`. Throws for a param not given and for a hole left over."
+  `given`. Throws for a param not given, and with no default, and for
+  a hole left over."
   [{:keys [params body template]} given template-name]
-  (let [given (aliased template given)]
+  (let [given (defaulted template (aliased template given))]
     (when-some [missing (seq (remove #(contains? given %) (keys params)))]
       (throw (refusal (str "The seed's template `" template-name "` needs the params "
                            (str/join ", " (map name missing)) ", and the step does not give them.")

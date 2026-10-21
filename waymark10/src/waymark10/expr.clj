@@ -30,8 +30,11 @@
 
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
   :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
-  (:require [clojure.edn :as edn])
-  (:import (java.time LocalDate Instant OffsetDateTime Period ZoneId ZoneOffset)
+  (:require [clojure.edn :as edn]
+            [waymark10.money :as money])
+  (:import (java.time Duration LocalDate LocalTime Instant OffsetDateTime Period ZoneId
+                      ZoneOffset ZonedDateTime)
+           (java.time.temporal ChronoUnit)
            (java.time.format DateTimeFormatter)
            (java.util Locale)))
 
@@ -72,20 +75,47 @@
   clock/day/iso: a sentence's own form for an instant — the hour on
   the reader's clock, the day it falls on there, or the raw RFC 3339
   value — earned by span's neighbour-keeps-some-width, whose holes
-  read instants (ticket 2af2d5dc). The guard scope lends its :zone."
+  read instants (ticket 2af2d5dc). The guard scope lends its :zone.
+
+  weeks/months/years/hours/minutes, days-between: the periods and the
+  difference of docs/spec-calendar-time.md §2. (days n) (weeks n)
+  (months n) (years n) are a Period, calendar arithmetic on a date;
+  (hours n) (minutes n) are a Duration, clock arithmetic on an instant.
+  (weeks n) normalizes to (days (* 7 n)), so the two spellings are one
+  law. (days-between a b) is the whole days from date a to date b,
+  negative when b is earlier.
+
+  today/local-date/business-days/business-day?/next-business-day/
+  working?: the calendar readers of docs/spec-calendar-time.md §2-§3.
+  They read the scope's :calendar hook (the governing work_calendar),
+  and are unknown without it, as an instant moved by a Period is: the
+  same local time that many days later in that calendar's zone, never
+  UTC by accident.
+
+  money/amount/currency and / (docs/spec-ledger-money.md §2): the
+  money literal (money \"18.00\" \"USD\"), its two readers, and the
+  quotient — money ÷ a number is money, unrounded, to 12 places when it
+  does not terminate. Money adds to and compares with money of its own
+  currency only; of two currencies, or with a bare number, the answer
+  is unknown, and the unknown says why (`unknown-why`). (round m) is
+  m at its currency's minor unit in the house's rounding, the scope's
+  :rounding (:half-even unless the house says :half-up)."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
-     + - * min max abs
+     + - * / min max abs
+     money amount currency round
      str
-     days date-of is-set clock day iso
+     days weeks months years hours minutes days-between
+     today local-date business-days business-day? next-business-day working?
+     date-of is-set clock day iso
      every some count sum
      follow did me self
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
 
-(deftype Unknown []
+(deftype Unknown [why]
   Object
   (toString [_] "#waymark/unknown"))
 
@@ -93,9 +123,15 @@
   "The third verdict: what a read with no hook to answer it evaluates
   to. Neither true nor false, and never a refusal — a guard whose
   :when is unknown answers pending. Only a scope can carry it."
-  (Unknown.))
+  (Unknown. nil))
 
 (defn unknown? [v] (instance? Unknown v))
+
+(defn unknown-why
+  "The sentence an unknown carries when the law can say why it is not
+  known — money of two currencies meeting — else nil."
+  [v]
+  (when (unknown? v) (.-why ^Unknown v)))
 
 (defn- scalar-literal? [x]
   (or (nil? x) (boolean? x) (string? x)
@@ -158,6 +194,9 @@
           now
           (if (zero? n) problems (conj problems "(now) takes no arguments"))
 
+          today
+          (if (zero? n) problems (conj problems "(today) takes no arguments"))
+
           (me self)
           (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
 
@@ -185,10 +224,22 @@
             (conj problems (str "(date …) takes one ISO date string; got "
                                 (pr-str (vec args)))))
 
-          (days date-of is-set clock day iso not abs)
+          (days weeks months years hours minutes date-of is-set clock day iso not abs
+           local-date business-days business-day? next-business-day amount currency round)
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
+
+          days-between
+          (if (= n 2)
+            (check (second args) env depth (check (first args) env depth problems))
+            (conj problems "(days-between a b) takes two expressions"))
+
+          working?
+          (if (<= 2 n 3)
+            (reduce (fn [p a] (check a env depth p)) problems args)
+            (conj problems (str "(working? from to) takes a window's two instants or two dates, "
+                                "and a calendar ref third when the resource names one")))
 
           ;; authored (follow <ref> :field); normalized at the def site
           ;; to (follow :kind <ref> :field)
@@ -217,6 +268,17 @@
             :else
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
+
+          money
+          (if (and (= n 2) (money/money (first args) (second args)))
+            problems
+            (conj problems (str "(money \"18.00\" \"USD\") takes an amount written as a "
+                                "string and an ISO currency code; got " (pr-str (vec args)))))
+
+          /
+          (if (= n 2)
+            (reduce (fn [p a] (check a env depth p)) problems args)
+            (conj problems "(/ a b) divides exactly two expressions"))
 
           (= not= < <= > >=)
           (if (= n 2)
@@ -403,7 +465,8 @@
   "Ops whose value is always a boolean — the only operands and/or/not
   may collapse around without changing the value domain: (and x x)
   means (boolean x), which is x itself only when x is already boolean."
-  '#{= not= < <= > >= and or not is-set every some did exists none})
+  '#{= not= < <= > >= and or not is-set every some did exists none
+     business-day? working?})
 
 (defn- boolean-valued? [form]
   (and (seq? form) (contains? boolean-valued-ops (first form))))
@@ -459,6 +522,16 @@
         ;; a door named twice, or in another order, is the same question
         did
         (cons op (sort (distinct args)))
+
+        ;; seven days and a week are one law (calendar spec §7)
+        weeks
+        (list 'days (norm (list '* 7 (first args))))
+
+        ;; "18.00" and "18" are one amount, so one law
+        money
+        (if-some [a (money/canonical-amount (first args))]
+          (list 'money a (second args))
+          (cons op args))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -567,6 +640,8 @@
   [a b]
   (cond
     (and (number? a) (number? b)) (num-compare a b)
+    (and (money/money? a) (money/money? b) (= (:currency a) (:currency b)))
+    (num-compare (:amount a) (:amount b))
     (and (instance? LocalDate a) (instance? LocalDate b))
     (.compareTo ^LocalDate a ^LocalDate b)
     (and (instance? Instant a) (instance? Instant b))
@@ -575,9 +650,13 @@
     :else nil))
 
 (defn- val-eq [a b]
-  (if (and (number? a) (number? b))
-    (zero? (num-compare a b))
-    (= a b)))
+  (cond
+    (and (number? a) (number? b)) (zero? (num-compare a b))
+    ;; 18.00 dollars is 18 dollars: the amount compares, not its scale
+    (and (money/money? a) (money/money? b))
+    (and (= (:currency a) (:currency b))
+         (zero? (num-compare (:amount a) (:amount b))))
+    :else (= a b)))
 
 (defn- num-add [a b]
   (if (or (decimal? a) (decimal? b))
@@ -594,32 +673,168 @@
     (.multiply (bigdec a) (bigdec b))
     (*' a b)))
 
-(defn- add2 [a b]
+;; ── money (docs/spec-ledger-money.md §2) ────────────────────────────
+
+(defn- mixed-currency
+  "Unknown, saying which two currencies, when money of two meets."
+  [a b]
+  (when-some [why (money/mixed-currency a b)]
+    (Unknown. why)))
+
+(defn- money-add
+  "money ± money of its currency is money; of another it is unknown,
+  naming both; money ± anything else is unknown — a bare number is not
+  money."
+  [a b sign]
+  (if (and (money/money? a) (money/money? b))
+    (or (mixed-currency a b)
+        (let [x ^java.math.BigDecimal (:amount a)
+              y ^java.math.BigDecimal (:amount b)]
+          (money/->Money (if (neg? (long sign)) (.subtract x y) (.add x y))
+                         (:currency a))))
+    (Unknown. "only money adds to or subtracts from money: a bare number is not money")))
+
+(defn- money-mul
+  "money × a number is money, every digit kept."
+  [m n]
+  (money/->Money (.multiply ^java.math.BigDecimal (:amount m) (bigdec n))
+                 (:currency m)))
+
+(defn- div2
+  "a ÷ b for a money or a number a and a number b: unrounded, to 12
+  places when the quotient does not terminate. ÷ 0 is a missing value."
+  [a b]
+  (cond
+    (not (number? b)) nil
+    (zero? b) nil
+    (money/money? a) (money/->Money (money/divide (:amount a) (bigdec b)) (:currency a))
+    (number? a) (money/divide (bigdec a) (bigdec b))
+    :else nil))
+
+;; ── the house's calendar (docs/spec-calendar-time.md §2, §3) ────────
+
+(defrecord BusinessDays [n])   ; (business-days n): a span only a calendar can walk
+
+(def ^:private business-walk-cap
+  "How many days a business-day walk may step before it answers nil."
+  366)
+
+(defn- calendar-in
+  "The calendar `ref` names under the scope's :calendar hook (no ref:
+  the default) — unknown when the scope has no hook or nothing governs."
+  ([scope] (calendar-in scope nil))
+  ([scope ref]
+   (if-some [calendar-of (:calendar scope)]
+     (if-some [c (calendar-of ref)] c unknown)
+     unknown)))
+
+(defn today-in
+  "The date of `now` in the zone of the default calendar `calendar-of`
+  answers: unknown with no hook or nothing that governs, nil with no
+  clock. Derived facts bind :today with it."
+  [now calendar-of]
+  (let [c (calendar-in {:calendar calendar-of})]
+    (cond (unknown? c) unknown
+          (instance? Instant now) (.toLocalDate (.atZone ^Instant now ^ZoneId (:zone c)))
+          :else nil)))
+
+(defn- weekday
+  "A date's weekday token, :mon to :sun."
+  [^LocalDate d]
+  (keyword (subs (.toLowerCase (.name (.getDayOfWeek d)) Locale/ROOT) 0 3)))
+
+(defn- business-day
+  "True when `d` is a workday of `cal` and none of its holidays."
+  [cal ^LocalDate d]
+  (and (contains? (:workdays cal) (weekday d))
+       (not (contains? (:holidays cal) d))))
+
+(defn- plus-business-days
+  "`d` moved `n` business days of `cal`, one day at a time, skipping
+  non-workdays and holidays; nil past the walk's cap."
+  [cal ^LocalDate d n]
+  (let [step (if (neg? (long n)) -1 1)]
+    (loop [^LocalDate d d left (Math/abs (long n)) walked 0]
+      (cond (zero? left) d
+            (>= walked business-walk-cap) nil
+            :else (let [d' (.plusDays d step)]
+                    (recur d' (if (business-day cal d') (dec left) left) (inc walked)))))))
+
+(defn- next-business-day
+  "`d` itself when it is a business day of `cal`, else the next one;
+  nil past the walk's cap."
+  [cal ^LocalDate d]
+  (loop [^LocalDate d d walked 0]
+    (cond (business-day cal d) d
+          (>= walked business-walk-cap) nil
+          :else (recur (.plusDays d 1) (inc walked)))))
+
+(defn- zoned-plus
+  "An instant moved by a Period: the same local time that many calendar
+  days later in the governing calendar's zone — unknown with no
+  calendar, never UTC by accident."
+  [scope ^Instant i ^Period p sign]
+  (let [c (calendar-in scope)]
+    (if (unknown? c)
+      unknown
+      (let [z (.atZone i ^ZoneId (:zone c))]
+        (.toInstant ^ZonedDateTime (if (neg? (long sign)) (.minus z p) (.plus z p)))))))
+
+(defn- business-walk
+  "A date moved by (business-days n) on the governing calendar."
+  [scope d b sign]
+  (let [c (calendar-in scope)]
+    (if (unknown? c) unknown (plus-business-days c d (* (long sign) (long (:n b)))))))
+
+(defn- add2 [a b scope]
   (try
     (cond
+      (or (unknown? a) (unknown? b)) unknown
       (or (nil? a) (nil? b)) nil
+      (or (money/money? a) (money/money? b)) (money-add a b 1)
       (and (number? a) (number? b)) (num-add a b)
       (and (instance? LocalDate a) (instance? Period b)) (.plus ^LocalDate a ^Period b)
       (and (instance? Period a) (instance? LocalDate b)) (.plus ^LocalDate b ^Period a)
       (and (instance? Period a) (instance? Period b)) (.plus ^Period a ^Period b)
+      (and (instance? Instant a) (instance? Duration b)) (.plus ^Instant a ^Duration b)
+      (and (instance? Duration a) (instance? Instant b)) (.plus ^Instant b ^Duration a)
+      (and (instance? Duration a) (instance? Duration b)) (.plus ^Duration a ^Duration b)
+      ;; calendar days on an instant, and business days on a date,
+      ;; ask the governing calendar (spec §2, §3)
+      (and (instance? Instant a) (instance? Period b)) (zoned-plus scope a b 1)
+      (and (instance? Period a) (instance? Instant b)) (zoned-plus scope b a 1)
+      (and (instance? LocalDate a) (instance? BusinessDays b)) (business-walk scope a b 1)
+      (and (instance? BusinessDays a) (instance? LocalDate b)) (business-walk scope b a 1)
+      ;; a date has no hour
       :else nil)
     (catch Exception _ nil)))   ; calendar overflow is a missing value, not a crash
 
-(defn- sub2 [a b]
+(defn- sub2 [a b scope]
   (try
     (cond
       (or (nil? a) (nil? b)) nil
+      (or (money/money? a) (money/money? b)) (money-add a b -1)
       (and (number? a) (number? b)) (num-sub a b)
       (and (instance? LocalDate a) (instance? Period b)) (.minus ^LocalDate a ^Period b)
+      (and (instance? Period a) (instance? Period b)) (.minus ^Period a ^Period b)
+      (and (instance? Instant a) (instance? Duration b)) (.minus ^Instant a ^Duration b)
+      (and (instance? Duration a) (instance? Duration b)) (.minus ^Duration a ^Duration b)
+      (and (instance? Instant a) (instance? Period b)) (zoned-plus scope a b -1)
+      (and (instance? LocalDate a) (instance? BusinessDays b)) (business-walk scope a b -1)
       :else nil)
     (catch Exception _ nil)))
 
 (defn- mul2 [a b]
-  (if (and (number? a) (number? b)) (num-mul a b) nil))
+  (cond
+    (and (number? a) (number? b)) (num-mul a b)
+    (and (money/money? a) (number? b)) (money-mul a b)
+    (and (number? a) (money/money? b)) (money-mul b a)
+    :else nil))
 
-(defn- whole-days
-  "Numeric → Period of that many days; nil for non-integral or
-  out-of-range values — the calendar has no fractional day. The whole
+(defn- whole-count
+  "Numeric → that many whole units, a long in int range; nil for
+  non-integral or out-of-range values — the calendar has no fractional
+  day and the clock no fractional hour. The whole
   long family passes (int?, the same boundary scalar-literal? draws):
   JSON decoding hands scope values over as Integer, and evaluation is
   total over JSON-shaped values — (days (var :n)) must mean what
@@ -629,7 +844,7 @@
     (cond
       (int? v)
       (when (<= Integer/MIN_VALUE (long v) Integer/MAX_VALUE)
-        (Period/ofDays (int (long v))))
+        (long v))
       (decimal? v)
       ;; integral means scale ≤ 0 after the strip: stripTrailingZeros
       ;; turns 10M into 1E+1 (scale -1), and a negative scale is as
@@ -638,9 +853,32 @@
         (when-not (pos? (.scale s))
           (let [l (.longValueExact s)]
             (when (<= Integer/MIN_VALUE l Integer/MAX_VALUE)
-              (Period/ofDays (int l))))))
+              l))))
       :else nil)
     (catch ArithmeticException _ nil)))
+
+(defn- span-of
+  "(days n) (weeks n) (months n) (years n) → a Period; (hours n)
+  (minutes n) → a Duration. nil where whole-count is nil, or where the
+  span overflows (a week count past the int range)."
+  [op v]
+  (when-some [n (whole-count v)]
+    (try
+      (case op
+        days    (Period/ofDays (int n))
+        weeks   (Period/ofWeeks (int n))
+        months  (Period/ofMonths (int n))
+        years   (Period/ofYears (int n))
+        hours   (Duration/ofHours n)
+        minutes (Duration/ofMinutes n))
+      (catch ArithmeticException _ nil))))
+
+(defn- days-between
+  "Whole days from date a to date b, negative when b is earlier; nil
+  unless both are dates."
+  [a b]
+  (when (and (instance? LocalDate a) (instance? LocalDate b))
+    (.between ChronoUnit/DAYS ^LocalDate a ^LocalDate b)))
 
 (declare evaluate)
 
@@ -775,6 +1013,59 @@
         iso   (str i)))
     x))
 
+(defn- local-date-of
+  "(local-date x): an instant's date in the governing calendar's zone;
+  a date is its own date, anything else nil."
+  [x scope]
+  (cond (unknown? x) unknown
+        (instance? LocalDate x) x
+        :else (when-some [i (instant-of x)]
+                (let [c (calendar-in scope)]
+                  (if (unknown? c)
+                    unknown
+                    (.toLocalDate (.atZone i ^ZoneId (:zone c))))))))
+
+(defn- working
+  "True when the window [from, to) falls on business days of `cal` —
+  inside its hours when it keeps them, so on one day — in its zone
+  (spec §5). A window that ends before it starts is not working."
+  [cal ^Instant from ^Instant to]
+  (let [^ZoneId zone (:zone cal)
+        a (.atZone from zone)
+        b (.atZone to zone)]
+    (cond
+      (.isBefore to from) false
+
+      (:hours cal)
+      (let [{open :from close :to} (:hours cal)
+            day (.toLocalDate a)]
+        (and (= day (.toLocalDate b))
+             (business-day cal day)
+             (not (.isBefore (.toLocalTime a) ^LocalTime open))
+             (not (.isAfter (.toLocalTime b) ^LocalTime close))))
+
+      :else
+      ;; no hours is the whole day: every day the window touches, the
+      ;; day it ends at midnight on left out
+      (let [first-day (.toLocalDate a)
+            last-day (if (.isAfter to from)
+                       (.toLocalDate (.atZone (.minusNanos to 1) zone))
+                       first-day)
+            span (.between ChronoUnit/DAYS first-day last-day)]
+        (and (<= span business-walk-cap)
+             (every? #(business-day cal (.plusDays first-day (long %)))
+                     (range (inc span))))))))
+
+(defn- working-days
+  "True when every day of the whole-day window [from, to] is a business
+  day of `cal` — a :grain :day window, so its hours do not enter (spec
+  §5). A window that ends before it starts is not working."
+  [cal ^LocalDate from ^LocalDate to]
+  (let [span (.between ChronoUnit/DAYS from to)]
+    (and (<= 0 span business-walk-cap)
+         (every? #(business-day cal (.plusDays from (long %)))
+                 (range (inc span))))))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -812,12 +1103,64 @@
           (cond (unknown? v) unknown
                 (map? v) (clojure.core/get v (second args))))
 
+        money (money/money (first args) (second args))
+        (amount currency)
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) v
+                (money/money? v) (clojure.core/get v (keyword op))))
+        ;; to the currency's minor unit, in the house's rounding
+        round
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) v
+                (money/money? v)
+                (or (money/round v (:rounding scope))
+                    (Unknown. (str (:currency v) " has no minor unit this engine knows, so it does not round")))))
+
         date
         (try (LocalDate/parse ^String (first args))
              (catch Exception _ nil))
 
-        days    (let [v (evaluate (first args) scope)]
-                  (if (unknown? v) unknown (whole-days v)))
+        (days weeks months years hours minutes)
+        (let [v (evaluate (first args) scope)]
+          (if (unknown? v) unknown (span-of op v)))
+        days-between
+        (let [a (evaluate (first args) scope)
+              b (evaluate (second args) scope)]
+          (if (or (unknown? a) (unknown? b)) unknown (days-between a b)))
+
+        ;; the house's day and its calendar (spec §2, §3), through the
+        ;; scope's :calendar hook; unknown without one
+        today (today-in (:now scope) (:calendar scope))
+        local-date (local-date-of (evaluate (first args) scope) scope)
+        business-days
+        (let [v (evaluate (first args) scope)]
+          (if (unknown? v) unknown (some-> (whole-count v) ->BusinessDays)))
+        business-day?
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) unknown
+                (not (instance? LocalDate v)) false
+                :else (let [c (calendar-in scope)]
+                        (if (unknown? c) unknown (business-day c v)))))
+        next-business-day
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) unknown
+                (not (instance? LocalDate v)) nil
+                :else (let [c (calendar-in scope)]
+                        (if (unknown? c) unknown (next-business-day c v)))))
+        ;; (working? from to ref): a nil ref is the default calendar, a
+        ;; ref that names no row is unknown; two dates are a day window
+        working?
+        (let [from (evaluate (first args) scope)
+              to (evaluate (second args) scope)
+              ref (when (= 3 (count args)) (evaluate (nth args 2) scope))]
+          (cond
+            (some unknown? [from to ref]) unknown
+            (and (instance? LocalDate from) (instance? LocalDate to))
+            (let [c (calendar-in scope ref)]
+              (if (unknown? c) unknown (working-days c from to)))
+            (not (and (instant-of from) (instant-of to))) false
+            :else (let [c (calendar-in scope ref)]
+                    (if (unknown? c) unknown (working c (instant-of from) (instant-of to))))))
         date-of (let [v (evaluate (first args) scope)]
                   (if (instance? Instant v)
                     (.toLocalDate (.atOffset ^Instant v ZoneOffset/UTC))
@@ -836,6 +1179,7 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (= op '=) (val-eq a b)
             :else (clojure.core/not (val-eq a b))))
 
@@ -844,6 +1188,7 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (or (nil? a) (nil? b)) false
             :else
             (if-some [c (val-compare a b)]
@@ -856,23 +1201,28 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (or (nil? a) (nil? b)) false
             :else
             (if-some [c (val-compare a b)]
               (case op > (pos? (long c)) >= (clojure.core/not (neg? (long c))))
               false)))
 
-        (+ - * min max abs)
+        (+ - * / min max abs)
         (let [all (mapv #(evaluate % scope) args)]
-          (if (some unknown? all)
-            unknown
+          (if-some [u (first (filter unknown? all))]
+            u
             (case op
-              + (reduce add2 all)
+              + (reduce #(add2 %1 %2 scope) all)
               - (if (= 1 (count all))
                   (let [v (first all)]
-                    (when (number? v) (num-sub 0 v)))
-                  (sub2 (first all) (second all)))
+                    (cond (number? v) (num-sub 0 v)
+                          (money/money? v)
+                          (money/->Money (.negate ^java.math.BigDecimal (:amount v))
+                                         (:currency v))))
+                  (sub2 (first all) (second all) scope))
               * (reduce mul2 all)
+              / (div2 (first all) (second all))
               (min max)
               (let [vs (filterv some? all)]
                 (when (and (seq vs) (every? number? vs))
@@ -947,6 +1297,7 @@
   :uses-self; a form that asks no such thing carries none of them.
   A form that follows adds :follows, the kinds written into its follows;
   one that asks exists/none/count-rows adds :queries, the kinds asked.
+  A calendar reader adds :uses-calendar, and (today) :uses-today.
   Judges and reads are derived from the tree, never sniffed."
   [form]
   (letfn [(walk [form acc]
@@ -964,6 +1315,9 @@
                   did   (update acc :doors (fnil into #{}) args)
                   me    (assoc acc :uses-me true)
                   self  (assoc acc :uses-self true)
+                  today (assoc acc :uses-today true :uses-calendar true)
+                  (local-date business-days business-day? next-business-day working?)
+                  (reduce #(walk %2 %1) (assoc acc :uses-calendar true) args)
                   (date it) acc
                   (exists none count-rows)
                   (if (vector? (first args))
@@ -989,7 +1343,7 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now doors uses-me uses-self queries]} (info form)
+  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self queries]} (info form)
         undeclared (remove over vars)]
     (cond-> []
       (or (seq doors) uses-me uses-self)
@@ -1004,6 +1358,8 @@
                  (pr-str (sort inputs))))
       uses-now
       (conj "derived expressions bind the clock as (var :now) via a declared clock input, not (now)")
+      uses-today
+      (conj "derived expressions bind the house's day as (var :today) via :today in :over, not (today)")
       (seq undeclared)
       (conj (str "expression reads inputs the declaration never named: "
                  (pr-str (sort undeclared)))))))
@@ -1109,3 +1465,78 @@
       {:kind kind
        :where (nth (normalize (list 'exists [c kind where])) 2)
        :pred (norm (debruijn pred {c 0} 1))})))
+
+;; ── next-free: the next open window, evidence-only (calendar §5) ─────
+
+(def ^:private next-free-cap
+  "How many business days a next-free scan walks (calendar spec §5)."
+  30)
+
+(defn next-free
+  "The refused window [from, to) and where it could go: {:zone :day
+  :holiday} — the calendar's zone, the window's own day there and that
+  day's holiday when it is one — with :from and :to the next window as
+  long that `free?` admits, scanned over at most 30 business days of
+  the calendar `ref` names (no ref: the default), from that day on. A
+  business day's candidates start at its opening hour and step by the
+  window's length inside its hours, or keep the window's time of day
+  when the calendar keeps none; only one later than the window counts.
+  nil when the scope cannot say (no calendar hook, no window). Asked
+  only when a guard refuses, never in a verdict."
+  [scope from-form to-form ref-form free?]
+  (let [from (instant-of (evaluate from-form scope))
+        to (instant-of (evaluate to-form scope))
+        ref (when (some? ref-form) (evaluate ref-form scope))
+        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+    (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
+      (let [^ZoneId zone (:zone c)
+            len (Duration/between ^Instant from ^Instant to)
+            start (.atZone ^Instant from zone)
+            day (.toLocalDate start)
+            starts (fn [^LocalDate d]
+                     (if-some [{open :from close :to} (:hours c)]
+                       (let [end (.atZone (.atTime d ^LocalTime close) zone)]
+                         (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
+                                     (iterate #(.plus ^ZonedDateTime % len)
+                                              (.atZone (.atTime d ^LocalTime open) zone))))
+                       [(.atZone (.atTime d (.toLocalTime start)) zone)]))
+            found (loop [^LocalDate d day left next-free-cap walked 0]
+                    (cond
+                      (or (zero? left) (>= walked business-walk-cap)) nil
+                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                      :else (or (some (fn [^ZonedDateTime z]
+                                        (let [s (.toInstant z)]
+                                          (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
+                                      (starts d))
+                                (recur (.plusDays d 1) (dec left) (inc walked)))))]
+        (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
+          found (assoc :from found :to (.plus ^Instant found len)))))))
+
+(defn- date-of
+  "A date, or its ISO wire string, as a LocalDate; anything else nil."
+  ^LocalDate [x]
+  (cond (instance? LocalDate x) x
+        (string? x) (try (LocalDate/parse ^String x) (catch Exception _ nil))))
+
+(defn next-free-days
+  "next-free over a :grain :day window, whole days [from, to]: {:zone
+  :day :holiday} as next-free answers them, with :from and :to the next
+  window of as many days that `free?` admits, its first day a business
+  day after `from`, scanned over at most 30 business days of the
+  calendar `ref` names (no ref: the default). nil when the scope cannot
+  say. Asked only when a guard refuses, never in a verdict."
+  [scope from-form to-form ref-form free?]
+  (let [from (date-of (evaluate from-form scope))
+        to (date-of (evaluate to-form scope))
+        ref (when (some? ref-form) (evaluate ref-form scope))
+        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+    (when (and (some? c) (not (unknown? c)) (not (.isBefore ^LocalDate to ^LocalDate from)))
+      (let [span (- (.toEpochDay ^LocalDate to) (.toEpochDay ^LocalDate from))
+            found (loop [^LocalDate d (.plusDays ^LocalDate from 1) left next-free-cap walked 0]
+                    (cond
+                      (or (zero? left) (>= walked business-walk-cap)) nil
+                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                      (free? d (.plusDays d span)) d
+                      :else (recur (.plusDays d 1) (dec left) (inc walked))))]
+        (cond-> {:zone (:zone c) :day from :holiday (get (:holidays c) from)}
+          found (assoc :from found :to (.plusDays ^LocalDate found span)))))))

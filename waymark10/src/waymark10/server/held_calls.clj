@@ -254,12 +254,17 @@
 
 (defn- an-approver?
   "`an-approver-decides`'s reading: the person a held seat call was
-  held for, or a holder of the approver role for a held tool call."
+  held for, a holder of the role a declarative hold named ((hold \"…\"
+  :for :role \"x\")), or a holder of the approver role for a held tool
+  call."
   [row p]
-  (let [owner (some-> (get-in row [:data :owner]) str not-empty)]
-    (if (some? (get-in row [:data :door]))
-      (the-owner? p owner)
-      (contains? (:roles p) approver-role))))
+  (let [owner (some-> (get-in row [:data :owner]) str not-empty)
+        role (some-> (get-in row [:data :door :for_role]) str not-empty)]
+    (cond
+      role (and (not (str/starts-with? (str (:id p)) "seat:"))
+                (contains? (set (map str (:roles p))) role))
+      (some? (get-in row [:data :door])) (the-owner? p owner)
+      :else (contains? (:roles p) approver-role))))
 
 (g/defguard an-approver-decides
   {:reads [:principal]
@@ -647,11 +652,15 @@
     ;; tool call: it is a write a delegating seat's sitter asked for,
     ;; and the allow replays it at this door, as that sitter, with
     ;; `forward` as its body. `author` is the seat it was written for.
+    ;; `for_role` is the role a (hold "…" :for :role "x") waits on: a
+    ;; member holding it answers, in place of the owner.
     [:door {:optional true
             :x-display {:label "The door"
                         :help "The kind, the action and the row a held seat call would write, and the seat that asked."}}
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
+              [:for_role {:optional true :x-display {:raw true :label "Waits on the role"}}
+               [:maybe [:string {:min 1 :max 64}]]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
               [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
@@ -780,6 +789,8 @@
                         :help "The kind, the action and the row a held seat call would write, and the seat that asked."}}
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
+              [:for_role {:optional true :x-display {:raw true :label "Waits on the role"}}
+               [:maybe [:string {:min 1 :max 64}]]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
               [:id {:optional true :x-ref {:kind-from :kind}
                     :x-display {:raw true :label "Row"}}
@@ -1011,14 +1022,15 @@
   hold writes no `input`, so a patch's hold stays small, and every
   reader of a door hold's call reads `forward`. The engine writes the row
   (`the-power-door-mints-it`), `caller` names the author's sitter and
-  `owner` the one person who may answer it.
+  `owner` the one person who may answer it — or, when the hold names a
+  `for_role` ((hold \"…\" :for :role \"x\")), any member holding that role.
 
   A FENCED door keeps what its edit is about beside `if_match`: for a
   door whose edit declares a prefill list, one digest per field as the
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner author why if-match] said :shown}]
+  [eng {:keys [kind action id body caller owner role author why if-match] said :shown}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
@@ -1060,6 +1072,7 @@
                     :door (cond-> {:kind kind :action action}
                             (some-> id str not-empty) (assoc :id (str id))
                             (some-> author str not-empty) (assoc :author (str author))
+                            (some-> role str not-empty) (assoc :for_role (str role))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
              (:cut kept) (assoc :why_cut true)

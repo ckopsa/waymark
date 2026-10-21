@@ -512,20 +512,25 @@
   lends one as :evidence-reads, read only by a refusing guard's
   :evidence fns (g/evaluate), so the envelope names what it found."
   [eng req]
-  (cond-> {:evidence-reads (inv/render-hooks eng)
-           :principal (principal-of req)
-           :now ((:now-fn eng))
-           :services (:services eng)
-           :visibility (visibility-of req)
-           :resources (inv/resources eng)
-           ;; what names the rows a summary line mentions (ticket
-           ;; 2f35a7b5): one instance a request, so a page reads each
-           ;; mentioned row once
-           :summary-refs (ref-summary-hook eng req)
-           ;; the links assembled modules lend core kinds
-           ;; (seams/Linking), gathered once at boot
-           :link-doors (:link-doors eng)}
-    (:probe-reads eng) (merge (inv/render-hooks eng))))
+  (let [reads (inv/render-hooks eng)]
+    (cond-> {:evidence-reads reads
+             ;; the house's calendar (docs/spec-calendar-time.md §6),
+             ;; lent to every probe: a calendar-reading guard is judged
+             ;; on the envelope, and pends only where nothing governs
+             :calendar (:calendar reads)
+             :principal (principal-of req)
+             :now ((:now-fn eng))
+             :services (:services eng)
+             :visibility (visibility-of req)
+             :resources (inv/resources eng)
+             ;; what names the rows a summary line mentions (ticket
+             ;; 2f35a7b5): one instance a request, so a page reads each
+             ;; mentioned row once
+             :summary-refs (ref-summary-hook eng req)
+             ;; the links assembled modules lend core kinds
+             ;; (seams/Linking), gathered once at boot
+             :link-doors (:link-doors eng)}
+      (:probe-reads eng) (merge (inv/render-hooks eng)))))
 
 (defn- with-waiting-on
   "A row's envelope with its `waiting_on` block (ticket 86af9d88): the
@@ -939,6 +944,7 @@
                                       :body body
                                       :caller (:id p)
                                       :owner owner
+                                      :role (get-in d [:evidence :role])
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
                                       :why (:detail d)

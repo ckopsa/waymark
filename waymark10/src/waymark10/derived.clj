@@ -155,16 +155,24 @@
   "Expression facts computed over `data` under an explicit spec map,
   in dependency order — the blast-radius meter's \"this row under
   that law\" read. Total: a missing input flows to a nil fact."
-  [derived data now]
-  (reduce (fn [d [fact spec]]
-            (let [vars (into {}
-                             (map (fn [k]
-                                    [k (if (= k :now) now (get d k))]))
-                             (:over spec))]
-              (assoc d fact (expr/evaluate (:expr spec)
-                                           {:vars vars :now now}))))
-          data
-          (expr-facts* derived)))
+  ([derived data now] (compute-facts derived data now nil))
+  ;; `calendar` is the :calendar hook: :today in :over binds the house's
+  ;; day, and the calendar readers read it; a fact it cannot answer is
+  ;; a missing value, never the unknown sentinel stored
+  ([derived data now calendar]
+   (let [today (delay (let [t (expr/today-in now calendar)]
+                        (when-not (expr/unknown? t) t)))]
+     (reduce (fn [d [fact spec]]
+               (let [vars (into {}
+                                (map (fn [k]
+                                       [k (case k :now now :today @today (get d k))]))
+                                (:over spec))
+                     v (expr/evaluate (:expr spec)
+                                      (cond-> {:vars vars :now now}
+                                        calendar (assoc :calendar calendar)))]
+                 (assoc d fact (when-not (expr/unknown? v) v))))
+             data
+             (expr-facts* derived)))))
 
 (defn materialize
   "Recompute the row's own expression facts into :data — under the
@@ -172,9 +180,10 @@
   derived-law overlay; batch C closes waymark9's v7 deviation for
   expr facts: a grandfathered row's facts recompute under its birth
   law). Total: a missing input flows to a nil fact, never a throw."
-  [rmap row now]
-  (update row :data
-          #(compute-facts (specs-under rmap (:law-revision row)) % now)))
+  ([rmap row now] (materialize rmap row now nil))
+  ([rmap row now calendar]
+   (update row :data
+           #(compute-facts (specs-under rmap (:law-revision row)) % now calendar))))
 
 (defn tampered
   "Derived fields the handler wrote values into that disagree with
@@ -183,11 +192,12 @@
   witness must judge by the same law the write materializes under).
   An aggregate fact the handler moved at all is tampering: its one
   writer is the maintainer, and a handler cannot compute it."
-  [rmap before after now]
+  ([rmap before after now] (tampered rmap before after now nil))
+  ([rmap before after now calendar]
   (let [revision (:law-revision before)
         specs (specs-under rmap revision)
         facts (map first (expr-facts* specs))
-        recomputed (compute-facts specs (:data after) now)]
+        recomputed (compute-facts specs (:data after) now calendar)]
     (-> (into []
               (keep (fn [fact]
                       (let [handler-wrote (get-in after [:data fact])
@@ -200,7 +210,7 @@
                       (when (not= (get-in after [:data fact])
                                   (get-in before [:data fact]))
                         fact)))
-              (keys (aggregate-specs rmap))))))
+              (keys (aggregate-specs rmap)))))))
 
 (defn vars-for
   "The refusal-surface garnish of a fact's spec, evaluated over the

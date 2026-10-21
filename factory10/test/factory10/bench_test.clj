@@ -1050,6 +1050,47 @@
         "a change no train found red is left as the rig said it")
     (is (nil? (with-train-red nil {:data {}})))))
 
+(deftest feedback-carries-the-ops-seats-verdicts-first
+  ;; ticket 954e9d25: the ops seat's verdict and remedy on the change's
+  ;; head ride in the feedback, not only as a GitHub label
+  (let [with-ops-verdicts #'mcp/with-ops-verdicts
+        head "1f0c2d3e4a5b60718293a4b5c6d7e8f901234567"
+        change {:id "c-1" :data {:head_sha head}}
+        run (fn [state verdict & [sha]]
+              {:state state
+               :data {:check_name "test10" :head_sha (or sha head)
+                      :verdict verdict :remedy "Fix the fixture."}})
+        rig {"findings" [{"source" "pipeline" "message" "test10 red"}]
+             "unavailable" []}]
+    (testing "a this_change run shows its remedy first"
+      (let [got (with-ops-verdicts rig change [(run :classified "this_change")])
+            [first-finding :as findings] (get got "findings")]
+        (is (= 2 (count findings)))
+        (is (= "ops-seat" (get first-finding "source")))
+        (is (= "test10: this_change — Fix the fixture."
+               (get first-finding "message")))
+        (is (nil? (get got "note")))))
+    (testing "only infra runs carry the rerun note"
+      (let [note (str (get (with-ops-verdicts rig change
+                                              [(run :classified "infra")
+                                               (run :reclassified "infra")])
+                           "note"))]
+        (is (str/includes? note "rerun"))
+        (is (str/includes? note "stop the sitting"))
+        (is (str/includes? note "Do not stall the ticket"))))
+    (testing "a base_red run carries the pull note"
+      (let [note (str (get (with-ops-verdicts nil change
+                                              [(run :classified "base_red")])
+                           "note"))]
+        (is (str/includes? note "bench.pull"))
+        (is (str/includes? note "Do not stall the ticket"))))
+    (testing "with no classified runs on the head the feedback is unchanged"
+      (is (= rig (with-ops-verdicts rig change [])))
+      (is (= rig (with-ops-verdicts rig change [(run :red nil)])))
+      (is (= rig (with-ops-verdicts rig change
+                   [(run :classified "this_change" "0ld")])))
+      (is (nil? (with-ops-verdicts nil change [(run :superseded nil)]))))))
+
 (deftest feedback-with-no-interrupted-finding-carries-no-rerun-note
   (let [w (world)]
     (is (some? (:feedback (:answer w))))
@@ -2914,12 +2955,13 @@
                                (assoc :version (inc (long (:version row)))))
                            (:version row)))))))
 
-(deftest every-state-but-live-and-retired-waits-on-go-live
+(deftest every-state-but-live-keeps-its-change-unmerged
   ;; ticket b79643fe: the states come from the kind, so `filming` and any
-  ;; state added later are covered.
+  ;; state added later are covered. Ticket e0ff6d71: a retired plan's
+  ;; change is never merge-eligible, so it is held and says why.
   (let [{:keys [eng state change plan] :as w} (simulated-world)
         states (map name (:states (get (inv/resources eng) :org_plan)))
-        ordinary #{"live" "retired"}
+        ordinary #{"live"}
         waits? (fn [] (contains? (#'bench/go-live-waits eng [{:id (str (:id change))}])
                                  (str (:id change))))]
     (is (some #{"filming"} states))
@@ -2930,7 +2972,7 @@
         (is (waits?))
         (is (= 0 (bench/merge-green! eng (atom {}))))
         (is (empty? (calls-of state "bench__merge")))
-        (is (= "org_plan_waits_go_live"
+        (is (= (if (= "retired" s) "org_plan_retired" "org_plan_waits_go_live")
                (get-in (change-row w) [:data :line_why])))))
     (doseq [s ordinary]
       (testing (str "a " s " plan's change is ordinary")

@@ -10,6 +10,8 @@
   one law per kind, one collection URL per plural."
   (:require [waymark10.checks-assembly :as assembly]
             [waymark10.fingerprint :as fp]
+            [waymark10.occupies :as occupies]
+            [waymark10.recurs :as recurs]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -62,12 +64,19 @@
       (registry-err (str "plural " (pr-str p) " is claimed by "
                          (vec (sort (map :kind rs)))
                          " — two kinds cannot share a collection URL"))))
-  (let [reg {:kinds (into (sorted-map) (map (juxt :kind assemble)) resources)}
-        {:keys [warnings]} (assembly/run-all reg)]
+  ;; :occupies writes its guards before any kind is fingerprinted: the
+  ;; derived trees are law, hashed as an authored guard is
+  ;; …and :recurs gives each kind it makes the engine's recurs_from
+  ;; field, law on that kind as those guards are on theirs
+  (let [kinds (-> (into {} (map (juxt :kind identity)) resources)
+                  occupies/derive-kinds
+                  recurs/derive-kinds)
+        reg {:kinds (into (sorted-map) (map (fn [[k r]] [k (assemble r)])) kinds)}
+        {:keys [warnings info]} (assembly/run-all reg)]
     (doseq [w warnings]
       (binding [*out* *err*]
         (println (str "waymark10 usability warning " w))))
-    (vary-meta reg assoc :waymark10/warnings (vec warnings))))
+    (vary-meta reg assoc :waymark10/warnings (vec warnings) :waymark10/info (vec info))))
 
 (defn rdef
   "The assembled definition of one kind, nil when unregistered."
