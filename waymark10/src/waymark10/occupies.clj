@@ -18,7 +18,9 @@
   (build step 9): the next window as long as the refused one, within
   30 business days, in which the resource is working and free — and
   the working guard a remedy that takes the door again at that slot,
-  and the holiday the refused day is.
+  and the holiday the refused day is. On a `:grain :day` window the
+  free guard names it alone: the next run of as many whole days, its
+  first a business day ({slot.day}, no {slot.time}).
 
   A door whose input does not carry a field reads it from the row,
   (data …). Derived at assembly, where every occupier of a resource
@@ -147,14 +149,18 @@
 (defn- next-free
   "(evidence :slot), canonical: the next window as long as the refused
   one in which the resource is working and free, its end as (evidence
-  :slot_ends) — the pred the guards' own trees over the moved window."
+  :slot_ends) — the pred the guards' own trees over the moved window.
+  A :grain :day window steps whole business days, so its pred is the
+  nones alone."
   [kinds o door occs]
   (let [[res from-side to-side] (sides kinds o door)
-        cal (get-in kinds [(:target o) :calendar])]
-    {:next-free {:from from-side :to to-side :resource res :of (:target o)
-                 :calendar (when cal (list 'follow (:target o) res cal))}
-     :pred (list 'and (nones-of o occs res from-side to-side)
-                 (working-form kinds o res from-side to-side))}))
+        cal (get-in kinds [(:target o) :calendar])
+        day? (= :day (:grain o))
+        nones (nones-of o occs res from-side to-side)]
+    {:next-free (cond-> {:from from-side :to to-side :resource res :of (:target o)
+                         :calendar (when cal (list 'follow (:target o) res cal))}
+                  day? (assoc :grain :day))
+     :pred (if day? nones (list 'and nones (working-form kinds o res from-side to-side)))}))
 
 (defn- slot-remedies
   "The refused door again at the slot: the resource as the call gave
@@ -176,25 +182,25 @@
         live (sort (map name (remove (set (:terminal tr)) (:states tr))))
         gname (guard-name (:resource o) "is-free")
         word (resource-word (:resource o))
-        slot? (= :instant (:grain o))
+        day? (= :day (:grain o))
         sentence (or (get-in kinds [(:kind o) :explain gname])
                      (str/join " " (concat
                                     (for [[p b] bs]
                                       (str "That " word " is held from {" b "." (name (:from p))
                                            "} to {" b "." (name (:to p)) "}."))
-                                    (when slot?
-                                      [(str "That " word " is next free {slot.day} at {slot.time}.")]))))
+                                    [(str "That " word " is next free {slot.day}"
+                                          (when-not day? " at {slot.time}") ".")])))
         remedies (vec (for [[p b] bs
                             door (sort (:doors p))
                             :when (some (:in p) (get-in p [:froms door]))]
                         {:door (keyword (name (:kind p)) (name door)) :id (list 'evidence (keyword b))}))
         nones #(nones-of o occs % from-side to-side)]
     (d/sentence-guard gname (d/refuse sentence) (nones res)
-                      (cond-> {:evidence (cond-> {:free (list 'first
-                                                             ['candidate (:target o)
-                                                              (if (seq live) {:state (cons 'in live)} {})]
-                                                             (nones '(get candidate :id)))}
-                                           slot? (assoc :slot (next-free kinds o door occs)))}
+                      (cond-> {:evidence {:free (list 'first
+                                                      ['candidate (:target o)
+                                                       (if (seq live) {:state (cons 'in live)} {})]
+                                                      (nones '(get candidate :id)))
+                                          :slot (next-free kinds o door occs)}}
                         (seq remedies) (assoc :remedies remedies)))))
 
 (defn- working-guard [kinds o door occs]

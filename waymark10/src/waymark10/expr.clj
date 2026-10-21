@@ -1394,3 +1394,32 @@
                                 (recur (.plusDays d 1) (dec left) (inc walked)))))]
         (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
           found (assoc :from found :to (.plus ^Instant found len)))))))
+
+(defn- date-of
+  "A date, or its ISO wire string, as a LocalDate; anything else nil."
+  ^LocalDate [x]
+  (cond (instance? LocalDate x) x
+        (string? x) (try (LocalDate/parse ^String x) (catch Exception _ nil))))
+
+(defn next-free-days
+  "next-free over a :grain :day window, whole days [from, to]: {:zone
+  :day :holiday} as next-free answers them, with :from and :to the next
+  window of as many days that `free?` admits, its first day a business
+  day after `from`, scanned over at most 30 business days of the
+  calendar `ref` names (no ref: the default). nil when the scope cannot
+  say. Asked only when a guard refuses, never in a verdict."
+  [scope from-form to-form ref-form free?]
+  (let [from (date-of (evaluate from-form scope))
+        to (date-of (evaluate to-form scope))
+        ref (when (some? ref-form) (evaluate ref-form scope))
+        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+    (when (and (some? c) (not (unknown? c)) (not (.isBefore ^LocalDate to ^LocalDate from)))
+      (let [span (- (.toEpochDay ^LocalDate to) (.toEpochDay ^LocalDate from))
+            found (loop [^LocalDate d (.plusDays ^LocalDate from 1) left next-free-cap walked 0]
+                    (cond
+                      (or (zero? left) (>= walked business-walk-cap)) nil
+                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                      (free? d (.plusDays d span)) d
+                      :else (recur (.plusDays d 1) (dec left) (inc walked))))]
+        (cond-> {:zone (:zone c) :day from :holiday (get (:holidays c) from)}
+          found (assoc :from found :to (.plusDays ^LocalDate found span)))))))
