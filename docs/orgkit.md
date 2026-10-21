@@ -372,6 +372,9 @@ and who makes each.
 - A day's `:person-allows` is `:yesterday` unless it says `:none`: the
   owner allows each call held the day before, as the director does.
 - `:goal` is the payoff: the rows of that kind in that state.
+- `:card`, on the week or on a day, is a line of text of at most 280
+  characters: the week's (the seed's) opens the first-week scene as a
+  full-screen card, and each day's comes before that day's shots.
 
 `clojure -M -m workqueue10.week <org-dir> [--json]`, from
 `workqueue10/`, plays it headlessly. It boots the org in-process as an

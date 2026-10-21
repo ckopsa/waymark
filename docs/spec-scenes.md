@@ -82,6 +82,13 @@ scene's shots.
 | `wait_for` | `expect`, `within_ms` | `within_ms` is a whole number above zero; `expect` as below |
 | `meanwhile` | a call | as a call: another cast member acts while the camera stays |
 
+A shot may be a card: `{card: "text", hold: {ms: n}}` shows the text
+alone, full screen, for the hold. The text is plain, at most 280
+characters, and may be a list of text and `$day`/`$rows` holes as a
+`say` is. `check` asks that a card has text, that its shot's verb is
+`hold`, and that the hold is at least 1500 ms and 60 ms a word. The
+take lists each card shot with its `card` text and `hold_ms`.
+
 The walk carries three things from one shot to the next: the names
 bound so far and the kind each holds, the kind of the row last opened,
 and the door last tapped. `open` sets the row and clears the door. A
@@ -343,6 +350,10 @@ be performed, as `given N: <why>`, `wearing <key>: <why>` or
 | a target | `<action>` is not a door of `<kind>`. |
 | `type` | `type` names its field as `dialog.field:<name>`. |
 | `hold` | `hold` names `ms`, a whole number above zero. |
+| a card | a `card` has text, and this one is empty. |
+| a card | a `card` is at most 280 characters, and this one has `<n>`. |
+| a card | a `card` is held: its shot's verb is `hold`. |
+| a card | a `card` of `<n>` words is held at least `<min>` ms, and this one is held `<ms>`. |
 | `wait_for` | `wait_for` names `within_ms`, a whole number above zero. |
 | `expect` | `expect` is a map of `envelope` and `screen`. |
 | `expect` | `expect` holds `envelope` and `screen`, and not `<key>`. |

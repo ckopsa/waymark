@@ -28,7 +28,8 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [factorykit.conform :as conform]
-            [waymark10.server.invoke :as inv])
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.scenes :as scenes])
   (:import (java.time LocalDate)
            (java.time.format TextStyle)
            (java.util Locale)))
@@ -180,6 +181,11 @@
       (vec (concat (pop shots) (map (fn [c] {:meanwhile c}) calls) [(peek shots)]))
       shots)))
 
+(defn- card-shot
+  "A full-screen card of `text`, held as long as the scene check asks."
+  [text]
+  {:card text :hold {:ms (scenes/card-ms text)}})
+
 (defn scene
   "The first-week scene of the org whose seed is `seed`, filmed on the
   clone at `clone_url`, made at `head_sha`, its day 1 on `day_one`
@@ -197,9 +203,11 @@
   bind?}, day k's calls played as `meanwhile` shots right before day
   k's caption, and each one's `as` joining the scene's cast after the
   owner. With no `week` the scene is the audit's, and none plays.
+  `week_script`, when given, is the org's week.edn as data: its `:card`
+  opens the scene, and each day's `:card` comes before that day's shots.
   Each shot carries `:id`, its 1-based position in the rendered scene
   (ticket ef24488d), for the take shot that films it to name."
-  [seed {:keys [clone_url head_sha day_one kind brief resources week]}]
+  [seed {:keys [clone_url head_sha day_one kind brief resources week week_script]}]
   (let [t (template)
         owner (the-owner seed)
         day-one (LocalDate/parse (str day_one))
@@ -217,6 +225,8 @@
                 :brief_line (or line "")
                 :day_one (str day-one)}
         roles (get-in t [:template :roles])
+        day-cards (into {} (keep (fn [d] (when (string? (:card d)) [(:day d) (:card d)])))
+                        (:days week_script))
         day (fn [k]
               (let [date (.plusDays day-one (long (dec k)))
                     shots (fill (:day t)
@@ -225,9 +235,10 @@
                                        :weekday (.getDisplayName (.getDayOfWeek date)
                                                                  TextStyle/FULL Locale/ENGLISH)
                                        :next_date (str (.plusDays day-one (long k)))))]
-                (cond-> shots
-                  (get roles k) (update (dec (count shots)) assoc :role (get roles k))
-                  true (with-calls (get (vec week) (dec k))))))
+                (cond->> (cond-> shots
+                           (get roles k) (update (dec (count shots)) assoc :role (get roles k))
+                           true (with-calls (get (vec week) (dec k))))
+                  (get day-cards k) (concat [(card-shot (get day-cards k))]))))
         actors (keep call-as (apply concat week))
         money (the-money seed resources)
         ;; four clauses at most: the ends, the money, then the taps
@@ -244,7 +255,9 @@
                      (seq actors) (update :cast #(vec (distinct (concat % actors)))))
                    :shots (vec (map-indexed
                                 (fn [i shot] (assoc shot :id (inc i)))
-                                (concat (fill (if line (:opening t) (:opening_bare t)) values)
+                                (concat (when (string? (:card week_script))
+                                          [(card-shot (:card week_script))])
+                                        (fill (if line (:opening t) (:opening_bare t)) values)
                                         (mapcat day (range 1 (inc days)))
                                         closing))))
      :clone (fill (:clone t) values)
@@ -438,14 +451,17 @@
   opening on org.edn's :brief when it has one. The audit's run stands up
   no clone, so the clone's url is empty: the director plays the scene on
   the clone it stands up at that head. An org with a week.edn carries
-  its script and sha beside the scene (`week-of`)."
+  its script and sha beside the scene (`week-of`), and the scene shows
+  the script's cards."
   [org-dir head-sha day-one]
-  (let [seed (read-seed org-dir)]
+  (let [seed (read-seed org-dir)
+        week (week-of org-dir)]
     (pr-str (merge (scene seed
                           {:clone_url "" :head_sha head-sha :day_one day-one
                            :brief (read-brief org-dir)
-                           :resources (read-resources org-dir (:org seed))})
-                   (week-of org-dir)))))
+                           :resources (read-resources org-dir (:org seed))
+                           :week_script (:week_script week)})
+                   week))))
 
 (defn -main
   "Print the first-week scene of the org at `org-dir` at `head-sha`, its
