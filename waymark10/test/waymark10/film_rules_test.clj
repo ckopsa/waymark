@@ -721,6 +721,68 @@
                  (update a-take :shots #(into [(call "acme" "record" "create" "moved")] %))
                  "arc"))))))
 
+(def ^:private dress-report
+  "The renderer's report as the director hands it in (ticket a37c3249),
+  under its own names, of a week the clone's clock played before the
+  film."
+  {:film "first-week.webm" :state "done" :url "https://clone.example/"
+   :device "phone" :width 390 :height 844 :image "first-week.png"
+   :lead_in_s 1.2 :shortest_shot "s4" :shortest_shot_s 3.1
+   :pacing {:summary "even"}
+   :scene {:first_week true :clock_days true}
+   :shots (mapv (fn [beat]
+                  (cond-> {:shot beat :id (str "s" beat) :ok true :pressed []
+                           :expects nil :still (str "still-" beat ".png") :why ""}
+                    (= 3 beat) (assoc :role "friction")
+                    (= 6 beat) (assoc :role "turn")
+                    (= 9 beat) (assoc :role "payoff")))
+                (range 1 11))
+   :stats {:webm_bytes 1200000 :mp4_bytes 900000 :duration_s 48.2 :played_ms 48200
+           :content_box {:width 390 :height 820 :x 0 :y 12}
+           :phases {} :card_s 2.0 :take "9d6c3b1a"}
+   :scorecard {:verdict "red"
+               :lines ["miss fail chrome-leaks: 51 against = 0"
+                       "miss warn dead-air: 1.3 against <= 0.8"
+                       "unmeasured arc: needs shot.goal_state"]}
+   :take {:beats 10
+          :lines ["1 · Example Landscaping: A six-person landscaping business."
+                  "2 · Monday. Hedge lead came in."
+                  "3 · Tuesday. Acme Robotics went to qualified."
+                  "4 · Wednesday. A quiet day."
+                  "5 · Thursday. Acme was chased for its records."
+                  "6 · Friday. A person was asked to sign off on Yard study."
+                  "7 · Saturday. Yard study was drawn."
+                  "8 · Sunday. Yard study was delivered."
+                  "9 · That was the week: 1 study delivered. Merge to make it real."
+                  "10"]
+          :measured "dead air 1.3 s in 1 spans; longest hold 6.3 s on beat 6"}})
+
+(deftest the-renderer's-report-is-read-by-its-own-names
+  (let [answer (film-rules/judge film-rules/seed-rules dress-report)]
+    (testing "the first week's checks come out measured"
+      (doseq [name' ["quiet-days" "busy-week" "chrome-leaks" "frame-fill" "asked-person"
+                     "week-arc" "asks-the-person" "no-bare-list" "caption-not-list"]]
+        (is (#{"pass" "miss"} (:verdict (rule-in answer name'))) name'))
+      (is (not-any? #{"quiet-days" "busy-week" "chrome-leaks" "frame-fill" "asked-person"}
+                    (:unmeasured answer))))
+    (testing "by the report's names"
+      (is (== 51 (:value (rule-in answer "chrome-leaks"))))
+      (is (== 1.3 (:value (rule-in answer "dead-air"))))
+      (is (< 0.97 (:value (rule-in answer "frame-fill")) 0.98))
+      (is (== 1 (:value (rule-in answer "quiet-days"))))
+      (is (== 6 (:value (rule-in answer "busy-week"))))
+      (is (== 1 (:value (rule-in answer "asked-person"))))
+      (is (== 1 (:value (rule-in answer "asks-the-person"))))
+      (is (== 3 (:value (rule-in answer "week-arc")))))
+    (testing "a field the take carries under its own name is kept"
+      (is (== 0 (:value (rule-in (film-rules/judge film-rules/seed-rules
+                                                   (assoc dress-report :film {:chrome_leaks 0}))
+                                 "chrome-leaks")))))
+    (testing "a week the clock did not mark still wants its calls"
+      (let [answer (film-rules/judge film-rules/seed-rules
+                                     (update dress-report :scene dissoc :clock_days))]
+        (is (= ["shot.meanwhile"] (:missing (rule-in answer "busy-week"))))))))
+
 (deftest a-take-is-a-first-week-when-its-scene-says-so
   (let [rules (concat week-rules played-rules)
         quiet (mapv #(str % ". A quiet day.") weekdays)

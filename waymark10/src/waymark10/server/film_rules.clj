@@ -196,6 +196,15 @@
        (boolean (or (some :meanwhile shots)
                     (<= week-days (count (day-captions shots)))))))
 
+(defn- clock-played?
+  "True when the take `tk` is a week the clone's clock played before the
+  film (ticket a37c3249): its scene says so, `:scene {:clock_days true}`,
+  and no meanwhile shot is in it. No call of the week is in the take, so
+  its day captions tell the moves."
+  [{:keys [scene shots]}]
+  (boolean (and (map? scene) (true? (:clock_days scene))
+                (not-any? :meanwhile shots))))
+
 (defn- day-caption?
   [shot]
   (let [c (:caption shot)]
@@ -250,6 +259,23 @@
                               (= "person" (word (:held_by m))))))
                    (keep :meanwhile shots)))))
 
+(defn- told-arc
+  "How many of the arc's roles have a shot whose day caption tells a
+  move, not `A quiet day.`, for a week the clone's clock played: a
+  role's day is its own caption when it is a day caption, else the last
+  day caption before it, as `role-days` reads it."
+  [{:keys [shots]}]
+  (let [told (loop [s (seq shots) day nil out #{}]
+               (if-let [shot (first s)]
+                 (let [day (if (day-caption? shot) (:caption shot) day)
+                       role (word (:role shot))]
+                   (recur (next s) day
+                          (cond-> out
+                            (and role day (not (str/ends-with? day "A quiet day.")))
+                            (conj role))))
+                 out))]
+    (count (filter told roles))))
+
 (def ^:private film-readers
   "Metric → how it is read from the whole take."
   {"frame_fill" (fn [{:keys [film]}]
@@ -263,8 +289,10 @@
    "asked_person" (partial days-that #(str/includes? % "was asked"))
    "week_bare_lists" (partial days-that bare-list?)
    "busy_days" (partial days-that #(not (str/ends-with? % "A quiet day.")))
-   "arc_moves" arc-moves
-   "person_asks" person-asks})
+   "arc_moves" #(if (clock-played? %) (told-arc %) (arc-moves %))
+   "person_asks" #(if (clock-played? %)
+                    (days-that (fn [c] (str/includes? c "was asked")) %)
+                    (person-asks %))})
 
 (def ^:private shot-readers
   "Metric → how it is read from one shot of the take."
@@ -676,6 +704,12 @@
 (def ^:private day-needs
   [["shot.caption" #(some? (seq (day-captions (:shots %))))]])
 
+(defn- clock-captioned?
+  "True unless the take `tk` is a week the clock played with no day
+  caption: such a week's calls are read from its captions."
+  [tk]
+  (or (not (clock-played? tk)) (some? (seq (day-captions (:shots tk))))))
+
 (def ^:private film-needs
   "Metric → the fields of the take it is read from, each with how to
   tell that the take carries it."
@@ -695,8 +729,10 @@
    "asked_person" day-needs
    "week_bare_lists" day-needs
    "busy_days" day-needs
-   "arc_moves" [["film.kind" #(some? (word (get-in % [:film :kind])))]]
-   "person_asks" []})
+   "arc_moves" [["film.kind" #(or (clock-played? %)
+                                  (some? (word (get-in % [:film :kind]))))]
+                ["shot.caption" clock-captioned?]]
+   "person_asks" [["shot.caption" clock-captioned?]]})
 
 (def ^:private shot-needs
   "Metric → the fields of one shot it is read from, each with how to
@@ -843,6 +879,9 @@
        {:verdict "unscored"}
        ;; a first week is never unscored by them (ticket 179f7824): a take
        ;; short of a played week is unmeasured, and so missed by default
+       ;; a week the clone's clock played before the film carries no call:
+       ;; its day captions tell the moves (ticket a37c3249)
+       (and (played-metrics metric) (clock-played? tk)) (judge-film rule tk)
        (and (played-metrics metric) (not (week? tk)))
        {:verdict "unmeasured" :missing ["shot.meanwhile"]}
        ;; a week no meanwhile shot played, as an older render's: the rule
@@ -853,6 +892,78 @@
        (contains? film-readers metric) (judge-film rule tk)
        (contains? run-readers metric) (judge-runs rule tk)
        :else {:verdict "unmeasured" :missing []}))))
+
+;; The director hands in the renderer's report (ticket a37c3249), whose
+;; names are its own: the frame is its top-level `width` and `height`,
+;; the content box `stats.content_box` {width height x y}, each beat's
+;; caption a line `<beat> · <caption>` of `take.lines`, and what the
+;; renderer measured a line of `scorecard.lines`, as `miss fail
+;; chrome-leaks: 51 against = 0`. `reported` reads them into the take's
+;; names; a field the take carries under its own name is kept.
+
+(defn- box
+  "A box or a frame as the take spells it, {:w :h}, read from the
+  report's {:width :height} as well."
+  [b]
+  (when (map? b)
+    (cond-> b
+      (nil? (:w b)) (assoc :w (:width b))
+      (nil? (:h b)) (assoc :h (:height b)))))
+
+(defn- scored
+  "The number the report's scorecard line for the rule `rule-name`
+  gives, or nil."
+  [tk rule-name]
+  (let [lines (get-in tk [:scorecard :lines])
+        re (re-pattern (str "(?:^|\\s)" (java.util.regex.Pattern/quote rule-name)
+                            ":\\s*(-?\\d+(?:\\.\\d+)?)(?:\\s|$)"))]
+    (when (sequential? lines)
+      (some #(when (string? %) (some-> (re-find re %) second bigdec)) lines))))
+
+(defn- beat-captions
+  "The report's `take.lines` as beat → caption; a bare beat has none."
+  [tk]
+  (let [lines (get-in tk [:take :lines])]
+    (into {}
+          (keep (fn [line]
+                  (when (string? line)
+                    (let [[beat caption] (str/split line #" · " 2)]
+                      (when-not (str/blank? caption)
+                        [(str/trim beat) caption])))))
+          (when (sequential? lines) lines))))
+
+(defn- captioned
+  "`shots`, each with its beat's caption from `captions` where it
+  carries none: a shot's beat is its `shot`, else its place counted
+  from 1."
+  [shots captions]
+  (if (empty? captions)
+    shots
+    (vec (map-indexed (fn [i s]
+                        (if-some [c (when (and (map? s) (nil? (:caption s)))
+                                      (get captions (str (if (some? (:shot s)) (:shot s) (inc i)))))]
+                          (assoc s :caption c)
+                          s))
+                      shots))))
+
+(defn- reported
+  "The take `tk` with what the renderer's report carries under its own
+  names read into the take's (ticket a37c3249)."
+  [tk]
+  (let [stats (if (map? (:stats tk)) (:stats tk) {})
+        film (if (map? (:film tk)) (:film tk) {})
+        fill (fn [m k v] (if (and (nil? (get m k)) (some? v)) (assoc m k v) m))
+        number (fn [& vs] (first (filter number? vs)))]
+    (assoc tk
+           :film (-> film
+                     (fill :frame (when (number? (:width tk))
+                                    {:w (:width tk) :h (:height tk)}))
+                     (fill :content_box (box (:content_box stats)))
+                     (fill :chrome_leaks (number (:chrome_leaks stats)
+                                                 (scored tk "chrome-leaks")))
+                     (fill :dead_air_s (number (:dead_air_s stats)
+                                               (scored tk "dead-air"))))
+           :shots (captioned (:shots tk) (beat-captions tk)))))
 
 (defn judge
   "The take `tk` scored against `rules` (each a rule's data), in order
@@ -869,7 +980,7 @@
   `unmeasured` says what it counts as, `miss` or `pass`."
   [rules tk]
   (let [tk (if (map? tk) tk {})
-        tk (assoc tk :shots (if (sequential? (:shots tk)) (vec (:shots tk)) []))
+        tk (reported (assoc tk :shots (if (sequential? (:shots tk)) (vec (:shots tk)) [])))
         judged (mapv #(judge-rule % tk) (sort-by (comp str :name) rules))
         missed (filter #(= "miss" (:verdict %)) judged)]
     {:verdict (cond (some #(= "fail" (:severity %)) missed) "red"

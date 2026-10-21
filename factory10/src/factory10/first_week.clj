@@ -268,6 +268,27 @@
       (assoc tk :scene (assoc (if (map? (:scene tk)) (:scene tk) {}) :first_week true))
       tk)))
 
+(defn- clock-days?
+  "True when the scene `doc` tells its days by a `$day` hole over the
+  clone's clock window, as the template's day shot does."
+  [doc]
+  (boolean (some (fn [x]
+                   (when (map? x)
+                     (let [h (get x "$day")
+                           w (when (map? h) (or (get h :window) (get h "window")))]
+                       (= "clock" (when (or (string? w) (keyword? w)) (name w))))))
+                 (tree-seq coll? seq doc))))
+
+(defn clocked
+  "The take `tk` marked `:scene {:clock_days true}` when the plan's scene
+  `scene-text`, edn text, tells its days by the clone's clock (ticket
+  a37c3249): the week may be played before the film, and the film rules
+  then read its moves from the day captions. `tk` as given otherwise."
+  [tk scene-text]
+  (if (and (map? tk) (clock-days? (read-scene scene-text)))
+    (assoc tk :scene (assoc (if (map? (:scene tk)) (:scene tk) {}) :clock_days true))
+    tk))
+
 (defn- scene-shots
   "The shots of the plan's scene `scene-text`, edn text; nil when it
   carries none."
