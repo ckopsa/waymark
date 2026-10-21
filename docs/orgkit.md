@@ -388,6 +388,18 @@ never for a refusal: a refusal is part of the report. Nothing renders
 and nothing leaves the process. `orgs/week_fixture` is a week that
 plays a refusal, a hold allowed the next day, and its payoff.
 
+The week is judged three ways, each an error that blocks propose:
+`[week-stalls]`, one for each refused call, naming its day, door and
+guard; `[week-no-ask]` when no call was held for the owner's tap; and
+`[week-no-payoff]` when the goal counts no row by the last day. The
+audit's `org-findings` job plays the week.edn and hands the report to
+the findings pass, which records these findings on the org_plan and
+the compact week as `dry_week`; an org with no week.edn carries
+`[week-missing]`, a warning for now. The bench check
+(`cd workqueue10 && clojure -M:check`) plays and judges the week of
+each org the change touches, so a seat sees the three before it
+submits.
+
 ## Conformance
 
 `factorykit.conform` judges an org the way the engine would:

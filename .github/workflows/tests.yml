@@ -817,6 +817,22 @@ jobs:
           set -uo pipefail
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
             || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
+      # The org's week.edn played headlessly rides the same artifact as
+      # `week_report`, for the forge pass to judge and record (tickets
+      # 7fba2e9b, 62297746). No week.edn, or a week that does not play,
+      # hands null: the pass records [week-missing].
+      - name: week
+        working-directory: workqueue10
+        run: |
+          set -uo pipefail
+          : > "$RUNNER_TEMP/week.json"
+          if [ -f "../orgs/$ORG/resources/$ORG/week.edn" ]; then
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m workqueue10.week "../orgs/$ORG" --json > "$RUNNER_TEMP/week.out" \
+              || echo "workqueue10.week exited $?; the artifact carries no week"
+            # The JSON object is the last line the player prints.
+            tail -n 1 "$RUNNER_TEMP/week.out" > "$RUNNER_TEMP/week.json"
+            jq -e 'type == "object"' "$RUNNER_TEMP/week.json" > /dev/null 2>&1 || : > "$RUNNER_TEMP/week.json"
+          fi
       # Lint keys leave the line out, so a finding keeps its key when code
       # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
       # for repeats of one slug in one file, in line order.
@@ -824,7 +840,8 @@ jobs:
         run: |
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
-             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" '
+             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
+             --rawfile week "$RUNNER_TEMP/week.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -842,6 +859,7 @@ jobs:
             | {($org): (($c[0][$org] // []) + .)}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
+              + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
