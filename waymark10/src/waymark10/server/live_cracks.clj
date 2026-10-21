@@ -1,7 +1,7 @@
 (ns waymark10.server.live-cracks
   "The live cracks audit (ticket 26e51658, part 2 of epic 400609cf): a
   scheduled pass over ROWS, where `waymark10.server.cracks` reads
-  declarations. It names six ways work has stopped with nobody told:
+  declarations. It names seven ways work has stopped with nobody told:
 
   aged          a row whose state has an expected age and that no
                 write has touched for longer
@@ -15,6 +15,10 @@
   puller_away   a pull runner link whose localfire has been away a day
                 while a seat on it has a fire due (LP2). No seat can
                 end it, so it goes to the mayor naming the link's owner
+  recurs_orphan a row a :recurs rule runs for whose :owner names
+                nobody, a retired seat, or a seat that no longer holds
+                the made kind's create door (spec R-4). It goes to the
+                mayor naming the seats that hold that door
 
   Each is filed ONCE, as a draft ticket naming the row, the crack and
   the seats the static audit says can move it (`cracks/movers`). The
@@ -91,6 +95,7 @@
   and files; nothing in it re-throws."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.recurs :as recurs]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
@@ -171,7 +176,7 @@
 (defn- seat-name [seat]
   (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
 
-(defn- age-entry
+(defn age-entry
   "The kind's own `:expected-age` entry for the state, as [entry], or
   nil when it declares none."
   [rdef state]
@@ -559,6 +564,56 @@
             :what (str "It is " state " and the ticket it was born from, " tid
                        ", is " tstate ": nothing will merge or close it.")})))
 
+(defn unowned-recurrences
+  "recurs_orphan: a row a :recurs rule runs for — in one of its :while
+  states, else any state that is not terminal — whose :owner answers no
+  principal, or names a seat that is no longer active, or an active seat
+  whose scope holds no create door of the made kind
+  (docs/spec-calendar-time.md §4, R-4). `seat-ids` is every seat's id
+  in any state, so an owner among them that is not active is a retired
+  seat. An owner who is no seat is a member, whose grant this pass does
+  not read. The key names the rule: two rules of one row are two cracks."
+  [rdefs seat-rows rows seat-ids]
+  (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
+        active (into {} (map (juxt (comp str :id) identity)) seat-rows)
+        seat-ids (into #{} (map str) seat-ids)]
+    (for [rdef (sort-by (comp text :kind) rdefs)
+          :when (sequential? (:recurs rdef))
+          rule (:recurs rdef)
+          :when (map? rule)
+          :let [kind (text (:kind rdef))
+                rname (text (:name rule))
+                makes (text (:makes rule))
+                doors (or (:create-action-names (get by-kind (keyword makes))) #{:create})
+                holds? (fn [seat] (some #(cracks/holds-door? seat makes %) doors))
+                holders (into [] (comp (filter holds?) (map seat-name)) seat-rows)
+                runs? (if (seq (:while rule))
+                        (into #{} (map text) (:while rule))
+                        (complement (into #{} (map text) (:terminal rdef))))]
+          row (get rows (keyword kind))
+          :let [state (text (:state row))]
+          :when (runs? state)
+          :let [data (into {} (map (fn [[k v]] [(keyword (text k)) (data-value v)])) (:data row))
+                owner (recurs/owner rule data)
+                seat (get active owner)
+                why (cond
+                      (nil? owner) "names no owner"
+                      seat (when-not (holds? seat)
+                             (str "is owned by the seat " (seat-name seat)
+                                  ", whose scope no longer holds " makes "'s create door"))
+                      (contains? seat-ids owner)
+                      (str "is owned by the seat " owner ", which is no longer active"))]
+          :when why]
+      (crack "recurs_orphan" kind (:id row)
+             {:key (str "recurs_orphan:" kind ":" (:id row) ":" rname)
+              :state state
+              :rule rname
+              :owner owner
+              :seats holders
+              :what (str "Its rule " rname ", which makes " makes " rows, " why
+                         ": no one answers for its occurrences, so it arms nothing. Set the"
+                         " owner to a member or seat who holds " makes "'s create door.")}))))
+
 (def ^:private away-seconds
   "How long a pull link's localfire may stay away, while a seat on it has
   a fire due, before the mayor hears of it (LP2)."
@@ -612,8 +667,10 @@
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
   tickets), :withheld (seat id → the walk row ids its sit would not
-  hand), :calendar (the :calendar hook a map age reads) and :now."
-  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now calendar]}]
+  hand), :seat-ids (every seat's id, in any state), :calendar (the
+  :calendar hook a map age reads) and :now."
+  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now calendar
+           seat-ids]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
@@ -623,7 +680,8 @@
                   (refusal-loops seats sittings)
                   (map #(to-its-holder by-kind seats rows tickets %)
                        (orphans (:change by-kind) seats (:change rows) tickets))
-                  (away-links links pools schedules now)))))
+                  (away-links links pools schedules now)
+                  (unowned-recurrences rdefs seats rows seat-ids)))))
 
 (defn- marker
   "The line a crack's ticket ends in, and what a later pass looks for."
@@ -748,10 +806,10 @@
                                  {:limit row-page}))))))
 
 (defn- world
-  "What `find-cracks` reads, from the store. A kind a seat walks, and
-  the ticket and change kinds, are read in every state; any other kind
-  only in the states that have an expected age. Each read is the
-  oldest `row-page` rows of one state."
+  "What `find-cracks` reads, from the store. A kind a seat walks, a
+  kind with :recurs rules, and the ticket and change kinds, are read in
+  every state; any other kind only in the states that have an expected
+  age. Each read is the oldest `row-page` rows of one state."
   [eng]
   (let [resources (inv/resources eng)
         seat-rows (rows-in eng :seat {:state :active} {})
@@ -762,9 +820,11 @@
                                  [(str (:id seat)) s])))
                        seat-rows)
                  {})
-        whole (into #{:ticket :change}
-                    (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
-                    seat-rows)
+        whole (-> #{:ticket :change}
+                  (into (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
+                        seat-rows)
+                  (into (keep (fn [[kind rdef]] (when (seq (:recurs rdef)) kind)))
+                        resources))
         rows (into {}
                    (keep (fn [[kind rdef]]
                            (let [states (if (contains? whole kind)
@@ -783,6 +843,10 @@
                    (:change rows))]
     {:rdefs (vec (vals resources))
      :seats seat-rows
+     :seat-ids (into #{}
+                     (comp (mapcat #(rows-in eng :seat {:state (keyword (text %))} {}))
+                           (map (comp str :id)))
+                     (:states (get resources :seat)))
      :rows rows
      :schedules scheds
      :links (into []

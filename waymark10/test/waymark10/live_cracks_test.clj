@@ -548,6 +548,43 @@
       (is (= 1 (count (filed-for eng row-id))))
       (is (empty? (fires-of eng seat-id))))))
 
+(deftest a-recurring-rule-with-no-owner-or-a-gone-owner-is-a-recurs-orphan
+  (let [contract {:kind :contract
+                  :states [:active :ended]
+                  :terminal #{:ended}
+                  :recurs [{:name :visits :makes :visit :while #{:active}
+                            :owner '(data :manager_id)}]}
+        visit {:kind :visit :states [:planned :done] :terminal #{:done}}
+        planner (seat "planner" {:scope [{:kind "visit" :actions ["create"]}]})
+        idler (seat "idler" {:scope [{:kind "visit" :actions ["finish"]}]})
+        world (fn [state data]
+                {:rdefs [contract visit]
+                 :seats [planner idler]
+                 :seat-ids #{"planner" "idler" "retired"}
+                 :rows {:contract [{:id "k1" :state state :data data}]}
+                 :now now})
+        orphans (fn [state data] (of (live/find-cracks (world state data)) "recurs_orphan"))]
+    (testing "an unset owner is one crack naming the rule and the seats that hold the create door"
+      (let [[c :as cs] (orphans :active {})]
+        (is (= 1 (count cs)))
+        (is (= ["contract" "k1" "visits"] ((juxt :kind :id :rule) c)))
+        (is (= ["planner"] (:seats c)))
+        (is (str/includes? (:what c) "names no owner"))
+        (is (str/includes? (:key c) "visits"))))
+    (testing "a retired seat, or an active one without the create door, is an orphan too"
+      (is (str/includes? (:what (first (orphans :active {:manager_id "retired"}))) "no longer active"))
+      (is (str/includes? (:what (first (orphans :active {:manager_id "idler"}))) "no longer holds")))
+    (testing "an owner holding the door, a member, or a row out of :while is none"
+      (is (empty? (orphans :active {:manager_id "planner"})))
+      (is (empty? (orphans :active {:manager_id "elena"})))
+      (is (empty? (orphans :ended {}))))
+    (testing "the same orphan is not filed twice"
+      (let [w (world :active {})
+            [c] (of (live/unfiled (live/find-cracks w) []) "recurs_orphan")
+            filed {:id "t" :state :draft :data (live/ticket-of c)}]
+        (is (some? c))
+        (is (empty? (of (live/unfiled (live/find-cracks w) [filed]) "recurs_orphan")))))))
+
 (deftest a-pull-link-away-a-day-with-a-fire-due-is-filed-once
   (let [link (fn [seen]
                {:id "link-1" :state :live :created-at (ago 999999)
