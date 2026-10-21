@@ -1980,7 +1980,7 @@
     rmap))
 
 (def ^:private on-event-keys
-  #{:source :type :match :door :input :retry-unmatched-for :tell})
+  #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
 
 (defn- check-on-event!
   "`:on-event` (docs/spec-integrations.md § 3): which outside event
@@ -1988,7 +1988,9 @@
   `:source`, the event's `:type`, a `:match` of this kind's filterable
   fields to the value each must equal, the `:door`, and an `:input` the
   door's own schema judges; `:retry-unmatched-for` is seconds, `:tell`
-  the seats a refusal wakes. The forms are judged and normalized here.
+  the seats a refusal wakes. The option kept, `:via :inbox :makes k`,
+  runs no door and matches no row: the event becomes a row of kind `k`,
+  its `:input` the create's. The forms are judged and normalized here.
   → rmap"
   [rmap]
   (if-some [es (:on-event rmap)]
@@ -2007,20 +2009,29 @@
               (fn [e]
                 (when-not (map? e)
                   (bad {} (str "entry " (pr-str e) " is not a map")))
-                (let [{:keys [source type match door input retry-unmatched-for tell]} e]
+                (let [{:keys [source type match door input retry-unmatched-for tell via makes]} e]
                   (when-some [k (first (remove on-event-keys (keys e)))]
                     (bad e (str "names " k "; an entry takes " (vec (sort on-event-keys)))))
                   (when-not (keyword? source)
                     (bad e ":source names an integration, as a keyword"))
                   (when-not (and (string? type) (not (str/blank? type)))
                     (bad e ":type is the event's type, a string"))
-                  (when-not (contains? (:actions rmap) door)
-                    (bad e (str ":door " (pr-str door) " is not an action of this kind")))
-                  (when-not (and (map? match) (seq match))
-                    (bad e ":match maps one or more fields of this kind to the value each must equal"))
-                  (doseq [f (keys match)]
-                    (when-not (some #{:eq :in} (get-in rmap [:filterable f]))
-                      (bad e (str ":match names " (pr-str f) ", which is not filterable by :eq"))))
+                  (when-not (or (nil? via) (= :inbox via))
+                    (bad e ":via is :inbox, or left out to run the door"))
+                  (if (= :inbox via)
+                    (do (when-not (keyword? makes)
+                          (bad e ":via :inbox :makes the kind the event becomes, as a keyword"))
+                        (when (or door match)
+                          (bad e ":via :inbox runs no :door and needs no :match; it names :makes")))
+                    (do (when (some? makes)
+                          (bad e ":makes is for :via :inbox"))
+                        (when-not (contains? (:actions rmap) door)
+                          (bad e (str ":door " (pr-str door) " is not an action of this kind")))
+                        (when-not (and (map? match) (seq match))
+                          (bad e ":match maps one or more fields of this kind to the value each must equal"))
+                        (doseq [f (keys match)]
+                          (when-not (some #{:eq :in} (get-in rmap [:filterable f]))
+                            (bad e (str ":match names " (pr-str f) ", which is not filterable by :eq"))))))
                   (when-not (or (nil? input) (and (map? input) (every? keyword? (keys input))))
                     (bad e ":input maps the door's input fields to expressions"))
                   (when-not (or (nil? retry-unmatched-for) (pos-int? retry-unmatched-for))
@@ -2028,7 +2039,8 @@
                   (when-not (or (nil? tell)
                                 (and (vector? tell) (every? #(or (string? %) (keyword? %)) tell)))
                     (bad e ":tell is a vector of seat names"))
-                  (cond-> (assoc e :match (into {} (map #(form e %)) match))
+                  (cond-> e
+                    match (assoc :match (into {} (map #(form e %)) match))
                     input (assoc :input (into {} (map #(form e %)) input)))))
               es)))
     rmap))
