@@ -132,10 +132,22 @@
                 :help "The header, the scheme, the timestamp header and its tolerance in seconds. Left empty: X-Signature, hmac-sha256, no timestamp."}}
    [:maybe
     [:map
-     [:header {:optional true} [:maybe [:string {:min 1 :max 120}]]]
-     [:scheme {:optional true} [:maybe [:enum "hmac-sha256"]]]
-     [:timestamp_header {:optional true} [:maybe [:string {:min 1 :max 120}]]]
-     [:tolerance_s {:optional true} [:maybe [:int {:min 0 :max 86400}]]]]]])
+     [:header {:optional true
+               :x-display {:label "The signature header"
+                           :help "The header the system's signature arrives in. Left empty: X-Signature."}}
+      [:maybe [:string {:min 1 :max 120}]]]
+     [:scheme {:optional true
+               :x-display {:label "The scheme"
+                           :help "How the signature is computed over the body. Only hmac-sha256 for now."}}
+      [:maybe [:enum "hmac-sha256"]]]
+     [:timestamp_header {:optional true
+                         :x-display {:label "The timestamp header"
+                                     :help "The header that carries when the system signed. Left empty: no timestamp is checked."}}
+      [:maybe [:string {:min 1 :max 120}]]]
+     [:tolerance_s {:optional true
+                    :x-display {:label "Its tolerance, in seconds"
+                                :help "How old a signed timestamp may be before the delivery is refused as a replay."}}
+      [:maybe [:int {:min 0 :max 86400}]]]]]])
 
 (defn- path-field [k label help]
   [k {:optional true
