@@ -181,6 +181,26 @@
                          :say "Rename it."})
          "shot 3: a shot with `trim` is cut from the film, so it has no `say`."))))
 
+(deftest a-shot-may-show-a-card
+  (let [eng (fresh-engine)
+        end (dec (count (:shots well-formed)))
+        id (write! eng (assoc-in well-formed [:shots end]
+                                 {:card "Monday. Two prospects arrive." :hold {:ms 2000}}))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id)))))
+    (is (str/includes?
+         (why-not eng 3 {:card "" :hold {:ms 2000}})
+         "shot 3: a `card` has text, and this one is empty."))
+    (is (str/includes?
+         (why-not eng 3 {:card "Monday. Two prospects arrive." :hold {:ms 1500}})
+         "shot 3: a `card` of 4 words is held at least 1740 ms, and this one is held 1500."))
+    (is (str/includes?
+         (why-not eng 3 {:card (apply str (repeat 281 "a")) :hold {:ms 9000}})
+         "shot 3: a `card` is at most 280 characters, and this one has 281."))
+    (is (str/includes?
+         (why-not eng 3 {:card "Monday." :tap {:surface "door:rename@$dishes"}})
+         "shot 3: a `card` is held: its shot's verb is `hold`."))))
+
 (deftest a-given-call-is-judged-and-named
   (let [eng (fresh-engine)
         stranger (write! eng (assoc-in well-formed [:given 0 :as] "nobody"))
