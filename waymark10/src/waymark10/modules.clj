@@ -737,8 +737,10 @@
    ;; with a grant a person approves; and its receiver (build step 2),
    ;; POST /api/-/events/<name>, keeping one integration_event receipt
    ;; per event; and its applier (build step 3), which runs the door an
-   ;; `:on-event` names, once, as the integration. The effect runner is
-   ;; a later step. The applier is elected for the walkthroughs'
+   ;; `:on-event` names, once, as the integration; and its outbox (build
+   ;; step 5), one effect_call per call an `:effect` door asks for, kept
+   ;; in the door's own transaction. The effect runner is a later step.
+   ;; The applier is elected for the walkthroughs'
    ;; reason: two engines applying one receipt would race to land it.
    {:module :integrations
     :routes integrations-routes/routes
@@ -746,7 +748,9 @@
               ;; its scope_wanted is read from the app's own law
               :kinds (fn [rs] [(integrations/integration-for rs)])}
              {:kind :integration_event :enroll :always
-              :kinds (fn [_] [integrations/integration-event])}]
+              :kinds (fn [_] [integrations/integration-event])}
+             {:kind :effect_call :enroll :always
+              :kinds (fn [_] [integrations/effect-call])}]
     :hooks [{:hook :integration-applier
              :after [:dispatcher]
              :elected :integration-applier

@@ -178,8 +178,9 @@
   integration_event's `received` is the applier's alone, and its
   `refused`, `unmatched` and `ambiguous` leave only by a person's retry
   or dismiss, which no seeded seat holds (docs/spec-integrations.md § 3,
-  ab9a557c)."
-  {"cadence_only" 2 "no_exit" 81 "remedy_unheld" 34 "silent_person_exit" 20})
+  ab9a557c). effect_call's `pending` is left only by the dispatcher
+  that § 12 step 6 builds, so it has no exit yet (ticket 304d090b)."
+  {"cadence_only" 2 "no_exit" 82 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

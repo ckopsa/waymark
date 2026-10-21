@@ -148,6 +148,7 @@
     rest are named, :awaiting, never failed."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
+            [waymark10.effect :as effect]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
@@ -1149,6 +1150,86 @@
         inner (assoc :inner-writes inner)
         follow (assoc :follow-ups follow)))))
 
+;; ── the outbox (docs/spec-integrations.md § 4, build step 5) ─────────
+
+(declare insert-quiet!)
+
+(def effects-actor
+  "The system actor that lands an effect's answer on the row that asked
+  for it, through the door's hidden `<door>_landed` and `<door>_failed`."
+  (t/principal {:id "waymark10-effects" :type :system :display "Effects"}))
+
+(defn- effect-ask
+  "The call an effect door asks for, over `row` (effect/ask), with the
+  `effect_call` already kept under its power and key as :found, or nil.
+  A key that reads nothing on this row refuses the door: without one
+  the call cannot be made once."
+  [engine tx rdef row defn inp now]
+  (let [call (effect/ask (:effect defn) row inp now)
+        crd (or (get (resources engine) :effect_call)
+                (throw (t/definition-error
+                        (str (name (:kind rdef)) "/" (name (:name defn))
+                             " declares an :effect, and this engine enrolls no effect_call kind"))))]
+    (when (str/blank? (:key call))
+      (throw (p/problem :effect-no-key 409 "No idempotency key"
+                        {:detail (str (name (:name defn))
+                                      "'s :idempotency-key reads nothing on this row, so its call cannot be made once.")})))
+    (assoc call :found
+           (some->> (store/query-rows (:storage engine) tx :effect_call
+                                      {:power (:power call) :idempotency_key (:key call)}
+                                      {:limit 1})
+                    first
+                    (decode-row crd)))))
+
+(defn- effect-probe
+  "What an effect door's rehearsal says of its call (§ 7): the power,
+  the key, and that it would call once — or write a `done` answer
+  again. It calls nothing."
+  [engine tx rdef row defn inp now]
+  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp now)]
+    {:power (:power call)
+     :key (:key call)
+     :says (effect/says call (= :done (:state found)))}))
+
+(defn- outbox!
+  "An effect door's outbox, in the door's own transaction (§ 4): one
+  `pending` effect_call for the call it asks for, unless its power and
+  key already have one. `effect_call` is unique on (power, key). A
+  `done` call is reused: nothing is called, and its answer is written
+  again through `<door>_landed` once this transaction commits; a
+  `failed` one lands its failure again the same way, and a pending one
+  lands on its own."
+  [engine tx rdef row defn inp ctx {:keys [principal correlation-id]}]
+  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp (:now ctx))
+        aname (:name defn)
+        again (fn [door input]
+                (swap! (:follow-sink ctx) conj
+                       {:kind (:kind rdef) :id (str (:id row)) :action door
+                        :input (assoc input :effect_call (str (:id found)))
+                        :opts {:principal effects-actor
+                               :correlation-id correlation-id}}))]
+    (cond
+      (nil? found)
+      (insert-quiet! engine tx :effect_call
+                     (cond-> {:power (:power call)
+                              :idempotency_key (:key call)
+                              :target_kind (name (:kind rdef))
+                              :target (str (:id row))
+                              :door (name aname)
+                              :input (wire/write-json (:input call))
+                              :on_behalf_of (str (or (:id principal) "anonymous"))}
+                       (:why call) (assoc :why (:why call)))
+                     {:principal principal})
+
+      (= :done (:state found))
+      (again (effect/landed-door aname)
+             (let [a (some-> (get-in found [:data :answer]) wire/read-json)]
+               (if (map? a) {:answer a} {})))
+
+      (= :failed (:state found))
+      (again (effect/failed-door aname)
+             {:reason (or (get-in found [:data :reason]) "The call failed.")}))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing."
@@ -1166,7 +1247,12 @@
                                         {:kind (:kind rdef) :resource-id (:id row)}
                                         {:newest-first true :limit 1})]
         {:row row :transition latest :replayed? :unchanged})
-      (land! engine tx rdef row defn inp ctx handled opts))))
+      (do
+        ;; the outbox (§ 4): the call rides this transaction, so the
+        ;; transition and its effect_call commit or roll back together
+        (when (:effect defn)
+          (outbox! engine tx rdef (assoc row :data (:data handled)) defn inp ctx opts))
+        (land! engine tx rdef row defn inp ctx handled opts)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -1596,9 +1682,14 @@
                         ;; move — the states either side and the
                         ;; fields the input names — for the bulk
                         ;; door's per-item `would` (waymark-pywy.4)
-                        dry-run {:valid? true :warnings (not-empty warned)
-                                 :from (:state row) :to (:to defn)
-                                 :fields (vec (sort (map p/wire-key (keys inp))))}
+                        dry-run (cond-> {:valid? true :warnings (not-empty warned)
+                                         :from (:state row) :to (:to defn)
+                                         :fields (vec (sort (map p/wire-key (keys inp))))}
+                                  ;; an effect door says the call it would
+                                  ;; add, and calls nothing (§ 7)
+                                  (:effect defn)
+                                  (assoc :effects [(effect-probe engine tx rdef row defn inp
+                                                                 (:now ctx))]))
                         (seq warned) (throw (p/warning-refused action-name warned))
                         :else (finish! engine tx rdef row defn inp ctx
                                        {:digest digest

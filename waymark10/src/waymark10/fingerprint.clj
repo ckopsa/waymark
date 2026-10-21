@@ -308,7 +308,13 @@
                              (cond-> {"kind" (name (:kind t))
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
-                           (:touches a)))))
+                           (:touches a)))
+    ;; the call a door makes is law (docs/spec-integrations.md § 8):
+    ;; projected only when declared, so every other door hashes as before
+    (:effect a)
+    (assoc "effect" (pr-str (into (sorted-map)
+                                  (map (fn [[k v]] [k (if (map? v) (into (sorted-map) v) v)]))
+                                  (:effect a))))))
 
 (defn- authority-fp
   "The mirror sync-law facet: the document contract, push-on-write,

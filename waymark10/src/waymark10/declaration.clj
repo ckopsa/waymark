@@ -22,6 +22,10 @@
   verify-undo-pointers reads and strips."
   [:from :to :input :guards :safety :display :handler :emits :edit
    :place :bulk :batch :waives :touches :unless :record :undo
+   ;; the call this door makes (docs/spec-integrations.md § 4), judged,
+   ;; normalized and given its two hidden doors at the def site
+   ;; (effect/weave); law, in the fingerprint's action facet
+   :effect
    ;; :engine marks a door the ENGINE owns rather than the household —
    ;; the sync machine's bookkeeping, woven in by mirror/declaration.
    ;; No application writes it. The ending wall (waymark-fp62.4.1)
