@@ -628,7 +628,7 @@ function itemTable(items, opts) {
 function renderCollection(view, doc, hints) {
   const kind = doc.kind.replace("_collection", "");
   const panel = el("div", {class:"panel"});
-  const colName = title(kind) + "s";
+  const colName = titles(kind);
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ", colName));
   panel.append(el("h2", {}, colName));

@@ -42,7 +42,7 @@ function fillDrawer(w, current, active) {
           {class: navTier(r) === "primary" ? "dr-kind" : "dr-second",
            href: "#" + r.href,
            style: current === r.href ? "font-weight:700" : ""},
-          title(kind) + "s"));
+          titles(kind)));
   }
   const engine = entries.filter(([, r]) =>
     navTier(r) === "secondary" && !r.domain);
@@ -50,7 +50,7 @@ function fillDrawer(w, current, active) {
     d.append(el("span", {class: "dr-domain"}, "Engine"));
     for (const [kind, r] of engine)
       d.append(el("a", {class: "dr-second", href: "#" + r.href},
-        title(kind) + "s"));
+        titles(kind)));
   }
 }
 
@@ -79,7 +79,7 @@ async function renderNav(current) {
   for (const [kind, r] of entries)
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
       nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
-        style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
+        style: current === r.href ? "font-weight:700" : ""}, titles(kind)));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && askKind(w))
     nav.append(el("a", {href: "#access", "data-surface": "nav-access",
@@ -97,7 +97,7 @@ async function renderNav(current) {
     if (kind === askKind(w) || navTier(r) === "primary") continue;
     if (r.domain && r.domain !== active) continue;
     nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
-      style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
+      style: current === r.href ? "font-weight:700" : ""}, titles(kind)));
   }
   /* secondary and system kinds fold behind ⋯ — domainless (the
      engine's own) always, a domain's own only while that domain is
@@ -155,7 +155,7 @@ function overflowMenu(tuckedEntries, extra = {}) {
     el("a", {href: "#" + href, role:"menuitem", "data-surface": "nav." + kind,
              onclick: close},
       ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
-      title(kind) + "s");
+      titles(kind));
   const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
   const system = tuckedEntries.filter(([, r]) => navTier(r) === "system");
   /* the jump box needs a way in that is not a keyboard: a phone has
@@ -233,7 +233,7 @@ async function renderHome(view, seq) {
         navTier(r) === "secondary" && r.domain === d);
       if (tucked.length)
         view.append(el("div", {class:"chips"}, tucked.map(([kind, {href}]) =>
-          el("a", {href: "#" + href, class: "link-chip"}, title(kind) + "s"))));
+          el("a", {href: "#" + href, class: "link-chip"}, titles(kind)))));
     }
     const loose = primaries.filter(([, r]) => !r.domain);
     if (loose.length) gridOf(loose);
@@ -390,7 +390,7 @@ async function renderHome(view, seq) {
     if (!list.length) return;
     view.append(el("h3", {class:"sect"}, label),
       el("div", {class:"chips"}, list.map(([kind, {href}]) =>
-        el("a", {href: "#" + href, class: "link-chip"}, title(kind) + "s"))));
+        el("a", {href: "#" + href, class: "link-chip"}, titles(kind)))));
   };
   chipRow("More kinds",
           entries.filter(([, r]) => navTier(r) === "secondary" && !r.domain));
@@ -421,7 +421,7 @@ async function fillDashCard(card, kind, href) {
   } catch { card.remove(); return null; }
   card.textContent = "";
   card.append(el("div", {class:"kc-head"},
-    el("h3", {}, el("a", {href: "#" + href}, title(kind) + "s"))));
+    el("h3", {}, el("a", {href: "#" + href}, titles(kind)))));
   const total = env.data?.total ?? 0;
   if (!total)
     card.append(el("div", {class:"kc-none"}, "none yet"));
@@ -434,7 +434,7 @@ async function fillDashCard(card, kind, href) {
     if (chips.length)
       card.append(el("div", {class:"kc-chips"}, chips.map(([s, n]) =>
         el("a", {class: "chip", href: "#" + mergeParams(href, {state: s}),
-                 title: `${pretty(s)} ${pretty(kind)}s`}, `${pretty(s)} ${n}`))));
+                 title: `${pretty(s)} ${pretty(kindPlural(kind))}`}, `${pretty(s)} ${n}`))));
   }
   const create = env.actions?.create;
   if (create) {

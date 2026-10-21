@@ -121,11 +121,14 @@
   "Move each row account's balance (step 3c) by its entries, inside
   `tx`: the owning row is locked, its field summed onto and saved a
   version on (inv/update-quiet!). Rows lock in one order, so two posts
-  over the same rows wait for each other rather than deadlock."
-  [eng tx entries]
+  over the same rows wait for each other rather than deadlock. The row
+  `settled` names, [kind id], already holds its move: the posting door
+  saved it so (step 4)."
+  [eng tx entries settled]
   (doseq [[[account-kind account-row] es]
           (sort-by (comp str key) (group-by (juxt :account-kind :account-row) entries))
-          :when account-row]
+          :when (and account-row
+                     (not= settled [(name account-kind) (str account-row)]))]
     (when-not (inv/update-quiet!
                eng tx account-kind account-row
                (fn [data]
@@ -149,6 +152,28 @@
                                   :value (account-address account-kind account-row account-name)}]
                                 {})))
 
+(defn- posted
+  "The postings the transition `log-id` wrote, as stored."
+  [eng tx log-id]
+  (store/search-rows (:storage eng) tx :posting
+                     [{:target :data :field :log_id :op := :value (str log-id)}]
+                     {}))
+
+(defn reversals
+  "The entries that take back what the transition `log-id` posted
+  (docs/spec-ledger-money.md §4, `undo`): each of its postings negated,
+  :reverses naming it. Empty when it posted nothing. Step 5's bounds
+  will judge them like any entry."
+  [eng tx log-id]
+  (mapv (fn [{:keys [id data]}]
+          (let [m (money/from-wire (:amount data) nil)]
+            {:account-kind (keyword (:account_kind data))
+             :account-row (:account_row data)
+             :account-name (keyword (:account_name data))
+             :amount (money/->Money (.negate ^java.math.BigDecimal (:amount m)) (:currency m))
+             :reverses id}))
+        (posted eng tx log-id)))
+
 (defn post!
   "Write `entries` as postings inside `tx`, the transaction that commits
   the posting door's transition — so the postings, the row and the log
@@ -158,28 +183,36 @@
   :reverses (optional)}; `source` is {:kind :id :action :log-id :at}.
   Each row account's balance moves in the same transaction (step 3c),
   its row locked and saved a version on — so a door that posts to its
-  own row saves that row first, then posts.
+  own row saves that row first, then posts, naming it `:settled` when
+  the saved row already holds its move (step 4).
+
+  Idempotent by log id: a transition that already posted posts nothing
+  again, and answers what it posted.
   → the postings as stored."
-  [eng tx source entries]
-  (let [{:keys [kind id action log-id at]} source
-        ^Instant at (or at (Instant/now))
-        today (LocalDate/ofInstant at ZoneOffset/UTC)]
-    (rebalance! eng tx entries)
-    (mapv (fn [{:keys [account-kind account-row account-name amount
-                       effective-on reverses]}]
-            (inv/insert-quiet!
-             eng tx :posting
-             (cond-> {:account (account-address account-kind account-row account-name)
-                      :account_kind (name account-kind)
-                      :account_name (name account-name)
-                      :amount amount
-                      :at at
-                      :effective_on (or effective-on today)
-                      :kind (name kind)
-                      :source_id (str id)
-                      :action (name action)
-                      :log_id (str log-id)}
-               account-row (assoc :account_row (str account-row))
-               reverses (assoc :reverses (str reverses)))
-             {:principal poster}))
-          entries)))
+  ([eng tx source entries] (post! eng tx source entries {}))
+  ([eng tx source entries {:keys [settled]}]
+   (let [{:keys [kind id action log-id at]} source
+         ^Instant at (or at (Instant/now))
+         today (LocalDate/ofInstant at ZoneOffset/UTC)]
+     (if-some [done (not-empty (posted eng tx log-id))]
+       (vec done)
+       (do
+         (rebalance! eng tx entries settled)
+         (mapv (fn [{:keys [account-kind account-row account-name amount
+                            effective-on reverses]}]
+                 (inv/insert-quiet!
+                  eng tx :posting
+                  (cond-> {:account (account-address account-kind account-row account-name)
+                           :account_kind (name account-kind)
+                           :account_name (name account-name)
+                           :amount amount
+                           :at at
+                           :effective_on (or effective-on today)
+                           :kind (name kind)
+                           :source_id (str id)
+                           :action (name action)
+                           :log_id (str log-id)}
+                    account-row (assoc :account_row (str account-row))
+                    reverses (assoc :reverses (str reverses)))
+                  {:principal poster}))
+               entries))))))

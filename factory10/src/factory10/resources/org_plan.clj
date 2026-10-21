@@ -447,6 +447,9 @@
       (some? (:first_week_scene inp))
       (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
           (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
+      (some? (:dry_week inp))
+      (-> (assoc-in [:data :dry_week] (:dry_week inp))
+          (assoc-in [:data :dry_week_sha] (:head_sha inp)))
       (seq (get-in row [:data :questions]))
       (update-in [:data :questions]
                  (fn [qs]
@@ -1231,6 +1234,18 @@
                           :help "The doors on a kind that wake the seat, entry by entry."}}
     [:maybe entry-schema]]])
 
+(def ^:private dry-week-schema
+  "The week report, compact (ticket 7fba2e9b): per call its day, who
+  made it, the door, and how it ended."
+  [:vector {:max 500}
+   [:map
+    [:day [:int {:min 1 :max 15}]]
+    [:as {:optional true} [:maybe [:string {:max 32}]]]
+    [:kind [:string {:max 64}]]
+    [:action [:string {:max 64}]]
+    [:outcome [:string {:max 32}]]
+    [:guard {:optional true} [:maybe [:string {:max 128}]]]]])
+
 (def ^:private findings-input
   "What the audit's run hands every findings door: the head, its
   findings and law page, and what go_live reads (M2e): whether org.edn
@@ -1251,6 +1266,10 @@
                        :x-display {:hidden true
                                    :label "The run's first-week scene"}}
     [:maybe [:string {:max 65536}]]]
+   [:dry_week {:optional true
+               :x-display {:hidden true
+                           :label "The run's played week"}}
+    [:maybe dry-week-schema]]
    [:live_flag {:optional true
                 :x-display {:hidden true
                             :label "The branch says live"}}
@@ -1457,6 +1476,20 @@
                             {:raw true
                              :label "Scene rendered at"
                              :help "The head commit of the org's branch the first-week scene was rendered at."}}
+     [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the week.edn the audit played
+    ;; at that head, compact (ticket 7fba2e9b)
+    [:dry_week {:optional true
+                :x-display
+                {:raw true
+                 :label "The played week"
+                 :help "Each call of the org's scripted first week as the audit played it: the day, who made it, the door, how it ended and the guard that refused it."}}
+     [:maybe dry-week-schema]]
+    [:dry_week_sha {:optional true
+                    :x-display
+                    {:raw true
+                     :label "Week played at"
+                     :help "The head commit of the org's branch the week was played at."}}
      [:maybe [:string {:max 64}]]]
     [:film_url {:optional true
                 :x-display

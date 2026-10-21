@@ -8,6 +8,7 @@
             [next.jdbc :as jdbc]
             [waymark10.modules :as modules]
             [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.resource :as r]
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
@@ -48,7 +49,7 @@
     (fn [st]
       (store/with-tx st
         (fn [tx]
-          (doseq [table ["postings" "pt_products" "waymark10_transitions"
+          (doseq [table ["postings" "pt_products" "pt_tills" "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
 
@@ -161,3 +162,116 @@
           (is (thrown? clojure.lang.ExceptionInfo
                        (inv/invoke! eng :pt_product mug-id :fudge nil {:principal elena})))
           (is (== 20.5M (paid st mug-id))))))))
+
+;; ── ledger step 4: :posts ────────────────────────────────────────────────
+
+(def ^:private till
+  (r/resource {:kind :pt_till
+               :plural "pt_tills"
+               :states [:open :paid]
+               :initial :open
+               :terminal #{}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]
+                        [:tip_to {:optional true} [:maybe [:string {:max 80}]]]]
+               :accounts {:cash {:unit [:money "USD"]} :owed {:unit [:money "USD"]}}
+               :actions {:pay {:from #{:open} :to :paid :undo :unpay
+                               :input [:map [:tip {:optional true} :boolean]]
+                               :posts '[{:move (money "18.00" "USD")
+                                         :from [:pt_till (self) :owed]
+                                         :to [:pt_till (self) :cash]}
+                                        {:account [:pt_product (data :tip_to) :paid]
+                                         :amount (money "2.00" "USD") :sign :+
+                                         :when (= (input :tip) true)}]
+                               :safety {:idempotent false :reversible true :confirm false}
+                               :display {:label "Pay"}}
+                         :unpay {:from #{:paid} :to :open :undo :pay
+                                 :safety {:idempotent false :reversible true :confirm false}
+                                 :display {:label "Unpay"}}
+                         :overcharge {:from #{:open} :to :open
+                                      :posts '[{:account [:pt_till (self) :cash]
+                                                :amount (money "-1.00" "USD") :sign :+}]
+                                      :safety {:idempotent false :reversible false :confirm false}
+                                      :display {:label "Overcharge"}}}}))
+
+(defn- balance [st kind id field]
+  (:amount (money/from-wire
+            (get-in (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))
+                    [:data field])
+            nil)))
+
+(defn- postings-of [st]
+  (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {}))))
+
+(deftest step-4-posts-normalize-at-the-def-site
+  (testing ":move is the two entries it means"
+    (is (= (vec (take 2 (get-in till [:actions :pay :posts])))
+           (posts/normalize :pt_till :pay
+                            '[{:account [:pt_till (self) :owed] :amount (money "18" "USD") :sign :-}
+                              {:account [:pt_till (self) :cash] :amount (money "18.00" "USD") :sign :+}]))))
+  (testing "normalizing twice is normalizing once"
+    (let [ps (get-in till [:actions :pay :posts])]
+      (is (= ps (posts/normalize :pt_till :pay ps)))))
+  (testing "a bad sign, an unknown key and :each refuse at the def site"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (posts/normalize :k :d '[{:account [:k (self) :a] :amount 1 :sign :up}])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (posts/normalize :k :d '[{:account [:k (self) :a] :amount 1 :sign :+ :memo "x"}])))
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (posts/normalize :k :d '[{:each (lines) :account [:k (self) :a] :amount 1 :sign :+}]))))
+  (testing "the undo of a posting door knows the door it reverses"
+    (is (= #{:pay} (get-in till [:actions :unpay :reverses-posts])))
+    (is (nil? (get-in till [:actions :pay :reverses-posts])))))
+
+(deftest step-4-a-door-posts-with-its-log-row-and-undo-reverses-it
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [product till postings/posting]})
+            mug-id (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                           [:row :id])
+            till-id (get-in (inv/create! eng :pt_till {:name "t1" :tip_to (str mug-id)}
+                                         {:principal elena})
+                            [:row :id])
+            as-elena (fn [k] {:principal elena :idempotency-key k})]
+        (testing "the postings, the row and the log row land together"
+          (inv/invoke! eng :pt_till till-id :pay {:tip true} (as-elena "pay-1"))
+          (let [ps (postings-of st)
+                [t] (store/with-tx st
+                      (fn [tx] (store/transitions st tx {:kind :pt_till :resource-id till-id}
+                                                  {:newest-first true :limit 1})))]
+            (is (= 3 (count ps)))
+            (is (every? #(= (str (:id t)) (get-in % [:data :log_id])) ps))
+            (is (== 18 (balance st :pt_till till-id :cash)))
+            (is (== -18 (balance st :pt_till till-id :owed)))
+            (is (== 2 (balance st :pt_product mug-id :paid)))))
+        (testing "a retried invoke never posts twice"
+          (inv/invoke! eng :pt_till till-id :pay {:tip true} (as-elena "pay-1"))
+          (is (= 3 (count (postings-of st)))))
+        (testing "undo writes the reversing entries, each naming its posting"
+          (inv/invoke! eng :pt_till till-id :unpay nil (as-elena "unpay-1"))
+          (let [ps (postings-of st)
+                ids (set (map (comp str :id) ps))
+                rev (filter #(get-in % [:data :reverses]) ps)]
+            (is (= 6 (count ps)))
+            (is (= 3 (count rev)))
+            (is (every? #(contains? ids (get-in % [:data :reverses])) rev))
+            (is (== 0 (balance st :pt_till till-id :cash)))
+            (is (== 0 (balance st :pt_till till-id :owed)))
+            (is (== 0 (balance st :pt_product mug-id :paid)))
+            (is (== 0 (:amount (store/with-tx st
+                                 (fn [tx]
+                                   (postings/recomputed-balance eng tx :pt_till till-id :cash))))))))
+        (testing "an entry whose :when does not hold posts nothing"
+          (inv/invoke! eng :pt_till till-id :pay {} (as-elena "pay-2"))
+          (is (= 8 (count (postings-of st))))
+          (is (== 0 (balance st :pt_product mug-id :paid))))
+        (testing "a negative amount refuses the door, and nothing posts"
+          (inv/invoke! eng :pt_till till-id :unpay nil (as-elena "unpay-2"))
+          (is (= 10 (count (postings-of st))))
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (inv/invoke! eng :pt_till till-id :overcharge nil (as-elena "over-1"))))
+          (is (= 10 (count (postings-of st))))
+          (is (= "open" (name (:state (store/with-tx st
+                                        (fn [tx] (store/load-row st tx :pt_till till-id {})))))))
+          (is (== 0 (balance st :pt_till till-id :cash))))))))

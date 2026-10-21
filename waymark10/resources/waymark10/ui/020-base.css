@@ -326,6 +326,9 @@
   .statechip { display: inline-block; font-family: var(--mono); font-size: 11px;
                background: var(--chipbg); color: var(--ink);
                border-radius: 3px; padding: 2px 8px; }
+  .asof-band { background: var(--chipbg); color: var(--ink); border-radius: 3px;
+               padding: 6px 10px; margin: 6px 0; font-size: 13px; }
+  .asof-band.waiting { background: var(--verdigris-wash); color: var(--verdigris-deep); }
   .version { font-family: var(--mono); font-size: 11px; color: var(--muted);
              margin-left: 8px; }
   /* clickable facet chips (the collection's x-facets, lit when active) */
