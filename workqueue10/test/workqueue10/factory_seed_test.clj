@@ -175,7 +175,7 @@
   either direction fails here and is read. Member reinstate's hold
   (HC2, ticket bed1f2f6) is declared `:hold :agents`: it holds only an
   agent's call, so a suspended member's exit stays a seat's (9b8e9749)."
-  {"cadence_only" 2 "no_exit" 72 "remedy_unheld" 34 "silent_person_exit" 20})
+  {"cadence_only" 2 "no_exit" 74 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
