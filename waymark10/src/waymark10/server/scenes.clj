@@ -24,7 +24,9 @@
   or `window: \"clock\"` with a `day` k: between the clone's (k-1)th and
   kth `clock_shift` (`clock-window`).
   A `$rows` hole's window may instead be `window: \"take\"`: since the
-  take began.
+  take began, or `window: \"clock\"` with `days` [from, to]: the clone's
+  clock days from to to, the whole played week unless named
+  (`clock-span`).
   A `{\"$list\": {items, lead, none}}` joins what its `$rows` holes say.
   `check` judges each hole;
   the performer fills it when the shot plays (`fill-say`), from the rows
@@ -395,15 +397,27 @@
 
 (defn- take-window-problem
   "Why a hole named `hole` cannot read the take's window, `window:
-  \"take\"` in place of `since` and `until`; nil when it can."
+  \"take\"` in place of `since` and `until`, or the clock's, `window:
+  \"clock\"` with its `days` [from, to]; nil when it can."
   [hole h]
-  (cond
-    (not= "take" (get h "window"))
-    (str "a `" hole "` hole's `window` is \"take\", and this one is "
-         (tick (get h "window")) ".")
+  (let [days (get h "days")]
+    (cond
+      (not (#{"take" "clock"} (get h "window")))
+      (str "a `" hole "` hole's `window` is \"take\" or \"clock\", and this one is "
+           (tick (get h "window")) ".")
 
-    (or (contains? h "since") (contains? h "until"))
-    (str "a `" hole "` hole with a `window` takes no `since` or `until`.")))
+      (or (contains? h "since") (contains? h "until"))
+      (str "a `" hole "` hole with a `window` takes no `since` or `until`.")
+
+      (and (contains? h "days") (not= "clock" (get h "window")))
+      (str "a `" hole "` hole's `days` goes with `window: \"clock\"` only.")
+
+      (and (contains? h "days")
+           (not (and (sequential? days) (= 2 (count days))
+                     (every? #(and (integer? %) (<= 1 % 31)) days)
+                     (apply <= days))))
+      (str "a `" hole "` hole's `days` is [from, to], two whole numbers from 1 to 31,"
+           " the first no later than the second, and this one is " (tick days) "."))))
 
 (defn- window-problem
   "Why one hole named `hole` (`$rows`, `$moves`) cannot read its window:
@@ -430,9 +444,11 @@
 (defn- hole-problem
   "Why one `$rows` hole cannot be filled; nil when it can."
   [h rdef-of]
-  (or (window-problem "$rows" ["kind" "since" "until" "window" "field" "terminal" "state" "count"
+  (or (window-problem "$rows" ["kind" "since" "until" "window" "days" "field" "terminal" "state" "count"
                                "sum" "one" "many" "none"]
                       h rdef-of)
+      (when (and (contains? h "days") (not (contains? h "window")))
+        "a `$rows` hole's `days` goes with `window: \"clock\"` only.")
       (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
         (str (tick (get h "field")) " is not a field a hole reads; the fields are "
              (str/join ", " hole-fields) "."))
@@ -590,7 +606,10 @@
   or by its `none` (`A quiet day.`) when it answers nil. A `$day` hole of
   `window: \"shot\"` reads [the instant `run` holds, now), and leaves now
   on `run` for the next one; a `$rows` hole of `window: \"take\"` reads
-  [the instant the take began on `run`, now). `run` is the take's
+  [the instant the take began on `run`, now), and one of
+  `window: \"clock\"` asks `rows-of` for {:clock-days [from to] :until now}
+  in place of `since` and `until`: those days of the clone's clock, the
+  whole played week when it names no `days`. `run` is the take's
   `take-run`, a fresh one unless given. A `$day` hole of
   `window: \"clock\"` asks `day-of` for {:clock-day k :until now :domain}:
   day k of the clone's clock."
@@ -606,17 +625,18 @@
          ;; a `$rows` hole's text; nil when its zero drops its clause
          rows-said (fn [h]
                      (let [sum (some-> (get h "sum") str)
-                           take? (= "take" (get h "window"))
-                           lines (rows-of (cond-> {:kind (str (get h "kind"))
-                                                   :since (if take?
-                                                            (:began @run)
-                                                            (instant-of (get h "since")))
-                                                   :until (if take?
-                                                            (Instant/now)
-                                                            (instant-of (get h "until")))
-                                                   :field (get h "field" "created_at")
+                           window (case (get h "window")
+                                    "take" {:since (:began @run) :until (Instant/now)}
+                                    "clock" {:clock-days (vec (get h "days" []))
+                                             :until (Instant/now)}
+                                    {:since (instant-of (get h "since"))
+                                     :until (instant-of (get h "until"))})
+                           lines (rows-of (cond-> (merge
+                                                   {:kind (str (get h "kind"))}
+                                                   window
+                                                   {:field (get h "field" "created_at")
                                                    :terminal (true? (get h "terminal"))
-                                                   :state (some-> (get h "state") str)}
+                                                    :state (some-> (get h "state") str)})
                                             sum (assoc :sum sum)))
                            n (if sum
                                (Math/round (double (reduce + 0 (filter number? lines))))
@@ -670,14 +690,22 @@
                                     (str (get h "none" quiet-day)))
                                 (str part)))))))))))))
 
+(declare clock-span)
+
 (defn rows-in-window
   "The summary lines of engine `eng`'s rows of `kind` whose `field`
   (created_at, or updated_at) falls in [since, until), oldest first;
   with `terminal`, only those in one of the kind's terminal states, and
   with `state`, only those in that state; with `sum`, that field of
-  each instead of its line. None for a kind the engine does not serve."
-  [eng {:keys [kind since until field terminal state sum]}]
-  (let [st (:storage eng)
+  each instead of its line. With `clock-days` [from to] in place of
+  `since`, the window is those days of the engine's demo clock, the
+  last ending at `until` (`clock-span`). None for a kind the engine does
+  not serve, and none for clock days it has not played."
+  [eng {:keys [kind clock-days field terminal state sum] :as w}]
+  (let [{:keys [since until]} (if (contains? w :clock-days)
+                                (clock-span eng clock-days (:until w))
+                                w)
+        st (:storage eng)
         rdef (get (inv/resources eng) (keyword kind))
         ended (into #{} (map name) (:terminal rdef))
         ended? (fn [row]
@@ -693,7 +721,7 @@
                     (and (inst? t)
                          (<= (inst-ms since) (inst-ms t))
                          (< (inst-ms t) (inst-ms until)))))]
-    (if-not rdef
+    (if-not (and rdef since until)
       []
       (store/with-tx st
         (fn [tx]
@@ -862,13 +890,10 @@
           (when-not (str/blank? said)
             (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
 
-(defn clock-window
-  "Day `k` of engine `eng`'s demo clock as a {:since :until} window: from
-  its (k-1)th `clock_shift` row to its kth, day 1 from the start of its
-  log and the day after the last shift up to `until`; nil for a later
-  day, and for a `k` that is no whole number from 1. Rows are stamped
-  with the wall clock in play order, so the shifts bound the days."
-  [eng k ^Instant until]
+(defn- clock-bounds
+  "The bounds of engine `eng`'s demo clock days in ms, in order: the start
+  of its log, each `clock_shift` row, and `until`."
+  [eng ^Instant until]
   (let [st (:storage eng)
         shifts (if (contains? (inv/resources eng) :clock_shift)
                  (store/with-tx st
@@ -876,11 +901,35 @@
                      (->> (store/query-rows st tx :clock_shift {} {:limit 100000})
                           (keep #(ms-of (:created-at %)))
                           sort)))
-                 [])
-        bounds (-> [0] (into shifts) (conj (inst-ms until)))]
-    (when (and (integer? k) (<= 1 k (inc (count shifts))))
+                 [])]
+    (-> [0] (into shifts) (conj (inst-ms until)))))
+
+(defn clock-window
+  "Day `k` of engine `eng`'s demo clock as a {:since :until} window: from
+  its (k-1)th `clock_shift` row to its kth, day 1 from the start of its
+  log and the day after the last shift up to `until`; nil for a later
+  day, and for a `k` that is no whole number from 1. Rows are stamped
+  with the wall clock in play order, so the shifts bound the days."
+  [eng k ^Instant until]
+  (let [bounds (clock-bounds eng until)]
+    (when (and (integer? k) (<= 1 k (dec (count bounds))))
       {:since (Instant/ofEpochMilli (nth bounds (dec k)))
        :until (Instant/ofEpochMilli (nth bounds k))})))
+
+(defn clock-span
+  "Days `from` to `to` of engine `eng`'s demo clock as one {:since :until}
+  window: from the start of day `from` (`clock-window`) to the end of day
+  `to`, the last day ending at `until`. `from` is day 1 and `to` the last
+  day played unless given, and a `to` past it is the last; nil when
+  `from` is a day the clock has not played."
+  [eng [from to] ^Instant until]
+  (let [bounds (clock-bounds eng until)
+        played (dec (count bounds))
+        from (or from 1)
+        to (if (integer? to) (min to played) played)]
+    (when (and (integer? from) (<= 1 from to))
+      {:since (Instant/ofEpochMilli (nth bounds (dec from)))
+       :until (Instant/ofEpochMilli (nth bounds to))})))
 
 (defn day-in-window
   "One plain sentence of the day `w` of the org whose kinds name its

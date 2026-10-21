@@ -63,20 +63,21 @@
  ;; ended the week in each success end, the money a kind with an amount
  ;; field invoiced, then the held calls it asked the person. A zero drops
  ;; its clause, and a week of zeros is a quiet one. The holes read the
- ;; take's window, the whole week as it was played on the clone, not the
- ;; dates the audit rendered (ticket 271018e5).
+ ;; clock's window, the whole week as it was played on the clone before
+ ;; or during the performance, not the dates the audit rendered (tickets
+ ;; 271018e5, c7762078).
  :closing_kind
- {"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :window "take"
+ {"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :window "clock"
            :field "updated_at" :count true :one "{{each_one}}" :many "{{each_many}}"}}
  :closing_money
- {"$rows" {:kind "{{money_kind}}" :window "take"
+ {"$rows" {:kind "{{money_kind}}" :window "clock"
            :sum "{{money_field}}" :one "invoiced" :many "invoiced"}}
  :closing
  [{:hold {:ms 3000} :role "payoff"
    :say [{"$list" {:lead "That was the week: " :none "A quiet week"
                    :items ["{{kinds}}"
                            "{{money}}"
-                           {"$rows" {:kind "held_call" :window "take"
+                           {"$rows" {:kind "held_call" :window "clock"
                                      :count true :one "tap from you" :many "taps from you"}}]}}
          ". Merge to make it real."]}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}
