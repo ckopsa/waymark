@@ -6592,6 +6592,22 @@
         (let [status (::status (meta out))]
           (not (and (number? status) (<= 500 (long status))))))))
 
+(defn- record-call!
+  "Ticket dc9e5b96: one line of the sitting's record of calls, beside
+  the count `count-served!` keeps — what the call read or moved, and
+  when. It never throws, for `count-served!`'s reason."
+  [eng session tool-name args out]
+  (try
+    (when-some [sitting-id (calling-sitting eng session)]
+      (transcripts/record-call! eng sitting-id tool-name args
+                                (body-json {:body (some-> out :content first :text)})
+                                (and (map? out) (true? (:isError out)))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp call record" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn- count-refused!
   "R-10.6 at the power door: one refusal on the open sitting of the
   session's grant, for each `waymark_power` answer `power-refusal?`
@@ -6704,9 +6720,10 @@
                            " — this engine serves exactly "
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
-           (do (count-served! eng session
-                               (served-name eng (:name params) params) out)
-               (count-refused! eng session (:name params) out)
+           (let [served (served-name eng (:name params) params)]
+             (count-served! eng session served out)
+             (record-call! eng session served (:arguments params) out)
+             (count-refused! eng session (:name params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))
