@@ -176,7 +176,7 @@
 (defn- seat-name [seat]
   (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
 
-(defn- age-entry
+(defn age-entry
   "The kind's own `:expected-age` entry for the state, as [entry], or
   nil when it declares none."
   [rdef state]
