@@ -113,6 +113,9 @@
            ;; …and the quest (docs/spec-quests.md), core's beside the
            ;; walkthrough: its goal is judged as an invitation's step is
            :quest
+           ;; …and the integration (docs/spec-integrations.md § 2): an
+           ;; outside system as a row and a principal, :always
+           :integration
            ;; …and the scene and the take (docs/spec-scenes.md): a demo
            ;; written as shots, and one performance of it
            :scene :take

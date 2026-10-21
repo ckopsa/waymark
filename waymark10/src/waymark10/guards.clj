@@ -426,6 +426,7 @@
              :count-matching (:count-matching ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
+      (:rounding ctx) (assoc :rounding (:rounding ctx))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))

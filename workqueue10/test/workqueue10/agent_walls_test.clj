@@ -51,6 +51,8 @@
    "A hold would carry the value in the held call's text, where the agent that wrote it and every reader of the hold see it: an agent makes the row without a value instead."
    :the-owner-fills-the-value
    "A secret's value is one no agent sees or writes, and a held replace would be an agent's own text of it waiting for a tap."
+   :a-person-holds-it
+   "An integration is a principal with its own grant (docs/spec-integrations.md § 2): an agent that could propose, approve, rotate or retire one would be minting a principal and its powers, so only a person moves it."
    :a-model-says-why-it-ungrooms
    "It asks the model for its own reason, which no person's approval can stand in for: the agent passes it by filling `shelved_because`, not by waiting for a tap."})
 

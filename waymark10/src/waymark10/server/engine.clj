@@ -57,6 +57,7 @@
             [org.httpkit.server :as http]
             [waymark10.checks-assembly :as checks-assembly]
             [waymark10.modules :as modules]
+            [waymark10.money :as money]
             [waymark10.registry :as registry]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.belief :as server-belief]
@@ -226,6 +227,15 @@
                                       :fire-adapter :wake-tick-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
+                    ;; the house's :rounding (docs/spec-ledger-money.md
+                    ;; §2): how (round m) breaks a half — :half-even
+                    ;; unless the house says :half-up; another word
+                    ;; refuses the boot
+                    :rounding (or (money/rounding-mode (:rounding opts))
+                                  (throw (t/definition-error
+                                          (str ":rounding is :half-even or :half-up; got "
+                                               (pr-str (:rounding opts)))
+                                          {:check :rounding})))
                     ;; the engine's own name: the :name option, else
                     ;; WAYMARK_ENGINE_NAME, else "waymark". The
                     ;; well-known document answers it and a walk's
