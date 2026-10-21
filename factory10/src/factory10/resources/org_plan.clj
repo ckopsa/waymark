@@ -117,12 +117,15 @@
 
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
             [waymark10.holds :as holds]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -471,8 +474,13 @@
         (assoc-in [:data :next_step] (next-step found))
         (assoc-in [:data :take_landed_at] (:now ctx)))))
 
-(defhandler retire-the-plan [row inp _ctx]
-  ;; A retired plan says why, because nothing departs `retired`.
+(declare park-the-onboarder!)
+
+(defhandler retire-the-plan [row inp ctx]
+  ;; A retired plan says why, because nothing departs `retired`; a
+  ;; found plan parks its onboarding seat (ticket 6b49540c).
+  (when (= "found" (purpose-of row))
+    (park-the-onboarder! row ctx))
   (assoc-in row [:data :retired_why] (:why inp)))
 
 (defhandler decline-the-hire [row inp ctx]
@@ -615,6 +623,148 @@
     (t/deny {:vars {:name (str (:name inp)) :plan (str (:id held)) :state (state-name held)}
              :evidence {:plan (str (:id held))}})
     (t/allow)))
+
+;; ── its onboarding seat (ticket 6b49540c) ────────────────────────────
+;;
+;; Filing a found plan seats `onboarding-<name>` from factorykit's
+;; onboarding template, in the same transaction, as the filer: the
+;; seat door opens only for a person's hand (seats/a-person), and the
+;; filer's create is the yes. The seat is born keyless (seat spec
+;; R-12.12): next_step tells the person to offer it a key and sit.
+;; The birth is skipped, and next_step says why, when the template's
+;; bench powers are not registered here, when no model resolves, or
+;; when the seat door would refuse it; the plan is filed either way.
+
+(def ^:private onboarding-template "seats/onboarding.edn")
+
+(defn- onboarding-seat-name [org] (str "onboarding-" org))
+
+(defn- found-rows
+  "`kind`'s rows matching `where`, through the ctx :find hook. A kind
+  this engine does not serve reads as none."
+  [ctx kind where]
+  (when-some [find' (:find ctx)]
+    (try (find' kind where {:limit 1000}) (catch Exception _ nil))))
+
+(defn- active-onboarding-seat [ctx org]
+  (first (found-rows ctx :seat {:name (onboarding-seat-name org) :state "active"})))
+
+(defn- onboarding-body
+  "The onboarding template's model name and its seat, each {{org}}
+  filled with `org`."
+  [org]
+  (let [t (edn/read-string (slurp (io/resource onboarding-template)))]
+    {:model (get-in t [:template :model])
+     :seat (edn/read-string (str/replace (pr-str (:seat t)) "{{org}}" (str org)))}))
+
+(defn- powers-registered?
+  "Does every power token `scope` names pass scope-names-real-kinds
+  here: named by a non-retired mcp_server's powers, or an active
+  capability?"
+  [ctx scope]
+  (let [served (delay (set (servers/tokens-of-rows
+                            (remove #(= "retired" (state-name %))
+                                    (found-rows ctx :mcp_server {})))))]
+    (every? (fn [k] (or (contains? @served k)
+                        (some #(= "active" (state-name %))
+                              (found-rows ctx :capability {:token k}))))
+            (filter #(str/includes? % ".") (map (comp str :kind) scope)))))
+
+(defn- onboarding-model
+  "The id of the model the onboarding seat is held for: the active
+  model the template names; else the one the house's onboarding-*
+  seats already hold; else nil."
+  [ctx model-name]
+  (or (some->> (found-rows ctx :model {})
+               (filter #(and (= (str model-name) (str (get-in % [:data :name])))
+                             (= "active" (state-name %))))
+               first :id str)
+      (some->> (found-rows ctx :seat {})
+               (filter #(str/starts-with? (str (get-in % [:data :name])) "onboarding-"))
+               (keep #(first (get-in % [:data :held_for])))
+               first str)))
+
+(defn- factory-domain [ctx]
+  (some->> (found-rows ctx :domain {})
+           (filter #(= "factory" (str (get-in % [:data :name]))))
+           first :id str))
+
+(defn- seat-step
+  "The plan's next_step while its onboarding seat is the next move."
+  [org sentence]
+  {:key "onboarding_seat" :severity "info" :class "onboarding"
+   :subject (onboarding-seat-name org)
+   :sentence (subs sentence 0 (min 240 (count sentence)))})
+
+(defn- seat-the-onboarder
+  "A found plan's birth seats its onboarding seat, or reuses the active
+  one its filer already holds, and says the next move in next_step. A
+  ctx without the hooks (the render probe, a scenario) seats nothing."
+  [row ctx]
+  (let [org (str (get-in row [:data :name]))
+        seat-name (onboarding-seat-name org)
+        offer (str "Offer " seat-name " a key (seat offer_key) and sit with it to start.")
+        step #(assoc-in row [:data :next_step] (seat-step org %))]
+    (if (or (not= "found" (purpose-of row))
+            (some nil? [(:find ctx) (:create ctx) (:rehearse ctx)]))
+      row
+      (if (active-onboarding-seat ctx org)
+        (step offer)
+        (let [{:keys [model seat]} (onboarding-body org)]
+          (if-not (powers-registered? ctx (:scope seat))
+            (step "No onboarding seat: this house has no bench powers")
+            (if-some [m (onboarding-model ctx model)]
+              (let [domain (factory-domain ctx)
+                    body (cond-> (assoc seat :name seat-name :held_for [m])
+                           domain (assoc :domain domain))
+                    refused (try ((:rehearse ctx) :seat nil nil body) nil
+                                 (catch Exception e
+                                   (or (ex-message e) "the seat door refused it")))]
+                (if refused
+                  (step (str "No onboarding seat: " refused))
+                  (do ((:create ctx) :seat body)
+                      (step offer))))
+              (step (str "Pick a model for " seat-name)))))))))
+
+(defn- file-the-plan
+  "The create's birth: stamp-the-owner's stamps, then its onboarding
+  seat."
+  [row ctx]
+  (seat-the-onboarder (stamp-the-owner row ctx) ctx))
+
+(defn- park-the-onboarder!
+  "Best-effort, as change's merge is: the plan's active onboarding
+  seat, when its owner is the plan's, parked. A door that refuses is
+  said in the log, and the plan moves on."
+  [row ctx]
+  (when (:invoke ctx)
+    (when-some [seat (active-onboarding-seat ctx (get-in row [:data :name]))]
+      (when (= (some-> (get-in row [:data :owner]) str)
+               (some-> (get-in seat [:data :owner]) str))
+        (try
+          ((:invoke ctx) :seat (str (:id seat)) :park {})
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "factory10 org_plan retire: the seat" (str (:id seat))
+                       "did not park -" (ex-message e)))))))))
+
+;; another person's active onboarding-<name> refuses the create: the
+;; birth would take an office whose name someone else holds. It reads
+;; that office through the ctx :find hook, and its declaration names no
+;; seat kind (tree_test's R-6: no declaration in this module does).
+
+(defguardfn the-onboarding-seat-is-not-anothers
+  {:reads [:principal]
+   :vars [:name :office]
+   :explain "The seat {office} is open for another person: filing {name} would start an onboarding seat under a name someone else holds."
+   :open "File the plan under another name, or ask that seat's owner to park it."}
+  [_row inp ctx]
+  (let [held (active-onboarding-seat ctx (:name inp))]
+    (if (and held
+             (not= (the-person ctx) (some-> (get-in held [:data :owner]) str)))
+      (t/deny {:vars {:name (str (:name inp)) :office (str (get-in held [:data :name]))}
+               :evidence {:office (str (:id held))}})
+      (t/allow))))
 
 (defguardfn only-the-owner-decides
   {:reads [:principal]
@@ -1317,7 +1467,7 @@
                 :owner #{:eq}
                 :purpose #{:eq}
                 :workarounds_concept #{:eq :in}}
-   :on-create stamp-the-owner
+   :on-create file-the-plan
    :data-migrate purpose-backfill
    ;; ticket 24c4feba: a findings run owed on the head shows on the plan
    :computed {:findings_pending
@@ -1334,7 +1484,8 @@
                 :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
                :reads? true
                :fn findings-pending-head}}
-   :create-guards [a-person-files-the-plan one-plan-per-name]
+   :create-guards [a-person-files-the-plan one-plan-per-name
+                   the-onboarding-seat-is-not-anothers]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
               :input hire-input
@@ -1428,7 +1579,8 @@
                    {:label "Quiet until"
                     :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
      [:maybe :waymark/instant]]
-    ;; WRITTEN ONLY BY THE FINDINGS DOOR: the walk's step (M2c)
+    ;; WRITTEN BY THE FINDINGS DOOR: the walk's step (M2c); the create
+    ;; writes the onboarding seat's step before any findings (6b49540c)
     [:next_step {:optional true
                  :x-display
                  {:label "The next step"
