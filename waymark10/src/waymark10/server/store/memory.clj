@@ -257,8 +257,8 @@
   (load-row [_ _tx kind id _opts]
     (get-in @state [:tables kind id]))
 
-  (insert-row! [_ _tx kind row]
-    (let [now (Instant/now)
+  (insert-row! [this _tx kind row]
+    (let [now (or (store/stamp-of this) (Instant/now))
           stored {:id (:id row)
                   :state (keyword (:state row))
                   :version (:version row 1)
@@ -274,11 +274,11 @@
       (swap! state assoc-in [:tables kind (:id row)] stored)
       row))
 
-  (save-row! [_ _tx kind row expected-version]
+  (save-row! [this _tx kind row expected-version]
     (let [current (get-in @state [:tables kind (:id row)])]
       (when (or (nil? current) (not= (:version current) expected-version))
         (throw (store/version-conflict kind (:id row) expected-version)))
-      (let [now (Instant/now)
+      (let [now (or (store/stamp-of this) (Instant/now))
             stored (merge current
                           {:state (keyword (:state row))
                            :version (:version row)
@@ -322,11 +322,11 @@
           (keep #(some-> (get-in % [:data :external_id]) str))
           (vals (get-in @state [:tables kind]))))
 
-  (append-transition! [_ _tx record]
+  (append-transition! [this _tx record]
     (let [id (:next-transition-id (swap! state update :next-transition-id
                                          (fnil inc 0)))
           rec (-> record
-                  (assoc :id id :at (Instant/now))
+                  (assoc :id id :at (or (store/stamp-of this) (Instant/now)))
                   (update :actor jsonish)
                   (update :inputs jsonish)
                   (update :acknowledged jsonish)
@@ -478,11 +478,11 @@
             (sort (map :id (filter #(matches-all? % conds)
                                    (vals (get-in @state [:tables kind]))))))))
 
-  (update-data! [_ _tx kind id data next-flip-at]
+  (update-data! [this _tx kind id data next-flip-at]
     (swap! state update-in [:tables kind id]
            #(when % (assoc % :data (jsonish data)
                            :next-flip-at next-flip-at
-                           :updated-at (Instant/now))))
+                           :updated-at (or (store/stamp-of this) (Instant/now)))))
     nil)
 
   (delete-rows! [_ _tx kind ids]
