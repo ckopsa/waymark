@@ -180,7 +180,10 @@
              :attachments-purge :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
-             :curtain :presence :intents}
+             :curtain :presence :intents
+             ;; the integrations' applier (docs/spec-integrations.md
+             ;; § 3): integration_event is always enrolled, so it runs
+             :integration-applier}
            (runtime/surfaces *eng*)))
     (is (nil? (runtime/surface *eng* :discovery))
         "no kind here declares a :mirror, so the mirror module's

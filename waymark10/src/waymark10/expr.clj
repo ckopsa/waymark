@@ -67,6 +67,11 @@
   Authored as (exists [b :kind {field (op <expr>)}]); the binder is
   erased at normalization, and (count [b :kind …]) is count-rows.
 
+  event: the value at one path in an outside event's body, or nil
+  where it has none — (event \"data\" \"object\" \"id\") — earned by
+  `:on-event`'s :match and :input (docs/spec-integrations.md § 3). It
+  reads the scope's :event, and is unknown without one.
+
   str: its parts joined into one string, in order — earned by
   factory10's its-change-is-under-review, which finds a change by its
   stored born_from, (= (str \"ticket:\" (self))). An unknown part is
@@ -110,7 +115,7 @@
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso
      every some count sum
-     follow did me self
+     follow did me self event
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
@@ -212,6 +217,11 @@
             (>= (long (first args)) (+ depth (count env)))
             (conj problems (str "(it " (first args) ") refers outside its quantifiers"))
             :else problems)
+
+          event
+          (if (and (pos? n) (every? string? args))
+            problems
+            (conj problems "(event \"a\" …) takes the path of one value in the event's body, as strings"))
 
           get
           (if (and (= n 2) (keyword? (second args)))
@@ -1089,6 +1099,17 @@
         it    (nth (:its scope) (long (first args)) nil)
         me    (if (contains? scope :principal) (:principal scope) unknown)
         self  (if (contains? scope :self) (:self scope) unknown)
+        ;; a value in an outside event's body, by its path; no event
+        ;; to read is unknown
+        event (if (contains? scope :event)
+                (reduce (fn [m k]
+                          (when (map? m)
+                            (let [kw (clojure.core/keyword k)]
+                              (if (contains? m kw)
+                                (clojure.core/get m kw)
+                                (clojure.core/get m k)))))
+                        (:event scope) args)
+                unknown)
 
         ;; true when a face of the principal acting now is a face of
         ;; any logged actor of one of the doors; no log to ask is unknown
