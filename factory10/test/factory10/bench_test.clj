@@ -2955,12 +2955,13 @@
                                (assoc :version (inc (long (:version row)))))
                            (:version row)))))))
 
-(deftest every-state-but-live-and-retired-waits-on-go-live
+(deftest every-state-but-live-keeps-its-change-unmerged
   ;; ticket b79643fe: the states come from the kind, so `filming` and any
-  ;; state added later are covered.
+  ;; state added later are covered. Ticket e0ff6d71: a retired plan's
+  ;; change is never merge-eligible, so it is held and says why.
   (let [{:keys [eng state change plan] :as w} (simulated-world)
         states (map name (:states (get (inv/resources eng) :org_plan)))
-        ordinary #{"live" "retired"}
+        ordinary #{"live"}
         waits? (fn [] (contains? (#'bench/go-live-waits eng [{:id (str (:id change))}])
                                  (str (:id change))))]
     (is (some #{"filming"} states))
@@ -2971,7 +2972,7 @@
         (is (waits?))
         (is (= 0 (bench/merge-green! eng (atom {}))))
         (is (empty? (calls-of state "bench__merge")))
-        (is (= "org_plan_waits_go_live"
+        (is (= (if (= "retired" s) "org_plan_retired" "org_plan_waits_go_live")
                (get-in (change-row w) [:data :line_why])))))
     (doseq [s ordinary]
       (testing (str "a " s " plan's change is ordinary")

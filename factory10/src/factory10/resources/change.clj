@@ -1110,6 +1110,18 @@
    ;; again the change the house stopped.
    :default-filters {:state "open,submitted"}
    :sortable {:fields [:updated_at] :default "updated_at"}
+   ;; the change's path lane (ticket 9b27142e): shown, not acted on yet
+   :computed {:lane
+              {:schema :string
+               :x-display
+               {:label "Lane"
+                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. Nothing acts on it yet."}
+               ;; it reads the repository's policy: with no :find it is
+               ;; absent, never a guessed engine
+               :reads? true
+               :fn (fn [row ctx]
+                     (when (:find ctx)
+                       (bench/lane-of row (bench/policy-of row ctx))))}}
    ;; WHERE THE KIT'S FIELDS STAND AMONG THESE. The builder puts the
    ;; core's fields first; this is the order the kind had as one map.
    :field-order [:change_id :repository :number :title :author :base_branch
@@ -1185,8 +1197,9 @@
                            "parked" "The bench refused this head for good"
                            "held" "Its ticket merges after tickets that are not done yet"
                            "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"
-                           "org_plan_waits_go_live" "An org plan not yet live names it: only its owner's go_live merges it"}}}
-     [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person" "org_plan_waits_go_live"]]]
+                           "org_plan_waits_go_live" "An org plan not yet live names it: only its owner's go_live merges it"
+                           "org_plan_retired" "A retired org plan names it or bore it: it is never merged"}}}
+     [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person" "org_plan_waits_go_live" "org_plan_retired"]]]
     [:line_reason {:optional true
                    :examples ["GitHub says it cannot merge"]
                    :x-display

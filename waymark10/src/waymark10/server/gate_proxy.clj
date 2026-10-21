@@ -247,7 +247,9 @@
   `*` matches any run of characters, slashes included, `?` matches
   one character, and `**` is `*`. A glob also matches when it matches
   the path's last part alone (`*.pem` matches keys/server.pem), and a
-  glob that starts with `**/` also matches with that prefix removed.
+  glob that starts with `**/` also matches with that prefix removed,
+  and a glob that ends `/**` also matches the directory itself, so
+  `orgs/x/**` admits `orgs/x` as well as `orgs/x/` (ticket 083cd105).
   `docs/*` matches docs/a/b.md; `*.md` matches docs/b.md."
   [glob path]
   (let [glob (str glob)
@@ -269,7 +271,9 @@
      (or (re-matches full path)
          (re-matches full base)
          (and (str/starts-with? glob "**/")
-              (re-matches (re-of (subs glob 3)) path))))))
+              (re-matches (re-of (subs glob 3)) path))
+         (and (str/ends-with? glob "/**")
+              (re-matches (re-of (subs glob 0 (- (count glob) 3))) path))))))
 
 (defn- whole-tree?
   "Is this call's `path` the whole checkout? A find that names no path
@@ -684,14 +688,27 @@
   field, what the call carried and what the filter admits — because an
   agent that reads all four either calls inside the filter or asks for
   one that names what it needs, and an agent told only `refused` can
-  do neither. Nothing reached the rig."
+  do neither. Nothing reached the rig.
+
+  A MISSING `repo` OR `branch` SAYS WHY IT IS MISSING (ticket
+  599cf0d4). The MCP dispatch fills both from the worktree the sit
+  prepared before this door judges the call (`bench-stamped`), so a
+  bench call that reaches here without one came from a session whose
+  sit prepared no bench: a sitting with no change to work, an empty
+  walk, a dark rig, or no sit at all. The refusal says so, and says to
+  pass the field on every call."
   [tname token {:keys [field got want]}]
   (refuse-invoke
    (str "Invoking " tname " is the " token " capability, and this grant"
         " names it with a filter this call stands outside of: `" field
         "` is " (if got (str "\"" got "\"") "not on this call")
         " and the filter admits " want ". Call inside the filter, or"
-        " ask for one that names what you need.")
+        " ask for one that names what you need."
+        (when (and (nil? got) (contains? #{"repo" "branch"} (some-> field name)))
+          (str " The engine fills `repo` and `branch` only for a sitting"
+               " whose sit prepared a bench, and this session's did not:"
+               " pass `" field "` on every call, one value the filter"
+               " admits.")))
    token))
 
 (defn- refuse-bench-protected

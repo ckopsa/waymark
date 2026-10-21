@@ -3877,10 +3877,12 @@
 (def ^:private bench-filled-note
   "What a seat whose bench opened is told about the two arguments every
   bench tool's schema calls required: the engine fills them from the
-  worktree it prepared (`bench-stamped`), so the seat need not copy
-  them and is not refused for leaving them out."
-  (str " Your bench calls carry the bench's repo and branch; leave them "
-       "out."))
+  worktree it prepared (`bench-stamped`) when the call reaches it on a
+  bound session. The note still asks for both on every call: three
+  onboarding rehearsals (ticket 083cd105) were refused 403 for leaving
+  them out, and a call that names them is judged the same either way."
+  (str " Pass the bench's repo and branch, as `bench` above names them, "
+       "on every bench call."))
 
 (def ^:private every-row-held-note
   "What a sit is told when every open row of its walk is held by
@@ -5482,7 +5484,8 @@
                                               (:states rdef))]
                                  (when (seq rs) [(keyword (name (:kind rdef))) rs]))))
                        rdefs)
-            aged (vec (live-cracks/aged-rows rdefs seat-rows rows now))
+            aged (vec (live-cracks/aged-rows rdefs seat-rows rows now
+                                             (:calendar (inv/render-hooks eng))))
             plural (into {} (map (juxt (comp name :kind) :plural)) rdefs)
             href (fn [kind id] (str "/api/" (get plural (str kind)) "/" id))]
         {"org" org

@@ -3464,6 +3464,7 @@ merges (`merge-strategy-of`, `train-size-of`).
 | `merge_strategy` | `line` or `train`. Empty reads as `line`. |
 | `train_size` | 2 to 10. Empty reads as 4. The pass reads it only when the strategy is `train`. |
 | `line_train` | the train that stands now: `branch`, `changes`, `prs`, `heads` (the head each change had when the train was built), `head`, `base_head`, `started_at`, `run_id`. Empty when no train stands. The pass writes it; a person does not. |
+| `lane_trains` | the trains that stand now in lanes other than `engine` (ticket 55d584f2), each shaped as `line_train` with its `lane`; `line_train` is the engine lane's. A train never mixes lanes, the trains of different lanes ride and land at once, and a change's `line_place` counts within its lane. Empty when none stands. The pass writes it; a person does not. |
 
 - `line` is the default and the line of R-15.4 to R-15.8: one change at
   a time. The pass brings the front up to date, its checks run again,
@@ -3499,7 +3500,9 @@ does.
    request merges, the pass deletes the branch (`train_delete`) and
    the line goes one at a time for that pass.
 3. `train_checks` dispatches the check workflow on the branch, with no
-   narrowing. The pass writes `line_train` with the changes that rode
+   narrowing but its `lane`: a train of a lane other than `engine`
+   names it (ticket 929ada09), and the workflow runs the jobs the
+   policy's `checks` gives that lane. The pass writes `line_train` with the changes that rode
    and the `run_id`. When no run showed yet, `run_id` is empty and
    `train_status` reads the run by branch and head.
 4. While a train stands, the front's `line_front_waiting` is `train`.

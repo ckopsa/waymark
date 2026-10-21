@@ -193,18 +193,26 @@
        :remedy-errors (checks/remedy-error-count cen tokens)
        :census cen})))
 
-(defn -main [& args]
-  (when (empty? args)
-    (binding [*out* *err*]
-      (println "usage: clojure -M -m waymark10.check <ns | ns/var> …"))
-    (System/exit 2))
+(defn run
+  "-main's work, answering its exit code instead of exiting: 0 clean, 1
+  a failure, 2 nothing to judge. waymark10.check-all runs it beside the
+  org conformance it adds, and exits on both."
+  [& args]
   (let [resources (into [] (mapcat resolve-arg) args)]
-    (when (empty? resources)
+    (cond
+      (empty? args)
+      (binding [*out* *err*]
+        (println "usage: clojure -M -m waymark10.check <ns | ns/var> …")
+        2)
+
+      (empty? resources)
       (binding [*out* *err*]
         (println (str "waymark10 check: no resource declarations found in "
-                      (vec args))))
-      (System/exit 2))
-    (try
+                      (vec args)))
+        2)
+
+      :else
+      (try
       (let [{:keys [kinds warnings scenarios broken remedy-errors]}
             (report resources)
             failed (+ (long broken) (long (or remedy-errors 0)))]
@@ -221,7 +229,7 @@
                       (when (pos? (long (or remedy-errors 0)))
                         (str ", " remedy-errors " remedy error"
                              (when (not= 1 remedy-errors) "s")))))
-        (System/exit (if (pos? failed) 1 0)))
+        (if (pos? failed) 1 0))
       (catch clojure.lang.ExceptionInfo e
         (when-not (:waymark10/definition-error (ex-data e))
           (throw e))
@@ -230,4 +238,7 @@
           (println (str "    check: " (name c))))
         (when-some [p (:path (ex-data e))]
           (println (str "    path:  " (pr-str p))))
-        (System/exit 1)))))
+        1)))))
+
+(defn -main [& args]
+  (System/exit (apply run args)))

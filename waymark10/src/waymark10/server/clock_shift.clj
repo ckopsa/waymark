@@ -122,24 +122,33 @@
 
 (defn- wall
   "Why this engine's clock does not move, or nil on a demo engine:
+  a clone (`:clone?`, an org clone's boot) with no IdP, or else
   `seed/admit!`'s question, asked of the engine `install!` was given."
   [c]
   (if-some [eng (some-> c :engine deref)]
-    (try
-      (seed/admit! eng)
+    (cond
+      (and (true? (:clone? eng)) (some? (:oidc eng)))
+      "this engine has an identity provider, and a demo engine has none."
+
+      (true? (:clone? eng))
       nil
-      (catch clojure.lang.ExceptionInfo _
-        (if (str/starts-with? (str (:name eng)) "demo-")
-          "this engine has an identity provider, and a demo engine has none."
-          (str "this engine is named `" (:name eng)
-               "`, and a demo engine's name begins with `demo-`."))))
+
+      :else
+      (try
+        (seed/admit! eng)
+        nil
+        (catch clojure.lang.ExceptionInfo _
+          (if (str/starts-with? (str (:name eng)) "demo-")
+            "this engine has an identity provider, and a demo engine has none."
+            (str "this engine is named `" (:name eng)
+                 "`, and a demo engine's name begins with `demo-`.")))))
     "this engine was built without the demo clock, so it has no offset to move."))
 
 (g/defguard the-engine-is-a-demo
   {:reads [:services]
    :vars [:problem]
    :explain "The clock moves only on a demo engine: {problem}"
-   :open "No door opens this on a working engine. The clock is moved in a seeded clone: an engine whose name begins with `demo-`, with no identity provider, booted with the demo clock."}
+   :open "No door opens this on a working engine. The clock is moved in a seeded clone or an org clone: an engine whose name begins with `demo-`, or one booted with WAYMARK10_CLONE=1, with no identity provider, booted with the demo clock."}
   [_row _inp ctx]
   (if-some [problem (wall (get-in ctx [:services :demo-clock]))]
     (t/deny {:vars {:problem problem}})

@@ -124,6 +124,18 @@ on:
           and on to the mayor's merge when SELFHOST_FIXTURE_TOKEN is set.
         type: boolean
         default: false
+      lane:
+        description: >-
+          The merge train's lane, which narrows the run to the jobs that
+          lane needs (ticket 3307bf9a). 'docs' runs the lint and the
+          link check only;
+          'orgs/<name>' runs org-law and org-findings for that org and
+          test-factory; empty or 'engine' runs everything, exactly as a
+          push does. `gate` then passes when every job of the lane
+          succeeded, and requires no other. A name outside these fails
+          the run.
+        type: string
+        default: ''
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -238,8 +250,9 @@ jobs:
       # diff to read. `actionlint` (and its shellcheck step) runs on it.
       workflows: ${{ steps.detect.outputs.workflows }}
       # The org dirs under orgs/ a pull request changes, as a JSON array
-      # for `org-findings`'s matrix: [] on a PR that touches no org, and
-      # unset on any other event.
+      # for `org-findings`'s matrix: [] on a PR that touches no org, the
+      # one org of an orgs/<name> lane, [] on a docs lane, and unset on
+      # any other event.
       orgs: ${{ steps.detect.outputs.orgs }}
       # Whether a pull request touches what the self-host walk follows:
       # SELFHOST.md, selfhost/** or the factory seed. `selfhost` runs on
@@ -250,7 +263,7 @@ jobs:
       # Why `select` refused a dispatch's `only`, when it did. `gate`
       # prints it: a seat reads only the tail of each failed job, and
       # this job's tail is the checkout's post-step cleanup.
-      refused: ${{ steps.select.outputs.refused }}
+      refused: ${{ steps.detect.outputs.refused || steps.select.outputs.refused }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -263,6 +276,7 @@ jobs:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           EVENT: ${{ github.event_name }}
+          LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
 
@@ -327,6 +341,40 @@ jobs:
           }
 
           say_yes () { emit true all; echo "workflows=true" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+
+          # ── A TRAIN'S LANE: ITS JOBS, NOT THE DIFF'S ─────────────────
+          #
+          # A train dispatch names its lane (ticket 3307bf9a), and the
+          # lane, not a diff, says what runs: docs is actionlint and links,
+          # orgs/<name> is test-factory plus org-law and org-findings for
+          # that one org. No lane, or engine, falls through to the diff
+          # below, so a run outside a train still runs everything.
+          case "${LANE:-}" in
+            ''|engine) ;;
+            docs)
+              emit false none
+              echo "workflows=true" >> "$GITHUB_OUTPUT"
+              echo "orgs=[]" >> "$GITHUB_OUTPUT"
+              echo "lane docs — the lint and the link check only; the suites are skipped"
+              exit 0 ;;
+            orgs/*)
+              org=${LANE#orgs/}
+              if [ -z "$org" ] || [ "${org#*/}" != "$org" ] || [ ! -d "orgs/$org" ]; then
+                echo "refused=lane: $LANE names no org directory under orgs/" >> "$GITHUB_OUTPUT"
+                echo "::error title=changes / lane::$LANE names no org directory under orgs/"
+                exit 1
+              fi
+              reach[factory10]=1
+              emit true table
+              echo "workflows=false" >> "$GITHUB_OUTPUT"
+              echo "orgs=$(jq -cn --arg o "$org" '[$o]')" >> "$GITHUB_OUTPUT"
+              echo "lane $LANE — test-factory, org-law and org-findings for $org"
+              exit 0 ;;
+            *)
+              echo "refused=lane: '$LANE' is not docs, orgs/<name> or engine" >> "$GITHUB_OUTPUT"
+              echo "::error title=changes / lane::'$LANE' is not docs, orgs/<name> or engine"
+              exit 1 ;;
+          esac
 
           # A workflow_dispatch has no base, and a brand-new branch's
           # first push reports the all-zeros sha. Both mean "no diff to
@@ -524,6 +572,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.quick == 'true' &&
+      (inputs.lane || 'engine') == 'engine' &&
       (needs.changes.outputs.workqueue10 == 'true' || needs.changes.outputs.calendar10 == 'true' ||
        needs.changes.outputs.localfire == 'true')
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -595,7 +644,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.factory == 'true' &&
-      needs.changes.outputs.factory10 == 'true'
+      needs.changes.outputs.factory10 == 'true' && inputs.lane != 'docs'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -767,13 +816,16 @@ jobs:
   # Each org dir a pull request changes, its law rendered as the page a
   # person approves (factory10.law-text) and posted on the pull request
   # as one sticky comment per org, edited in place on every push
-  # (ticket 9020e8f8). Not a gate: `gate` does not need this job. A
+  # (ticket 9020e8f8). On a pull request it is not a gate: `gate` reads
+  # it only on an orgs/<name> lane's dispatch, which renders the page
+  # and posts nothing, having no pull request (ticket 3307bf9a). A
   # fork's token cannot comment, so a fork's pull request skips it.
   org-law:
     needs: changes
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+       startsWith(inputs.lane, 'orgs/')) &&
       needs.changes.outputs.orgs != '' && needs.changes.outputs.orgs != '[]'
     runs-on: ubuntu-latest
     permissions:
@@ -802,6 +854,7 @@ jobs:
             clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG"
           } > "$RUNNER_TEMP/law.md"
       - name: post the law page
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -823,7 +876,7 @@ jobs:
   # a.b-test, which is the convention every file in both suites follows.
   discover:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && (inputs.lane || 'engine') == 'engine'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
@@ -955,7 +1008,7 @@ jobs:
     needs: [changes, discover]
     if: >-
       needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]' &&
-      needs.changes.outputs.waymark10 == 'true'
+      needs.changes.outputs.waymark10 == 'true' && (inputs.lane || 'engine') == 'engine'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       # One shard failing must not hide the others: the point of a
@@ -1245,7 +1298,7 @@ jobs:
     needs: [changes, discover]
     if: >-
       needs.changes.outputs.code == 'true' && needs.discover.outputs.workqueue10 != '[]' &&
-      needs.changes.outputs.workqueue10 == 'true'
+      needs.changes.outputs.workqueue10 == 'true' && (inputs.lane || 'engine') == 'engine'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -1514,7 +1567,7 @@ jobs:
   actionlint:
     needs: [changes]
     if: >-
-      needs.changes.outputs.workflows == 'true' &&
+      needs.changes.outputs.workflows == 'true' && !startsWith(inputs.lane, 'orgs/') &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
@@ -1535,6 +1588,24 @@ jobs:
           set -euo pipefail
           shellcheck --version
           shellcheck .github/scripts/*.sh scripts/*.sh waymark10/scripts/*.sh .claude/hooks/sitting-close.sh
+
+  # ── THE DOCS LANE'S LINK CHECK ──────────────────────────────────────
+  #
+  # The docs lane (ticket 3307bf9a) runs the lint and this, and nothing
+  # else, so a docs train that breaks a relative link or names a file
+  # that is gone turns `gate` red. Offline: it follows the links into
+  # this tree only, so a site that is down for a minute fails no train.
+  links:
+    needs: [changes]
+    if: inputs.lane == 'docs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --exclude-path node_modules './**/*.md'
+          fail: true
 
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #
@@ -1575,6 +1646,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
@@ -1757,6 +1829,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
@@ -1915,6 +1988,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
     steps:
@@ -2329,7 +2403,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided]
+    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2356,6 +2430,10 @@ jobs:
           RUN_LOCALFIRE: ${{ needs.changes.outputs.localfire }}
           WORKFLOWS: ${{ needs.changes.outputs.workflows }}
           ACTIONLINT: ${{ needs.actionlint.result }}
+          LINKS: ${{ needs.links.result }}
+          ORG_LAW: ${{ needs.org-law.result }}
+          ORG_FINDINGS: ${{ needs.org-findings.result }}
+          LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
           echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
@@ -2365,6 +2443,26 @@ jobs:
               echo "gate: changes refused — $REFUSED"
             fi
             exit 1
+          fi
+          # A train's lane names its jobs (ticket 3307bf9a): each of them
+          # must succeed, and every other job is not required, skipped on
+          # purpose. No lane, or engine, is everything, decided below.
+          lane_jobs=()
+          case "${LANE:-engine}" in
+            engine) ;;
+            docs)   lane_jobs=("actionlint=$ACTIONLINT" "links=$LINKS") ;;
+            orgs/*) lane_jobs=("test-factory=$TEST_FACTORY" "org-law=$ORG_LAW" "org-findings=$ORG_FINDINGS") ;;
+            *)      echo "gate: FAIL — '$LANE' is no lane."; exit 1 ;;
+          esac
+          if [ "${#lane_jobs[@]}" -gt 0 ]; then
+            for j in "${lane_jobs[@]}"; do
+              if [ "${j#*=}" != "success" ]; then
+                echo "gate: FAIL — lane $LANE needs ${j%%=*} and it did not succeed (${j#*=})."
+                exit 1
+              fi
+            done
+            echo "gate: PASS — lane $LANE, and each of its jobs succeeded (${lane_jobs[*]})."
+            exit 0
           fi
           # Before the code check: a diff touching only a workflow such as
           # image.yml is no code path, and still must lint. A dispatch

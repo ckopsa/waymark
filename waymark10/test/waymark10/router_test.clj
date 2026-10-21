@@ -152,7 +152,9 @@
             ;; spec-guided-follow § 4: the recorded walk and its frames
             "walk" "walk_frame"
             ;; docs/spec-walkthrough.md § 1: an ordered run of steps
-            "walkthrough"]
+            "walkthrough"
+            ;; docs/spec-calendar-time.md §3: the days a house works
+            "work_calendar"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

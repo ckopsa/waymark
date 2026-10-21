@@ -55,17 +55,20 @@
   declarations)."
   (:require [clojure.string :as str]
             [org.httpkit.server :as http]
+            [waymark10.checks-assembly :as checks-assembly]
             [waymark10.modules :as modules]
             [waymark10.registry :as registry]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.belief :as server-belief]
             [waymark10.server.definitions :as defs]
             [waymark10.server.film-rules :as film-rules]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -292,6 +295,10 @@
                                   ;; closed rolls its seat's `health`
                                   (seats/after-write
                                    engine kind action-name res')
+                                  ;; a :recurs source keeps its next
+                                  ;; occurrence armed (calendar step 8b)
+                                  (scheduled/recurs-after-write!
+                                   engine kind action-name res')
                                   res'))
                     ;; the declared surfaces, validated where every
                     ;; kind is known (phase 9b)
@@ -354,6 +361,23 @@
   [eng]
   (router/handler eng (modules/route-sets eng (:modules eng))))
 
+(defn- check-default-calendar!
+  "[business-days-no-calendar] (docs/spec-calendar-time.md §7), at boot:
+  when a law reads the house's calendar — (today), business-days,
+  working? or another calendar reader, or :today in a fact's :over —
+  and the engine has no default work_calendar, throw, naming the laws."
+  [eng]
+  (when-some [readers (seq (checks-assembly/calendar-readers
+                            {:kinds (inv/resources eng)}))]
+    (when-some [calendar-of (:calendar (inv/render-hooks eng))]
+      (when (nil? (calendar-of))
+        (throw (t/definition-error
+                (str "[business-days-no-calendar] " (str/join ", " readers)
+                     " read the house's calendar, and this engine has no default "
+                     "work_calendar — create one: which days does the house "
+                     "work, and in which zone?")
+                {:check :business-days-no-calendar}))))))
+
 (defn start-runtime!
   "Start the engine's running surfaces into its :runtime atom, and
   return the {hook-key handle} map that landed there.
@@ -376,6 +400,8 @@
   alone. It is a seed and no running surface, so it is no hook."
   [eng]
   (when-some [rt (:runtime eng)]
+    ;; a law that reads the house's calendar needs one (calendar spec §7)
+    (check-default-calendar! eng)
     (film-rules/ensure-seed-rules! eng)
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 

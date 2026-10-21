@@ -54,6 +54,249 @@ No live org is a deps root of the engine.
   stamped by `in-domain`) and `check-resources` (zero-arg, for the
   gate).
 
+## Writing a kind
+
+A kind is one `defresource` in `src/<org>/kinds/`, its guards as
+`defguard` sentences: `(defguard name (refuse "the sentence") 'law)`.
+`orgkit/template/src/myorg/kinds/item.clj` carries each form below as
+a comment; `docs/spec-related-row-law.md` is the whole grammar.
+
+**Reference forms.** A law reads a field through a reference form:
+`(data :k)` is what the row already holds, `(input :k)` is what the
+caller sent to this door. A bare keyword anywhere else is refused at
+load ("keyword outside a reference form"); `(present? :k)` is the one
+shorthand that takes one. `(is-set (input :k))` asks whether an
+optional input was sent.
+
+**A related-row guard** names other rows: `exists` holds when one
+matches, `none` when none does. The binder is `[name kind where]`;
+`where` maps a field of the other kind to `(op <expr>)`, with `op` one
+of `= not= < <= > >=` or `(in v …)`. The binder's name is the
+refusal's `{name.field}`:
+
+```clojure
+(defguard crew-is-free
+  (refuse "{b.title} already has this crew that day; pick another crew or day.")
+  '(none [b :booking {:crew  (= (input :crew))
+                      :day   (= (input :day))
+                      :state (in "scheduled" "in_progress")}]))
+```
+
+`(follow (data :customer_id) :status)` reads one field of the row a
+ref names.
+
+**A door's input.** A door that takes arguments declares them as a
+malli map; its guards read them as `(input :k)`:
+
+```clojure
+:schedule {:from #{:requested} :to :scheduled
+           :input [:map
+                   [:crew [:string {:min 1 :max 80}]]
+                   [:day :waymark/date]]
+           :guards [crew-is-free]
+           :safety {:idempotent true :reversible true :confirm false}}
+```
+
+**Dates.** `:waymark/date` is a calendar date, an ISO string on the
+wire (`"2026-10-22"`); `:waymark/instant` is a point in time, RFC 3339
+on the wire. A schema field is `[:due_on {:optional true} [:maybe
+:waymark/date]]`. Keep dates out of plain strings.
+
+**Fields that hold an id.** The `unref'd-ids` check refuses a short
+string field (a `:max` of 64 or less, not a `prose` widget) whose name
+reads as an id and that nothing declares a ref: a name ending `_by`,
+one of `owner author caller member sitter person`, or a served kind's
+name, bare or with `_id` (`request`, `request_id`). Declare a row ref
+with its kind, a member with `:x-ref {:principal true}`, or waive a
+field that holds no id with `{:not-a-ref "why"}`:
+
+```clojure
+[:request_id {:optional true :kind :request} [:maybe :waymark/ref]]
+[:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+```
+
+## Calendar time
+
+A deadline, a business day, a visit every other Tuesday and a crew
+booked once are law, not hand-written guards. This is the part of
+`docs/spec-calendar-time.md` an org author uses; the examples are in
+the shape of `orgs/example`'s kinds.
+
+**Periods.** `(days n) (weeks n) (months n) (years n)` are calendar
+arithmetic on a date; `(hours n) (minutes n)` are clock arithmetic on
+an instant. A date plus a period is a date (a month past the 31st is
+the month's last day); an instant plus hours is an instant; a date plus
+hours is nil, as a date has no hour. `(weeks 2)` is `(days 14)`, one
+law. `(days-between a b)` is the whole days from date `a` to date `b`,
+negative when `b` is earlier:
+
+```clojure
+(defguard prescription-is-live
+  (refuse "The prescription was signed {data.signed_on} and ran out after 90 days.")
+  '(< (today) (+ (data :signed_on) (days 90))))
+
+(defguard note-in-time
+  (refuse "The note is due within a day of the visit.")
+  '(<= (now) (+ (data :visit_at) (hours 24))))
+
+(defguard long-past-due
+  (refuse "This invoice is not yet 15 days past due.")
+  '(> (days-between (data :due_on) (today)) 15))
+```
+
+**Readers and the house zone.** `(today)` is the date of `(now)` in
+the governing calendar's zone: the house's day, the same for every
+reader. `(local-date (data :starts_at))` is an instant's date in that
+zone. `(date-of (now))` stays Greenwich's day; do not compare it with
+a date field. A derived fact spells the day `(var :today)` and names
+`:today` in `:over`:
+
+```clojure
+:derived {:overdue {:over [:issued_on :today]
+                    :expr '(> (var :today) (+ (var :issued_on) (days 30)))}}
+```
+
+The business-day readers walk the governing calendar's workdays and
+holidays:
+
+```clojure
+'(<= (today) (+ (data :ordered_on) (business-days 3)))   ; ships within 3 business days
+'(business-day? (data :visit_on))
+'(= (data :due_on) (next-business-day (data :due_on)))   ; the day itself when it is one
+'(working? (input :starts_at) (input :ends_at))          ; on a workday, inside hours
+```
+
+`(working? from to)` takes a third argument, a calendar ref, when the
+resource names its own calendar. Every reader is unknown, so pending
+and never refused, where no calendar governs; `business-days` walks at
+most 366 days.
+
+**`work_calendar`.** A calendar is a row the engine serves, not a
+declaration, so a holiday added in December moves verdicts without a
+deploy. Its fields are `name`, `zone` (IANA, required), `workdays`
+(default `mon`–`fri`), `hours` `{from "07:00" to "17:00"}` (none means
+the whole day), `holidays` (kept by the `add_holiday` and
+`remove_holiday` doors) and `default`, true on the one row that governs
+when nothing names another. A kind whose rows keep their own calendar
+holds a ref to one and names it with `:calendar`:
+
+```clojure
+(defresource crew
+  {:kind :crew
+   :calendar :calendar_id
+   :schema [:map
+            [:name [:string {:min 1 :max 80}]]
+            [:calendar_id {:optional true :kind :work_calendar} [:maybe :waymark/ref]]]
+   ...})
+```
+
+A scenario whose law reads the calendar names one, as it names `:at`;
+the engine never makes one up:
+
+```clojure
+{:kind :work_order :attempt :ship
+ :at "2027-05-13T14:00:00Z"
+ :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}
+            :hours {:from "07:00" :to "17:00"} :holidays ["2027-05-31"]}
+ ...}
+```
+
+**`:expected-age` from a date.** Beside seconds, a state's age may be
+`{:business-days n}`, counted from state entry, or `{:until <form>}`,
+the date or instant after which the row is overdue. `:until` reads only
+`(data …)`, periods and the calendar; an unset date is no age. Once it
+passes, the row is filed once as an `aged` draft ticket. A deadline
+that must change the law (an expired prescription refuses `refill`) is
+a guard over `(today)`, not an age:
+
+```clojure
+:expected-age {:open        43200
+               :in_billing  {:business-days 2}
+               :sent        {:until '(+ (data :due_on) (days 15))}
+               :inactive    {:until '(+ (data :last_visit_on) (years 7))}}
+```
+
+**`:recurs`.** A rule on the source kind makes rows of another kind on
+its dates. The engine keeps one `scheduled_action` ahead per source row
+and rule, run as `:owner` under that principal's grant, and never makes
+two rows for one date. `:every`, `:from`, `:until`, `:lead` and
+`:owner` are law over the source row; `(occurrence)` is the date, legal
+only in `:input`, and `(self)` the source row's id:
+
+```clojure
+:recurs [{:name     :visits
+          :makes    :visit
+          :every    '(weeks 2)
+          :on       #{:tue}                     ; weekdays in the period; else :from's day
+          :from     '(data :season_starts_on)
+          :until    '(data :season_ends_on)     ; or :times 12, or both
+          :while    #{:active}                  ; leaving these cancels what is armed
+          :holidays :next                       ; :skip (default) | :next | :previous | :keep
+          :lead     '(days 14)
+          :owner    '(data :account_manager_id)
+          :input    {:contract_id '(self)
+                     :visit_on    '(occurrence)}}]
+```
+
+The dates are a pure function, so a scenario lists them at the check
+tier:
+
+```clojure
+{:kind :contract :recurs :visits
+ :row {:state "active" :data {:season_starts_on "2027-04-01" :season_ends_on "2027-10-31"}}
+ :calendar {:zone "America/Denver"}
+ :expect {:occurrences {:first "2027-04-06" :count 15}}}
+```
+
+**`:occupies`.** A row holds a resource (any kind a ref names) for the
+window `[from, to)` while it is in `:in`; `:grain :day` reads two dates
+as whole days. On each door in `:doors` the engine adds two guards,
+named from the resource field: `crew-is-free`, a `none` over every kind
+that occupies the same resource kind, and `crew-is-working`, `working?`
+in the resource's calendar. On an instant window a refusal carries
+`next-free`: the next window as long, within 30 business days, in which
+the crew is working and free, and a remedy that takes the door again
+there. `:explain {:crew-is-free "…"}` replaces a derived sentence;
+do not write your own copy of the guard:
+
+```clojure
+;; on :booking
+:occupies [{:resource :crew_id :from :starts_at :to :ends_at
+            :in #{:scheduled :in_progress} :doors #{:create :reschedule}}]
+;; on :time_off, the same crew held by something that is not a job
+:occupies [{:resource :crew_id :from :starts_at :to :ends_at
+            :in #{:approved} :doors #{:create :approve}}]
+```
+
+**What each replaces.**
+
+| The workaround | Write instead |
+|---|---|
+| A deadline from a date: expiry, net-30, quote validity, returns, a note within 24h, a purge | period arithmetic and `(today)` in a guard; `:expected-age :until` where someone must be told |
+| Past due by N days | `days-between` in a guard or derived fact |
+| Business days and holidays | a `work_calendar` row and `business-days` |
+| A season, N a week, a monthly close | `:recurs` |
+| One job per crew, equipment per day, open slots, the next free day | `:occupies`, and the `next-free` it derives |
+
+**Findings you may meet.**
+
+- `[utc-today]`: a guard or fact compares `(date-of (now))` with a
+  date field; use `(today)`, or `(var :today)` in a fact.
+- `[date-unread]`: a date or instant field nothing reads; give it a
+  guard or an `:expected-age :until`, or mark it `:record-only true`.
+- `deadline_untold` (cracks audit): an `:until` age on a state no seat
+  is woken to; wake a seat there, or add a notice rule.
+- `[recurs-no-owner]`: name `:owner`, the field or seat whose act each
+  made row is.
+- `[recurs-no-stop]`: give the rule `:until`, `:times` or `:while`.
+- `[recurs-unmakeable]`: `:makes` names a kind with a create door, and
+  `:input` fills each field that door requires.
+- `[occupies-unfiltered]`: declare the resource, `from` and `to`
+  fields `:filterable` on the occupying kind.
+- `[resource-uncalendared]` (info): the occupied kind names no
+  `:calendar`, so the default row's hours judge it; name one when its
+  hours differ.
+
 ## The seed
 
 `resources/<org>/seed.edn` is the demo seed's grammar

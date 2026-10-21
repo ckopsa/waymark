@@ -158,6 +158,9 @@
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
+            ;; a cue note's {data.field} holes, filled as a :summary
+            ;; template's are (ticket 79b29c3e)
+            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
@@ -6854,12 +6857,24 @@
   stated `note`, else a default sentence built from the entry, so a
   cue spelled as a `wake_on` entry still tells the person (ticket
   1f3aa7cd). A cue that names actions says by which one the row
-  arrived; one with no actions says only that it moved."
-  [cue action]
-  (or (some-> (:note cue) str not-empty)
-      (if (seq (:actions cue))
-        (str "A " (:kind cue) " arrived by " action ": it may wait on your tap.")
-        (str "A " (:kind cue) " moved: it may wait on your tap."))))
+  arrived; one with no actions says only that it moved.
+
+  A stated note may name the row that moved: its {data.field},
+  {state} and {id} holes fill from `row` as a :summary template's do,
+  and a field the row lacks, or a row that is gone, says an em-dash
+  (ticket 79b29c3e)."
+  ([cue action] (cue-note cue action nil))
+  ([cue action row]
+   (or (some-> (:note cue) str not-empty (summary/render row))
+       (if (seq (:actions cue))
+         (str "A " (:kind cue) " arrived by " action ": it may wait on your tap.")
+         (str "A " (:kind cue) " moved: it may wait on your tap.")))))
+
+(defn cue-note-holes?
+  "Whether a cue's stated note names a field of the row that moved, so
+  matching it reads that row (ticket 79b29c3e)."
+  [cue]
+  (boolean (some->> (:note cue) str (re-find #"\{[A-Za-z0-9_.]+\}"))))
 
 (def inbox-keys-max
   "How many inbox keys of one sitting answer at one time. A same-session

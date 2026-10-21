@@ -151,7 +151,8 @@
   `:probe` with a nil input, which is render's own posture: a guard
   that grades input cannot decide without it, so it pends rather than
   refusing, and the sweep never reports a drift nobody has typed yet.
-  The hooks are live (`inv/render-hooks` plus :actor-of) — a sweep is
+  The hooks are live (`inv/render-hooks`, its :calendar among them
+  — docs/spec-calendar-time.md §6 — plus :actor-of) — a sweep is
   a question about real rows, and the storage-free ctx a scenario
   uses would answer it optimistically."
   [eng principal]

@@ -534,6 +534,46 @@
                 (str path)))
             (get-in change [:data :touched_paths])))))
 
+(def engine-lane
+  "The catch-all lane every policy implies and none declares."
+  "engine")
+
+(defn- org-dir
+  "The org directory a path stands in — `orgs/<x>` for orgs/<x>/… — or
+  nil for a path that is not inside one."
+  [path]
+  (let [[top org & more] (str/split (str path) #"/")]
+    (when (and (= "orgs" top) (not-empty org) (seq more))
+      (str "orgs/" org))))
+
+(defn lane-of
+  "The lane this change stands in (ticket 9b27142e): the name of the
+  first of its policy's `lanes` whose globs cover EVERY path the change
+  touches, in the grammar of `person-path` (`gate/path-glob-matches?`).
+  A lane that covers by `orgs/**` is one lane for each org directory,
+  `orgs/<x>`. A change no lane covers, one that spans lanes or org
+  directories, one that touches nothing, and every change of a policy
+  that declares no lanes is `engine-lane`. Pure: it reads the two rows
+  it is given and nothing else."
+  [change policy]
+  (let [paths (keep #(some-> % str not-empty) (get-in change [:data :touched_paths]))
+        covers? (fn [globs path] (some #(gate/path-glob-matches? % path) globs))
+        lane (when (seq paths)
+               (some (fn [lane]
+                       (let [globs (keep #(some-> % str not-empty) (:paths lane))
+                             lane-name (some-> (:name lane) str not-empty)]
+                         (when (and lane-name (seq globs)
+                                    (every? #(covers? globs %) paths))
+                           {:globs globs :name lane-name})))
+                     (map #(update-keys % keyword)
+                          (filter map? (get-in policy [:data :lanes])))))]
+    (cond
+      (nil? lane) engine-lane
+      (some #{"orgs/**"} (:globs lane))
+      (let [orgs (set (map org-dir paths))]
+        (if (and (= 1 (count orgs)) (first orgs)) (first orgs) engine-lane))
+      :else (:name lane))))
+
 (defn house-merges-change?
   "Does the house's merge pass merge THIS change? Only when its policy
   `house-pass-merges?` and the change touches no path the policy keeps
@@ -972,6 +1012,58 @@
   [repo front]
   (str "train/" repo "/" (get-in front [:data :number])))
 
+(defn train-key
+  "Where a lane's train stands among the `trains` a pass fills (ticket
+  55d584f2): the engine lane's under its repository, as the one train
+  of a repository always stood, and any other lane's under
+  [repository lane]."
+  [repo lane]
+  (if (= engine-lane lane) repo [repo lane]))
+
+(defn- lane-of-train
+  "The lane a train rides in: the one it carries, else `engine-lane`."
+  [train]
+  (or (some-> (:lane train) str not-empty) engine-lane))
+
+(defn- train-done-key
+  "The `seen` mark that sends one lane's line one at a time for the
+  rest of this process; the engine lane's is its repository's."
+  [repo lane]
+  (if (= engine-lane lane) [:train-done repo] [:train-done repo lane]))
+
+(defn trains-of
+  "Every train standing on a policy → {lane train}: the engine lane's in
+  `line_train`, as before lanes, and each other lane's in
+  `lane_trains`, which carries its `lane`."
+  [policy]
+  (into (if-some [t (get-in policy [:data :line_train])] {engine-lane t} {})
+        (keep (fn [t]
+                (let [lane (lane-of-train t)]
+                  (when (not= engine-lane lane) [lane t]))))
+        (get-in policy [:data :lane_trains])))
+
+(defn train-marks
+  "What a pass writes on each policy from the `trains` it filled
+  (`train-key` → the train standing now, nil for none) → {repo marks}:
+  the engine lane's train as `line_train`, and the others' as the whole
+  `lane_trains`, a lane this pass did not touch kept as the policy had it."
+  [by-repo trains]
+  (update-vals
+   (reduce-kv
+    (fn [acc k t]
+      (if (vector? k)
+        (let [[repo lane] k
+              had (or (get-in acc [repo :lane_trains])
+                      (vec (get-in (get by-repo repo) [:data :lane_trains])))]
+          (assoc-in acc [repo :lane_trains]
+                    (cond-> (filterv #(not= lane (lane-of-train %)) had)
+                      t (conj (assoc t :lane lane)))))
+        (assoc-in acc [k :line_train] t)))
+    {} trains)
+   (fn [marks]
+     (cond-> marks
+       (contains? marks :lane_trains) (update :lane_trains not-empty)))))
+
 (defn- green-behind?
   "Does the rig's merge answer say the change is green on its own head
   and only behind its base?"
@@ -998,11 +1090,14 @@
 
 (defn- dispatch-checks!
   "Dispatch a built train's checks → the train with its `run_id`, nil
-  when no run showed yet (`train_status` then reads it by branch)."
+  when no run showed yet (`train_status` then reads it by branch). A
+  train of a lane other than engine names it as `lane` (ticket
+  929ada09), and tests.yml runs that lane's jobs instead of the diff's."
   [ctx repo train]
   (let [answer (ask ctx :train_checks
                     (cond-> {:repo repo :branch (:branch train)}
-                      (:workflow train) (assoc :workflow (:workflow train))))]
+                      (:workflow train) (assoc :workflow (:workflow train))
+                      (:lane train) (assoc :lane (:lane train))))]
     (when (refused answer)
       (warn! "the rig refused the checks of " (:branch train) " ("
              (reason-of answer) ")"))
@@ -1052,8 +1147,10 @@
   did not merge cleanly stays in the line untouched. The train carries
   the heads its riders had (`heads`, beside `changes`), so its red is
   not written on a head it did not test (e23f8842), and a restart
-  still knows them (ffd36c98)."
-  [ctx repo policy riders]
+  still knows them (ffd36c98). A `lane` other than engine rides on the
+  train before its checks are dispatched, so the dispatch names it."
+  ([ctx repo policy riders] (build-train! ctx repo policy riders nil))
+  ([ctx repo policy riders lane]
   (let [branch (train-branch repo (first riders))
         answer (ask ctx :train_build {:repo repo :base (base-of policy)
                                       :branch branch
@@ -1083,17 +1180,19 @@
                                    :base_head (some-> (:base_head answer) str)
                                    :started_at (pass-now ctx)}
                             (test-workflow-of policy)
-                            (assoc :workflow (test-workflow-of policy))))))))
+                            (assoc :workflow (test-workflow-of policy))
+                            (and lane (not= engine-lane lane))
+                            (assoc :lane (str lane)))))))))
 
 (defn- one-at-a-time!
   "Delete a train and send its repository one at a time for the rest of
-  this process (`seen` keeps that under `[:train-done repo]`), so no
+  this process for its lane (`seen` keeps that under `train-done-key`), so no
   train is built only to be thrown away again. → nil."
   [ctx seen repo train why]
   (warn! repo ": the train " (:branch train) " " why
          "; it is deleted and the line goes one at a time")
   (ask ctx :train_delete {:repo repo :branch (:branch train)})
-  (swap! seen assoc [:train-done repo] true)
+  (swap! seen assoc (train-done-key repo (lane-of-train train)) true)
   nil)
 
 (defn- land-train!
@@ -1196,8 +1295,10 @@
 
       :else
       (some-> (build-train! ctx repo policy
-                            (subvec riders 0 (quot (count riders) 2)))
-              (assoc :tries tries :size size)))))
+                            (subvec riders 0 (quot (count riders) 2))
+                            (:lane train))
+              (assoc :tries tries :size size)
+              (cond-> (:lane train) (assoc :lane (:lane train)))))))
 
 (defn- run-of [x] (some-> (:run_id x) str not-empty))
 
@@ -1506,12 +1607,14 @@
   The front is chosen after the answers, so a change that went
   red or was parked this pass does not hold the line. `answers`, when
   given, is an atom the pass fills with change id → the rig's answer.
-  A repository whose policy says `merge_strategy: train` sends its
-  front and the green changes behind it as one train instead
-  (`build-train!`), and a standing train (`line_train`) is read once
-  (`advance-train!`) while its front waits. `trains`, when given, is an
-  atom the pass fills with repository → the train that stands now, nil
-  for none, for each repository whose train it built or read. A
+  A repository whose policy says `merge_strategy: train` sends each
+  lane's front and the green changes behind it in that lane as one
+  train instead (`build-train!`, ticket 55d584f2): a train never mixes
+  lanes, and each lane keeps its own standing train (`trains-of`), read
+  once (`advance-train!`) while the line waits. The repository's front
+  waits when a train stands in its lane. `trains`, when given, is an
+  atom the pass fills with `train-key` → the train that stands now, nil
+  for none, for each lane whose train it built or read. A
   standing train whose repository has no line this pass — every rider
   merged or left, or the repository is deploy-held — is read as well,
   so it still finishes and leaves the policy.
@@ -1535,20 +1638,35 @@
                (recur more)))))
        (let [front (front-of line @answers @seen)
              id (some-> front :id str)
-             train (get-in policy [:data :line_train])
-             riders (when (and (nil? train)
-                               (= "train" (merge-strategy-of policy))
-                               (not (get @seen [:train-done repo])))
-                      (train-riders line @answers @seen policy))
-             built (when (next riders) (build-train! ctx repo policy riders))]
+             in-lane #(lane-of % policy)
+             standing (trains-of policy)
+             built (into {}
+                         (keep
+                          (fn [lane]
+                            (when (and (nil? (get standing lane))
+                                       (= "train" (merge-strategy-of policy))
+                                       (not (get @seen (train-done-key repo lane))))
+                              (let [riders (train-riders (filterv #(= lane (in-lane %)) line)
+                                                         @answers @seen policy)]
+                                (when-some [t (when (next riders)
+                                                (build-train! ctx repo policy riders lane))]
+                                  [lane (cond-> t
+                                          (not= engine-lane lane) (assoc :lane lane))])))))
+                         (distinct (map in-lane line)))]
          (bring-missing-forward! ctx seen line policy answers)
          (warn! repo ": " (or id "nothing") " is the front of the merge line, "
                 (count (remove #(= id (str (:id %))) line)) " wait")
+         (doseq [[lane train] standing]
+           (swap! trains assoc (train-key repo lane)
+                  (advance-train! (assoc ctx :answers answers)
+                                  seen repo policy train)))
+         (doseq [[lane train] built]
+           (swap! trains assoc (train-key repo lane) train))
          (cond
-           train (swap! trains assoc repo
-                        (advance-train! (assoc ctx :answers answers)
-                                        seen repo policy train))
-           built (swap! trains assoc repo built)
+           ;; a train stands in the front's lane: the front rides or waits
+           (and front (let [lane (in-lane front)]
+                        (or (contains? standing lane) (contains? built lane))))
+           nil
            ;; an interrupted front that stands in the line was not run
            ;; again yet: it is, and it waits on its checks (ticket 68423628)
            (and front (= "interrupted" (answer-state (get @answers id))))
@@ -1576,9 +1694,8 @@
      ;; no line this pass would otherwise keep it on the policy for good
      (doseq [[repo policy] by-repo
              :when (not (contains? lines repo))
-             :let [train (get-in policy [:data :line_train])]
-             :when train]
-       (swap! trains assoc repo
+             [lane train] (trains-of policy)]
+       (swap! trains assoc (train-key repo lane)
               (advance-train! (assoc ctx :answers answers)
                               seen repo policy train)))
      @asked)))
@@ -1604,7 +1721,7 @@
 (def line-whys
   "Every word `line_why` may carry."
   ["front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held"
-   "person" "org_plan_waits_go_live"])
+   "person" "org_plan_waits_go_live" "org_plan_retired"])
 
 (def ^:private reason-chars 500)
 
@@ -1655,10 +1772,14 @@
   :changes {id marks}}; a field a marks map leaves out is cleared. The
   front's place is 1 and the others in the line follow in order; a
   change out of the line has no place and says why. A repository with
-  a train in `trains` (repository → its standing train) says its front
-  waits on the `train`."
+  a train in `trains` (`train-key` → its standing train) in its front's
+  lane says its front waits on the `train`. `lane-fn` (change → its
+  lane, `lane-of`) counts each place within the change's lane (ticket
+  55d584f2); without it every change stands in `engine-lane`."
   ([lines answers seen parked] (line-marks lines answers seen parked {}))
   ([lines answers seen parked trains]
+   (line-marks lines answers seen parked trains (constantly engine-lane)))
+  ([lines answers seen parked trains lane-fn]
   (let [answer-of #(get answers (str (:id %)))
         in-line (fn [line] (vec (remove #(out-of-line % (answer-of %) seen) line)))]
     {:policies
@@ -1669,7 +1790,7 @@
                     [repo (if front
                             {:line_front (str (:id front))
                              :line_front_pr (get-in front [:data :number])
-                             :line_front_waiting (if (get trains repo)
+                             :line_front_waiting (if (get trains (train-key repo (lane-fn front)))
                                                    "train"
                                                    (front-waits-on (answer-of front)
                                                                    (holds-base? front seen)))
@@ -1688,8 +1809,11 @@
             parked)
       (into {}
             (mapcat (fn [[_ line]]
-                      (let [place (zipmap (map (comp str :id) (in-line line))
-                                          (iterate inc 1))]
+                      (let [place (into {}
+                                        (mapcat (fn [[_ in]]
+                                                  (zipmap (map (comp str :id) in)
+                                                          (iterate inc 1))))
+                                        (group-by lane-fn (in-line line)))]
                         (map (fn [change]
                                (let [id (str (:id change))
                                      out (out-of-line change (answer-of change) seen)]
@@ -2251,21 +2375,37 @@
   that carry no go_live yes (`go-live-yeses!`): change id → that plan.
   Such a change merges only through go_live — the house does not merge
   it and no person is asked to (ticket 7aff6a5c). Once its plan is live
-  or retired the change is ordinary again."
+  the change is ordinary again. A retired plan's change is never
+  merge-eligible (ticket e0ff6d71): it is held too, whether the plan
+  names it or it was born from that plan, unless a live plan names it."
   [eng changes]
-  (let [plans (org-plans eng (go-live-wait-states eng))]
+  (let [live (org-plans eng ["live"])
+        retired (apply dissoc (org-plans eng ["retired"]) (keys live))
+        born-of (into {}
+                      (map (fn [p] [(str "org_plan:" (:id p)) p]))
+                      (vals retired))
+        plans (merge retired (org-plans eng (go-live-wait-states eng)))]
     (into {}
           (keep (fn [c]
                   (let [id (str (:id c))]
-                    (when-some [plan (get plans id)]
+                    (when-some [plan (or (get plans id)
+                                         (when-not (contains? live id)
+                                           (get born-of (str (get-in c [:data :born_from])))))]
                       (when (nil? (::go-live-yes c)) [id plan])))))
           changes)))
+
+(defn- retired-plan?
+  [plan]
+  (= "retired" (some-> (:state plan) name)))
 
 (defn go-live-wait-reason
   "What a change waiting on its org_plan's go_live says on its row."
   [plan]
-  (str "org plan " (:id plan) " is " (some-> (:state plan) name)
-       ": only its owner's go_live merges this pull request"))
+  (if (retired-plan? plan)
+    (str "org plan " (:id plan) " is retired: its pull request is never"
+         " merged; close it")
+    (str "org plan " (:id plan) " is " (some-> (:state plan) name)
+         ": only its owner's go_live merges this pull request")))
 
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
@@ -2338,7 +2478,8 @@
   names merges on the owner's go_live yes (`go-live-yeses!`, ticket
   c8e131fb); one an org_plan not yet live names is merged by nothing
   else, and says `org_plan_waits_go_live` (`go-live-waits`, ticket
-  7aff6a5c). Throws nothing.
+  7aff6a5c); one a retired org_plan names or bore is merged by nothing
+  and says `org_plan_retired` (ticket e0ff6d71). Throws nothing.
   → the number of `merge` calls made."
   ([eng seen] (merge-green! eng seen nil))
   ([eng seen repos]
@@ -2373,9 +2514,9 @@
                            (apply dissoc lines (keys deploy-holds)) by-repo
                            answers trains)
         standing (merge (into {}
-                              (keep (fn [[repo p]]
-                                      (when-some [t (get-in p [:data :line_train])]
-                                        [repo t])))
+                              (mapcat (fn [[repo p]]
+                                        (map (fn [[lane t]] [(train-key repo lane) t])
+                                             (trains-of p))))
                               by-repo)
                         @trains)]
     (try
@@ -2390,9 +2531,9 @@
                              (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (mark-conflicts! eng @answers)
-      (doseq [[repo t] @trains]
+      (doseq [[repo marks] (train-marks by-repo @trains)]
         (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
-                   {:line_train t} #{}))
+                   marks #{}))
       (doseq [[repo why] deploy-holds]
         (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
                    {:deploy_note why} #{}))
@@ -2407,7 +2548,8 @@
                                          @answers @seen
                                          (parked-changes (with-conflicts found offered)
                                                          by-repo @seen)
-                                         standing))
+                                         standing
+                                         #(lane-of % (get by-repo (str (get-in % [:data :repository]))))))
                            :changes merge
                            ;; a change nobody here can merge says so
                            ;; (ticket 60962bcf)
@@ -2423,7 +2565,9 @@
                            ;; (ticket 7aff6a5c)
                            (into {}
                                  (map (fn [[id plan]]
-                                        [id {:line_why "org_plan_waits_go_live"
+                                        [id {:line_why (if (retired-plan? plan)
+                                                         "org_plan_retired"
+                                                         "org_plan_waits_go_live")
                                              :line_reason (go-live-wait-reason plan)}]))
                                  waits))
                    changes repos)

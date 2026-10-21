@@ -807,6 +807,33 @@
         (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
     (t/allow)))
 
+(def ^:private findings-states
+  "The states whose plan the findings pass audits at each new head of
+  its change (forge's `findings-doors`, less filming, whose take is
+  voided instead)."
+  #{"drafting" "proposed" "simulated"})
+
+(defn- findings-pending-head
+  "The `findings_pending_head` computed field: the head of the plan's
+  change its findings were not recorded at yet, or nil when they were,
+  when no head is pushed, or when the plan's state takes no findings.
+  Ticket 24c4feba: a reader knows findings are coming, and for which
+  head, without polling until `findings_sha` moves."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when (contains? findings-states (some-> (:state row) name))
+      (let [named (some-> (get-in row [:data :change]) str not-empty)
+            head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)]
+        (when (and head (not= head (str (get-in row [:data :findings_sha]))))
+          head)))))
+
+(defn- findings-pending
+  "The `findings_pending` computed field: true while a findings run is
+  owed on the change's head, false once it landed; nil with no read."
+  [row ctx]
+  (when (:read ctx)
+    (some? (findings-pending-head row ctx))))
+
 ;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
 ;; sit mints it `born_from` the plan; a change opened for anything else,
 ;; or one already closed or merged, is not this plan's pull request.
@@ -1139,6 +1166,25 @@
                           :help "A field name, and the value it must equal: state, or a field the kind filters by."}}
      [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]]])
 
+(defn- log-workarounds-door
+  "The log_workarounds door as a self-loop on `state`. A run learns
+  workarounds after drafting too, so the door is spelled once per state
+  it stays in (a v10 action declares one :to). It only appends to
+  `workarounds`: no law, no head, so no refilm, findings run or void
+  (ticket beb733af)."
+  [state label order]
+  {:from #{state} :to state
+   :guards [the-name-is-snake-case]
+   :handler log-the-workarounds
+   :input [:map
+           [:entries {:x-display {:label "The workarounds"
+                                  :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
+            [:vector {:min 1 :max 50} workaround-schema]]]
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
+   :display {:label label :order order
+             :description "Log the workarounds onboarding had to make"}})
+
 (def ^:private hire-seat-schema
   "The seat a hire plan hires, as factorykit.hire's seed step drafts it
   (M4b): what the engine opens in the org's domain once the hire merges."
@@ -1254,6 +1300,21 @@
                 :workarounds_concept #{:eq :in}}
    :on-create stamp-the-owner
    :data-migrate purpose-backfill
+   ;; ticket 24c4feba: a findings run owed on the head shows on the plan
+   :computed {:findings_pending
+              {:schema [:maybe :boolean]
+               :x-display
+               {:label "Findings coming"
+                :help "True while the audit's findings for the head of this plan's pull request have not landed yet; false once they have. Read each time from the change."}
+               :reads? true
+               :fn findings-pending}
+              :findings_pending_head
+              {:schema [:maybe :string]
+               :x-display
+               {:label "Findings coming for"
+                :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
+               :reads? true
+               :fn findings-pending-head}}
    :create-guards [a-person-files-the-plan one-plan-per-name]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
@@ -1514,17 +1575,18 @@
                :description "Answer a question the onboarding seat asked"}}
 
     :log_workarounds
-    {:from #{:drafting} :to :drafting
-     :guards [the-name-is-snake-case]
-     :handler log-the-workarounds
-     :input [:map
-             [:entries {:x-display {:label "The workarounds"
-                                    :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
-              [:vector {:min 1 :max 50} workaround-schema]]]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
-     :display {:label "Log workarounds" :order 16
-               :description "Log the workarounds onboarding had to make"}}
+    (log-workarounds-door :drafting "Log workarounds" 16)
+
+    ;; AFTER DRAFTING (ticket beb733af): a run that proposes, films and
+    ;; simulates still logs what it worked around, in the state it is in.
+    :log_workarounds_proposed
+    (log-workarounds-door :proposed "Log workarounds while proposed" 17)
+
+    :log_workarounds_simulated
+    (log-workarounds-door :simulated "Log workarounds while simulated" 18)
+
+    :log_workarounds_going_live
+    (log-workarounds-door :going_live "Log workarounds while going live" 19)
 
     :propose
     {:from #{:drafting} :to :proposed

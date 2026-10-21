@@ -297,6 +297,22 @@
         (is (str/includes? said another-repo) "what this call carried")
         (is (str/includes? said a-repo) "and what the filter admits")
         (is (= 1 (count (calls w)))
+            "nothing reached the rig: the refusal is in-process")))
+
+    (testing "a read with NO repo refuses 403 and says why it is missing:
+              the engine fills it only for a sit that prepared a bench,
+              so pass it on every call (ticket 599cf0d4)"
+      (let [r (power! w {:tool "bench__read"
+                         :arguments {:path "src/a.clj"}})
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said "`repo` is not on this call")
+            "the field that is missing")
+        (is (str/includes? said "only for a sitting whose sit prepared a bench")
+            "why the engine did not fill it")
+        (is (str/includes? said "pass `repo` on every call")
+            "and what to do instead")
+        (is (= 1 (count (calls w)))
             "nothing reached the rig: the refusal is in-process")))))
 
 ;; ── acceptance 3: the paths the filter names, and the `allow` ───────
@@ -346,7 +362,17 @@
       (is (true? (gate/path-glob-matches? "*.pem" "keys/server.pem")))
       (is (true? (gate/path-glob-matches? "**/secrets/**" "a/secrets/b")))
       (is (true? (gate/path-glob-matches? "src/?.clj" "src/a.clj")))
-      (is (false? (gate/path-glob-matches? "src/?.clj" "src/ab.clj"))))))
+      (is (false? (gate/path-glob-matches? "src/?.clj" "src/ab.clj"))))
+
+    (testing "`X/**` admits the directory X itself, with or without its slash"
+      (is (true? (gate/path-glob-matches? "orgs/shop/**" "orgs/shop")))
+      (is (true? (gate/path-glob-matches? "orgs/shop/**" "orgs/shop/")))
+      (is (false? (gate/path-glob-matches? "orgs/shop/**" "orgs/shopfront"))))))
+
+(deftest the-sit-note-asks-for-repo-and-branch-on-every-bench-call
+  (is (str/includes? @#'mcp/bench-filled-note "repo and branch"))
+  (is (str/includes? @#'mcp/bench-filled-note "every bench call"))
+  (is (not (str/includes? @#'mcp/bench-filled-note "leave them"))))
 
 (deftest a-path-filter-judges-a-moves-move-to-by-the-same-globs
   (let [w (world [{:kind "bench.edit" :actions []
