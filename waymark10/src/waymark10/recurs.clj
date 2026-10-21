@@ -3,7 +3,10 @@
   declares a rule that makes rows of another kind on dates, and the
   dates are a pure function of the rule, the source row's data and the
   house's calendar — so a recurrence scenario judges them at the check
-  tier. Nothing here makes a row or schedules one; arming is step 8b.
+  tier. Nothing here makes a row or schedules one: arming is
+  waymark10.server.scheduled's (step 8b), which reads the rule through
+  `lead-of`, `owner-of` and `input-of`. `derive-kinds` gives each made
+  kind the engine's `recurs_from` field.
 
   A rule is {:name :makes :every :on :from :until :times :while
   :holidays :lead :owner :input}. :every, :from, :until, :lead and
@@ -193,3 +196,65 @@
   (into []
         (comp (remove #(.isBefore ^LocalDate % on-or-after)) (take n))
         (occurrences rule data calendar)))
+
+;; ── what arming reads (build step 8b) ───────────────────────────────
+
+(defn lead-of
+  "The rule's :lead over the source row's data, a Period, or nil when it
+  declares none or answers no forward one."
+  ^Period [rule data calendar]
+  (let [v (value (:lead rule) data calendar)]
+    (when (and (instance? Period v) (not (.isNegative ^Period v))) v)))
+
+(defn owner-of
+  "The principal id the rule's :owner names on the source row, or nil."
+  [rule data calendar]
+  (some-> (value (:owner rule) data calendar) str not-empty))
+
+(defn input-of
+  "The made row's create input for one occurrence: each :input form over
+  the source row, where (self) is the source row's id and (occurrence)
+  the date. A form that answers unknown is left out; a date crosses as
+  its ISO string, as a body spells it."
+  [rule data self ^LocalDate on calendar]
+  (let [scope (cond-> {:data data :self self}
+                calendar (assoc :calendar (fn ([] calendar) ([_] calendar))))]
+    (into {}
+          (keep (fn [[k form]]
+                  (let [v (if (= '(occurrence) form)
+                            on
+                            (expr/evaluate (expr/normalize form) scope))]
+                    (when-not (or (nil? v) (expr/unknown? v))
+                      [k (if (instance? LocalDate v) (str v) v)]))))
+          (:input rule))))
+
+(def recurs-from-field
+  "The field every made kind gains: the key its row was made under."
+  [:recurs_from {:optional true
+                 :engine-written true
+                 :x-display {:raw true
+                             :label "Made by the rule"
+                             :help "The occurrence that made this row, as recurs:<source>:<rule>:<date>. Written by the engine, never by hand."}}
+   [:maybe [:string {:min 1 :max 300}]]])
+
+(defn derive-kinds
+  "`kinds` ({kind rdef}) with `recurs-from-field` on every kind a :recurs
+  rule makes — the registry's step before it fingerprints, since the
+  field is law on the made kind. A rule that is not a map, or a kind the
+  registry does not hold, is left to checks-assembly to name."
+  [kinds]
+  (let [made (into (sorted-set)
+                   (comp (mapcat (fn [[_ r]] (when (sequential? (:recurs r)) (:recurs r))))
+                         (filter map?)
+                         (keep :makes)
+                         (filter keyword?)
+                         (filter #(contains? kinds %)))
+                   kinds)
+        has? (fn [form] (some #(and (vector? %) (= :recurs_from (first %))) form))]
+    (reduce (fn [ks k]
+              (let [form (get-in ks [k :schema])]
+                (if (and (vector? form) (not (has? form)))
+                  (assoc-in ks [k :schema] (conj form recurs-from-field))
+                  ks)))
+            kinds
+            made)))

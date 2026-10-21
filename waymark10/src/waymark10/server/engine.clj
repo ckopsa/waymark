@@ -68,6 +68,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.runtime :as runtime]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -293,6 +294,10 @@
                                   ;; seat health 2: a sitting that
                                   ;; closed rolls its seat's `health`
                                   (seats/after-write
+                                   engine kind action-name res')
+                                  ;; a :recurs source keeps its next
+                                  ;; occurrence armed (calendar step 8b)
+                                  (scheduled/recurs-after-write!
                                    engine kind action-name res')
                                   res'))
                     ;; the declared surfaces, validated where every
