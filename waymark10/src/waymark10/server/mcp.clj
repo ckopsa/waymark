@@ -5484,7 +5484,8 @@
                                               (:states rdef))]
                                  (when (seq rs) [(keyword (name (:kind rdef))) rs]))))
                        rdefs)
-            aged (vec (live-cracks/aged-rows rdefs seat-rows rows now))
+            aged (vec (live-cracks/aged-rows rdefs seat-rows rows now
+                                             (:calendar (inv/render-hooks eng))))
             plural (into {} (map (juxt (comp name :kind) :plural)) rdefs)
             href (fn [kind id] (str "/api/" (get plural (str kind)) "/" id))]
         {"org" org
