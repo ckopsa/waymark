@@ -13,6 +13,22 @@
 ;; waymark10.dsl and put the guard in that door's :guards:
 ;;   (defguard owner-drops (hold "An item is dropped only on the owner's tap."))
 
+;; A law reads a field through a reference form: (data :k) is what the
+;; row holds, (input :k) what this door's caller sent. A bare keyword
+;; outside present? is refused. A related-row guard names other rows,
+;; with exists or none (docs/orgkit.md, Writing a kind):
+;;   (defguard no-twin
+;;     (refuse "\"{o.title}\" is open already; finish it first.")
+;;     '(none [o :item {:title (= (input :title)) :state (= "open")}]))
+;; A door that takes arguments declares them, and a date is :waymark/date:
+;;   :reschedule {:from #{:open} :to :open
+;;                :input [:map [:title [:string {:min 1 :max 120}]]
+;;                             [:due_on :waymark/date]] ...}
+;; A field named after a kind (request_id) or ending _by holds an id;
+;; declare it, or the unref'd-ids check refuses it:
+;;   [:request_id {:optional true :kind :request} [:maybe :waymark/ref]]
+;;   [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+
 (defresource item
   {:kind :item
    :plural "items"

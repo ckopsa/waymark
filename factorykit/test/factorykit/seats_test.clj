@@ -4,7 +4,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.server.gate-proxy :as gate]))
 
 (def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor" "onboarding" "director"])
 
@@ -114,6 +115,19 @@
     (testing org
       (is (<= 1 (count (:charter seat)) 1200) "the charter's cap")
       (is (<= (count (:instructions seat)) 2000) "the instructions' cap"))))
+
+(deftest the-onboarding-seat-reads-the-org-grammar
+  (let [seat (fill (template "onboarding") {:org "shop"})
+        globs (fn [kind]
+                (some #(when (= kind (:kind %))
+                         (str/split (get-in % [:filter :path]) #","))
+                      (:scope seat)))]
+    (doseq [kind ["bench.read" "bench.find"]
+            path ["docs/orgkit.md" "docs/spec-related-row-law.md"
+                  "waymark10/src/waymark10/dsl.clj" "CLAUDE.md"
+                  "orgs/shop" "orgs/shop/org.edn"]]
+      (testing (str kind " " path)
+        (is (some #(gate/path-glob-matches? % path) (globs kind)))))))
 
 (def ^:private domain-names #{"draft-judge" "ops-seat" "sitting-judge" "mayor"})
 

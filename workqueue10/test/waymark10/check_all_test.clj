@@ -3,6 +3,7 @@
   are every module's kinds, each once, and they assemble."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
+            [factory10.law-text]
             [waymark10.check-all :as check-all]
             [waymark10.checks :as checks]
             [waymark10.server.engine :as engine]))
@@ -45,3 +46,14 @@
               (vreset! n (check-all/report-orgs [(io/file "../orgs/example")])))]
     (is (zero? @n))
     (is (re-find #"orgs/example: conforms" out))))
+
+;; ── the law page (ticket ade71a1e) ─────────────────────────────────────────────
+
+(deftest an-org-whose-law-page-throws-fails-the-check
+  (let [n (volatile! nil)
+        out (with-redefs [factory10.law-text/law-text
+                          (fn [_] (throw (ex-info "no such seat" {})))]
+              (with-out-str
+                (vreset! n (check-all/report-orgs [(io/file "../orgs/example")]))))]
+    (is (= 1 @n))
+    (is (re-find #"✗ orgs/example \[law\] law/example: the law page could not render: no such seat" out))))

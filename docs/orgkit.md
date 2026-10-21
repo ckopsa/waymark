@@ -54,6 +54,67 @@ No live org is a deps root of the engine.
   stamped by `in-domain`) and `check-resources` (zero-arg, for the
   gate).
 
+## Writing a kind
+
+A kind is one `defresource` in `src/<org>/kinds/`, its guards as
+`defguard` sentences: `(defguard name (refuse "the sentence") 'law)`.
+`orgkit/template/src/myorg/kinds/item.clj` carries each form below as
+a comment; `docs/spec-related-row-law.md` is the whole grammar.
+
+**Reference forms.** A law reads a field through a reference form:
+`(data :k)` is what the row already holds, `(input :k)` is what the
+caller sent to this door. A bare keyword anywhere else is refused at
+load ("keyword outside a reference form"); `(present? :k)` is the one
+shorthand that takes one. `(is-set (input :k))` asks whether an
+optional input was sent.
+
+**A related-row guard** names other rows: `exists` holds when one
+matches, `none` when none does. The binder is `[name kind where]`;
+`where` maps a field of the other kind to `(op <expr>)`, with `op` one
+of `= not= < <= > >=` or `(in v …)`. The binder's name is the
+refusal's `{name.field}`:
+
+```clojure
+(defguard crew-is-free
+  (refuse "{b.title} already has this crew that day; pick another crew or day.")
+  '(none [b :booking {:crew  (= (input :crew))
+                      :day   (= (input :day))
+                      :state (in "scheduled" "in_progress")}]))
+```
+
+`(follow (data :customer_id) :status)` reads one field of the row a
+ref names.
+
+**A door's input.** A door that takes arguments declares them as a
+malli map; its guards read them as `(input :k)`:
+
+```clojure
+:schedule {:from #{:requested} :to :scheduled
+           :input [:map
+                   [:crew [:string {:min 1 :max 80}]]
+                   [:day :waymark/date]]
+           :guards [crew-is-free]
+           :safety {:idempotent true :reversible true :confirm false}}
+```
+
+**Dates.** `:waymark/date` is a calendar date, an ISO string on the
+wire (`"2026-10-22"`); `:waymark/instant` is a point in time, RFC 3339
+on the wire. A schema field is `[:due_on {:optional true} [:maybe
+:waymark/date]]`. Keep dates out of plain strings.
+
+**Fields that hold an id.** The `unref'd-ids` check refuses a short
+string field (a `:max` of 64 or less, not a `prose` widget) whose name
+reads as an id and that nothing declares a ref: a name ending `_by`,
+one of `owner author caller member sitter person`, or a served kind's
+name, bare or with `_id` (`request`, `request_id`). Declare a row ref
+with its kind, a member with `:x-ref {:principal true}`, or waive a
+field that holds no id with `{:not-a-ref "why"}`:
+
+```clojure
+[:request_id {:optional true :kind :request} [:maybe :waymark/ref]]
+[:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+```
+
 ## The seed
 
 `resources/<org>/seed.edn` is the demo seed's grammar

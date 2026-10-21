@@ -31,7 +31,8 @@
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
   :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn])
-  (:import (java.time LocalDate Instant OffsetDateTime Period ZoneId ZoneOffset)
+  (:import (java.time Duration LocalDate Instant OffsetDateTime Period ZoneId ZoneOffset)
+           (java.time.temporal ChronoUnit)
            (java.time.format DateTimeFormatter)
            (java.util Locale)))
 
@@ -72,13 +73,22 @@
   clock/day/iso: a sentence's own form for an instant — the hour on
   the reader's clock, the day it falls on there, or the raw RFC 3339
   value — earned by span's neighbour-keeps-some-width, whose holes
-  read instants (ticket 2af2d5dc). The guard scope lends its :zone."
+  read instants (ticket 2af2d5dc). The guard scope lends its :zone.
+
+  weeks/months/years/hours/minutes, days-between: the periods and the
+  difference of docs/spec-calendar-time.md §2. (days n) (weeks n)
+  (months n) (years n) are a Period, calendar arithmetic on a date;
+  (hours n) (minutes n) are a Duration, clock arithmetic on an instant.
+  (weeks n) normalizes to (days (* 7 n)), so the two spellings are one
+  law. (days-between a b) is the whole days from date a to date b,
+  negative when b is earlier."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      str
-     days date-of is-set clock day iso
+     days weeks months years hours minutes days-between
+     date-of is-set clock day iso
      every some count sum
      follow did me self
      exists none count-rows})
@@ -185,10 +195,15 @@
             (conj problems (str "(date …) takes one ISO date string; got "
                                 (pr-str (vec args)))))
 
-          (days date-of is-set clock day iso not abs)
+          (days weeks months years hours minutes date-of is-set clock day iso not abs)
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
+
+          days-between
+          (if (= n 2)
+            (check (second args) env depth (check (first args) env depth problems))
+            (conj problems "(days-between a b) takes two expressions"))
 
           ;; authored (follow <ref> :field); normalized at the def site
           ;; to (follow :kind <ref> :field)
@@ -460,6 +475,10 @@
         did
         (cons op (sort (distinct args)))
 
+        ;; seven days and a week are one law (calendar spec §7)
+        weeks
+        (list 'days (norm (list '* 7 (first args))))
+
         (= not= min max + *)
         (cons op (sort-by sort-key args))
 
@@ -602,6 +621,11 @@
       (and (instance? LocalDate a) (instance? Period b)) (.plus ^LocalDate a ^Period b)
       (and (instance? Period a) (instance? LocalDate b)) (.plus ^LocalDate b ^Period a)
       (and (instance? Period a) (instance? Period b)) (.plus ^Period a ^Period b)
+      (and (instance? Instant a) (instance? Duration b)) (.plus ^Instant a ^Duration b)
+      (and (instance? Duration a) (instance? Instant b)) (.plus ^Instant b ^Duration a)
+      (and (instance? Duration a) (instance? Duration b)) (.plus ^Duration a ^Duration b)
+      ;; a date has no hour, and an instant moved by calendar days
+      ;; waits on the governing calendar's zone (spec §2, step 3)
       :else nil)
     (catch Exception _ nil)))   ; calendar overflow is a missing value, not a crash
 
@@ -611,15 +635,19 @@
       (or (nil? a) (nil? b)) nil
       (and (number? a) (number? b)) (num-sub a b)
       (and (instance? LocalDate a) (instance? Period b)) (.minus ^LocalDate a ^Period b)
+      (and (instance? Period a) (instance? Period b)) (.minus ^Period a ^Period b)
+      (and (instance? Instant a) (instance? Duration b)) (.minus ^Instant a ^Duration b)
+      (and (instance? Duration a) (instance? Duration b)) (.minus ^Duration a ^Duration b)
       :else nil)
     (catch Exception _ nil)))
 
 (defn- mul2 [a b]
   (if (and (number? a) (number? b)) (num-mul a b) nil))
 
-(defn- whole-days
-  "Numeric → Period of that many days; nil for non-integral or
-  out-of-range values — the calendar has no fractional day. The whole
+(defn- whole-count
+  "Numeric → that many whole units, a long in int range; nil for
+  non-integral or out-of-range values — the calendar has no fractional
+  day and the clock no fractional hour. The whole
   long family passes (int?, the same boundary scalar-literal? draws):
   JSON decoding hands scope values over as Integer, and evaluation is
   total over JSON-shaped values — (days (var :n)) must mean what
@@ -629,7 +657,7 @@
     (cond
       (int? v)
       (when (<= Integer/MIN_VALUE (long v) Integer/MAX_VALUE)
-        (Period/ofDays (int (long v))))
+        (long v))
       (decimal? v)
       ;; integral means scale ≤ 0 after the strip: stripTrailingZeros
       ;; turns 10M into 1E+1 (scale -1), and a negative scale is as
@@ -638,9 +666,32 @@
         (when-not (pos? (.scale s))
           (let [l (.longValueExact s)]
             (when (<= Integer/MIN_VALUE l Integer/MAX_VALUE)
-              (Period/ofDays (int l))))))
+              l))))
       :else nil)
     (catch ArithmeticException _ nil)))
+
+(defn- span-of
+  "(days n) (weeks n) (months n) (years n) → a Period; (hours n)
+  (minutes n) → a Duration. nil where whole-count is nil, or where the
+  span overflows (a week count past the int range)."
+  [op v]
+  (when-some [n (whole-count v)]
+    (try
+      (case op
+        days    (Period/ofDays (int n))
+        weeks   (Period/ofWeeks (int n))
+        months  (Period/ofMonths (int n))
+        years   (Period/ofYears (int n))
+        hours   (Duration/ofHours n)
+        minutes (Duration/ofMinutes n))
+      (catch ArithmeticException _ nil))))
+
+(defn- days-between
+  "Whole days from date a to date b, negative when b is earlier; nil
+  unless both are dates."
+  [a b]
+  (when (and (instance? LocalDate a) (instance? LocalDate b))
+    (.between ChronoUnit/DAYS ^LocalDate a ^LocalDate b)))
 
 (declare evaluate)
 
@@ -816,8 +867,13 @@
         (try (LocalDate/parse ^String (first args))
              (catch Exception _ nil))
 
-        days    (let [v (evaluate (first args) scope)]
-                  (if (unknown? v) unknown (whole-days v)))
+        (days weeks months years hours minutes)
+        (let [v (evaluate (first args) scope)]
+          (if (unknown? v) unknown (span-of op v)))
+        days-between
+        (let [a (evaluate (first args) scope)
+              b (evaluate (second args) scope)]
+          (if (or (unknown? a) (unknown? b)) unknown (days-between a b)))
         date-of (let [v (evaluate (first args) scope)]
                   (if (instance? Instant v)
                     (.toLocalDate (.atOffset ^Instant v ZoneOffset/UTC))
