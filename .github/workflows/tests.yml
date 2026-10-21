@@ -127,7 +127,8 @@ on:
       lane:
         description: >-
           The merge train's lane, which narrows the run to the jobs that
-          lane needs (ticket 3307bf9a). 'docs' runs the lint only;
+          lane needs (ticket 3307bf9a). 'docs' runs the lint and the
+          link check only;
           'orgs/<name>' runs org-law and org-findings for that org and
           test-factory; empty or 'engine' runs everything, exactly as a
           push does. `gate` then passes when every job of the lane
@@ -344,7 +345,7 @@ jobs:
           # ── A TRAIN'S LANE: ITS JOBS, NOT THE DIFF'S ─────────────────
           #
           # A train dispatch names its lane (ticket 3307bf9a), and the
-          # lane, not a diff, says what runs: docs is actionlint only,
+          # lane, not a diff, says what runs: docs is actionlint and links,
           # orgs/<name> is test-factory plus org-law and org-findings for
           # that one org. No lane, or engine, falls through to the diff
           # below, so a run outside a train still runs everything.
@@ -354,7 +355,7 @@ jobs:
               emit false none
               echo "workflows=true" >> "$GITHUB_OUTPUT"
               echo "orgs=[]" >> "$GITHUB_OUTPUT"
-              echo "lane docs — the lint only; the suites are skipped"
+              echo "lane docs — the lint and the link check only; the suites are skipped"
               exit 0 ;;
             orgs/*)
               org=${LANE#orgs/}
@@ -1588,6 +1589,24 @@ jobs:
           shellcheck --version
           shellcheck .github/scripts/*.sh scripts/*.sh waymark10/scripts/*.sh .claude/hooks/sitting-close.sh
 
+  # ── THE DOCS LANE'S LINK CHECK ──────────────────────────────────────
+  #
+  # The docs lane (ticket 3307bf9a) runs the lint and this, and nothing
+  # else, so a docs train that breaks a relative link or names a file
+  # that is gone turns `gate` red. Offline: it follows the links into
+  # this tree only, so a site that is down for a minute fails no train.
+  links:
+    needs: [changes]
+    if: inputs.lane == 'docs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress --exclude-path node_modules './**/*.md'
+          fail: true
+
   # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
   #
   # Auto-merge waits on REQUIRED checks, and required checks are matched
@@ -2384,7 +2403,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings]
+    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2411,6 +2430,7 @@ jobs:
           RUN_LOCALFIRE: ${{ needs.changes.outputs.localfire }}
           WORKFLOWS: ${{ needs.changes.outputs.workflows }}
           ACTIONLINT: ${{ needs.actionlint.result }}
+          LINKS: ${{ needs.links.result }}
           ORG_LAW: ${{ needs.org-law.result }}
           ORG_FINDINGS: ${{ needs.org-findings.result }}
           LANE: ${{ inputs.lane }}
@@ -2430,7 +2450,7 @@ jobs:
           lane_jobs=()
           case "${LANE:-engine}" in
             engine) ;;
-            docs)   lane_jobs=("actionlint=$ACTIONLINT") ;;
+            docs)   lane_jobs=("actionlint=$ACTIONLINT" "links=$LINKS") ;;
             orgs/*) lane_jobs=("test-factory=$TEST_FACTORY" "org-law=$ORG_LAW" "org-findings=$ORG_FINDINGS") ;;
             *)      echo "gate: FAIL — '$LANE' is no lane."; exit 1 ;;
           esac

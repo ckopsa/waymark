@@ -874,6 +874,46 @@
                      (str (name kind) " " (name fact))))))
         (sort-by key (:kinds reg))))
 
+;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────
+
+(defn- occupations
+  "Every :occupies entry of the registry as [kind entry target], target
+  the kind its :resource ref names."
+  [reg]
+  (for [[kind r] (sort-by key (:kinds reg))
+        o (:occupies r)
+        :let [target (some (fn [{:keys [field kind listed]}]
+                             (when (and (= field (:resource o)) (not listed)) kind))
+                           (schema/ref-fields (:schema r)))]]
+    [kind o target]))
+
+(defn- check-occupies-unfiltered
+  "[occupies-unfiltered]: the resource, from and to fields of every
+  :occupies entry are :filterable on the occupying kind — the derived
+  -is-free guard asks them on every write ([exists-unfiltered]'s
+  reason, named for the declaration that wrote the query)."
+  [reg]
+  (doseq [[kind o _] (occupations reg)
+          f [(:resource o) (:from o) (:to o)]
+          :when (not (contains? (get-in reg [:kinds kind :filterable]) f))]
+    (err kind :occupies-unfiltered
+         (str ":occupies holds " (name (:resource o)) " by " (name f) ", a field "
+              (name kind) " does not declare :filterable — the derived guard asks it "
+              "on every write")))
+  [])
+
+(defn- check-resource-uncalendared
+  "[resource-uncalendared], info: an occupied kind that names no
+  :calendar — its -is-working guards read the default work_calendar,
+  the whole day when that names no hours."
+  [reg]
+  (vec (for [target (sort (distinct (keep last (occupations reg))))
+             :when (nil? (get-in reg [:kinds target :calendar]))]
+         (str (name target) " [resource-uncalendared] " (name target)
+              " is occupied and names no :calendar — its -is-working guards read "
+              "the default work_calendar. What hours does a "
+              (str/replace (name target) "_" " ") " work?"))))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -904,12 +944,13 @@
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
   and process, v10's own, whose steps name doors of other kinds.
-  Throws the first error, returns {:warnings [str …]}."
+  Throws the first error, returns {:warnings [str …] :info [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-rows-queries
-          check-utc-today check-unref'd-ids])})
+          check-link-where check-follow-fields check-occupies-unfiltered
+          check-rows-queries check-utc-today check-unref'd-ids])
+   :info (check-resource-uncalendared reg)})
