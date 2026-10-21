@@ -56,6 +56,7 @@
                   :shipped 1209600}
    :actions
    {:mark_paid {:from #{:placed} :to :paid
+                :input [:map [:payment_id [:string {:min 1 :max 120}]]]
                 :guards [payment-cleared]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A paid order stays paid; a refund gives the money back."}
@@ -100,3 +101,15 @@
                 :buyer_state "CO" :tax_cents 0 :total_cents 3200
                 :label_id "label-1" :paid_on "2026-10-22"}}
    :expect {:refused :ships-in-time}})
+
+(defscenario paid-with-its-payment
+  "A placed order is marked paid when its cleared payment is named."
+  {:kind :order :attempt :mark_paid :input {:payment_id "pay-1"}
+   :row {:state :placed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}}
+   :expect {:allowed true}})
+
+(defscenario not-paid-without-payment
+  "A placed order is not marked paid until its payment is named."
+  {:kind :order :attempt :mark_paid :input {}
+   :row {:state :placed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}}
+   :expect {:refused :payment-cleared}})
