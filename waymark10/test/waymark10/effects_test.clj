@@ -10,7 +10,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
 (def ^:private clock (Instant/parse "2026-10-21T09:00:00Z"))
@@ -94,6 +95,25 @@
       (door! eng pid :buy_label)
       (is (= :label_asked (:state (row-of eng pid))))
       (is (= 1 (count (calls eng)))))))
+
+(deftest the-row-read-shows-its-pending-effect
+  (let [eng (parcel-engine)
+        h (engine/handler eng)
+        pid (parcel! eng "P-5")
+        read-meta #(:meta (wire/read-json
+                           (:body (h {:request-method :get
+                                      :uri (str "/api/parcels/" pid)
+                                      :headers {"x-waymark-principal" "colton"}}))))]
+    (is (nil? (:effects (read-meta))) "a row that asked for nothing shows nothing")
+    (door! eng pid :buy_label)
+    (let [[e :as es] (:effects (read-meta))]
+      (is (= 1 (count es)))
+      (is (= "postage__create_label" (:power e)))
+      (is (= "pending" (:state e)))
+      (is (string? (:since e))))
+    (inv/invoke! eng :effect_call (str (:id (first (calls eng)))) :mark_done
+                 {:answer "{\"object_id\":\"L5\"}"} {:principal runner})
+    (is (nil? (:effects (read-meta))) "a call that ended is no longer pending")))
 
 (deftest a-done-key-writes-its-answer-again
   (let [eng (parcel-engine)

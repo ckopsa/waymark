@@ -535,7 +535,15 @@
    [:reason {:optional true
              :x-display {:label "Why it failed"
                          :help "The server's sentence when it refused the call. Engine-written."}}
-    [:maybe [:string {:min 1 :max 480}]]]])
+    [:maybe [:string {:min 1 :max 480}]]]
+   [:held_call {:optional true
+                :x-display {:raw true :label "The held call"
+                            :help "The held_call a person decides when the power waits on a person's tap. Engine-written."}}
+    [:maybe call-text]]
+   [:tries {:optional true
+            :x-display {:label "Tries"
+                        :help "How many times the runner sent it. Written before each try. Engine-written."}}
+    [:maybe [:int {:min 0 :max 9}]]]])
 
 (def ^:private a-call-ending
   "A runner's door: the engine writes how a call ended."
@@ -549,9 +557,9 @@
 (defresource effect-call
   {:kind :effect_call
    :plural "effect_calls"
-   :states [:pending :done :failed]
+   :states [:pending :held :done :failed :unknown]
    :initial :pending
-   :terminal #{:done :failed}
+   :terminal #{:done :failed :unknown}
    :nav :system
    :summary "{data.power} {data.idempotency_key} · {state}"
    :label-template "{data.idempotency_key}"
@@ -559,21 +567,33 @@
    :filterable {:state #{:eq :in}
                 :power #{:eq}
                 :idempotency_key #{:eq}
-                :target #{:eq}}
+                :target #{:eq}
+                :held_call #{:eq}}
    :sortable {:fields [:idempotency_key] :default "idempotency_key"}
    :unique [[:power :idempotency_key]]
    :no-own-surface "An effect call is the house's; only a grant that names the kind shows that one exists."
    :create-guards [the-engine-keeps-the-call]
    ;; its exits are the runner's alone, and no seat takes them
-   :allow-dead #{:pending}
+   :allow-dead #{:pending :held}
    :actions
    {:mark_done (assoc a-call-ending :to :done
+                      :from #{:pending :held}
                       :input [:map [:answer {:x-display {:raw true}}
                                     [:string {:max answer-cap}]]])
     :mark_failed (assoc a-call-ending :to :failed
-                        :input [:map [:reason [:string {:min 1 :max 480}]]])}
+                        :from #{:pending :held}
+                        :input [:map [:reason [:string {:min 1 :max 480}]]])
+    :mark_unknown (assoc a-call-ending :to :unknown
+                         :input [:map [:reason [:string {:min 1 :max 480}]]])
+    :mark_held (assoc a-call-ending :to :held
+                      :input [:map [:held_call call-text]])
+    :note_try (assoc a-call-ending :to :pending
+                     :input [:map [:tries [:int {:min 1 :max 9}]]])}
    :deviations
-   ["§ 4's `unknown` and `held` endings arrive with the runner that reaches them (build step 6); until then a call is `pending`, `done` or `failed`, and `mark_done` and `mark_failed` are the engine's own, hidden from everyone else."
+   ["§ 4's runner endings (`mark_done`, `mark_failed`, `mark_unknown`, `mark_held`) and `note_try` are the engine's own, hidden from everyone else. `note_try` writes each try on the call before the wire, so a call a crash left `pending` after a try ends `unknown` and is not sent again, unless its power entry says `idempotent: true`."
+    "§ 4's three tries of an idempotent call run in one pass, a second and then two seconds apart; a call still unanswered after the third is `unknown`."
+    "§ 4 names no integration on the call: the runner calls as the live integration whose `server` holds the power's row. With one that is not live yet the call waits `pending`; with none it is `failed`, unsent."
+    "§ 4's refusal is a refusal the power door or the server gives before or instead of an answer: a problem under 500, or an `isError` answer. A 5xx or a dropped wire is the unknown ending."
     "§ 4 names two hidden doors, `effect_landed` and `effect_failed`; each effect door has its own pair, `<door>_landed` and `<door>_failed`, because each names its own `:lands` and `:fails-to`."
     "§ 4 says what a `done` key does when a door asks again; a `failed` key lands its failure again through the door's failed door in the same way, and a `pending` one adds nothing and lands on its own."
     "§ 4's `:why` fills each {field} from the row's data, as a summary does."]})

@@ -177,17 +177,20 @@
   "The four headers that name who made a power call, from what the
   session knows and never from the call's arguments. A seat's sitter is
   `seat:<id>` with the display `<name> (seat)`; any other principal
-  answers an empty X-Waymark-Seat."
-  [{:keys [principal caller sitting]}]
+  answers an empty X-Waymark-Seat. The effect runner's call adds a
+  fifth, Idempotency-Key, its effect_call's key."
+  [{:keys [principal caller sitting idempotency-key]}]
   (let [pid (str (or (:id principal) caller))
         seat (when (str/starts-with? pid "seat:") (subs pid 5))
         seat-name (str/replace (str (:display principal)) #" \(seat\)$" "")]
     (update-vals
-     {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
-      "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
-                                 "; id=" pid)
-      "X-Waymark-Acts-For" (str (:acts-for principal))
-      "X-Waymark-Sitting" (str sitting)}
+     (cond-> {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
+              "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
+                                         "; id=" pid)
+              "X-Waymark-Acts-For" (str (:acts-for principal))
+              "X-Waymark-Sitting" (str sitting)}
+       (some-> idempotency-key str not-empty)
+       (assoc "Idempotency-Key" (str idempotency-key)))
      header-safe)))
 
 (defn- headers-fn
@@ -403,7 +406,8 @@
                ;; entry's old boolean: an entry that says
                ;; `approval person` demands one too
                :why (boolean (and entry (why-demanded? entry)))
-               :approval (if entry (approval-of entry) :none))))))
+               :approval (if entry (approval-of entry) :none)
+               :idempotent (true? (:idempotent entry)))))))
 
 (defn resolve-tool
   "`resolve-among`, over every row of this engine that is not retired."
@@ -1132,7 +1136,14 @@
             :examples [["bench__status" "bench__test_result"]]
             :x-display {:label "Read-only tools"
                         :help "The tools of this power that change nothing, by name. A repeated call with the same arguments is held until its answer changes, up to 20 seconds. A tool left out is a write, unless its server marks it readOnlyHint."}}
-    [:maybe [:vector [:string {:min 1 :max 120}]]]]])
+    [:maybe [:vector [:string {:min 1 :max 120}]]]]
+   ;; docs/spec-integrations.md § 4: the server itself dedupes on the
+   ;; Idempotency-Key the effect runner sends, so a call whose wire
+   ;; dropped may be sent again under the same key. Only then.
+   [:idempotent {:optional true
+                 :x-display {:label "The server dedupes on the key"
+                             :help "True when the server itself makes a call once per Idempotency-Key, as a payment processor does. The effect runner then tries a call whose wire dropped again, with the same key; otherwise that call ends saying it may or may not have been sent."}}
+    [:maybe :boolean]]])
 
 (defn entry-approval-agrees?
   "R-14's one rule a `:map` cannot say: the two spellings of the same
