@@ -70,6 +70,11 @@
   [seed]
   (some-> (first (filter :create (:steps seed))) :kind name))
 
+(defn- the-called-kind
+  "The kind the week script's first call names, its days in order."
+  [week-script]
+  (some->> (:days week-script) (sort-by :day) (mapcat :calls) (keep :kind) first name))
+
 (defn- the-org-kinds
   "The kinds the seed's steps make rows of, in the order they first name
   them."
@@ -102,20 +107,27 @@
   steps make, in that order, each of its terminal states that is no
   loss, in the kind's state order, as the values of one :closing_kind;
   at most `n`. A kind's noun is its declared :label, else its name with
-  '_' as a space. `resources` are the org's declarations."
-  [seed resources n]
-  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)]
+  '_' as a space. `resources` are the org's declarations. The week's
+  `goal`, {:kind :state}, when given, is the first clause (ticket
+  6c3d93db): the payoff counts what the week was played for."
+  [seed resources n goal]
+  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)
+        clause (fn [k s]
+                 (let [noun (or (:label (get by-kind k)) (words k))]
+                   {:each_kind k
+                    :each_state s
+                    :each_one (str noun " " (words s))
+                    :each_many (str (plural noun) " " (words s))}))]
     (->> (the-org-kinds seed)
          (mapcat (fn [k]
                    (when-some [r (get by-kind k)]
-                     (let [noun (or (:label r) (words k))
-                           ends (into #{} (map name) (:terminal r))]
+                     (let [ends (into #{} (map name) (:terminal r))]
                        (for [s (map name (:states r))
                              :when (and (ends s) (not (loss-states s)))]
-                         {:each_kind k
-                          :each_state s
-                          :each_one (str noun " " (words s))
-                          :each_many (str (plural noun) " " (words s))})))))
+                         (clause k s))))))
+         (concat (when (and (:kind goal) (:state goal))
+                   [(clause (name (:kind goal)) (name (:state goal)))]))
+         (distinct)
          (take n))))
 
 (def amount-names
@@ -205,15 +217,22 @@
   owner. With no `week` the scene is the audit's, and none plays.
   `week_script`, when given, is the org's week.edn as data: its `:card`
   opens the scene, and each day's `:card` comes before that day's shots.
+  Its `:day-one` is the scene's day 1, its `:days` the days filmed, one
+  day's shots per entry at its `:day` (a day with no entry, a weekend,
+  has none), its `:goal` the closing's first count, and its first call's
+  kind the collection the opening opens (ticket 6c3d93db). With none of
+  these the opening opens the seed's first kind, never an empty name.
   Each shot carries `:id`, its 1-based position in the rendered scene
   (ticket ef24488d), for the take shot that films it to name."
   [seed {:keys [clone_url head_sha day_one kind brief resources week week_script]}]
   (let [t (template)
         owner (the-owner seed)
-        day-one (LocalDate/parse (str day_one))
-        days (get-in t [:template :days])
+        day-one (LocalDate/parse (str (or (:day-one week_script) day_one)))
+        day-nums (or (seq (sort (distinct (filter pos-int? (map :day (:days week_script))))))
+                     (range 1 (inc (get-in t [:template :days]))))
         line (brief-line brief)
-        kind (or kind (the-knocked-kind seed))
+        kind (or kind (the-called-kind week_script) (the-knocked-kind seed)
+                 (first (the-org-kinds seed)) (some-> (first resources) :kind name))
         values {:seed (:seed seed)
                 :org_display (or (:label (first (:domains seed))) (:org seed))
                 :owner (:id owner)
@@ -243,7 +262,7 @@
         money (the-money seed resources)
         ;; four clauses at most: the ends, the money, then the taps
         per-kind (map #(fill (:closing_kind t) (merge values %))
-                      (the-clauses seed resources (- 3 (count money))))
+                      (the-clauses seed resources (- 3 (count money)) (:goal week_script)))
         per-money (map #(fill (:closing_money t) (merge values %)) money)
         closing (walk/postwalk
                  (fn [x]
@@ -258,7 +277,7 @@
                                 (concat (when (string? (:card week_script))
                                           [(card-shot (:card week_script))])
                                         (fill (if line (:opening t) (:opening_bare t)) values)
-                                        (mapcat day (range 1 (inc days)))
+                                        (mapcat day day-nums)
                                         closing))))
      :clone (fill (:clone t) values)
      :day_one (str day-one)
