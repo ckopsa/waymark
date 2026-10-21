@@ -313,7 +313,8 @@
             aggs-moved? (not= aggs (select-keys (:data row) (keys aggs)))
             data (merge (:data row) aggs)
             data (if (or reclock? aggs-moved?)
-                   (:data (derived/materialize rdef (assoc row :data data) now))
+                   (:data (derived/materialize rdef (assoc row :data data) now
+                                               (:calendar (inv/render-hooks eng))))
                    data)
             nf (next-flip-at rdef revision data now)
             changed (into []
@@ -551,6 +552,7 @@
                           (filter #(contains? (:derived rdef) %)))
                     facts)
         now ((:now-fn eng))
+        calendar (:calendar (inv/render-hooks eng))
         tally (atom (into {}
                           (map (fn [f] [f {:flips 0 :of 0 :sample []}]))
                           facts))
@@ -558,8 +560,8 @@
         (fn [tx raw]
           (let [row (decode-row rdef raw)]
             (when (or (nil? population) (claims? population row))
-              (let [cur-data (derived/compute-facts cur-specs (:data row) now)
-                    prop-data (derived/compute-facts prop-specs (:data row) now)]
+              (let [cur-data (derived/compute-facts cur-specs (:data row) now calendar)
+                    prop-data (derived/compute-facts prop-specs (:data row) now calendar)]
                 (doseq [fact facts]
                   (let [spec (get (:derived rdef) fact)
                         aggregate? (or (:count spec) (:sum spec))

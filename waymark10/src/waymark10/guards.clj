@@ -409,6 +409,7 @@
              :rows-matching (:rows-matching ctx)
              :count-matching (:count-matching ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
+      (:calendar ctx) (assoc :calendar (:calendar ctx))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))
@@ -593,7 +594,9 @@
      (if (nil? inp)
        [(t/allow {:pending-input true}) g]
        (let [v (expr/evaluate (get-in g [:require/spec :expr])
-                              {:vars (assoc inp :now (:now ctx))})]
+                              {:vars (cond-> (assoc inp :now (:now ctx))
+                                       (some #{:today} (get-in g [:require/spec :over]))
+                                       (assoc :today (expr/today-in (:now ctx) (:calendar ctx))))})]
          ;; an unknown spec is pending, never truthy and never a
          ;; refusal (docs/spec-related-row-law.md §5)
          [(cond (expr/unknown? v) (t/allow {:pending-input true})
@@ -876,7 +879,8 @@
     (into (vec (distinct (cond-> []
                            (reads? (comp seq :doors)) (conj :transitions :principal)
                            (reads? :uses-me) (conj :principal)
-                           (reads? :uses-now) (conj :now))))
+                           (reads? #(clojure.core/or (:uses-now %) (:uses-today %))) (conj :now)
+                           (reads? :uses-calendar) (conj :calendar))))
           (sort (into #{} (mapcat #(concat (:follows %) (:queries %))) infos)))))
 
 (defn expr

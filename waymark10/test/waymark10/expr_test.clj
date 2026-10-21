@@ -12,7 +12,7 @@
             [waymark10.server.judgment :as judgment]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time Duration Instant LocalDate Period)))
+  (:import (java.time Duration Instant LocalDate LocalTime Period ZoneId)))
 
 (def trials 300)
 
@@ -114,8 +114,8 @@
       (is (= (Instant/parse "2026-03-09T06:30:00Z") (ev '(+ (var :at) (hours 24)))))
       (is (= (Instant/parse "2026-03-08T06:00:00Z") (ev '(- (var :at) (minutes 30)))))
       (is (true? (ev '(<= (var :at) (+ (var :at) (hours 24)))))))
-    (testing "instant ± Period waits on the calendar (step 3): nil, never UTC"
-      (is (nil? (ev '(+ (var :at) (days 1))))))
+    (testing "instant ± Period with no calendar is unknown, never UTC"
+      (is (e/unknown? (ev '(+ (var :at) (days 1))))))
     (testing "Period ± Period is a Period"
       (is (= (Period/of 0 1 7) (ev '(+ (months 1) (weeks 1)))))
       (is (= (Period/ofDays 5) (ev '(- (weeks 1) (days 2)))))
@@ -135,6 +135,81 @@
     (is (e/unknown? (ev '(days-between (var :a) (var :u)))))
     (is (seq (e/problems '(days-between (var :a))))
         "days-between takes two expressions")))
+
+(def ^:private elm-street
+  "A Denver house's calendar, as the :calendar hook answers one."
+  {:id "elm" :version 1 :zone (ZoneId/of "America/Denver")
+   :workdays #{:mon :tue :wed :thu :fri}
+   :hours {:from (LocalTime/parse "07:00") :to (LocalTime/parse "17:00")}
+   :holidays (sorted-map (LocalDate/parse "2027-05-31") "Memorial Day")})
+
+(defn- calendar-of
+  "The :calendar hook over elm-street: no ref is the default, \"crew\" a
+  calendar that keeps no hours, any other ref names no row."
+  ([] elm-street)
+  ([ref] (case ref nil elm-street "crew" (assoc elm-street :hours nil) nil)))
+
+(deftest calendar-readers
+  (let [scope {:now (Instant/parse "2027-05-14T03:00:00Z")   ; Thu 13 May, 21:00 in Denver
+               :calendar calendar-of
+               :data {:signed_on (LocalDate/parse "2027-02-13")
+                      :ordered_on (LocalDate/parse "2027-05-28")
+                      :visit_on (LocalDate/parse "2027-05-31")
+                      :starts_at (Instant/parse "2027-06-01T05:00:00Z")}
+               :vars {:at (Instant/parse "2027-03-13T15:00:00Z")}}
+        ev #(e/evaluate (e/normalize %) scope)
+        bare #(e/evaluate (e/normalize %) (dissoc scope :calendar))]
+    (testing "(today) is the date of (now) in the house's zone, not Greenwich's"
+      (is (= (LocalDate/parse "2027-05-13") (ev '(today))))
+      (is (= (LocalDate/parse "2027-05-14") (ev '(date-of (now)))) "date-of stays UTC")
+      (is (e/unknown? (bare '(today))) "no hook is unknown"))
+    (testing "the worked shape: a prescription is live"
+      (is (true? (ev '(< (today) (+ (data :signed_on) (days 90))))))
+      (is (false? (ev '(< (date-of (now)) (+ (data :signed_on) (days 90)))))
+          "Greenwich's day has already ended it"))
+    (testing "(local-date …) is an instant's date in that zone"
+      (is (= (LocalDate/parse "2027-05-31") (ev '(local-date (data :starts_at)))))
+      (is (= (LocalDate/parse "2027-05-31") (bare '(local-date (data :visit_on))))
+          "a date is its own date")
+      (is (e/unknown? (bare '(local-date (data :starts_at))))))
+    (testing "instant ± Period keeps the local time across the spring change"
+      (is (= (Instant/parse "2027-03-14T14:00:00Z") (ev '(+ (var :at) (days 1)))))
+      (is (= (Instant/parse "2027-03-14T15:00:00Z") (ev '(+ (var :at) (hours 24)))))
+      (is (= (Instant/parse "2027-03-13T15:00:00Z") (ev '(- (+ (var :at) (days 1)) (days 1)))))
+      (is (e/unknown? (bare '(+ (var :at) (days 1)))) "never UTC by accident"))
+    (testing "business days skip the weekend and the holiday"
+      (is (= (LocalDate/parse "2027-06-03") (ev '(+ (data :ordered_on) (business-days 3)))))
+      (is (= (LocalDate/parse "2027-05-27")
+             (ev '(- (local-date (data :starts_at)) (business-days 2)))))
+      (is (false? (ev '(business-day? (data :visit_on)))))
+      (is (true? (ev '(business-day? (data :ordered_on)))))
+      (is (= (LocalDate/parse "2027-06-01") (ev '(next-business-day (data :visit_on)))))
+      (is (= (LocalDate/parse "2027-05-28") (ev '(next-business-day (data :ordered_on))))
+          "the day itself when it is one")
+      (is (e/unknown? (bare '(+ (data :ordered_on) (business-days 3)))))
+      (is (nil? (e/evaluate '(+ (data :ordered_on) (business-days 1))
+                            (assoc scope :calendar (fn [& _] (assoc elm-street :workdays #{})))))
+          "past the 366-day cap is nil"))
+    (testing "working? is the window on a workday, inside the hours, in the zone"
+      (is (true? (ev '(working? "2027-05-13T14:00:00Z" "2027-05-13T16:00:00Z"))))
+      (is (false? (ev '(working? "2027-05-13T23:00:00Z" "2027-05-14T01:00:00Z")))
+          "17:00 to 19:00 is past the hours")
+      (is (true? (ev '(working? "2027-05-13T23:00:00Z" "2027-05-14T01:00:00Z" "crew")))
+          "a calendar that keeps no hours keeps the whole day")
+      (is (false? (ev '(working? "2027-05-31T14:00:00Z" "2027-05-31T16:00:00Z")))
+          "a holiday")
+      (is (e/unknown? (ev '(working? "2027-05-13T14:00:00Z" "2027-05-13T16:00:00Z" "gone")))
+          "a ref that names no row is unknown")
+      (is (e/unknown? (bare '(working? "2027-05-13T14:00:00Z" "2027-05-13T16:00:00Z")))))
+    (testing "the readers' grammar"
+      (is (seq (e/problems '(today 1))))
+      (is (seq (e/problems '(working? (now)))))
+      (is (seq (e/problems '(business-days 1 2))))
+      (is (empty? (e/problems '(working? (now) (now) (data :calendar_id))))))
+    (testing "a derived fact reads the house's day as (var :today)"
+      (is (seq (e/derived-scope-problems '(< (today) (var :due_on)) #{:due_on})))
+      (is (empty? (e/derived-scope-problems '(< (var :today) (var :due_on))
+                                            #{:today :due_on}))))))
 
 (deftest a-week-is-seven-days-in-law
   (is (= (e/normalize '(days (* 7 (var :n))))
