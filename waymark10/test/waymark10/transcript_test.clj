@@ -1218,6 +1218,19 @@
                 " · A tr_ask moved: it may wait on your tap.")
            (:cue (first lines))))))
 
+(deftest a-cue-note-names-the-row-that-moved
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng)
+                      (assoc-in hears-asks [:inbox :cues]
+                                [(cue "The ask {data.name} is {state}; {data.nosuch} stays a dash.")]))
+        key (get-in (sit! h) [:inbox :key])
+        plain (groomed! eng {:name "plain"} person)
+        lines (lines-of (tail! h key))]
+    (is (= [plain] (mapv :id lines)))
+    (is (re-matches #"The ask plain is [A-Z][a-z ]+; — stays a dash\." (str (:cue (first lines))))
+        "a note's holes fill from the row as a :summary template's do (ticket 79b29c3e)")))
+
 ;; ── the default inbox, and the keys a re-sit keeps (epic 3ad250ef) ──
 
 (def ^:private reads-seats
