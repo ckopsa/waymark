@@ -237,6 +237,47 @@
         (is (= ["postage__create_label"]
                (mapv #(get-in % [:data :power]) (calls-on eng sid))))))))
 
+(def ^:private cancel-label
+  {:power "postage__cancel_label"
+   :input {:label '(data :label_ref)}
+   :fails-to :void_failed})
+
+(deftest a-refund-whose-undo-is-a-power-adds-that-call
+  (let [law (assoc-in (shipment-law [{:effect :buy_label}])
+                      [:actions :buy_label :effect :compensate] cancel-label)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources [(resource/resource law)]
+                            :now-fn (fn [] clock)})
+        sid (labelled! eng {:number "S-3"})]
+    (inv/invoke! eng :shipment sid :refund {} {:principal colton})
+    (is (= :refunded (:state (shipment-of eng sid))))
+    (let [undo (some #(when (= "postage__cancel_label" (get-in % [:data :power])) %)
+                     (calls-on eng sid))]
+      (is (= 2 (count (calls-on eng sid))))
+      (is (= :pending (:state undo)))
+      (is (= (str "undo:label:" sid) (get-in undo [:data :idempotency_key])))
+      (is (= "buy_label_undo" (str (get-in undo [:data :door]))))
+      (is (re-find (re-pattern (str "L-" sid)) (str (get-in undo [:data :input])))
+          "its input read from the row")
+      (testing "and an undo that fails holds the row in its :fails-to"
+        (inv/invoke! eng :effect_call (str (:id undo)) :mark_failed
+                     {:reason "The carrier refused the cancel."} {:principal runner})
+        (inv/invoke! eng :shipment sid :buy_label_undo_failed
+                     {:effect_call (str (:id undo)) :reason "The carrier refused the cancel."}
+                     {:principal runner})
+        (is (= :void_failed (:state (shipment-of eng sid))))))))
+
+(deftest a-power-undo-names-its-failure-state
+  (is (thrown-with-msg? Exception #"effect-no-failure-state"
+                        (resource/resource
+                         (assoc-in (shipment-law [{:effect :buy_label}])
+                                   [:actions :buy_label :effect :compensate]
+                                   (dissoc cancel-label :fails-to)))))
+  (is (thrown-with-msg? Exception #"is not one"
+                        (resource/resource
+                         (assoc-in (shipment-law [{:effect :buy_label}])
+                                   [:actions :buy_label :effect :compensate] :ship)))))
+
 (deftest unwinds-names-an-effect-with-its-undo
   (is (thrown-with-msg? Exception #"unwinds-no-compensate"
                         (resource/resource

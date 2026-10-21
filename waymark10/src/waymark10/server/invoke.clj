@@ -1234,7 +1234,7 @@
   "The compensations a door that `:unwinds` adds in its own transaction
   (§ 5). For each named effect whose call on this row is `done` and
   whose `:when` holds over the row as the door leaves it: one `pending`
-  effect_call for its `:compensate` door's call, keyed `undo:<the
+  effect_call for its `:compensate` call, a door's or a power's, keyed `undo:<the
   original key>`, newest effect first, and none a second time. A
   compensation that fails lands that door's own `:fails-to`; the door
   that unwound is not rolled back."
@@ -1253,9 +1253,9 @@
                                    (= (name (:effect u)) (str (get-in c [:data :door]))))]
                     c))]
       (doseq [c (sort-by :created-at #(compare %2 %1) undone)
-              :let [door (get-in rdef [:actions (keyword (str (get-in c [:data :door])))
-                                       :effect :compensate])
-                    call (effect/ask (get-in rdef [:actions door :effect]) row {} now)
+              :let [[door eff] (effect/compensation
+                                rdef (keyword (str (get-in c [:data :door]))))
+                    call (effect/ask eff row {} now)
                     k (effect/undo-key (get-in c [:data :idempotency_key]))]
               :when (empty? (store/query-rows st tx :effect_call
                                               {:power (:power call) :idempotency_key k}
