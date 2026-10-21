@@ -550,6 +550,9 @@
     ;; the sitting this session is bound to rides every door call, so
     ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
     (:sitting session) (assoc :waymark10/sitting (:sitting session))
+    ;; waymark_invoke's `why` (ticket 1d8f5f1c): the router judges it
+    ;; and the log entry keeps it
+    (:why session) (assoc :waymark10/why (:why session))
     query (assoc :query-string query)
     ;; store conds a collection read adds to its own (`walk-of`)
     conds (assoc :waymark10/extra-conds conds)
@@ -1129,7 +1132,13 @@
                    :acknowledge_warnings
                    {:type "array" :items {:type "string"}
                     :description (str "Guard names from a previous advisory refusal, "
-                                      "accepted so the call may proceed.")}}
+                                      "accepted so the call may proceed.")}
+                   :why {:type "string" :maxLength 280
+                         :description (str "One sentence, at most 280 characters: why you "
+                                           "make this move, in the words of the person "
+                                           "you work for. It is stored on the move's log "
+                                           "entry, on its held call when it is held, and "
+                                           "shown in the row's history.")}}
                   :required ["kind" "action"]
                   :additionalProperties false}})
 
@@ -2571,6 +2580,11 @@
   [eng call session {:keys [kind id ids items action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
+        ;; the move's one sentence of why (ticket 1d8f5f1c) rides every
+        ;; request this call makes (`request`)
+        session (if-some [why (some-> (:why args) str str/trim not-empty)]
+                  (assoc session :why why)
+                  session)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))
         ;; a caption inside `input` is the call's own (§ 3): it leaves
