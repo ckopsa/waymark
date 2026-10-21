@@ -663,6 +663,12 @@
             field " " value ", or restate these rows under a " field
             " a seat walks: " (str/join ", " admitted) ".")})))
 
+(defn holds-door?
+  "Does the seat's scope hold `action` on `kind` in some state: the
+  door alone, whatever row it is asked of."
+  [seat kind action]
+  (boolean (seq (holding-entries seat kind action nil))))
+
 (defn movers
   "The names of the active seats whose scope holds an action that
   leaves `state` of this kind: who this audit says can move a row that

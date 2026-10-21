@@ -118,6 +118,13 @@
                              calendar (assoc :calendar (fn ([] calendar) ([_] calendar)))))]
       (when-not (expr/unknown? v) v))))
 
+(defn owner
+  "The principal id the rule's :owner names for a source row with this
+  data (spec R-4: whose act each made row is), or nil when it is not
+  declared or answers nothing."
+  [rule data]
+  (some-> (value (:owner rule) data nil) str not-empty))
+
 (defn- holiday? [calendar d]
   (contains? (:holidays calendar) d))
 
