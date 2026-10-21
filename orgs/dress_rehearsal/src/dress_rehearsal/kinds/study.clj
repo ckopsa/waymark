@@ -22,6 +22,10 @@
   (refuse "The last cost record came on a day that has come, not one still ahead; say when the last one came.")
   '(<= (input :records_complete_on) (today)))
 
+(defguard chased-on-a-day-that-came
+  (refuse "A chase is recorded on a day that has come, not one still ahead; say when it went.")
+  '(<= (input :last_chased_on) (today)))
+
 (defguard has-preparer
   (refuse "A study goes to review with the name of who prepared it.")
   '(is-set (input :preparer)))
@@ -79,7 +83,9 @@
                       [:map
                        [:record [:enum "payroll" "contractor_invoices" "cloud_and_supply_costs" "engineering_records"]]
                        [:last_chased_on {:optional true} [:maybe [:string {:max 10}]]]]]]]
-            [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
+            ;; how many times the missing documents were chased, and the last day
+            [:chases {:optional true :default 0} [:maybe [:int {:min 0}]]]
+            [:last_chased_on {:optional true} [:maybe :waymark/date]]
             [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
@@ -91,7 +97,17 @@
              :review "A study may stay in review for 3 days; past that, the mayor tells The Principal."
              :signed_off "A signed-off study may wait 2 days to be delivered; past that, the mayor tells The Principal."}
    :actions
-   {:records_in {:from #{:collecting} :to :drafting
+   {:chase      {:from #{:collecting} :to :collecting
+                 :input [:map
+                         [:chases [:int {:min 1}]]
+                         [:last_chased_on :waymark/date]
+                         [:missing_records {:optional true} [:maybe [:vector {:max 4} [:map [:record [:enum "payroll" "contractor_invoices" "cloud_and_supply_costs" "engineering_records"]] [:last_chased_on {:optional true} [:maybe [:string {:max 10}]]]]]]]
+                         [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]]
+                 :guards [chased-on-a-day-that-came]
+                 ;; it writes the count it is given, so a retry writes the same
+                 :safety {:idempotent true :reversible true :confirm false}
+                 :decided "The AI chases missing documents on its own: twice, then the principal is told."}
+    :records_in {:from #{:collecting} :to :drafting
                  :input [:map [:records_complete_on :waymark/date]]
                  :guards [records-complete records-complete-already records-confirmed-by-a-person]
                  :safety {:idempotent true :reversible false :confirm false
@@ -113,6 +129,15 @@
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "The study and Form 6765 are with the client's CPA."}
                  :decided "The AI delivers a study to the client's CPA on its own once it is signed off; sign-off is the gate."}}})
+
+(defscenario chase-a-collecting-study
+  "A collecting study records a chase for its missing documents and stays collecting."
+  {:kind :study :attempt :chase
+   :row {:state :collecting :data {:client "Birch Instruments" :tax_year 2025 :chases 0}}
+   :input {:chases 1 :last_chased_on "2026-10-20"}
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :expect {:allowed true}})
 
 (defscenario records-in-with-the-day-the-last-came
   "A collecting study moves to drafting once the day the last cost record came is recorded."

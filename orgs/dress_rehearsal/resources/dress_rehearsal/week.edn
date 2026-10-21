@@ -1,0 +1,55 @@
+;; dress_rehearsal's first week, Monday to Friday (docs/orgkit.md § The
+;; week). The owner allows each held call the day it is asked: the
+;; script shows that as the owner's own call on the same door, right
+;; after the mayor's, so every day says :person-allows :none.
+{:day-one "2026-10-26"
+ :goal {:kind "study" :state "delivered"}
+ :days [;; Monday: Jordan Lee refers Acme Robotics; the website form brings Cedar Bakery
+        {:day 1 :person-allows :none
+         :calls [;; Birch Instruments comes back: its 2025 study, its narratives drafted from last year's notes
+                 {:as :person :kind "study" :action "create" :name "birch-2025"
+                  :input {:client "Birch Instruments" :tax_year 2025 :cpa "Jordan Lee, CPA" :chases 0}}
+                 {:as :world :cast :jordan :kind "prospect" :action "create" :name "acme"
+                  :input {:company "Acme Robotics" :source "cpa_referral" :referring_cpa "Jordan Lee, CPA"}}
+                 {:as :world :cast :cedar :kind "prospect" :action "create" :name "cedar"
+                  :input {:company "Cedar Bakery" :source "website"}}
+                 {:as :mayor :kind "prospect" :action "qualify" :row "acme"
+                  :input {:estimated_credit_usd 60000}}
+                 {:as :mayor :kind "prospect" :action "decline" :row "cedar" :input {}}
+                 {:as :person :kind "prospect" :action "decline" :row "cedar" :input {}}]}
+        ;; Tuesday: Birch sends its cost records; the payroll is missing
+        {:day 2 :person-allows :none
+         :calls [{:as :mayor :kind "study" :action "chase" :row "birch-2025"
+                  :input {:chases 1 :last_chased_on "2026-10-27"
+                          :missing_records [{:record "payroll" :last_chased_on "2026-10-27"}]}}
+                 {:as :mayor :kind "prospect" :action "engage" :row "acme"
+                  :input {:letter_signed_on "2026-10-27"}}
+                 {:as :person :kind "prospect" :action "engage" :row "acme"
+                  :input {:letter_signed_on "2026-10-27"}}]}
+        ;; Wednesday: still no payroll
+        {:day 3 :person-allows :none
+         :calls [{:as :mayor :kind "study" :action "chase" :row "birch-2025"
+                  :input {:chases 2 :last_chased_on "2026-10-28"
+                          :missing_records [{:record "payroll" :last_chased_on "2026-10-28"}]
+                          :principal_told_on "2026-10-28"}}
+                 {:as :mayor :kind "study" :action "create" :name "acme-2025"
+                  :input {:client "Acme Robotics" :tax_year 2025 :prospect_id {"$row" "acme"}
+                          :cpa "Jordan Lee, CPA" :chases 0}}]}
+        ;; Thursday: Birch sends the payroll; the specialist interviews Birch's engineering lead
+        {:day 4 :person-allows :none
+         :calls [{:as :mayor :kind "study" :action "records_in" :row "birch-2025"
+                  :input {:records_complete_on "2026-10-29"}}
+                 {:as :person :kind "study" :action "records_in" :row "birch-2025"
+                  :input {:records_complete_on "2026-10-29"}}
+                 {:as :mayor :kind "study" :action "submit" :row "birch-2025"
+                  :input {:preparer "The tax specialist" :credit_usd 48000}}]}
+        ;; Friday: the principal signs off; Birch's study goes to its CPA, and 20% of $48,000 is billed
+        {:day 5 :person-allows :none
+         :calls [{:as :mayor :kind "study" :action "sign_off" :row "birch-2025"
+                  :input {:signed_off_by "The Principal"}}
+                 {:as :person :kind "study" :action "sign_off" :row "birch-2025"
+                  :input {:signed_off_by "The Principal"}}
+                 {:as :mayor :kind "study" :action "deliver" :row "birch-2025" :input {}}
+                 {:as :mayor :kind "invoice" :action "create" :name "birch-invoice"
+                  :input {:client "Birch Instruments" :study_id {"$row" "birch-2025"}
+                          :amount_usd 9600 :due_on "2026-11-29"}}]}]}
