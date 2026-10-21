@@ -14,7 +14,7 @@
    :rounds_per_change :queued_check_minutes :merge_strategy :train_size
    :groom_floor :groom_floor_settle_seconds :groom_floor_max_priority
    :formatter :deny :test :check :hosted_workflows :hosted_ok :person_paths
-   :orientation])
+   :lanes :orientation])
 
 (def ^:private engines
   [:floor_noted_at :floor_count :floor_ticket :enrolled_at :note
