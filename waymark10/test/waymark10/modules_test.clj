@@ -116,6 +116,9 @@
            ;; …and the integration (docs/spec-integrations.md § 2): an
            ;; outside system as a row and a principal, :always
            :integration
+           ;; …and its receipt (§ 3, build step 2): one row per event
+           ;; its receiver kept
+           :integration_event
            ;; …and the scene and the take (docs/spec-scenes.md): a demo
            ;; written as shots, and one performance of it
            :scene :take
@@ -252,6 +255,8 @@
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
+               ;; an integration's receiver (docs/spec-integrations.md § 3)
+               "/api/-/events/:name"
                ;; the MCP door's OAuth discovery (waymark-kkx): RFC
                ;; 9728's root document and the path-inserted spelling
                "/.well-known/oauth-protected-resource"
