@@ -92,7 +92,8 @@
 (defn- weave-effects
   "Judge every action's `:effect`, normalize its forms, and add its two
   hidden doors. `[effect-no-key]` and `[effect-no-failure-state]` are
-  refused here, at the def site. → rmap"
+  the battery's to refuse (checks.clj), with their questions; an effect
+  with no `:fails-to` opens no failed door. → rmap"
   [rmap]
   (let [states (set (:states rmap))]
     (reduce
@@ -114,10 +115,6 @@
            (bad (str "names " k "; an effect takes " (vec (sort effect-keys)))))
          (when-not (and (string? (:power eff)) (not (str/blank? (:power eff))))
            (bad ":power names the tool it calls, as a string"))
-         (when (nil? (:idempotency-key eff))
-           (bad "[effect-no-key] has no :idempotency-key; key it on what makes it once: the row's id, plus a count if it repeats"))
-         (when (nil? (:fails-to eff))
-           (bad "[effect-no-failure-state] has no :fails-to; name the state a row waits in when the call fails"))
          (doseq [k [:fails-to :lands]
                  :let [s (get eff k)]
                  :when (some? s)]
@@ -128,10 +125,11 @@
          (when-not (or (nil? (:why eff)) (string? (:why eff)))
            (bad ":why is a sentence"))
          (let [eff (assoc eff
-                          :idempotency-key (form ":idempotency-key" (:idempotency-key eff))
+                          :idempotency-key (some->> (:idempotency-key eff) (form ":idempotency-key"))
                           :input (forms ":input" (:input eff))
                           :writes (forms ":writes" (:writes eff)))
-               doors (hidden-doors aname (:to a) eff)]
+               doors (cond-> (hidden-doors aname (:to a) eff)
+                       (nil? (:fails-to eff)) (dissoc (failed-door aname)))]
            (doseq [d (keys doors)]
              (when (contains? (:actions rmap) d)
                (bad (str "needs the door " d " for itself, and this kind declares one"))))
@@ -230,9 +228,6 @@
                       (let [e (:effect u)]
                         (when-not (get-in rmap [:actions e :effect])
                           (bad (str (pr-str e) " is not an effect door of this kind")))
-                        (when (nil? (get-in rmap [:actions e :effect :compensate]))
-                          (bad (str "[unwinds-no-compensate] names " (name e)
-                                    ", which declares no :compensate; name its undo")))
                         (when-some [ps (seq (some-> (:when u) expr/problems))]
                           (bad (str ":when: " (str/join "; " ps))))
                         (cond-> {:effect e}
@@ -240,12 +235,14 @@
                     us)
            held (or (get-in a [:effect :lands]) (:to a))]
        (reduce (fn [r {:keys [effect]}]
-                 (let [[door eff] (compensation r effect)
-                       fd (failed-door door)]
-                   (-> r
-                       (update-in [:actions fd]
-                                  #(or % (assoc (get (hidden-doors door nil eff) fd) :from #{})))
-                       (update-in [:actions fd :from] (fnil conj #{}) held))))
+                 ;; [unwinds-no-compensate] is the battery's to refuse
+                 (if-let [[door eff] (compensation r effect)]
+                   (let [fd (failed-door door)]
+                     (-> r
+                         (update-in [:actions fd]
+                                    #(or % (assoc (get (hidden-doors door nil eff) fd) :from #{})))
+                         (update-in [:actions fd :from] (fnil conj #{}) held)))
+                   r))
                (cond-> (assoc-in r [:actions aname :unwinds] us)
                  (:effect a) (assoc-in [:actions (landed-door aname) :unwinds] us))
                us)))
@@ -254,7 +251,9 @@
 
 (defn weave
   "Judge every action's `:effect`, `:compensate` and `:unwinds` at the
-  def site, and add the hidden doors they land through. → rmap"
+  def site, and add the hidden doors they land through. The findings of
+  § 8 — a missing key, failure state or undo — are the battery's
+  (checks.clj), which asks each one's question. → rmap"
   [rmap]
   (-> rmap weave-effects weave-compensations weave-unwinds))
 
