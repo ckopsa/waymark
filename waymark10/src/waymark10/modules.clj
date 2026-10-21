@@ -139,7 +139,8 @@
   Nothing here runs at load beyond the `defresource` gates the
   required namespaces already run, and nothing here touches storage —
   `waymark10.check` reads this table with no database at all."
-  (:require [waymark10.server.attachments :as attachments]
+  (:require [waymark10.lines :as lines]
+            [waymark10.server.attachments :as attachments]
             [waymark10.server.belief :as server-belief]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.curtain :as curtain]
@@ -579,7 +580,11 @@
    {:module :ledger
     :enrols [{:kind :posting :enroll :when-declared
               :kinds (fn [resources]
-                       (when (some :accounts resources) [postings/posting]))}]}
+                       (when (some :accounts resources) [postings/posting]))}
+             ;; …and each kind's line items (§6, step 6a): the child kind
+             ;; a :lines declaration makes, one per declaring kind
+             {:kind :line_items :enroll :when-declared
+              :kinds lines/kinds}]}
 
    ;; the when-declared precedent, unchanged: worksheet/kinds is both
    ;; the predicate and the synthesis — it answers empty when no kind

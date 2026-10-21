@@ -358,7 +358,7 @@ and who makes each.
                   :input {:company "Hillside Labs"}}
                  {:as :mayor :kind "prospect" :action "qualify" :row "hillside"
                   :input {:note "Referred by Jordan Lee."}}]}
-        {:day 2 :person-allows :yesterday
+        {:day 2
          :calls [{:as :mayor :kind "study" :action "create"
                   :input {:prospect_id {"$row" "hillside"}}}]}]}
 ```
@@ -369,8 +369,12 @@ and who makes each.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
-- A day's `:person-allows` is `:yesterday` unless it says `:none`: the
-  owner allows each call held the day before, as the director does.
+- A day's `:person-allows` is `:today` unless it says `:yesterday` or
+  `:none`: after the day's calls the owner allows each call held that
+  day, as the director does, since a held call expires 24h after it is
+  made. `:yesterday` allows them at the start of the next day instead,
+  and the report warns `[week-allow-late]` beside each such allow: its
+  call had expired by then. `:none` allows nothing that day.
 - `:goal` is the payoff: the rows of that kind in that state.
 - `:card`, on the week or on a day, is a line of text of at most 280
   characters: the week's (the seed's) opens the first-week scene as a
@@ -389,7 +393,7 @@ owner; and the goal's rows. It exits non-zero only for a broken script
 (a row name no earlier call made, a cast or kind it does not know),
 never for a refusal: a refusal is part of the report. Nothing renders
 and nothing leaves the process. `orgs/week_fixture` is a week that
-plays a refusal, a hold allowed the next day, and its payoff.
+plays a refusal, a hold allowed the same day, and its payoff.
 
 The week is judged three ways, each an error that blocks propose:
 `[week-stalls]`, one for each refused call, naming its day, door and
