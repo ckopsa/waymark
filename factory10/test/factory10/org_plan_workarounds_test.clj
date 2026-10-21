@@ -111,6 +111,48 @@
         (is (served? resp) (pr-str (json resp)))
         (is (= [a-rule] (get-in (stored eng id) [:data :workarounds])))))))
 
+(defn- force-state!
+  "The plan stands in `state`, as a run's plan does once past drafting."
+  [eng id state]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :org_plan id {})]
+          (store/save-row! st tx :org_plan
+                           (assoc row :state state
+                                  :version (inc (long (:version row))))
+                           (:version row)))))))
+
+(deftest a-plan-past-drafting-logs-in-its-own-state
+  (let [eng (engine)
+        h (dev/handler eng)]
+    (doseq [state [:proposed :simulated :going_live]]
+      (testing (name state)
+        (let [id (filed! eng (str "greenleaf_" (name state)))
+              _ (force-state! eng id state)
+              before (stored eng id)
+              resp (req h :post (str "/api/org_plans/" id "/-/log_workarounds_" (name state))
+                        person {:entries [a-rule]})
+              after (stored eng id)]
+          (is (served? resp) (pr-str (json resp)))
+          (is (= [a-rule] (get-in after [:data :workarounds])))
+          (is (= state (keyword (name (:state after)))) "it stays where it stood")
+          (is (= (dissoc (:data before) :workarounds :workarounds_concept)
+                 (dissoc (:data after) :workarounds :workarounds_concept))
+              "the take, the findings and the head are untouched"))))))
+
+(deftest a-retired-plan-refuses-every-log
+  (let [eng (engine)
+        h (dev/handler eng)
+        id (filed! eng "greenleaf")]
+    (force-state! eng id :retired)
+    (doseq [door ["log_workarounds" "log_workarounds_proposed"
+                  "log_workarounds_simulated" "log_workarounds_going_live"]]
+      (is (not (served? (req h :post (str "/api/org_plans/" id "/-/" door)
+                             person {:entries [a-rule]})))
+          door))
+    (is (empty? (get-in (stored eng id) [:data :workarounds])))))
+
 (deftest the-collection-finds-a-plan-by-its-workarounds-concept
   (let [eng (engine)
         h (dev/handler eng)
