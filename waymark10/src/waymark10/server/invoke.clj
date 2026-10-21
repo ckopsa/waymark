@@ -160,6 +160,7 @@
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -272,7 +273,7 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
-(defn render-hooks
+(defn- read-hooks
   "The render probe's :read/:find/:sum — make-ctx's enforcement hooks
   twinned for the READ path, each call over a short transaction of
   its own. An engine booted with :probe-reads true hands one instance
@@ -340,6 +341,15 @@
                               st tx {:kind (:kind row) :resource-id (:id row)}
                               {:newest-first true :limit 1}))))))}))
 
+(defn render-hooks
+  "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
+  §3) over their own :read and :find: the render probe and the
+  law-sweep name the governing work_calendar from the same memo the
+  rest of their reads ride."
+  [engine]
+  (let [hooks (read-hooks engine)]
+    (assoc hooks :calendar (work-calendar/hook (:read hooks) (:find hooks)))))
+
 (defn- law-conds
   "An exists/none/count-rows where as the store's conds
   (docs/spec-related-row-law.md §3): :state and :id are the row's own
@@ -368,6 +378,22 @@
 
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
          create-guard-pass)
+
+(defn- tx-calendar
+  "The `:calendar` hook (docs/spec-calendar-time.md §3) over the
+  write's own transaction, as make-ctx's :read and :find read it: a
+  holiday added in this transaction moves this write's verdict."
+  [engine tx]
+  (work-calendar/hook
+   (fn [target-kind id]
+     (when-some [trdef (get (resources engine) target-kind)]
+       (some->> (store/load-row (:storage engine) tx target-kind (str id) {})
+                (decode-row trdef))))
+   (fn [target-kind where opts]
+     (when-some [trdef (get (resources engine) target-kind)]
+       (mapv #(decode-row trdef %)
+             (store/query-rows (:storage engine) tx target-kind
+                               (or where {}) (merge {:limit 100} opts)))))))
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -664,6 +690,10 @@
                                (when-some [trdef (get (resources engine) target-kind)]
                                  (store/count-matching (:storage engine) tx target-kind
                                                        (law-conds trdef conds))))
+             ;; the house's calendar (docs/spec-calendar-time.md §3):
+             ;; the row's work_calendar ref, or nothing for the
+             ;; default, → the calendar that governs, or nil
+             :calendar (tx-calendar engine tx)
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render
