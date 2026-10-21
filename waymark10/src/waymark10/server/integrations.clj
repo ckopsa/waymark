@@ -42,6 +42,7 @@
   `refused` with the refusal whole, `unmatched`, `ambiguous` or
   `ignored`; `retry` and `dismiss` are a person's or a seat's."
   (:require [clojure.string :as str]
+            [waymark10.checks :as checks]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -971,11 +972,12 @@
                                e (:on-event rd)
                                :when (and (= (name (:source e)) nm) (not (inbox? e)))]
                            (str (name (:kind rd)) "." (name (:door e))))]]
-         (str "[source-unsigned] warning: integration " nm
-              " signs with scheme none, so its events are not checked"
-              (when (seq doors)
-                (str ", and " (str/join ", " doors) " run on them unread"))
-              ". Use a signing source, or keep it on :via :inbox so a seat reads each event."))))
+         (checks/integration-finding
+          :source-unsigned
+          (str "integration " nm " signs with scheme none, so its events are not checked"
+               (when (seq doors)
+                 (str ", and " (str/join ", " doors) " run on them unread")))
+          {}))))
 
 (defn handle-transition!
   "One committed transition: a receipt's birth, or its `retry`, applies
