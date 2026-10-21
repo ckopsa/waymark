@@ -14,6 +14,12 @@
     resource's own `:calendar` when its kind names one, else the
     default work_calendar.
 
+  On an instant window both name (evidence :slot), a `next-free`
+  (build step 9): the next window as long as the refused one, within
+  30 business days, in which the resource is working and free — and
+  the working guard a remedy that takes the door again at that slot,
+  and the holiday the refused day is.
+
   A door whose input does not carry a field reads it from the row,
   (data …). Derived at assembly, where every occupier of a resource
   kind is known; the trees fingerprint as any authored guard. A kind's
@@ -123,6 +129,46 @@
     (mapv #(list (if (contains? fields %) 'input 'data) %)
           [(:resource o) (:from o) (:to o)])))
 
+(defn- nones-of
+  "The tree that finds resource `res-side` held by none of `occs` in
+  the window [from-side, to-side)."
+  [o occs res-side from-side to-side]
+  (all-of (for [[p b] (binders occs)]
+            (list 'none [b (:kind p) (overlap p (:grain o) res-side from-side to-side)]))))
+
+(defn- working-form
+  "(working? from to), in the resource's own :calendar when its kind
+  names one."
+  [kinds o res from-side to-side]
+  (let [cal (get-in kinds [(:target o) :calendar])]
+    (apply list (cond-> ['working? from-side to-side]
+                  cal (conj (list 'follow (:target o) res cal))))))
+
+(defn- next-free
+  "(evidence :slot), canonical: the next window as long as the refused
+  one in which the resource is working and free, its end as (evidence
+  :slot_ends) — the pred the guards' own trees over the moved window."
+  [kinds o door occs]
+  (let [[res from-side to-side] (sides kinds o door)
+        cal (get-in kinds [(:target o) :calendar])]
+    {:next-free {:from from-side :to to-side :resource res :of (:target o)
+                 :calendar (when cal (list 'follow (:target o) res cal))}
+     :pred (list 'and (nones-of o occs res from-side to-side)
+                 (working-form kinds o res from-side to-side))}))
+
+(defn- slot-remedies
+  "The refused door again at the slot: the resource as the call gave
+  it, the window moved — on a door of the row whose input carries the
+  window, not its create."
+  [kinds o door]
+  (let [fields (door-fields (get kinds (:kind o)) door)]
+    (when (and (contains? (:froms o) door) (contains? fields (:from o)))
+      [{:door (keyword (name (:kind o)) (name door))
+        :input (into {} (filter (comp fields key))
+                     {(:resource o) (list 'input (:resource o))
+                      (:from o) '(evidence :slot)
+                      (:to o) '(evidence :slot_ends)})}])))
+
 (defn- free-guard [kinds o door occs]
   (let [[res from-side to-side] (sides kinds o door)
         bs (binders occs)
@@ -130,33 +176,39 @@
         live (sort (map name (remove (set (:terminal tr)) (:states tr))))
         gname (guard-name (:resource o) "is-free")
         word (resource-word (:resource o))
+        slot? (= :instant (:grain o))
         sentence (or (get-in kinds [(:kind o) :explain gname])
-                     (str/join " " (for [[p b] bs]
-                                     (str "That " word " is held from {" b "." (name (:from p))
-                                          "} to {" b "." (name (:to p)) "}."))))
+                     (str/join " " (concat
+                                    (for [[p b] bs]
+                                      (str "That " word " is held from {" b "." (name (:from p))
+                                           "} to {" b "." (name (:to p)) "}."))
+                                    (when slot?
+                                      [(str "That " word " is next free {slot.day} at {slot.time}.")]))))
         remedies (vec (for [[p b] bs
                             door (sort (:doors p))
                             :when (some (:in p) (get-in p [:froms door]))]
                         {:door (keyword (name (:kind p)) (name door)) :id (list 'evidence (keyword b))}))
-        nones (fn [res-side]
-                (all-of (for [[p b] bs]
-                          (list 'none [b (:kind p) (overlap p (:grain o) res-side from-side to-side)]))))]
+        nones #(nones-of o occs % from-side to-side)]
     (d/sentence-guard gname (d/refuse sentence) (nones res)
-                      (cond-> {:evidence {:free (list 'first
-                                                      ['candidate (:target o)
-                                                       (if (seq live) {:state (cons 'in live)} {})]
-                                                      (nones '(get candidate :id)))}}
+                      (cond-> {:evidence (cond-> {:free (list 'first
+                                                             ['candidate (:target o)
+                                                              (if (seq live) {:state (cons 'in live)} {})]
+                                                             (nones '(get candidate :id)))}
+                                           slot? (assoc :slot (next-free kinds o door occs)))}
                         (seq remedies) (assoc :remedies remedies)))))
 
-(defn- working-guard [kinds o door]
+(defn- working-guard [kinds o door occs]
   (let [[res from-side to-side] (sides kinds o door)
-        cal (get-in kinds [(:target o) :calendar])
-        gname (guard-name (:resource o) "is-working")]
+        gname (guard-name (:resource o) "is-working")
+        word (resource-word (:resource o))
+        remedies (slot-remedies kinds o door)]
     (d/sentence-guard gname
                       (d/refuse (or (get-in kinds [(:kind o) :explain gname])
-                                    (str "That " (resource-word (:resource o)) " does not work then.")))
-                      (apply list (cond-> ['working? from-side to-side]
-                                    cal (conj (list 'follow (:target o) res cal)))))))
+                                    (str "{holiday.day} is {holiday.name}. That " word " does not work then. "
+                                         "That " word " is next free {slot.day} at {slot.time}.")))
+                      (working-form kinds o res from-side to-side)
+                      (cond-> {:evidence {:slot (next-free kinds o door occs)}}
+                        (seq remedies) (assoc :remedies remedies)))))
 
 (defn- add-guard
   "`g` on door `door` of `r`, once: a registry built again from its own
@@ -203,7 +255,8 @@
                         (cond-> (update ks (:kind o) add-guard door
                                         (free-guard kinds o door (get by-target (:target o))))
                           (= :instant (:grain o))
-                          (update (:kind o) add-guard door (working-guard kinds o door))))
+                          (update (:kind o) add-guard door
+                                  (working-guard kinds o door (get by-target (:target o))))))
                       ks
                       (sort (:doors o))))
             kinds
