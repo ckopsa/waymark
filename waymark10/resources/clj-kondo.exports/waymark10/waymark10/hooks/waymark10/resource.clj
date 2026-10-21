@@ -27,6 +27,7 @@
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
+    :accounts
     :scenarios})
 
 (def action-keys
