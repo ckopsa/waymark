@@ -102,18 +102,7 @@
                                        :server sid}
                                       {:principal colton})
                          [:row :id]))
-        _ (inv/invoke! eng :integration iid :approve {} {:principal mom})
-        gid (get-in (store/with-tx (:storage eng)
-                      #(store/load-row (:storage eng) % :integration iid {}))
-                    [:data :grant])]
-    ;; the law does not yet name an effect's power in scope_wanted, so
-    ;; the test widens the grant the approve minted, behind the doors
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (let [raw (store/load-row (:storage eng) tx :grant (str gid) {})]
-          (store/save-row! (:storage eng) tx :grant
-                           (assoc-in raw [:data :scope] [{:kind "postage.send" :actions []}])
-                           (:version raw)))))
+        _ (inv/invoke! eng :integration iid :approve {} {:principal mom})]
     (let [pid (str (get-in (inv/create! eng :parcel {:number "P-1"} {:principal colton})
                            [:row :id]))]
       (inv/invoke! eng :parcel pid :buy_label {} {:principal colton})
@@ -132,6 +121,11 @@
 
 (deftest answered-is-done-and-the-row-lands
   (let [{:keys [eng log pid iid]} (world {:approval "none"} (fn [_ _] (labelled "L1")))]
+    (testing "the law names the effect's power, and the approve's grant wears it"
+      (let [irow (row-of eng :integration iid)
+            grow (row-of eng :grant (get-in irow [:data :grant]))]
+        (is (= ["postage.send"] (mapv (comp str :kind) (get-in irow [:data :scope_wanted]))))
+        (is (= ["postage.send"] (mapv (comp str :kind) (get-in grow [:data :scope]))))))
     (runner/sweep! eng)
     (let [c (the-call eng)]
       (is (= :done (:state c)))
