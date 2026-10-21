@@ -612,9 +612,13 @@
   "One take as the performer plays it: an atom holding the instant the
   take began (`began`, now unless given), and the instant the take's
   last `$day` hole of `window: \"shot\"` was filled, before the first
-  the instant the take began."
+  the instant the take began; with `now-fn`, the clock its windows read
+  now on (`:now-fn`), the wall clock without one."
   ([] (take-run (Instant/now)))
-  ([^Instant began] (atom {:began began :day-filled began})))
+  ([^Instant began] (take-run began nil))
+  ([^Instant began now-fn]
+   (atom (cond-> {:began began :day-filled began}
+           now-fn (assoc :now-fn now-fn)))))
 
 (defn fill-say
   "A shot's `say` as the film speaks it. A string stays as written; a
@@ -652,6 +656,8 @@
   ([say rows-of moves-of day-of] (fill-say say rows-of moves-of day-of (take-run)))
   ([say rows-of moves-of day-of run]
    (let [say (plain say)
+         ;; now on the run's clock: an engine's own, which stamps its rows
+         now! (fn [] ((:now-fn @run (fn [] (Instant/now)))))
          spoken (fn [lines h none]
                   (if (seq lines)
                     (str/join "; " lines)
@@ -660,9 +666,9 @@
          rows-said (fn [h]
                      (let [sum (some-> (get h "sum") str)
                            window (case (get h "window")
-                                    "take" {:since (:began @run) :until (Instant/now)}
+                                    "take" {:since (:began @run) :until (now!)}
                                     "clock" {:clock-days (vec (get h "days" []))
-                                             :until (Instant/now)}
+                                             :until (now!)}
                                     {:since (instant-of (get h "since"))
                                      :until (instant-of (get h "until"))})
                            lines (rows-of (cond-> (merge
@@ -711,12 +717,12 @@
                               (if-some [h (day-hole-of part)]
                                 (or (day-of (case (get h "window")
                                               "shot"
-                                              (let [now (Instant/now)
+                                              (let [now (now!)
                                                     [was] (swap-vals! run assoc :day-filled now)]
                                                 {:since (:day-filled was) :until now
                                                  :domain (str (get h "domain"))})
                                               "clock"
-                                              {:clock-day (get h "day") :until (Instant/now)
+                                              {:clock-day (get h "day") :until (now!)
                                                :domain (str (get h "domain"))}
                                               {:since (instant-of (get h "since"))
                                                :until (instant-of (get h "until"))
@@ -939,7 +945,9 @@
 
 (defn- clock-bounds
   "The bounds of engine `eng`'s demo clock days in ms, in order: the start
-  of its log, each `clock_shift` row, and `until`."
+  of its log, each `clock_shift` row, and `until` or the engine's clock,
+  whichever is later: its rows are stamped on that clock, which runs
+  ahead of the wall by the shifts."
   [eng ^Instant until]
   (let [st (:storage eng)
         shifts (if (contains? (inv/resources eng) :clock_shift)
@@ -949,14 +957,16 @@
                           (keep #(ms-of (:created-at %)))
                           sort)))
                  [])]
-    (-> [0] (into shifts) (conj (inst-ms until)))))
+    (-> [0] (into shifts)
+        (conj (max (inst-ms until) (inst-ms ((:now-fn eng (fn [] until)))))))))
 
 (defn clock-window
   "Day `k` of engine `eng`'s demo clock as a {:since :until} window: from
   its (k-1)th `clock_shift` row to its kth, day 1 from the start of its
   log and the day after the last shift up to `until`; nil for a later
-  day, and for a `k` that is no whole number from 1. Rows are stamped
-  with the wall clock in play order, so the shifts bound the days."
+  day, and for a `k` that is no whole number from 1. Rows, the log and
+  the shifts are all stamped on the engine's clock (`store/stamped`),
+  which only moves forward, so the shifts bound the days."
   [eng k ^Instant until]
   (let [bounds (clock-bounds eng until)]
     (when (and (integer? k) (<= 1 k (dec (count bounds))))
@@ -1044,15 +1054,20 @@
 (defn take-run-of
   "The run of the take keyed `k`: the first call for a key makes one
   (`take-run`, begun `now`), a later one reuses it, and every run begun
-  `take-run-ttl-ms` or more before `now` is dropped first."
+  `take-run-ttl-ms` or more before `now` is dropped first. With
+  `now-fn`, an engine's clock, the run begins and reads on it; its
+  keeping is still judged on `now`, the wall."
   ([k] (take-run-of k (Instant/now)))
-  ([k ^Instant now]
+  ([k now] (take-run-of k now nil))
+  ([k ^Instant now now-fn]
    (let [lo (- (inst-ms now) (long take-run-ttl-ms))]
      (-> (swap! take-runs
                 (fn [runs]
                   (let [runs (into {} (filter #(< lo (inst-ms (:began (val %))))) runs)]
                     (cond-> runs
-                      (not (contains? runs k)) (assoc k {:began now :run (take-run now)})))))
+                      (not (contains? runs k))
+                      (assoc k {:began now
+                                :run (take-run (if now-fn (now-fn) now) now-fn)})))))
          (get-in [k :run])))))
 
 (defn say-refusal

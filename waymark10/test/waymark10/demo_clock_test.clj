@@ -239,6 +239,31 @@
         (is (= (str (.plusSeconds ^Instant t0 2)) (str (get-in w2 [:data :started_at]))))
         (is (= 3000 (get-in f [:data :t])))))))
 
+(deftest a-clocked-engine-stamps-its-rows-on-the-demo-clock
+  (let [{:keys [eng]} (world)
+        st (:storage eng)
+        stamp (fn [c] (store/with-tx st #(:created-at (store/load-row st % :demo_chore (str c) {}))))
+        logged (fn [c] (store/with-tx st #(:at (first (store/transitions
+                                                         st % {:kind :demo_chore :resource-id (str c)} {})))))
+        before (chore! eng)]
+    (shift! eng {:by "P1D"})
+    (let [after (chore! eng)]
+      (testing "a row created after a P1D shift is stamped a day after the one before it"
+        (is (= t0 (stamp before)))
+        (is (= (.plusSeconds ^Instant t0 86400) (stamp after))))
+      (testing "and so is its move in the log"
+        (is (= (.plusSeconds ^Instant t0 86400) (logged after)))))))
+
+(deftest a-working-engine-keeps-the-stores-own-stamps
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [chore]
+                            :name "working"
+                            :now-fn (fn [] t0)})
+        st (:storage eng)
+        c (chore! eng)]
+    (is (nil? (store/stamp-of st)))
+    (is (not= t0 (store/with-tx st #(:created-at (store/load-row st % :demo_chore (str c) {})))))))
+
 (deftest a-restarted-engine-keeps-its-shift
   (let [{:keys [eng storage]} (world)]
     (shift! eng {:by "PT2H"})

@@ -57,7 +57,8 @@
       (router/json-response
        200 {:text (scenes/fill-say-as
                    eng say
-                   (scenes/take-run-of [(str (:id principal)) take-name])
+                   (scenes/take-run-of [(str (:id principal)) take-name]
+                                       (java.time.Instant/now) (:now-fn eng))
                    (sees (router/visibility-of req)))}))))
 
 (defn- open-doc

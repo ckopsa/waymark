@@ -543,8 +543,9 @@
        "INSERT INTO waymark10_transitions"
        " (kind, resource_id, action, from_state, to_state, actor,"
        "  law_revision, input_digest, inputs, acknowledged,"
-       "  judgment, after, correlation_id, idempotency_key, summary)"
-       " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+       "  judgment, after, correlation_id, idempotency_key, summary, at)"
+       " SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,"
+       "  coalesce(?::timestamptz, now())"
        (when floor? " FROM (SELECT count(*) FROM floor) held")
        " RETURNING id, at)"
        " SELECT id, at, pg_notify(?, id::text) AS notified FROM appended"))
@@ -780,18 +781,22 @@
                    (when (:for-update opts) " FOR UPDATE"))]
       (opened sealed kind (row->map (jdbc/execute-one! tx [sql id] jdbc-opts)))))
 
-  (insert-row! [_ tx kind row]
-    (let [table (table-for tables kind)]
+  (insert-row! [this tx kind row]
+    (let [table (table-for tables kind)
+          stamp (some-> (store/stamp-of this) Timestamp/from)]
       (try
         (jdbc/execute-one!
          tx
          [(str "INSERT INTO " table
-               " (id, state, version, data, shape, owner, law_revision, next_flip_at)"
-               " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+               " (id, state, version, data, shape, owner, law_revision, next_flip_at,"
+               "  created_at, updated_at)"
+               " VALUES (?, ?, ?, ?, ?, ?, ?, ?,"
+               "  coalesce(?::timestamptz, now()), coalesce(?::timestamptz, now()))")
           (:id row) (name (:state row)) (:version row 1)
           (sealed-data sealed kind row) (:shape row 1) (:owner row)
           (:law-revision row)
-          (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)])
+          (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
+          stamp stamp])
         (catch org.postgresql.util.PSQLException e
           (if (= "23505" (.getSQLState e))
             (throw (store/unique-violation kind (:id row)
@@ -799,7 +804,7 @@
             (throw e))))
       row))
 
-  (save-row! [_ tx kind row expected-version]
+  (save-row! [this tx kind row expected-version]
     (let [table (table-for tables kind)
           res (try
                 (jdbc/execute-one!
@@ -807,12 +812,13 @@
                  [(str "UPDATE " table
                        " SET state = ?, version = ?, data = ?, shape = ?,"
                        " owner = ?, law_revision = ?, next_flip_at = ?,"
-                       " updated_at = now()"
+                       " updated_at = coalesce(?::timestamptz, now())"
                        " WHERE id = ? AND version = ?"
                        " RETURNING updated_at")
                   (name (:state row)) (:version row) (sealed-data sealed kind row)
                   (:shape row 1) (:owner row) (:law-revision row)
                   (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
+                  (some-> (store/stamp-of this) Timestamp/from)
                   (:id row) expected-version]
                  jdbc-opts)
                 ;; a data edit can move a promoted generated column into
@@ -862,7 +868,7 @@
                                     " WHERE data->>'external_id' IS NOT NULL")]
                            jdbc-opts))))
 
-  (append-transition! [_ tx record]
+  (append-transition! [this tx record]
     ;; the floor is held before the id is allocated, and to the commit:
     ;; see the log's commit order
     ;; the outbox IS the log: the notify is in the append's statement and
@@ -885,6 +891,7 @@
                 (:correlation-id record)
                 (:idempotency-key record)
                 (:summary record)
+                (some-> (store/stamp-of this) Timestamp/from)
                 notify-channel]
                jdbc-opts)]
       (assoc record :id (:id res) :at (->inst (:at res)))))
@@ -1056,17 +1063,19 @@
                    " ORDER BY id LIMIT " (long limit))]
       (mapv :id (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
-  (update-data! [_ tx kind id data next-flip-at]
+  (update-data! [this tx kind id data next-flip-at]
     (let [table (table-for tables kind)]
       (jdbc/execute-one!
        tx
        [(str "UPDATE " table
-             " SET data = ?, next_flip_at = ?, updated_at = now()"
+             " SET data = ?, next_flip_at = ?,"
+             " updated_at = coalesce(?::timestamptz, now())"
              " WHERE id = ?")
         ;; sealed as every write is: a maintenance write of a row read
         ;; opened would otherwise store its secret fields in the clear
         (sealed-data sealed kind {:data data})
         (some-> ^java.time.Instant next-flip-at Timestamp/from)
+        (some-> (store/stamp-of this) Timestamp/from)
         id])
       nil))
 
