@@ -198,6 +198,83 @@
   [text]
   {:card text :hold {:ms (scenes/card-ms text)}})
 
+;; ── the week, played as the camera rolls (ticket 1b89ca49) ──────────
+
+(defn- the-mayor-seat
+  "The name of the seed's mayor seat, as factorykit's org-mayor template
+  names it: `<org>-mayor`. nil when the seed seats no mayor."
+  [seed]
+  (some #(when (= "org-mayor" (:template %))
+           (some-> (get-in % [:params :org]) (str "-mayor")))
+        (:seats seed)))
+
+(defn- cast-of [c] (some-> (:as c) name keyword))
+
+(defn- row-bind
+  "The name the scene binds the week's row `nm` to, as a `$ref` spells it."
+  [nm]
+  (str "row_" (str/replace (str nm) #"[^A-Za-z0-9_]" "_")))
+
+(defn- shown?
+  "Whether the film shows call `c`, `last?` when it is its day's last:
+  day 1 shows every call; a later day the ones marked `:show true`, or
+  with no mark, a person's call and the day's last."
+  [c day-one? last?]
+  (cond day-one? true
+        (contains? c :show) (true? (:show c))
+        :else (or (= :person (cast-of c)) last?)))
+
+(defn- call-shots
+  "The shots that play week.edn call `c`. A person's call on a row is
+  the owner's tap: open the row, frame its held band and each field the
+  call's `:focus` names, press Allow. Any other is a `call` shot the
+  performer makes as it plays, binding the row a named create makes,
+  then the open of the row it moved; the first shown call of a cast
+  opens its queue first, and the mayor's its seat page and its latest
+  sitting after. A call not shown is still played, its shots trimmed."
+  [c first? mayor-seat resources show?]
+  (let [as (cast-of c)
+        row (or (:row c) (:name c))
+        ref (some->> row row-bind (str "$"))
+        shots (if (and (= :person as) (:row c))
+                (concat [{:open {:self ref}} {:focus {:target "held"}}]
+                        (map (fn [f] {:focus {:target (str "field:" (name f))}}) (:focus c))
+                        [{:press {:target "allow"}}])
+                (concat (when (and show? first?)
+                          [{:open {:collection (the-collection resources (name (:kind c)))}}])
+                        (when (and show? first? (= :mayor as) mayor-seat)
+                          [{:open {:seat mayor-seat}}
+                           {:open {:sitting {:of mayor-seat :which "latest"}}}])
+                        [(cond-> {:call (cond-> {:as (name as) :kind (name (:kind c))
+                                                 :action (name (or (:action c) "create"))}
+                                          (:row c) (assoc :row (str (:row c)))
+                                          (:name c) (assoc :name (str (:name c)))
+                                          (some? (:input c)) (assoc :input (:input c)))}
+                           (:name c) (assoc :bind (row-bind (:name c))))]
+                        (when (and show? ref) [{:open {:self ref}}])))]
+    (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
+
+(defn- week-shots
+  "Each day of `week-script` that has calls, to the shots that play
+  them, its days in order: day 1 in full, a later day the calls it shows
+  (`shown?`)."
+  [week-script seed resources]
+  (let [mayor-seat (the-mayor-seat seed)
+        play-day (fn [[acc seen] {:keys [day calls]}]
+                   (let [n (count calls)
+                         [shots seen]
+                         (reduce (fn [[shots seen] [i c]]
+                                   (let [show? (shown? c (= 1 day) (= i (dec n)))
+                                         as (cast-of c)]
+                                     [(into shots (call-shots c (not (seen as)) mayor-seat
+                                                              resources show?))
+                                      (cond-> seen show? (conj as))]))
+                                 [[] seen]
+                                 (map-indexed vector calls))]
+                     [(assoc acc day shots) seen]))]
+    (first (reduce play-day [{} #{}]
+                   (sort-by :day (filter (comp seq :calls) (:days week-script)))))))
+
 (defn scene
   "The first-week scene of the org whose seed is `seed`, filmed on the
   clone at `clone_url`, made at `head_sha`, its day 1 on `day_one`
@@ -223,7 +300,10 @@
   kind the collection the opening opens (ticket 6c3d93db). With none of
   these the opening opens the seed's first kind, never an empty name.
   Each shot carries `:id`, its 1-based position in the rendered scene
-  (ticket ef24488d), for the take shot that films it to name."
+  (ticket ef24488d), for the take shot that films it to name.
+  A day of `week_script` with `:calls` is played as the camera rolls
+  (ticket 1b89ca49): its card, the shots `week-shots` makes of its
+  calls, then its caption, and each call shot's cast joins the scene's."
   [seed {:keys [clone_url head_sha day_one kind brief resources week week_script]}]
   (let [t (template)
         owner (the-owner seed)
@@ -244,6 +324,7 @@
                 :brief_line (or line "")
                 :day_one (str day-one)}
         roles (get-in t [:template :roles])
+        played (week-shots week_script seed resources)
         day-cards (into {} (keep (fn [d] (when (string? (:card d)) [(:day d) (:card d)])))
                         (:days week_script))
         day (fn [k]
@@ -256,9 +337,12 @@
                                        :next_date (str (.plusDays day-one (long k)))))]
                 (cond->> (cond-> shots
                            (get roles k) (update (dec (count shots)) assoc :role (get roles k))
+                           ;; the week's calls, then the day's caption
+                           (get played k) (->> peek (conj (get played k)))
                            true (with-calls (get (vec week) (dec k))))
                   (get day-cards k) (concat [(card-shot (get day-cards k))]))))
-        actors (keep call-as (apply concat week))
+        actors (concat (keep call-as (apply concat week))
+                       (keep #(get-in % [:call :as]) (apply concat (vals played))))
         money (the-money seed resources)
         ;; four clauses at most: the ends, the money, then the taps
         per-kind (map #(fill (:closing_kind t) (merge values %))
