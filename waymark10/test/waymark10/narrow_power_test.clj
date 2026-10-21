@@ -346,7 +346,17 @@
       (is (true? (gate/path-glob-matches? "*.pem" "keys/server.pem")))
       (is (true? (gate/path-glob-matches? "**/secrets/**" "a/secrets/b")))
       (is (true? (gate/path-glob-matches? "src/?.clj" "src/a.clj")))
-      (is (false? (gate/path-glob-matches? "src/?.clj" "src/ab.clj"))))))
+      (is (false? (gate/path-glob-matches? "src/?.clj" "src/ab.clj"))))
+
+    (testing "`X/**` admits the directory X itself, with or without its slash"
+      (is (true? (gate/path-glob-matches? "orgs/shop/**" "orgs/shop")))
+      (is (true? (gate/path-glob-matches? "orgs/shop/**" "orgs/shop/")))
+      (is (false? (gate/path-glob-matches? "orgs/shop/**" "orgs/shopfront"))))))
+
+(deftest the-sit-note-asks-for-repo-and-branch-on-every-bench-call
+  (is (str/includes? @#'mcp/bench-filled-note "repo and branch"))
+  (is (str/includes? @#'mcp/bench-filled-note "every bench call"))
+  (is (not (str/includes? @#'mcp/bench-filled-note "leave them"))))
 
 (deftest a-path-filter-judges-a-moves-move-to-by-the-same-globs
   (let [w (world [{:kind "bench.edit" :actions []

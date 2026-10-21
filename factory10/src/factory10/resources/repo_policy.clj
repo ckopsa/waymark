@@ -719,6 +719,21 @@
                     :label "Paths only a person merges"
                     :help "Globs, one for each row, in the grammar of the paths the bench never serves. A change that touches a path one matches is never merged by the house: once green and clean it waits merge_wait_seconds, then asks a person for the merge. Empty means the house merges every green change as the policy says."}}
     [:maybe [:vector {:max 50} [:string {:min 1 :max 200}]]]]
+   ;; the path lanes (ticket 9b27142e, part 1 of 96d24571). OPTIONAL: a
+   ;; row without it, or with an empty list, puts every change in the
+   ;; catch-all lane `engine`, which is implied and never declared. Each
+   ;; change reads its lane from its touched paths (`bench/lane-of`);
+   ;; nothing acts on the lane yet.
+   [:lanes {:optional true
+            :examples [[{:name "docs" :paths ["docs/**"]}
+                        {:name "orgs" :paths ["orgs/**"]}]]
+            :x-display
+            {:label "Path lanes"
+             :help "An ordered list of lanes, each a name and its globs, in the grammar of the paths only a person merges. A change is in the first lane whose globs cover every path it touches; a lane of orgs/** is one lane for each org directory (orgs/<name>). A change no lane covers, or one that spans lanes, is in the lane engine. Empty means every change is engine."}}
+    [:maybe [:vector {:max 20}
+             [:map
+              [:name [:string {:min 1 :max 60}]]
+              [:paths [:vector {:min 1 :max 50} [:string {:min 1 :max 200}]]]]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display

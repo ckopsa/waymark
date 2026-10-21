@@ -534,6 +534,46 @@
                 (str path)))
             (get-in change [:data :touched_paths])))))
 
+(def engine-lane
+  "The catch-all lane every policy implies and none declares."
+  "engine")
+
+(defn- org-dir
+  "The org directory a path stands in — `orgs/<x>` for orgs/<x>/… — or
+  nil for a path that is not inside one."
+  [path]
+  (let [[top org & more] (str/split (str path) #"/")]
+    (when (and (= "orgs" top) (not-empty org) (seq more))
+      (str "orgs/" org))))
+
+(defn lane-of
+  "The lane this change stands in (ticket 9b27142e): the name of the
+  first of its policy's `lanes` whose globs cover EVERY path the change
+  touches, in the grammar of `person-path` (`gate/path-glob-matches?`).
+  A lane that covers by `orgs/**` is one lane for each org directory,
+  `orgs/<x>`. A change no lane covers, one that spans lanes or org
+  directories, one that touches nothing, and every change of a policy
+  that declares no lanes is `engine-lane`. Pure: it reads the two rows
+  it is given and nothing else."
+  [change policy]
+  (let [paths (keep #(some-> % str not-empty) (get-in change [:data :touched_paths]))
+        covers? (fn [globs path] (some #(gate/path-glob-matches? % path) globs))
+        lane (when (seq paths)
+               (some (fn [lane]
+                       (let [globs (keep #(some-> % str not-empty) (:paths lane))
+                             lane-name (some-> (:name lane) str not-empty)]
+                         (when (and lane-name (seq globs)
+                                    (every? #(covers? globs %) paths))
+                           {:globs globs :name lane-name})))
+                     (map #(update-keys % keyword)
+                          (filter map? (get-in policy [:data :lanes])))))]
+    (cond
+      (nil? lane) engine-lane
+      (some #{"orgs/**"} (:globs lane))
+      (let [orgs (set (map org-dir paths))]
+        (if (and (= 1 (count orgs)) (first orgs)) (first orgs) engine-lane))
+      :else (:name lane))))
+
 (defn house-merges-change?
   "Does the house's merge pass merge THIS change? Only when its policy
   `house-pass-merges?` and the change touches no path the policy keeps
