@@ -22,7 +22,11 @@
                     reads it, so what this calls overdue is what that
                     pass calls aged
   expected_seconds  the state's expected age, or nil
-  overdue           age / expected, or nil with no expected age
+  due, late         where that age is a map (a date or business days):
+                    the deadline `waiting_on.since.due` names, and
+                    whether it has passed
+  overdue           age / expected — age / the span to `due` for a
+                    dated age — or nil with neither
 
   Groups run `person`, `nobody`, then each seat, then each source;
   inside a group the most overdue first.
@@ -96,9 +100,9 @@
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
   the row's data as the caller may read it, `summary` its line."
-  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments]}]
+  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar]}]
   (let [w (waiting-on/block rdef seat-rows by-kind row
-                            {:now now :data data
+                            {:now now :data data :calendar calendar
                              :tickets tickets :judgments judgments})]
     (when-not (str/starts-with? (str (:verdict w)) "nothing:")
       (let [at (inst (get-in w [:since :at]))
@@ -106,8 +110,12 @@
             age (when (and at now)
                   (max 0 (.getSeconds (Duration/between at now))))
             expected (get-in w [:since :expected_seconds])
-            ratio (when (and age (number? expected) (pos? expected))
-                    (/ (Math/round (* 100.0 (/ (double age) expected))) 100.0))
+            due (inst (get-in w [:since :due]))
+            window (if due
+                     (when at (.getSeconds (Duration/between at due)))
+                     expected)
+            ratio (when (and age (number? window) (pos? window))
+                    (/ (Math/round (* 100.0 (/ (double age) window))) 100.0))
             repo (some-> (or (get data :repo) (get data :repository)
                              (get data "repo") (get data "repository"))
                          str not-empty)]
@@ -121,11 +129,15 @@
                  :overdue ratio
                  :waiting_on w}
           (:domain rdef) (assoc :domain (text (:domain rdef)))
-          repo (assoc :repo repo))))))
+          repo (assoc :repo repo)
+          due (assoc :due (str due)
+                     :late (boolean (and now (not (.isBefore now due))))))))))
 
 (defn- overdue? [e]
-  (boolean (and (:age_seconds e) (number? (:expected_seconds e))
-                (> (:age_seconds e) (:expected_seconds e)))))
+  (if (contains? e :late)
+    (boolean (:late e))
+    (boolean (and (:age_seconds e) (number? (:expected_seconds e))
+                  (> (:age_seconds e) (:expected_seconds e))))))
 
 (defn- group-rank [h]
   [(cond (= "person" h) 0
@@ -190,6 +202,7 @@
         st (:storage eng)
         resources (inv/resources eng)
         now ((:now-fn eng))
+        calendar (:calendar (inv/render-hooks eng))
         kind? (fn [k] (or (nil? vis) ((:kind? vis) k)))
         kinds (for [[k rdef] resources
                     :when (and (kind? k)
@@ -235,6 +248,7 @@
                       :let [e (entry rdef seat-rows resources row
                                      (assoc reads
                                             :now now
+                                            :calendar calendar
                                             :data (shown-data rdef row vis)
                                             :summary (render/target-summary rdef row vis)))]
                       :when e]
