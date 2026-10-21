@@ -181,6 +181,11 @@
    ;; derived guard's sentence. Never in the fingerprint themselves: the
    ;; derived trees are, as an authored guard is
    :occupies :calendar :explain
+   ;; recurrence (docs/spec-calendar-time.md §4): [{:name :makes :every
+   ;; :on :from :until :times :while :holidays :lead :owner :input}] —
+   ;; rules that make rows of another kind on the dates waymark10.recurs
+   ;; lists. Law: the fingerprint's recurs facet, since they write rows
+   :recurs
    ;; read-only fields the server computes at read time: {field {:schema
    ;; <malli> :x-display {…} :fn (fn [row ctx] value) :reads? bool}} —
    ;; :reads? true renders nil where no :read is lent; never stored,

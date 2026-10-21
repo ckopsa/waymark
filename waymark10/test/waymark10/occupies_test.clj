@@ -10,7 +10,8 @@
             [waymark10.guards :as g]
             [waymark10.occupies :as occupies]
             [waymark10.resource :as r]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time LocalDate LocalTime ZoneId)))
 
 ;; ── the fixture pair, and time off ───────────────────────────────────
 
@@ -224,6 +225,85 @@
       (is (= (tree '(working? (input :starts_at) (input :ends_at)
                               (follow :crew (data :crew_id) :calendar_id)))
              (:when (guard-on w :booking :reschedule :crew-is-working)))))))
+
+;; ── next-free (build step 9) ────────────────────────────────────────────
+
+;; The house works Monday to Friday, 8:00 to 17:00, and keeps Memorial
+;; Day, Monday 31 May 2027 (film step 2).
+(def ^:private house
+  {:zone (ZoneId/of "UTC")
+   :workdays #{:mon :tue :wed :thu :fri}
+   :hours {:from (LocalTime/of 8 0) :to (LocalTime/of 17 0)}
+   :holidays (sorted-map (LocalDate/parse "2027-05-31") "Memorial Day")})
+
+(defn- housed [rows] (assoc (ctx-over rows) :calendar (fn [_] house)))
+
+(defn- memorial-day [crew]
+  {:crew_id crew :starts_at "2027-05-31T08:00:00Z" :ends_at "2027-05-31T12:00:00Z"})
+
+(defn- elm-booked [id from to]
+  {:id id :kind :booking :state :scheduled :created_at "2027-05-01T09:00:00Z"
+   :data {:customer_name "the Wus' hedge" :crew_id "crew-elm" :starts_at from :ends_at to}})
+
+(defn- elm-away [until]
+  {:id "to-elm-summer" :kind :time_off :state :approved :created_at "2027-05-01T09:00:00Z"
+   :data {:crew_id "crew-elm" :starts_at "2027-06-01T00:00:00Z" :ends_at until}})
+
+(deftest the-holiday-refusal-names-the-next-free-day
+  (let [w (world :booking {:explain (assoc (:explain booking) :crew-is-working
+                                           "{holiday.day} is {holiday.name}. {slot.name} is next free {slot.day} at {slot.time}.")})
+        [v d] (g/evaluate (guard-on w :booking :schedule :crew-is-working)
+                          hendersons (memorial-day "crew-elm") (housed rows))]
+    (is (t/deny? v))
+    (is (= {:slot "2027-06-01T08:00:00Z" :slot_ends "2027-06-01T12:00:00Z"} (:evidence v)))
+    (is (= "Monday 31 May is Memorial Day. The Elm Street crew is next free Tuesday at 8:00."
+           (g/render-reason d v hendersons)))
+    (is (= [{:door :booking/schedule
+             :input {:crew_id "crew-elm" :starts_at "2027-06-01T08:00:00Z" :ends_at "2027-06-01T12:00:00Z"}}]
+           (g/resolve-remedies d hendersons (memorial-day "crew-elm") (:evidence v)))
+        "the remedy takes the same door again, at the slot")))
+
+(deftest the-derived-sentence-names-the-holiday-and-the-slot
+  (let [[v d] (g/evaluate (guard-on (world) :booking :schedule :crew-is-working)
+                          hendersons (memorial-day "crew-elm") (housed rows))]
+    (is (= (str "Monday 31 May is Memorial Day. That crew does not work then. "
+                "That crew is next free Tuesday at 8:00.")
+           (g/render-reason d v hendersons)))))
+
+(deftest the-slot-is-working-and-free
+  (let [busy (conj rows (elm-booked "bk-wu" "2027-06-01T08:00:00Z" "2027-06-01T12:00:00Z"))]
+    (testing "the Elm crew is at the Wus' Tuesday morning: the slot steps past it"
+      (let [[v] (g/evaluate (guard-on (world) :booking :schedule :crew-is-working)
+                            hendersons (memorial-day "crew-elm") (housed busy))]
+        (is (= "2027-06-01T12:00:00Z" (get-in v [:evidence :slot])))))
+    (testing "a crew that is held is told when it is next free"
+      (let [[v d] (g/evaluate (guard-on (world) :time_off :create :crew-is-free)
+                              {:data {}}
+                              {:crew_id "crew-elm" :starts_at "2027-06-01T09:00:00Z" :ends_at "2027-06-01T11:00:00Z"}
+                              (housed busy))]
+        (is (t/deny? v))
+        (is (= "2027-06-01T12:00:00Z" (get-in v [:evidence :slot]))
+            "two hours from the opening hour, past the Wus' morning")
+        (is (= "That crew is held from 08:00 to 12:00. That crew is next free Tuesday at 12:00."
+               (g/render-reason d v {:data {}})))))
+    (testing "no calendar to ask: no slot, and the sentence that reads it goes"
+      (let [[v] (g/evaluate (guard-on (world) :booking :schedule :crew-is-free)
+                            hendersons (thursday "crew-oak") (ctx-over rows))]
+        (is (nil? (get-in v [:evidence :slot])))))))
+
+(deftest the-scan-stops-at-thirty-business-days
+  (let [working (guard-on (world) :booking :schedule :crew-is-working)]
+    (testing "away until the thirtieth business day after the holiday: free on it"
+      (let [[v] (g/evaluate working hendersons (memorial-day "crew-elm")
+                            (housed (conj rows (elm-away "2027-07-12T00:00:00Z"))))]
+        (is (= "2027-07-12T08:00:00Z" (get-in v [:evidence :slot])))))
+    (testing "away one business day longer: no slot is named"
+      (let [[v d] (g/evaluate working hendersons (memorial-day "crew-elm")
+                              (housed (conj rows (elm-away "2027-07-13T00:00:00Z"))))]
+        (is (t/deny? v))
+        (is (nil? (get-in v [:evidence :slot])))
+        (is (= "Monday 31 May is Memorial Day. That crew does not work then."
+               (g/render-reason d v hendersons)))))))
 
 (deftest derivation-is-idempotent
   (let [w (world)]
