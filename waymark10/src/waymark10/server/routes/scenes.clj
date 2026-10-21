@@ -78,6 +78,8 @@
       (let [o (scenes/open-as eng open (sees (router/visibility-of req)))]
         (when-not o
           (refuse "the open's domain has no kind this caller sees."))
+        (when-some [why (:problem o)]
+          (refuse why))
         (router/json-response 200 {:open o})))))
 
 (defn routes [eng]

@@ -10,7 +10,9 @@
   birth door in the parent door's transaction (server.invoke's
   write-lines!), so a line is addressable, readable and filterable by
   its parent and its refs, and no hand at the wire writes one."
-  (:require [waymark10.guards :as g]
+  (:require [waymark10.expr :as expr]
+            [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
@@ -65,3 +67,43 @@
   when-declared enrollment."
   [resources]
   (into [] (comp (filter :lines) (map line-kind)) resources))
+
+(defn defaulted
+  "A door's lines with each omitted defaulted field filled (ledger step
+  6c, docs/spec-ledger-money.md §6): the parent's :defaults form, read
+  at the door with the line bound and `read` (kind, id → row) as
+  follow's hook, so a line's price is its product's when the door ran.
+  A default that answers nil or unknown leaves the field out, and the
+  line's own schema judges it."
+  [parent read ls]
+  (let [defaults (get-in parent [:lines :defaults])]
+    (if (and (seq defaults) (sequential? ls))
+      (mapv (fn [l]
+              (reduce-kv (fn [l f form]
+                           (if (some? (get l f))
+                             l
+                             (let [v (expr/evaluate form (cond-> {:its (list l)}
+                                                           read (assoc :read read)))]
+                               (if (or (nil? v) (expr/unknown? v)) l (assoc l f v)))))
+                         l defaults))
+            ls)
+      ls)))
+
+(defn totals
+  "The parent's :totals over these lines (ledger step 6c, §6): each
+  total's form with (lines) bound to them, as the type its :line-total
+  mark names. A total that answers no value of that type — a money
+  total of no lines among them — is absent."
+  [parent ls]
+  (let [em (schema/entry-map (:schema parent))]
+    (into {}
+          (keep (fn [[f form]]
+                  (let [v (expr/evaluate form {:lines (vec ls)})
+                        ty (get-in em [f :properties :line-total])
+                        v (cond (or (nil? v) (expr/unknown? v)) nil
+                                (= :money ty) (when (money/money? v) v)
+                                (money/money? v) nil
+                                (= :int ty) (when (integer? v) v)
+                                :else (when (number? v) (bigdec v)))]
+                    (when (some? v) [f v]))))
+          (get-in parent [:lines :totals]))))

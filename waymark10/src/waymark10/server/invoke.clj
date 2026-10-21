@@ -151,6 +151,7 @@
             [waymark10.effect :as effect]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
+            [waymark10.lines :as line-items]
             [waymark10.machine :as machine]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
@@ -1368,6 +1369,26 @@
 
 (declare write-lines!)
 
+(defn- defaulted-lines
+  "The input with each of its lines' omitted :defaults filled (ledger
+  step 6c, docs/spec-ledger-money.md §6), read through follow over the
+  door's own :read, so a line's price is its product's when the door
+  ran."
+  [rdef ctx inp]
+  (cond-> inp
+    (and (get-in rdef [:lines :defaults]) (map? inp) (contains? inp :lines))
+    (update :lines #(line-items/defaulted rdef (:read ctx) %))))
+
+(defn- with-totals
+  "The row's data with its kind's :totals (ledger step 6c) computed
+  from these lines, in the door's own transaction, so the row is
+  written with them and its postings read them. A total with no value
+  is left out."
+  [data rdef ls]
+  (if-some [ts (not-empty (get-in rdef [:lines :totals]))]
+    (merge (apply dissoc data (keys ts)) (line-items/totals rdef ls))
+    data))
+
 (defn- sans-lines
   "The input as the row's own data reads it: a kind that declares
   :lines (ledger step 6a) takes its `lines` into line rows, never into
@@ -1387,7 +1408,12 @@
                               (str "handler for " (name (:name defn))
                                    " must return the row"))))
                     out)
-                  row)]
+                  row)
+        ;; its totals (ledger step 6c) are computed here, in this
+        ;; transaction, from the lines the door writes
+        handled (cond-> handled
+                  (and (:lines rdef) (map? inp) (contains? inp :lines))
+                  (update :data with-totals rdef (:lines inp)))]
     (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
       (let [[latest] (store/transitions (:storage engine) tx
                                         {:kind (:kind rdef) :resource-id (:id row)}
@@ -1824,7 +1850,11 @@
                           (throw (p/schema-invalid
                                   action-name
                                   (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
-                          nil))]
+                          nil))
+                  ;; a line's omitted defaults fill here (ledger step
+                  ;; 6c), so the guards, the handler and the lines
+                  ;; written all read the line as the door placed it
+                  inp (defaulted-lines rdef ctx inp)]
               ;; 8. natural replay before guards
               (or (when (and (not dry-run)
                              (get-in defn [:safety :idempotent])
@@ -2881,6 +2911,7 @@
                            :within within
                            :grant grant
                            :self {:kind kind :action create-action}})
+            inp (defaulted-lines rdef ctx inp)
             {:keys [warned overridden basis]}
             (create-guard-pass door-guards
                                inp (cond-> (dissoc ctx :invoke :create :inner-sink
@@ -2902,8 +2933,11 @@
                    :version 1
                    ;; each account is born at zero (ledger step 3c),
                    ;; so "under 5" finds a row nothing posted to yet
-                   :data (merge (money/opening-balances (:accounts rdef))
-                                (sans-lines rdef inp))
+                   :data (cond-> (merge (money/opening-balances (:accounts rdef))
+                                        (sans-lines rdef inp))
+                           ;; its totals (ledger step 6c), from the
+                           ;; lines it is born with
+                           (:lines rdef) (with-totals rdef (:lines inp)))
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}
