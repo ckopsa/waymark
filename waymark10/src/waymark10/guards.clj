@@ -215,6 +215,108 @@
                    (seq fields) (assoc :fields fields)))))
            (:remedies g)))))
 
+;; a guard that names no remedy still knows where the fields it reads
+;; are written: the door it guards when that door's input takes them,
+;; else the nearest door before it on the path that does, else an edit
+;; door, else create — create counts as a writer (ticket 7cc2315b)
+
+(defn- door-of [rdef door]
+  (some #(clojure.core/when (= door (:name %)) %) (machine/actions-seq rdef)))
+
+(defn- state-set [x]
+  (cond (set? x) x (coll? x) (set x) (some? x) #{x} :else #{}))
+
+(defn door-accepts
+  "The fields one door of rdef takes as input: the create model's at
+  :create, none for a door that declares no :input."
+  [rdef door]
+  (if (= :create door)
+    (set (schema/entry-keys (clojure.core/or (:create-schema rdef) (:schema rdef))))
+    (if-some [in (:input (door-of rdef door))]
+      (set (schema/entry-keys in))
+      #{})))
+
+(defn- doors-before
+  "The doors that lead to `door`, nearest first: those that end in a
+  state it leaves from (a door with no :to stays where it was), then
+  those that end in theirs, each once."
+  [rdef door]
+  (let [acts (machine/actions-seq rdef)
+        ends (fn [a] (if (some? (:to a)) #{(:to a)} (state-set (:from a))))]
+    (loop [states (state-set (:from (door-of rdef door)))
+           seen #{door}
+           out []]
+      (let [step (into []
+                       (comp (filter #(some states (ends %)))
+                             (remove #(contains? seen (:name %))))
+                       acts)]
+        (if (empty? step)
+          out
+          (recur (into #{} (mapcat #(state-set (:from %))) step)
+                 (into seen (map :name) step)
+                 (into out (map :name) step)))))))
+
+(defn writer-door
+  "The door a caller sends `field` to so that a guard at `door` reading
+  it can pass, or nil when no door of rdef takes it."
+  [rdef door field]
+  (some #(clojure.core/when (contains? (door-accepts rdef %) field) %)
+        (concat [door]
+                (doors-before rdef door)
+                (keep #(clojure.core/when (:edit %) (:name %)) (machine/actions-seq rdef))
+                [:create])))
+
+(defn engine-written?
+  "True when the engine writes `field` itself — a :derived count or
+  roll-up, or a principal it stamps — so no caller is sent to write it."
+  [rdef field]
+  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))]
+    (clojure.core/or (contains? (:derived rdef) field)
+                     (some? (:derived props))
+                     (true? (get-in props [:x-ref :principal])))))
+
+(defn code-writes?
+  "True when a door of rdef runs a :handler or an :on-event runs one: code
+  may write any field, so no field of it is known to be unwritable."
+  [rdef]
+  (boolean (clojure.core/or (some :handler (machine/actions-seq rdef))
+                            (seq (:on-event rdef)))))
+
+(defn data-reads
+  "The data fields an expression guard's :when reads, sorted; nil for a
+  code guard."
+  [g]
+  (clojure.core/when-some [w (:when g)]
+    (vec (sort (:data (expr/info w))))))
+
+(defn with-writers
+  "g, with :remedies naming where each data field it reads is written
+  when it declares none: one {:door :kind/door :fields [f …]} per door,
+  in the order its fields are read. A field no door takes rides
+  :unwritable instead, unless code writes the kind's fields. g as it was when it names its own remedies or
+  reads no data a caller writes."
+  [rdef door g]
+  (let [fields (remove #(engine-written? rdef %) (data-reads g))]
+    (if (clojure.core/or (seq (:remedies g)) (empty? fields))
+      g
+      (let [by (group-by #(writer-door rdef door %) fields)
+            doors (distinct (keep #(writer-door rdef door %) fields))]
+        (cond-> (assoc g :remedies
+                       (mapv (fn [d] {:door (keyword (name (:kind rdef)) (name d))
+                                      :fields (get by d)})
+                             doors))
+          (clojure.core/and (seq (get by nil)) (not (code-writes? rdef)))
+          (assoc :unwritable (get by nil)))))))
+
+(defn writers-reason
+  "A refusal's reason, and a sentence naming each field it reads that
+  no door takes, so a remedy-less refusal says why it has none."
+  [g reason]
+  (if-some [fs (seq (:unwritable g))]
+    (str reason " No door takes " (str/join ", " (map name fs))
+         ", so nothing here can write it.")
+    reason))
+
 (def context-reads
   "The `:reads` a guard may declare that name no kind: the store
   itself, the log, the clock, the caller, the wiring, the call. Every
