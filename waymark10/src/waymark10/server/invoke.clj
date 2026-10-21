@@ -1230,6 +1230,47 @@
       (again (effect/failed-door aname)
              {:reason (or (get-in found [:data :reason]) "The call failed.")}))))
 
+(defn- unwind!
+  "The compensations a door that `:unwinds` adds in its own transaction
+  (§ 5). For each named effect whose call on this row is `done` and
+  whose `:when` holds over the row as the door leaves it: one `pending`
+  effect_call for its `:compensate` door's call, keyed `undo:<the
+  original key>`, newest effect first, and none a second time. A
+  compensation that fails lands that door's own `:fails-to`; the door
+  that unwound is not rolled back."
+  [engine tx rdef row defn ctx {:keys [principal]}]
+  (when-some [crd (get (resources engine) :effect_call)]
+    (let [st (:storage engine)
+          now (:now ctx)
+          done (mapv #(decode-row crd %)
+                     (store/query-rows st tx :effect_call
+                                       {:target (str (:id row)) :state :done} {:limit 500}))
+          undone (distinct
+                  (for [u (:unwinds defn)
+                        :when (effect/unwinds? u row now)
+                        c done
+                        :when (and (= (name (:kind rdef)) (str (get-in c [:data :target_kind])))
+                                   (= (name (:effect u)) (str (get-in c [:data :door]))))]
+                    c))]
+      (doseq [c (sort-by :created-at #(compare %2 %1) undone)
+              :let [door (get-in rdef [:actions (keyword (str (get-in c [:data :door])))
+                                       :effect :compensate])
+                    call (effect/ask (get-in rdef [:actions door :effect]) row {} now)
+                    k (effect/undo-key (get-in c [:data :idempotency_key]))]
+              :when (empty? (store/query-rows st tx :effect_call
+                                              {:power (:power call) :idempotency_key k}
+                                              {:limit 1}))]
+        (insert-quiet! engine tx :effect_call
+                       (cond-> {:power (:power call)
+                                :idempotency_key k
+                                :target_kind (name (:kind rdef))
+                                :target (str (:id row))
+                                :door (name door)
+                                :input (wire/write-json (:input call))
+                                :on_behalf_of (str (or (:id principal) "anonymous"))}
+                         (:why call) (assoc :why (:why call)))
+                       {:principal principal})))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing."
@@ -1252,6 +1293,9 @@
         ;; transition and its effect_call commit or roll back together
         (when (:effect defn)
           (outbox! engine tx rdef (assoc row :data (:data handled)) defn inp ctx opts))
+        ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
+        (when (and (:unwinds defn) (not (:effect defn)))
+          (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
         (land! engine tx rdef row defn inp ctx handled opts)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
