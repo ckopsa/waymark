@@ -3,13 +3,15 @@
   :calendar hook answers the default row with no ref and the named row
   with one, a ref that names no row is unknown and never an exception,
   a ctx without the hook is unknown, the hook rides the invoke ctx and
-  the render hooks, an engine keeps one default, and only a person
-  keeps the calendar.
+  the render hooks, an engine keeps one default, only a person keeps
+  the calendar, and a boot whose law reads the calendar makes the
+  house's default when it has none.
 
   Real Postgres. Needs the test database; WAYMARK10_TEST_DSN overrides
   the DSN."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
+            [waymark10.checks-assembly :as checks-assembly]
             [waymark10.expr :as expr]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -135,6 +137,33 @@
       (move! home :clear_default {} colton)
       (is (nil? (refusal #(move! crew :make_default {} colton))))
       (is (= (str (:id crew)) (:id ((calendar-of))))))))
+
+(defn- calendars []
+  ((:find (inv/render-hooks *eng*)) :work_calendar {:state "active"} {:limit 100}))
+
+(def ^:private reads-the-calendar
+  "calendar-readers for a shop whose order ships in business days."
+  (constantly ["order ship ships-in-time"]))
+
+(deftest a-law-that-reads-the-calendar-boots-with-the-default
+  (with-redefs [checks-assembly/calendar-readers reads-the-calendar]
+    (testing "no calendar in the seed: the boot makes the house's default"
+      (is (nil? (engine/ensure-default-calendar! *eng*)) "it does not throw")
+      (let [cal ((calendar-of))]
+        (is (some? cal) "a business-day guard reads the default, not unknown")
+        (is (= #{:mon :tue :wed :thu :fri} (:workdays cal)))
+        (is (= (ZoneId/of (work-calendar/house-zone)) (:zone cal)))
+        (is (= {} (:holidays cal)))))
+    (testing "a second boot makes none"
+      (engine/ensure-default-calendar! *eng*)
+      (is (= 1 (count (calendars)))))))
+
+(deftest an-org-with-its-own-calendar-keeps-it
+  (with-redefs [checks-assembly/calendar-readers reads-the-calendar]
+    (let [home (make! house colton)]
+      (engine/ensure-default-calendar! *eng*)
+      (is (= 1 (count (calendars))))
+      (is (= (str (:id home)) (:id ((calendar-of))))))))
 
 (deftest the-calendar-is-a-persons
   (testing "a bare agent makes no calendar"

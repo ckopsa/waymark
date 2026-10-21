@@ -426,6 +426,7 @@
              :count-matching (:count-matching ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
+      (:rounding ctx) (assoc :rounding (:rounding ctx))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))
@@ -756,13 +757,15 @@
   (let [scope (expr-scope row inp ctx)]
     (reduce
      (fn [acc [b {:keys [next-free pred]}]]
-       (let [{:keys [from to calendar resource of]} next-free
+       (let [{:keys [from to calendar resource of grain]} next-free
              free? (fn [s e]
                      (let [[row' inp'] (-> [row (clojure.core/or inp {})]
                                            (moved from (str s))
                                            (moved to (str e)))]
                        (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))
-             {:keys [zone day holiday] slot :from end :to} (expr/next-free scope from to calendar free?)
+             {:keys [zone day holiday] slot :from end :to} (if (= :day grain)
+                                                             (expr/next-free-days scope from to calendar free?)
+                                                             (expr/next-free scope from to calendar free?))
              at (fn [k] (str (clojure.core/name b) "." (clojure.core/name k)))]
          (cond-> acc
            (string? holiday)
@@ -779,13 +782,14 @@
                              hidden (clojure.core/or (clojure.core/when-some [rdef-of (:rdef-of ctx)]
                                                        (some-> (rdef-of of) :schema schema/secret-fields))
                                                      #{})
-                             z (.atZone ^Instant slot ^ZoneId zone)]
+                             instant? (instance? Instant slot)
+                             z (if instant? (.atZone ^Instant slot ^ZoneId zone) slot)]
                          (merge (into {} (map (fn [[k v]] [(at k) (if (hidden k) "" v)])) (:data hit))
-                                {(at :id) (str slot)
-                                 (at :starts_at) (str slot)
-                                 (at :ends_at) (str end)
-                                 (at :day) (.format ^DateTimeFormatter slot-weekday z)
-                                 (at :time) (.format ^DateTimeFormatter slot-clock z)})))))))
+                                (cond-> {(at :id) (str slot)
+                                         (at :starts_at) (str slot)
+                                         (at :ends_at) (str end)
+                                         (at :day) (.format ^DateTimeFormatter slot-weekday z)}
+                                  instant? (assoc (at :time) (.format ^DateTimeFormatter slot-clock z))))))))))
      {}
      (evidence-slots g))))
 

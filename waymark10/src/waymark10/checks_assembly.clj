@@ -861,7 +861,7 @@
   each guard whose tree asks (today), business-days, working? or
   another calendar reader, `kind fact` for each derived fact that does
   or names :today in :over — what [business-days-no-calendar] names at
-  boot (waymark10.server.work-calendar/check-default!)."
+  boot (waymark10.server.engine/ensure-default-calendar!)."
   [reg]
   (into []
         (mapcat (fn [[kind r]]

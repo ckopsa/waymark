@@ -24,6 +24,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire]))
@@ -192,6 +193,28 @@
                                                        (:input r))))]))
         rules))
 
+(defn- on-event-fp
+  "The kind's inbound events (docs/spec-integrations.md § 3, § 8): each
+  moves a door or makes a row, so each is law. Entries keep their order
+  (the first whose match names one row runs); expressions ride as
+  trees, an undeclared key stays absent."
+  [es]
+  (mapv (fn [e]
+          (let [forms (fn [m] (into (sorted-map)
+                                    (map (fn [[f x]] [(name f) (form-tree x)]))
+                                    m))]
+            (cond-> {"source" (name (:source e))
+                     "type"   (:type e)}
+              (some? (:door e))  (assoc "door" (name (:door e)))
+              (seq (:match e))   (assoc "match" (forms (:match e)))
+              (seq (:input e))   (assoc "input" (forms (:input e)))
+              (some? (:retry-unmatched-for e))
+              (assoc "retry_unmatched_for" (:retry-unmatched-for e))
+              (seq (:tell e))    (assoc "tell" (mapv name (:tell e)))
+              (some? (:via e))   (assoc "via" (name (:via e)))
+              (some? (:makes e)) (assoc "makes" (name (:makes e))))))
+        es))
+
 (defn- safety-fp [s]
   {"idempotent" (boolean (:idempotent s))
    "reversible" (boolean (:reversible s))
@@ -225,6 +248,7 @@
   [v]
   (cond
     (decimal? v) {"dec" (.toPlainString ^java.math.BigDecimal v)}
+    (money/money? v) (money/wire-node v)
     (keyword? v) (name v)
     (instance? java.time.LocalDate v) (str v)
     (instance? java.time.Instant v) (str v)
@@ -284,7 +308,29 @@
                              (cond-> {"kind" (name (:kind t))
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
-                           (:touches a)))))
+                           (:touches a)))
+    ;; what a door unwinds is law too (§ 5), projected only when declared
+    (seq (:unwinds a))
+    (assoc "unwinds" (pr-str (:unwinds a)))
+    ;; the call a door makes is law (docs/spec-integrations.md § 8):
+    ;; projected only when declared, so every other door hashes as before
+    (:effect a)
+    (assoc "effect" (pr-str (into (sorted-map)
+                                  (map (fn [[k v]] [k (if (map? v) (into (sorted-map) v) v)]))
+                                  (:effect a))))))
+
+(defn accounts-fp
+  "Accounts (docs/spec-ledger-money.md §3, §10): names, units and bounds
+  are law — the bounds will refuse writes — so each entry rides as its
+  canonical tree, its keys snake_case; an undeclared bound stays absent."
+  [accts]
+  (into (sorted-map)
+        (map (fn [[n a]]
+               [(name n) (into (sorted-map)
+                               (map (fn [[k v]] [(str/replace (name k) "-" "_")
+                                                 (canonical-default v)]))
+                               a)]))
+        accts))
 
 (defn- authority-fp
   "The mirror sync-law facet: the document contract, push-on-write,
@@ -408,6 +454,18 @@
       (seq (:recurs rmap))
       (assoc "recurs" (recurs-fp (:recurs rmap)))
 
+      ;; :on-event moves doors on an outside event's word (spec-
+      ;; integrations § 8), so the mapping is law. Non-empty-only, so
+      ;; every event-free kind hashes byte-identical to before
+      (seq (:on-event rmap))
+      (assoc "on_event" (on-event-fp (:on-event rmap)))
+
+      ;; :accounts (docs/spec-ledger-money.md §10): names, units and
+      ;; bounds are law. Non-empty-only, so every account-free kind
+      ;; hashes byte-identical to before
+      (seq (:accounts rmap))
+      (assoc "accounts" (accounts-fp (:accounts rmap)))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
@@ -427,7 +485,8 @@
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
-                              "create" "over" "recurs"})
+                              "create" "over" "recurs" "on_event"
+                              "accounts"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"

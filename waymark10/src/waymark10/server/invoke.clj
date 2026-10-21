@@ -148,9 +148,11 @@
     rest are named, :awaiting, never failed."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
+            [waymark10.effect :as effect]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -694,6 +696,9 @@
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
              :calendar (tx-calendar engine tx)
+             ;; the house's :rounding (docs/spec-ledger-money.md §2),
+             ;; which (round m) reads
+             :rounding (:rounding engine)
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render
@@ -1074,6 +1079,12 @@
   (let [now (:now ctx)
         _ (when-some [facts (seq (derived/tampered rdef row handled now (:calendar ctx)))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
+        ;; an account's balance (ledger step 3c) moves only by
+        ;; postings: a handler that writes one is refused, whoever
+        ;; holds the door
+        _ (when-some [moved (money/balances-moved (:accounts rdef) (:data row)
+                                                  (:data handled))]
+            (throw (p/schema-invalid (:name defn) moved)))
         ;; ref labels + one-of clears (phase 8): engine passes, never
         ;; handler work — the handler sets the ref, the engine writes
         ;; the label and clears the other arm
@@ -1146,6 +1157,127 @@
         inner (assoc :inner-writes inner)
         follow (assoc :follow-ups follow)))))
 
+;; ── the outbox (docs/spec-integrations.md § 4, build step 5) ─────────
+
+(declare insert-quiet!)
+
+(def effects-actor
+  "The system actor that lands an effect's answer on the row that asked
+  for it, through the door's hidden `<door>_landed` and `<door>_failed`."
+  (t/principal {:id "waymark10-effects" :type :system :display "Effects"}))
+
+(defn- effect-ask
+  "The call an effect door asks for, over `row` (effect/ask), with the
+  `effect_call` already kept under its power and key as :found, or nil.
+  A key that reads nothing on this row refuses the door: without one
+  the call cannot be made once."
+  [engine tx rdef row defn inp now]
+  (let [call (effect/ask (:effect defn) row inp now)
+        crd (or (get (resources engine) :effect_call)
+                (throw (t/definition-error
+                        (str (name (:kind rdef)) "/" (name (:name defn))
+                             " declares an :effect, and this engine enrolls no effect_call kind"))))]
+    (when (str/blank? (:key call))
+      (throw (p/problem :effect-no-key 409 "No idempotency key"
+                        {:detail (str (name (:name defn))
+                                      "'s :idempotency-key reads nothing on this row, so its call cannot be made once.")})))
+    (assoc call :found
+           (some->> (store/query-rows (:storage engine) tx :effect_call
+                                      {:power (:power call) :idempotency_key (:key call)}
+                                      {:limit 1})
+                    first
+                    (decode-row crd)))))
+
+(defn- effect-probe
+  "What an effect door's rehearsal says of its call (§ 7): the power,
+  the key, and that it would call once — or write a `done` answer
+  again. It calls nothing."
+  [engine tx rdef row defn inp now]
+  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp now)]
+    {:power (:power call)
+     :key (:key call)
+     :says (effect/says call (= :done (:state found)))}))
+
+(defn- outbox!
+  "An effect door's outbox, in the door's own transaction (§ 4): one
+  `pending` effect_call for the call it asks for, unless its power and
+  key already have one. `effect_call` is unique on (power, key). A
+  `done` call is reused: nothing is called, and its answer is written
+  again through `<door>_landed` once this transaction commits; a
+  `failed` one lands its failure again the same way, and a pending one
+  lands on its own."
+  [engine tx rdef row defn inp ctx {:keys [principal correlation-id]}]
+  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp (:now ctx))
+        aname (:name defn)
+        again (fn [door input]
+                (swap! (:follow-sink ctx) conj
+                       {:kind (:kind rdef) :id (str (:id row)) :action door
+                        :input (assoc input :effect_call (str (:id found)))
+                        :opts {:principal effects-actor
+                               :correlation-id correlation-id}}))]
+    (cond
+      (nil? found)
+      (insert-quiet! engine tx :effect_call
+                     (cond-> {:power (:power call)
+                              :idempotency_key (:key call)
+                              :target_kind (name (:kind rdef))
+                              :target (str (:id row))
+                              :door (name aname)
+                              :input (wire/write-json (:input call))
+                              :on_behalf_of (str (or (:id principal) "anonymous"))}
+                       (:why call) (assoc :why (:why call)))
+                     {:principal principal})
+
+      (= :done (:state found))
+      (again (effect/landed-door aname)
+             (let [a (some-> (get-in found [:data :answer]) wire/read-json)]
+               (if (map? a) {:answer a} {})))
+
+      (= :failed (:state found))
+      (again (effect/failed-door aname)
+             {:reason (or (get-in found [:data :reason]) "The call failed.")}))))
+
+(defn- unwind!
+  "The compensations a door that `:unwinds` adds in its own transaction
+  (§ 5). For each named effect whose call on this row is `done` and
+  whose `:when` holds over the row as the door leaves it: one `pending`
+  effect_call for its `:compensate` call, a door's or a power's, keyed `undo:<the
+  original key>`, newest effect first, and none a second time. A
+  compensation that fails lands that door's own `:fails-to`; the door
+  that unwound is not rolled back."
+  [engine tx rdef row defn ctx {:keys [principal]}]
+  (when-some [crd (get (resources engine) :effect_call)]
+    (let [st (:storage engine)
+          now (:now ctx)
+          done (mapv #(decode-row crd %)
+                     (store/query-rows st tx :effect_call
+                                       {:target (str (:id row)) :state :done} {:limit 500}))
+          undone (distinct
+                  (for [u (:unwinds defn)
+                        :when (effect/unwinds? u row now)
+                        c done
+                        :when (and (= (name (:kind rdef)) (str (get-in c [:data :target_kind])))
+                                   (= (name (:effect u)) (str (get-in c [:data :door]))))]
+                    c))]
+      (doseq [c (sort-by :created-at #(compare %2 %1) undone)
+              :let [[door eff] (effect/compensation
+                                rdef (keyword (str (get-in c [:data :door]))))
+                    call (effect/ask eff row {} now)
+                    k (effect/undo-key (get-in c [:data :idempotency_key]))]
+              :when (empty? (store/query-rows st tx :effect_call
+                                              {:power (:power call) :idempotency_key k}
+                                              {:limit 1}))]
+        (insert-quiet! engine tx :effect_call
+                       (cond-> {:power (:power call)
+                                :idempotency_key k
+                                :target_kind (name (:kind rdef))
+                                :target (str (:id row))
+                                :door (name door)
+                                :input (wire/write-json (:input call))
+                                :on_behalf_of (str (or (:id principal) "anonymous"))}
+                         (:why call) (assoc :why (:why call)))
+                       {:principal principal})))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing."
@@ -1163,7 +1295,15 @@
                                         {:kind (:kind rdef) :resource-id (:id row)}
                                         {:newest-first true :limit 1})]
         {:row row :transition latest :replayed? :unchanged})
-      (land! engine tx rdef row defn inp ctx handled opts))))
+      (do
+        ;; the outbox (§ 4): the call rides this transaction, so the
+        ;; transition and its effect_call commit or roll back together
+        (when (:effect defn)
+          (outbox! engine tx rdef (assoc row :data (:data handled)) defn inp ctx opts))
+        ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
+        (when (and (:unwinds defn) (not (:effect defn)))
+          (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
+        (land! engine tx rdef row defn inp ctx handled opts)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -1416,15 +1556,22 @@
   :schema) an input carries from a hand — {field [why]}, or nil. A
   :system principal (the seed loader, the registrar, a pass) writes
   them; every other principal is refused as schema-invalid, before any
-  guard runs."
+  guard runs. An account's balance (ledger step 3c) is refused from
+  every principal, :system's too: only postings move it."
   [rdef principal inp]
-  (when-not (= :system (:type principal))
-    (not-empty
-     (into {}
-           (keep (fn [k]
-                   (when (contains? inp k)
-                     [k ["written by the engine, never by hand"]])))
-           (schema/engine-written-fields (:schema rdef))))))
+  (not-empty
+   (merge
+    (when-not (= :system (:type principal))
+      (into {}
+            (keep (fn [k]
+                    (when (contains? inp k)
+                      [k ["written by the engine, never by hand"]])))
+            (schema/engine-written-fields (:schema rdef))))
+    (into {}
+          (keep (fn [k]
+                  (when (contains? inp k)
+                    [k [(money/by-postings k)]])))
+          (keys (:accounts rdef))))))
 
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
@@ -1593,9 +1740,14 @@
                         ;; move — the states either side and the
                         ;; fields the input names — for the bulk
                         ;; door's per-item `would` (waymark-pywy.4)
-                        dry-run {:valid? true :warnings (not-empty warned)
-                                 :from (:state row) :to (:to defn)
-                                 :fields (vec (sort (map p/wire-key (keys inp))))}
+                        dry-run (cond-> {:valid? true :warnings (not-empty warned)
+                                         :from (:state row) :to (:to defn)
+                                         :fields (vec (sort (map p/wire-key (keys inp))))}
+                                  ;; an effect door says the call it would
+                                  ;; add, and calls nothing (§ 7)
+                                  (:effect defn)
+                                  (assoc :effects [(effect-probe engine tx rdef row defn inp
+                                                                 (:now ctx))]))
                         (seq warned) (throw (p/warning-refused action-name warned))
                         :else (finish! engine tx rdef row defn inp ctx
                                        {:digest digest
@@ -2503,6 +2655,27 @@
     (store/insert-row! (:storage engine) tx kind (encode-row rdef row))
     row))
 
+(defn update-quiet!
+  "The quiet door for a row that exists: lock the row of `kind` under
+  `id` inside an existing transaction, put its data through `f` and save
+  it a version on — with NO transition and no guard pass. → the row as
+  saved, or nil when there is none.
+
+  One caller: the ledger (server/postings, step 3c), moving an account's
+  projected balance in the transaction that writes its postings. The
+  posting door's own transition is the write the log records, and a
+  balance is no door's to write (hand-written-errors, land!)."
+  [engine tx kind id f]
+  (let [rdef (rdef-of engine kind)
+        st (:storage engine)]
+    (when-some [raw (store/load-row st tx kind (str id) {:for-update true})]
+      (let [row (decode-row rdef raw)]
+        (decode-row rdef (store/save-row! st tx kind
+                                          (encode-row rdef (-> row
+                                                               (update :data f)
+                                                               (update :version inc)))
+                                          (:version row)))))))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
@@ -2596,7 +2769,9 @@
               row {:id (or id (str (random-uuid)))
                    :state (:initial rdef)
                    :version 1
-                   :data inp
+                   ;; each account is born at zero (ledger step 3c),
+                   ;; so "under 5" finds a row nothing posted to yet
+                   :data (merge (money/opening-balances (:accounts rdef)) inp)
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}

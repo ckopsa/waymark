@@ -30,10 +30,12 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.declaration :as declaration]
+            [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -1979,6 +1981,105 @@
                    cs)))
     rmap))
 
+(defn- check-accounts!
+  "`:accounts` (docs/spec-ledger-money.md §3): the counts and money a
+  kind's rows hold, each a declared name with its unit and bounds
+  (money/account-problems judges the form). An account projects as a
+  read-only field of its own name (step 3c), so a schema field of that
+  name is refused here too."
+  [rmap]
+  (when-some [accts (:accounts rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
+                                          {:check :accounts}))]
+      (some-> (first (money/account-problems ":accounts" accts)) bad)
+      (when-some [f (some (set (keys accts))
+                          ;; the projected fields themselves, when a
+                          ;; normalized declaration comes through again
+                          (keep (fn [[k {:keys [properties]}]]
+                                  (when-not (:ledger-account properties) k))
+                                (schema/entry-map (:schema rmap))))]
+        (bad (str ":accounts " (name f) " is also a field; an account is its own"
+                  " read-only field, and only postings move it"))))))
+
+(defn- project-accounts
+  "Each account appears on its row as a read-only field of its own name
+  (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
+  joins the schema, before project-colocated turns its :filter and
+  :sort marks into :filterable and :sortable. A field already projected
+  — a declaration normalized twice — stays as it is."
+  [rmap]
+  (if-some [accts (not-empty (:accounts rmap))]
+    (let [have (set (keys (schema/entry-map (:schema rmap))))]
+      (update rmap :schema into
+              (for [[n a] (sort-by (comp str key) accts)
+                    :when (not (contains? have n))]
+                (money/account-field n a))))
+    rmap))
+
+(def ^:private on-event-keys
+  #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
+
+(defn- check-on-event!
+  "`:on-event` (docs/spec-integrations.md § 3): which outside event
+  moves which door of this kind. Each entry names its integration as
+  `:source`, the event's `:type`, a `:match` of this kind's filterable
+  fields to the value each must equal, the `:door`, and an `:input` the
+  door's own schema judges; `:retry-unmatched-for` is seconds, `:tell`
+  the seats a refusal wakes. The option kept, `:via :inbox :makes k`,
+  runs no door and matches no row: the event becomes a row of kind `k`,
+  its `:input` the create's. The forms are judged and normalized here.
+  → rmap"
+  [rmap]
+  (if-some [es (:on-event rmap)]
+    (let [bad (fn [e s]
+                (throw (t/definition-error
+                        (str ":on-event " (pr-str (select-keys e [:source :type])) " " s))))
+          form (fn [e [f x]]
+                 (when-some [ps (seq (expr/problems x))]
+                   (bad e (str f ": " (str/join "; " ps))))
+                 [f (expr/normalize x)])]
+      (when-not (vector? es)
+        (throw (t/definition-error
+                ":on-event is a vector of entries, one per event a source sends")))
+      (assoc rmap :on-event
+             (mapv
+              (fn [e]
+                (when-not (map? e)
+                  (bad {} (str "entry " (pr-str e) " is not a map")))
+                (let [{:keys [source type match door input retry-unmatched-for tell via makes]} e]
+                  (when-some [k (first (remove on-event-keys (keys e)))]
+                    (bad e (str "names " k "; an entry takes " (vec (sort on-event-keys)))))
+                  (when-not (keyword? source)
+                    (bad e ":source names an integration, as a keyword"))
+                  (when-not (and (string? type) (not (str/blank? type)))
+                    (bad e ":type is the event's type, a string"))
+                  (when-not (or (nil? via) (= :inbox via))
+                    (bad e ":via is :inbox, or left out to run the door"))
+                  (if (= :inbox via)
+                    (do (when-not (keyword? makes)
+                          (bad e ":via :inbox :makes the kind the event becomes, as a keyword"))
+                        (when (or door match)
+                          (bad e ":via :inbox runs no :door and needs no :match; it names :makes")))
+                    (do (when (some? makes)
+                          (bad e ":makes is for :via :inbox"))
+                        (when-not (contains? (:actions rmap) door)
+                          (bad e (str ":door " (pr-str door) " is not an action of this kind")))
+                        ;; [event-match-unfiltered] is the battery's (checks.clj)
+                        (when-not (and (map? match) (seq match))
+                          (bad e ":match maps one or more fields of this kind to the value each must equal"))))
+                  (when-not (or (nil? input) (and (map? input) (every? keyword? (keys input))))
+                    (bad e ":input maps the door's input fields to expressions"))
+                  (when-not (or (nil? retry-unmatched-for) (pos-int? retry-unmatched-for))
+                    (bad e ":retry-unmatched-for is a positive number of seconds"))
+                  (when-not (or (nil? tell)
+                                (and (vector? tell) (every? #(or (string? %) (keyword? %)) tell)))
+                    (bad e ":tell is a vector of seat names"))
+                  (cond-> e
+                    match (assoc :match (into {} (map #(form e %)) match))
+                    input (assoc :input (into {} (map #(form e %)) input)))))
+              es)))
+    rmap))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -1990,7 +2091,10 @@
   ;; process before decision: the two are refused together (one
   ;; machine per kind), and the process's projected doors must exist
   ;; before :flow can be told it collides with them
-  (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields)
+  ;; effects last: an effect door's two hidden doors are woven from the
+  ;; states and doors the spellings above left
+  (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields
+                 effect/weave)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]
@@ -2021,6 +2125,7 @@
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (check-over! rmap)
+    (check-accounts! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
@@ -2039,6 +2144,7 @@
     ;; filter/facet surface it forbids
     (check-secret!
      (-> rmap
+        project-accounts
         project-colocated
         desugar-owns
         (update :plural #(or % (str (name kind) "s")))
@@ -2087,7 +2193,8 @@
         normalize-derived
         bind-follow-kinds
         bind-require-specs
-        merge-vocab-filters))))
+        merge-vocab-filters
+        check-on-event!))))
 
 ;; ── the import-time gate ────────────────────────────────────────────
 

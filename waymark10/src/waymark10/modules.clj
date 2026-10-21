@@ -155,11 +155,14 @@
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.postings :as postings]
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
+            [waymark10.server.integrations :as integrations]
+            [waymark10.server.effect-runner :as effect-runner]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
@@ -174,6 +177,7 @@
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
+            [waymark10.server.routes.integrations :as integrations-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
             [waymark10.server.routes.scenes :as scene-routes]
@@ -566,6 +570,13 @@
              :stop jobs/stop-orphan-sweeper!}]
     :pack packs/jobs}
 
+   ;; the ledger's postings (docs/spec-ledger-money.md §4): read-only
+   ;; rows the engine writes, enrolled once some kind declares :accounts
+   {:module :ledger
+    :enrols [{:kind :posting :enroll :when-declared
+              :kinds (fn [resources]
+                       (when (some :accounts resources) [postings/posting]))}]}
+
    ;; the when-declared precedent, unchanged: worksheet/kinds is both
    ;; the predicate and the synthesis — it answers empty when no kind
    ;; declares :worksheet, and otherwise bakes the target enum from
@@ -730,6 +741,40 @@
              :start (fn [eng _] (mirror/start-discovery! eng))
              :stop mirror/stop-discovery!}]
     :pack packs/mirror}
+   ;; the integration (docs/spec-integrations.md § 2, build step 1):
+   ;; an outside system as a row and a principal, `integration:<id>`,
+   ;; with a grant a person approves; and its receiver (build step 2),
+   ;; POST /api/-/events/<name>, keeping one integration_event receipt
+   ;; per event; and its applier (build step 3), which runs the door an
+   ;; `:on-event` names, once, as the integration; and its outbox (build
+   ;; step 5), one effect_call per call an `:effect` door asks for, kept
+   ;; in the door's own transaction; and its runner (build step 6),
+   ;; which makes each call as the integration. The applier and the
+   ;; runner are one elected surface, for the walkthroughs' reason: two
+   ;; engines applying one receipt, or making one call, would race.
+   {:module :integrations
+    :routes integrations-routes/routes
+    :enrols [{:kind :integration :enroll :always
+              ;; its scope_wanted is read from the app's own law
+              :kinds (fn [rs] [(integrations/integration-for rs)])}
+             {:kind :integration_event :enroll :always
+              :kinds (fn [_] [integrations/integration-event])}
+             {:kind :effect_call :enroll :always
+              :kinds (fn [_] [integrations/effect-call])}]
+    :hooks [{:hook :integration-applier
+             :after [:dispatcher]
+             :elected :integration-applier
+             :start (fn [eng running]
+                      (let [opts {:dispatcher (:dispatcher running)
+                                  :poll-ms (:events-poll-ms eng 2000)
+                                  :sweep-ms (get-in eng [:services :integrations :sweep-ms]
+                                                    30000)}]
+                        {:applier (integrations/start-applier! eng opts)
+                         :runner (effect-runner/start-runner! eng opts)}))
+             :stop (fn [{:keys [applier runner]}]
+                     (integrations/stop-applier! applier)
+                     (effect-runner/stop-runner! runner))}]}
+
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
 

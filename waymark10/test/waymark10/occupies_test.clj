@@ -7,6 +7,7 @@
   holds the same crew, so the derived tree is one none per occupier."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.checks-assembly :as ca]
+            [waymark10.expr :as e]
             [waymark10.guards :as g]
             [waymark10.occupies :as occupies]
             [waymark10.resource :as r]
@@ -226,6 +227,26 @@
                               (follow :crew (data :crew_id) :calendar_id)))
              (:when (guard-on w :booking :reschedule :crew-is-working)))))))
 
+(deftest a-day-window-derives-its-working-guard
+  (let [w (world :booking {:occupies [{:resource :crew_id :from :starts_at :to :ends_at :grain :day
+                                       :in #{:scheduled :in_progress} :doors #{:schedule :reschedule}}]})
+        working (:when (guard-on w :booking :schedule :crew-is-working))
+        week {:zone (ZoneId/of "UTC") :workdays #{:mon :tue :wed :thu :fri} :holidays #{}}
+        days (fn [from to]
+               (e/evaluate working {:calendar (fn [_] week)
+                                    :input {:starts_at (LocalDate/parse from)
+                                            :ends_at (LocalDate/parse to)}}))]
+    (is (= (tree '(working? (input :starts_at) (input :ends_at))) working)
+        "the same reader, over the window's two dates")
+    (testing "every day of [from, to] a business day of the calendar"
+      (is (true? (days "2026-10-19" "2026-10-23")) "Monday to Friday")
+      (is (true? (days "2026-10-21" "2026-10-21")) "one day")
+      (is (false? (days "2026-10-22" "2026-10-24")) "Saturday is in the window")
+      (is (false? (days "2026-10-23" "2026-10-22")) "a window that ends before it starts"))
+    (is (e/unknown? (e/evaluate working {:input {:starts_at (LocalDate/parse "2026-10-19")
+                                                 :ends_at (LocalDate/parse "2026-10-23")}}))
+        "no :calendar hook is unknown")))
+
 ;; ── next-free (build step 9) ────────────────────────────────────────────
 
 ;; The house works Monday to Friday, 8:00 to 17:00, and keeps Memorial
@@ -304,6 +325,74 @@
         (is (nil? (get-in v [:evidence :slot])))
         (is (= "Monday 31 May is Memorial Day. That crew does not work then."
                (g/render-reason d v hendersons)))))))
+
+;; ── next-free for :grain :day (a trailer booked by the day) ──────────────
+
+(def ^:private trailer
+  {:kind :trailer
+   :plural "trailers"
+   :states [:active :retired]
+   :initial :active
+   :terminal #{:retired}
+   :summary "{data.name} · {state}"
+   :schema [:map [:name [:string {:min 1 :max 80}]]]
+   :filterable {:state #{:eq :in}}
+   :actions {:retire {:from #{:active} :to :retired :safety safety}}})
+
+(def ^:private rental
+  {:kind :rental
+   :plural "rentals"
+   :states [:draft :booked :returned]
+   :initial :draft
+   :terminal #{:returned}
+   :summary "Rental · {state}"
+   :schema [:map
+            [:trailer_id {:optional true :kind :trailer} [:maybe :waymark/ref]]
+            [:from_day {:optional true} [:maybe :waymark/date]]
+            [:to_day {:optional true} [:maybe :waymark/date]]]
+   :filterable {:state #{:eq :in} :trailer_id #{:eq} :from_day #{:eq} :to_day #{:eq}}
+   :occupies [{:resource :trailer_id :from :from_day :to :to_day :grain :day
+               :in #{:booked} :doors #{:book}}]
+   :actions {:book {:from #{:draft} :to :booked :safety safety
+                    :input [:map
+                            [:trailer_id {:kind :trailer} :waymark/ref]
+                            [:from_day :waymark/date]
+                            [:to_day :waymark/date]]}
+             :return {:from #{:booked} :to :returned :safety safety}}})
+
+(defn- trailer-world []
+  (occupies/derive-kinds {:trailer (r/resource trailer) :rental (r/resource rental)}))
+
+;; The flatbed is out Monday 7 to Wednesday 9 June 2027.
+(def ^:private trailer-rows
+  [{:id "tr-flatbed" :kind :trailer :state :active :created_at "2027-05-01T09:00:00Z"
+    :data {:name "The flatbed"}}
+   {:id "rt-moss" :kind :rental :state :booked :created_at "2027-05-02T09:00:00Z"
+    :data {:trailer_id "tr-flatbed" :from_day "2027-06-07" :to_day "2027-06-09"}}])
+
+(deftest a-day-grain-refusal-names-the-next-free-day
+  (let [free (guard-on (trailer-world) :rental :book :trailer-is-free)]
+    (testing "one day, Tuesday: the flatbed is next free Thursday"
+      (let [[v d] (g/evaluate free {:data {}}
+                              {:trailer_id "tr-flatbed" :from_day "2027-06-08" :to_day "2027-06-08"}
+                              (housed trailer-rows))]
+        (is (t/deny? v))
+        (is (= "2027-06-10" (get-in v [:evidence :slot])))
+        (is (= "2027-06-10" (get-in v [:evidence :slot_ends])))
+        (is (re-find #"That trailer is next free Thursday\.$" (g/render-reason d v {:data {}})))))
+    (testing "two days from Friday: the weekend is stepped over, the span kept"
+      (let [[v] (g/evaluate free {:data {}}
+                            {:trailer_id "tr-flatbed" :from_day "2027-06-04" :to_day "2027-06-07"}
+                            (housed trailer-rows))]
+        (is (t/deny? v))
+        (is (= "2027-06-10" (get-in v [:evidence :slot])))
+        (is (= "2027-06-13" (get-in v [:evidence :slot_ends])))))
+    (testing "no calendar to ask: no slot"
+      (let [[v] (g/evaluate free {:data {}}
+                            {:trailer_id "tr-flatbed" :from_day "2027-06-08" :to_day "2027-06-08"}
+                            (ctx-over trailer-rows))]
+        (is (t/deny? v))
+        (is (nil? (get-in v [:evidence :slot])))))))
 
 (deftest derivation-is-idempotent
   (let [w (world)]

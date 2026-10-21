@@ -258,6 +258,21 @@
   [st f]
   (with-tx* st f))
 
+(defn stamped
+  "Storage `st` stamping its rows' created_at and updated_at, and the
+  log's `at`, from `now-fn` instead of its own clock: the demo clock
+  `clock-shift/with-clock` lays over a clocked engine, so a filmed
+  week's rows carry the week's own dates. A working engine's storage is
+  never stamped, and its stamps stay the database's."
+  [st now-fn]
+  (assoc st :stamp-fn now-fn))
+
+(defn stamp-of
+  "The instant a write of storage `st` is stamped with when it is
+  `stamped`; nil otherwise, and the store's own clock stamps it."
+  ^Instant [st]
+  (when-some [f (:stamp-fn st)] (f)))
+
 (defn settled-transitions
   "The settled log (transitions' {:settled true}) for a reader with no
   next pass of its own: it asks up to `tries` times, each in a
@@ -366,7 +381,7 @@
       :waymark/instant "timestamptz"
       :boolean "boolean"
       :int "bigint"
-      (:double :decimal) "numeric"
+      (:double :decimal :waymark/money) "numeric"
       (:string :waymark/ref :waymark/vocab :enum) "text"
       nil)))
 
@@ -383,16 +398,31 @@
     "numeric" (str "(data->>'" fname "')::numeric")
     (str "data->>'" fname "'")))
 
-(defn- promoted-column [rmap field]
+(defn- promoted-columns
+  "The generated columns one promoted field projects: one, or for a
+  :waymark/money field two (docs/spec-ledger-money.md §2) — its amount
+  as f_<field> numeric, which filters and sorts read, and its currency
+  as f_<field>_currency char(3)."
+  [rmap field]
   (let [fname (definition-checked-name field)
-        sql-type (generated-column-type
-                  (schema/field-schema (:schema rmap) field))]
-    (when sql-type
-      {:name (str "f_" fname)
-       :type sql-type
-       :generated? true
-       :ddl (str "f_" fname " " sql-type " GENERATED ALWAYS AS ("
-                 (generated-expression sql-type fname) ") STORED")})))
+        fschema (schema/field-schema (:schema rmap) field)
+        sql-type (generated-column-type fschema)
+        column (fn [cname type ddl-type expression]
+                 {:name cname
+                  :type type
+                  :generated? true
+                  :ddl (str cname " " ddl-type " GENERATED ALWAYS AS ("
+                            expression ") STORED")})]
+    (cond
+      (= :waymark/money (if (vector? fschema) (first fschema) fschema))
+      ;; information_schema spells char(3) "character"
+      [(column (str "f_" fname) "numeric" "numeric"
+               (str "(data->'" fname "'->>'amount')::numeric"))
+       (column (str "f_" fname "_currency") "character" "char(3)"
+               (str "(data->'" fname "'->>'currency')::char(3)"))]
+      sql-type
+      [(column (str "f_" fname) sql-type sql-type
+               (generated-expression sql-type fname))])))
 
 (defn vocab-array-schema?
   "Is this field's schema form a vector of :waymark/vocab tokens (the
@@ -478,10 +508,10 @@
   [rmap]
   (let [table (definition-checked-name (:plural rmap))
         sortable (set (get-in rmap [:sortable :fields]))
-        promoted (keep (fn [field]
-                         (when-not (or (= field :state)
-                                       (contains? sortable-timestamps field))
-                           (promoted-column rmap field)))
+        promoted (mapcat (fn [field]
+                           (when-not (or (= field :state)
+                                         (contains? sortable-timestamps field))
+                             (promoted-columns rmap field)))
                        (sort (into (set (keys (:filterable rmap))) sortable)))
         ix (fn [suffix col]
              [(str "ix_" table "_" suffix)

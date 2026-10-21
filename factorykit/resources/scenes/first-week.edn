@@ -13,7 +13,6 @@
            :org_display "The org's name as a person reads it: its first domain's :label."
            :brief_line "The first sentence of the org's brief, cut at 140 characters."
            :day_one "Day 1's date (YYYY-MM-DD)."
-           :week_end "The day after the last day, where the week's holes end."
            :each_kind "In :closing_kind: one kind the seed's steps make rows of."
            :each_state "In :closing_kind: one of that kind's terminal states that is no loss."
            :each_one "In :closing_kind: the kind's noun and that state, for one row: prospect engaged."
@@ -51,29 +50,35 @@
   {:hold {:ms 3000} :say "{{org_display}}."}]
  ;; one day: its weekday, then the org's day in one sentence, filled from
  ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say):
- ;; what moved since the last day caption, for a clone runs no seats and
- ;; its week is played live by meanwhile shots. The weekday is a label.
+ ;; what moved on day {{day}} of the clone's clock, between its (day-1)th
+ ;; and day-th clock_shift, for the week is played by the clone's own
+ ;; world and mayor seats, before the performance or as meanwhile shots.
+ ;; The weekday is a label. The day opens the screen of the same day's
+ ;; top move, resolved when the shot plays (ticket ce3b28c1).
  :day
- [{:open {:collection "{{kind_plural}}"}}
+ [{:open {"$day-row" {:window "clock" :day "{{day}}" :domain "{{seed}}"}}}
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
-         {"$day" {:window "shot" :domain "{{seed}}"}}]}]
+         {"$day" {:window "clock" :day "{{day}}" :domain "{{seed}}"}}]}]
  ;; the week's numbers, most consequential first: each kind's rows that
  ;; ended the week in each success end, the money a kind with an amount
  ;; field invoiced, then the held calls it asked the person. A zero drops
- ;; its clause, and a week of zeros is a quiet one.
+ ;; its clause, and a week of zeros is a quiet one. The holes read the
+ ;; clock's window, the whole week as it was played on the clone before
+ ;; or during the performance, not the dates the audit rendered (tickets
+ ;; 271018e5, c7762078).
  :closing_kind
- {"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :since "{{day_one}}" :until "{{week_end}}"
+ {"$rows" {:kind "{{each_kind}}" :state "{{each_state}}" :window "clock"
            :field "updated_at" :count true :one "{{each_one}}" :many "{{each_many}}"}}
  :closing_money
- {"$rows" {:kind "{{money_kind}}" :since "{{day_one}}" :until "{{week_end}}"
+ {"$rows" {:kind "{{money_kind}}" :window "clock"
            :sum "{{money_field}}" :one "invoiced" :many "invoiced"}}
  :closing
  [{:hold {:ms 3000} :role "payoff"
    :say [{"$list" {:lead "That was the week: " :none "A quiet week"
                    :items ["{{kinds}}"
                            "{{money}}"
-                           {"$rows" {:kind "held_call" :since "{{day_one}}" :until "{{week_end}}"
+                           {"$rows" {:kind "held_call" :window "clock"
                                      :count true :one "tap from you" :many "taps from you"}}]}}
          ". Merge to make it real."]}]
  :clone {:url "{{clone_url}}" :head_sha "{{head_sha}}"}}
