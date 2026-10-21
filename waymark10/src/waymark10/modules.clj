@@ -161,6 +161,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.integrations :as integrations]
+            [waymark10.server.effect-runner :as effect-runner]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
@@ -739,9 +740,10 @@
    ;; per event; and its applier (build step 3), which runs the door an
    ;; `:on-event` names, once, as the integration; and its outbox (build
    ;; step 5), one effect_call per call an `:effect` door asks for, kept
-   ;; in the door's own transaction. The effect runner is a later step.
-   ;; The applier is elected for the walkthroughs'
-   ;; reason: two engines applying one receipt would race to land it.
+   ;; in the door's own transaction; and its runner (build step 6),
+   ;; which makes each call as the integration. The applier and the
+   ;; runner are one elected surface, for the walkthroughs' reason: two
+   ;; engines applying one receipt, or making one call, would race.
    {:module :integrations
     :routes integrations-routes/routes
     :enrols [{:kind :integration :enroll :always
@@ -755,12 +757,15 @@
              :after [:dispatcher]
              :elected :integration-applier
              :start (fn [eng running]
-                      (integrations/start-applier!
-                       eng {:dispatcher (:dispatcher running)
-                            :poll-ms (:events-poll-ms eng 2000)
-                            :sweep-ms (get-in eng [:services :integrations :sweep-ms]
-                                              30000)}))
-             :stop integrations/stop-applier!}]}
+                      (let [opts {:dispatcher (:dispatcher running)
+                                  :poll-ms (:events-poll-ms eng 2000)
+                                  :sweep-ms (get-in eng [:services :integrations :sweep-ms]
+                                                    30000)}]
+                        {:applier (integrations/start-applier! eng opts)
+                         :runner (effect-runner/start-runner! eng opts)}))
+             :stop (fn [{:keys [applier runner]}]
+                     (integrations/stop-applier! applier)
+                     (effect-runner/stop-runner! runner))}]}
 
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
