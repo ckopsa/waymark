@@ -155,6 +155,7 @@
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.postings :as postings]
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
@@ -568,6 +569,13 @@
                        eng {:interval-ms (:orphan-sweep-ms eng 30000)}))
              :stop jobs/stop-orphan-sweeper!}]
     :pack packs/jobs}
+
+   ;; the ledger's postings (docs/spec-ledger-money.md §4): read-only
+   ;; rows the engine writes, enrolled once some kind declares :accounts
+   {:module :ledger
+    :enrols [{:kind :posting :enroll :when-declared
+              :kinds (fn [resources]
+                       (when (some :accounts resources) [postings/posting]))}]}
 
    ;; the when-declared precedent, unchanged: worksheet/kinds is both
    ;; the predicate and the synthesis — it answers empty when no kind
