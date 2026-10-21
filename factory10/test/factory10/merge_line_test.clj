@@ -1151,6 +1151,15 @@
     (is (= "docs" (:lane (get t2 [wm "docs"]))))
     (is (not (get @seen [:train-done wm])))))
 
+(deftest a-train-s-dispatch-names-its-lane
+  (let [r (lane-rig {})
+        _ (train-pass! r (atom {}) (two-lanes) (lane-policy))
+        sent (into {} (map (juxt :branch identity)) (args-of r "bench__train_checks"))]
+    (is (= "docs" (:lane (get sent "train/ckopsa/waymark/3")))
+        "a docs train's dispatch carries lane=docs")
+    (is (contains? #{nil "engine"} (:lane (get sent "train/ckopsa/waymark/1")))
+        "an engine train's dispatch carries none or engine")))
+
 (deftest with-no-lanes-one-train-carries-every-path
   (let [r (train-rig (atom {}))
         trains (train-pass! r (atom {}) (two-lanes) (train-policy))]
