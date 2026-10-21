@@ -14,27 +14,22 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.law-words :as lw]
             [waymark10.server.seed :as seed]))
 
 (set! *warn-on-reflection* true)
 
 ;; ── words ───────────────────────────────────────────────────────────
 
-(defn- words [k] (str/replace (name k) "_" " "))
+;; spelled once in waymark10.law-words, which a seat's page also reads
+;; (ticket 9935e3a3)
+(def ^:private words lw/words)
 
-(defn- a-an [s] (str (if (re-find #"^[aeiou]" s) "an " "a ") s))
+(def ^:private a-an lw/a-an)
 
-(defn- capital [s]
-  (if (str/blank? s) s (str (str/upper-case (subs s 0 1)) (subs s 1))))
+(def ^:private capital lw/capital)
 
-(defn- either
-  "a · a or b · a, b or c"
-  [xs]
-  (let [xs (vec xs)]
-    (case (count xs)
-      0 ""
-      1 (first xs)
-      (str (str/join ", " (pop xs)) " or " (peek xs)))))
+(def ^:private either lw/either)
 
 (defn- dollars [x]
   (let [^java.math.BigDecimal d (bigdec x)]
@@ -83,26 +78,7 @@
           (for [[aname a] (:actions r)]
             [aname (:guards a) (:safety a)])))
 
-(defn- create-door? [r aname]
-  (contains? (into (set (map name (:create-action-names r)))
-                   (map (comp name :action))
-                   (:creates r))
-             (name aname)))
-
-(defn- move-phrase
-  "How one door moves a row, in the words of the kind's section: 'a new
-  prospect becomes qualified'; a create door is 'a prospect is written'."
-  [r aname]
-  (let [k (words (:kind r))
-        a (some (fn [[n a]] (when (= (name n) (name aname)) a)) (:actions r))
-        from (either (map words (filter (set (:from a)) (:states r))))
-        to (:to a)]
-    (if (create-door? r aname)
-      (str (a-an k) " is written")
-      (str (a-an (if (str/blank? from) k (str from " " k))) " "
-           (cond (not (keyword? to)) "moves on"
-                 (= #{to} (set (:from a))) (str "stays " (words to))
-                 :else (str "becomes " (words to)))))))
+(def ^:private move-phrase lw/move-phrase)
 
 (defn- kind-section [r]
   (let [k (words (:kind r))
@@ -190,22 +166,14 @@
       (seed/filled (:seat t) (or params {}) (:template t)))
     seat))
 
-(defn- scope-line [{:keys [kind actions filter]}]
-  (let [k (words kind)]
-    (str "- " (if (seq actions) (str (either actions) " " (a-an k)) (str "read " k))
-         (when (seq filter)
-           (str " (only where "
-                (str/join " and " (map (fn [[f v]] (str (words f) " is " v)) filter))
-                ")")))))
+(defn- scope-line [entry] (str "- " (lw/scope-phrase entry)))
 
 (defn- wake-phrase
   "One wake, as the door's own move reads in its kind's section; a kind
   this org does not declare is named with the door, never a guessed
   past tense."
   [kinds kind a]
-  (if-some [r (get kinds (name kind))]
-    (move-phrase r a)
-    (str (a-an (words kind)) " goes through " (words a))))
+  (lw/wake-phrase #(get kinds (name %)) kind a))
 
 (defn- seat-lines [plural kinds seat]
   (let [{:keys [walk cadence_seconds rows_per_firing wake_on scope
