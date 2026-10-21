@@ -3,7 +3,7 @@
   attended or missed, then noted and signed by the treating therapist
   within 24 hours. A note a physical therapist assistant writes is also
   co-signed by a licensed therapist, never by its own author."
-  (:require [waymark10.dsl :refer [defguard defresource hold refuse]]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse warn]]))
 
 (defguard has-plan
   (refuse "A visit is booked from a plan of care; name the plan first.")
@@ -35,6 +35,34 @@
 (defguard therapist-signs
   (hold "A visit note is signed on the treating therapist's own tap; a note an assistant wrote also waits for a licensed therapist, never its author, to co-sign."))
 
+;; advisory: a late note is still signed, and says it is late; the
+;; :until age on :attended is what tells the owner
+(defguard note-in-time
+  (warn "This note is signed more than 24 hours after the visit.")
+  '(<= (now) (+ (data :starts_at) (hours 24))))
+
+(defscenario note-within-a-day
+  "A note signed 20 hours after the visit is on time."
+  {:kind :visit :attempt :sign
+   :at "2026-10-22T12:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :attended
+         :data {:therapist "Sam Ortiz" :starts_at "2026-10-21T16:00:00Z"
+                :note "Low back, session 3: tolerated progression."
+                :signer "Sam Ortiz" :author_role "pt"}}
+   :expect {:allowed true}})
+
+(defscenario note-past-a-day
+  "A note signed 26 hours after the visit is late."
+  {:kind :visit :attempt :sign
+   :at "2026-10-22T18:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :attended
+         :data {:therapist "Sam Ortiz" :starts_at "2026-10-21T16:00:00Z"
+                :note "Low back, session 3: tolerated progression."
+                :signer "Sam Ortiz" :author_role "pt"}}
+   :expect {:refused :note-in-time}})
+
 (defresource visit
   {:kind :visit
    :plural "visits"
@@ -46,7 +74,7 @@
             [:plan_id {:optional true :kind :plan_of_care} [:maybe :waymark/ref]]
             [:patient_id {:optional true :kind :patient} [:maybe :waymark/ref]]
             [:therapist {:optional true} [:maybe [:string {:max 80}]]]
-            [:starts_at {:optional true} [:maybe [:string {:max 25}]]]
+            [:starts_at {:optional true} [:maybe :waymark/instant]]
             [:author_role {:optional true} [:maybe [:enum "pt" "pta"]]]
             [:note {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 4000}]]]
@@ -56,7 +84,8 @@
    :filterable {:state #{:eq :in} :therapist #{:eq} :plan_id #{:eq} :patient_id #{:eq}}
    :decided {:booked "A visit stays booked until its time; the mayor tells the owner of one a day past its time."
              :attended "An attended visit's note is signed within 24 hours; past that, the mayor tells the owner."}
-   :expected-age {:booked 1209600 :attended 86400}
+   :expected-age {:booked 1209600
+                  :attended {:until '(+ (data :starts_at) (hours 24))}}
    :actions
    {:attend   {:from #{:booked} :to :attended
                :guards [has-plan has-therapist has-time]
@@ -64,7 +93,7 @@
                         :one-way "An attended visit is noted and signed from here."}
                :decided "The front desk checks a patient in on its own when they arrive for a booked visit."}
     :sign     {:from #{:attended} :to :signed
-               :guards [has-note has-signer has-author-role therapist-signs]
+               :guards [has-note has-signer has-author-role note-in-time therapist-signs]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A signed note is the record; correct it with an addendum on a new visit."}}
     :no_show  {:from #{:booked} :to :no_show

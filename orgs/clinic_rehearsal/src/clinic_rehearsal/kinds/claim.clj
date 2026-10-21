@@ -2,7 +2,7 @@
   "A claim: after each visit we submit a claim to the insurer, track
   what they pay, and bill the patient's copay or balance. A claim the
   insurer denies goes to the billing specialist within 2 business days."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse warn]]))
 
 (defguard has-visit
   (refuse "A claim is for one signed visit; name it first.")
@@ -20,6 +20,32 @@
   (refuse "A denied claim says why the insurer denied it.")
   '(present? :denial_reason))
 
+;; advisory: a late payment is still posted, and says it came past
+;; net-30; the :until age on :submitted is what tells the specialist
+(defguard paid-within-net-30
+  (warn "The insurer paid this claim more than 30 days after it was submitted.")
+  '(<= (today) (+ (data :submitted_on) (days 30))))
+
+(defscenario claim-inside-net-30
+  "A payment posted 20 days after the claim was submitted is inside net-30."
+  {:kind :claim :attempt :post_payment
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :submitted
+         :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
+                :submitted_on "2026-10-01"}}
+   :expect {:allowed true}})
+
+(defscenario claim-past-net-30
+  "A payment posted 35 days after the claim was submitted is past net-30."
+  {:kind :claim :attempt :post_payment
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :submitted
+         :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
+                :submitted_on "2026-09-16"}}
+   :expect {:refused :paid-within-net-30}})
+
 (defresource claim
   {:kind :claim
    :plural "claims"
@@ -31,6 +57,7 @@
             [:visit_id {:optional true :kind :visit} [:maybe :waymark/ref]]
             [:insurer {:optional true} [:maybe [:string {:max 120}]]]
             [:billed_cents {:optional true} [:maybe [:int {:min 0}]]]
+            [:submitted_on {:optional true} [:maybe :waymark/date]]
             [:paid_cents {:optional true} [:maybe [:int {:min 0}]]]
             [:patient_owes_cents {:optional true} [:maybe [:int {:min 0}]]]
             [:denial_reason {:optional true} [:maybe [:string {:max 500}]]]]
@@ -39,7 +66,9 @@
              :submitted "An insurer pays a claim within 30 days on average; past 30 days, the mayor tells the billing specialist."
              :paid "A paid claim's copay or balance is billed to the patient within a week."
              :denied "A denied claim goes to the billing specialist within 2 business days."}
-   :expected-age {:draft 86400 :submitted 2592000 :paid 604800 :denied 172800}
+   :expected-age {:draft 86400
+                  :submitted {:until '(+ (data :submitted_on) (days 30))}
+                  :paid 604800 :denied 172800}
    :actions
    {:submit      {:from #{:draft} :to :submitted
                   :guards [has-visit has-amount]
@@ -47,7 +76,7 @@
                            :one-way "A submitted claim is the insurer's to pay or deny."}
                   :decided "The billing specialist submits a claim on their own after each visit, because after each visit we submit a claim to the insurer."}
     :post_payment {:from #{:submitted} :to :paid
-                  :guards [has-payment]
+                  :guards [has-payment paid-within-net-30]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A posted payment stays posted."}
                   :decided "The billing specialist posts what the insurer paid on their own, because we track what they pay."}

@@ -4,7 +4,7 @@
   insurance; the front desk verifies coverage before the first visit,
   and a patient with no verified coverage pays self-pay rates. A chart
   is kept seven years after the last visit, then purged."
-  (:require [waymark10.dsl :refer [defguard defresource hold refuse]]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]]))
 
 (defguard has-referral
   (refuse "A chart is opened from the physician's accepted referral; name it first.")
@@ -31,6 +31,28 @@
   (refuse "A chart is purged seven years after the last visit; the last visit's day must be on it.")
   '(present? :last_visit_on))
 
+(defguard seven-years-kept
+  (refuse "A chart is kept seven years after the last visit before it is purged.")
+  '(>= (today) (+ (data :last_visit_on) (years 7))))
+
+(defscenario purge-after-seven-years
+  "A chart whose last visit was over seven years ago may be purged."
+  {:kind :patient :attempt :purge
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :discharged
+         :data {:name "Ana Ruiz" :last_visit_on "2019-10-01"}}
+   :expect {:allowed true}})
+
+(defscenario purge-before-seven-years
+  "A chart whose last visit was six years ago is kept, not purged."
+  {:kind :patient :attempt :purge
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :row {:state :discharged
+         :data {:name "Ana Ruiz" :last_visit_on "2020-10-01"}}
+   :expect {:refused :seven-years-kept}})
+
 (defresource patient
   {:kind :patient
    :plural "patients"
@@ -48,13 +70,14 @@
             [:coverage {:optional true} [:maybe [:enum "verified" "self_pay"]]]
             [:care_team {:optional true} [:maybe [:string {:max 240}]]]
             [:no_shows {:optional true} [:maybe [:int {:min 0}]]]
-            [:last_visit_on {:optional true} [:maybe [:string {:max 10}]]]]
+            [:last_visit_on {:optional true} [:maybe :waymark/date]]]
    :filterable {:state #{:eq :in} :coverage #{:eq}}
    :default-filters {:state "intake"}
    :decided {:intake "A patient may wait at intake for a week while the front desk verifies coverage; past that, the mayor tells the owner."
              :active "A patient stays active while a plan of care runs; the mayor tells the owner of a chart with no visit in 60 days."
              :discharged "A discharged chart is kept seven years after the last visit, then purged."}
-   :expected-age {:intake 604800 :active 5184000 :discharged 220898664}
+   :expected-age {:intake 604800 :active 5184000
+                  :discharged {:until '(+ (data :last_visit_on) (years 7))}}
    :actions
    {:admit     {:from #{:intake} :to :active
                 :guards [has-referral consent-signed privacy-signed coverage-settled]
@@ -67,6 +90,6 @@
                          :one-way "A discharged patient returns with a new referral."}
                 :decided "The treating therapist discharges a patient on their own when the plan of care has ended."}
     :purge     {:from #{:discharged} :to :purged
-                :guards [has-last-visit owner-purges]
+                :guards [has-last-visit seven-years-kept owner-purges]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A purged chart is gone for good."}}}})
