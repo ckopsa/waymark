@@ -261,6 +261,10 @@
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
    :on-event
+   ;; the kind's accounts (docs/spec-ledger-money.md § 3): {name {:unit
+   ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
+   ;; judged at the def site (resource/check-accounts!) — law
+   :accounts
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

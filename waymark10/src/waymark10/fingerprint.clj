@@ -319,6 +319,19 @@
                                   (map (fn [[k v]] [k (if (map? v) (into (sorted-map) v) v)]))
                                   (:effect a))))))
 
+(defn accounts-fp
+  "Accounts (docs/spec-ledger-money.md §3, §10): names, units and bounds
+  are law — the bounds will refuse writes — so each entry rides as its
+  canonical tree, its keys snake_case; an undeclared bound stays absent."
+  [accts]
+  (into (sorted-map)
+        (map (fn [[n a]]
+               [(name n) (into (sorted-map)
+                               (map (fn [[k v]] [(str/replace (name k) "-" "_")
+                                                 (canonical-default v)]))
+                               a)]))
+        accts))
+
 (defn- authority-fp
   "The mirror sync-law facet: the document contract, push-on-write,
   and per-field authority (external keys, adopts/frozen windows).
@@ -447,6 +460,12 @@
       (seq (:on-event rmap))
       (assoc "on_event" (on-event-fp (:on-event rmap)))
 
+      ;; :accounts (docs/spec-ledger-money.md §10): names, units and
+      ;; bounds are law. Non-empty-only, so every account-free kind
+      ;; hashes byte-identical to before
+      (seq (:accounts rmap))
+      (assoc "accounts" (accounts-fp (:accounts rmap)))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
@@ -466,7 +485,8 @@
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
-                              "create" "over" "recurs" "on_event"})
+                              "create" "over" "recurs" "on_event"
+                              "accounts"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"

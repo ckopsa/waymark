@@ -2628,17 +2628,33 @@
                                      {})]))))
         (remove inbox? (:on-event r))))
 
+;; ── accounts (docs/spec-ledger-money.md §10) ─────────────────────────
+
+(defn- check-account-unbounded
+  "[account-unbounded], info: a :count account with no :never-below that
+  does not say :may-go-negative true."
+  [r]
+  (for [[n a] (sort-by (comp str key) (:accounts r))
+        :when (= :count (:unit a))
+        :when (not (contains? a :never-below))
+        :when (not (:may-go-negative a))]
+    (str "[account-unbounded] info: account " (name n) " is a count with no"
+         " :never-below. Add :never-below 0, or say :may-go-negative true."
+         " Can there ever be fewer than none of " (name n) "?")))
+
 (defn run-all
   "The full battery in waymark9 order, after § 8's integration findings
   (docs/spec-integrations.md); throws the first error, returns
   {:warnings [str …] :info [str …]}. [convertible-guard],
-  [stays-code], [date-unread] and [integration-in-prose] are info
+  [stays-code], [date-unread], [integration-in-prose] and
+  [account-unbounded] are info
   (docs/spec-related-row-law.md §6): counted, not enforced, so they
   never land among the warnings."
   [rmap]
   {:info (-> (vec (check-convertible-guard rmap))
              (into (check-date-unread rmap))
-             (into (check-integration-in-prose rmap)))
+             (into (check-integration-in-prose rmap))
+             (into (check-account-unbounded rmap)))
    :warnings
    (into []
          (mapcat #(% rmap))

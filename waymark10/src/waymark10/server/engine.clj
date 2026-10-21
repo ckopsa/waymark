@@ -236,6 +236,15 @@
                                           (str ":rounding is :half-even or :half-up; got "
                                                (pr-str (:rounding opts)))
                                           {:check :rounding})))
+                    ;; the house's accounts (docs/spec-ledger-money.md
+                    ;; §3): money no product or order owns, addressed
+                    ;; [:house name]; a malformed one refuses the boot
+                    :house-accounts (let [ha (or (:house-accounts opts) {})]
+                                      (when-some [p (first (money/account-problems
+                                                            ":house-accounts" ha))]
+                                        (throw (t/definition-error
+                                                p {:check :house-accounts})))
+                                      ha)
                     ;; the engine's own name: the :name option, else
                     ;; WAYMARK_ENGINE_NAME, else "waymark". The
                     ;; well-known document answers it and a walk's

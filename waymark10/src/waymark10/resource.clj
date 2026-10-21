@@ -35,6 +35,7 @@
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -1980,6 +1981,21 @@
                    cs)))
     rmap))
 
+(defn- check-accounts!
+  "`:accounts` (docs/spec-ledger-money.md §3): the counts and money a
+  kind's rows hold, each a declared name with its unit and bounds
+  (money/account-problems judges the form). An account projects as a
+  read-only field of its own name (step 3c), so a schema field of that
+  name is refused here too."
+  [rmap]
+  (when-some [accts (:accounts rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
+                                          {:check :accounts}))]
+      (some-> (first (money/account-problems ":accounts" accts)) bad)
+      (when-some [f (some (set (keys accts)) (keys (schema/entry-map (:schema rmap))))]
+        (bad (str ":accounts " (name f) " is also a field; an account is its own"
+                  " read-only field, and only postings move it"))))))
+
 (def ^:private on-event-keys
   #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
 
@@ -2089,6 +2105,7 @@
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (check-over! rmap)
+    (check-accounts! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
