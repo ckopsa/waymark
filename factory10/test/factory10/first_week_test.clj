@@ -408,6 +408,17 @@
       (is (str/includes? (:remedy (second findings)) "shot.caption")))
     (is (nil? (get-in row [:data :film_url])))))
 
+(deftest a-first-week-with-no-goal-state-lands-no-arc-finding
+  (let [e (eng)
+        id (proposed! e)
+        tk (-> (week-take quiet-week)
+               (update :shots (partial mapv #(dissoc % :goal_state)))
+               (first-week/marked "{:first-week true}"))
+        answer (film-rules/judge (filterv #(= "arc" (:name %)) film-rules/seed-rules) tk)
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= [] (:unmeasured answer)))
+    (is (not-any? #{"film/arc"} (map :key (get-in row [:data :findings]))))))
+
 (deftest a-warn-rule-the-film-cannot-measure-does-not-block-it
   (let [e (eng)
         id (proposed! e)

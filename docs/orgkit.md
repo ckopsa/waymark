@@ -15,6 +15,7 @@ orgs/<org>/
   src/<org>/org.clj        the module: resources, check-resources, domain
   src/<org>/kinds/*.clj    one defresource per kind, guards as defguard sentences
   resources/<org>/seed.edn what a fresh engine holds at boot
+  resources/<org>/week.edn the first week, as a script (§ The week)
   README.md                what each file is
 ```
 
@@ -342,6 +343,50 @@ it:
   org.edn waives it for an org that only works inside.
 
 The loader that walks it on a fresh engine is M1b's.
+
+## The week
+
+`resources/<org>/week.edn` is the org's first week as a script, beside
+the first-week scene the director films: each day's calls, in order,
+and who makes each.
+
+```clojure
+{:day-one "2026-10-21"
+ :goal {:kind "prospect" :state "engaged"}
+ :days [{:day 1
+         :calls [{:as :world :kind "prospect" :action "create" :name "hillside"
+                  :input {:company "Hillside Labs"}}
+                 {:as :mayor :kind "prospect" :action "qualify" :row "hillside"
+                  :input {:note "Referred by Jordan Lee."}}]}
+        {:day 2 :person-allows :yesterday
+         :calls [{:as :mayor :kind "study" :action "create"
+                  :input {:prospect_id {"$row" "hillside"}}}]}]}
+```
+
+- `:as` is a cast role: `:world`, a rehearsal cast member (the call's
+  `:cast` key, or the first); `:mayor`, the org's mayor, an agent
+  acting for the owner; or `:person`, the seed's `:owner`.
+- A call with `:row` walks that row's `:action`; one without it walks a
+  create door of the kind. `:name` names the row a create made, and
+  `{"$row" "hillside"}` anywhere in a later input is that row's id.
+- A day's `:person-allows` is `:yesterday` unless it says `:none`: the
+  owner allows each call held the day before, as the director does.
+- `:goal` is the payoff: the rows of that kind in that state.
+
+`clojure -M -m workqueue10.week <org-dir> [--json]`, from
+`workqueue10/`, plays it headlessly. It boots the org in-process as an
+org clone over a memory store, seeded with its rehearsal, sets the
+demo clock to 09:00 UTC on `:day-one`, makes each day's calls through
+the engine's doors as their cast, and shifts the clock P1D between
+days. The mayor wears a grant the owner mints over the doors the
+script's mayor calls name. It prints a report: per call its day, cast,
+kind, action and outcome, `moved`, `held` or `refused`, with the guard
+and its sentence when refused; `person_asks`, the calls held for the
+owner; and the goal's rows. It exits non-zero only for a broken script
+(a row name no earlier call made, a cast or kind it does not know),
+never for a refusal: a refusal is part of the report. Nothing renders
+and nothing leaves the process. `orgs/week_fixture` is a week that
+plays a refusal, a hold allowed the next day, and its payoff.
 
 ## Conformance
 
