@@ -129,6 +129,8 @@
             "grant" "held_call"
             ;; docs/spec-integrations.md § 2: an outside system as a principal
             "integration"
+            ;; § 3: and one receipt per event its receiver kept
+            "integration_event"
             "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan"

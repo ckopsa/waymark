@@ -303,6 +303,28 @@
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
                                         {:principal mayor})))))))
 
+(deftest a-take-names-its-engine-and-org-commits
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        take {:scene (str id)
+              :scene_version 1
+              :device "desktop"
+              :commit "6abcba3e"
+              :shots [{:shot 1 :ok true}]}
+        both (row-of eng :take
+                     (:id (:row (inv/create! eng :take
+                                             (assoc take :engine_commit "bb72d482"
+                                                         :org_commit "6abcba3e")
+                                             {:principal mayor}))))
+        neither (row-of eng :take
+                        (:id (:row (inv/create! eng :take take {:principal mayor}))))]
+    (is (= "bb72d482" (get-in both [:data :engine_commit])))
+    (is (= "6abcba3e" (get-in both [:data :org_commit])))
+    (is (= "6abcba3e" (get-in both [:data :commit])))
+    (is (= "recorded" (name (:state neither))))
+    (is (nil? (get-in neither [:data :engine_commit])))))
+
 (deftest a-take-keeps-its-shots-ids-and-roles
   (let [eng (fresh-engine)
         id (write! eng well-formed)

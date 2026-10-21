@@ -175,6 +175,7 @@
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
+            [waymark10.server.routes.integrations :as integrations-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
             [waymark10.server.routes.scenes :as scene-routes]
@@ -733,11 +734,15 @@
     :pack packs/mirror}
    ;; the integration (docs/spec-integrations.md § 2, build step 1):
    ;; an outside system as a row and a principal, `integration:<id>`,
-   ;; with a grant a person approves. The receiver and the effect
-   ;; runner are later steps of the same spec; this is the kind alone.
+   ;; with a grant a person approves; and its receiver (build step 2),
+   ;; POST /api/-/events/<name>, keeping one integration_event receipt
+   ;; per event. The applier and the effect runner are later steps.
    {:module :integrations
+    :routes integrations-routes/routes
     :enrols [{:kind :integration :enroll :always
-              :kinds (fn [_] [integrations/integration])}]}
+              :kinds (fn [_] [integrations/integration])}
+             {:kind :integration_event :enroll :always
+              :kinds (fn [_] [integrations/integration-event])}]}
 
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
