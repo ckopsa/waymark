@@ -3011,7 +3011,9 @@
                                   (judge eng (first-week/line-up tk scene))
                                   {:film_url (str take_film_url)
                                    :head_sha (str take_sha)
-                                   :warnings (first-week/dropped-roles tk scene)}
+                                   :warnings (into (first-week/dropped-roles tk scene)
+                                                   (first-week/take-differs
+                                                    tk (get-in plan [:data :dry_week])))}
                                   (as-opts)))
               (update census :films (fnil inc 0))
               (catch Exception e
