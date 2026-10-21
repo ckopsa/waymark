@@ -2553,7 +2553,7 @@
   grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
                                idempotency-key mint? depth within grant
-                               action]
+                               action recurs-from]
                         :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
         {model :model create-action :action door-guards :guards
@@ -2629,6 +2629,11 @@
                                                 :body body :opts opts})
                             nil))
               row (if-some [oc on-create] (oc row octx) row)
+              ;; a :recurs run's made row keeps the key it was made
+              ;; under (scheduled/run-key): the engine's field, past the
+              ;; closed create model no hand may write it through
+              row (cond-> row
+                    recurs-from (assoc-in [:data :recurs_from] recurs-from))
               ;; ref labels + one-of at birth too: before nil, every
               ;; set ref is newly set
               row (update row :data
