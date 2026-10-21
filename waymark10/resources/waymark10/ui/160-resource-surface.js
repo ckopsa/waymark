@@ -39,6 +39,66 @@ function renderAsOf(view, doc, hints) {
   view.append(panel);
 }
 
+/* the band on a live row some held call waits on (ticket f6808194):
+   "Waiting on your tap: <action> <row>", the AI's reason under it, and
+   Allow and Deny — the held call's own doors, drawn only when its
+   envelope affords them to this viewer. After Allow it says who
+   allowed, until the page refreshes with the move. */
+function heldBand(doc) {
+  const band = el("div", {class: "asof-band waiting held-band", "data-focus": "held"});
+  const what = String(doc.summary || "").split(" · ")[0];
+  for (const h of doc.held || []) {
+    const line = el("div", {class: "held-call"},
+      el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim()));
+    if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    band.append(line);
+    api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
+      const acts = (ok && body && body.actions) || {};
+      if (!acts.allow && !acts.refuse) return;
+      const bar = el("div", {class: "actions"});
+      if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
+        onclick: async () => {
+          const r = await invokeBare(acts.allow, body);
+          if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+          bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
+            `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
+        }}, "Allow"));
+      if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
+        onclick: async () => {
+          const reason = (window.prompt("Why not? One sentence the caller reads.") || "").trim();
+          if (!reason) return;
+          const r = await api(acts.refuse.href, {method: acts.refuse.method || "POST",
+                                                 body: JSON.stringify({reason})});
+          if (!r.ok) { toast((r.body || {}).detail || "Deny was refused"); return; }
+          render();
+        }}, "Deny"));
+      line.append(bar);
+    }).catch(() => {});
+  }
+  return band;
+}
+
+/* a seat's page leads with the seat in words (ticket 9935e3a3): its
+   charter's first sentence, what wakes it and what it may do, spelled
+   by the server as the org's law page spells them, and the queues it
+   works, each a link with the rows waiting in a state it can move */
+function seatReadsAs(r) {
+  const box = el("div", {class:"seat-reads", "data-seat-reads": ""});
+  for (const k of ["charter", "wakes", "may"])
+    if (r[k]) box.append(el("p", {class:"prose"}, r[k]));
+  const works = r.works || [];
+  if (works.length) {
+    const line = el("p", {class:"prose"}, "Works: ");
+    works.forEach((w, i) => {
+      if (i) line.append(", ");
+      line.append(el("a", {href:"#"+w.href, title: w.kind}, w.label));
+    });
+    line.append(".");
+    box.append(line);
+  }
+  return box;
+}
+
 async function renderResource(view, doc, hints) {
   hints = hints || {};
   /* the ref labels this envelope carries, before any cell asks */
@@ -53,6 +113,8 @@ async function renderResource(view, doc, hints) {
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
   panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));
+  if (kind === "seat" && doc.data?.reads_as)
+    panel.append(seatReadsAs(doc.data.reads_as));
   const meta = doc.meta || {};
   panel.append(el("div", {},
     el("span", {class:"statechip", title: kind}, doc.state),
@@ -60,6 +122,8 @@ async function renderResource(view, doc, hints) {
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* a held call waiting on this row: the person's tap, up top */
+  if ((doc.held || []).length) panel.append(heldBand(doc));
   /* the row's own path is the crumb's title, on every kind, and is
      not header text */
   /* the viewing dots: who else is looking at this screen right now
@@ -221,6 +285,14 @@ async function renderResource(view, doc, hints) {
   const goalInputLabels = (kind === "quest" && plainData.input_labels) || {};
   if (kind === "quest")
     for (const k of ["action_label", "input_labels"]) delete plainData[k];
+  /* a seat said in words above: the words leave the kv table, and its
+     raw scope and wake_on fold below it, closed */
+  const seatRaw = {};
+  if (kind === "seat") {
+    delete plainData.reads_as;
+    for (const k of ["scope", "wake_on"])
+      if (k in plainData) { seatRaw[k] = plainData[k]; delete plainData[k]; }
+  }
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -267,6 +339,10 @@ async function renderResource(view, doc, hints) {
     el("details", {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
       dataTable));
+  if (Object.keys(seatRaw).length)
+    dataPanel.append(el("details", {class:"rowdata", "data-seat-raw": ""},
+      el("summary", {class:"muted"}, "What it opens and what wakes it, as declared"),
+      kvTable(seatRaw, hints)));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
