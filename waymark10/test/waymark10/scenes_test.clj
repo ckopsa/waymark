@@ -557,6 +557,29 @@
                                          (constantly []) (constantly [])
                                          (fn [w] (scenes/day-in-window eng w)) run))))))
 
+(deftest a-take-window-rows-hole-reads-since-the-take-began
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        hole {"$rows" {:kind "study" :window "take" :count true :one "study" :many "studies"}}
+        said #(scenes/fill-say [hole "."] (fn [w] (scenes/rows-in-window eng w))
+                               (constantly []) (constantly nil) %)
+        run (scenes/take-run)
+        pause #(Thread/sleep 5)]
+    (testing "check takes it, and refuses another window or one beside a date"
+      (is (nil? (scenes/say-refusal eng [hole])))
+      (is (some? (scenes/say-refusal eng [(assoc-in hole ["$rows" :window] "shot")])))
+      (is (some? (scenes/say-refusal eng [(assoc-in hole ["$rows" :since] "2026-10-19")]))))
+    (pause)
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "it reads every row born since the take began, whatever its date"
+      (is (= "1 study." (said run)))
+      (inv/create! eng :study {:title "Acme's second study" :domain "acme"} {:principal mayor})
+      (pause)
+      (is (= "2 studies." (said run))))
+    (testing "a row born before the take began is not the take's"
+      (is (= "" (said (scenes/take-run)))))))
+
 (defn- say! [h headers body]
   (let [resp (h {:request-method :post :uri "/api/-/scenes/say"
                  :headers (merge {"content-type" "application/json"} headers)

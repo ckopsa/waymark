@@ -209,8 +209,7 @@
                 :clone_url clone_url
                 :head_sha head_sha
                 :brief_line (or line "")
-                :day_one (str day-one)
-                :week_end (str (.plusDays day-one (long days)))}
+                :day_one (str day-one)}
         roles (get-in t [:template :roles])
         day (fn [k]
               (let [date (.plusDays day-one (long (dec k)))
