@@ -634,7 +634,9 @@
     (shift!)
     (pause)
     (testing "a study moved on day 2: the study's page"
-      (is (= {"self" (str "/api/studys/" (:id study))} (opened (open 2)))))
+      (let [end (str (:until (scenes/clock-window eng 2 (java.time.Instant/now))))]
+        (is (= {"self" (str "/api/studys/" (:id study) "?as-of=" end) "as_of" end}
+               (opened (open 2))))))
     (testing "two notes written on day 3: the notes collection"
       (is (= {"collection" "notes"} (opened (open 3)))))
     (testing "a quiet day, and a day the clock has not played: the domain's first kind"
@@ -661,6 +663,50 @@
       (is (= 422 (:status (post! as-mayor {:take "t" :open (open 32)}))))
       (is (= 422 (:status (post! as-mayor {:open (open 3)}))))
       (is (= 404 (:status (post! {} {:take "t" :open (open 3)})))))))
+
+(deftest a-day-row-open-shows-the-row-as-it-stood-at-the-end-of-its-day
+  (let [eng (clock-shift/install!
+             (engine/engine (clock-shift/with-clock
+                             {:storage (memory/storage)
+                              :resources (mapv org-kind [:study :invoice :note])
+                              :name "demo-scenes-as-of"
+                              :clone? true})))
+        h (engine/handler eng)
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        open (fn [k] {"$day-row" {:window "clock" :day k :domain "acme"}})
+        opened (fn [o] (scenes/open-as eng o (constantly true)))
+        pause #(Thread/sleep 5)
+        shift! (fn []
+                 (pause)
+                 (inv/create! eng :clock_shift {:by "P1D"} {:principal mayor}))
+        state-at (fn [self]
+                   (let [[uri q] (str/split self #"\?" 2)
+                         resp (h {:request-method :get :uri uri :query-string q
+                                  :headers {"x-waymark-principal" "mayor"}})]
+                     (get-in (wire/read-json (:body resp)) [:data :state])))
+        _ (pause)
+        study (:row (inv/create! eng :study {:title "Acme's study" :domain "acme"}
+                                 {:principal mayor}))]
+    (shift!)
+    (shift!)
+    (pause)
+    (inv/invoke! eng :study (str (:id study)) :send {} {:principal seat})
+    (shift!)
+    (pause)
+    (testing "a row written on day 1 and sent on day 3: each day's open shows it as it stood then"
+      (let [day1 (opened (open 1))
+            day3 (opened (open 3))]
+        (is (= (str (:until (scenes/clock-window eng 1 (java.time.Instant/now))))
+               (get day1 "as_of")))
+        (is (= "open" (state-at (get day1 "self"))))
+        (is (= "review" (state-at (get day3 "self"))))))
+    (testing "`as_of` false opens the row as it stands now"
+      (is (= {"self" (str "/api/studys/" (:id study))}
+             (opened (assoc (open 1) "as_of" false)))))
+    (testing "check admits `as_of` false beside a `$day-row`, and nothing else"
+      (is (nil? (scenes/open-refusal (assoc (open 1) "as_of" false))))
+      (is (some? (scenes/open-refusal (assoc (open 1) "as_of" true))))
+      (is (some? (scenes/open-refusal (assoc (open 1) "as_of" "2026-10-21")))))))
 
 (deftest a-take-window-rows-hole-reads-since-the-take-began
   (let [eng (engine/engine {:storage (memory/storage)
