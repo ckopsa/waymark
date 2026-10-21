@@ -352,6 +352,49 @@
     (testing "a plan with no scene drops nothing"
       (is (= [] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} nil))))))
 
+(deftest the-audit's-scene-carries-the-org's-week-script-and-its-sha
+  (let [dir (io/file (.getParentFile (io/file (example-dir))) "week_fixture")
+        f (io/file dir "resources" "week_fixture" "week.edn")]
+    (testing "the script is the org's week.edn, as data"
+      (is (= (edn/read-string (slurp f)) (:week_script (first-week/week-of dir)))))
+    (testing "its sha is the file's git blob sha, as git hash-object names it"
+      (let [tmp (.toFile (java.nio.file.Files/createTempDirectory
+                          "week" (make-array java.nio.file.attribute.FileAttribute 0)))
+            w (io/file tmp "resources" "empty" "week.edn")]
+        (io/make-parents w)
+        (spit w "")
+        (is (= "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" (:week_sha (first-week/week-of tmp))))))
+    (testing "an org with no week.edn carries none"
+      (is (nil? (first-week/week-of (example-dir)))))))
+
+(def ^:private dry-week
+  [{:day 1 :as "world" :kind "booking" :action "create" :outcome "moved"}
+   {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "moved"}
+   {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "refused"
+    :guard "only-the-owner-books"}])
+
+(def ^:private a-take-report
+  "A fixture take report, as the director hands it in: the film's report
+  with the week it played and its script's sha."
+  {:film {:chrome_leaks 0 :dead_air_s 0.4}
+   :week {:sha "9d3c6a0e1f2b4c5d6e7f8091a2b3c4d5e6f70812"
+          :calls dry-week}})
+
+(deftest a-call-the-dry-week-moved-and-the-clone-refused-is-take-differs
+  (testing "a fixture take report carries the sha of the week it played"
+    (is (re-matches #"[0-9a-f]{40}" (get-in a-take-report [:week :sha]))))
+  (testing "a take that plays the dry week call for call differs in nothing"
+    (is (= [] (first-week/take-differs a-take-report dry-week))))
+  (testing "a call the dry week moved and the clone refused is [take-differs]"
+    (let [tk (assoc-in a-take-report [:week :calls 1 :outcome] "refused")
+          [w :as ws] (first-week/take-differs tk dry-week)]
+      (is (= ["take-differs"] (map :key ws)))
+      (is (= "warning" (:severity w)))
+      (is (str/includes? (:sentence w) "day 2: booking confirm"))))
+  (testing "a take with no week, or a plan with no dry week, differs in nothing"
+    (is (= [] (first-week/take-differs {:film {}} dry-week)))
+    (is (= [] (first-week/take-differs a-take-report nil)))))
+
 (deftest a-green-film's-warning-lands-beside-it
   (let [e (eng)
         id (proposed! e)
@@ -407,6 +450,17 @@
       (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
       (is (str/includes? (:remedy (second findings)) "shot.caption")))
     (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-first-week-with-no-goal-state-lands-no-arc-finding
+  (let [e (eng)
+        id (proposed! e)
+        tk (-> (week-take quiet-week)
+               (update :shots (partial mapv #(dissoc % :goal_state)))
+               (first-week/marked "{:first-week true}"))
+        answer (film-rules/judge (filterv #(= "arc" (:name %)) film-rules/seed-rules) tk)
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= [] (:unmeasured answer)))
+    (is (not-any? #{"film/arc"} (map :key (get-in row [:data :findings]))))))
 
 (deftest a-warn-rule-the-film-cannot-measure-does-not-block-it
   (let [e (eng)

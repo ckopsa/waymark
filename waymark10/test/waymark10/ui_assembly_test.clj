@@ -188,6 +188,28 @@
           (str "the generic page never learns an application's plural or"
                " field — found " word)))))
 
+(deftest a-kinds-plural-reads-as-english
+  ;; the page cannot run here, so the rule is read off its own regex
+  ;; literals and applied in pluralWord's order
+  (let [page (sut/assemble)
+        es (js-regex page "PLURAL_ES")
+        as-is (js-regex page "PLURAL_AS_IS")
+        ies (js-regex page "PLURAL_IES")
+        plural (fn [w] (cond (re-find es w) (str w "es")
+                             (re-find as-is w) w
+                             (re-find ies w) (str (subs w 0 (dec (count w))) "ies")
+                             :else (str w "s")))]
+    (is (= ["studies" "batches" "classes" "days" "invoices" "studies" "boxes"]
+           (map plural ["study" "batch" "class" "day" "invoice" "studies" "box"])))
+    (is (str/includes? page "collectionHref(wellKnownNow, k)")
+        "a declared plural is read off the kind's collection href")
+    (is (str/includes? page "m[1] !== k + \"s\" ? m[1] : pluralWord(k)")
+        "…unless it is the engine's default, which English rules replace")
+    (is (not (str/includes? page "title(kind) + \"s\""))
+        "no kind's name is pluralised by appending an s"))
+  (is (not (str/includes? (slurp (io/resource "waymark10/ui_lite.html")) "title(kind) + \"s\""))
+      "the lite page pluralises the same way"))
+
 (deftest prose-keeps-its-words
   ;; the address branch sits AFTER the prose branch in valueCell: a
   ;; field declared prose is a person's words and stays their words,

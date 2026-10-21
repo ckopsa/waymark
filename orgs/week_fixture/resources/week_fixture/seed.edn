@@ -1,0 +1,31 @@
+;; week_fixture's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+{:seed "week_fixture"
+ :version 1
+ :org "week_fixture"
+ :domains [{:name "week_fixture" :label "Week Fixture Gardening" :ref :week_fixture}]
+ :cast
+ {:owner {:id "owner" :display "Rosa Delgado" :type :human :roles ["approver"]}}
+ ;; the outside world, which only a clone loads: a homeowner who asks
+ ;; for jobs, and the world seat that plays their week
+ :rehearsal
+ {:cast {:ana {:id "ana" :display "Ana Ruiz" :type :human
+               :scope [{:kind "garden_job" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "Week Fixture Gardening trims hedges and mows lawns for homeowners, who ask it for jobs."
+                    :kinds "garden_job" :cast "ana" :day_one [:days 0]
+                    :domain_id [:ref :week_fixture]}}]}
+ :seats
+ [{:seat {:name "job-clerk"
+          :mode "fired"
+          :walk "garden_job"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You read each job. Quote it when the homeowner says their budget, ask for the owner's tap to book a quoted one, and decline work this office does not do. Say why in one sentence."
+          :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]
+          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}]
+ :judgments []
+ :steps []}

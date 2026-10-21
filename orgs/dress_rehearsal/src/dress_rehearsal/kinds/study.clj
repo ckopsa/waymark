@@ -63,6 +63,8 @@
    :initial :collecting
    :terminal #{:delivered}
    :summary "{data.client} {data.tax_year} · {state}"
+   ;; a film's day reads the row as it stood: its fields, not only its state
+   :retain {:data true}
    :schema [:map
             [:client [:string {:min 1 :max 120}]]
             [:tax_year [:int {:min 2000 :max 2100}]]

@@ -10,6 +10,9 @@
                        ;; factory10.orgkit-test can load both modules
                        orgkit/template        {:local/root "../orgkit/template"}
                        orgs/example           {:local/root "../orgs/example"}
+                       ;; an org whose rehearsal declares an integration,
+                       ;; so factory10.rehearsal-seed-test loads its seed
+                       orgs/landscape-rehearsal {:local/root "../orgs/landscape_rehearsal"}
                        ;; an org whose name holds an underscore, so
                        ;; factory10.two-words-org-test loads `two_words.org`
                        fixtures/two-words     {:local/root "fixtures/orgs/two_words"}}

@@ -57,3 +57,13 @@
                 (vreset! n (check-all/report-orgs [(io/file "../orgs/example")]))))]
     (is (= 1 @n))
     (is (re-find #"✗ orgs/example \[law\] law/example: the law page could not render: no such seat" out))))
+
+;; ── the week (ticket 62297746) ──────────────────────────────────────────────────
+
+(deftest a-stalling-week-fails-the-check-naming-week-stalls
+  ;; the fixture's day-1 quote is refused by has-budget
+  (let [n (volatile! nil)
+        out (with-out-str
+              (vreset! n (check-all/report-orgs [(io/file "../orgs/week_fixture")])))]
+    (is (pos? @n))
+    (is (re-find #"✗ orgs/week_fixture \[week-stalls\] week-stalls/0: day 1: garden_job quote refused by has-budget" out) out)))

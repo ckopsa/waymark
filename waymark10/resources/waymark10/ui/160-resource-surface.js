@@ -1,6 +1,44 @@
 /* ── resource screen ───────────────────────────────────────────────── */
 function label(name, entry) { return entry.display?.label || title(name); }
 
+/* a row as it stood (GET /api/<plural>/<id>?as-of=): the log's own
+   document, never an envelope, so nothing on it is a door. A film's
+   day opens it; the quiet note names the day, and the id crumb leads
+   to the row as it stands now. */
+function renderAsOf(view, doc, hints) {
+  const d = doc.data || {};
+  const of = d.of || doc.self.split("?")[0];
+  const panel = el("div", {class:"panel"});
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ",
+    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, titles(d.kind || "row")),
+    el("span", {class:"idsep"}, " / "),
+    el("a", {class:"id", href:"#"+of, title:"this row as it stands now"},
+      String(d.id || of.split("/").pop()).slice(0, 8))));
+  const at = new Date(d.as_of);
+  const day = isNaN(at) ? String(d.as_of)
+    : at.toLocaleDateString(undefined, {weekday: "long"});
+  /* the band: which day this page is, before anything on it */
+  const when = isNaN(at) ? String(d.as_of)
+    : at.toLocaleDateString(undefined, {weekday: "long", year: "numeric",
+                                        month: "long", day: "numeric"}) +
+      " " + at.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"});
+  panel.append(el("div", {class:"asof-band"}, `As of ${when}`));
+  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
+  /* the held call pending then: whose tap the row was waiting on */
+  const h = d.held;
+  if (h) panel.append(el("div", {class:"asof-band waiting"},
+    `Waiting on ${h.who || h.owner || "a person"}'s tap: ` +
+    title(h.action || "allow") + (h.why ? ` — ${h.why}` : "")));
+  panel.append(el("div", {},
+    el("span", {class:"statechip", title: d.kind || ""},
+      d.existed ? String(d.state) : "not yet"),
+    el("span", {class:"version", title: `read-only: this row as of ${d.as_of}`},
+      `as of ${day}`)));
+  if (d.data && typeof d.data === "object") panel.append(kvTable(d.data, hints || {}));
+  view.append(panel);
+}
+
 async function renderResource(view, doc, hints) {
   hints = hints || {};
   /* the ref labels this envelope carries, before any cell asks */
@@ -10,7 +48,7 @@ async function renderResource(view, doc, hints) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("a", {href:"#"+colHref}, titles(kind)),
     el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
