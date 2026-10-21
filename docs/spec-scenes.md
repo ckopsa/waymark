@@ -221,13 +221,14 @@ call for a take begins it, later calls reuse it, so a
 `window: "shot"` hole reads since that take's previous `$day`; a run
 is dropped two hours after it began.
 
-A filmed week is played this way. A clone runs no seats (clone-mcp
-strips every fire key) and every seed row on it is born the day it
-boots, so a dated `$day` would put the whole week on day 1. Instead the
-director writes each day's events as `meanwhile` shots before that
-day's caption, and the caption's `{"window": "shot"}` reads what those
-calls did. factorykit's `scenes/first-week.edn` does so; its weekday
-words are labels.
+A filmed week is played this way. The week is played by the clone's
+own seats: the director sits the clone's `world` and `<org>-mayor`
+seats day by day, and separates the days with `clock_shift` and
+`meanwhile` shots before each day's caption. Every seed row on a clone
+is born the day it boots, so a dated `$day` would put the whole week on
+day 1; the caption's `{"window": "shot"}` reads instead what the seats
+did since the last caption. factorykit's `scenes/first-week.edn` does
+so; its weekday words are labels.
 
 ## `wearing`
 
