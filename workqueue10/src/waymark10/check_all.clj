@@ -22,10 +22,16 @@
   that does not load, or whose kinds do not pass the gate or assemble,
   fails this check instead of a CI round. CHECK_ORGS (comma-separated
   names) picks the orgs by hand; CHECK_BASE names the base, which is
-  otherwise the merge-base with origin/main, or with main."
+  otherwise the merge-base with origin/main, or with main.
+
+  THE LAW PAGE (ticket ade71a1e). Each org that loads also has its
+  law page rendered with factory10.law-text — what CI's `org-law
+  (<org>)` job runs — with the org on the classpath as conform puts
+  it there, so a page that throws is a finding here too."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.string :as str]
+            [factory10.law-text :as law]
             [factory10.main :as factory]
             [factorykit.conform :as conform]
             [waymark10.check :as check]
@@ -87,16 +93,35 @@
         :sentence (str "the conformance could not run: " (or (ex-message t) (str t)))
         :remedy "Run `clojure -M:conform` on the org from factorykit/ to see the whole trace."}])))
 
+(defn- law-errors
+  "The org at `dir`'s law page rendered as CI's org-law job renders it,
+  with the org's src and resources on the classpath; a render that
+  throws is one law finding."
+  [^File dir]
+  (try
+    (conform/with-org-classpath dir #(law/law-text (str dir)))
+    []
+    (catch Throwable t
+      [{:severity :error :class :law :key (str "law/" (.getName dir))
+        :sentence (str "the law page could not render: " (or (ex-message t) (str t)))
+        :remedy (str "Run `clojure -M:org -m factory10.law-text ../orgs/" (.getName dir)
+                     "` from factory10/ to see the whole trace.")}])))
+
 (defn report-orgs
-  "Judge each org directory, printing each error as a finding with its
-  file and message; answers how many errors there were."
+  "Judge each org directory and render its law page, printing each
+  error as a finding with its file and message; answers how many
+  errors there were. An org that does not load is not rendered: the
+  page would fail on the same load."
   [dirs]
   (reduce
    (fn [n ^File dir]
      (let [file (str "orgs/" (.getName dir))
-           errs (org-errors dir)]
+           errs (org-errors dir)
+           errs (if (some #(= :load (:class %)) errs)
+                  errs
+                  (into errs (law-errors dir)))]
        (if (empty? errs)
-         (println (str "  [org] " file ": conforms"))
+         (println (str "  [org] " file ": conforms, its law page renders"))
          (doseq [{:keys [class key sentence remedy]} errs]
            (println (str "  ✗ " file " [" (name class) "] " key ": " sentence))
            (when (seq remedy)
