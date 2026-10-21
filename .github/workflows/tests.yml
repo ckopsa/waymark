@@ -1824,6 +1824,12 @@ jobs:
   # parallel and neither waits on the other. The setup steps are
   # ui-access's, copied.
   #
+  # The walk is sharded by its parts (QUEST_PHONE_PARTS in ui-drive.mjs):
+  # quest, the flow and its film; phone and desktop, the 'not yet'
+  # button on each. Each part writes its own rows, so each shard starts
+  # from the engine's seed. Together they are every step the one job
+  # walked; `gate` reads the job's result, which fails when any shard does.
+  #
   # Not on a dispatch narrowed by `only`, as ui-access.
   ui-quest-phone:
     needs: changes
@@ -1832,6 +1838,12 @@ jobs:
       (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
+    strategy:
+      # As in test10: one shard failing must not hide the others.
+      fail-fast: false
+      matrix:
+        part: [quest, phone, desktop]
+    name: ui-quest-phone (${{ matrix.part }})
     steps:
       - uses: actions/checkout@v4
       # test10's "Start postgres", word for word, as in ui-access.
@@ -1960,13 +1972,14 @@ jobs:
       - name: Drive the quest flow on a phone
         env:
           SHOTS: ${{ runner.temp }}/ui-quest-phone-shots
+          QUEST_PHONE_PARTS: ${{ matrix.part }}
         run: node waymark10/scripts/ui-drive.mjs quest-phone
-      # the drive's screenshots (phone-quest-*)
+      # the drive's screenshots (phone-quest-*), one artifact per shard
       - name: Upload the drive's screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ui-quest-phone-shots
+          name: ui-quest-phone-shots-${{ matrix.part }}
           path: ${{ runner.temp }}/ui-quest-phone-shots
           if-no-files-found: ignore
           retention-days: 7
