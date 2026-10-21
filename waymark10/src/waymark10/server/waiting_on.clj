@@ -6,7 +6,9 @@
   since     when the row entered its state and by which door, read from
             its log (the last write when the log does not say), and the
             state's expected age
-            (`live-cracks/expected-age`) when it has one
+            (`live-cracks/expected-age`) when it has one — or, where
+            that age is a map, its `due` (`live-cracks/deadline` over
+            the :calendar hook) and no nominal seconds
   next      every way out of the state (`cracks/row-doors`): the door,
             the active seats that hold it for THIS row, what wakes each
             of them, and `held_by`: seat, person, source or nobody
@@ -235,8 +237,9 @@
   is the instant of the read, `entered` the transition that put the row
   into its state when the log said (`:at`, `:action`), `data` the
   row's data as the caller is shown it, and `tickets` and `judgments`
-  what `walk-reads` read for it."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments]}]
+  what `walk-reads` read for it, and `calendar` the :calendar hook a
+  map age reads."
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar]}]
   (let [kind (text (:kind rdef))
         state (text (:state row))
         doors (some->> (cracks/row-doors rdef seat-rows by-kind row) vec)
@@ -244,7 +247,11 @@
         ^Instant now (inst now)
         secs (when (and at now)
                (max 0 (.getSeconds (Duration/between at now))))
-        expected (when doors (live-cracks/expected-age rdef state))
+        dated (map? (first (live-cracks/age-entry rdef state)))
+        expected (when (and doors (not dated)) (live-cracks/expected-age rdef state))
+        ^Instant due (when (and doors dated at now)
+                       (live-cracks/deadline (first (live-cracks/age-entry rdef state))
+                                             row at now calendar))
         named (for [f (cracks/walked-fields rdef seat-rows)
                     :let [v (fget data f)]
                     :when (set-value? v)]
@@ -252,7 +259,10 @@
         for-words (when (seq named) (str " for " (str/join ", " named)))
         age-words (when secs
                     (str ", " (span secs)
-                         (when expected (str " of " (span expected)))))
+                         (cond
+                           due (str (if (.isBefore due now) ", past its deadline " ", due ")
+                                    due)
+                           expected (str " of " (span expected)))))
         held (held-by data)
         kept (kept-for data)
         reads {:tickets tickets :judgments judgments}
@@ -268,7 +278,8 @@
              :since (cond-> {}
                       at (assoc :at (str at))
                       (:action entered) (assoc :by (text (:action entered)))
-                      expected (assoc :expected_seconds expected))
+                      expected (assoc :expected_seconds expected)
+                      due (assoc :due (str due)))
              :next (or doors [])
              :verdict (verdict kind state doors walking for-words age-words held kept)}
       holder (assoc :holder holder)
@@ -327,7 +338,8 @@
              (assoc reads
                     :now ((:now-fn eng))
                     :entered (entered log (:state row))
-                    :data data)))
+                    :data data
+                    :calendar (:calendar (inv/render-hooks eng)))))
     (catch Exception e
       (warn! (text (:kind rdef)) " " (:id row) ": " (ex-message e))
       nil)))
