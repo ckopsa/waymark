@@ -734,6 +734,20 @@
              [:map
               [:name [:string {:min 1 :max 60}]]
               [:paths [:vector {:min 1 :max 50} [:string {:min 1 :max 200}]]]]]]]
+   ;; the lanes' checks (ticket 929ada09). OPTIONAL: each entry maps a
+   ;; lane, as `lanes` names it, to the jobs of the test workflow its
+   ;; train's run needs. A train's dispatch names its lane, and the
+   ;; workflow runs those jobs; a lane none names, and engine, runs all.
+   [:checks {:optional true
+             :examples [[{:lane "docs" :jobs ["actionlint"]}
+                         {:lane "orgs" :jobs ["test-factory" "org-law" "org-findings"]}]]
+             :x-display
+             {:label "The jobs each lane's train runs"
+              :help "One entry for each lane, as Path lanes names it, with the job names of the test workflow a train of that lane needs green. A lane of orgs/** is named orgs here. A lane no entry names, and engine, needs every job. Empty means every lane needs every job."}}
+    [:maybe [:vector {:max 20}
+             [:map
+              [:lane [:string {:min 1 :max 60}]]
+              [:jobs [:vector {:min 1 :max 50} [:string {:min 1 :max 120}]]]]]]]
    [:orientation {:default "docs/orientation.md"
                   :examples ["docs/orientation.md"]
                   :x-display
