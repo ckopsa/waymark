@@ -4525,6 +4525,15 @@
           (catch Exception _ nil))))
     change))
 
+(defn- unspent
+  "`change`, or nil when it is merged (ticket a60aed8e). A merged
+  change keeps its `change_id` when no adoption wrote over it, and the
+  sit must not hand it out: nothing on it can be submitted or stalled.
+  A closed one is kept, because `reopened-change` may open it again."
+  [change]
+  (when-not (= :merged (some-> (:state change) name keyword))
+    change))
+
 (defn- minted-change
   "The change row for one walk row: the one that is already here, or
   one minted now with the engine's own hand (R-12.32). The branch is
@@ -4541,9 +4550,9 @@
   A REOPENED ROW FINDS ITS SUBMITTED CHANGE (ticket b35ab5b5). Once
   the adoption has written GitHub's id over `change_id`, the lookup by
   `change_id` misses, so the row's own `born_from` is read first: a
-  `submitted` or `failing` change is the answer (its feedback is the
-  next round's work), then the one `change_id` still names, then a
-  `stuck` one. And a branch that already carries an open, submitted,
+  `submitted`, `failing` or `open` change is the answer (its feedback
+  is the next round's work), then the one `change_id` still names
+  unless it merged, then a `stuck` one (ticket a60aed8e). And a branch that already carries an open, submitted,
   failing or stuck change is that change's: no second row is minted
   under it.
 
@@ -4554,8 +4563,8 @@
         row-id (some-> (get row "id") str not-empty)
         change-id (str (get walk "kind") ":" row-id)]
     (if-some [found (or (change-in-state eng {:born_from change-id}
-                                         [:submitted :failing])
-                        (change-by-id eng change-id)
+                                         [:submitted :failing :open])
+                        (unspent (change-by-id eng change-id))
                         (change-in-state eng {:born_from change-id}
                                          [:stuck]))]
       [found nil]
@@ -4594,7 +4603,7 @@
                   (println "waymark10 seat change mint failed -" (ex-message e)))
                 ;; a peer sitting that minted the same id one moment ago
                 ;; is the ordinary cause, and its row is the answer
-                (if-some [raced (change-by-id eng change-id)]
+                (if-some [raced (unspent (change-by-id eng change-id))]
                   [raced nil]
                   [nil no-change-note]))))))))))
 
@@ -4741,6 +4750,40 @@
        "grooming it again puts the change back itself, at the groom: to "
        "work when it has no pull request, and back under review when it "
        "has one. Say that it is stuck, and stop."))
+
+(def ^:private spent-change-note
+  "What the sit says when the only change it found for this row is one
+  no door of the seat's moves: merged, or closed and not reopened
+  (ticket a60aed8e). The row is not handed out as the seat's change."
+  (str "The change for this row is merged or closed, so this firing has "
+       "no change to submit or stall and the bench did not open. Say so "
+       "in one sentence, and stop."))
+
+(def ^:private stallable-fallback
+  "The states factory10's change kind affords `stall` from, read when
+  the kind declares no `:from` on its `stall` door."
+  #{:open :submitted :failing})
+
+(defn- stallable-states
+  "The states the engine's change kind affords `stall` from, as
+  keywords, read off the kind (ticket a60aed8e)."
+  [eng]
+  (or (some->> (get-in (inv/resources eng) [:change :actions :stall :from])
+               seq (map #(keyword (name %))) set)
+      stallable-fallback))
+
+(defn- handed-change
+  "What the sit hands the seat for `change` → [change note]. A change
+  in a state `stallable` names is the seat's; a `stuck` one is handed
+  with `stuck-change-note` as context, so the seat says it is stuck;
+  any other — merged, closed — is not handed at all (ticket a60aed8e)."
+  [stallable change]
+  (let [state (some-> (:state change) name keyword)]
+    (cond
+      (nil? change) [nil nil]
+      (contains? stallable state) [change nil]
+      (= :stuck state) [change stuck-change-note]
+      :else [nil spent-change-note])))
 
 (def ^:private groomed-walk-prefix
   "What `born_from` starts with for a change built for a ticket. A
@@ -4893,14 +4936,15 @@
                                 (rehomed-change eng seat row)
                                 (rebranched-change eng row)
                                 (linked-change! eng walk))
-                repo (first (walk-home seat row))]
+                repo (first (walk-home seat row))
+                [change handed-note] (handed-change (stallable-states eng)
+                                                    change)]
             [change
              (or note
                  (when (and change repo
                             (not= repo (str (get-in change [:data :repository]))))
                    elsewhere-change-note)
-                 (when (= :stuck (some-> (:state change) name keyword))
-                   stuck-change-note))])))
+                 handed-note)])))
 
 (defn- change-said
   "The change row beside the walk, read AS THE SITTER: the row's own
