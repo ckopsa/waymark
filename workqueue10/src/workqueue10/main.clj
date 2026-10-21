@@ -982,21 +982,36 @@
   is no invitation."
   :invited-only)
 
+(defn- org-clone?
+  "Whether this boot is an org clone (ticket be579386): WAYMARK10_ORG
+  names an org and WAYMARK10_CLONE is 1, as clone-mcp boots one with no
+  WAYMARK10_SEED. `org` and `clone` are the two variables' values as
+  `start!` read them."
+  [org clone]
+  (boolean (and (some-> org str not-empty) (= "1" clone))))
+
 (defn- clocked-engine
   "The engine `build` makes of `opts`, with the demo clock
   (docs/spec-agent-demo-walks.md § 7) assembled behind a demo seed
-  (`demo-seed?`) and nothing otherwise: the `clock_shift` kind, the
+  (`demo-seed?`) or an org clone (`org-clone?`, so a filmed week moves
+  day by day) and nothing otherwise: the `clock_shift` kind, the
   `:now-fn` its shifts move, and the offset read back from the rows, so
-  a restarted clone keeps its time. A working engine, and one booted
-  with a `:live-ok` seed, is built from `opts` as they are: it serves no
-  such kind and has no offset to read. `seed-on-boot!` then
-  refuses a seeded engine not named `demo-…` or one with an IdP, and
-  the kind's own guard asks that again at each shift. `seed` is the
-  variable's value as `start!` read it."
-  [seed build opts]
-  (if (demo-seed? seed)
+  a restarted clone keeps its time. An org clone is built `:clone? true`,
+  which the kind's guard admits beside the `demo-` name. A working
+  engine, and one booted with a `:live-ok` seed, is built from `opts` as
+  they are: it serves no such kind and has no offset to read.
+  `seed-on-boot!` then refuses a seeded engine not named `demo-…` or one
+  with an IdP, and the kind's own guard asks that again at each shift.
+  `seed` is the variable's value as `start!` read it."
+  [seed org-clone? build opts]
+  (cond
+    (demo-seed? seed)
     (clock-shift/install! (build (clock-shift/with-clock opts)))
-    (build opts)))
+
+    org-clone?
+    (clock-shift/install! (build (clock-shift/with-clock (assoc opts :clone? true))))
+
+    :else (build opts)))
 
 (defn start!
   "Boot and serve. Returns the engine."
@@ -1039,6 +1054,7 @@
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
         eng (clocked-engine (System/getenv "WAYMARK10_SEED")
+                            (org-clone? org (System/getenv "WAYMARK10_CLONE"))
                             #(mirror/with-push (engine/engine %))
                             {:storage storage
                              :resources (:resources admitted)

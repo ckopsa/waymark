@@ -9,10 +9,14 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire]
-            [workqueue10.main :as main]))
+            [workqueue10.main :as main])
+  (:import (java.time Instant)))
 
 (def ^:private example (org/org-name "orgs/example"))
 
@@ -54,6 +58,32 @@
       (let [[eng2 twice] (boot st)]
         (is (false? (:seeded twice)))
         (is (= 2 (count (dev/rows eng2 :request))) "no second row")))))
+
+(deftest an-org-clone-gets-the-demo-clock
+  (let [t0 (Instant/parse "2026-10-01T12:00:00Z")
+        built (fn [org-clone?]
+                (#'main/clocked-engine
+                 nil org-clone? engine/engine
+                 {:storage (memory/storage)
+                  :resources (main/with-org (main/factory-only-resources) example)
+                  :suppress-mirror-refresh true
+                  :clone? false
+                  :now-fn (constantly t0)}))]
+    (is (true? (#'main/org-clone? example "1")))
+    (is (false? (#'main/org-clone? nil "1")))
+    (is (false? (#'main/org-clone? example nil)))
+    (testing "an org clone serves clock_shift, and a P1D shift moves its clock"
+      (let [eng (built true)]
+        (is (contains? (inv/resources eng) :clock_shift))
+        (inv/create! eng :member {:display "owner" :actor_type "human"}
+                     {:principal scheduled/engine-actor :id "owner"})
+        (inv/create! eng :clock_shift {:by "P1D"}
+                     {:principal (t/principal {:id "owner" :display "Owner"})})
+        (is (= (.plusSeconds t0 86400) ((:now-fn eng))))))
+    (testing "a working engine serves no clock_shift"
+      (let [eng (built false)]
+        (is (not (contains? (inv/resources eng) :clock_shift)))
+        (is (= t0 ((:now-fn eng))))))))
 
 (deftest a-broken-org-kind-fails-the-boot-with-the-registry's-message
   (let [rs (org/resources example)

@@ -1,0 +1,41 @@
+;; landscape_rehearsal's seed: what a fresh engine holds the moment it
+;; boots this org. The grammar is docs/orgkit.md § The seed: the demo
+;; seed's :cast and :steps (docs/spec-demo-clones.md § 1) under the
+;; org's :domains, :seats and :judgments.
+{:seed "landscape_rehearsal"
+ :version 1
+ :org "landscape_rehearsal"
+ :domains [{:name "landscape_rehearsal" :label "Landscaping" :ref :landscape_rehearsal}]
+ ;; the :owner :id is the plan owner's member id
+ :cast
+ {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}}
+ ;; the outside world, which only a clone loads: a customer who asks
+ ;; for bookings, and the world seat that plays their week
+ :rehearsal
+ {:cast {:hendersons {:id "hendersons" :display "The Hendersons" :type :human
+                      :scope [{:kind "booking" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "A landscaping company sends crews to customers' yards; customers ask it to book a crew for a patio, a hedge or a lawn."
+                    :kinds "booking" :cast "hendersons" :day_one [:days 0]
+                    :domain_id [:ref :landscape_rehearsal]}}]}
+ ;; the org's mayor: it holds every door out of each kind's open
+ ;; states, so no booking, time off, contract or visit is left without
+ ;; a leaver; its scope names only the org's own kinds
+ :seats
+ [{:template "org-mayor"
+   :params {:org "landscape_rehearsal" :domain "landscape_rehearsal" :domain_id [:ref :landscape_rehearsal]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "crew" :actions ["rest"]}
+                    {:kind "booking" :actions ["reschedule" "start" "finish" "cancel"]}
+                    {:kind "time_off" :actions ["approve" "withdraw"]}
+                    {:kind "contract" :actions ["end"]}
+                    {:kind "visit" :actions ["finish" "skip"]}]
+            :wakes [{:kind "crew" :actions ["create"]}
+                    {:kind "booking" :actions ["create" "start"]}
+                    {:kind "time_off" :actions ["create" "approve"]}
+                    {:kind "contract" :actions ["create"]}
+                    {:kind "visit" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :crew :ref :elm :create {:name "The Elm crew"}}
+  {:as :owner :kind :crew :ref :oak :create {:name "The Oak crew"}}]}
