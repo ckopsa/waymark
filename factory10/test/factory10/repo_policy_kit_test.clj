@@ -8,8 +8,8 @@
             [factorykit.repo-policy :as kit]))
 
 (def ^:private stated
-  [:repository :clone_url :branch_pattern :base :max_lines :opens_pr
-   :auto_merge :merge_by :required_checks :merge_method
+  [:repository :clone_url :branch_pattern :base :max_lines :lane_max_lines
+   :opens_pr :auto_merge :merge_by :required_checks :merge_method
    :merge_wait_seconds :deploy_check :deploy_wait_seconds
    :rounds_per_change :queued_check_minutes :merge_strategy :train_size
    :groom_floor :groom_floor_settle_seconds :groom_floor_max_priority

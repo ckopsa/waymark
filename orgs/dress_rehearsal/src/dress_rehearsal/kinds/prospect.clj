@@ -20,6 +20,8 @@
    :initial :new
    :terminal #{:engaged :declined}
    :summary "{data.company} · {state}"
+   ;; a film's day reads the row as it stood: its fields, not only its state
+   :retain {:data true}
    :schema [:map
             [:company [:string {:min 1 :max 120}]]
             [:source {:optional true} [:maybe [:enum "cpa_referral" "website" "returning"]]]

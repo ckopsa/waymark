@@ -153,6 +153,7 @@
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -692,6 +693,20 @@
                                (when-some [trdef (get (resources engine) target-kind)]
                                  (store/count-matching (:storage engine) tx target-kind
                                                        (law-conds trdef conds))))
+             ;; the ledger's reader (docs/spec-ledger-money.md §4, step
+             ;; 5): an account's balance, read under its row's lock in
+             ;; the write's own transaction, so two doors judged at once
+             ;; for the last mug are judged one after the other. nil —
+             ;; unknown to the law — for an account no kind declares and
+             ;; for a house account, whose balance no row carries yet
+             :balance (fn [account-kind id account-name]
+                        (when-some [trdef (get (resources engine) account-kind)]
+                          (when-some [acct (get-in trdef [:accounts account-name])]
+                            (when (some? id)
+                              (when-some [raw (store/load-row (:storage engine) tx account-kind
+                                                              (str id) {:for-update true})]
+                                (let [v (get-in (decode-row trdef raw) [:data account-name])]
+                                  (if (some? v) v (money/zero (:unit acct)))))))))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
@@ -942,7 +957,9 @@
   Reasons render over the secret-concealed row (waymark-kyg); id,
   state and the gate-safe summary keep the full row."
   [acc v d row inp acknowledged defn rdef now]
-  (let [nrow (narration-row rdef row)]
+  (let [nrow (narration-row rdef row)
+        ;; a guard naming no remedy still says where its fields are written
+        d (g/with-writers rdef (:name defn) d)]
     (cond
       (= :warning (:severity d))
       (if (contains? acknowledged (:name d))
@@ -958,7 +975,7 @@
       :else
       (throw (p/guard-refused
               (:name defn) (:state row)
-              (g/render-reason d v nrow)
+              (g/writers-reason d (g/render-reason d v nrow))
               {:guard (:name d)
                :remedies (g/remedy-doors d)
                :resolved-remedies (g/resolve-remedies d nrow inp (:evidence v))
@@ -1069,6 +1086,40 @@
   [row]
   (vary-meta row assoc ::unchanged true))
 
+(defn- posting-entries
+  "The entries a landing door posts (ledger step 4): its :posts over the
+  row as it leaves it, then — when it is the :undo of a posting door
+  that made the row's last move — that move's postings, reversed. An
+  entry that cannot be written refuses the door."
+  [engine tx rdef row defn inp ctx materialized]
+  (vec
+   (concat
+    (when-some [ps (seq (:posts defn))]
+      (try (posts/entries ps {:data (:data materialized) :input inp
+                              :now (:now ctx) :self (str (:id row))})
+           (catch clojure.lang.ExceptionInfo e
+             (if (:posts-refused (ex-data e))
+               (throw (p/schema-invalid (:name defn) {:posts [(ex-message e)]}))
+               (throw e)))))
+    (when-some [undoes (not-empty (:reverses-posts defn))]
+      (let [[latest] (store/transitions (:storage engine) tx
+                                        {:kind (:kind rdef) :resource-id (:id row)}
+                                        {:newest-first true :limit 1})]
+        (when (and latest (contains? undoes (keyword (name (:action latest)))))
+          ((requiring-resolve 'waymark10.server.postings/reversals)
+           engine tx (:id latest))))))))
+
+(defn- own-balances
+  "`data` with this row's own accounts moved by `entries`, so the row a
+  posting door saves already holds its balance; `own` is [kind id]."
+  [data own entries]
+  (reduce (fn [d {:keys [account-kind account-row account-name amount]}]
+            (if (= own [(name account-kind) (str account-row)])
+              (update d (keyword (name account-name))
+                      #(if (some? %) (money/plus % amount) amount))
+              d))
+          data entries))
+
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
   idempotency store — of the row the handler answered."
@@ -1091,7 +1142,13 @@
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
         materialized (derived/materialize rdef handled now (:calendar ctx))
+        ;; the door's postings (ledger step 4): this row's own accounts
+        ;; move here, before it is saved; post! moves the others and
+        ;; writes every posting, in this transaction, under the log row
+        entries (posting-entries engine tx rdef row defn inp ctx materialized)
+        own [(name (:kind rdef)) (str (:id row))]
         advanced (-> materialized
+                     (update :data own-balances own entries)
                      (assoc :state (:to defn))
                      (update :version inc))
         advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
@@ -1125,6 +1182,11 @@
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
+    (when (seq entries)
+      ((requiring-resolve 'waymark10.server.postings/post!)
+       engine tx {:kind (:kind rdef) :id (:id row) :action (:name defn)
+                  :log-id (:id record)}
+       entries {:settled own}))
     ;; the effort landed; its draft has served its purpose — consumed
     ;; in the same commit as the write it composed (phase 7)
     (when (get-in defn [:edit :draft])

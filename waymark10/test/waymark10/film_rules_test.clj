@@ -623,6 +623,23 @@
         (is (= ["asked-person" "caption-not-list" "quiet-days"] (:unmeasured answer)))
         (is (= ["shot.caption"] (:missing (rule-in answer "asked-person"))))))))
 
+(def ^:private arc-rules
+  (filterv #(= "arc" (:name %)) film-rules/seed-rules))
+
+(deftest a-first-week-is-not-judged-by-the-walk-arc
+  (let [no-goal (update a-take :shots (partial mapv #(dissoc % :goal_state)))
+        arc-of #(rule-in (film-rules/judge arc-rules %) "arc")]
+    (testing "a first week with the roles and no goal_state leaves arc unscored"
+      (let [answer (film-rules/judge arc-rules (assoc no-goal :scene {:first_week true}))]
+        (is (= "unscored" (:verdict (rule-in answer "arc"))))
+        (is (= [] (:unmeasured answer)))
+        (is (not= "red" (:verdict answer)))))
+    (testing "a walk take with no goal_state is still unmeasured"
+      (is (= {:verdict "unmeasured" :missing ["shot.goal_state"]}
+             (select-keys (arc-of no-goal) [:verdict :missing]))))
+    (testing "a walk take whose goal is open still misses"
+      (is (= "miss" (:verdict (arc-of (assoc-in a-take [:shots 2 :goal_state] "open"))))))))
+
 (def ^:private weekdays
   ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" "Sunday"])
 

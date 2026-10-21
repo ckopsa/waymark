@@ -62,7 +62,7 @@ async function jumpTargets() {
                          : navTier(r) === "secondary" ? 1 : 2)
                         + (r.domain === here ? 0 : r.domain ? 3 : 6);
   for (const [kind, r] of entries.slice().sort((a, b) => rank(a) - rank(b)))
-    out.push({label: title(kind) + "s", href: r.href,
+    out.push({label: titles(kind), href: r.href,
               where: r.domain ? title(r.domain)
                    : navTier(r) === "system" ? "engine" : ""});
   return out;
