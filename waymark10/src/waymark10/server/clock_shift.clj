@@ -235,13 +235,16 @@
   "Engine options with the demo clock laid over them: the `clock_shift`
   kind beside the application's own, a `:now-fn` that adds the offset to
   the real clock, and the services the guard, the birth and the walks
-  read. The options' own `:now-fn` is taken as the real clock. Build the
-  engine from the answer, then `install!` it."
+  read. The options' own `:now-fn` is taken as the real clock. The
+  storage stamps its rows and the log on the same clock
+  (`store/stamped`), so a filmed week's lists show the week's dates.
+  Build the engine from the answer, then `install!` it."
   ([opts] (with-clock opts (clock (select-keys opts [:now-fn]))))
   ([opts c]
    (-> opts
        (update :resources #(conj (vec %) clock-shift))
        (assoc :now-fn (now-fn c))
+       (cond-> (:storage opts) (update :storage store/stamped (now-fn c)))
        (update :services assoc
                :demo-clock c
                :recording-clock (:real-now-fn c)))))

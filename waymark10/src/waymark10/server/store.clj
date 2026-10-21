@@ -258,6 +258,21 @@
   [st f]
   (with-tx* st f))
 
+(defn stamped
+  "Storage `st` stamping its rows' created_at and updated_at, and the
+  log's `at`, from `now-fn` instead of its own clock: the demo clock
+  `clock-shift/with-clock` lays over a clocked engine, so a filmed
+  week's rows carry the week's own dates. A working engine's storage is
+  never stamped, and its stamps stay the database's."
+  [st now-fn]
+  (assoc st :stamp-fn now-fn))
+
+(defn stamp-of
+  "The instant a write of storage `st` is stamped with when it is
+  `stamped`; nil otherwise, and the store's own clock stamps it."
+  ^Instant [st]
+  (when-some [f (:stamp-fn st)] (f)))
+
 (defn settled-transitions
   "The settled log (transitions' {:settled true}) for a reader with no
   next pass of its own: it asks up to `tries` times, each in a
