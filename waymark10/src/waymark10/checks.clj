@@ -2279,7 +2279,8 @@
   no door's input, create's included, so the guard refuses with nowhere
   to send it. A field the engine writes (a :derived roll-up, a stamped
   principal) is neither, and a kind whose code writes (a :handler, an
-  :on-event) is not called unwritable (ticket 7cc2315b)."
+  :on-event) is not called unwritable (ticket 7cc2315b). A field the
+  guard names in :fixed-at-birth is confirmed set at create: no warning."
   [r]
   (let [acts (machine/actions-seq r)
         created (g/door-accepts r :create)]
@@ -2289,13 +2290,15 @@
                 f (g/data-reads guard)
                 :when (contains? (data-keys r) f)
                 :when (not (g/engine-written? r f))
+                :when (not (some #{f} (:fixed-at-birth guard)))
                 :when (not (some #(contains? (g/door-accepts r (:name %)) f) acts))
                 :when (or (contains? created f) (not (g/code-writes? r)))]
             (if (contains? created f)
               (str "[guard-create-only] guard " (name (:name guard)) " on "
                    (name (:kind r)) "." (name door) " reads " (name f)
                    ", which only create takes. Add " (name f) " to " (name door)
-                   "'s input, or confirm it is a fact fixed at birth.")
+                   "'s input, or confirm it is a fact fixed at birth: name it in "
+                   "the guard's :fixed-at-birth.")
               (err r :guard-unwritable
                    (str "guard " (name (:name guard)) " on " (name (:kind r)) "."
                         (name door) " reads " (name f) ", which no door's input "

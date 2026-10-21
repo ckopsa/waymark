@@ -86,7 +86,8 @@
   (g/expr {:name :plan-started
            :when '(<= (data :start_date) (date-of (now)))
            :explain "The plan starts {start}."
-           :vars {:start '(data :start_date)}}))
+           :vars {:start '(data :start_date)}
+           :fixed-at-birth [:start_date]}))
 
 ;; hoisted so its :check fn has ONE identity per process: two boots of
 ;; the same declaration must fingerprint identically, and a code
