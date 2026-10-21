@@ -1,0 +1,21 @@
+;; week_fixture's first week, as a script (docs/orgkit.md § The week):
+;; one call a guard refuses, one held for the owner and allowed the
+;; next day, and the payoff, a booked job.
+{:day-one "2026-10-21"
+ :goal {:kind "garden_job" :state "booked"}
+ :days
+ [{:day 1
+   :calls [{:as :world :kind "garden_job" :action "create" :name "hedge"
+            :input {:title "Trim the front hedge"}}
+           ;; refused: the hedge says no budget
+           {:as :mayor :kind "garden_job" :action "quote" :row "hedge"}
+           {:as :world :kind "garden_job" :action "create" :name "lawn"
+            :input {:title "Mow the back lawn" :budget_usd 80}}
+           {:as :mayor :kind "garden_job" :action "quote" :row "lawn"}]}
+  ;; held: booking is the owner's tap, allowed at the start of day 3
+  {:day 2
+   :calls [{:as :mayor :kind "garden_job" :action "book" :row "lawn"}]}
+  {:day 3
+   :calls [{:as :world :kind "garden_job" :action "create" :name "edging"
+            :input {:title "Edge the back lawn" :follows {"$row" "lawn"}}}
+           {:as :mayor :kind "garden_job" :action "decline" :row "hedge"}]}]}

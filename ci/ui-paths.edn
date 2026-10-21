@@ -1,0 +1,79 @@
+;; The paths that can move the UI walks: ui-access, ui-quest-phone and
+;; ui-guided in .github/workflows/tests.yml (ticket 3ca3e028).
+;; scripts/ui-paths.sh reads each :glob, a bash pattern whose * crosses
+;; a / too, and the `changes` job runs the walks on a pull request or a
+;; train only when a touched path matches one. A push to main runs them
+;; always, and a red walk there is the safety net. An empty vector runs
+;; them always as well, as before this list.
+[{:glob "waymark10/resources/waymark10/ui/*"
+  :why "the shell, its js and its css: what every walk renders and clicks"}
+ {:glob "waymark10/resources/waymark10/ui_lite.html"
+  :why "the lite shell the server serves beside it"}
+ {:glob "waymark10/resources/waymark10/demo/*"
+  :why "the demo seed the dev engines boot with"}
+ {:glob "waymark10/src/waymark10/server/ui_assembly.clj"
+  :why "assembles the shell from resources/waymark10/ui"}
+ {:glob "waymark10/src/waymark10/server/router.clj"
+  :why "the routes every page and fetch of a walk goes through"}
+ {:glob "waymark10/src/waymark10/server/render.clj"
+  :why "hypermedia: the envelope and its actions as the shell reads them"}
+ {:glob "waymark10/src/waymark10/resource.clj"
+  :why "builds the envelope the row pages render"}
+ {:glob "waymark10/src/waymark10/server/collections.clj"
+  :why "collection rendering: the lists and the query ui-guided follows"}
+ {:glob "waymark10/src/waymark10/server/surface.clj"
+  :why "the resource surface the row pages show"}
+ {:glob "waymark10/src/waymark10/server/invoke.clj"
+  :why "the action door every dialog a walk submits goes through"}
+ {:glob "waymark10/src/waymark10/guards.clj"
+  :why "the guards ui-guided shows, and access-dev requires"}
+ {:glob "waymark10/src/waymark10/server/capabilities.clj"
+  :why "access-dev requires it"}
+ {:glob "waymark10/src/waymark10/server/mcp.clj"
+  :why "the sit and MCP surface"}
+ {:glob "waymark10/src/waymark10/server/seats.clj"
+  :why "the seat kinds access-dev boots, and the sit"}
+ {:glob "waymark10/src/waymark10/server/held_calls.clj"
+  :why "the held seat-restate ui-access opens"}
+ {:glob "waymark10/src/waymark10/server/members.clj"
+  :why "the names a held call's owner and caller render as"}
+ {:glob "waymark10/src/waymark10/server/walks.clj"
+  :why "access-dev requires it"}
+ {:glob "waymark10/src/waymark10/server/oidc_rp.clj"
+  :why "access-dev's sign-in"}
+ {:glob "waymark10/src/waymark10/server/quests.clj"
+  :why "the quest flow ui-quest-phone walks"}
+ {:glob "waymark10/src/waymark10/server/scenes.clj"
+  :why "the quest scenes"}
+ {:glob "waymark10/src/waymark10/server/seed.clj"
+  :why "loads the demo seed"}
+ {:glob "waymark10/src/waymark10/server/events.clj"
+  :why "the event stream guided follow rides"}
+ {:glob "waymark10/src/waymark10/server/presence.clj"
+  :why "who shares a screen and who follows it, in ui-guided"}
+ {:glob "waymark10/src/waymark10/server/collab.clj"
+  :why "the shared screen ui-guided follows"}
+ {:glob "waymark10/src/waymark10/server/drafts.clj"
+  :why "the recipe door's shared draft ui-guided needs"}
+ {:glob "waymark10/src/waymark10/server/engine.clj"
+  :why "boots the engine both dev namespaces start"}
+ {:glob "waymark10/src/waymark10/server/store*"
+  :why "the Postgres store the dev engines run on"}
+ {:glob "waymark10/deps.edn"
+  :why "the classpath the dev engines start on"}
+ {:glob "waymark10/test/waymark10/access_dev.clj"
+  :why "the engine ui-access and ui-quest-phone drive"}
+ {:glob "waymark10/test/waymark10/batch_a_dev.clj"
+  :why "the engine ui-guided drives"}
+ {:glob "waymark10/test/waymark10/batch_a_fixtures.clj"
+  :why "batch-a-dev's kinds"}
+ {:glob "waymark10/test/waymark10/fixtures.clj"
+  :why "batch-a-dev requires it"}
+ {:glob "waymark10/scripts/ui-drive.mjs"
+  :why "the driver of all three walks"}
+ {:glob ".github/workflows/tests.yml"
+  :why "the walks' own jobs and the conditions they run on"}
+ {:glob "ci/ui-paths.edn"
+  :why "this list: a change to it runs the walks it might skip"}
+ {:glob "scripts/ui-paths.sh"
+  :why "the reader of this list"}]
