@@ -475,7 +475,7 @@
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at :line_train
+               :line_waiting :line_at :line_train :lane_trains
                :deploy_check :deploy_wait_seconds :deploy_waits_on
                :deploy_waiting_since :deployed_head :deployed_at
                :deploy_state :deploy_note
@@ -494,7 +494,7 @@
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket
                :line_front :line_front_pr :line_front_waiting
-               :line_waiting :line_at :line_train
+               :line_waiting :line_at :line_train :lane_trains
                :deploy_waits_on :deploy_waiting_since :deployed_head
                :deployed_at :deploy_state :deploy_note
                :floor_noted_at :floor_count :floor_ticket}
