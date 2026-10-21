@@ -2967,7 +2967,9 @@
             :else
             (try
               (let [scene (get-in plan [:data :first_week_scene])
-                    tk (first-week/marked (wire/read-json (str take_report)) scene)]
+                    tk (-> (wire/read-json (str take_report))
+                           (first-week/marked scene)
+                           (first-week/clocked scene))]
                 (first-week/land! eng (str (:id plan))
                                   (judge eng (first-week/line-up tk scene))
                                   {:film_url (str take_film_url)

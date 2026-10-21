@@ -249,26 +249,60 @@
             (some #(check-problem where % st rdef-of) (get e where)))
           ["envelope" "screen"])))
 
+(defn open-refusal
+  "Why a shot's `open` cannot be resolved, as `check` says it of a
+  `$day-row` open: one key, a map of `window` (the clock's), `day` and
+  `domain`, judged as a `$day` hole of the clock's window is. nil for
+  any other open, which POST /api/-/scenes/open passes through as given."
+  [open]
+  (let [o (plain open)]
+    (when (and (map? o) (contains? o "$day-row"))
+      (let [h (get o "$day-row")
+            stray (when (map? h) (remove #{"window" "day" "domain"} (keys h)))]
+        (cond
+          (next (keys o))
+          "a `$day-row` open names nothing beside it."
+
+          (not (map? h))
+          "a `$day-row` open is a map of `window`, `day` and `domain`."
+
+          (seq stray)
+          (str "a `$day-row` open takes window, day and domain, not " (tick (first stray)) ".")
+
+          (str/blank? (some-> (get h "domain") str))
+          "a `$day-row` open names a `domain`."
+
+          (not= "clock" (get h "window"))
+          (str "a `$day-row` open's `window` is \"clock\", and this one is "
+               (tick (get h "window")) ".")
+
+          (not (and (integer? (get h "day")) (<= 1 (get h "day") 31)))
+          (str "a `$day-row` open names its `day`, a whole number from 1 to 31, and this one is "
+               (tick (get h "day")) "."))))))
+
 (defn- verb-step
   "One shot's verb: the walk after it, or {:problem}."
   [verb v st people rdef-of]
   (let [bound (:bound st)]
     (case verb
       "open"
-      (let [self (get v "self")
-            coll (get v "collection")
-            rdef (if self (row-rdef self bound rdef-of) (some-> coll str rdef-of))]
-        (cond
-          (not (or self coll))
-          (fail "`open` names `self` or `collection`.")
+      (if (contains? v "$day-row")
+        ;; the row is the clock day's, known only when the shot plays
+        (if-some [p (open-refusal v)] (fail p) (assoc st :shown nil :door nil))
+        (let [self (get v "self")
+              coll (get v "collection")
+              rdef (if self (row-rdef self bound rdef-of) (some-> coll str rdef-of))]
+          (cond
+            (not (or self coll))
+            (fail "`open` names `self` or `collection`.")
 
-          (and self (unbound self bound))
-          (fail (unbound self bound))
+            (and self (unbound self bound))
+            (fail (unbound self bound))
 
-          (and (nil? rdef) (or coll (str/starts-with? (str self) "/")))
-          (fail (tick (or coll self)) " names no kind this engine serves.")
+            (and (nil? rdef) (or coll (str/starts-with? (str self) "/")))
+            (fail (tick (or coll self)) " names no kind this engine serves.")
 
-          :else (assoc st :shown rdef :door nil :found rdef)))
+            :else (assoc st :shown rdef :door nil :found rdef))))
 
       ("tap" "press")
       (let [tg (target (get v "surface") st rdef-of)]
@@ -846,17 +880,12 @@
     (str "a person was asked to approve "
          (first-part (summary/line rdef (assoc row :kind :approval_request))))))
 
-(defn- told-day
-  "One plain sentence of the day [since, until) of the org whose kinds
-  name `domain`, or nil when nothing happened in it. It reads that
-  window's transitions on every kind of the domain, the domain's held
-  calls and the approval requests born in it (an ask's domain is the
-  one born-ask stamps from its requester's seat, else the kind's
-  :absent-as), ranks a held call or an ask first, then a door that
-  cannot be undone, then another seat's move, then a create (oldest
-  first within each), and tells the first two as clauses joined with
-  `; `. `opts` :held? and :asks? false leave the held calls or the asks
-  out, unsaid, for a caller who does not see that kind whole."
+(defn- day-entries
+  "What the day [since, until) of the org whose kinds name `domain`
+  holds, best first, as `told-day` ranks it: each [rank ms phrase row],
+  `row` the {:kind :id} the entry is about. A held call is about the row
+  its door would walk when this engine serves that kind, else itself.
+  `opts` are `told-day`'s."
   [eng {:keys [since until domain]} {:keys [held? asks?] :or {held? true asks? true}}]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
@@ -873,7 +902,11 @@
                            :let [ms (within (:created-at raw))
                                  row (when ms (inv/decode-row held-rdef raw))]
                            :when (and row (= (str domain) (str (get-in row [:data :domain]))))]
-                       [0 ms (held-phrase st tx rdefs row)]))
+                       (let [door (get-in row [:data :door])
+                             k (some->> (door-field door :kind) keyword (get rdefs) :kind)
+                             id (door-field door :id)]
+                         [0 ms (held-phrase st tx rdefs row)
+                          (if (and k id) {:kind k :id id} {:kind :held_call :id (str (:id row))})])))
               asks (when ask-rdef
                      (for [raw (store/query-rows st tx :approval_request {} {:limit 100000})
                            :let [ms (within (:created-at raw))
@@ -881,20 +914,34 @@
                            :when (and row (= (str domain)
                                              (str (or (some-> (get-in row [:data :domain]) str not-empty)
                                                       (get-in ask-rdef [:absent-as :domain])))))]
-                       [0 ms (ask-phrase ask-rdef row)]))
+                       [0 ms (ask-phrase ask-rdef row) {:kind :approval_request :id (str (:id row))}]))
               moves (for [rdef kinds
                           t (store/transitions st tx {:kind (:kind rdef)} {:limit 100000})
                           :let [ms (within (:at t))
                                 rank (when ms (move-rank rdef t))]
                           :when rank]
-                      [rank ms (move-phrase t)])
-              said (->> (concat held asks moves)
-                        (sort-by (juxt first second))
-                        (map peek)
-                        (take 2)
-                        (str/join "; "))]
-          (when-not (str/blank? said)
-            (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
+                      [rank ms (move-phrase t) {:kind (:kind rdef) :id (str (:resource-id t))}])]
+          (vec (sort-by (juxt first second) (concat held asks moves))))))))
+
+(defn- told-day
+  "One plain sentence of the day [since, until) of the org whose kinds
+  name `domain`, or nil when nothing happened in it. It reads that
+  window's transitions on every kind of the domain, the domain's held
+  calls and the approval requests born in it (an ask's domain is the
+  one born-ask stamps from its requester's seat, else the kind's
+  :absent-as), ranks a held call or an ask first, then a door that
+  cannot be undone, then another seat's move, then a create (oldest
+  first within each), and tells the first two as clauses joined with
+  `; ` (`day-entries`). `opts` :held? and :asks? false leave the held
+  calls or the asks out, unsaid, for a caller who does not see that
+  kind whole."
+  [eng w opts]
+  (let [said (->> (day-entries eng w opts)
+                  (map #(nth % 2))
+                  (take 2)
+                  (str/join "; "))]
+    (when-not (str/blank? said)
+      (str (str/upper-case (subs said 0 1)) (subs said 1) "."))))
 
 (defn- clock-bounds
   "The bounds of engine `eng`'s demo clock days in ms, in order: the start
@@ -953,6 +1000,45 @@
      (when-some [cw (clock-window eng (:clock-day w) (:until w))]
        (told-day eng (merge (dissoc w :clock-day) cw) opts))
      (told-day eng w opts))))
+
+(defn- domain-kinds
+  "The kinds engine `eng` serves whose domain is `domain`, by name."
+  [eng domain]
+  (->> (vals (inv/resources eng))
+       (filter #(= (str domain) (some-> (:domain %) name)))
+       (sort-by (comp name :kind))))
+
+(defn day-row-open
+  "The concrete open of a `$day-row` open: the screen of the top move of
+  day k of engine `eng`'s demo clock (`clock-window`, the last day
+  ending at `until`) in the org whose kinds name `domain`, ranked as a
+  `$day` ranks it (`day-entries`). The moves of the best rank on the top
+  move's kind are one row: that row's page, {self /api/<plural>/<id>};
+  several: that kind's collection, unfiltered, for an open names no
+  filter. Nothing moved, a day the clock has not played, or a caller who
+  does not see the domain whole: the domain's first kind by name the
+  caller sees, its collection; nil when it sees none. `opts` are
+  `told-day`'s, and :sees?, a fn of a kind keyword, every kind unless
+  given."
+  [eng {:keys [clock-day until domain]} {:keys [sees?] :or {sees? (constantly true)} :as opts}]
+  (let [rdefs (inv/resources eng)
+        plural #(or (:plural (get rdefs %)) (str (name %) "s"))
+        kinds (domain-kinds eng domain)
+        entries (when (every? #(sees? (:kind %)) kinds)
+                  (when-some [cw (clock-window eng clock-day until)]
+                    (filter #(sees? (:kind (peek %)))
+                            (day-entries eng (assoc cw :domain domain) opts))))
+        [rank _ _ top] (first entries)
+        rows (->> entries
+                  (filter #(= rank (first %)))
+                  (map peek)
+                  (filter #(= (:kind top) (:kind %)))
+                  distinct)
+        fallback (first (filter #(sees? (:kind %)) kinds))]
+    (cond
+      (= 1 (count rows)) {"self" (str "/api/" (plural (:kind top)) "/" (:id top))}
+      (seq rows) {"collection" (plural (:kind top))}
+      fallback {"collection" (plural (:kind fallback))})))
 
 ;; ── the say over the wire (POST /api/-/scenes/say) ───────────────────
 
@@ -1013,6 +1099,22 @@
                   (day-in-window eng w {:held? (boolean (sees? :held_call))
                                         :asks? (boolean (sees? :approval_request))})))
               run)))
+
+(defn open-as
+  "A shot's `open` as the performer takes it, for one caller (POST
+  /api/-/scenes/open): a `$day-row` open resolved to its clock day's
+  screen (`day-row-open`, the day ending now), through `sees?` as
+  `fill-say-as` fills a `$day`; any other open as given. nil when the
+  caller sees no kind of the domain."
+  [eng open sees?]
+  (let [o (plain open)]
+    (if-some [h (when (map? o) (get o "$day-row"))]
+      (day-row-open eng {:clock-day (get h "day") :until (Instant/now)
+                         :domain (str (get h "domain"))}
+                    {:sees? #(boolean (sees? %))
+                     :held? (boolean (sees? :held_call))
+                     :asks? (boolean (sees? :approval_request))})
+      open)))
 
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."
