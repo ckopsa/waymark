@@ -507,7 +507,7 @@
           :let [dkeys (set (schema/entry-keys (:schema r)))]
           [fact d] (sort-by key (:derived r))]
     (doseq [o (:over d)]
-      (when-not (or (= :now o) (contains? dkeys o))
+      (when-not (or (contains? #{:now :today} o) (contains? dkeys o))
         (err kind :derived-cycles
              (str "derived field " fact ": cross-kind derived inputs read "
                   "through aggregate edges only; over= names " o " — neither "
@@ -798,6 +798,82 @@
                   (name tk) " — name a door of " (name tk))))))
   [])
 
+;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
+
+(defn- guard-forms
+  "An expression guard's :when and its :vars' forms; nothing for a code
+  guard."
+  [guard]
+  (when-some [w (:when guard)]
+    (cons w (when (map? (:vars guard)) (remove nil? (vals (:vars guard)))))))
+
+(defn- utc-today?
+  "(date-of (now)) or (date-of (var :now)): Greenwich's day."
+  [x]
+  (and (seq? x) (= 'date-of (first x))
+       (let [a (second x)] (or (= a '(now)) (= a '(var :now))))))
+
+(defn- utc-today-hits
+  "The date fields of `r` a comparison in `form` sets against
+  (date-of (now)) or (date-of (var :now))."
+  [r form]
+  (let [nodes #(tree-seq seq? rest %)
+        date-field (fn [x]
+                     (when (and (seq? x) (contains? '#{data input var} (first x))
+                                (keyword? (second x))
+                                (= :waymark/date
+                                   (head (schema/field-schema (:schema r) (second x)))))
+                       (second x)))]
+    (for [x (nodes form)
+          :when (and (seq? x) (contains? '#{= not= < <= > >=} (first x)) (= 3 (count x)))
+          :let [[_ a b] x]
+          [today other] [[a b] [b a]]
+          :when (some utc-today? (nodes today))
+          f (keep date-field (nodes other))]
+      f)))
+
+(defn- check-utc-today
+  "[utc-today], a warning: a guard or fact that compares (date-of (now))
+  — or (date-of (var :now)) — with a date field asks Greenwich's day,
+  not the house's."
+  [reg]
+  (into []
+        (mapcat (fn [[kind r]]
+                  (concat
+                   (for [{:keys [door guard]} (checks/guard-sites r)
+                         form (guard-forms guard)
+                         f (distinct (utc-today-hits r form))]
+                     (str (name kind) " [utc-today] guard " (some-> (:name guard) name)
+                          " on " (name door) " compares (date-of (now)) with " (name f)
+                          " — that is Greenwich's day; use (today), which is the house's"))
+                   (for [[fact d] (sort-by key (:derived r))
+                         :when (:expr d)
+                         f (distinct (utc-today-hits r (:expr d)))]
+                     (str (name kind) " [utc-today] derived field " (name fact)
+                          " compares (date-of (var :now)) with " (name f)
+                          " — that is Greenwich's day; name :today in :over and "
+                          "read (var :today), which is the house's")))))
+        (sort-by key (:kinds reg))))
+
+(defn calendar-readers
+  "The laws of `reg` that read the work calendar: `kind door guard` for
+  each guard whose tree asks (today), business-days, working? or
+  another calendar reader, `kind fact` for each derived fact that does
+  or names :today in :over — what [business-days-no-calendar] names at
+  boot (waymark10.server.work-calendar/check-default!)."
+  [reg]
+  (into []
+        (mapcat (fn [[kind r]]
+                  (concat
+                   (for [{:keys [door guard]} (checks/guard-sites r)
+                         :when (some #(:uses-calendar (expr/info %)) (guard-forms guard))]
+                     (str (name kind) " " (name door) " " (some-> (:name guard) name)))
+                   (for [[fact d] (sort-by key (:derived r))
+                         :when (or (some #{:today} (:over d))
+                                   (some-> (:expr d) expr/info :uses-calendar))]
+                     (str (name kind) " " (name fact))))))
+        (sort-by key (:kinds reg))))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -836,4 +912,4 @@
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-rows-queries
-          check-unref'd-ids])})
+          check-utc-today check-unref'd-ids])})

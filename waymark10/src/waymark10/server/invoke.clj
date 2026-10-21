@@ -1072,14 +1072,14 @@
            record-key?]
     :or {record-key? true}}]
   (let [now (:now ctx)
-        _ (when-some [facts (seq (derived/tampered rdef row handled now))]
+        _ (when-some [facts (seq (derived/tampered rdef row handled now (:calendar ctx)))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
         ;; ref labels + one-of clears (phase 8): engine passes, never
         ;; handler work — the handler sets the ref, the engine writes
         ;; the label and clears the other arm
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
-        materialized (derived/materialize rdef handled now)
+        materialized (derived/materialize rdef handled now (:calendar ctx))
         advanced (-> materialized
                      (assoc :state (:to defn))
                      (update :version inc))
@@ -2633,7 +2633,7 @@
               ;; set ref is newly set
               row (update row :data
                           #(labels-and-groups engine tx rdef % nil))
-              row (derived/materialize rdef row now)
+              row (derived/materialize rdef row now (:calendar ctx))
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))

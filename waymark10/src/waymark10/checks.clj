@@ -1578,9 +1578,10 @@
               :when (contains? d agg)]
         (check-aggregate-spec r fact d agg))
       (doseq [o (:over d)]
-        (when-not (or (= :now o) (contains? dkeys o))
+        (when-not (or (contains? #{:now :today} o) (contains? dkeys o))
           (err r :derived (str "derived field " fact ": :over names " o
-                               ", not a data field (or :now, the clock)"))))
+                               ", not a data field (or :now, the clock, or "
+                               ":today, the house's day)"))))
       (when-some [e (:expr d)]
         (when-some [p (first (concat (expr/problems e)
                                      (expr/derived-scope-problems e (set (:over d)))))]
