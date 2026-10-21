@@ -1247,7 +1247,7 @@
     (some-> thread (.join 5000))
     nil)
 
-  (restamp-law! [_ tx kind where to-revision]
+  (restamp-law! [this tx kind where to-revision]
     (let [table (table-for tables kind)
           clauses (map (fn [[f _]]
                          (case f
@@ -1264,10 +1264,12 @@
                       where)
           res (jdbc/execute-one!
                tx (into [(str "UPDATE " table
-                              " SET law_revision = ?, updated_at = now()"
+                              " SET law_revision = ?,"
+                              " updated_at = coalesce(?::timestamptz, now())"
                               (when (seq clauses)
                                 (str " WHERE " (str/join " AND " clauses))))
-                         to-revision]
+                         to-revision
+                         (some-> (store/stamp-of this) Timestamp/from)]
                         params))]
       (:next.jdbc/update-count res))))
 

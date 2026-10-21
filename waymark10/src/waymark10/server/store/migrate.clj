@@ -166,7 +166,12 @@
   :renames {:states …} entry maps (directly or through the chain)."
   [st rmap table]
   (let [renames (get-in rmap [:renames :states])
-        declared (into #{} (map name) (:states rmap))]
+        declared (into #{} (map name) (:states rmap))
+        ;; a clocked engine's storage stamps from the demo clock; an
+        ;; Instant prints as ISO-8601, safe inside the literal
+        stamped-at (if-some [at (store/stamp-of st)]
+                     (str "'" at "'::timestamptz")
+                     "now()")]
     (when (seq renames)
       (when-some [live-states (pg/distinct-states st table)]
         (for [[old _] (sort-by key renames)
@@ -177,7 +182,7 @@
           (step :rename-state table
                 (str "UPDATE " table " SET state = '"
                      (store/definition-checked-name target)
-                     "', updated_at = now() WHERE state = '" o "'")
+                     "', updated_at = " stamped-at " WHERE state = '" o "'")
                 true
                 (str "live rows occupy retired state " o " → " target
                      " — an UPDATE that rewrites state tokens.")))))))
