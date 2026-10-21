@@ -16,6 +16,24 @@
   (refuse "A prescription expires 90 days after the physician signed it; the physician sends a new one.")
   '(< (today) (+ (data :signed_on) (days 90))))
 
+(defguard signed-on-not-future
+  (refuse "The day the physician signed the prescription cannot be later than today.")
+  '(<= (data :signed_on) (today)))
+
+(defscenario accept-with-signed-on
+  "The front desk accepts a referral by putting on it the day the physician signed the prescription."
+  {:kind :referral :attempt :accept :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :received :data {:patient_name "Pat Example" :physician "Dr. Lena Vance" :prescription "PT eval and treat, left knee."}}
+   :input {:signed_on "2026-10-19"}
+   :expect {:allowed true}})
+
+(defscenario accept-without-signed-on
+  "A referral accepted without the day the physician signed it is refused."
+  {:kind :referral :attempt :accept :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :received :data {:patient_name "Pat Example" :physician "Dr. Lena Vance" :prescription "PT eval and treat, left knee."}}
+   :input {}
+   :expect {:refused :has-signed-on}})
+
 (defscenario accept-live-prescription
   "A prescription signed 30 days ago is accepted."
   {:kind :referral :attempt :accept
@@ -25,6 +43,7 @@
          :data {:patient_name "Ana Ruiz" :physician "Dr. Lee"
                 :prescription "PT 2x/week for 6 weeks, low back."
                 :signed_on "2026-09-21"}}
+   :input {:signed_on "2026-09-21"}
    :expect {:allowed true}})
 
 (defscenario accept-expired-prescription
@@ -36,6 +55,7 @@
          :data {:patient_name "Ana Ruiz" :physician "Dr. Lee"
                 :prescription "PT 2x/week for 6 weeks, low back."
                 :signed_on "2026-07-22"}}
+   :input {:signed_on "2026-07-22"}
    :expect {:refused :prescription-is-live}})
 
 (defresource referral
@@ -57,7 +77,8 @@
    :expected-age {:received 86400}
    :actions
    {:accept  {:from #{:received} :to :accepted
-              :guards [has-prescription has-signed-on prescription-is-live]
+              :input [:map [:signed_on :waymark/date]]
+              :guards [has-prescription has-signed-on signed-on-not-future prescription-is-live]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "An accepted referral stays accepted; the patient's chart carries it from here."}
               :decided "The front desk accepts a referral on its own once the prescription is on it, because we cannot book a first visit until we have it."}

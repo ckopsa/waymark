@@ -50,7 +50,23 @@
          :data {:therapist "Sam Ortiz" :starts_at "2026-10-21T16:00:00Z"
                 :note "Low back, session 3: tolerated progression."
                 :signer "Sam Ortiz" :author_role "pt"}}
+   :input {:note "Low back, session 3: tolerated progression."
+           :signer "Sam Ortiz" :author_role "pt"}
    :expect {:allowed true}})
+
+(defscenario sign-with-note
+  "The treating therapist signs a visit by writing its note, naming who signs and whether a PT or an assistant wrote it."
+  {:kind :visit :attempt :sign :at "2026-10-21T20:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :attended :data {:therapist "Dana Holt" :starts_at "2026-10-21T16:00:00Z"}}
+   :input {:note "Left knee post-op, session 1: flexion to 95 degrees." :signer "Dana Holt" :author_role "pt"}
+   :expect {:allowed true}})
+
+(defscenario sign-without-note
+  "A visit signed without its note is refused."
+  {:kind :visit :attempt :sign :at "2026-10-21T20:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :attended :data {:therapist "Dana Holt" :starts_at "2026-10-21T16:00:00Z"}}
+   :input {}
+   :expect {:refused :has-note}})
 
 (defscenario note-past-a-day
   "A note signed 26 hours after the visit is late."
@@ -61,6 +77,8 @@
          :data {:therapist "Sam Ortiz" :starts_at "2026-10-21T16:00:00Z"
                 :note "Low back, session 3: tolerated progression."
                 :signer "Sam Ortiz" :author_role "pt"}}
+   :input {:note "Low back, session 3: tolerated progression."
+           :signer "Sam Ortiz" :author_role "pt"}
    :expect {:refused :note-in-time}})
 
 (defresource visit
@@ -93,6 +111,10 @@
                         :one-way "An attended visit is noted and signed from here."}
                :decided "The front desk checks a patient in on its own when they arrive for a booked visit."}
     :sign     {:from #{:attended} :to :signed
+               :input [:map
+                       [:note {:x-display {:widget "prose"}} [:string {:min 1 :max 4000}]]
+                       [:signer [:string {:min 1 :max 80}]]
+                       [:author_role [:enum "pt" "pta"]]]
                :guards [has-note has-signer has-author-role note-in-time therapist-signs]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A signed note is the record; correct it with an addendum on a new visit."}}

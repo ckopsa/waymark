@@ -20,6 +20,49 @@
   (refuse "A denied claim says why the insurer denied it.")
   '(present? :denial_reason))
 
+(defguard has-submitted-on
+  (refuse "A submitted claim says the day it went to the insurer.")
+  '(present? :submitted_on))
+
+(defguard submitted-on-not-future
+  (refuse "The day a claim went to the insurer cannot be later than today.")
+  '(<= (data :submitted_on) (today)))
+
+(defscenario submit-with-day
+  "The billing specialist submits a claim by putting on it the day it went to the insurer."
+  {:kind :claim :attempt :submit :at "2026-10-22T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :draft :data {:visit_id "visit-1" :insurer "Acme Health" :billed_cents 18000}}
+   :input {:submitted_on "2026-10-22"}
+   :expect {:allowed true}})
+
+(defscenario submit-without-day
+  "A claim submitted without the day it went to the insurer is refused."
+  {:kind :claim :attempt :submit :at "2026-10-22T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :draft :data {:visit_id "visit-1" :insurer "Acme Health" :billed_cents 18000}}
+   :input {}
+   :expect {:refused :has-submitted-on}})
+
+(defscenario post-payment-without-amount
+  "A payment posted without what the insurer paid is refused."
+  {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
+   :input {}
+   :expect {:refused :has-payment}})
+
+(defscenario deny-with-reason
+  "The billing specialist records a denial by putting the insurer's reason on the claim."
+  {:kind :claim :attempt :deny :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
+   :input {:denial_reason "CO-197: precertification absent."}
+   :expect {:allowed true}})
+
+(defscenario deny-without-reason
+  "A denial recorded without the insurer's reason is refused."
+  {:kind :claim :attempt :deny :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
+   :input {}
+   :expect {:refused :has-denial-reason}})
+
 ;; advisory: a late payment is still posted, and says it came past
 ;; net-30; the :until age on :submitted is what tells the specialist
 (defguard paid-within-net-30
@@ -34,6 +77,7 @@
    :row {:state :submitted
          :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
                 :submitted_on "2026-10-01"}}
+   :input {:paid_cents 14000}
    :expect {:allowed true}})
 
 (defscenario claim-past-net-30
@@ -44,6 +88,7 @@
    :row {:state :submitted
          :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
                 :submitted_on "2026-09-16"}}
+   :input {:paid_cents 14000}
    :expect {:refused :paid-within-net-30}})
 
 (defresource claim
@@ -71,16 +116,19 @@
                   :paid 604800 :denied 172800}
    :actions
    {:submit      {:from #{:draft} :to :submitted
-                  :guards [has-visit has-amount]
+                  :input [:map [:submitted_on :waymark/date]]
+                  :guards [has-visit has-amount has-submitted-on submitted-on-not-future]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A submitted claim is the insurer's to pay or deny."}
                   :decided "The billing specialist submits a claim on their own after each visit, because after each visit we submit a claim to the insurer."}
     :post_payment {:from #{:submitted} :to :paid
+                  :input [:map [:paid_cents [:int {:min 0}]]]
                   :guards [has-payment paid-within-net-30]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A posted payment stays posted."}
                   :decided "The billing specialist posts what the insurer paid on their own, because we track what they pay."}
     :deny        {:from #{:submitted} :to :denied
+                  :input [:map [:denial_reason [:string {:min 1 :max 240}]]]
                   :guards [has-denial-reason]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A denied claim goes to the billing specialist."}
