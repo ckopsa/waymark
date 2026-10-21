@@ -4,6 +4,8 @@
 ;; Interactive: the person is there. Epic cafa6106, M2d.
 {:template
  {:params {:org "The org's name, as its directory under orgs/ spells it: the org_plan's name."}
+  ;; the model an org_plan's create holds onboarding-<org> for (ticket 6b49540c)
+  :model "claude-opus-5"
   :note "One onboarding seat per org. It writes only under orgs/{{org}}/ in ckopsa/waymark: bench.edit_many takes no path, so the seat edits one file a call. It walks drafting, simulated and going_live plans: propose leaves drafting, go_live's Allow leaves simulated, and a simulated or going_live plan whose change merged before it was live gets a fresh change at the sit (ticket 87fc7996). It never answers a question, never takes go_live alone (go_live is held for the person, so its call files a held call and the seat's work ends there), and never restates a seat; it holds no live power. attach_film acts on a proposed plan, which the walk hides, so the film is handed in by the director seat and landed by the engine's film pass."}
  :seat
  {:name "onboarding"
