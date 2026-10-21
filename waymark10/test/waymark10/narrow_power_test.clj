@@ -297,6 +297,22 @@
         (is (str/includes? said another-repo) "what this call carried")
         (is (str/includes? said a-repo) "and what the filter admits")
         (is (= 1 (count (calls w)))
+            "nothing reached the rig: the refusal is in-process")))
+
+    (testing "a read with NO repo refuses 403 and says why it is missing:
+              the engine fills it only for a sit that prepared a bench,
+              so pass it on every call (ticket 599cf0d4)"
+      (let [r (power! w {:tool "bench__read"
+                         :arguments {:path "src/a.clj"}})
+            said (text-of r)]
+        (is (true? (:isError r)) said)
+        (is (str/includes? said "`repo` is not on this call")
+            "the field that is missing")
+        (is (str/includes? said "only for a sitting whose sit prepared a bench")
+            "why the engine did not fill it")
+        (is (str/includes? said "pass `repo` on every call")
+            "and what to do instead")
+        (is (= 1 (count (calls w)))
             "nothing reached the rig: the refusal is in-process")))))
 
 ;; ── acceptance 3: the paths the filter names, and the `allow` ───────

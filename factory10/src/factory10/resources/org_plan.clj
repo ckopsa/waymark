@@ -807,6 +807,33 @@
         (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
     (t/allow)))
 
+(def ^:private findings-states
+  "The states whose plan the findings pass audits at each new head of
+  its change (forge's `findings-doors`, less filming, whose take is
+  voided instead)."
+  #{"drafting" "proposed" "simulated"})
+
+(defn- findings-pending-head
+  "The `findings_pending_head` computed field: the head of the plan's
+  change its findings were not recorded at yet, or nil when they were,
+  when no head is pushed, or when the plan's state takes no findings.
+  Ticket 24c4feba: a reader knows findings are coming, and for which
+  head, without polling until `findings_sha` moves."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when (contains? findings-states (some-> (:state row) name))
+      (let [named (some-> (get-in row [:data :change]) str not-empty)
+            head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)]
+        (when (and head (not= head (str (get-in row [:data :findings_sha]))))
+          head)))))
+
+(defn- findings-pending
+  "The `findings_pending` computed field: true while a findings run is
+  owed on the change's head, false once it landed; nil with no read."
+  [row ctx]
+  (when (:read ctx)
+    (some? (findings-pending-head row ctx))))
+
 ;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
 ;; sit mints it `born_from` the plan; a change opened for anything else,
 ;; or one already closed or merged, is not this plan's pull request.
@@ -1273,6 +1300,21 @@
                 :workarounds_concept #{:eq :in}}
    :on-create stamp-the-owner
    :data-migrate purpose-backfill
+   ;; ticket 24c4feba: a findings run owed on the head shows on the plan
+   :computed {:findings_pending
+              {:schema [:maybe :boolean]
+               :x-display
+               {:label "Findings coming"
+                :help "True while the audit's findings for the head of this plan's pull request have not landed yet; false once they have. Read each time from the change."}
+               :reads? true
+               :fn findings-pending}
+              :findings_pending_head
+              {:schema [:maybe :string]
+               :x-display
+               {:label "Findings coming for"
+                :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
+               :reads? true
+               :fn findings-pending-head}}
    :create-guards [a-person-files-the-plan one-plan-per-name]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
