@@ -2,11 +2,15 @@
   "A return: a customer sends back an item within 30 days of delivery.
   It comes back into stock only after a staff member inspects it and
   finds it unbroken."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-order
   (refuse "A return names the order it comes from.")
   '(present? :order_id))
+
+(defguard within-returns-window
+  (refuse "Returns are accepted within 30 days of delivery; this one was asked for later.")
+  '(<= (data :requested_on) (+ (data :delivered_on) (days 30))))
 
 (defguard inspected
   (refuse "An item comes back into stock only after a staff member inspects it; say who inspected it.")
@@ -28,8 +32,8 @@
             [:order_id {:optional true :kind :order} [:maybe :waymark/ref]]
             [:product_id {:optional true :kind :product} [:maybe :waymark/ref]]
             [:item [:string {:min 1 :max 200}]]
-            [:delivered_on {:optional true} [:maybe [:string {:max 10}]]]
-            [:requested_on {:optional true} [:maybe [:string {:max 10}]]]
+            [:delivered_on {:optional true} [:maybe :waymark/date]]
+            [:requested_on {:optional true} [:maybe :waymark/date]]
             [:reason {:optional true :x-display {:widget "prose"}} [:maybe [:string {:max 1000}]]]
             [:inspected_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:condition {:optional true} [:maybe [:enum "unbroken" "broken"]]]]
@@ -39,7 +43,7 @@
    :expected-age {:requested 1209600 :received 172800}
    :actions
    {:receive {:from #{:requested} :to :received
-              :guards [names-order]
+              :guards [names-order within-returns-window]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A received return waits for inspection."}
               :decided "The mayor marks a return received on its own when the parcel arrives."}
@@ -57,3 +61,19 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A rejected return does not go back into stock."}
               :decided "The mayor rejects a return on its own when the inspecting staff member finds it broken, and says why."}}})
+
+(defscenario return-inside-window
+  "A return asked for 30 days after delivery is received."
+  {:kind :return_request :attempt :receive
+   :row {:state :requested
+         :data {:customer "Ana" :item "Blue mug" :order_id "order-1"
+                :delivered_on "2026-09-01" :requested_on "2026-10-01"}}
+   :expect {:allowed true}})
+
+(defscenario return-past-window
+  "A return asked for 31 days after delivery is refused."
+  {:kind :return_request :attempt :receive
+   :row {:state :requested
+         :data {:customer "Ana" :item "Blue mug" :order_id "order-1"
+                :delivered_on "2026-09-01" :requested_on "2026-10-02"}}
+   :expect {:refused :within-returns-window}})
