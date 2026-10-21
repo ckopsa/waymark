@@ -6,6 +6,8 @@
   test database (WAYMARK10_TEST_DSN)."
   (:require [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
+            [waymark10.bounds :as bounds]
+            [waymark10.expr :as expr]
             [waymark10.modules :as modules]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
@@ -49,7 +51,8 @@
     (fn [st]
       (store/with-tx st
         (fn [tx]
-          (doseq [table ["postings" "pt_products" "pt_tills" "waymark10_transitions"
+          (doseq [table ["postings" "pt_products" "pt_tills" "pt_mugs" "pt_orders"
+                         "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
 
@@ -275,3 +278,98 @@
           (is (= "open" (name (:state (store/with-tx st
                                         (fn [tx] (store/load-row st tx :pt_till till-id {})))))))
           (is (== 0 (balance st :pt_till till-id :cash))))))))
+
+;; ── ledger step 5: (balance …) and the bounds ────────────────────────────
+
+(def ^:private mug-kind
+  (r/resource {:kind :pt_mug
+               :plural "pt_mugs"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:on_hand {:unit :count :never-below 0}}
+               :actions {:restock {:from #{:open} :to :open
+                                   :input [:map [:qty [:int {:min 1}]]]
+                                   :posts '[{:account [:pt_mug (self) :on_hand]
+                                             :amount (input :qty) :sign :+}]
+                                   :safety {:idempotent false :reversible false :confirm false}
+                                   :display {:label "Restock"}}}}))
+
+(def ^:private order-kind
+  (r/resource {:kind :pt_order
+               :plural "pt_orders"
+               :states [:cart :placed]
+               :initial :cart
+               :terminal #{:placed}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :actions {:place {:from #{:cart} :to :placed
+                                 :input [:map [:product [:string {:max 80}]] [:qty [:int {:min 1}]]]
+                                 :posts '[{:account [:pt_mug (input :product) :on_hand]
+                                           :amount (input :qty) :sign :-}]
+                                 :safety {:idempotent false :reversible false :confirm false
+                                          :one-way "A placed order is the test's last word."}
+                                 :display {:label "Place"}}}}))
+
+(def ^:private shop
+  (bounds/derive-kinds {:pt_mug mug-kind :pt_order order-kind}))
+
+(deftest step-5-a-bound-writes-its-guard-where-a-door-can-break-it
+  (let [named #(some (fn [g] (when (= :pt_mug.on_hand-never-below (:name g)) g)) %)
+        g (named (get-in shop [:pt_order :actions :place :guards]))]
+    (testing "the door that takes from on_hand gains the guard, as a tree"
+      (is (some? g))
+      (is (= (expr/normalize '(>= (- (balance [:pt_mug (input :product) :on_hand]) (input :qty)) 0))
+             (:when g)))
+      (is (= [:product :qty] (:judges g))))
+    (testing "a door that only adds gains none"
+      (is (nil? (named (get-in shop [:pt_mug :actions :restock :guards])))))
+    (testing "deriving twice is deriving once"
+      (is (= shop (bounds/derive-kinds shop))))
+    (testing "(balance …) is unknown with no hook to ask, as on the probe"
+      (is (expr/unknown? (expr/evaluate (:when g) {:input {:product "m1" :qty 1}}))))))
+
+(deftest step-5-two-orders-for-the-last-mug-one-is-refused
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources (conj (vec (vals shop)) postings/posting)})
+            mug-id (str (get-in (inv/create! eng :pt_mug {:name "speckled"} {:principal elena})
+                                [:row :id]))
+            order! #(str (get-in (inv/create! eng :pt_order {:name %} {:principal elena})
+                                 [:row :id]))
+            on-hand #(get-in (store/with-tx st (fn [tx] (store/load-row st tx :pt_mug mug-id {})))
+                             [:data :on_hand])
+            place! (fn [oid k qty]
+                     (try (inv/invoke! eng :pt_order oid :place {:product mug-id :qty qty}
+                                       {:principal elena :idempotency-key k})
+                          :placed
+                          (catch clojure.lang.ExceptionInfo e e)))]
+        (inv/invoke! eng :pt_mug mug-id :restock {:qty 1}
+                     {:principal elena :idempotency-key "restock-1"})
+        (is (== 1 (on-hand)))
+        (testing "two orders at once for the last mug: one lands, one is refused"
+          (let [a (order! "a")
+                b (order! "b")
+                gate (java.util.concurrent.CountDownLatch. 1)
+                runs [(future (.await gate) (place! a "place-a" 1))
+                      (future (.await gate) (place! b "place-b" 1))]
+                _ (.countDown gate)
+                outcomes (mapv deref runs)]
+            (is (= 1 (count (filter #{:placed} outcomes))))
+            (is (== 0 (on-hand)))
+            (is (= 2 (count (postings-of st))))
+            (testing "and the refusal names the account and the gap"
+              (is (re-find #"Only 0 on hand on that pt mug; this pt order takes 1\."
+                           (pr-str (ex-data (first (remove #{:placed} outcomes)))))))))
+        (testing "an order larger than the stock is refused, and nothing posts"
+          (inv/invoke! eng :pt_mug mug-id :restock {:qty 2}
+                       {:principal elena :idempotency-key "restock-2"})
+          (let [refused (place! (order! "c") "place-c" 3)]
+            (is (instance? clojure.lang.ExceptionInfo refused))
+            (is (re-find #"Only 2 on hand on that pt mug; this pt order takes 3\."
+                         (pr-str (ex-data refused))))
+            (is (== 2 (on-hand)))))))))

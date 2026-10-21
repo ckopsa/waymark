@@ -113,8 +113,15 @@
   currency only; of two currencies, or with a bare number, the answer
   is unknown, and the unknown says why (`unknown-why`). (round m) is
   m at its currency's minor unit in the house's rounding, the scope's
-  :rounding (:half-even unless the house says :half-up)."
-  '#{data input var now it get date
+  :rounding (:half-even unless the house says :half-up).
+
+  balance (docs/spec-ledger-money.md §4-§5, ledger step 5): an
+  account's balance now — (balance [:product (input :product)
+  :on_hand]), or (balance [:house :fees]) — through the scope's
+  :balance hook, which the write answers under the row's lock. A row
+  part that names no row, or no hook to ask, is unknown, as on the
+  probe."
+  '#{data input var now it get date balance
      = not= < <= > >=
      and or not
      + - * / min max abs
@@ -292,6 +299,20 @@
             :else
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
+
+          ;; (balance [:kind <row> :account]) or (balance [:house :account])
+          balance
+          (let [a (first args)]
+            (cond
+              (not (and (= n 1) (vector? a)))
+              (conj problems "(balance [:kind <row> :account]) takes one account address")
+              (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
+              problems
+              (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
+              (check (nth a 1) env depth problems)
+              :else
+              (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
+                                  (pr-str a)))))
 
           money
           (if (and (= n 2) (money/money (first args) (second args)))
@@ -550,6 +571,11 @@
         ;; seven days and a week are one law (calendar spec §7)
         weeks
         (list 'days (norm (list '* 7 (first args))))
+
+        ;; an address's row part normalizes as any expression does
+        balance
+        (let [[a] args]
+          (list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)))
 
         ;; "18.00" and "18" are one amount, so one law
         money
@@ -1300,6 +1326,21 @@
                     (when (every? some? parts)
                       (apply clojure.core/str parts)))))
 
+        ;; an account's balance through the scope's :balance hook: a row
+        ;; part that names no row, an account no row carries, or no hook
+        ;; to ask is unknown
+        balance
+        (let [a (first args)
+              [kind row-form account] (if (= 2 (count a)) [(first a) nil (second a)] a)
+              row (when row-form (evaluate row-form scope))
+              hook (:balance scope)]
+          (cond
+            (unknown? row) unknown
+            (and row-form (or (nil? row) (= "" (clojure.core/str row)))) unknown
+            (nil? hook) unknown
+            :else (let [v (hook kind (some-> row clojure.core/str) account)]
+                    (if (nil? v) unknown v))))
+
         ;; one hop through the scope's :read hook: a nil ref, an id no
         ;; row has and a row the caller may not see answer nil; no
         ;; hook, or no kind written in yet, is unknown
@@ -1347,7 +1388,8 @@
   A form that asks who acts adds :doors (from did), :uses-me and
   :uses-self; a form that asks no such thing carries none of them.
   A form that follows adds :follows, the kinds written into its follows;
-  one that asks exists/none/count-rows adds :queries, the kinds asked.
+  one that asks exists/none/count-rows adds :queries, the kinds asked;
+  one that reads (balance …) adds :balances, the kinds whose rows it reads.
   A calendar reader adds :uses-calendar, and (today) :uses-today.
   Judges and reads are derived from the tree, never sniffed."
   [form]
@@ -1359,6 +1401,10 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
+                  balance (let [a (first args)]
+                            (if (and (vector? a) (= 3 (count a)))
+                              (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
+                              acc))
                   follow (reduce #(walk %2 %1)
                                  (cond-> acc
                                    (= 3 (count args)) (update :follows (fnil conj #{}) (first args)))
