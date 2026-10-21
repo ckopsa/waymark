@@ -68,7 +68,11 @@
   normalized comparison op) — the flip instant derives from the
   compared field's value: an instant is its own candidate; a date
   contributes the UTC midnights bounding it (a spurious candidate is
-  swept once, silently, and advances the index). An inscrutable
+  swept once, silently, and advances the index). A fact that reads
+  :today (the house's day) adds one shape, (< (var :today) <date>),
+  where <date> is a field or a field plus or minus a constant period:
+  its candidates are the midnights bounding that date IN THE GOVERNING
+  CALENDAR'S ZONE (docs/spec-calendar-time.md §2). An inscrutable
   expression falls back to the spec's declared {:flips-at (fn [row]
   …)}, else to a fixed re-check interval (15 minutes)."
   (:require [waymark10.derived :as derived]
@@ -78,7 +82,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
-  (:import (java.time Instant LocalDate ZoneOffset)
+  (:import (java.time Instant LocalDate ZoneId ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -103,13 +107,13 @@
 ;; ── clock facts and the flip instant ────────────────────────────────
 
 (defn- clock-specs
-  "The kind's clock facts — expression facts that declare :now in
-  :over (the v10 spelling of waymark9's Clock input). With a
+  "The kind's clock facts — expression facts that declare :now or
+  :today in :over (the v10 spelling of waymark9's Clock input). With a
   revision, the trees resolve under that law (batch C)."
   ([rmap] (clock-specs rmap nil))
   ([rmap revision]
    (into {}
-         (filter (fn [[_ d]] (and (:expr d) (some #{:now} (:over d)))))
+         (filter (fn [[_ d]] (and (:expr d) (some #{:now :today} (:over d)))))
          (derived/specs-under rmap revision))))
 
 (def ^:private comparison-ops '#{< <= = not=})
@@ -123,11 +127,40 @@
       (= 'date-of (first form)) (bare-field (second form)))))
 
 (defn- now-reader? [form]
-  (contains? (:vars (expr/info form)) :now))
+  (let [vars (:vars (expr/info form))]
+    (or (contains? vars :now) (contains? vars :today))))
+
+(defn- field-of
+  "The row field `form` reads bare — never the clock or the house's day."
+  [form]
+  (let [f (bare-field form)]
+    (when (and (keyword? f) (not (#{:now :today} f))) f)))
+
+(defn- constant?
+  "True when `form` reads nothing: no var, field, input, clock or calendar."
+  [form]
+  (let [i (expr/info form)]
+    (and (empty? (:vars i)) (empty? (:data i)) (empty? (:inputs i))
+         (not (:uses-now i)) (not (:uses-calendar i)))))
+
+(defn- house-date
+  "The date side of a (var :today) comparison when it is a field, or a
+  field plus or minus a constant period → {:field kw :form form}, else nil."
+  [form]
+  (if-some [f (field-of form)]
+    {:field f :form form}
+    (when (and (seq? form) (= 3 (count form)))
+      (let [[op x y] form]
+        (cond
+          (and (= '+ op) (field-of x) (constant? y)) {:field (field-of x) :form form}
+          (and (= '+ op) (field-of y) (constant? x)) {:field (field-of y) :form form}
+          (and (= '- op) (field-of x) (constant? y)) {:field (field-of x) :form form})))))
 
 (defn- scan-clock
   "Walk a clock fact's normalized expr for the invertible comparison
-  pattern → {:fields #{kw} :inscrutable? bool}."
+  patterns → {:fields #{kw} :dates #{{:field kw :form form}}
+  :inscrutable? bool}: :fields compare with the clock, :dates with the
+  house's day."
   [form acc]
   (if-not (seq? form)
     acc
@@ -138,10 +171,14 @@
               fa (bare-field a)
               fb (bare-field b)]
           (cond
-            (and (= :now fa) (keyword? fb) (not= :now fb))
+            (and (= :now fa) (keyword? fb) (not (#{:now :today} fb)))
             (update acc :fields conj fb)
-            (and (= :now fb) (keyword? fa) (not= :now fa))
+            (and (= :now fb) (keyword? fa) (not (#{:now :today} fa)))
             (update acc :fields conj fa)
+            (and (= :today fa) (house-date b))
+            (update acc :dates conj (house-date b))
+            (and (= :today fb) (house-date a))
+            (update acc :dates conj (house-date a))
             (or (now-reader? a) (now-reader? b))
             (assoc acc :inscrutable? true)
             :else acc))
@@ -164,28 +201,44 @@
       [midnight (.plusSeconds midnight 86400)])
     :else []))
 
+(defn- house-flip-candidates
+  "The midnights in `zone` that bound the date `form` answers over
+  `data` — the moments a (var :today) comparison with it can change."
+  [{:keys [field form]} data ^ZoneId zone ^Instant now]
+  (let [d (expr/evaluate form {:vars {field (get data field)} :now now})]
+    (if (instance? LocalDate d)
+      [(.toInstant (.atStartOfDay ^LocalDate d zone))
+       (.toInstant (.atStartOfDay (.plusDays ^LocalDate d 1) zone))]
+      [])))
+
 (defn next-flip-at
   "The earliest future instant at which any clock fact of this row
   can change its value — the maintained index the sweep reads. nil
   when the kind has no clock facts, or none can flip again without a
   write. data is the DECODED document; revision is the row's law
-  stamp (the flip scan reads the trees the row is judged by)."
-  ([rmap data ^Instant now] (next-flip-at rmap nil data now))
-  ([rmap revision data ^Instant now]
-   (let [moments
+  stamp (the flip scan reads the trees the row is judged by);
+  calendar is the :calendar hook, whose default calendar's zone bounds
+  the house's day — without it a :today fact re-checks on the
+  interval, never at UTC midnight by accident."
+  ([rmap data ^Instant now] (next-flip-at rmap nil data now nil))
+  ([rmap revision data ^Instant now] (next-flip-at rmap revision data now nil))
+  ([rmap revision data ^Instant now calendar]
+   (let [zone (when calendar
+                (try (:zone (calendar nil)) (catch Exception _ nil)))
+         moments
          (mapcat
           (fn [[_fact spec]]
             (if-some [fa (:flips-at spec)]
               (when-some [t (try (fa {:data data}) (catch Exception _ nil))]
                 (when (.isAfter ^Instant t now) [t]))
-              (let [{:keys [fields inscrutable?]}
-                    (scan-clock (:expr spec) {:fields #{} :inscrutable? false})]
-                (if inscrutable?
+              (let [{:keys [fields dates inscrutable?]}
+                    (scan-clock (:expr spec) {:fields #{} :dates #{} :inscrutable? false})]
+                (if (or inscrutable? (and (seq dates) (not (instance? ZoneId zone))))
                   [(.plusMillis now recheck-interval-ms)]
                   (into []
-                        (comp (mapcat #(flip-candidates (get data %)))
-                              (filter #(.isAfter ^Instant % now)))
-                        fields)))))
+                        (filter #(.isAfter ^Instant % now))
+                        (concat (mapcat #(flip-candidates (get data %)) fields)
+                                (mapcat #(house-flip-candidates % data zone now) dates)))))))
           (clock-specs rmap revision))]
      (when (seq moments)
        (reduce #(if (.isBefore ^Instant %2 ^Instant %1) %2 %1) moments)))))
@@ -316,7 +369,7 @@
                    (:data (derived/materialize rdef (assoc row :data data) now
                                                (:calendar (inv/render-hooks eng))))
                    data)
-            nf (next-flip-at rdef revision data now)
+            nf (next-flip-at rdef revision data now (:calendar (inv/render-hooks eng)))
             changed (into []
                           (filter #(not= (get data %) (get-in row [:data %])))
                           (sort (keys (:derived rdef))))]
