@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -914,6 +915,54 @@
               "the default work_calendar. What hours does a "
               (str/replace (name target) "_" " ") " work?"))))
 
+;; ── :recurs (docs/spec-calendar-time.md §4, §7) ─────────────────────
+
+(defn- required-create-fields
+  "The fields `target`'s create door cannot do without: its create
+  schema's entries that are neither optional nor defaulted."
+  [target]
+  (sort (for [[f e] (schema/entry-map (or (:create-schema target) (:schema target)))
+              :when (not (or (:optional e) (contains? (:properties e) :default)))]
+          f)))
+
+(defn- check-recurs
+  "Every :recurs rule of the registry: its shape ([recurs], from
+  waymark10.recurs/rule-problems), then the three findings — an owner
+  ([recurs-no-owner]), a stop ([recurs-no-stop]), and a made kind whose
+  create door the rule's :input opens ([recurs-unmakeable])."
+  [reg]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          :let [rules (:recurs r)]
+          :when (some? rules)
+          rule (if (sequential? rules)
+                 rules
+                 (err kind :recurs ":recurs is a vector of rules [{:name … :makes … :every … :from …}]"))]
+    (when-some [p (first (recurs/rule-problems r rule))]
+      (err kind :recurs p))
+    (let [rname (name (:name rule))
+          makes (name (:makes rule))
+          said (str/replace makes "_" " ")
+          target (get-in reg [:kinds (:makes rule)])]
+      (when (nil? (:owner rule))
+        (err kind :recurs-no-owner
+             (str "rule " rname " makes " makes " rows with no :owner — name the field or "
+                  "seat whose act the made row is. Whose name goes on each " said
+                  " this makes?")))
+      (when (every? #(nil? (get rule %)) [:until :times :while])
+        (err kind :recurs-no-stop
+             (str "rule " rname " has none of :until, :times or :while — add the season's "
+                  "end, a count, or the states that keep it going. When should the " said
+                  "s stop coming?")))
+      (when (or (nil? target) (empty? (or (:create-action-names target) #{:create})))
+        (err kind :recurs-unmakeable
+             (str "rule " rname " makes " makes ", "
+                  (if target "a kind with no create door" "a kind this registry does not hold"))))
+      (when-some [missing (seq (remove (set (keys (:input rule))) (required-create-fields target)))]
+        (err kind :recurs-unmakeable
+             (str "rule " rname "'s :input misses " (str/join ", " (map name missing))
+                  ", which " makes "'s create door requires — fill the input from the source row")))))
+  [])
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -951,6 +1000,6 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-occupies-unfiltered
+          check-link-where check-follow-fields check-occupies-unfiltered check-recurs
           check-rows-queries check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})

@@ -169,6 +169,29 @@
            "ways_back"    (vec (sort (map name (:ways-back o))))}
     (:field o) (assoc "field" (name (:field o)))))
 
+(defn- recurs-fp
+  "The kind's recurrence rules (docs/spec-calendar-time.md §4, §7):
+  they write rows, so each is law and a change to any is a revision.
+  Expressions ride as trees, sets sort, an undeclared key stays absent."
+  [rules]
+  (into (sorted-map)
+        (map (fn [r]
+               [(name (:name r :unnamed))
+                (cond-> {"makes" (name (:makes r :unnamed))
+                         "holidays" (name (:holidays r :skip))}
+                  (some? (:every r)) (assoc "every" (form-tree (:every r)))
+                  (seq (:on r))      (assoc "on" (vec (sort (map name (:on r)))))
+                  (some? (:from r))  (assoc "from" (form-tree (:from r)))
+                  (some? (:until r)) (assoc "until" (form-tree (:until r)))
+                  (some? (:times r)) (assoc "times" (:times r))
+                  (some? (:while r)) (assoc "while" (vec (sort (map name (:while r)))))
+                  (some? (:lead r))  (assoc "lead" (form-tree (:lead r)))
+                  (some? (:owner r)) (assoc "owner" (form-tree (:owner r)))
+                  (seq (:input r))   (assoc "input" (into (sorted-map)
+                                                       (map (fn [[f x]] [(name f) (form-tree x)]))
+                                                       (:input r))))]))
+        rules))
+
 (defn- safety-fp [s]
   {"idempotent" (boolean (:idempotent s))
    "reversible" (boolean (:reversible s))
@@ -380,6 +403,11 @@
       (and (:mirror rmap) (seq (authority-fp rmap)))
       (assoc "authority" (authority-fp rmap))
 
+      ;; :recurs writes rows on a rule, so the rule is law. Non-empty-only,
+      ;; so every recurrence-free kind hashes byte-identical to before
+      (seq (:recurs rmap))
+      (assoc "recurs" (recurs-fp (:recurs rmap)))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
@@ -399,7 +427,7 @@
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
-                              "create" "over"})
+                              "create" "over" "recurs"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
