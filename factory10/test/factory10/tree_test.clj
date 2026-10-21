@@ -470,7 +470,7 @@
                :merge_strategy
                :train_size :formatter :deny
                :test :check :hosted_workflows :hosted_ok :person_paths
-               :lanes :orientation :enrolled_at :note :source_note
+               :lanes :checks :orientation :enrolled_at :note :source_note
                :forge_cursor :forge_retry :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
                :base_ticket

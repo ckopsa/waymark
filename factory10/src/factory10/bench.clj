@@ -1090,11 +1090,14 @@
 
 (defn- dispatch-checks!
   "Dispatch a built train's checks → the train with its `run_id`, nil
-  when no run showed yet (`train_status` then reads it by branch)."
+  when no run showed yet (`train_status` then reads it by branch). A
+  train of a lane other than engine names it as `lane` (ticket
+  929ada09), and tests.yml runs that lane's jobs instead of the diff's."
   [ctx repo train]
   (let [answer (ask ctx :train_checks
                     (cond-> {:repo repo :branch (:branch train)}
-                      (:workflow train) (assoc :workflow (:workflow train))))]
+                      (:workflow train) (assoc :workflow (:workflow train))
+                      (:lane train) (assoc :lane (:lane train))))]
     (when (refused answer)
       (warn! "the rig refused the checks of " (:branch train) " ("
              (reason-of answer) ")"))
@@ -1144,8 +1147,10 @@
   did not merge cleanly stays in the line untouched. The train carries
   the heads its riders had (`heads`, beside `changes`), so its red is
   not written on a head it did not test (e23f8842), and a restart
-  still knows them (ffd36c98)."
-  [ctx repo policy riders]
+  still knows them (ffd36c98). A `lane` other than engine rides on the
+  train before its checks are dispatched, so the dispatch names it."
+  ([ctx repo policy riders] (build-train! ctx repo policy riders nil))
+  ([ctx repo policy riders lane]
   (let [branch (train-branch repo (first riders))
         answer (ask ctx :train_build {:repo repo :base (base-of policy)
                                       :branch branch
@@ -1175,7 +1180,9 @@
                                    :base_head (some-> (:base_head answer) str)
                                    :started_at (pass-now ctx)}
                             (test-workflow-of policy)
-                            (assoc :workflow (test-workflow-of policy))))))))
+                            (assoc :workflow (test-workflow-of policy))
+                            (and lane (not= engine-lane lane))
+                            (assoc :lane (str lane)))))))))
 
 (defn- one-at-a-time!
   "Delete a train and send its repository one at a time for the rest of
@@ -1288,7 +1295,8 @@
 
       :else
       (some-> (build-train! ctx repo policy
-                            (subvec riders 0 (quot (count riders) 2)))
+                            (subvec riders 0 (quot (count riders) 2))
+                            (:lane train))
               (assoc :tries tries :size size)
               (cond-> (:lane train) (assoc :lane (:lane train)))))))
 
@@ -1641,7 +1649,7 @@
                               (let [riders (train-riders (filterv #(= lane (in-lane %)) line)
                                                          @answers @seen policy)]
                                 (when-some [t (when (next riders)
-                                                (build-train! ctx repo policy riders))]
+                                                (build-train! ctx repo policy riders lane))]
                                   [lane (cond-> t
                                           (not= engine-lane lane) (assoc :lane lane))])))))
                          (distinct (map in-lane line)))]

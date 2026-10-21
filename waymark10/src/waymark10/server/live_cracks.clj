@@ -63,6 +63,15 @@
   a state with none of these has no expected age. That is deliberate: a
   row may rest in `draft`, `done` or `active` for as long as it likes.
 
+  AN AGE MAY BE A MAP (docs/spec-calendar-time.md §2, §3, step 5):
+  `{:business-days n}` counts n business days of the governing
+  calendar from the row's entry to the state, and `{:until <form>}`
+  names when the row is overdue, a date (overdue once that day ends in
+  the calendar's zone) or an instant computed from the row's data
+  (`deadline`). Both read the `:calendar` hook; without it, or with an
+  unset date, the row has no age. Elsewhere such an age counts as its
+  nominal seconds (`expected-age`).
+
   AN ORG'S HIRING GAPS (`hiring-gaps`, ticket 6a3fac3e) read the same
   aged rows, for the rows of an org's domains only, grouped by domain,
   kind and state. A group is a gap when no fired seat in that domain
@@ -81,6 +90,7 @@
   rows, so a test judges them with no engine. `pass!` reads that world
   and files; nothing in it re-throws."
   (:require [clojure.string :as str]
+            [waymark10.expr :as expr]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
@@ -88,7 +98,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.wakes :as wakes]
             [waymark10.wire :as wire])
-  (:import (java.time Instant)
+  (:import (java.time Instant LocalDate LocalTime ZoneId ZonedDateTime)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -161,17 +171,76 @@
 (defn- seat-name [seat]
   (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
 
+(defn- age-entry
+  "The kind's own `:expected-age` entry for the state, as [entry], or
+  nil when it declares none."
+  [rdef state]
+  (let [s (text state)]
+    (some (fn [[k v]] (when (= s (text k)) [v])) (:expected-age rdef))))
+
+(defn- nominal-seconds
+  "The seconds an age entry counts as where a number is read: itself,
+  a day for each business day, and a day for an `:until`."
+  [entry]
+  (cond (number? entry) entry
+        (pos-int? (:business-days entry)) (* 86400 (long (:business-days entry)))
+        (and (map? entry) (contains? entry :until)) 86400))
+
 (defn expected-age
   "Seconds a row of this kind may sit in `state` with no write: the
   kind's own `:expected-age` for the state, or the default for the
   state's name, or — for a state that is not terminal — the kind's
-  `:default-expected-age`, or nil when it has none of these."
+  `:default-expected-age`, or nil when it has none of these. An entry
+  that is a map answers its nominal seconds (`nominal-seconds`); the
+  aged judgment reads its `deadline`."
   [rdef state]
   (let [s (text state)]
-    (or (some (fn [[k v]] (when (= s (text k)) v)) (:expected-age rdef))
-        (get default-ages s)
-        (when-not (some #(= s (text %)) (:terminal rdef))
-          (:default-expected-age rdef)))))
+    (if-some [[entry] (age-entry rdef s)]
+      (nominal-seconds entry)
+      (or (get default-ages s)
+          (when-not (some #(= s (text %)) (:terminal rdef))
+            (:default-expected-age rdef))))))
+
+(defn- data-value
+  "A row's stored value as the law reads it: an ISO date or an RFC 3339
+  instant spelled as a string becomes the date or the instant."
+  [v]
+  (if (string? v)
+    (or (try (LocalDate/parse v) (catch Exception _ nil))
+        (try (Instant/parse v) (catch Exception _ nil))
+        v)
+    v))
+
+(defn deadline
+  "The instant past which a row is overdue under an age `entry` that is
+  a map (docs/spec-calendar-time.md §2, §3), or nil when the entry is
+  seconds, its answer is missing (an unset date) or the calendar it
+  needs is. `{:business-days n}` counts from `at`, the row's entry to
+  the state: the same local time n business days later on the
+  governing calendar. `{:until form}` is evaluated over the row's
+  data: an instant is the deadline, and a date is overdue once that
+  day ends in the calendar's zone. `calendar` is the :calendar hook."
+  [entry row ^Instant at ^Instant now calendar]
+  (let [cal (when calendar (calendar nil))
+        zone (:zone cal)
+        scope (cond-> {:now now} calendar (assoc :calendar calendar))]
+    (cond
+      (not (map? entry)) nil
+
+      (pos-int? (:business-days entry))
+      (when (and (instance? ZoneId zone) at)
+        (let [z (.atZone at ^ZoneId zone)
+              d (expr/evaluate (list '+ '(var :entered) (list 'business-days (:business-days entry)))
+                               (assoc scope :vars {:entered (.toLocalDate z)}))]
+          (when (instance? LocalDate d)
+            (.toInstant (ZonedDateTime/of ^LocalDate d ^LocalTime (.toLocalTime z) ^ZoneId zone)))))
+
+      (contains? entry :until)
+      (let [data (into {} (map (fn [[k v]] [(keyword (text k)) (data-value v)])) (:data row))
+            v (expr/evaluate (expr/normalize (:until entry)) (assoc scope :data data))]
+        (cond (instance? Instant v) v
+              (and (instance? LocalDate v) (instance? ZoneId zone))
+              (.toInstant (.atStartOfDay (.plusDays ^LocalDate v 1) ^ZoneId zone)))))))
 
 (defn- crack [word kind id m]
   (merge {:crack word
@@ -185,24 +254,35 @@
 
 (defn aged-rows
   "aged: every row in `rows` (kind → rows) that no write has touched
-  for longer than its state's expected age."
-  [rdefs seat-rows rows now]
-  (for [rdef (sort-by (comp text :kind) rdefs)
-        :let [terminal (into #{} (map text) (:terminal rdef))]
-        row (get rows (keyword (text (:kind rdef))))
-        :let [state (text (:state row))
-              age (expected-age rdef state)
-              at (inst (:updated-at row))]
-        :when (and age at
-                   (not (contains? terminal state))
-                   (past? at age now))]
-    (crack "aged" (:kind rdef) (:id row)
-           {:state state
-            :since (str at)
-            :expected_seconds age
-            :seats (movers rdef seat-rows state)
-            :what (str "It has sat in " state " since " at
-                       ", past the " age " seconds a row is expected to stay there.")})))
+  for longer than its state's expected age — or, where that age is a
+  map, whose `deadline` has passed. `calendar` is the :calendar hook
+  a map age reads; without it a map age ages nothing."
+  ([rdefs seat-rows rows now] (aged-rows rdefs seat-rows rows now nil))
+  ([rdefs seat-rows rows now calendar]
+   (for [rdef (sort-by (comp text :kind) rdefs)
+         :let [terminal (into #{} (map text) (:terminal rdef))]
+         row (get rows (keyword (text (:kind rdef))))
+         :let [state (text (:state row))
+               [entry] (age-entry rdef state)
+               age (expected-age rdef state)
+               at (inst (:updated-at row))
+               due (when (and at (map? entry)) (deadline entry row at now calendar))]
+         :when (and age at
+                    (not (contains? terminal state))
+                    (if (map? entry)
+                      (and due (.isBefore ^Instant due ^Instant now))
+                      (past? at age now)))]
+     (crack "aged" (:kind rdef) (:id row)
+            (cond-> {:state state
+                     :since (str at)
+                     :expected_seconds age
+                     :seats (movers rdef seat-rows state)
+                     :what (if due
+                             (str "It has sat in " state " since " at
+                                  ", past its deadline of " due ".")
+                             (str "It has sat in " state " since " at
+                                  ", past the " age " seconds a row is expected to stay there."))}
+              due (assoc :due (str due)))))))
 
 (defn- in-walk?
   "Does a walk under `flt` read this row? Its `state` entry, or the
@@ -318,7 +398,7 @@
   held by no fired seat of that domain (`no_holder`), or else when there
   are `pressure-rows` of them and the oldest has sat `pressure-factor`
   expected ages (`pressure`). Sorted by `:key`."
-  [{:keys [rdefs seats rows tickets seat-domains now]} org-domains]
+  [{:keys [rdefs seats rows tickets seat-domains now calendar]} org-domains]
   (let [orgs (into #{} (map text) org-domains)
         by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
         by-id (into {} (for [[kind rs] rows, row rs]
@@ -335,7 +415,7 @@
                                 :held (seq (holders by-kind
                                                     (filterv #(= d (domain-of %)) seats)
                                                     tickets rdef row))))))
-                   (aged-rows rdefs seats rows now))]
+                   (aged-rows rdefs seats rows now calendar))]
     (->> (group-by (juxt :org :kind :state) aged)
          (keep (fn [[[org kind state] cs]]
                  (let [cs (sort-by (juxt #(inst (:since %)) :id) cs)
@@ -532,12 +612,12 @@
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
   tickets), :withheld (seat id → the walk row ids its sit would not
-  hand) and :now."
-  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now]}]
+  hand), :calendar (the :calendar hook a map age reads) and :now."
+  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now calendar]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
-                       (aged-rows rdefs seats rows now))
+                       (aged-rows rdefs seats rows now calendar))
                   (silent-seats rdefs seats rows schedules withheld now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
@@ -744,6 +824,7 @@
                                [(str (:id seat))
                                 (into #{} (map str) (seats/unwalkable-rows eng seat nil))])))
                      seat-rows)
+     :calendar (:calendar (inv/render-hooks eng))
      :now ((:now-fn eng))}))
 
 (defn- standing-tickets
