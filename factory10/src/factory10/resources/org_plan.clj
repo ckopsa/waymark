@@ -366,6 +366,23 @@
                (fnil conj [])
                (select-keys inp [:key :finding_key :question]))))
 
+(defn- workaround-key [w] [(:concept w) (:subject w)])
+
+(defhandler log-the-workarounds [row inp _ctx]
+  ;; Workarounds are appended, never rewritten: one already logged
+  ;; under the same concept and subject is nothing, so a retried log is
+  ;; safe. The concepts they name are kept beside them, once each, the
+  ;; list a query filters plans by (ticket 4fdcd08a).
+  (let [logged (reduce (fn [ws w]
+                         (if (some #(= (workaround-key w) (workaround-key %)) ws)
+                           ws
+                           (conj ws (select-keys w [:concept :subject :need :instead]))))
+                       (vec (get-in row [:data :workarounds]))
+                       (:entries inp))]
+    (-> row
+        (assoc-in [:data :workarounds] logged)
+        (assoc-in [:data :workarounds_concept] (vec (distinct (map :concept logged)))))))
+
 (defhandler answer-the-question [row inp ctx]
   (update-in row [:data :questions]
              (fn [qs]
@@ -578,6 +595,24 @@
   [_row _inp ctx]
   (if (some? (the-person ctx)) (t/allow) (t/deny)))
 
+;; the org's directory is orgs/<name>, so one plan not retired holds a
+;; name: a second create cannot take over the first's directory (ticket
+;; be518c13). It reads through the ctx :find hook, as the hire walls do.
+
+(defguardfn one-plan-per-name
+  {:judges [:name]
+   :reads [:org_plan]
+   :check-tier :given
+   :vars [:name :plan :state]
+   :explain "The org {name} is held by plan {plan}, in {state}: one plan that is not retired holds an org's name, and its directory orgs/{name}."
+   :open "Work the plan that holds the name, retire it first, or file this one under another name."}
+  [_row inp ctx]
+  (if-some [held (first (remove #(= "retired" (state-name %))
+                                (plans-named ctx (:name inp))))]
+    (t/deny {:vars {:name (str (:name inp)) :plan (str (:id held)) :state (state-name held)}
+             :evidence {:plan (str (:id held))}})
+    (t/allow)))
+
 (defguardfn only-the-owner-decides
   {:reads [:principal]
    :explain "This is the owner's decision: only the person who owns this plan, or an agent acting for them, may take this door."
@@ -772,6 +807,33 @@
         (t/deny {:vars {:head (if head (short-sha head) "none yet")}})))
     (t/allow)))
 
+(def ^:private findings-states
+  "The states whose plan the findings pass audits at each new head of
+  its change (forge's `findings-doors`, less filming, whose take is
+  voided instead)."
+  #{"drafting" "proposed" "simulated"})
+
+(defn- findings-pending-head
+  "The `findings_pending_head` computed field: the head of the plan's
+  change its findings were not recorded at yet, or nil when they were,
+  when no head is pushed, or when the plan's state takes no findings.
+  Ticket 24c4feba: a reader knows findings are coming, and for which
+  head, without polling until `findings_sha` moves."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when (contains? findings-states (some-> (:state row) name))
+      (let [named (some-> (get-in row [:data :change]) str not-empty)
+            head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)]
+        (when (and head (not= head (str (get-in row [:data :findings_sha]))))
+          head)))))
+
+(defn- findings-pending
+  "The `findings_pending` computed field: true while a findings run is
+  owed on the change's head, false once it landed; nil with no read."
+  [row ctx]
+  (when (:read ctx)
+    (some? (findings-pending-head row ctx))))
+
 ;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
 ;; sit mints it `born_from` the plan; a change opened for anything else,
 ;; or one already closed or merged, is not this plan's pull request.
@@ -946,6 +1008,27 @@
    :as      {:id "factory10-hire" :type :system}
    :expect  {:allowed true}})
 
+(defscenario a-second-plan-does-not-take-a-held-name
+  "An org's name is held by its plan while that plan is not retired: a
+   second create with the same name is refused."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :drafting
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :one-plan-per-name}})
+
+(defscenario a-retired-plan-frees-its-name
+  "And once that plan is retired, the name may be filed again."
+  {:kind    :org_plan
+   :attempt :create
+   :given   [{:kind :org_plan :state :retired
+              :data {:name "greenleaf" :purpose "found"}}]
+   :input   {:name "greenleaf"}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
 ;; ── :org_plan ───────────────────────────────────────────────────────
 
 (def ^:private finding-schema
@@ -976,6 +1059,20 @@
    [:oldest_since {:optional true} [:maybe :waymark/instant]]
    [:expected_seconds {:optional true} [:maybe [:int {:min 0}]]]
    [:key [:string {:min 1 :max 200}]]])
+
+(def workaround-concepts
+  "The concepts a workaround stands in for, as epic 2bb0aed8 numbers
+  them: 1 related-row rules, 2 calendar time and recurrence, 3 ledger
+  money, 4 retention and evidence, 5 teams and outside parties, 6
+  integrations, 7 goals and measures; then new and default."
+  ["1" "2" "3" "4" "5" "6" "7" "new" "default"])
+
+(def ^:private workaround-schema
+  [:map
+   [:concept (into [:enum] workaround-concepts)]
+   [:subject [:string {:min 1 :max 200}]]
+   [:need [:string {:min 1 :max 240}]]
+   [:instead [:string {:min 1 :max 240}]]])
 
 (def ^:private hire-input
   "The open_hire door's input: the org, the gap, and the live plan's
@@ -1068,6 +1165,25 @@
                           :spelled-by-hand "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal."
                           :help "A field name, and the value it must equal: state, or a field the kind filters by."}}
      [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]]])
+
+(defn- log-workarounds-door
+  "The log_workarounds door as a self-loop on `state`. A run learns
+  workarounds after drafting too, so the door is spelled once per state
+  it stays in (a v10 action declares one :to). It only appends to
+  `workarounds`: no law, no head, so no refilm, findings run or void
+  (ticket beb733af)."
+  [state label order]
+  {:from #{state} :to state
+   :guards [the-name-is-snake-case]
+   :handler log-the-workarounds
+   :input [:map
+           [:entries {:x-display {:label "The workarounds"
+                                  :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
+            [:vector {:min 1 :max 50} workaround-schema]]]
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
+   :display {:label label :order order
+             :description "Log the workarounds onboarding had to make"}})
 
 (def ^:private hire-seat-schema
   "The seat a hire plan hires, as factorykit.hire's seed step drafts it
@@ -1180,10 +1296,26 @@
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :owner #{:eq}
-                :purpose #{:eq}}
+                :purpose #{:eq}
+                :workarounds_concept #{:eq :in}}
    :on-create stamp-the-owner
    :data-migrate purpose-backfill
-   :create-guards [a-person-files-the-plan]
+   ;; ticket 24c4feba: a findings run owed on the head shows on the plan
+   :computed {:findings_pending
+              {:schema [:maybe :boolean]
+               :x-display
+               {:label "Findings coming"
+                :help "True while the audit's findings for the head of this plan's pull request have not landed yet; false once they have. Read each time from the change."}
+               :reads? true
+               :fn findings-pending}
+              :findings_pending_head
+              {:schema [:maybe :string]
+               :x-display
+               {:label "Findings coming for"
+                :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
+               :reads? true
+               :fn findings-pending-head}}
+   :create-guards [a-person-files-the-plan one-plan-per-name]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
               :input hire-input
@@ -1288,6 +1420,19 @@
                  {:label "Questions for the owner"
                   :help "What the onboarding seat asked, each tied to the finding that raised it, and the owner's answer."}}
      [:maybe [:vector {:max 100} question-schema]]]
+    ;; WRITTEN ONLY BY THE log_workarounds DOOR (ticket 4fdcd08a): read
+    ;; and counted like any plan field, and not law, so the law page
+    ;; leaves it out
+    [:workarounds {:optional true
+                   :x-display
+                   {:label "Workarounds"
+                    :help "What the onboarding seat had to make do with where the engine had no concept for it: the concept, the kind's field or door, what the org needed, and what was built instead."}}
+     [:maybe [:vector {:max 200} workaround-schema]]]
+    [:workarounds_concept {:optional true
+                           :x-display
+                           {:label "Workaround concepts"
+                            :help "Each concept the plan's workarounds name, once: what a query finds plans by."}}
+     [:vector {:max 9} [:waymark/vocab {:open true}]]]
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
@@ -1428,6 +1573,20 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Answer" :order 2
                :description "Answer a question the onboarding seat asked"}}
+
+    :log_workarounds
+    (log-workarounds-door :drafting "Log workarounds" 16)
+
+    ;; AFTER DRAFTING (ticket beb733af): a run that proposes, films and
+    ;; simulates still logs what it worked around, in the state it is in.
+    :log_workarounds_proposed
+    (log-workarounds-door :proposed "Log workarounds while proposed" 17)
+
+    :log_workarounds_simulated
+    (log-workarounds-door :simulated "Log workarounds while simulated" 18)
+
+    :log_workarounds_going_live
+    (log-workarounds-door :going_live "Log workarounds while going live" 19)
 
     :propose
     {:from #{:drafting} :to :proposed
@@ -1765,4 +1924,6 @@
                the-owner-goes-live
                an-unflipped-org-does-not-go-live
                no-hire-without-a-live-org
-               a-live-org-opens-a-hire]})
+               a-live-org-opens-a-hire
+               a-second-plan-does-not-take-a-held-name
+               a-retired-plan-frees-its-name]})

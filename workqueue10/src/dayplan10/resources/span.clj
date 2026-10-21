@@ -543,8 +543,9 @@
    :over {:accomplished #{:done} :let-go #{:skipped}}
    :summary "{data.block_name} · {data.starts_at} → {data.ends_at} · {state}"
    :label-template "{data.block_name} {data.starts_at} → {data.ends_at}"
-   ;; plan_id is the guard's one indexed query; current and missed are
-   ;; the feed's and the notice's
+   ;; plan_id is the guard's one indexed query; starts_at is day_plan's
+   ;; a-different-shape asking for a window still ahead; current and
+   ;; missed are the feed's and the notice's
    :filterable {:state #{:eq :in} :plan_id #{:eq} :block_id #{:eq}
                 :current #{:eq} :missed #{:eq}
                 ;; neighbour-keeps-some-width asks both instants

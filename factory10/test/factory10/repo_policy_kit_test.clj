@@ -14,7 +14,7 @@
    :rounds_per_change :queued_check_minutes :merge_strategy :train_size
    :groom_floor :groom_floor_settle_seconds :groom_floor_max_priority
    :formatter :deny :test :check :hosted_workflows :hosted_ok :person_paths
-   :orientation])
+   :lanes :checks :orientation])
 
 (def ^:private engines
   [:floor_noted_at :floor_count :floor_ticket :enrolled_at :note
@@ -22,7 +22,7 @@
    :base_head :base_red_from :base_ticket :base_checked_at
    :deploy_waits_on :deploy_waiting_since :deployed_head :deployed_at
    :deploy_state :deploy_note :line_front :line_front_pr
-   :line_front_waiting :line_waiting :line_at :line_train])
+   :line_front_waiting :line_waiting :line_at :line_train :lane_trains])
 
 (deftest the-composed-policy-has-the-fields-it-had
   (testing "every field, in the order the literal map spelled them"

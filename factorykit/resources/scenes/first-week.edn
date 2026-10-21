@@ -51,8 +51,9 @@
   {:hold {:ms 3000} :say "{{org_display}}."}]
  ;; one day: its weekday, then the org's day in one sentence, filled from
  ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say):
- ;; what moved since the last day caption, for a clone runs no seats and
- ;; its week is played live by meanwhile shots. The weekday is a label.
+ ;; what moved since the last day caption, for the week is played by the
+ ;; clone's own world and mayor seats, its days separated by clock_shift
+ ;; and meanwhile shots. The weekday is a label.
  :day
  [{:open {:collection "{{kind_plural}}"}}
   {:hold {:ms 5000}

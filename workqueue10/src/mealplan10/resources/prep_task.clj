@@ -131,6 +131,10 @@
                          {:label "Calendar event"
                           :help "The event you just put on the family calendar for this step — the task keeps the pointer so the two stay one thing."})]]
       :confirm "An event goes on the family calendar for this prep step."
+      ;; :ref-unjudged — the event is the one just put on the calendar
+      ;; for this step; the event is a mirror of the provider's
+      ;; calendar, whose states are its sync's, not a lifecycle to judge
+      :waives #{:ref-unjudged}
       :handler set-calendar-event
       :display {:label "Put on calendar" :style :primary :order 1}}]
     [:pending   :complete :done      step-done]

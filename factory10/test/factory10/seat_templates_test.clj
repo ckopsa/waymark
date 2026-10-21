@@ -127,19 +127,21 @@
               a actions]
         (is (contains? (get vocab kind) a) (str kind "." a))))
     (testing "it holds the walk's doors and no other"
-      (is (= {"org_plan" #{"create" "ask" "propose" "go_live" "retire"}
+      (is (= {"org_plan" #{"create" "ask" "log_workarounds" "log_workarounds_proposed"
+                           "log_workarounds_simulated" "log_workarounds_going_live"
+                           "propose" "go_live" "retire"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
-      (is (= {:state "drafting,simulated,going_live" :name "rd_tax_services"}
+      (is (= {:state "drafting,proposed,simulated,going_live" :name "rd_tax_services"}
              (:filter (first (filter #(= "org_plan" (:kind %)) kinds))))
-          "the walk is its own org's drafting, simulated and going_live plans: propose leaves one, go_live's Allow the next, and a merged change is minted again on the last (ticket 87fc7996)"))
+          "the walk is its own org's drafting, proposed, simulated and going_live plans: propose leaves one, go_live's Allow the next, a merged change is minted again on the last (ticket 87fc7996), and a proposed plan still logs its workarounds (ticket beb733af)"))
     (testing "its bench reaches the org's directory in ckopsa/waymark, and no live power"
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
         (is (str/starts-with? kind "bench.") kind)
         (is (= "ckopsa/waymark" (:repo filter)) kind)
         (when (#{"bench.find" "bench.read"} kind)
-          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/resources/seats/org-*.edn,factorykit/resources/seats/world.edn"
+          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"
                  (:path filter))
               kind))
         (when (= "bench.edit" kind)
@@ -215,11 +217,21 @@
                                       :charter "Example Landscaping"
                                       :budget_usd_per_week 1000})
         org-kinds (sort (map (comp name :kind) (example/resources)))
-        seat (seed/filled (:seat (edn-resource "seats/org-mayor.edn"))
+        t (edn-resource "seats/org-mayor.edn")
+        seat (seed/filled (:seat t)
                           {:org "example" :domain "example" :domain_id domain-id
                            :owner "owner" :budget_usd_per_week 8M
                            :kinds (mapv (fn [k] {:kind k :actions []}) org-kinds)
-                           :wakes []})]
+                           :wakes []}
+                          (:template t))]
+    (testing "its :cues are optional, the wakes when left out, and a cue may carry its own note"
+      (let [wake {:kind "request" :actions ["create"]}
+            cue (assoc wake :note "A request came in.")
+            given {:org "example" :domain "example" :domain_id domain-id
+                   :owner "owner" :budget_usd_per_week 8M :kinds [] :wakes [wake]}]
+        (is (= {:cues [wake]} (:inbox (seed/filled (:seat t) given (:template t)))))
+        (is (= {:cues [cue]}
+               (:inbox (seed/filled (:seat t) (assoc given :cues [cue]) (:template t)))))))
     (testing "it fills with no hole left, its budget a decimal"
       (is (nil? (re-find #"\{\{" (pr-str seat))))
       (is (= 8M (:budget_usd_per_week seat)))

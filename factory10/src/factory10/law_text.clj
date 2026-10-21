@@ -186,8 +186,8 @@
   template filled with its params, as the seed loader fills it."
   [{:keys [template params seat]}]
   (if template
-    (-> (str "seats/" template ".edn") io/resource slurp edn/read-string :seat
-        (seed/filled (or params {})))
+    (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)]
+      (seed/filled (:seat t) (or params {}) (:template t)))
     seat))
 
 (defn- scope-line [{:keys [kind actions filter]}]

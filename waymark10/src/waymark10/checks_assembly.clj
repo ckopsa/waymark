@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -507,7 +508,7 @@
           :let [dkeys (set (schema/entry-keys (:schema r)))]
           [fact d] (sort-by key (:derived r))]
     (doseq [o (:over d)]
-      (when-not (or (= :now o) (contains? dkeys o))
+      (when-not (or (contains? #{:now :today} o) (contains? dkeys o))
         (err kind :derived-cycles
              (str "derived field " fact ": cross-kind derived inputs read "
                   "through aggregate edges only; over= names " o " — neither "
@@ -798,6 +799,170 @@
                   (name tk) " — name a door of " (name tk))))))
   [])
 
+;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
+
+(defn- guard-forms
+  "An expression guard's :when and its :vars' forms; nothing for a code
+  guard."
+  [guard]
+  (when-some [w (:when guard)]
+    (cons w (when (map? (:vars guard)) (remove nil? (vals (:vars guard)))))))
+
+(defn- utc-today?
+  "(date-of (now)) or (date-of (var :now)): Greenwich's day."
+  [x]
+  (and (seq? x) (= 'date-of (first x))
+       (let [a (second x)] (or (= a '(now)) (= a '(var :now))))))
+
+(defn- utc-today-hits
+  "The date fields of `r` a comparison in `form` sets against
+  (date-of (now)) or (date-of (var :now))."
+  [r form]
+  (let [nodes #(tree-seq seq? rest %)
+        date-field (fn [x]
+                     (when (and (seq? x) (contains? '#{data input var} (first x))
+                                (keyword? (second x))
+                                (= :waymark/date
+                                   (head (schema/field-schema (:schema r) (second x)))))
+                       (second x)))]
+    (for [x (nodes form)
+          :when (and (seq? x) (contains? '#{= not= < <= > >=} (first x)) (= 3 (count x)))
+          :let [[_ a b] x]
+          [today other] [[a b] [b a]]
+          :when (some utc-today? (nodes today))
+          f (keep date-field (nodes other))]
+      f)))
+
+(defn- check-utc-today
+  "[utc-today], a warning: a guard or fact that compares (date-of (now))
+  — or (date-of (var :now)) — with a date field asks Greenwich's day,
+  not the house's."
+  [reg]
+  (into []
+        (mapcat (fn [[kind r]]
+                  (concat
+                   (for [{:keys [door guard]} (checks/guard-sites r)
+                         form (guard-forms guard)
+                         f (distinct (utc-today-hits r form))]
+                     (str (name kind) " [utc-today] guard " (some-> (:name guard) name)
+                          " on " (name door) " compares (date-of (now)) with " (name f)
+                          " — that is Greenwich's day; use (today), which is the house's"))
+                   (for [[fact d] (sort-by key (:derived r))
+                         :when (:expr d)
+                         f (distinct (utc-today-hits r (:expr d)))]
+                     (str (name kind) " [utc-today] derived field " (name fact)
+                          " compares (date-of (var :now)) with " (name f)
+                          " — that is Greenwich's day; name :today in :over and "
+                          "read (var :today), which is the house's")))))
+        (sort-by key (:kinds reg))))
+
+(defn calendar-readers
+  "The laws of `reg` that read the work calendar: `kind door guard` for
+  each guard whose tree asks (today), business-days, working? or
+  another calendar reader, `kind fact` for each derived fact that does
+  or names :today in :over — what [business-days-no-calendar] names at
+  boot (waymark10.server.work-calendar/check-default!)."
+  [reg]
+  (into []
+        (mapcat (fn [[kind r]]
+                  (concat
+                   (for [{:keys [door guard]} (checks/guard-sites r)
+                         :when (some #(:uses-calendar (expr/info %)) (guard-forms guard))]
+                     (str (name kind) " " (name door) " " (some-> (:name guard) name)))
+                   (for [[fact d] (sort-by key (:derived r))
+                         :when (or (some #{:today} (:over d))
+                                   (some-> (:expr d) expr/info :uses-calendar))]
+                     (str (name kind) " " (name fact))))))
+        (sort-by key (:kinds reg))))
+
+;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────
+
+(defn- occupations
+  "Every :occupies entry of the registry as [kind entry target], target
+  the kind its :resource ref names."
+  [reg]
+  (for [[kind r] (sort-by key (:kinds reg))
+        o (:occupies r)
+        :let [target (some (fn [{:keys [field kind listed]}]
+                             (when (and (= field (:resource o)) (not listed)) kind))
+                           (schema/ref-fields (:schema r)))]]
+    [kind o target]))
+
+(defn- check-occupies-unfiltered
+  "[occupies-unfiltered]: the resource, from and to fields of every
+  :occupies entry are :filterable on the occupying kind — the derived
+  -is-free guard asks them on every write ([exists-unfiltered]'s
+  reason, named for the declaration that wrote the query)."
+  [reg]
+  (doseq [[kind o _] (occupations reg)
+          f [(:resource o) (:from o) (:to o)]
+          :when (not (contains? (get-in reg [:kinds kind :filterable]) f))]
+    (err kind :occupies-unfiltered
+         (str ":occupies holds " (name (:resource o)) " by " (name f) ", a field "
+              (name kind) " does not declare :filterable — the derived guard asks it "
+              "on every write")))
+  [])
+
+(defn- check-resource-uncalendared
+  "[resource-uncalendared], info: an occupied kind that names no
+  :calendar — its -is-working guards read the default work_calendar,
+  the whole day when that names no hours."
+  [reg]
+  (vec (for [target (sort (distinct (keep last (occupations reg))))
+             :when (nil? (get-in reg [:kinds target :calendar]))]
+         (str (name target) " [resource-uncalendared] " (name target)
+              " is occupied and names no :calendar — its -is-working guards read "
+              "the default work_calendar. What hours does a "
+              (str/replace (name target) "_" " ") " work?"))))
+
+;; ── :recurs (docs/spec-calendar-time.md §4, §7) ─────────────────────
+
+(defn- required-create-fields
+  "The fields `target`'s create door cannot do without: its create
+  schema's entries that are neither optional nor defaulted."
+  [target]
+  (sort (for [[f e] (schema/entry-map (or (:create-schema target) (:schema target)))
+              :when (not (or (:optional e) (contains? (:properties e) :default)))]
+          f)))
+
+(defn- check-recurs
+  "Every :recurs rule of the registry: its shape ([recurs], from
+  waymark10.recurs/rule-problems), then the three findings — an owner
+  ([recurs-no-owner]), a stop ([recurs-no-stop]), and a made kind whose
+  create door the rule's :input opens ([recurs-unmakeable])."
+  [reg]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          :let [rules (:recurs r)]
+          :when (some? rules)
+          rule (if (sequential? rules)
+                 rules
+                 (err kind :recurs ":recurs is a vector of rules [{:name … :makes … :every … :from …}]"))]
+    (when-some [p (first (recurs/rule-problems r rule))]
+      (err kind :recurs p))
+    (let [rname (name (:name rule))
+          makes (name (:makes rule))
+          said (str/replace makes "_" " ")
+          target (get-in reg [:kinds (:makes rule)])]
+      (when (nil? (:owner rule))
+        (err kind :recurs-no-owner
+             (str "rule " rname " makes " makes " rows with no :owner — name the field or "
+                  "seat whose act the made row is. Whose name goes on each " said
+                  " this makes?")))
+      (when (every? #(nil? (get rule %)) [:until :times :while])
+        (err kind :recurs-no-stop
+             (str "rule " rname " has none of :until, :times or :while — add the season's "
+                  "end, a count, or the states that keep it going. When should the " said
+                  "s stop coming?")))
+      (when (or (nil? target) (empty? (or (:create-action-names target) #{:create})))
+        (err kind :recurs-unmakeable
+             (str "rule " rname " makes " makes ", "
+                  (if target "a kind with no create door" "a kind this registry does not hold"))))
+      (when-some [missing (seq (remove (set (keys (:input rule))) (required-create-fields target)))]
+        (err kind :recurs-unmakeable
+             (str "rule " rname "'s :input misses " (str/join ", " (map name missing))
+                  ", which " makes "'s create door requires — fill the input from the source row")))))
+  [])
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
 ;; punt: check-compounds (compound inputs) — its declaration shape is
@@ -828,12 +993,13 @@
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
   and process, v10's own, whose steps name doors of other kinds.
-  Throws the first error, returns {:warnings [str …]}."
+  Throws the first error, returns {:warnings [str …] :info [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-rows-queries
-          check-unref'd-ids])})
+          check-link-where check-follow-fields check-occupies-unfiltered check-recurs
+          check-rows-queries check-utc-today check-unref'd-ids])
+   :info (check-resource-uncalendared reg)})
