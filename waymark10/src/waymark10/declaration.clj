@@ -270,6 +270,10 @@
    ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
    ;; judged at the def site (resource/check-accounts!) — law
    :accounts
+   ;; the kind's line items (docs/spec-ledger-money.md § 6): {:kind
+   ;; :parent :fields}, a child kind the engine makes (waymark10.lines)
+   ;; and writes only through this kind's create and edit doors
+   :lines
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,
