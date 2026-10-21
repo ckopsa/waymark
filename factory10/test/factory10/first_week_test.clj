@@ -114,7 +114,7 @@
               ["invoice" "paid" "invoice paid" "invoices paid"]
               ["held_call" nil "tap from you" "taps from you"]]
              (map (juxt :kind :state :one :many) (counts closing))))
-      (is (every? #(= {:window "take"} (select-keys % [:since :until :window]))
+      (is (every? #(= {:window "clock"} (select-keys % [:since :until :window]))
                   (counts closing)))
       (is (str/ends-with? (last (:say closing)) "Merge to make it real.")))
     (testing "it reads each count by its noun and end, a zero dropping its clause"
