@@ -623,6 +623,40 @@
     (testing "a row born before the take began is not the take's"
       (is (= "" (said (scenes/take-run)))))))
 
+(deftest a-clock-window-rows-hole-counts-the-week-played-before-the-take
+  (let [eng (clock-shift/install!
+             (engine/engine (clock-shift/with-clock
+                             {:storage (memory/storage)
+                              :resources (mapv org-kind [:study :invoice :note])
+                              :name "demo-scenes"
+                              :clone? true})))
+        hole {"$rows" {:kind "study" :window "clock" :count true :one "study" :many "studies"}}
+        days #(assoc-in hole ["$rows" :days] %)
+        said #(scenes/fill-say [% "."] (fn [w] (scenes/rows-in-window eng w))
+                               (constantly []) (constantly nil) (scenes/take-run))
+        study! (fn [title]
+                 (Thread/sleep 5)
+                 (inv/create! eng :study {:title title :domain "acme"} {:principal mayor}))]
+    (study! "Acme's study")
+    (study! "Acme's second study")
+    (Thread/sleep 5)
+    (inv/create! eng :clock_shift {:by "P1D"} {:principal mayor})
+    (study! "Acme's third study")
+    (Thread/sleep 5)
+    (testing "check takes it with or without its days, and refuses days that are not days"
+      (is (nil? (scenes/say-refusal eng [hole])))
+      (is (nil? (scenes/say-refusal eng [(days [1 2])])))
+      (is (some? (scenes/say-refusal eng [(days [2 1])])))
+      (is (some? (scenes/say-refusal eng [(days [0 2])])))
+      (is (some? (scenes/say-refusal eng [(assoc-in (days [1 2]) ["$rows" :window] "take")]))))
+    (testing "a take begun after the week was played counts the whole week"
+      (is (= "3 studies." (said hole)))
+      (is (= "" (said (assoc-in hole ["$rows" :window] "take")))))
+    (testing "its days narrow it to those days of the clock"
+      (is (= "2 studies." (said (days [1 1]))))
+      (is (= "1 study." (said (days [2 7]))))
+      (is (= "" (said (days [3 3])))))))
+
 (defn- say! [h headers body]
   (let [resp (h {:request-method :post :uri "/api/-/scenes/say"
                  :headers (merge {"content-type" "application/json"} headers)
