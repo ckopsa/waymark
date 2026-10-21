@@ -873,3 +873,54 @@
     (testing "a say that is neither a string nor a list"
       (is (str/includes? (why-not eng 1 {:open {:collection "chores"} :say {:x 1}})
                          "shot 1: `say` is a string")))))
+
+(def ^:private dress
+  "A dress scene: the mayor's seat, its latest sitting, the held band
+  framed, Allow pressed."
+  (assoc well-formed :shots
+         [{:open {:seat "dress_rehearsal-mayor"}}
+          {:open {:sitting {:of "dress_rehearsal-mayor" :which :latest}}}
+          {:focus {:target "held"}}
+          {:focus {:target "field:title"}}
+          {:press {:target "allow"}}]))
+
+(deftest a-scene-opens-a-seat-focuses-and-presses
+  (let [eng (fresh-engine)]
+    (testing "the dress scene checks ready"
+      (let [id (write! eng dress)]
+        (is (nil? (refusal #(walk! eng id :check))))
+        (is (= "ready" (name (:state (row-of eng :scene id)))))))
+    (testing "an unknown target, or a bad seat open, refuses with its shot"
+      (is (str/includes? (why-not eng 3 {:focus {:target "row"}})
+                         "shot 3: `row` is not a focus target"))
+      (is (str/includes? (why-not eng 5 {:press {:target "maybe"}})
+                         "shot 5: `maybe` is not a press target"))
+      (is (str/includes? (why-not eng 1 {:open {:seat ""}}) "shot 1:"))
+      (is (str/includes? (why-not eng 2 {:open {:sitting {:of "dress_rehearsal-mayor" :which :first}}})
+                         "shot 2:"))
+      (is (str/includes? (why-not eng 1 {:open {:seat "x" :collection "chores"}}) "shot 1:")))))
+
+(deftest a-seat-open-resolves-to-the-seat-and-its-latest-sitting
+  (let [eng (fresh-engine)
+        st (:storage eng)
+        plant! (fn [kind id state data]
+                 (Thread/sleep 5)
+                 (store/with-tx st
+                   (fn [tx]
+                     (store/insert-row! st tx kind
+                                        {:id id :state state :version 1 :data data
+                                         :shape (:shape (get (inv/resources eng) kind) 1)
+                                         :owner "mayor"}))))
+        opened #(scenes/open-as eng % (constantly true))
+        latest {:sitting {:of "dress_rehearsal-mayor" :which :latest}}]
+    (plant! :seat "seat-d" :active {:name "dress_rehearsal-mayor"})
+    (testing "a seat that has not sat refuses its sitting open"
+      (is (= "the seat `dress_rehearsal-mayor` has not sat yet." (:problem (opened latest)))))
+    (plant! :sitting "sitting-1" :closed {:seat "seat-d"})
+    (plant! :sitting "sitting-2" :open {:seat "seat-d"})
+    (testing "the seat by name, and its newest sitting"
+      (is (= {"self" "/api/seats/seat-d"} (opened {:seat "dress_rehearsal-mayor"})))
+      (is (= {"self" "/api/sittings/sitting-2"} (opened latest))))
+    (testing "no seat of the name, or one the caller does not see"
+      (is (= "no seat is named `nobody`." (:problem (opened {:seat "nobody"}))))
+      (is (some? (:problem (scenes/open-as eng {:seat "dress_rehearsal-mayor"} #{})))))))

@@ -45,7 +45,8 @@ function renderAsOf(view, doc, hints) {
    envelope affords them to this viewer. After Allow it says who
    allowed, until the page refreshes with the move. */
 function heldBand(doc) {
-  const band = el("div", {class: "asof-band waiting held-band", "data-focus": "held"});
+  const band = el("div", {class: "asof-band waiting held-band", "data-focus": "held",
+                          "data-surface": "held"});
   const what = String(doc.summary || "").split(" · ")[0];
   for (const h of doc.held || []) {
     const line = el("div", {class: "held-call"},
@@ -57,6 +58,7 @@ function heldBand(doc) {
       if (!acts.allow && !acts.refuse) return;
       const bar = el("div", {class: "actions"});
       if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
+        "data-surface": "held.allow",
         onclick: async () => {
           const r = await invokeBare(acts.allow, body);
           if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
@@ -64,6 +66,7 @@ function heldBand(doc) {
             `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
         }}, "Allow"));
       if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
+        "data-surface": "held.deny",
         onclick: async () => {
           const reason = (window.prompt("Why not? One sentence the caller reads.") || "").trim();
           if (!reason) return;
