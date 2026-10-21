@@ -170,7 +170,10 @@
             {:account-kind (keyword (:account_kind data))
              :account-row (:account_row data)
              :account-name (keyword (:account_name data))
-             :amount (money/->Money (.negate ^java.math.BigDecimal (:amount m)) (:currency m))
+             ;; a :count or :decimal account's amount is a bare number
+             :amount (if (money/money? m)
+                       (money/->Money (.negate ^java.math.BigDecimal (:amount m)) (:currency m))
+                       (- m))
              :reverses id}))
         (posted eng tx log-id)))
 

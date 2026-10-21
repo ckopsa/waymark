@@ -1091,6 +1091,26 @@
   [row]
   (vary-meta row assoc ::unchanged true))
 
+(defn- stored-lines
+  "The line rows one parent holds now, as their data in place order —
+  what (lines) reads at a door that does not take `lines` (ledger step
+  6b, docs/spec-ledger-money.md §6)."
+  [engine tx rdef parent-id]
+  (let [{child :kind via :parent} (:lines rdef)
+        crdef (get (resources engine) child)]
+    (mapv #(:data (if crdef (decode-row crdef %) %))
+          (store/search-rows (:storage engine) tx child
+                             [{:target :data :field via :op := :value (str parent-id)}]
+                             {:order-by :n}))))
+
+(defn- door-lines
+  "(lines) at a door: the input's when the door takes `lines`, the
+  stored set otherwise."
+  [engine tx rdef row inp]
+  (if (and (map? inp) (contains? inp :lines))
+    (vec (:lines inp))
+    (stored-lines engine tx rdef (:id row))))
+
 (defn- posting-entries
   "The entries a landing door posts (ledger step 4): its :posts over the
   row as it leaves it, then — when it is the :undo of a posting door
@@ -1100,8 +1120,9 @@
   (vec
    (concat
     (when-some [ps (seq (:posts defn))]
-      (try (posts/entries ps {:data (:data materialized) :input inp
-                              :now (:now ctx) :self (str (:id row))})
+      (try (posts/entries ps (cond-> {:data (:data materialized) :input inp
+                                      :now (:now ctx) :self (str (:id row))}
+                               (:lines rdef) (assoc :lines (door-lines engine tx rdef row inp))))
            (catch clojure.lang.ExceptionInfo e
              (if (:posts-refused (ex-data e))
                (throw (p/schema-invalid (:name defn) {:posts [(ex-message e)]}))
@@ -1710,7 +1731,11 @@
                           ;; a77bf705): a guard several doors carry
                           ;; reads which one judges it from here, and
                           ;; not from the shape of the body
-                          (assoc :door action-name))]
+                          (assoc :door action-name)
+                          ;; the row's stored lines (ledger step 6b),
+                          ;; read only when a guard asks for (lines)
+                          (cond-> (:lines rdef)
+                            (assoc :stored-lines (delay (stored-lines engine tx rdef id)))))]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)
@@ -2858,8 +2883,11 @@
                            :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
             (create-guard-pass door-guards
-                               inp (dissoc ctx :invoke :create :inner-sink
-                                           :power :follow-up :follow-sink)
+                               inp (cond-> (dissoc ctx :invoke :create :inner-sink
+                                                   :power :follow-up :follow-sink)
+                                     ;; a birth holds no lines yet: (lines)
+                                     ;; reads the input's (ledger step 6b)
+                                     (:lines rdef) (assoc :stored-lines []))
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS
