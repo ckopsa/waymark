@@ -28,6 +28,7 @@
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
     :accounts
+    :lines
     :scenarios})
 
 (def action-keys
