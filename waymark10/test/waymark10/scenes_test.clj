@@ -304,6 +304,28 @@
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
                                         {:principal mayor})))))))
 
+(deftest a-take-names-its-engine-and-org-commits
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        take {:scene (str id)
+              :scene_version 1
+              :device "desktop"
+              :commit "6abcba3e"
+              :shots [{:shot 1 :ok true}]}
+        both (row-of eng :take
+                     (:id (:row (inv/create! eng :take
+                                             (assoc take :engine_commit "bb72d482"
+                                                         :org_commit "6abcba3e")
+                                             {:principal mayor}))))
+        neither (row-of eng :take
+                        (:id (:row (inv/create! eng :take take {:principal mayor}))))]
+    (is (= "bb72d482" (get-in both [:data :engine_commit])))
+    (is (= "6abcba3e" (get-in both [:data :org_commit])))
+    (is (= "6abcba3e" (get-in both [:data :commit])))
+    (is (= "recorded" (name (:state neither))))
+    (is (nil? (get-in neither [:data :engine_commit])))))
+
 (deftest a-take-keeps-its-shots-ids-and-roles
   (let [eng (fresh-engine)
         id (write! eng well-formed)
@@ -577,6 +599,29 @@
       (is (some? (scenes/say-refusal eng [(day 32)])))
       (is (some? (scenes/say-refusal eng [{"$day" {:window "clock" :domain "acme"}}])))
       (is (some? (scenes/say-refusal eng [{"$day" {:window "shot" :day 1 :domain "acme"}}]))))))
+
+(deftest a-take-window-rows-hole-reads-since-the-take-began
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (mapv org-kind [:study :invoice :note])})
+        hole {"$rows" {:kind "study" :window "take" :count true :one "study" :many "studies"}}
+        said #(scenes/fill-say [hole "."] (fn [w] (scenes/rows-in-window eng w))
+                               (constantly []) (constantly nil) %)
+        run (scenes/take-run)
+        pause #(Thread/sleep 5)]
+    (testing "check takes it, and refuses another window or one beside a date"
+      (is (nil? (scenes/say-refusal eng [hole])))
+      (is (some? (scenes/say-refusal eng [(assoc-in hole ["$rows" :window] "shot")])))
+      (is (some? (scenes/say-refusal eng [(assoc-in hole ["$rows" :since] "2026-10-19")]))))
+    (pause)
+    (inv/create! eng :study {:title "Acme's study" :domain "acme"} {:principal mayor})
+    (pause)
+    (testing "it reads every row born since the take began, whatever its date"
+      (is (= "1 study." (said run)))
+      (inv/create! eng :study {:title "Acme's second study" :domain "acme"} {:principal mayor})
+      (pause)
+      (is (= "2 studies." (said run))))
+    (testing "a row born before the take began is not the take's"
+      (is (= "" (said (scenes/take-run)))))))
 
 (defn- say! [h headers body]
   (let [resp (h {:request-method :post :uri "/api/-/scenes/say"

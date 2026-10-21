@@ -220,6 +220,12 @@ the shifts are the days' bounds. `check` admits `day` only with
 {"say": ["Tuesday. ", {"$day": {"window": "clock", "day": 2, "domain": "acme"}}]}
 ```
 
+In place of `since` and `until`, a `$rows` hole may say
+`"window": "take"`: it reads the rows whose `field` falls since the take
+began, up to the moment the performer fills it, the instant the take
+began kept on the take's run. `check` refuses any other `window` on it,
+and a `window` beside a `since` or an `until`.
+
 The performer has the engine fill a say over the wire:
 `POST /api/-/scenes/say` with `{"say": <the shot's say, as the scene
 holds it>, "take": <a string the performer names the take by>}` answers
@@ -245,6 +251,9 @@ clock, however the week was played. factorykit's
 `scenes/first-week.edn` does so; its weekday words are labels. A scene
 that plays its days only as `meanwhile` shots, with no shift, may still
 say `{"window": "shot"}`: what the seats did since the last caption.
+The closing's `$rows` holes say `{"window": "take"}` for the same
+reason: dated ones would read the week the audit rendered, and a take
+played after it would count nothing.
 
 ## `wearing`
 

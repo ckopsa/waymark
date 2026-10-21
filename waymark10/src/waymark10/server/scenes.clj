@@ -23,6 +23,8 @@
   `window: \"shot\"`: since the take's last `$day` was filled (`take-run`),
   or `window: \"clock\"` with a `day` k: between the clone's (k-1)th and
   kth `clock_shift` (`clock-window`).
+  A `$rows` hole's window may instead be `window: \"take\"`: since the
+  take began.
   A `{\"$list\": {items, lead, none}}` joins what its `$rows` holes say.
   `check` judges each hole;
   the performer fills it when the shot plays (`fill-say`), from the rows
@@ -391,6 +393,18 @@
       (not (.isBefore since until))
       (str "a `" hole "` hole's `since` comes before its `until`."))))
 
+(defn- take-window-problem
+  "Why a hole named `hole` cannot read the take's window, `window:
+  \"take\"` in place of `since` and `until`; nil when it can."
+  [hole h]
+  (cond
+    (not= "take" (get h "window"))
+    (str "a `" hole "` hole's `window` is \"take\", and this one is "
+         (tick (get h "window")) ".")
+
+    (or (contains? h "since") (contains? h "until"))
+    (str "a `" hole "` hole with a `window` takes no `since` or `until`.")))
+
 (defn- window-problem
   "Why one hole named `hole` (`$rows`, `$moves`) cannot read its window:
   its shape, its `kind` and its [since, until). `names` are the keys it
@@ -409,12 +423,14 @@
 
         (nil? (rdef-of k)) (str (tick k) " is not a kind this engine serves.")
 
+        (contains? h "window") (take-window-problem hole h)
+
         :else (span-problem hole h)))))
 
 (defn- hole-problem
   "Why one `$rows` hole cannot be filled; nil when it can."
   [h rdef-of]
-  (or (window-problem "$rows" ["kind" "since" "until" "field" "terminal" "state" "count"
+  (or (window-problem "$rows" ["kind" "since" "until" "window" "field" "terminal" "state" "count"
                                "sum" "one" "many" "none"]
                       h rdef-of)
       (when (and (contains? h "field") (not (some #{(get h "field")} hole-fields)))
@@ -544,10 +560,11 @@
 
 (defn take-run
   "One take as the performer plays it: an atom holding the instant the
-  take's last `$day` hole of `window: \"shot\"` was filled, and before
-  the first, the instant the take began (`began`, now unless given)."
+  take began (`began`, now unless given), and the instant the take's
+  last `$day` hole of `window: \"shot\"` was filled, before the first
+  the instant the take began."
   ([] (take-run (Instant/now)))
-  ([^Instant began] (atom {:day-filled began})))
+  ([^Instant began] (atom {:began began :day-filled began})))
 
 (defn fill-say
   "A shot's `say` as the film speaks it. A string stays as written; a
@@ -572,9 +589,11 @@
   `day-of` answers, a fn of {:since :until :domain} (`day-in-window`),
   or by its `none` (`A quiet day.`) when it answers nil. A `$day` hole of
   `window: \"shot\"` reads [the instant `run` holds, now), and leaves now
-  on `run` for the next one; `run` is the take's `take-run`, a fresh one
-  unless given. A `$day` hole of `window: \"clock\"` asks `day-of` for
-  {:clock-day k :until now :domain}: day k of the clone's clock."
+  on `run` for the next one; a `$rows` hole of `window: \"take\"` reads
+  [the instant the take began on `run`, now). `run` is the take's
+  `take-run`, a fresh one unless given. A `$day` hole of
+  `window: \"clock\"` asks `day-of` for {:clock-day k :until now :domain}:
+  day k of the clone's clock."
   ([say rows-of] (fill-say say rows-of (constantly [])))
   ([say rows-of moves-of] (fill-say say rows-of moves-of (constantly nil)))
   ([say rows-of moves-of day-of] (fill-say say rows-of moves-of day-of (take-run)))
@@ -587,9 +606,14 @@
          ;; a `$rows` hole's text; nil when its zero drops its clause
          rows-said (fn [h]
                      (let [sum (some-> (get h "sum") str)
+                           take? (= "take" (get h "window"))
                            lines (rows-of (cond-> {:kind (str (get h "kind"))
-                                                   :since (instant-of (get h "since"))
-                                                   :until (instant-of (get h "until"))
+                                                   :since (if take?
+                                                            (:began @run)
+                                                            (instant-of (get h "since")))
+                                                   :until (if take?
+                                                            (Instant/now)
+                                                            (instant-of (get h "until")))
                                                    :field (get h "field" "created_at")
                                                    :terminal (true? (get h "terminal"))
                                                    :state (some-> (get h "state") str)}
@@ -1239,6 +1263,13 @@
     [:enum "phone" "desktop"]]
    [:commit {:x-display {:raw true :label "Commit" :help "The commit of the house that was filmed."}}
     [:string {:min 1 :max 64}]]
+   ;; an org clone's renderer names both halves of what it filmed
+   [:engine_commit {:optional true
+                    :x-display {:raw true :label "Engine commit" :help "The engine's commit the take was rendered on."}}
+    [:maybe [:string {:max 64}]]]
+   [:org_commit {:optional true
+                 :x-display {:raw true :label "Org commit" :help "The org's commit the take was rendered on, for an org clone."}}
+    [:maybe [:string {:max 64}]]]
    [:film {:optional true
            :x-display {:raw true :label "Film" :help "The id of the film this take made. Empty when none was rendered."}}
     [:maybe [:string {:max 200}]]]
