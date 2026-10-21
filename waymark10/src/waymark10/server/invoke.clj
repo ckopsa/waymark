@@ -942,7 +942,9 @@
   Reasons render over the secret-concealed row (waymark-kyg); id,
   state and the gate-safe summary keep the full row."
   [acc v d row inp acknowledged defn rdef now]
-  (let [nrow (narration-row rdef row)]
+  (let [nrow (narration-row rdef row)
+        ;; a guard naming no remedy still says where its fields are written
+        d (g/with-writers rdef (:name defn) d)]
     (cond
       (= :warning (:severity d))
       (if (contains? acknowledged (:name d))
@@ -958,7 +960,7 @@
       :else
       (throw (p/guard-refused
               (:name defn) (:state row)
-              (g/render-reason d v nrow)
+              (g/writers-reason d (g/render-reason d v nrow))
               {:guard (:name d)
                :remedies (g/remedy-doors d)
                :resolved-remedies (g/resolve-remedies d nrow inp (:evidence v))
