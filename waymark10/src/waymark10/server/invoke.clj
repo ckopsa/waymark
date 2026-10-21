@@ -152,6 +152,7 @@
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -1078,6 +1079,12 @@
   (let [now (:now ctx)
         _ (when-some [facts (seq (derived/tampered rdef row handled now (:calendar ctx)))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
+        ;; an account's balance (ledger step 3c) moves only by
+        ;; postings: a handler that writes one is refused, whoever
+        ;; holds the door
+        _ (when-some [moved (money/balances-moved (:accounts rdef) (:data row)
+                                                  (:data handled))]
+            (throw (p/schema-invalid (:name defn) moved)))
         ;; ref labels + one-of clears (phase 8): engine passes, never
         ;; handler work — the handler sets the ref, the engine writes
         ;; the label and clears the other arm
@@ -1549,15 +1556,22 @@
   :schema) an input carries from a hand — {field [why]}, or nil. A
   :system principal (the seed loader, the registrar, a pass) writes
   them; every other principal is refused as schema-invalid, before any
-  guard runs."
+  guard runs. An account's balance (ledger step 3c) is refused from
+  every principal, :system's too: only postings move it."
   [rdef principal inp]
-  (when-not (= :system (:type principal))
-    (not-empty
-     (into {}
-           (keep (fn [k]
-                   (when (contains? inp k)
-                     [k ["written by the engine, never by hand"]])))
-           (schema/engine-written-fields (:schema rdef))))))
+  (not-empty
+   (merge
+    (when-not (= :system (:type principal))
+      (into {}
+            (keep (fn [k]
+                    (when (contains? inp k)
+                      [k ["written by the engine, never by hand"]])))
+            (schema/engine-written-fields (:schema rdef))))
+    (into {}
+          (keep (fn [k]
+                  (when (contains? inp k)
+                    [k [(money/by-postings k)]])))
+          (keys (:accounts rdef))))))
 
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
@@ -2641,6 +2655,27 @@
     (store/insert-row! (:storage engine) tx kind (encode-row rdef row))
     row))
 
+(defn update-quiet!
+  "The quiet door for a row that exists: lock the row of `kind` under
+  `id` inside an existing transaction, put its data through `f` and save
+  it a version on — with NO transition and no guard pass. → the row as
+  saved, or nil when there is none.
+
+  One caller: the ledger (server/postings, step 3c), moving an account's
+  projected balance in the transaction that writes its postings. The
+  posting door's own transition is the write the log records, and a
+  balance is no door's to write (hand-written-errors, land!)."
+  [engine tx kind id f]
+  (let [rdef (rdef-of engine kind)
+        st (:storage engine)]
+    (when-some [raw (store/load-row st tx kind (str id) {:for-update true})]
+      (let [row (decode-row rdef raw)]
+        (decode-row rdef (store/save-row! st tx kind
+                                          (encode-row rdef (-> row
+                                                               (update :data f)
+                                                               (update :version inc)))
+                                          (:version row)))))))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
@@ -2734,7 +2769,9 @@
               row {:id (or id (str (random-uuid)))
                    :state (:initial rdef)
                    :version 1
-                   :data inp
+                   ;; each account is born at zero (ledger step 3c),
+                   ;; so "under 5" finds a row nothing posted to yet
+                   :data (merge (money/opening-balances (:accounts rdef)) inp)
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}

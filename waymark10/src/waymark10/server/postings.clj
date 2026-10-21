@@ -14,11 +14,20 @@
 
   The kind is enrolled when some kind declares :accounts
   (waymark10.modules, :ledger). A house that declares only
-  :house-accounts does not enrol it yet."
+  :house-accounts does not enrol it yet.
+
+  Ledger step 3c: each row account's balance is a read-only field on
+  its row (money/account-field), and `post!` moves it in the same
+  transaction as the postings. The posting rows are the truth and the
+  field their cache; `recomputed-balance` sums the truth, for step 10's
+  [balance-drift] to compare. A house account has no row to carry its
+  balance yet."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant LocalDate ZoneOffset)))
 
@@ -108,6 +117,38 @@
    ["§4 names a `posting` table beside the log; a posting is a row of an engine-served kind instead (owner, 2026-10-21), so it filters, sorts and grants like any row."
     "Each posting is inserted by the engine's quiet birth door (`inv/insert-quiet!`) with no transition of its own; the posting door's transition, named by log_id, is the write."]})
 
+(defn- rebalance!
+  "Move each row account's balance (step 3c) by its entries, inside
+  `tx`: the owning row is locked, its field summed onto and saved a
+  version on (inv/update-quiet!). Rows lock in one order, so two posts
+  over the same rows wait for each other rather than deadlock."
+  [eng tx entries]
+  (doseq [[[account-kind account-row] es]
+          (sort-by (comp str key) (group-by (juxt :account-kind :account-row) entries))
+          :when account-row]
+    (when-not (inv/update-quiet!
+               eng tx account-kind account-row
+               (fn [data]
+                 (reduce (fn [d {:keys [account-name amount]}]
+                           (update d (keyword (name account-name))
+                                   #(if (some? %) (money/plus % amount) amount)))
+                         data es)))
+      (throw (ex-info (str "no " (name account-kind) " " account-row " to post to")
+                      {:account-kind account-kind :account-row account-row})))))
+
+(defn recomputed-balance
+  "An account's balance summed from its posting rows, nil when it has
+  none: the truth its projected field caches (step 3c), and what step
+  10's [balance-drift] compares that field with."
+  [eng tx account-kind account-row account-name]
+  (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
+             (completing (fn [acc a] (if (some? acc) (money/plus acc a) a)))
+             nil
+             (store/search-rows (:storage eng) tx :posting
+                                [{:target :data :field :account :op :=
+                                  :value (account-address account-kind account-row account-name)}]
+                                {})))
+
 (defn post!
   "Write `entries` as postings inside `tx`, the transaction that commits
   the posting door's transition — so the postings, the row and the log
@@ -115,11 +156,15 @@
   :account-row (nil for a house account) :account-name :amount (a Money,
   signed) :effective-on (a LocalDate; the commit's UTC date when absent)
   :reverses (optional)}; `source` is {:kind :id :action :log-id :at}.
+  Each row account's balance moves in the same transaction (step 3c),
+  its row locked and saved a version on — so a door that posts to its
+  own row saves that row first, then posts.
   → the postings as stored."
   [eng tx source entries]
   (let [{:keys [kind id action log-id at]} source
         ^Instant at (or at (Instant/now))
         today (LocalDate/ofInstant at ZoneOffset/UTC)]
+    (rebalance! eng tx entries)
     (mapv (fn [{:keys [account-kind account-row account-name amount
                        effective-on reverses]}]
             (inv/insert-quiet!
