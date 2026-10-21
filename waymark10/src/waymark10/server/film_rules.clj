@@ -598,6 +598,8 @@
          [:vector
           [:map
            [:caption {:optional true} :string]
+           ;; a card shot's text; its hold is `hold_s`
+           [:card {:optional true} :string]
            [:role {:optional true} (into [:enum] roles)]
            [:goal_state {:optional true} :string]
            [:zoom {:optional true} :boolean]

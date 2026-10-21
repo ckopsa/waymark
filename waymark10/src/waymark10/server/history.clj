@@ -221,6 +221,8 @@
              :law_revision (:law-revision t)
              :evidence (evidence-tier rdef (:judgment t))}
       (:summary t) (assoc :summary (:summary t))
+      ;; the hand's own sentence about the move (ticket 1d8f5f1c)
+      (get-in t [:actor :why]) (assoc :why (get-in t [:actor :why]))
       (seq (:acknowledged t)) (assoc :acknowledged (vec (:acknowledged t)))
       (:correlation-id t) (assoc :correlation_id (:correlation-id t))
       b (assoc :basis b)

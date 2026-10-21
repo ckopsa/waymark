@@ -48,6 +48,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
@@ -600,3 +601,67 @@
 
     (testing "an unknown sitting answers nil"
       (is (nil? (seats/sitting-transitions eng "no-such-sitting"))))))
+
+;; ── the record of each call (ticket dc9e5b96) ────────────────────────
+
+(defn- calls-of
+  "The sitting's record of calls, in the order it made them."
+  [eng sitting-id]
+  (->> (store/with-tx (:storage eng)
+         #(store/query-rows (:storage eng) % :sitting_call
+                            {:sitting (str sitting-id)} {}))
+       (map :data)
+       (sort-by :n)
+       vec))
+
+(deftest a-sitting-records-each-call-it-made-in-order
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sid sitting]} (sit! h)
+        dinner (str (:id (meal! eng "Pho")))
+        got (tool h (with-session sid) "waymark_get"
+                  {:kind "meal" :id dinner :return "summary"})
+        listed (tool h (with-session sid) "waymark_query"
+                     {:kind "meal" :return "summary"})
+        moved (tool h (with-session sid) "waymark_invoke"
+                    {:kind "meal" :id dinner :action "accept" :return "summary"})
+        calls (filterv #(not= "waymark_sit" (:tool %)) (calls-of eng sitting))]
+    (is (false? (:isError got)) (text-of got))
+    (is (false? (:isError listed)) (text-of listed))
+    (is (false? (:isError moved)) (text-of moved))
+    (is (= ["waymark_get" "waymark_query" "waymark_invoke"] (mapv :tool calls)))
+    (is (apply < (map :n calls)) "numbered in the order the door answered")
+    (let [[g q i] calls]
+      (testing "the read names its row and the row's summary line at that moment"
+        (is (= ["meal" dinner "read"] ((juxt :row_kind :row_id :outcome) g)))
+        (is (seq (:row_summary g)))
+        (is (= (str (:summary (doc-of got))) (:row_summary g))))
+      (testing "the collection read keeps the kind and the count, not the rows"
+        (is (= ["meal" "" "read" 1]
+               ((juxt :row_kind :row_id :outcome (comp long :count)) q))))
+      (testing "the move names its action, its outcome and the log entry it wrote"
+        (is (= ["meal" dinner "accept" "moved"]
+               ((juxt :row_kind :row_id :action :outcome) i)))
+        (is (= (str (:summary (doc-of moved))) (:row_summary i)))
+        (is (= (some-> (first (store/with-tx (:storage eng)
+                                 #(store/transitions (:storage eng) %
+                                                     {:kind :meal :resource-id dinner}
+                                                     {:newest-first true :limit 1})))
+                       :id str)
+               (:log_id i)))
+        (is (seq (:log_id i)))))))
+
+(deftest a-held-call-and-a-refusal-record-their-outcome
+  (testing "a held invoke records outcome held, and no log entry"
+    (let [e (transcripts/call-entry "waymark_invoke"
+                                    {:kind "transcript" :id "t-1" :action "purge"}
+                                    {:held true :held_call "h-1" :note "waits"} false)]
+      (is (= ["transcript" "t-1" "purge" "held"]
+             ((juxt :row_kind :row_id :action :outcome) e)))))
+  (testing "a refused invoke records outcome refused and no summary line"
+    (let [e (transcripts/call-entry "waymark_invoke"
+                                    {:kind "meal" :id "m-1" :action "decline"}
+                                    {:status 409 :summary "not this"} true)]
+      (is (= ["refused" ""] ((juxt :outcome :row_summary) e))))))

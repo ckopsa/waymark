@@ -79,8 +79,9 @@
 
 (defn- checked!
   "Throw for a script the player cannot play: days that do not climb
-  from 1 within the clock's 14, or a call with no known cast, kind or
-  door. `rdefs` is the engine's resources."
+  from 1 within the clock's 14, a `:card` that is not text of 1 to 280
+  characters, or a call with no known cast, kind or door. `rdefs` is
+  the engine's resources."
   [week rdefs]
   (let [days (:days week)
         ns' (map :day days)]
@@ -88,6 +89,13 @@
       (throw (broken (str "The week's :days are numbered " (pr-str (vec ns'))
                           ": each a :day from 1, climbing, and none past " max-days ".")
                      {})))
+    (doseq [[whose card] (cons ["The week's" (:card week)]
+                               (map (fn [d] [(str "Day " (:day d) "'s") (:card d)]) days))
+            :when (some? card)]
+      (when-not (and (string? card) (not (str/blank? card)) (<= (count card) 280))
+        (throw (broken (str whose " :card is `" (pr-str card)
+                            "`, and a card is text of 1 to 280 characters.")
+                       {}))))
     (doseq [{:keys [day calls]} days
             {:keys [kind action] :as c} calls]
       (when-not (casts (as-of c))

@@ -367,6 +367,30 @@
     (testing "an org with no week.edn carries none"
       (is (nil? (first-week/week-of (example-dir)))))))
 
+(deftest a-week-with-cards-opens-on-its-card-and-cards-each-day
+  (let [dir (io/file (.getParentFile (io/file (example-dir))) "week_fixture")
+        cards {1 "Wednesday. Two jobs arrive."
+               2 "Thursday. The lawn waits on the owner."
+               3 "Friday. The hedge is let go."}
+        script (-> (:week_script (first-week/week-of dir))
+                   (assoc :card "A garden crew takes its first jobs.")
+                   (update :days (partial mapv #(assoc % :card (cards (:day %))))))
+        shots (:shots (:scene (first-week/scene seed (assoc filmed-on
+                                                            :resources (example-kinds)
+                                                            :week_script script))))
+        at (keep-indexed (fn [i s] (when (:card s) i)) shots)]
+    (testing "the scene opens with the week's card"
+      (is (= (:card script) (:card (first shots)))))
+    (testing "each day's card comes before that day's shots, in order"
+      (is (= (cons (:card script) (map :card (:days script))) (keep :card shots)))
+      (is (every? (fn [[a b]] (< (inc a) b)) (partition 2 1 at))))
+    (testing "each card is held as long as the scene check asks"
+      (is (every? #(>= (get-in % [:hold :ms]) (scenes/card-ms (:card %)))
+                  (filter :card shots))))
+    (testing "a scene with no week script shows no card"
+      (is (not-any? :card (:shots (:scene (first-week/scene seed (assoc filmed-on
+                                                                        :resources (example-kinds))))))))))
+
 (def ^:private dry-week
   [{:day 1 :as "world" :kind "booking" :action "create" :outcome "moved"}
    {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "moved"}

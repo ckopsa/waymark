@@ -35,6 +35,11 @@
   of an org's day (`day-in-window`), and a hole that finds none says so
   plainly.
 
+  A CARD IS A FULL-SCREEN TEXT. A shot `{card, hold: {ms}}` shows its
+  text alone on black for the hold. The text is plain, at most 280
+  characters, and may hold holes as a `say` does; `check` asks a hold
+  of at least 1500 ms and 60 ms a word (`card-ms`).
+
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
   (:require [clojure.string :as str]
@@ -607,6 +612,50 @@
                     :else say-shape))
                 say)))
 
+(def card-max
+  "The most characters a card's text holds."
+  280)
+
+(defn- card-text
+  "A card's written text: the string, or a list's strings joined."
+  [card]
+  (if (string? card) card (apply str (filter string? card))))
+
+(defn card-ms
+  "The least a card of `text` is held, in ms: 1500, and 60 a word."
+  [text]
+  (+ 1500 (* 60 (count (re-seq #"\S+" (str text))))))
+
+(defn- card-problem
+  "Why a shot's `card` cannot be shown; nil when it can. A card is plain
+  text of at most `card-max` characters, or a list of text and holes as
+  a `say` is, and its shot holds it: the verb is `hold`, its `ms` at
+  least `card-ms`."
+  [shot rdef-of]
+  (let [card (get shot "card")
+        text (when (or (string? card) (sequential? card)) (card-text card))
+        ms (get-in shot ["hold" "ms"])]
+    (cond
+      (nil? text)
+      "a `card` is text, or a list of text and holes as a `say` is."
+
+      (and (str/blank? text) (not-any? map? card))
+      "a `card` has text, and this one is empty."
+
+      (> (count text) card-max)
+      (str "a `card` is at most " card-max " characters, and this one has "
+           (count text) ".")
+
+      (say-problem card rdef-of)
+      (say-problem card rdef-of)
+
+      (not (map? (get shot "hold")))
+      "a `card` is held: its shot's verb is `hold`."
+
+      (and (pos-int? ms) (< ms (card-ms text)))
+      (str "a `card` of " (count (re-seq #"\S+" text)) " words is held at least "
+           (card-ms text) " ms, and this one is held " ms "."))))
+
 (defn- dollars
   "Whole dollars `n` with a comma between thousands: 1250 as 1,250."
   [n]
@@ -1135,13 +1184,16 @@
   (if-not (map? shot)
     (fail "a shot is a map with one verb.")
     (let [named (filter (set verbs) (keys shot))
-          stray (remove (into #{"say" "expect" "bind" "role" "speed" "trim" "id"} verbs)
+          stray (remove (into #{"say" "card" "expect" "bind" "role" "speed" "trim" "id"} verbs)
                         (keys shot))
           verb (first named)]
       (cond
         (seq stray)
         (fail "unknown verb " (tick (first stray)) "; the verbs are "
               (str/join ", " verbs) ".")
+
+        (and (contains? shot "card") (card-problem shot rdef-of))
+        (fail (card-problem shot rdef-of))
 
         (not= 1 (count named))
         (fail "a shot has one verb, and this one has " (count named) ".")
@@ -1426,7 +1478,14 @@
     [:maybe [:int {:min 1}]]]
    [:role {:optional true
            :x-display {:label "Role" :help "The shot's part in the arc: friction, turn or payoff."}}
-    [:maybe (into [:enum] film-rules/roles)]]])
+    [:maybe (into [:enum] film-rules/roles)]]
+   ;; a card shot's text as it was shown, and how long it was held
+   [:card {:optional true
+           :x-display {:widget "prose" :label "Card" :help "The text a card shot showed, its holes filled."}}
+    [:maybe [:string {:max 2000}]]]
+   [:hold_ms {:optional true
+              :x-display {:label "Held (ms)" :help "How long the card was held, in ms."}}
+    [:maybe [:int {:min 0}]]]])
 
 (def ^:private take-fields
   "What the runner writes: the create model."
