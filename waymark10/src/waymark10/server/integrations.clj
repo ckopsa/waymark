@@ -479,7 +479,6 @@
    ["§ 3's endings are states, and the doors that land them (mark_applied, mark_refused, mark_unmatched, mark_ambiguous, mark_ignored) are the engine's own, hidden from everyone else; `dismiss` lands a seventh state, `dismissed`."
     "§ 3 finds the `:on-event` entries for the source and type, then the row by `:match`. When several entries name the type, the first in kind order whose match names exactly one row runs; the receipt lands `ambiguous` only when none does and one names more than one row."
     "§ 3's `:tell` wakes the seats it names, or the approver. The refused receipt carries them as `tell`, and a seat hears it through its own wake_on for integration_event/mark_refused; a named seat that does not subscribe is not woken yet."
-    "§ 3 keeps an `ignored` receipt 30 days and then purges it. The purge is not built yet, so an ignored receipt stays."
     "§ 3's applier is a log consumer, and also a sweep every 30 seconds over the receipts still `received`: the sweep tries a `:retry-unmatched-for` entry again, and applies what a crash or a pause left."
     "§ 3's `received` is the receipt's state; the moment it arrived is the row's own creation time, not a field."
     "§ 3's `:via :inbox` entry makes its row with the entry's `:input`; with none, the event body's top-level fields are the create's input. A refused create is a `refused` receipt with no target."
@@ -938,10 +937,38 @@
            (catch Exception e
              (warn! "receipt " (:id raw) " could not be applied — " (ex-message e)))))))
 
+(def ignored-kept
+  "How long an `ignored` receipt is kept before the purge (§ 3)."
+  (Duration/ofDays 30))
+
+(defn purge-ignored!
+  "Delete every `ignored` receipt that landed more than `ignored-kept`
+  before `now` — a maintenance delete with no transition, as a
+  transcript's lines go; the landing transition stays in the log as
+  the record of it. → how many."
+  ([eng] (purge-ignored! eng (Instant/now)))
+  ([eng ^Instant now]
+   (let [st (:storage eng)
+         cutoff (.minus now ^Duration ignored-kept)]
+     (loop [n 0]
+       (let [ids (store/with-tx st
+                   (fn [tx]
+                     (->> (store/query-rows st tx :integration_event
+                                            {:state :ignored}
+                                            {:order-by :updated_at :limit 500})
+                          (take-while #(some-> ^Instant (:updated-at %) (.isBefore cutoff)))
+                          (mapv #(str (:id %))))))]
+         (if (empty? ids)
+           n
+           (recur (+ n (long (store/with-tx st
+                               (fn [tx] (store/delete-rows! st tx :integration_event ids))))))))))))
+
 (defn start-applier!
   "The applier: a durable log consumer (consumer:integrations) that
   applies each receipt as it is kept or retried, and a sweep every
-  `:sweep-ms`. opts: :dispatcher, :poll-ms, :sweep-ms."
+  `:sweep-ms` that also purges the `ignored` receipts past
+  `ignored-kept`. The module elects it, so one process per database
+  purges. opts: :dispatcher, :poll-ms, :sweep-ms."
   [eng {:keys [sweep-ms] :or {sweep-ms 30000} :as opts}]
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
@@ -949,7 +976,10 @@
                      (while (not (.await stop (long sweep-ms) TimeUnit/MILLISECONDS))
                        (try (sweep! eng)
                             (catch Exception e
-                              (warn! "the sweep failed (" (ex-message e) ")")))))
+                              (warn! "the sweep failed (" (ex-message e) ")")))
+                       (try (purge-ignored! eng)
+                            (catch Exception e
+                              (warn! "the purge failed (" (ex-message e) ")")))))
                    "waymark10-integrations-sweep")]
     (doto ^Thread t (.setDaemon true) (.start))
     {:consumer (consumers/register-consumer!
