@@ -20,7 +20,9 @@
   one, many, none}}` and
   `{\"$moves\": {kind, since, until, by, none}}` holes, and
   `{\"$day\": {since, until, domain, none}}`, whose window may instead be
-  `window: \"shot\"`: since the take's last `$day` was filled (`take-run`).
+  `window: \"shot\"`: since the take's last `$day` was filled (`take-run`),
+  or `window: \"clock\"` with a `day` k: between the clone's (k-1)th and
+  kth `clock_shift` (`clock-window`).
   A `$rows` hole's window may instead be `window: \"take\"`: since the
   take began.
   A `{\"$list\": {items, lead, none}}` joins what its `$rows` holes say.
@@ -474,9 +476,9 @@
   "Why one `$day` hole cannot be filled; nil when it can. Its `domain`
   is judged for shape only: a domain no kind names plays a quiet day."
   [h]
-  (let [names ["since" "until" "window" "domain" "none"]]
+  (let [names ["since" "until" "window" "day" "domain" "none"]]
     (if-not (map? h)
-      "a `$day` hole is a map of `since`, `until` and `domain`, or of `window` and `domain`."
+      "a `$day` hole is a map of `since`, `until` and `domain`, or of `window` and `domain`, with a `day` when the window is the clock."
       (let [stray (remove (set names) (keys h))]
         (cond
           (seq stray)
@@ -488,12 +490,23 @@
 
           (contains? h "window")
           (cond
-            (not= "shot" (get h "window"))
-            (str "a `$day` hole's `window` is \"shot\", and this one is "
+            (not (#{"shot" "clock"} (get h "window")))
+            (str "a `$day` hole's `window` is \"shot\" or \"clock\", and this one is "
                  (tick (get h "window")) ".")
 
             (or (contains? h "since") (contains? h "until"))
-            "a `$day` hole with a `window` takes no `since` or `until`.")
+            "a `$day` hole with a `window` takes no `since` or `until`."
+
+            (= "shot" (get h "window"))
+            (when (contains? h "day")
+              "a `$day` hole's `day` goes with `window: \"clock\"` only.")
+
+            (not (and (integer? (get h "day")) (<= 1 (get h "day") 31)))
+            (str "a `$day` hole of `window: \"clock\"` names its `day`, a whole number from 1 to 31, and this one is "
+                 (tick (get h "day")) "."))
+
+          (contains? h "day")
+          "a `$day` hole's `day` goes with `window: \"clock\"` only."
 
           :else (span-problem "$day" h))))))
 
@@ -578,7 +591,9 @@
   `window: \"shot\"` reads [the instant `run` holds, now), and leaves now
   on `run` for the next one; a `$rows` hole of `window: \"take\"` reads
   [the instant the take began on `run`, now). `run` is the take's
-  `take-run`, a fresh one unless given."
+  `take-run`, a fresh one unless given. A `$day` hole of
+  `window: \"clock\"` asks `day-of` for {:clock-day k :until now :domain}:
+  day k of the clone's clock."
   ([say rows-of] (fill-say say rows-of (constantly [])))
   ([say rows-of moves-of] (fill-say say rows-of moves-of (constantly nil)))
   ([say rows-of moves-of day-of] (fill-say say rows-of moves-of day-of (take-run)))
@@ -640,11 +655,15 @@
                                                  :by (get h "by" "seats")})
                                       h no-moves)
                               (if-some [h (day-hole-of part)]
-                                (or (day-of (if (= "shot" (get h "window"))
+                                (or (day-of (case (get h "window")
+                                              "shot"
                                               (let [now (Instant/now)
                                                     [was] (swap-vals! run assoc :day-filled now)]
                                                 {:since (:day-filled was) :until now
                                                  :domain (str (get h "domain"))})
+                                              "clock"
+                                              {:clock-day (get h "day") :until (Instant/now)
+                                               :domain (str (get h "domain"))}
                                               {:since (instant-of (get h "since"))
                                                :until (instant-of (get h "until"))
                                                :domain (str (get h "domain"))}))
@@ -793,7 +812,7 @@
     (str "a person was asked to approve "
          (first-part (summary/line rdef (assoc row :kind :approval_request))))))
 
-(defn day-in-window
+(defn- told-day
   "One plain sentence of the day [since, until) of the org whose kinds
   name `domain`, or nil when nothing happened in it. It reads that
   window's transitions on every kind of the domain, the domain's held
@@ -804,8 +823,7 @@
   first within each), and tells the first two as clauses joined with
   `; `. `opts` :held? and :asks? false leave the held calls or the asks
   out, unsaid, for a caller who does not see that kind whole."
-  ([eng w] (day-in-window eng w {}))
-  ([eng {:keys [since until domain]} {:keys [held? asks?] :or {held? true asks? true}}]
+  [eng {:keys [since until domain]} {:keys [held? asks?] :or {held? true asks? true}}]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
         lo (inst-ms since)
@@ -842,7 +860,40 @@
                         (take 2)
                         (str/join "; "))]
           (when-not (str/blank? said)
-            (str (str/upper-case (subs said 0 1)) (subs said 1) "."))))))))
+            (str (str/upper-case (subs said 0 1)) (subs said 1) ".")))))))
+
+(defn clock-window
+  "Day `k` of engine `eng`'s demo clock as a {:since :until} window: from
+  its (k-1)th `clock_shift` row to its kth, day 1 from the start of its
+  log and the day after the last shift up to `until`; nil for a later
+  day, and for a `k` that is no whole number from 1. Rows are stamped
+  with the wall clock in play order, so the shifts bound the days."
+  [eng k ^Instant until]
+  (let [st (:storage eng)
+        shifts (if (contains? (inv/resources eng) :clock_shift)
+                 (store/with-tx st
+                   (fn [tx]
+                     (->> (store/query-rows st tx :clock_shift {} {:limit 100000})
+                          (keep #(ms-of (:created-at %)))
+                          sort)))
+                 [])
+        bounds (-> [0] (into shifts) (conj (inst-ms until)))]
+    (when (and (integer? k) (<= 1 k (inc (count shifts))))
+      {:since (Instant/ofEpochMilli (nth bounds (dec k)))
+       :until (Instant/ofEpochMilli (nth bounds k))})))
+
+(defn day-in-window
+  "One plain sentence of the day `w` of the org whose kinds name its
+  `domain`, or nil when nothing happened in it (`told-day`). `w` is
+  {:since :until :domain}, or {:clock-day k :until :domain}: day k of
+  the engine's demo clock, the last day ending at `until`
+  (`clock-window`). `opts` are `told-day`'s."
+  ([eng w] (day-in-window eng w {}))
+  ([eng w opts]
+   (if (contains? w :clock-day)
+     (when-some [cw (clock-window eng (:clock-day w) (:until w))]
+       (told-day eng (merge (dissoc w :clock-day) cw) opts))
+     (told-day eng w opts))))
 
 ;; ── the say over the wire (POST /api/-/scenes/say) ───────────────────
 
