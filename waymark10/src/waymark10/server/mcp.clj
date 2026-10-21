@@ -353,6 +353,16 @@
 (defn- ttl-cutoff ^Instant [^Instant now]
   (.minusSeconds now session-ttl-seconds))
 
+(defn- session-now
+  "Transport time: the wall clock, never the demo clock. A shifted
+  engine (clock-shift) moves law-facing time only; read through
+  `:now-fn`, a P1D shift aged every session past the TTL and the
+  transport answered 404 until the engine was taken down (ticket
+  f0365a18). `:recording-clock` is the real clock where a demo clock
+  is laid over the engine, and an unshifted engine has only `:now-fn`."
+  ^Instant [eng]
+  ((or (get-in eng [:services :recording-clock]) (:now-fn eng))))
+
 (defn- binding-of
   "The binding on this session, or nil. A plain read — no touch,
   because the callers are not messages of their own."
@@ -369,7 +379,7 @@
   [eng & [declared]]
   (when-some [a (:mcp-sessions eng)]
     (let [id (new-session-id)
-          now ((:now-fn eng))]
+          now (session-now eng)]
       (if (session-table? eng)
         (sessions/open! (:storage eng) id now (ttl-cutoff now) declared)
         (swap! a (fn [m]
@@ -389,7 +399,7 @@
   [eng id]
   (when-some [a (:mcp-sessions eng)]
     (when-some [id (some-> id str not-empty)]
-      (let [now ((:now-fn eng))]
+      (let [now (session-now eng)]
         (if (session-table? eng)
           (sessions/touch! (:storage eng) id now (ttl-cutoff now))
           (let [m (swap! a (fn [m]
@@ -443,14 +453,14 @@
       (empty? sitting-ids) #{}
       (session-table? eng)
       (sessions/bound-elsewhere (:storage eng) id sitting-ids
-                                (ttl-cutoff ((:now-fn eng))))
+                                (ttl-cutoff (session-now eng)))
       :else
       (let [wanted (set (map str sitting-ids))]
         (into #{}
               (comp (remove (fn [[k _]] (= k id)))
                     (keep (fn [[_ e]] (some-> e :bound :sitting str)))
                     (filter wanted))
-              (some-> (:mcp-sessions eng) deref (evict ((:now-fn eng)))))))))
+              (some-> (:mcp-sessions eng) deref (evict (session-now eng))))))))
 
 (defn- live-sessions
   "The hashes of every connector session heard from since `since`, as
@@ -3243,7 +3253,8 @@
                 (some-> (first (filter #(= wanted (stamp-of %)) rows))
                         (claim! (constantly true))))
               (let [free (remove stamp-of rows)
-                    now ^Instant ((:now-fn eng))
+                    ;; compared with sessions' `touched`: transport time
+                    now (session-now eng)
                     idle (long (or (get-in seat [:data :sitting_idle_seconds])
                                    seats/default-idle-seconds))
                     since (let [quiet (.minusSeconds now idle)

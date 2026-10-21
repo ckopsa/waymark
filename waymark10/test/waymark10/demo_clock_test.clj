@@ -12,6 +12,7 @@
             [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.scheduled :as scheduled]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -247,3 +248,15 @@
       (testing "and the next shift adds to it"
         (is (= 10800 (get-in (shift! again {:by "PT1H"}) [:data :offset_seconds])))
         (is (= (.plusSeconds ^Instant t0 10800) (now again)))))))
+
+(deftest a-shift-leaves-the-mcp-sessions-on-the-wall-clock
+  (let [{:keys [eng real]} (world)
+        open (mcp/open-session! eng)]
+    (shift! eng {:by "P7D"})
+    (testing "a session open before a 7-day shift still answers"
+      (is (some? (mcp/touch-session! eng open))))
+    (testing "and a new one opens and answers"
+      (is (some? (mcp/touch-session! eng (mcp/open-session! eng)))))
+    (testing "the TTL still runs on real time"
+      (tick! real (inc mcp/session-ttl-seconds))
+      (is (nil? (mcp/touch-session! eng open))))))
