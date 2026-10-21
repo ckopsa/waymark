@@ -42,9 +42,9 @@ async function renderFeed(view, doc, hints, decl) {
   const scroller = el("div", {class: "feed-scroll"});
   const root = el("div",
     {class: "feedview", role: "region",
-     "aria-label": `${title(kind)}s — ${viewLabel}`},
+     "aria-label": `${titles(kind)} — ${viewLabel}`},
     el("div", {class: "feed-top"},
-      el("span", {class: "feed-name"}, title(kind) + "s",
+      el("span", {class: "feed-name"}, titles(kind),
         el("span", {class: "muted"}, ` · ${viewLabel}`)),
       pos,
       el("button", {class: "feed-close", "data-feed-close": "",

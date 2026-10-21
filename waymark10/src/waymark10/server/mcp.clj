@@ -5175,8 +5175,10 @@
   "What `submit` does on this seat, in one sentence built from the
   policy. The model reads it and asks for nothing: the sentence says
   whether a push opens a pull request, who merges, how large the
-  change may be, and how many rounds it gets."
-  [policy]
+  change may be, and how many rounds it gets. A change whose lane a
+  `lane_max_lines` prefix names is told that lane's ceiling (ticket
+  bacb84f2), as factory10's `bench/lane-max-lines-of` judges it."
+  [policy change]
   (if (nil? policy)
     ;; the same sentence the submit door's first guard says, said
     ;; early: a repository nobody has stated a policy for is a
@@ -5187,7 +5189,18 @@
     (let [d (:data policy)
           opens? (not (false? (:opens_pr d)))
           merges? (not (false? (:auto_merge d)))
-          lines (long (or (:max_lines d) 400))
+          lane (some-> (get-in change [:data :lane]) str not-empty)
+          lane-lines (when lane
+                       (some (fn [[k n]]
+                               (let [p (str/replace (if (keyword? k) (subs (str k) 1) (str k))
+                                                    #"/+$" "")]
+                                 (when (and (integer? n) (not-empty p)
+                                            (or (= lane p)
+                                                (str/starts-with? lane (str p "/"))))
+                                   n)))
+                             (sort-by #(- (count (str (key %))))
+                                      (:lane_max_lines d))))
+          lines (long (or lane-lines (:max_lines d) 400))
           rounds (long (or (:rounds_per_change d) 3))]
       (str "Submit writes your changes to the branch with your sentence,"
            " then pushes them: "
@@ -5197,7 +5210,11 @@
            (if merges? "the gate merges the change when the checks are green"
                "a person merges the change")
            ". The change must have not more than " lines
-           " changed lines, and this change gets " rounds
+           " changed lines"
+           (when lane-lines
+             (str " (the " lane " lane's ceiling, while every path it"
+                  " touches stands in that lane)"))
+           ", and this change gets " rounds
            (if (= 1 rounds) " round." " rounds.")))))
 
 (def ^:private bench-dark-note
@@ -5365,7 +5382,7 @@
                                  {:repo repo :branch branch :base base})
           made (bench-payload answer)
           refusal (bench-refusal answer)
-          means (submit-means policy)
+          means (submit-means policy change)
           ;; what the last submit caused, for a change that HAS one:
           ;; a person's own branch, or a round this house already
           ;; pushed (R-12.31). A worktree the rig did not make is

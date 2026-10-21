@@ -36,6 +36,7 @@
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -149,7 +150,9 @@
                      :waives (set (:waives a))
                      :emits (vec (:emits a)))
         (seq touches) (assoc :touches touches)
-        ref-fields (assoc :ref-fields ref-fields)))))
+        ref-fields (assoc :ref-fields ref-fields)
+        ;; ledger step 4: the entries this door posts, :move spelled out
+        (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes
@@ -1506,6 +1509,18 @@
 
 ;; — :undo pointers (batch H, delta 4) ───────────────────────────────
 
+(defn- stamp-reversals
+  "Ledger step 4 (docs/spec-ledger-money.md §4): the :undo of a door
+  that :posts takes back what that door posted. Each such undo carries
+  :reverses-posts, the set of posting doors it reverses — read off the
+  pointers in `authored` before verify-undo-pointers strips them."
+  [authored actions]
+  (reduce (fn [acc [aname a]]
+            (if (and (:undo a) (seq (:posts a)))
+              (update-in acc [(:undo a) :reverses-posts] (fnil conj #{}) aname)
+              acc))
+          actions authored))
+
 (defn- verify-undo-pointers
   "An :undo pointer is verified where every action is known, then
   stripped — its residue is the :reversible true it already stamped
@@ -1518,7 +1533,9 @@
   (let [kind (:kind rmap)]
     (update rmap :actions
             (fn [actions]
-              (into (sorted-map)
+              (stamp-reversals
+               actions
+               (into (sorted-map)
                     (map (fn [[aname a]]
                            (if-some [u-name (:undo a)]
                              (let [u (get actions u-name)]
@@ -1543,7 +1560,7 @@
                                                  "exactly where it began")))
                                [aname (dissoc a :undo)])
                              [aname a])))
-                    actions)))))
+                    actions))))))
 
 ;; — the owns map (batch H) ──────────────────────────────────────────
 

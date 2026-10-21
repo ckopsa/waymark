@@ -372,6 +372,15 @@ function toast(msg, bad) {
 function title(s) {
   return String(s).replaceAll("_", " ").replace(/^./, c => c.toUpperCase());
 }
+/* a kind's plural for a person to read — Studies, not Studys — by the
+   full page's rules (pluralWord, 110-discovery-routing.js) */
+function titles(kind) {
+  const w = String(kind);
+  return title(/(?:ss|us|x|z|ch|sh)$/.test(w) ? w + "es"
+    : /s$/.test(w) ? w
+    : /[^aeiou]y$/.test(w) ? w.slice(0, -1) + "ies"
+    : w + "s");
+}
 function go(href) { location.hash = href; }
 
 /* ════ discovery (well-known drives everything) ═════════════════════ */
@@ -404,7 +413,7 @@ async function renderNav(current) {
   const eng = entries.filter(([k]) => ENGINE_KINDS.has(k));
   const link = ([kind, {href}]) =>
     el("a", {href: "#" + href, class: current === href ? "on" : ""},
-       title(kind) + "s");
+       titles(kind));
   nav.append(el("a", {href: "#", class: current ? "" : "on"}, "Home"));
   nav.append(...app.map(link));
   if (eng.length) nav.append(el("span", {class: "sep"}, "·"), ...eng.map(link));
@@ -439,13 +448,13 @@ async function renderHome() {
   for (const [kind, {href}] of Object.entries(idx.resources || {})) {
     if (ENGINE_KINDS.has(kind)) continue;
     cards.push(el("div", {class: "card rowlink", onclick: () => go(href)},
-      el("b", {}, title(kind) + "s"), " ",
+      el("b", {}, titles(kind)), " ",
       el("span", {class: "meta mono"}, href)));
   }
   const engine = Object.entries(idx.resources || {})
     .filter(([k]) => ENGINE_KINDS.has(k))
     .map(([kind, {href}]) => el("a", {href: "#" + href, class: "chip"},
-                                title(kind) + "s"));
+                                titles(kind)));
   const surfaces = Object.entries(idx.surfaces || {}).map(([name, {href}]) =>
     href.includes("{anchor-id}")
       ? el("li", {}, el("code", {}, name), " ", el("span", {class: "meta mono"}, href),
@@ -571,7 +580,7 @@ async function renderCollection(href) {
       ? el("button", {onclick: () => go(doc.links.next.href)}, "next ›") : null);
 
   $main.replaceChildren(
-    el("h1", {}, title(doc.kind.replace("_collection", "")) + "s"),
+    el("h1", {}, titles(doc.kind.replace("_collection", ""))),
     el("p", {class: "meta"}, doc.summary),
     actionsBar, bar, ...chipRows,
     el("div", {class: "card tablewrap"},
@@ -735,7 +744,7 @@ async function renderResource(href) {
 
   $main.replaceChildren(
     el("p", {class: "crumb"},
-      el("a", {href: "#" + collectionOf(doc.self)}, "‹ " + title(doc.kind) + "s")),
+      el("a", {href: "#" + collectionOf(doc.self)}, "‹ " + titles(doc.kind))),
     el("h1", {}, doc.summary || doc.kind),
     el("p", {}, el("span", {class: "statechip"}, doc.state), " ",
       el("span", {class: "meta"},

@@ -59,6 +59,28 @@ function kindAtHref(idx, href) {
     if (r && r.href === href) return kind;
   return null;
 }
+/* a kind's plural for a person to read — Studies, not Studys. The
+   plural a kind declares rides its collection's href on discovery;
+   where it declared none, the engine's default (the name and an s) is
+   no English word, and English's own rules make it: a consonant's y
+   is -ies, a hiss is -es, a word already ending in s stays as it is.
+   The address itself is the declaration's and is never made here. */
+const PLURAL_ES = /(?:ss|us|x|z|ch|sh)$/;
+const PLURAL_AS_IS = /s$/;
+const PLURAL_IES = /[^aeiou]y$/;
+function pluralWord(w) {
+  w = String(w);
+  return PLURAL_ES.test(w) ? w + "es"
+    : PLURAL_AS_IS.test(w) ? w
+    : PLURAL_IES.test(w) ? w.slice(0, -1) + "ies"
+    : w + "s";
+}
+function kindPlural(kind) {
+  const k = String(kind);
+  const m = /^\/api\/([^/?]+)$/.exec(collectionHref(wellKnownNow, k) || "");
+  return m && m[1] !== k + "s" ? m[1] : pluralWord(k);
+}
+const titles = kind => title(kindPlural(kind));
 
 /* published data schemas: x-display hints per kind */
 const dataHintsCache = {};

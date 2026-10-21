@@ -11,14 +11,25 @@ function renderAsOf(view, doc, hints) {
   const panel = el("div", {class:"panel"});
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, title(d.kind || "row") + "s"),
+    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, titles(d.kind || "row")),
     el("span", {class:"idsep"}, " / "),
     el("a", {class:"id", href:"#"+of, title:"this row as it stands now"},
       String(d.id || of.split("/").pop()).slice(0, 8))));
-  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
   const at = new Date(d.as_of);
   const day = isNaN(at) ? String(d.as_of)
     : at.toLocaleDateString(undefined, {weekday: "long"});
+  /* the band: which day this page is, before anything on it */
+  const when = isNaN(at) ? String(d.as_of)
+    : at.toLocaleDateString(undefined, {weekday: "long", year: "numeric",
+                                        month: "long", day: "numeric"}) +
+      " " + at.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"});
+  panel.append(el("div", {class:"asof-band"}, `As of ${when}`));
+  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
+  /* the held call pending then: whose tap the row was waiting on */
+  const h = d.held;
+  if (h) panel.append(el("div", {class:"asof-band waiting"},
+    `Waiting on ${h.who || h.owner || "a person"}'s tap: ` +
+    title(h.action || "allow") + (h.why ? ` — ${h.why}` : "")));
   panel.append(el("div", {},
     el("span", {class:"statechip", title: d.kind || ""},
       d.existed ? String(d.state) : "not yet"),
@@ -37,7 +48,7 @@ async function renderResource(view, doc, hints) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("a", {href:"#"+colHref}, titles(kind)),
     el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));

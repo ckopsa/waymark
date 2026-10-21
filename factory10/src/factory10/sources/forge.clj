@@ -104,6 +104,7 @@
             [factory10.resources.org-plan :as org-plan]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
+            [factory10.week :as week]
             [factorykit.change :as change-kit]
             [factorykit.forge :as kit]
             [waymark10.server.film-rules :as film-rules]
@@ -2936,13 +2937,18 @@
                                           (law-page-of doc))
                          scene (within-cap log-fn org "first_week_scene"
                                            first-week-scene-cap
-                                           (first-week-scene-of doc))]
+                                           (first-week-scene-of doc))
+                         ;; the week report's checks join the findings
+                         ;; (ticket 7fba2e9b)
+                         wk (week/of-artifact doc)]
                      (inv/invoke! eng :org_plan (str (:id plan)) door
                                   (cond-> (merge {:head_sha head
-                                                  :findings (capped-findings found)}
+                                                  :findings (capped-findings
+                                                             (into found (:findings wk)))}
                                                  (live-of doc))
                                     page (assoc :law_page page)
-                                    scene (assoc :first_week_scene scene))
+                                    scene (assoc :first_week_scene scene)
+                                    (:dry_week wk) (assoc :dry_week (:dry_week wk)))
                                   (as-opts))
                      (update census :findings (fnil inc 0)))
                    census))
