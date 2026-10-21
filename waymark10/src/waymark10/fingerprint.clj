@@ -24,6 +24,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire]))
@@ -225,6 +226,7 @@
   [v]
   (cond
     (decimal? v) {"dec" (.toPlainString ^java.math.BigDecimal v)}
+    (money/money? v) (money/wire-node v)
     (keyword? v) (name v)
     (instance? java.time.LocalDate v) (str v)
     (instance? java.time.Instant v) (str v)

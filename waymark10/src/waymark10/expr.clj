@@ -30,7 +30,8 @@
 
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
   :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
-  (:require [clojure.edn :as edn])
+  (:require [clojure.edn :as edn]
+            [waymark10.money :as money])
   (:import (java.time Duration LocalDate LocalTime Instant OffsetDateTime Period ZoneId
                       ZoneOffset ZonedDateTime)
            (java.time.temporal ChronoUnit)
@@ -89,11 +90,21 @@
   They read the scope's :calendar hook (the governing work_calendar),
   and are unknown without it, as an instant moved by a Period is: the
   same local time that many days later in that calendar's zone, never
-  UTC by accident."
+  UTC by accident.
+
+  money/amount/currency and / (docs/spec-ledger-money.md §2): the
+  money literal (money \"18.00\" \"USD\"), its two readers, and the
+  quotient — money ÷ a number is money, unrounded, to 12 places when it
+  does not terminate. Money adds to and compares with money of its own
+  currency only; of two currencies, or with a bare number, the answer
+  is unknown, and the unknown says why (`unknown-why`). (round m) is
+  m at its currency's minor unit in the house's rounding, the scope's
+  :rounding (:half-even unless the house says :half-up)."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
-     + - * min max abs
+     + - * / min max abs
+     money amount currency round
      str
      days weeks months years hours minutes days-between
      today local-date business-days business-day? next-business-day working?
@@ -104,7 +115,7 @@
 
 (def ^:private quantifier-ops '#{every some count sum})
 
-(deftype Unknown []
+(deftype Unknown [why]
   Object
   (toString [_] "#waymark/unknown"))
 
@@ -112,9 +123,15 @@
   "The third verdict: what a read with no hook to answer it evaluates
   to. Neither true nor false, and never a refusal — a guard whose
   :when is unknown answers pending. Only a scope can carry it."
-  (Unknown.))
+  (Unknown. nil))
 
 (defn unknown? [v] (instance? Unknown v))
+
+(defn unknown-why
+  "The sentence an unknown carries when the law can say why it is not
+  known — money of two currencies meeting — else nil."
+  [v]
+  (when (unknown? v) (.-why ^Unknown v)))
 
 (defn- scalar-literal? [x]
   (or (nil? x) (boolean? x) (string? x)
@@ -208,7 +225,7 @@
                                 (pr-str (vec args)))))
 
           (days weeks months years hours minutes date-of is-set clock day iso not abs
-           local-date business-days business-day? next-business-day)
+           local-date business-days business-day? next-business-day amount currency round)
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
@@ -221,7 +238,7 @@
           working?
           (if (<= 2 n 3)
             (reduce (fn [p a] (check a env depth p)) problems args)
-            (conj problems (str "(working? from to) takes a window's two instants, "
+            (conj problems (str "(working? from to) takes a window's two instants or two dates, "
                                 "and a calendar ref third when the resource names one")))
 
           ;; authored (follow <ref> :field); normalized at the def site
@@ -251,6 +268,17 @@
             :else
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
+
+          money
+          (if (and (= n 2) (money/money (first args) (second args)))
+            problems
+            (conj problems (str "(money \"18.00\" \"USD\") takes an amount written as a "
+                                "string and an ISO currency code; got " (pr-str (vec args)))))
+
+          /
+          (if (= n 2)
+            (reduce (fn [p a] (check a env depth p)) problems args)
+            (conj problems "(/ a b) divides exactly two expressions"))
 
           (= not= < <= > >=)
           (if (= n 2)
@@ -499,6 +527,12 @@
         weeks
         (list 'days (norm (list '* 7 (first args))))
 
+        ;; "18.00" and "18" are one amount, so one law
+        money
+        (if-some [a (money/canonical-amount (first args))]
+          (list 'money a (second args))
+          (cons op args))
+
         (= not= min max + *)
         (cons op (sort-by sort-key args))
 
@@ -606,6 +640,8 @@
   [a b]
   (cond
     (and (number? a) (number? b)) (num-compare a b)
+    (and (money/money? a) (money/money? b) (= (:currency a) (:currency b)))
+    (num-compare (:amount a) (:amount b))
     (and (instance? LocalDate a) (instance? LocalDate b))
     (.compareTo ^LocalDate a ^LocalDate b)
     (and (instance? Instant a) (instance? Instant b))
@@ -614,9 +650,13 @@
     :else nil))
 
 (defn- val-eq [a b]
-  (if (and (number? a) (number? b))
-    (zero? (num-compare a b))
-    (= a b)))
+  (cond
+    (and (number? a) (number? b)) (zero? (num-compare a b))
+    ;; 18.00 dollars is 18 dollars: the amount compares, not its scale
+    (and (money/money? a) (money/money? b))
+    (and (= (:currency a) (:currency b))
+         (zero? (num-compare (:amount a) (:amount b))))
+    :else (= a b)))
 
 (defn- num-add [a b]
   (if (or (decimal? a) (decimal? b))
@@ -632,6 +672,44 @@
   (if (or (decimal? a) (decimal? b))
     (.multiply (bigdec a) (bigdec b))
     (*' a b)))
+
+;; ── money (docs/spec-ledger-money.md §2) ────────────────────────────
+
+(defn- mixed-currency
+  "Unknown, saying which two currencies, when money of two meets."
+  [a b]
+  (when-some [why (money/mixed-currency a b)]
+    (Unknown. why)))
+
+(defn- money-add
+  "money ± money of its currency is money; of another it is unknown,
+  naming both; money ± anything else is unknown — a bare number is not
+  money."
+  [a b sign]
+  (if (and (money/money? a) (money/money? b))
+    (or (mixed-currency a b)
+        (let [x ^java.math.BigDecimal (:amount a)
+              y ^java.math.BigDecimal (:amount b)]
+          (money/->Money (if (neg? (long sign)) (.subtract x y) (.add x y))
+                         (:currency a))))
+    (Unknown. "only money adds to or subtracts from money: a bare number is not money")))
+
+(defn- money-mul
+  "money × a number is money, every digit kept."
+  [m n]
+  (money/->Money (.multiply ^java.math.BigDecimal (:amount m) (bigdec n))
+                 (:currency m)))
+
+(defn- div2
+  "a ÷ b for a money or a number a and a number b: unrounded, to 12
+  places when the quotient does not terminate. ÷ 0 is a missing value."
+  [a b]
+  (cond
+    (not (number? b)) nil
+    (zero? b) nil
+    (money/money? a) (money/->Money (money/divide (:amount a) (bigdec b)) (:currency a))
+    (number? a) (money/divide (bigdec a) (bigdec b))
+    :else nil))
 
 ;; ── the house's calendar (docs/spec-calendar-time.md §2, §3) ────────
 
@@ -713,6 +791,7 @@
     (cond
       (or (unknown? a) (unknown? b)) unknown
       (or (nil? a) (nil? b)) nil
+      (or (money/money? a) (money/money? b)) (money-add a b 1)
       (and (number? a) (number? b)) (num-add a b)
       (and (instance? LocalDate a) (instance? Period b)) (.plus ^LocalDate a ^Period b)
       (and (instance? Period a) (instance? LocalDate b)) (.plus ^LocalDate b ^Period a)
@@ -734,6 +813,7 @@
   (try
     (cond
       (or (nil? a) (nil? b)) nil
+      (or (money/money? a) (money/money? b)) (money-add a b -1)
       (and (number? a) (number? b)) (num-sub a b)
       (and (instance? LocalDate a) (instance? Period b)) (.minus ^LocalDate a ^Period b)
       (and (instance? Period a) (instance? Period b)) (.minus ^Period a ^Period b)
@@ -745,7 +825,11 @@
     (catch Exception _ nil)))
 
 (defn- mul2 [a b]
-  (if (and (number? a) (number? b)) (num-mul a b) nil))
+  (cond
+    (and (number? a) (number? b)) (num-mul a b)
+    (and (money/money? a) (number? b)) (money-mul a b)
+    (and (number? a) (money/money? b)) (money-mul b a)
+    :else nil))
 
 (defn- whole-count
   "Numeric → that many whole units, a long in int range; nil for
@@ -972,6 +1056,16 @@
              (every? #(business-day cal (.plusDays first-day (long %)))
                      (range (inc span))))))))
 
+(defn- working-days
+  "True when every day of the whole-day window [from, to] is a business
+  day of `cal` — a :grain :day window, so its hours do not enter (spec
+  §5). A window that ends before it starts is not working."
+  [cal ^LocalDate from ^LocalDate to]
+  (let [span (.between ChronoUnit/DAYS from to)]
+    (and (<= 0 span business-walk-cap)
+         (every? #(business-day cal (.plusDays from (long %)))
+                 (range (inc span))))))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -1009,6 +1103,19 @@
           (cond (unknown? v) unknown
                 (map? v) (clojure.core/get v (second args))))
 
+        money (money/money (first args) (second args))
+        (amount currency)
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) v
+                (money/money? v) (clojure.core/get v (keyword op))))
+        ;; to the currency's minor unit, in the house's rounding
+        round
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) v
+                (money/money? v)
+                (or (money/round v (:rounding scope))
+                    (Unknown. (str (:currency v) " has no minor unit this engine knows, so it does not round")))))
+
         date
         (try (LocalDate/parse ^String (first args))
              (catch Exception _ nil))
@@ -1041,13 +1148,16 @@
                 :else (let [c (calendar-in scope)]
                         (if (unknown? c) unknown (next-business-day c v)))))
         ;; (working? from to ref): a nil ref is the default calendar, a
-        ;; ref that names no row is unknown
+        ;; ref that names no row is unknown; two dates are a day window
         working?
         (let [from (evaluate (first args) scope)
               to (evaluate (second args) scope)
               ref (when (= 3 (count args)) (evaluate (nth args 2) scope))]
           (cond
             (some unknown? [from to ref]) unknown
+            (and (instance? LocalDate from) (instance? LocalDate to))
+            (let [c (calendar-in scope ref)]
+              (if (unknown? c) unknown (working-days c from to)))
             (not (and (instant-of from) (instant-of to))) false
             :else (let [c (calendar-in scope ref)]
                     (if (unknown? c) unknown (working c (instant-of from) (instant-of to))))))
@@ -1069,6 +1179,7 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (= op '=) (val-eq a b)
             :else (clojure.core/not (val-eq a b))))
 
@@ -1077,6 +1188,7 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (or (nil? a) (nil? b)) false
             :else
             (if-some [c (val-compare a b)]
@@ -1089,23 +1201,28 @@
               b (evaluate (second args) scope)]
           (cond
             (or (unknown? a) (unknown? b)) unknown
+            (mixed-currency a b) (mixed-currency a b)
             (or (nil? a) (nil? b)) false
             :else
             (if-some [c (val-compare a b)]
               (case op > (pos? (long c)) >= (clojure.core/not (neg? (long c))))
               false)))
 
-        (+ - * min max abs)
+        (+ - * / min max abs)
         (let [all (mapv #(evaluate % scope) args)]
-          (if (some unknown? all)
-            unknown
+          (if-some [u (first (filter unknown? all))]
+            u
             (case op
               + (reduce #(add2 %1 %2 scope) all)
               - (if (= 1 (count all))
                   (let [v (first all)]
-                    (when (number? v) (num-sub 0 v)))
+                    (cond (number? v) (num-sub 0 v)
+                          (money/money? v)
+                          (money/->Money (.negate ^java.math.BigDecimal (:amount v))
+                                         (:currency v))))
                   (sub2 (first all) (second all) scope))
               * (reduce mul2 all)
+              / (div2 (first all) (second all))
               (min max)
               (let [vs (filterv some? all)]
                 (when (and (seq vs) (every? number? vs))
@@ -1394,3 +1511,32 @@
                                 (recur (.plusDays d 1) (dec left) (inc walked)))))]
         (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
           found (assoc :from found :to (.plus ^Instant found len)))))))
+
+(defn- date-of
+  "A date, or its ISO wire string, as a LocalDate; anything else nil."
+  ^LocalDate [x]
+  (cond (instance? LocalDate x) x
+        (string? x) (try (LocalDate/parse ^String x) (catch Exception _ nil))))
+
+(defn next-free-days
+  "next-free over a :grain :day window, whole days [from, to]: {:zone
+  :day :holiday} as next-free answers them, with :from and :to the next
+  window of as many days that `free?` admits, its first day a business
+  day after `from`, scanned over at most 30 business days of the
+  calendar `ref` names (no ref: the default). nil when the scope cannot
+  say. Asked only when a guard refuses, never in a verdict."
+  [scope from-form to-form ref-form free?]
+  (let [from (date-of (evaluate from-form scope))
+        to (date-of (evaluate to-form scope))
+        ref (when (some? ref-form) (evaluate ref-form scope))
+        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+    (when (and (some? c) (not (unknown? c)) (not (.isBefore ^LocalDate to ^LocalDate from)))
+      (let [span (- (.toEpochDay ^LocalDate to) (.toEpochDay ^LocalDate from))
+            found (loop [^LocalDate d (.plusDays ^LocalDate from 1) left next-free-cap walked 0]
+                    (cond
+                      (or (zero? left) (>= walked business-walk-cap)) nil
+                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                      (free? d (.plusDays d span)) d
+                      :else (recur (.plusDays d 1) (dec left) (inc walked))))]
+        (cond-> {:zone (:zone c) :day from :holiday (get (:holidays c) from)}
+          found (assoc :from found :to (.plusDays ^LocalDate found span)))))))

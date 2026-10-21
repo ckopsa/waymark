@@ -14,7 +14,8 @@
                  [\"=\", [\"get\",[\"it\",0],\"eating_out\"], true]]]
 
   Decimals cross as {\"dec\":\"0.02\"} (exact, no floats), date
-  literals as {\"date\":\"2026-07-09\"}.
+  literals as {\"date\":\"2026-07-09\"}, money literals as
+  {\"dec\":\"18\",\"cur\":\"USD\"} (docs/spec-ledger-money.md §10).
 
   Canonical bytes (digests, fingerprint hashes) admit only
   nil/boolean/string/long/keyword/map/vector — floats and raw
@@ -22,7 +23,8 @@
   wire encoding and keeps hashes byte-stable across processes."
   (:require [clojure.string :as str]
             [jsonista.core :as j]
-            [waymark10.expr :as expr])
+            [waymark10.expr :as expr]
+            [waymark10.money :as money])
   (:import (java.math BigDecimal)
            (java.security MessageDigest)))
 
@@ -55,6 +57,7 @@
         (= op 'it)   ["it" (first args)]
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
+        (= op 'money) {"dec" (money/canonical-amount (first args)) "cur" (second args)}
         (= op 'follow) (let [[ref field] (take-last 2 args)]
                          (cond-> ["follow"]
                            (= 3 (count args)) (conj (name (first args)))
@@ -86,8 +89,11 @@
 
     (map? tree)
     (let [dec-s  (or (get tree "dec") (get tree :dec))
+          cur-s  (or (get tree "cur") (get tree :cur))
           date-s (or (get tree "date") (get tree :date))]
       (cond
+        (and (string? dec-s) (string? cur-s) (= 2 (count tree)))
+        (list 'money dec-s cur-s)
         (and (string? dec-s) (= 1 (count tree)))
         (try (BigDecimal. ^String dec-s)
              (catch NumberFormatException _
@@ -202,6 +208,7 @@
   [v]
   (cond
     (decimal? v) {"dec" (.toPlainString ^BigDecimal v)}
+    (money/money? v) (money/wire-node v)
     (map? v) (into {} (map (fn [[k x]] [k (dec-nodes x)])) v)
     (sequential? v) (mapv dec-nodes v)
     :else v))
