@@ -231,3 +231,66 @@
                 (when (and (:may-go-negative a) (contains? a :never-below))
                   [(str where " " (name n) " says :may-go-negative beside :never-below; it is one or the other")])))]
        p))))
+
+(defn by-postings
+  "The sentence that refuses a write of account n's balance (§3)."
+  [n]
+  (str (name n) " moves only by postings"))
+
+(defn account-field
+  "The read-only field account n projects on its row (§3, ledger step
+  3c): its own name, typed by its unit, :engine-written so no create or
+  edit door offers it, and :ledger-account so the engine knows it moves
+  only by postings. Its :filter and :sort marks are colocated sugar the
+  declaration gate joins into :filterable and :sortable."
+  [n {:keys [unit]}]
+  [n {:optional true
+      :engine-written true
+      :ledger-account true
+      :filter (if (= :count unit) #{:eq :range} #{:range})
+      :sort true
+      :x-display {:label (name n)
+                  :help (str "The balance as of the last commit; " (by-postings n) ".")}}
+   (case unit
+     :count :int
+     :decimal :decimal
+     :waymark/money)])
+
+(defn zero
+  "An account's balance before its first posting: nothing, in its unit."
+  [unit]
+  (case unit
+    :count 0
+    :decimal 0M
+    (let [m (->Money 0M (second unit))]
+      (or (round m nil) m))))
+
+(defn opening-balances
+  "What a row of a kind with these accounts is born holding: each at zero."
+  [accounts]
+  (into {} (map (fn [[n a]] [n (zero (:unit a))])) accounts))
+
+(defn plus
+  "a + b for two balances of one unit: two numbers, or two Money of one
+  currency. Money never meets a bare number or another currency."
+  [a b]
+  (cond
+    (and (money? a) (money? b))
+    (if-some [why (mixed-currency a b)]
+      (throw (ex-info why {:a a :b b}))
+      (->Money (.add ^java.math.BigDecimal (:amount a) ^java.math.BigDecimal (:amount b))
+               (:currency a)))
+    (or (money? a) (money? b))
+    (throw (ex-info "money meets a bare number: a balance is of one unit" {:a a :b b}))
+    :else (+ a b)))
+
+(defn balances-moved
+  "The accounts whose balance differs between `before` and `after` —
+  {field [why]}, or nil. No door's hand moves one (§3); postings do."
+  [accounts before after]
+  (not-empty
+   (into {}
+         (keep (fn [n]
+                 (when (not= (get before n) (get after n))
+                   [n [(by-postings n)]])))
+         (keys accounts))))
