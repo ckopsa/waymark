@@ -546,6 +546,21 @@
     (assoc env "waiting_on" (p/wire-value w))
     env))
 
+(defn- with-held
+  "A row's envelope with `held` (ticket f6808194): the held calls
+  pending on it now, each with its action's label, who it waits on and
+  its why, read through history's as-of fold at the clock. A held_call
+  itself, a row nothing waits on, and a read that fails leave the
+  envelope as it was. It rides the full row READ alone, as
+  `waiting_on` does: an action's answer must replay byte for byte."
+  [eng rdef row env]
+  (let [h (when-not (= :held_call (:kind rdef))
+            (try (history/held-now eng rdef (:id row))
+                 (catch Exception _ nil)))]
+    (if (seq h)
+      (assoc env "held" (p/wire-value h))
+      env)))
+
 (defn- with-effects
   "A row's envelope with the calls its effect doors still wait on
   (docs/spec-integrations.md § 7): `meta.effects`, one
@@ -1376,6 +1391,7 @@
                              (embed-overrides req)))
         env (cond->> env
               (not= :summary depth) (with-waiting-on eng rdef row)
+              (not= :summary depth) (with-held eng rdef row)
               true (with-effects eng rdef row))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
