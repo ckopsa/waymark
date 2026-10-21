@@ -165,3 +165,69 @@
            (if (= even up)
              (str even " " cur)
              (str even " " cur " half-even, " up " " cur " half-up"))))))
+
+;; ── accounts (§3) ───────────────────────────────────────────────────
+
+(defn unit?
+  "An account's unit (§3): :count (an integer quantity), :decimal (kilos
+  of clay) or [:money cur] with an ISO 4217 code."
+  [u]
+  (or (= :count u)
+      (= :decimal u)
+      (and (vector? u) (= 2 (count u)) (= :money (first u)) (currency-code? (second u)))))
+
+(def account-keys
+  "What one account declares: its unit, and the bounds step 5 judges."
+  #{:unit :never-below :never-above :may-go-negative})
+
+(defn- bound-problem
+  "What is wrong with account n's bound k: a number of its unit (a whole
+  one for :count, never a float), or the name of another account of the
+  same unit declared beside it. nil when it is whole or absent."
+  [accounts n a k]
+  (let [b (get a k)
+        unit (:unit a)]
+    (cond
+      (not (contains? a k)) nil
+      (keyword? b)
+      (cond (= b n) (str (name n) " " k " names itself")
+            (not (contains? accounts b)) (str (name n) " " k " " b " names no account declared beside it")
+            (not= unit (get-in accounts [b :unit])) (str (name n) " " k " " b " is of another unit"))
+      (= :count unit)
+      (when-not (integer? b)
+        (str (name n) " " k " is a whole number for a :count account, or another account's name"))
+      (not (or (integer? b) (decimal? b)))
+      (str (name n) " " k " is a number (an integer or a decimal, never a float), or another account's name"))))
+
+(defn account-problems
+  "What is wrong with an :accounts or :house-accounts map, one sentence
+  each, `where` naming the declaration: each name a snake_case keyword,
+  each entry a map of `account-keys` that names its :unit; a bound a
+  number of that unit or another account of the same unit;
+  :may-go-negative a boolean, and never beside :never-below. Empty when
+  it is whole."
+  [where accounts]
+  (if-not (map? accounts)
+    [(str where " maps each account's name to {:unit …}")]
+    (vec
+     (for [[n a] (sort-by (comp str key) accounts)
+           p (cond
+               (not (and (keyword? n) (nil? (namespace n))
+                         (re-matches #"[a-z][a-z0-9_]*" (name n))))
+               [(str where " " (pr-str n) " is not an account name: a snake_case keyword, such as :on_hand")]
+               (not (map? a))
+               [(str where " " (name n) " is a map, {:unit …}")]
+               :else
+               (concat
+                (for [k (sort-by str (remove account-keys (keys a)))]
+                  (str where " " (name n) " names " k "; an account takes " (vec (sort account-keys))))
+                (if (unit? (:unit a))
+                  (keep #(some->> (bound-problem accounts n a %) (str where " "))
+                        [:never-below :never-above])
+                  [(str where " " (name n) " :unit is :count, :decimal or [:money \"USD\"]; got "
+                        (pr-str (:unit a)))])
+                (when-not (or (nil? (:may-go-negative a)) (boolean? (:may-go-negative a)))
+                  [(str where " " (name n) " :may-go-negative is true or false")])
+                (when (and (:may-go-negative a) (contains? a :never-below))
+                  [(str where " " (name n) " says :may-go-negative beside :never-below; it is one or the other")])))]
+       p))))
