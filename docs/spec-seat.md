@@ -3500,7 +3500,9 @@ does.
    request merges, the pass deletes the branch (`train_delete`) and
    the line goes one at a time for that pass.
 3. `train_checks` dispatches the check workflow on the branch, with no
-   narrowing. The pass writes `line_train` with the changes that rode
+   narrowing but its `lane`: a train of a lane other than `engine`
+   names it (ticket 929ada09), and the workflow runs the jobs the
+   policy's `checks` gives that lane. The pass writes `line_train` with the changes that rode
    and the `run_id`. When no run showed yet, `run_id` is empty and
    `train_status` reads the run by branch and head.
 4. While a train stands, the front's `line_front_waiting` is `train`.
