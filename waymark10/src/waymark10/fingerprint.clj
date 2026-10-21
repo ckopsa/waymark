@@ -466,6 +466,13 @@
       (seq (:accounts rmap))
       (assoc "accounts" (accounts-fp (:accounts rmap)))
 
+      ;; :rate-table (docs/spec-ledger-money.md §8): which rows a (rate …)
+      ;; reads is law. Present-only, so every other kind hashes as before
+      (some? (:rate-table rmap))
+      (assoc "rate_table" (let [{n :name ks :key v :value e :effective} (:rate-table rmap)]
+                            {"name" (name n) "key" (mapv name ks)
+                             "value" (name v) "effective" (name e)}))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
