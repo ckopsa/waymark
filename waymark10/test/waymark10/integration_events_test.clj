@@ -252,3 +252,88 @@
       (is (= :dismissed (:state (row-of eng :integration_event gone))))
       (is (= "That payment was for another shop."
              (get-in (row-of eng :integration_event gone) [:data :reason]))))))
+
+;; ── the option kept: the inbox (build step 4) ──────────────────────────
+
+(defresource payment-notice
+  {:kind :payment_notice
+   :states [:new :read]
+   :initial :new
+   :terminal #{:read}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map
+            [:payment_ref [:string {:min 1 :max 120}]]
+            [:amount_cents {:optional true} [:maybe :int]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_read {:from #{:new} :to :read
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A read notice stays read."}}}})
+
+(defresource inbox-order
+  {:kind :inbox_order
+   :states [:open :paid]
+   :initial :open
+   :terminal #{:paid}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map [:payment_ref [:string {:min 1 :max 120}]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_paid {:from #{:open} :to :paid
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A paid order stays paid."}}}
+   :on-event [{:source :stripe
+               :type "payment_intent.succeeded"
+               :via :inbox
+               :makes :payment_notice
+               :input {:payment_ref '(event "data" "object" "id")
+                       :amount_cents '(event "data" "object" "amount_received")}}]})
+
+(defn- inbox-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [payment-notice inbox-order]
+                  :now-fn (fn [] clock)}))
+
+(defn- notices [eng]
+  (let [rd (get (inv/resources eng) :payment_notice)
+        st (:storage eng)]
+    (mapv #(inv/decode-row rd %)
+          (store/with-tx st
+            (fn [tx] (store/query-rows st tx :payment_notice {} {:limit 100}))))))
+
+(deftest an-inbox-event-becomes-a-row-and-runs-no-door
+  (let [eng (inbox-engine)
+        irow (row-of eng :integration (live! eng {:scheme "none"}))
+        body (paid "evt_8" "pi_8" 2500)
+        answer (post eng "stripe" {} body)]
+    (testing "the law asks for the made kind's create"
+      (is (= [{:kind "payment_notice" :actions ["create"]}]
+             (mapv (fn [w] {:kind (str (:kind w)) :actions (mapv str (:actions w))})
+                   (get-in irow [:data :scope_wanted])))))
+    (testing "a source that says it signs with scheme none is kept unsigned"
+      (is (= 202 (:status answer))))
+    (let [rid (:receipt answer)
+          _ (integrations/apply! eng rid)
+          r (row-of eng :integration_event rid)
+          [n :as ns] (notices eng)]
+      (testing "its body becomes a row of the named kind, as the integration"
+        (is (= :applied (:state r)) (pr-str (:data r)))
+        (is (= "payment_notice.create" (get-in r [:data :door])))
+        (is (= 1 (count ns)))
+        (is (= (str (:id n)) (get-in r [:data :target])))
+        (is (= :new (:state n)))
+        (is (= "pi_8" (get-in n [:data :payment_ref])))
+        (is (= 2500 (get-in n [:data :amount_cents]))))
+      (testing "applying it again makes nothing more"
+        (integrations/apply! eng rid)
+        (is (= 1 (count (notices eng))))))))
+
+(deftest an-unsigned-source-is-a-finding
+  (let [eng (job-engine)
+        rdefs (vals (inv/resources eng))
+        signed-row (row-of eng :integration (live! eng nil))
+        unsigned-row (assoc-in signed-row [:data :signature] {:scheme "none"})]
+    (is (= [] (integrations/findings rdefs [signed-row])) "a signing source says nothing")
+    (let [[f :as fs] (integrations/findings rdefs [signed-row unsigned-row])]
+      (is (= 1 (count fs)))
+      (is (.startsWith ^String f "[source-unsigned] warning: integration stripe"))
+      (is (.contains ^String f "shop_order.mark_paid") "it names the doors its events run unread")
+      (is (.contains ^String f ":via :inbox") "and the remedy"))))

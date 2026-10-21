@@ -162,7 +162,7 @@
   [:signature {:optional true
                :x-display
                {:label "How it signs"
-                :help "The header, the scheme, the timestamp header and its tolerance in seconds. Left empty: X-Signature, hmac-sha256, no timestamp."}}
+                :help "The header, the scheme, the timestamp header and its tolerance in seconds. Left empty: X-Signature, hmac-sha256, no timestamp. Scheme none checks nothing, and the audit names it."}}
    [:maybe
     [:map
      [:header {:optional true
@@ -171,8 +171,8 @@
       [:maybe [:string {:min 1 :max 120}]]]
      [:scheme {:optional true
                :x-display {:label "The scheme"
-                           :help "How the signature is computed over the body. Only hmac-sha256 for now."}}
-      [:maybe [:enum "hmac-sha256"]]]
+                           :help "How the signature is computed over the body: hmac-sha256, or none for a source that cannot sign, whose events a seat should read through :via :inbox."}}
+      [:maybe [:enum "hmac-sha256" "none"]]]
      [:timestamp_header {:optional true
                          :x-display {:label "The timestamp header"
                                      :help "The header that carries when the system signed. Left empty: no timestamp is checked."}}
@@ -447,7 +447,8 @@
                                  [:transition {:optional true} [:maybe ending-text]]])
     :mark_refused (assoc an-ending :to :refused
                          :waives #{:edit-shape}
-                         :input [:map [:door ending-text] [:target ending-text]
+                         :input [:map [:door ending-text]
+                                 [:target {:optional true} [:maybe ending-text]]
                                  [:refusal {:x-display {:raw true}}
                                   [:string {:min 1 :max body-cap}]]
                                  [:tell {:optional true} [:maybe [:vector ending-text]]]])
@@ -480,7 +481,9 @@
     "§ 3's `:tell` wakes the seats it names, or the approver. The refused receipt carries them as `tell`, and a seat hears it through its own wake_on for integration_event/mark_refused; a named seat that does not subscribe is not woken yet."
     "§ 3 keeps an `ignored` receipt 30 days and then purges it. The purge is not built yet, so an ignored receipt stays."
     "§ 3's applier is a log consumer, and also a sweep every 30 seconds over the receipts still `received`: the sweep tries a `:retry-unmatched-for` entry again, and applies what a crash or a pause left."
-    "§ 3's `received` is the receipt's state; the moment it arrived is the row's own creation time, not a field."]})
+    "§ 3's `received` is the receipt's state; the moment it arrived is the row's own creation time, not a field."
+    "§ 3's `:via :inbox` entry makes its row with the entry's `:input`; with none, the event body's top-level fields are the create's input. A refused create is a `refused` receipt with no target."
+    "§ 8 puts `[source-unsigned]` in the declaration battery, which reads the law; an integration's signature is a row's data, so `findings` reads the rows and is not yet in that battery."]})
 
 ;; ── the receiver (§ 3, build step 2) ────────────────────────────────
 
@@ -569,15 +572,19 @@
         d (:data row)
         sig (merge default-signature
                    (into {} (remove (comp nil? val)) (:signature d)))
-        ks (keys-of eng row now)
-        _ (when (empty? ks)
+        ;; § 3's option kept: a source that cannot sign says so, and
+        ;; only then is the signature step skipped
+        unsigned (= "none" (:scheme sig))
+        ks (when-not unsigned (keys-of eng row now))
+        _ (when (and (not unsigned) (empty? ks))
             (throw (refuse :no-signing-key 503 "No signing key"
                            "The integration's secret holds no value to check a signature against; the owner enters one.")))
         bs (bytes-of body)
         sent (some-> (get headers (str/lower-case (:header sig)))
                      str/trim (str/replace #"^sha256=" "") str/lower-case
                      not-empty)]
-    (when-not (and sent (some #(signed-by? sent % bs) ks) (fresh? headers sig now))
+    (when-not (or unsigned
+                  (and sent (some #(signed-by? sent % bs) ks) (fresh? headers sig now)))
       (throw (refuse :bad-signature 401 "Unauthorized"
                      "The signature does not match the body, or its timestamp is outside the tolerance.")))
     (case (:state row)
@@ -620,19 +627,34 @@
 
 ;; ── the law it is held to (§ 2, build step 3) ─────────────────────────────
 
+(defn- inbox? [e] (= :inbox (:via e)))
+
+(defn- create-verb
+  "The made kind's create door: `create` when it has one, else the first
+  it names."
+  [rd]
+  (let [names (:create-action-names rd #{:create})]
+    (if (contains? names :create) :create (first (sort names)))))
+
 (defn wanted
   "`scope_wanted` read from the law: for each kind whose `:on-event`
   names the integration `nm` as its source, the doors those entries
-  run. nil when the law names it nowhere."
+  run, and for each kind a `:via :inbox` entry `:makes`, its create.
+  nil when the law names it nowhere."
   [rdefs nm]
-  (not-empty
-   (vec (for [rd (sort-by (comp str :kind) rdefs)
-              :let [doors (into (sorted-set)
-                                (keep #(when (= (name (:source %)) (str nm))
-                                         (name (:door %))))
-                                (:on-event rd))]
-              :when (seq doors)]
-          {:kind (name (:kind rd)) :actions (vec doors)}))))
+  (let [by-kind (into {} (map (juxt :kind identity)) rdefs)
+        doors (reduce
+               (fn [m [k door]] (update m k (fnil conj (sorted-set)) door))
+               {}
+               (for [rd rdefs
+                     e (:on-event rd)
+                     :when (= (name (:source e)) (str nm))]
+                 (if (inbox? e)
+                   [(:makes e) (name (create-verb (get by-kind (:makes e))))]
+                   [(:kind rd) (name (:door e))])))]
+    (not-empty
+     (vec (for [[k ds] (sort-by (comp str key) doors)]
+            {:kind (name k) :actions (vec ds)})))))
 
 (defn integration-for
   "The integration kind an application's law enrols: a row's birth, and
@@ -697,36 +719,49 @@
 (defn- invoke-entry!
   "Run the entry's door on the one row it matched, as the integration,
   under its grant and the `event:` key, and land what it answered. A
-  refusal is kept whole; a fault that is no refusal is thrown, and the
-  receipt stays `received` for the next pass."
-  [eng irow r {:keys [kind door] :as e} target scope]
-  (let [id (str (:id target))
+  `:via :inbox` entry runs its made kind's create instead, with no row
+  matched. A refusal is kept whole; a fault that is no refusal is
+  thrown, and the receipt stays `received` for the next pass."
+  [eng irow r e target scope]
+  (let [made (when (inbox? e) (:makes e))
+        kind (or made (:kind e))
+        door (if made (create-verb (get (inv/resources eng) made)) (:door e))
+        id (some-> (:id target) str)
         label (str (name kind) "." (name door))
         told (vec (or (seq (map name (:tell e)))
                       (some-> (get-in irow [:data :approved_by]) str vector)))
         refused (fn [doc]
                   (land! eng (:id r) :mark_refused
-                         (cond-> {:door label :target id :refusal doc}
+                         (cond-> {:door label :refusal doc}
+                           id (assoc :target id)
                            (seq told) (assoc :tell told))))
         who (principal irow)
         vis (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
               (when (= :active (:standing (grants/grant-standing eng gid)))
-                (grants/visibility eng gid who)))]
-    (if-not (and vis ((:action? vis) kind door) ((:row? vis) kind id))
+                (grants/visibility eng gid who)))
+        inp (if (and made (nil? (:input e)))
+              (into {} (keep (fn [[k v]] (when (some? v) [(keyword (name k)) v])))
+                    (:event scope))
+              (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v])))
+                    (:input e)))
+        opts (fn [g] {:principal who
+                      :grant g
+                      :idempotency-key (str "event:" (:id irow) ":"
+                                            (get-in r [:data :event_id]))})]
+    (if-not (and vis ((:action? vis) kind door) (or made ((:row? vis) kind id)))
       (refused (refusal-json
                 (refuse :not-granted 403 "Not granted"
                         (str "The grant this integration wears does not admit " label
                              "; approve it again so it wears what the law asks of it."))))
       (try
-        (let [res (inv/invoke! eng kind id door
-                               (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v])))
-                                     (:input e))
-                               {:principal who
-                                :grant (:grant vis)
-                                :idempotency-key (str "event:" (:id irow) ":"
-                                                      (get-in r [:data :event_id]))})
+        (let [res (if made
+                    (inv/create! eng kind inp (assoc (opts (:grant vis)) :action door))
+                    (inv/invoke! eng kind id door inp (opts (:grant vis))))
               tid (or (get-in res [:transition :id])
-                      (get-in res [:response :transition :id]))]
+                      (get-in res [:response :transition :id]))
+              id (or id (some-> (or (get-in res [:row :id])
+                                    (get-in res [:response :row :id]))
+                                str))]
           (land! eng (:id r) :mark_applied
                  (cond-> {:door label :target id} tid (assoc :transition (str tid)))))
         (catch clojure.lang.ExceptionInfo ex
@@ -757,14 +792,34 @@
                         (catch Exception _ nil))
               scope {:event body :now ((:now-fn eng))}
               es (entries-for eng (get-in irow [:data :name]) (get-in r [:data :event_type]))
-              found (mapv #(assoc % :rows (candidates eng % scope)) es)
-              hit (first (filter #(= 1 (count (:rows %))) found))]
+              found (mapv #(if (inbox? %) % (assoc % :rows (candidates eng % scope))) es)
+              hit (first (filter #(or (inbox? %) (= 1 (count (:rows %)))) found))]
           (cond
             (empty? es) (land! eng rid :mark_ignored {})
             hit (invoke-entry! eng irow r hit (first (:rows hit)) scope)
             (some #(< 1 (count (:rows %))) found) (land! eng rid :mark_ambiguous {})
             (waiting? r found (:now scope)) nil
             :else (land! eng rid :mark_unmatched {})))))))
+
+;; ── the audit (§ 8, build step 4) ───────────────────────────────────
+
+(defn findings
+  "What § 8's audit says of these integration rows: `[source-unsigned]`,
+  a warning, for each that signs with scheme none, naming the doors its
+  events run without a seat reading them first. Pure."
+  [rdefs irows]
+  (vec (for [r (sort-by #(str (get-in % [:data :name])) irows)
+             :let [nm (str (get-in r [:data :name]))]
+             :when (= "none" (get-in r [:data :signature :scheme]))
+             :let [doors (for [rd (sort-by (comp str :kind) rdefs)
+                               e (:on-event rd)
+                               :when (and (= (name (:source e)) nm) (not (inbox? e)))]
+                           (str (name (:kind rd)) "." (name (:door e))))]]
+         (str "[source-unsigned] warning: integration " nm
+              " signs with scheme none, so its events are not checked"
+              (when (seq doors)
+                (str ", and " (str/join ", " doors) " run on them unread"))
+              ". Use a signing source, or keep it on :via :inbox so a seat reads each event."))))
 
 (defn handle-transition!
   "One committed transition: a receipt's birth, or its `retry`, applies
