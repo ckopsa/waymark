@@ -1110,6 +1110,18 @@
    ;; again the change the house stopped.
    :default-filters {:state "open,submitted"}
    :sortable {:fields [:updated_at] :default "updated_at"}
+   ;; the change's path lane (ticket 9b27142e): shown, not acted on yet
+   :computed {:lane
+              {:schema :string
+               :x-display
+               {:label "Lane"
+                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. Nothing acts on it yet."}
+               ;; it reads the repository's policy: with no :find it is
+               ;; absent, never a guessed engine
+               :reads? true
+               :fn (fn [row ctx]
+                     (when (:find ctx)
+                       (bench/lane-of row (bench/policy-of row ctx))))}}
    ;; WHERE THE KIT'S FIELDS STAND AMONG THESE. The builder puts the
    ;; core's fields first; this is the order the kind had as one map.
    :field-order [:change_id :repository :number :title :author :base_branch
