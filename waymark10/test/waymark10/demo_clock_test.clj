@@ -254,6 +254,15 @@
       (testing "and so is its move in the log"
         (is (= (.plusSeconds ^Instant t0 86400) (logged after)))))))
 
+(deftest a-clocked-engines-law-sweep-stamps-on-the-demo-clock
+  (let [{:keys [eng]} (world)
+        st (:storage eng)
+        c (chore! eng)]
+    (shift! eng {:by "P1D"})
+    (store/with-tx st #(store/restamp-law! st % :demo_chore [[:state :open]] "next"))
+    (is (= (.plusSeconds ^Instant t0 86400)
+           (store/with-tx st #(:updated-at (store/load-row st % :demo_chore (str c) {})))))))
+
 (deftest a-working-engine-keeps-the-stores-own-stamps
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources [chore]

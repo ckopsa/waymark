@@ -436,7 +436,7 @@
     (count (filter #(= revision (:law-revision %))
                    (vals (get-in @state [:tables kind])))))
 
-  (restamp-law! [_ _tx kind where to-revision]
+  (restamp-law! [this _tx kind where to-revision]
     (let [match? (fn [row]
                    (every? (fn [[f v]]
                              (case f
@@ -445,10 +445,11 @@
                                (= (json-text (get-in row [:data f])) (str v))))
                            where))
           ids (into [] (comp (filter match?) (map :id))
-                    (vals (get-in @state [:tables kind])))]
+                    (vals (get-in @state [:tables kind])))
+          now (or (store/stamp-of this) (Instant/now))]
       (doseq [id ids]
         (swap! state update-in [:tables kind id]
-               #(assoc % :law-revision to-revision :updated-at (Instant/now))))
+               #(assoc % :law-revision to-revision :updated-at now)))
       (count ids)))
 
   ;; ── phase 6 ─────────────────────────────────────────────────────────
