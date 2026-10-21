@@ -12,7 +12,10 @@
   job of tests.yml runs `-main` on the org's directory at the pull
   request's head and uploads the text as `first_week_scene.edn`; the
   forge's findings pass writes it onto the plan as `first_week_scene`,
-  at that head. The director plays it on the clone it stands up.
+  at that head. The director plays it on the clone it stands up. With
+  the scene rides the org's week.edn and its git blob sha (`week-of`,
+  ticket 4c70e261): the director plays that script on the clone, and the
+  film pass compares its take with the plan's `dry_week` (`take-differs`).
 
   THE FILM LANDS ON THE PLAN. `landing` reads the film rules' answer
   (film-rules/judge). With no fail rule missed, the film is attached and
@@ -406,18 +409,43 @@
     (io/file org-dir)
     #((requiring-resolve (symbol (str org ".org") "resources")))))
 
+(defn- blob-sha
+  "The git blob sha of `bs`, as `git hash-object` names the file."
+  [^bytes bs]
+  (let [md (java.security.MessageDigest/getInstance "SHA-1")]
+    (.update md (.getBytes (str "blob " (alength bs) "\u0000") "UTF-8"))
+    (.update md bs)
+    (apply str (map #(format "%02x" (bit-and (long %) 0xff)) (.digest md)))))
+
+(defn week-of
+  "The week script of the org at `org-dir` (ticket 4c70e261): {:week_script
+  its resources/<org>/week.edn as data, :week_sha that file's git blob
+  sha}, the script the director plays and its take report names. nil
+  when the org has no week.edn."
+  [org-dir]
+  (when-some [^java.io.File f (->> (.listFiles (io/file org-dir "resources"))
+                                   (sort)
+                                   (map #(io/file % "week.edn"))
+                                   (filter #(.isFile ^java.io.File %))
+                                   first)]
+    (let [bs (java.nio.file.Files/readAllBytes (.toPath f))]
+      {:week_script (edn/read-string (String. bs "UTF-8"))
+       :week_sha (blob-sha bs)})))
+
 (defn org-scene
   "The first-week scene of the org at `org-dir`, at `head-sha`, its day 1
   on `day-one`, as the edn text the org-findings artifact carries, its
   opening on org.edn's :brief when it has one. The audit's run stands up
   no clone, so the clone's url is empty: the director plays the scene on
-  the clone it stands up at that head."
+  the clone it stands up at that head. An org with a week.edn carries
+  its script and sha beside the scene (`week-of`)."
   [org-dir head-sha day-one]
   (let [seed (read-seed org-dir)]
-    (pr-str (scene seed
-                   {:clone_url "" :head_sha head-sha :day_one day-one
-                    :brief (read-brief org-dir)
-                    :resources (read-resources org-dir (:org seed))}))))
+    (pr-str (merge (scene seed
+                          {:clone_url "" :head_sha head-sha :day_one day-one
+                           :brief (read-brief org-dir)
+                           :resources (read-resources org-dir (:org seed))})
+                   (week-of org-dir)))))
 
 (defn -main
   "Print the first-week scene of the org at `org-dir` at `head-sha`, its
@@ -433,6 +461,45 @@
 
 (defn- word [v]
   (when (or (string? v) (keyword? v)) (name v)))
+
+(defn- numbered
+  "Each call of `calls` in order as [[its day, cast, kind and action, how
+  many such calls came before it] the call]."
+  [calls]
+  (first (reduce (fn [[out seen] c]
+                   (let [k [(str (:day c)) (str (:as c)) (str (:kind c)) (str (:action c))]
+                         n (get seen k 0)]
+                     [(conj out [[k n] c]) (assoc seen k (inc n))]))
+                 [[] {}] calls)))
+
+(defn take-differs
+  "The `take-differs` warning of the take `tk` against the plan's
+  `dry_week` (ticket 4c70e261): each call the audit's dry week moved and
+  the take's `week` refused on the clone, the two paired call for call
+  by day, cast, kind and action. [] when the take played no week, the
+  plan has no dry week, or none differs."
+  [tk dry-week]
+  (let [played (when (map? tk) (get-in (walk/keywordize-keys tk) [:week :calls]))]
+    (if-not (and (sequential? played) (sequential? dry-week))
+      []
+      (let [taken (into {} (numbered played))
+            differs (keep (fn [[k c]]
+                            (let [t (get taken k)]
+                              (when (and (= "moved" (str (:outcome c)))
+                                         (= "refused" (str (:outcome t))))
+                                (str "day " (:day c) ": " (:kind c) " " (:action c)
+                                     (when (seq (str (:guard t))) (str " by " (:guard t)))))))
+                          (numbered (walk/keywordize-keys dry-week)))]
+        (if (empty? differs)
+          []
+          [{:key "take-differs"
+            :severity "warning"
+            :class "film"
+            :subject "week"
+            :sentence (clip (str "The clone refused what the dry week moved: "
+                                 (str/join "; " differs) ".")
+                            240)
+            :remedy "Find why the clone refused what the audit's dry week moved, and film the week again."}])))))
 
 (defn- missed?
   "True when `rule` of the judge's answer keeps the film from landing: a
