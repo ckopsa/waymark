@@ -72,6 +72,10 @@
   `:on-event`'s :match and :input (docs/spec-integrations.md § 3). It
   reads the scope's :event, and is unknown without one.
 
+  instant: an outside body's moment as an instant — its epoch seconds
+  (Stripe's \"created\") or an RFC 3339 string — and nil for anything
+  else: (instant (event \"created\")) (docs/spec-integrations.md § 3).
+
   str: its parts joined into one string, in order — earned by
   factory10's its-change-is-under-review, which finds a change by its
   stored born_from, (= (str \"ticket:\" (self))). An unknown part is
@@ -113,7 +117,7 @@
      str
      days weeks months years hours minutes days-between
      today local-date business-days business-day? next-business-day working?
-     date-of is-set clock day iso
+     date-of is-set clock day iso instant
      every some count sum
      follow did me self event
      exists none count-rows})
@@ -234,7 +238,7 @@
             (conj problems (str "(date …) takes one ISO date string; got "
                                 (pr-str (vec args)))))
 
-          (days weeks months years hours minutes date-of is-set clock day iso not abs
+          (days weeks months years hours minutes date-of is-set clock day iso instant not abs
            local-date business-days business-day? next-business-day amount currency round)
           (if (= n 1)
             (check (first args) env depth problems)
@@ -1189,6 +1193,11 @@
         is-set  (let [v (evaluate (first args) scope)]
                   (if (unknown? v) unknown (some? v)))
         (clock day iso) (instant-text op (evaluate (first args) scope) (:zone scope))
+        ;; an outside body's moment: epoch seconds or RFC 3339
+        instant (let [v (evaluate (first args) scope)]
+                  (cond (unknown? v) v
+                        (integer? v) (Instant/ofEpochSecond (long v))
+                        :else (instant-of v)))
 
         not (let [v (evaluate (first args) scope)]
               (if (unknown? v) unknown (clojure.core/not (truthy? v))))

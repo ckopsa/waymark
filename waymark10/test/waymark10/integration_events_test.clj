@@ -4,6 +4,7 @@
   duplicate changes nothing. Memory storage, real rows through the
   engine."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.fingerprint :as fingerprint]
             [waymark10.resource :refer [defhandler defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.integrations :as integrations]
@@ -345,3 +346,14 @@
       (is (.startsWith ^String f "[source-unsigned] warning: integration stripe"))
       (is (.contains ^String f "shop_order.mark_paid") "it names the doors its events run unread")
       (is (.contains ^String f ":via :inbox") "and the remedy"))))
+
+(deftest on-event-is-law-in-the-fingerprint
+  (let [fp-of fingerprint/fingerprint-of
+        moved (assoc-in job [:on-event 0 :input :amount_cents]
+                        '(event "data" "object" "amount"))]
+    (is (= "mark_paid" (get-in (fp-of job) ["on_event" 0 "door"])))
+    (is (not= (fp-of job) (fp-of moved)) "changing an :on-event mints a revision")
+    (is (not= (fp-of job) (fp-of (assoc-in job [:on-event 0 :type] "charge.succeeded"))))
+    (is (not (contains? (fp-of (dissoc job :on-event)) "on_event"))
+        "an event-free kind hashes as before")
+    (is (= :truth (fingerprint/classify-path "on_event.0.input.amount_cents")))))

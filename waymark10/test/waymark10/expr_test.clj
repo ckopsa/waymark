@@ -465,6 +465,18 @@
     (is (= '(str "ticket:" (self))
            (wire/wire->form (wire/form->wire '(str "ticket:" (self))))))))
 
+(deftest instant-reads-an-outside-moment
+  (let [at (Instant/parse "2026-10-21T09:00:00Z")]
+    (is (= at (e/evaluate '(instant (event "created")) {:event {:created 1792573200}}))
+        "epoch seconds")
+    (is (= at (e/evaluate '(instant (event "at")) {:event {:at "2026-10-21T03:00:00-06:00"}}))
+        "RFC 3339")
+    (is (nil? (e/evaluate '(instant (event "created")) {:event {:created "yesterday"}})))
+    (is (nil? (e/evaluate '(instant (event "created")) {:event {}})))
+    (is (e/unknown? (e/evaluate '(instant (event "created")) {})) "no event is unknown")
+    (is (empty? (e/problems '(instant (event "created")))))
+    (is (seq (e/problems '(instant))))))
+
 (deftest pending-deny-refuses-an-unknown-verdict
   (let [law '(exists [c :change {:born_from (= (str "ticket:" (self)))
                                  :state (= "submitted")}])
