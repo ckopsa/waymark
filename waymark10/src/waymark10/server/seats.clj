@@ -148,6 +148,9 @@
             [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            ;; the law page's words, which a seat's page leads with
+            ;; (`reads-as`, ticket 9935e3a3)
+            [waymark10.law-words :as lw]
             ;; the walked kind's query grammar: whether a row another
             ;; seat's sitting was handed is still in that seat's walk
             ;; (`still-in-its-walk`, ticket 2885ad6e)
@@ -2744,6 +2747,60 @@
                                 (* 7 86400)
                                 (get-in row [:data :scope]))))
 
+(defn first-sentence
+  "The first sentence of `s`, its whitespace made even; all of it when
+  it has no sentence end; nil when blank."
+  [s]
+  (when-some [t (some-> s str (str/replace #"\s+" " ") str/trim not-empty)]
+    (or (re-find #"^.*?[.!?](?=\s|$)" t) t)))
+
+(defn reads-as
+  "A seat in words, as its page leads with it (ticket 9935e3a3): its
+  charter's first sentence, `Wakes when: …` from wake_on and `May: …`
+  from scope, both phrased as the org's law page phrases them
+  (waymark10.law-words), and `works`: one queue for each kind an entry
+  of its scope may move, with its collection's href and the count of
+  rows waiting in a state one of the entry's doors leaves. `rdef-of`
+  answers a kind's rdef or nil; `find'` is the render's find, or nil,
+  when no queue is counted."
+  [rdef-of find' row]
+  (let [{:keys [charter wake_on scope]} (:data row)
+        rdef-of (or rdef-of (constantly nil))
+        wakes (for [{:keys [kind actions]} wake_on
+                    a actions]
+                (lw/wake-phrase rdef-of kind a))
+        may (map lw/scope-phrase scope)
+        works (when find'
+                (reduce
+                 (fn [acc {:keys [kind actions ids filter]}]
+                   (let [r (when (seq actions) (rdef-of kind))]
+                     (if (or (nil? r) (some #(= (name kind) (:kind %)) acc))
+                       acc
+                       (let [only (some->> ids (map str) set)
+                             plural (or (:plural r) (str (name kind) "s"))
+                             n (count (for [s (lw/from-states r actions)
+                                            x (find' (keyword (name kind))
+                                                     (assoc (or filter {}) :state (name s))
+                                                     {:limit 1000})
+                                            :when (or (nil? only) (contains? only (str (:id x))))]
+                                        x))]
+                         (conj acc {:kind (name kind)
+                                    :href (str "/api/" plural)
+                                    :waiting n
+                                    :label (str (lw/capital (lw/words plural)) " (" n " waiting)")})))))
+                 [] scope))
+        lead (first-sentence charter)]
+    (cond-> {:works (vec works)}
+      lead (assoc :charter lead)
+      (seq wakes) (assoc :wakes (str "Wakes when: " (lw/either wakes) "."))
+      (seq may) (assoc :may (str "May: " (str/join "; " may) ".")))))
+
+(defn- reads-as-field
+  "The seat's :computed `reads_as`: `reads-as` over the registry and the
+  find the render ctx lends."
+  [row ctx]
+  (reads-as (:rdef-of ctx) (:find ctx) row))
+
 (defn- spend-by-domain-field
   "The seat's :computed `spend_by_domain_7d`: `spend-by-domain` over the
   read and the find the render ctx lends."
@@ -3027,7 +3084,25 @@
                :x-display
                {:label "Ends within seven days"
                 :help "The scope entries whose until falls within seven days, soonest first, worked out at read time. Restate the seat with a later until to keep one."}
-               :fn lapsing-field}}
+               :fn lapsing-field}
+              :reads_as
+              {:schema [:map
+                        [:charter {:optional true} :string]
+                        [:wakes {:optional true} :string]
+                        [:may {:optional true} :string]
+                        [:works [:vector
+                                 [:map
+                                  [:kind :string]
+                                  [:href :string]
+                                  [:waiting :int]
+                                  [:label :string]]]]]
+               :x-display
+               {:label "In words"
+                :help "What this seat is for, what wakes it, what it may do and the queues it works, worked out at read time in the words of the org's law page. Each queue counts the rows waiting in a state this seat can move."}
+               ;; it counts the queues: with no :read it is absent,
+               ;; never a false zero
+               :reads? true
+               :fn reads-as-field}}
    ;; No :x-options on :name, and roles.clj's reason verbatim: the list
    ;; the engine could publish here is the list of names already TAKEN,
    ;; and a chip row of it would offer exactly the tokens the guard is
