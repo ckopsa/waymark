@@ -1,7 +1,8 @@
 (ns workqueue10.week-test
-  "workqueue10.week (ticket f084a59c): the fixture org's three-day week
+  "workqueue10.week (ticket f084a59c): the fixture org's two-day week
   plays in-process, and its report names the guard that refused a call,
-  counts the call held for the owner and allowed the next day, and
+  counts the call held for the owner and allowed the same day (ticket
+  2fa0d276; `:yesterday` warns it allowed an expired call), and
   reaches the payoff row. A broken script throws; a refusal does not.
   No database: the in-memory twin.
 
@@ -25,20 +26,31 @@
         (is (str/includes? (str (:guard c)) "has-budget") (pr-str c))))
     (testing "the same door moves a job that says its budget"
       (is (= "moved" (:outcome (entry r 1 "quote" "lawn"))) (pr-str (:calls r))))
-    (testing "the mayor's booking is held, and the owner allows it the next day"
-      (is (= "held" (:outcome (entry r 2 "book" "lawn"))) (pr-str (:calls r)))
-      (let [a (entry r 3 "allow" "lawn")]
-        (is (= "moved" (:outcome a)) (pr-str a)))
+    (testing "the mayor's booking is held, and the owner allows it the same day"
+      (is (= "held" (:outcome (entry r 1 "book" "lawn"))) (pr-str (:calls r)))
+      (let [a (entry r 1 "allow" "lawn")]
+        (is (= "moved" (:outcome a)) (pr-str a))
+        (is (nil? (:warning a)) (pr-str a)))
       (is (= 1 (:person_asks r)))
-      (is (= 0 (:still_held r))))
-    (testing "a {\"$row\" name} input names the row an earlier call made"
-      (is (= "moved" (:outcome (entry r 3 "create" "edging"))) (pr-str (:calls r))))
+      (is (= 0 (:still_held r)))
+      (is (= [] (:warnings r))))
+    (testing "the next day's follow-up, a {\"$row\" name} input naming the row an earlier call made, moves"
+      (is (= "moved" (:outcome (entry r 2 "create" "edging"))) (pr-str (:calls r))))
     (testing "the payoff row is reached"
       (is (= {:kind "garden_job" :state "booked" :count 1}
              (select-keys (:goal r) [:kind :state :count]))
           (pr-str (:goal r))))
     (testing "the text report says the same"
       (is (str/includes? (week/text r) "goal: garden_job booked, 1 row(s)")))))
+
+(deftest a-week-that-allows-yesterday-warns-for-each-expired-call
+  (let [script (week/read-week (java.io.File. fixture) "week_fixture")
+        r (week/play fixture (update script :days (partial mapv #(assoc % :person-allows :yesterday))))
+        a (entry r 2 "allow" "lawn")]
+    (is (nil? (entry r 1 "allow" "lawn")) (pr-str (:calls r)))
+    (is (str/includes? (str (:warning a)) "[week-allow-late]") (pr-str a))
+    (is (= 1 (count (:warnings r))) (pr-str (:warnings r)))
+    (is (str/includes? (week/text r) "[week-allow-late]"))))
 
 (deftest a-broken-script-throws-and-a-refusal-does-not
   (let [script (week/read-week (java.io.File. fixture) "week_fixture")
