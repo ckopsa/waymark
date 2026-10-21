@@ -309,6 +309,9 @@
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
                            (:touches a)))
+    ;; what a door unwinds is law too (§ 5), projected only when declared
+    (seq (:unwinds a))
+    (assoc "unwinds" (pr-str (:unwinds a)))
     ;; the call a door makes is law (docs/spec-integrations.md § 8):
     ;; projected only when declared, so every other door hashes as before
     (:effect a)
