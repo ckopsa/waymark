@@ -205,3 +205,96 @@
         (is (str/includes? (get-in c [:data :reason]) "Not this one.")))
       (is (= :label_failed (:state (row-of eng :parcel pid))))
       (is (empty? @log)))))
+
+(defn- postage-effect [tool input k]
+  {:power (str "postage__" tool) :input input
+   :idempotency-key (list 'str k '(self)) :fails-to :failed})
+
+(defresource errand
+  {:kind :errand
+   :states [:packed :label_asked :labelled :pickup_asked :booked :failed :cancelled]
+   :initial :packed
+   :summary "{data.number} · {state}"
+   :schema [:map
+            [:number [:string {:min 1 :max 40}]]
+            [:label_ref {:optional true} [:maybe [:string {:max 120}]]]
+            [:pickup_ref {:optional true} [:maybe [:string {:max 120}]]]]
+   :actions {:buy_label {:from #{:packed} :to :label_asked
+                         :safety once
+                         :effect (assoc (postage-effect "create_label" {:number '(data :number)} "label:")
+                                        :writes {:label_ref '(result "object_id")}
+                                        :lands :labelled
+                                        :compensate :void_label)}
+             :book_pickup {:from #{:labelled} :to :pickup_asked
+                           :safety once
+                           :effect (assoc (postage-effect "book_pickup" {:number '(data :number)} "pickup:")
+                                          :writes {:pickup_ref '(result "object_id")}
+                                          :lands :booked
+                                          :compensate :cancel_pickup)}
+             :void_label {:from #{:labelled} :to :cancelled
+                          :safety once
+                          :effect (postage-effect "void_label" {:label '(data :label_ref)} "void:")}
+             :cancel_pickup {:from #{:booked} :to :cancelled
+                             :safety once
+                             :effect (postage-effect "cancel_pickup" {:pickup '(data :pickup_ref)} "unbook:")}
+             :cancel {:from #{:booked} :to :cancelled
+                      :safety once
+                      :unwinds [{:effect :buy_label} {:effect :book_pickup}]}
+             :reopen {:from #{:failed :cancelled} :to :packed
+                      :safety once}}})
+
+(def ^:private errand-tools
+  ["create_label" "book_pickup" "void_label" "cancel_pickup"])
+
+(deftest compensations-run-newest-effect-first
+  ;; the store stamps :created-at from the wall clock, not :now-fn, so the
+  ;; clock advances between the two effects by sleeping across it
+  (let [log (atom [])
+        server (with-meta
+                 (fn [method params]
+                   (case method
+                     "tools/list" {:tools (mapv #(hash-map :name % :description %
+                                                           :inputSchema {:type "object"})
+                                                errand-tools)}
+                     "tools/call" (do (swap! log conj params)
+                                      (labelled (str "R-" (count @log))))))
+                 {::client/dead? (constantly false)})
+        eng (engine/engine
+             {:storage (memory/storage)
+              :resources [caps/capability errand]
+              :now-fn (fn [] clock)
+              :services {:mcp-servers {:client-fn (constantly server)}
+                         :integrations {:effect-backoff-ms 0}}})
+        _ (inv/create! eng :capability
+                       {:token "postage.send"
+                        :description "postage.send through a server row."
+                        :enforced_by "this engine's own power door"}
+                       {:principal colton})
+        sid (str (get-in (inv/create! eng :mcp_server
+                                      {:name "postage" :transport "http"
+                                       :url "http://fake.invalid/mcp/"
+                                       :powers [{:power "postage.send" :approval "none"
+                                                 :tools errand-tools}]}
+                                      {:principal colton})
+                         [:row :id]))
+        iid (str (get-in (inv/create! eng :integration
+                                      {:name "shippo" :system "Shippo, the postage seller"
+                                       :server sid}
+                                      {:principal colton})
+                         [:row :id]))
+        _ (inv/invoke! eng :integration iid :approve {} {:principal mom})
+        eid (str (get-in (inv/create! eng :errand {:number "E-1"} {:principal colton})
+                         [:row :id]))]
+    (inv/invoke! eng :errand eid :buy_label {} {:principal colton})
+    (runner/sweep! eng)
+    (Thread/sleep 5)
+    (inv/invoke! eng :errand eid :book_pickup {} {:principal colton})
+    (runner/sweep! eng)
+    (is (= :booked (:state (row-of eng :errand eid))))
+    (is (= ["create_label" "book_pickup"] (mapv :name @log)) "the label, then the pickup")
+    (reset! log [])
+    (inv/invoke! eng :errand eid :cancel {} {:principal colton})
+    (runner/sweep! eng)
+    (is (= :cancelled (:state (row-of eng :errand eid))))
+    (is (= ["cancel_pickup" "void_label"] (mapv :name @log))
+        "the pickup, the newer effect, is undone first")))
