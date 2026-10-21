@@ -40,13 +40,16 @@
   (edn/read-string (slurp (io/resource "scenes/first-week.edn"))))
 
 (defn- fill
-  "`form` with each {{param}} in its strings replaced by its value."
+  "`form` with each {{param}} in its strings replaced by its value; a
+  string that is one {{param}} whole, of a number, becomes that number."
   [form values]
   (walk/postwalk
    (fn [x]
      (if (string? x)
-       (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
-                  x values)
+       (or (some (fn [[k v]] (when (and (number? v) (= x (str "{{" (name k) "}}"))) v))
+                 values)
+           (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
+                      x values))
        x))
    form))
 

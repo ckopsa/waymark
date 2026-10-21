@@ -51,14 +51,15 @@
   {:hold {:ms 3000} :say "{{org_display}}."}]
  ;; one day: its weekday, then the org's day in one sentence, filled from
  ;; the clone when the shot plays (docs/spec-scenes.md, Holes in a say):
- ;; what moved since the last day caption, for the week is played by the
- ;; clone's own world and mayor seats, its days separated by clock_shift
- ;; and meanwhile shots. The weekday is a label.
+ ;; what moved on day {{day}} of the clone's clock, between its (day-1)th
+ ;; and day-th clock_shift, for the week is played by the clone's own
+ ;; world and mayor seats, before the performance or as meanwhile shots.
+ ;; The weekday is a label.
  :day
  [{:open {:collection "{{kind_plural}}"}}
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
-         {"$day" {:window "shot" :domain "{{seed}}"}}]}]
+         {"$day" {:window "clock" :day "{{day}}" :domain "{{seed}}"}}]}]
  ;; the week's numbers, most consequential first: each kind's rows that
  ;; ended the week in each success end, the money a kind with an amount
  ;; field invoiced, then the held calls it asked the person. A zero drops

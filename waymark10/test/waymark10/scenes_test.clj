@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -534,6 +535,48 @@
       (is (= "Nothing." (scenes/fill-say [(assoc-in caption ["$day" :none] "Nothing.")]
                                          (constantly []) (constantly [])
                                          (fn [w] (scenes/day-in-window eng w)) run))))))
+
+(deftest a-clock-window-day-hole-reads-its-day-between-the-shifts
+  (let [eng (clock-shift/install!
+             (engine/engine (clock-shift/with-clock
+                             {:storage (memory/storage)
+                              :resources (mapv org-kind [:study :invoice :note])
+                              :name "demo-scenes"
+                              :clone? true})))
+        day (fn [k] {"$day" {:window "clock" :day k :domain "acme"}})
+        said (fn [k] (scenes/fill-say [(day k)] (constantly []) (constantly [])
+                                      (fn [w] (scenes/day-in-window eng w))))
+        write! (fn [kind title]
+                 (Thread/sleep 5)
+                 (inv/create! eng kind {:title title :domain "acme"} {:principal mayor}))
+        shift! (fn []
+                 (Thread/sleep 5)
+                 (inv/create! eng :clock_shift {:by "P1D"} {:principal mayor}))]
+    (write! :study "Acme's study")
+    (write! :invoice "Acme's invoice")
+    (write! :note "Acme's note")
+    (shift!)
+    (write! :study "Acme's second study")
+    (write! :invoice "Acme's second invoice")
+    (shift!)
+    (Thread/sleep 5)
+    (testing "day 1 tells the moves before the first shift"
+      (let [s (said 1)]
+        (is (str/includes? s "Acme's study was written") s)
+        (is (not (str/includes? s "second")) s)))
+    (testing "day 2 tells the two between the shifts"
+      (let [s (said 2)]
+        (is (str/includes? s "Acme's second study was written") s)
+        (is (str/includes? s "Acme's second invoice was written") s)
+        (is (not (str/includes? s "Acme's study")) s)))
+    (testing "day 3, after the last shift, is quiet, and a day past it too"
+      (is (= "A quiet day." (said 3)))
+      (is (= "A quiet day." (said 4))))
+    (testing "check admits `day` only with the clock's window, 1 to 31"
+      (is (nil? (scenes/say-refusal eng [(day 7)])))
+      (is (some? (scenes/say-refusal eng [(day 32)])))
+      (is (some? (scenes/say-refusal eng [{"$day" {:window "clock" :domain "acme"}}])))
+      (is (some? (scenes/say-refusal eng [{"$day" {:window "shot" :day 1 :domain "acme"}}]))))))
 
 (defn- say! [h headers body]
   (let [resp (h {:request-method :post :uri "/api/-/scenes/say"

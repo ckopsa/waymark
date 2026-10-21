@@ -207,6 +207,19 @@ instant on the take's run (`take-run`). `check` refuses any other
 {"say": ["Tuesday. ", {"$day": {"window": "shot", "domain": "acme"}}]}
 ```
 
+Or it may say `"window": "clock", "day": k`: it reads the transitions
+and held calls of the domain logged between the clone's (k-1)th and kth
+`clock_shift` row (day 1: from the start of the clone to the first
+shift; the day after the last shift: up to the moment the performer
+fills it; a later day is quiet), ranked, phrased and `none`d as above
+(`clock-window`). Rows are stamped with the wall clock in play order, so
+the shifts are the days' bounds. `check` admits `day` only with
+`window: "clock"`, a whole number from 1 to 31, and requires it there.
+
+```json
+{"say": ["Tuesday. ", {"$day": {"window": "clock", "day": 2, "domain": "acme"}}]}
+```
+
 The performer has the engine fill a say over the wire:
 `POST /api/-/scenes/say` with `{"say": <the shot's say, as the scene
 holds it>, "take": <a string the performer names the take by>}` answers
@@ -223,12 +236,15 @@ is dropped two hours after it began.
 
 A filmed week is played this way. The week is played by the clone's
 own seats: the director sits the clone's `world` and `<org>-mayor`
-seats day by day, and separates the days with `clock_shift` and
-`meanwhile` shots before each day's caption. Every seed row on a clone
-is born the day it boots, so a dated `$day` would put the whole week on
-day 1; the caption's `{"window": "shot"}` reads instead what the seats
-did since the last caption. factorykit's `scenes/first-week.edn` does
-so; its weekday words are labels.
+seats day by day and separates the days with `clock_shift`, before the
+performance or as `meanwhile` shots before each day's caption. Every
+seed row on a clone is born the day it boots, so a dated `$day` would
+put the whole week on day 1; day k's caption, `{"window": "clock",
+"day": k}`, reads instead what the seats did on day k of the clone's
+clock, however the week was played. factorykit's
+`scenes/first-week.edn` does so; its weekday words are labels. A scene
+that plays its days only as `meanwhile` shots, with no shift, may still
+say `{"window": "shot"}`: what the seats did since the last caption.
 
 ## `wearing`
 

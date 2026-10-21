@@ -57,12 +57,12 @@
         shots))
 
 (defn- day-captions
-  "What `captions` answers for days named `weekdays`: each reads since
-  the last day caption."
+  "What `captions` answers for days named `weekdays`: day k reads day k
+  of the clone's clock."
   [weekdays]
-  (map (fn [weekday]
-         [(str weekday ". ") {:window "shot" :domain "example"}])
-       weekdays))
+  (map-indexed (fn [i weekday]
+                 [(str weekday ". ") {:window "clock" :day (inc i) :domain "example"}])
+               weekdays))
 
 (defn- counts
   "The `$rows` holes of a shot's say, its `$list`'s too."
