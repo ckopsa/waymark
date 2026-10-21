@@ -96,6 +96,40 @@ function seatReadsAs(r) {
     line.append(".");
     box.append(line);
   }
+  if (r.sitting)
+    box.append(el("p", {class:"prose"},
+      el("a", {href:"#"+r.sitting.href, "data-seat-sitting": ""}, r.sitting.label)));
+  return box;
+}
+
+/* a sitting's page leads with the seat at work (ticket ff5bfbb9): its
+   name, Working or Done, and its calls in the owner's words, newest
+   last. While it works the page asks for the row again and appends
+   the calls that landed since */
+function sittingAtWork(doc) {
+  const box = el("div", {class:"sitting-at-work", "data-sitting-at-work": ""});
+  const lead = el("p", {class:"prose"});
+  const list = el("ol", {class:"prose", "data-sitting-calls": ""});
+  box.append(lead, list);
+  let shown = 0;
+  const paint = (w) => {
+    lead.replaceChildren(el("strong", {}, w.lead || ""));
+    for (const c of (w.calls || []).filter(c => c.n > shown)) {
+      list.append(el("li", {"data-call": String(c.n), title: c.outcome},
+        c.href ? el("a", {href:"#"+c.href}, c.text) : c.text));
+      shown = Math.max(shown, c.n);
+    }
+  };
+  paint(doc.data.at_work);
+  if (doc.data.at_work.working) {
+    const tick = setInterval(async () => {
+      if (!box.isConnected) { clearInterval(tick); return; }
+      const {ok, body} = await api(doc.self);
+      const w = ok && body && body.data && body.data.at_work;
+      if (w) paint(w);
+      if (!box.isConnected || (ok && !(w && w.working))) clearInterval(tick);
+    }, 4000);
+  }
   return box;
 }
 
@@ -115,6 +149,8 @@ async function renderResource(view, doc, hints) {
   panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));
   if (kind === "seat" && doc.data?.reads_as)
     panel.append(seatReadsAs(doc.data.reads_as));
+  if (kind === "sitting" && doc.data?.at_work)
+    panel.append(sittingAtWork(doc));
   const meta = doc.meta || {};
   panel.append(el("div", {},
     el("span", {class:"statechip", title: kind}, doc.state),
@@ -288,6 +324,8 @@ async function renderResource(view, doc, hints) {
   /* a seat said in words above: the words leave the kv table, and its
      raw scope and wake_on fold below it, closed */
   const seatRaw = {};
+  /* …and a sitting's calls, said above: its raw fields fold, closed */
+  if (kind === "sitting") delete plainData.at_work;
   if (kind === "seat") {
     delete plainData.reads_as;
     for (const k of ["scope", "wake_on"])
@@ -336,7 +374,7 @@ async function renderResource(view, doc, hints) {
     }
   }
   const dataPanel = el("div", {class:"panel"},
-    el("details", {class:"rowdata", open:""},
+    el("details", kind === "sitting" ? {class:"rowdata"} : {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
       dataTable));
   if (Object.keys(seatRaw).length)
