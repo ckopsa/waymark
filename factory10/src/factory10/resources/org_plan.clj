@@ -1886,6 +1886,24 @@
      :display {:label "Take carried" :order 15
                :description "A base move that left the org alone keeps the film"}}
 
+    ;; The same, for a filming plan (ticket 4670d326): a take waiting to
+    ;; be judged is of the org's files, and a base move that left them
+    ;; alone does not void it. It stays filming, its take at the new head.
+    :carry_take_filming
+    {:from #{:filming} :to :filming
+     :guards [the-engine-records-the-findings]
+     :handler carry-the-take
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The new head"}}
+              schema/commit-sha]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The take waiting to be judged is of the new head: the org there is the org that was filmed."}
+     :display {:label "Take carried" :order 16
+               :description "A base move that left the org alone keeps the take waiting to be judged"}}
+
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.
     :decline_hire
