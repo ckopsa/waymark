@@ -1734,6 +1734,31 @@
                                            :started_at "2026-09-29T12:00:00Z"}})))
       (is (nil? (get-in (policy-row eng (:id row)) [:data :line_train]))))))
 
+(deftest an-org-lane-has-its-own-line-ceiling
+  ;; ticket bacb84f2
+  (let [lanes [{:name "orgs" :paths ["orgs/**"]}]
+        policy {:data {:max_lines 800 :lanes lanes
+                       :lane_max_lines {:orgs 3000}}}]
+    (testing "a change touching only one org directory takes the lane's ceiling"
+      (is (= 3000 (bench/max-lines-for policy ["orgs/x/plan.edn"
+                                                "orgs/x/scenarios/a.edn"]))))
+    (testing "the same paths with one outside orgs/ keep max_lines"
+      (is (= 800 (bench/max-lines-for policy ["orgs/x/plan.edn"
+                                               "factory10/src/x.clj"]))))
+    (testing "a submit that names no paths keeps max_lines"
+      (is (= 800 (bench/max-lines-for policy []))))
+    (testing "a policy without lane_max_lines behaves as today"
+      (is (= 800 (bench/max-lines-for {:data {:max_lines 800 :lanes lanes}}
+                                      ["orgs/x/plan.edn"])))
+      (is (= 400 (bench/max-lines-for {:data {}} ["orgs/x/plan.edn"]))))
+    (testing "a lane is named by its prefix, and the longest prefix wins"
+      (is (= 3000 (bench/lane-max-lines-of policy "orgs/x")))
+      (is (= 800 (bench/lane-max-lines-of policy "engine")))
+      (is (= 800 (bench/lane-max-lines-of policy "orgsx")))
+      (is (= 1200 (bench/lane-max-lines-of
+                   (assoc-in policy [:data :lane_max_lines :orgs/x] 1200)
+                   "orgs/x"))))))
+
 (deftest a-policy-that-opens-no-pull-request-lands-without-one
   (let [st (state)
         eng (fresh-engine st)
