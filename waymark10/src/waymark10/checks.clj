@@ -1862,6 +1862,8 @@
                  (str in " is reached :by " (pr-str by) "; a mover is "
                       "{:kind <another kind> :action <its door>}"))))))))
 
+(declare age-problem)
+
 (defn- check-expected-age
   "`:expected-age` says how long a row may rest in a state with no
   write (ticket 21b49b28). The live cracks pass reads it by state name
@@ -1870,22 +1872,45 @@
   nowhere.
 
   The key is a map, each state it names is a state this kind declares,
-  and each value is a positive integer of seconds."
+  and each value is a positive integer of seconds, `{:business-days n}`
+  or `{:until <form>}` (docs/spec-calendar-time.md §2, §3): a
+  well-formed form that reads only (data …), periods and the calendar."
   [r]
   (let [ages (:expected-age r)
         states (set (:states r))]
     (when (some? ages)
       (when-not (map? ages)
         (err r :expected-age ":expected-age is {<state> <seconds>}"))
-      (doseq [[state seconds] (sort-by (comp str key) ages)]
+      (doseq [[state age] (sort-by (comp str key) ages)]
         (when-not (contains? states state)
           (err r :expected-age
                (str ":expected-age names " (pr-str state) ", which is no state "
                     "of this kind; it names " (vec (:states r)))))
-        (when-not (pos-int? seconds)
+        (when-some [why (age-problem age)]
           (err r :expected-age
-               (str ":expected-age gives " (pr-str state) " " (pr-str seconds)
-                    "; an age is a positive integer of seconds")))))))
+               (str ":expected-age gives " (pr-str state) " " (pr-str age) "; " why)))))))
+
+(defn- age-problem
+  "Why one `:expected-age` value is no age, or nil when it is one."
+  [age]
+  (let [shape (str "an age is a positive integer of seconds, "
+                   "{:business-days <n>} or {:until <date expression>}")]
+    (cond
+      (pos-int? age) nil
+      (not (and (map? age) (= 1 (count age)))) shape
+      (contains? age :business-days)
+      (when-not (pos-int? (:business-days age))
+        "its business days are a positive integer")
+      (contains? age :until)
+      (let [form (:until age)]
+        (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries follows]}
+                  (expr/info form)]
+              (when (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
+                        uses-me uses-self (seq queries) (seq follows))
+                (str "its :until reads only (data …), periods and the calendar; "
+                     "not the clock, an input, a var, the actor or another row")))))
+      :else shape)))
 
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
@@ -2386,13 +2411,52 @@
                         ":stays-code with one sentence saying why.")))))
            sites))))
 
+(defn- law-read-fields
+  "The data fields the kind's law reads: its guards' judged fields and
+  trees, its derived facts' inputs and trees, and its ages' :until
+  forms."
+  [r]
+  (into #{}
+        (map (comp keyword name))
+        (concat
+         (for [{:keys [guard]} (guard-sites r)
+               f (concat (:judges guard)
+                         (when-some [w (:when guard)]
+                           (mapcat (comp :data expr/info)
+                                   (cons w (when (map? (:vars guard))
+                                             (remove nil? (vals (:vars guard))))))))]
+           f)
+         (for [[_ d] (:derived r)
+               f (concat (:over d) (some-> (:expr d) expr/info :data))]
+           f)
+         (for [[_ age] (:expected-age r)
+               :when (and (map? age) (contains? age :until))
+               f (:data (expr/info (:until age)))]
+           f))))
+
+(defn- check-date-unread
+  "[date-unread], info (docs/spec-calendar-time.md §7): a date or
+  instant field that no guard, fact or age reads, and that does not say
+  `:record-only true` (kept, not acted on)."
+  [r]
+  (when (:schema r)
+    (let [read (law-read-fields r)]
+      (for [[k {:keys [properties] s :schema}] (sort-by (comp str key) (schema/entry-map (:schema r)))
+            :when (contains? #{:waymark/date :waymark/instant} (schema/leaf-head s))
+            :when (not (:record-only properties))
+            :when (not (contains? read k))]
+        (str "[date-unread] info: field " (name k) " is a date no guard, fact or age"
+             " reads. When " (name k) " passes, should anything happen or anyone"
+             " hear? Give it a deadline (an :expected-age :until), a guard, or"
+             " :record-only true to say it is kept, not acted on.")))))
+
 (defn run-all
   "The full battery in waymark9 order; throws the first error, returns
-  {:warnings [str …] :info [str …]}. [convertible-guard] and
-  [stays-code] are info (docs/spec-related-row-law.md §6): counted,
-  not enforced, so they never land among the warnings."
+  {:warnings [str …] :info [str …]}. [convertible-guard],
+  [stays-code] and [date-unread] are info (docs/spec-related-row-law.md
+  §6): counted, not enforced, so they never land among the warnings."
   [rmap]
-  {:info (check-convertible-guard rmap)
+  {:info (into (vec (check-convertible-guard rmap)) (check-date-unread rmap))
    :warnings
    (into []
          (mapcat #(% rmap))
