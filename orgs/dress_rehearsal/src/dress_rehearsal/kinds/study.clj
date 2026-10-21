@@ -10,29 +10,29 @@
   when the cost records are complete, and that is what moves the study
   to drafting. A missing document is chased twice; after the second
   chase the principal is told."
-  (:require [waymark10.dsl :refer [defguard defguardfn defresource refuse]]
+  (:require [waymark10.dsl :refer [defguard defguardfn defresource defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
 (defguard records-complete
   (refuse "Drafting starts once the cost records are complete; say when the last one came.")
-  '(present? :records_complete_on))
+  '(is-set (input :records_complete_on)))
 
-(defguard records-confirmed
-  (refuse "The specialist decides the cost records are complete; name who confirmed them.")
-  '(present? :records_confirmed_by))
+(defguard records-complete-already
+  (refuse "The last cost record came on a day that has come, not one still ahead; say when the last one came.")
+  '(<= (input :records_complete_on) (today)))
 
 (defguard has-preparer
   (refuse "A study goes to review with the name of who prepared it.")
-  '(present? :preparer))
+  '(is-set (input :preparer)))
 
 (defguard has-credit
   (refuse "A study goes to review once the credit is calculated.")
-  '(present? :credit_usd))
+  '(is-set (input :credit_usd)))
 
 (defguard has-signer
   (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
-  '(present? :signed_off_by))
+  '(is-set (input :signed_off_by)))
 
 (defguardfn records-confirmed-by-a-person
   {:reads [:principal :within]
@@ -70,8 +70,7 @@
             [:cpa {:optional true} [:maybe [:string {:max 120}]]]
             [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
-            [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
-            [:records_confirmed_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+            [:records_complete_on {:optional true} [:maybe :waymark/date]]
             ;; what records are still missing: one entry per kind of record, with when it was last chased
             [:missing_records {:optional true}
              [:maybe [:vector {:max 4}
@@ -91,15 +90,20 @@
              :signed_off "A signed-off study may wait 2 days to be delivered; past that, the mayor tells The Principal."}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
-                 :guards [records-complete records-confirmed records-confirmed-by-a-person]
+                 :input [:map [:records_complete_on :waymark/date]]
+                 :guards [records-complete records-complete-already records-confirmed-by-a-person]
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review
+                 :input [:map
+                         [:preparer [:string {:min 1 :max 80}]]
+                         [:credit_usd [:int {:min 0}]]]
                  :guards [has-preparer has-credit]
                  :safety {:idempotent true :reversible true :confirm false}}
     :send_back  {:from #{:review} :to :drafting
                  :safety {:idempotent true :reversible true :confirm false}}
     :sign_off   {:from #{:review} :to :signed_off
+                 :input [:map [:signed_off_by {:x-ref {:principal true}} [:string {:min 1 :max 80}]]]
                  :guards [has-signer principal-signs-off]
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "A signed-off study is final; correct it with a new study."}}
@@ -107,3 +111,21 @@
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "The study and Form 6765 are with the client's CPA."}
                  :decided "The AI delivers a study to the client's CPA on its own once it is signed off; sign-off is the gate."}}})
+
+(defscenario records-in-with-the-day-the-last-came
+  "A collecting study moves to drafting once the day the last cost record came is recorded."
+  {:kind :study :attempt :records_in
+   :row {:state :collecting :data {:client "Acme Robotics" :tax_year 2025}}
+   :input {:records_complete_on "2026-10-20"}
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :expect {:allowed true}})
+
+(defscenario records-in-refused-without-the-day-the-last-came
+  "A collecting study stays collecting while no day for the last cost record is recorded."
+  {:kind :study :attempt :records_in
+   :row {:state :collecting :data {:client "Acme Robotics" :tax_year 2025}}
+   :input {}
+   :at "2026-10-21T16:00:00Z"
+   :calendar {:zone "America/Denver"}
+   :expect {:refused :records-complete}})
