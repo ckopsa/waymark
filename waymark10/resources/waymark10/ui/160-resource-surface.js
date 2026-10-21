@@ -1,6 +1,33 @@
 /* ── resource screen ───────────────────────────────────────────────── */
 function label(name, entry) { return entry.display?.label || title(name); }
 
+/* a row as it stood (GET /api/<plural>/<id>?as-of=): the log's own
+   document, never an envelope, so nothing on it is a door. A film's
+   day opens it; the quiet note names the day, and the id crumb leads
+   to the row as it stands now. */
+function renderAsOf(view, doc, hints) {
+  const d = doc.data || {};
+  const of = d.of || doc.self.split("?")[0];
+  const panel = el("div", {class:"panel"});
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ",
+    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, title(d.kind || "row") + "s"),
+    el("span", {class:"idsep"}, " / "),
+    el("a", {class:"id", href:"#"+of, title:"this row as it stands now"},
+      String(d.id || of.split("/").pop()).slice(0, 8))));
+  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
+  const at = new Date(d.as_of);
+  const day = isNaN(at) ? String(d.as_of)
+    : at.toLocaleDateString(undefined, {weekday: "long"});
+  panel.append(el("div", {},
+    el("span", {class:"statechip", title: d.kind || ""},
+      d.existed ? String(d.state) : "not yet"),
+    el("span", {class:"version", title: `read-only: this row as of ${d.as_of}`},
+      `as of ${day}`)));
+  if (d.data && typeof d.data === "object") panel.append(kvTable(d.data, hints || {}));
+  view.append(panel);
+}
+
 async function renderResource(view, doc, hints) {
   hints = hints || {};
   /* the ref labels this envelope carries, before any cell asks */

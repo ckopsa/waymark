@@ -250,7 +250,10 @@ open>}`, under the say door's principal rules and concealment 404. It
 ranks day k's moves as a `$day` does (a held call or an ask first, then
 a door that cannot be undone, then another seat's move, then a create)
 and opens the top move's kind: when the moves of the best rank on that
-kind are one row, that row's page, `{"self": "/api/<plural>/<id>"}`;
+kind are one row, that row's page as it stood at the end of day k, read
+from its log, `{"self": "/api/<plural>/<id>?as-of=<end>", "as_of":
+<end>}` (an open that says `"as_of": false` beside its `$day-row` gets
+the row as it stands now, `{"self": "/api/<plural>/<id>"}`);
 when several, its collection, unfiltered, for an open names no filter.
 A quiet day, a day the clock has not played, or a caller who does not
 see the domain whole opens the domain's first kind by name that the

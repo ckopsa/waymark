@@ -252,16 +252,20 @@
 (defn open-refusal
   "Why a shot's `open` cannot be resolved, as `check` says it of a
   `$day-row` open: one key, a map of `window` (the clock's), `day` and
-  `domain`, judged as a `$day` hole of the clock's window is. nil for
-  any other open, which POST /api/-/scenes/open passes through as given."
+  `domain`, judged as a `$day` hole of the clock's window is, and beside
+  it only `as_of` false, for the row as it stands now. nil for any other
+  open, which POST /api/-/scenes/open passes through as given."
   [open]
   (let [o (plain open)]
     (when (and (map? o) (contains? o "$day-row"))
       (let [h (get o "$day-row")
             stray (when (map? h) (remove #{"window" "day" "domain"} (keys h)))]
         (cond
-          (next (keys o))
-          "a `$day-row` open names nothing beside it."
+          (seq (remove #{"$day-row" "as_of"} (keys o)))
+          "a `$day-row` open names nothing beside it but `as_of`."
+
+          (and (contains? o "as_of") (not (false? (get o "as_of"))))
+          "a `$day-row` open's `as_of` is false, for the row as it stands now, or left out."
 
           (not (map? h))
           "a `$day-row` open is a map of `window`, `day` and `domain`."
@@ -1013,21 +1017,24 @@
   day k of engine `eng`'s demo clock (`clock-window`, the last day
   ending at `until`) in the org whose kinds name `domain`, ranked as a
   `$day` ranks it (`day-entries`). The moves of the best rank on the top
-  move's kind are one row: that row's page, {self /api/<plural>/<id>};
-  several: that kind's collection, unfiltered, for an open names no
-  filter. Nothing moved, a day the clock has not played, or a caller who
+  move's kind are one row: that row's page as it stood at the end of
+  day k, read from its log, {self /api/<plural>/<id>?as-of=<end>, as_of
+  <end>}, or as it stands now, {self /api/<plural>/<id>}, when :as-of?
+  is false; several: that kind's collection, unfiltered, for an open
+  names no filter. Nothing moved, a day the clock has not played, or a caller who
   does not see the domain whole: the domain's first kind by name the
   caller sees, its collection; nil when it sees none. `opts` are
   `told-day`'s, and :sees?, a fn of a kind keyword, every kind unless
   given."
-  [eng {:keys [clock-day until domain]} {:keys [sees?] :or {sees? (constantly true)} :as opts}]
+  [eng {:keys [clock-day until domain as-of?] :or {as-of? true}}
+   {:keys [sees?] :or {sees? (constantly true)} :as opts}]
   (let [rdefs (inv/resources eng)
         plural #(or (:plural (get rdefs %)) (str (name %) "s"))
         kinds (domain-kinds eng domain)
-        entries (when (every? #(sees? (:kind %)) kinds)
-                  (when-some [cw (clock-window eng clock-day until)]
-                    (filter #(sees? (:kind (peek %)))
-                            (day-entries eng (assoc cw :domain domain) opts))))
+        cw (clock-window eng clock-day until)
+        entries (when (and cw (every? #(sees? (:kind %)) kinds))
+                  (filter #(sees? (:kind (peek %)))
+                          (day-entries eng (assoc cw :domain domain) opts)))
         [rank _ _ top] (first entries)
         rows (->> entries
                   (filter #(= rank (first %)))
@@ -1036,7 +1043,11 @@
                   distinct)
         fallback (first (filter #(sees? (:kind %)) kinds))]
     (cond
-      (= 1 (count rows)) {"self" (str "/api/" (plural (:kind top)) "/" (:id top))}
+      (= 1 (count rows))
+      (let [self (str "/api/" (plural (:kind top)) "/" (:id top))]
+        (if as-of?
+          {"self" (str self "?as-of=" (:until cw)) "as_of" (str (:until cw))}
+          {"self" self}))
       (seq rows) {"collection" (plural (:kind top))}
       fallback {"collection" (plural (:kind fallback))})))
 
@@ -1103,14 +1114,16 @@
 (defn open-as
   "A shot's `open` as the performer takes it, for one caller (POST
   /api/-/scenes/open): a `$day-row` open resolved to its clock day's
-  screen (`day-row-open`, the day ending now), through `sees?` as
+  screen (`day-row-open`, the day ending now; its row as of the day's
+  end unless the open says `as_of` false), through `sees?` as
   `fill-say-as` fills a `$day`; any other open as given. nil when the
   caller sees no kind of the domain."
   [eng open sees?]
   (let [o (plain open)]
     (if-some [h (when (map? o) (get o "$day-row"))]
       (day-row-open eng {:clock-day (get h "day") :until (Instant/now)
-                         :domain (str (get h "domain"))}
+                         :domain (str (get h "domain"))
+                         :as-of? (not (false? (get o "as_of")))}
                     {:sees? #(boolean (sees? %))
                      :held? (boolean (sees? :held_call))
                      :asks? (boolean (sees? :approval_request))})
