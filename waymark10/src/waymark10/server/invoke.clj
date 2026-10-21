@@ -1340,12 +1340,22 @@
                          (:why call) (assoc :why (:why call)))
                        {:principal principal})))))
 
+(declare write-lines!)
+
+(defn- sans-lines
+  "The input as the row's own data reads it: a kind that declares
+  :lines (ledger step 6a) takes its `lines` into line rows, never into
+  the parent's data."
+  [rdef inp]
+  (cond-> inp (and (:lines rdef) (map? inp)) (dissoc :lines)))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
-  `unchanged` on an in-state door, which writes nothing."
+  `unchanged` on an in-state door, which writes nothing. A door that
+  took `lines` replaces its row's lines in this transaction."
   [engine tx rdef row defn inp ctx opts]
   (let [handled (if-some [h (:handler defn)]
-                  (let [out (h row inp ctx)]
+                  (let [out (h row (sans-lines rdef inp) ctx)]
                     (when-not (map? out)
                       (throw (t/definition-error
                               (str "handler for " (name (:name defn))
@@ -1365,7 +1375,11 @@
         ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
         (when (and (:unwinds defn) (not (:effect defn)))
           (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
-        (land! engine tx rdef row defn inp ctx handled opts)))))
+        (let [res (land! engine tx rdef row defn inp ctx handled opts)]
+          (when (and (:lines rdef) (map? inp) (contains? inp :lines))
+            (write-lines! engine tx rdef (:id row) (:lines inp)
+                          (:principal opts) true))
+          res)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -2738,6 +2752,28 @@
                                                                (update :version inc)))
                                           (:version row)))))))
 
+(defn- write-lines!
+  "Ledger step 6a (docs/spec-ledger-money.md §6): the line rows of one
+  parent, written in the door's transaction through the quiet birth
+  door. The parent's transition is the write the log records, and its
+  :inputs carry the lines; a transition per line would say it twice.
+  `replace?` (an edit) deletes the stored set first, so the door's list
+  IS the set. Each line is stamped with its parent and its place, `n`."
+  [engine tx rdef parent-id lines principal replace?]
+  (let [{child :kind via :parent} (:lines rdef)
+        st (:storage engine)
+        pid (str parent-id)]
+    (when replace?
+      (when-some [ids (seq (store/ids-matching
+                            st tx child
+                            [{:target :data :field via :cast "text"
+                              :op := :value pid}]
+                            10000))]
+        (store/delete-rows! st tx child (vec ids))))
+    (doseq [[n line] (map-indexed vector lines)]
+      (insert-quiet! engine tx child (assoc line via pid :n n)
+                     {:principal principal}))))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
@@ -2833,7 +2869,8 @@
                    :version 1
                    ;; each account is born at zero (ledger step 3c),
                    ;; so "under 5" finds a row nothing posted to yet
-                   :data (merge (money/opening-balances (:accounts rdef)) inp)
+                   :data (merge (money/opening-balances (:accounts rdef))
+                                (sans-lines rdef inp))
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}
@@ -2879,6 +2916,11 @@
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
+              ;; its lines (ledger step 6a) follow it in, in this
+              ;; transaction: a refused line already refused the door
+              _ (when (and (:lines rdef) (seq (:lines inp)))
+                  (write-lines! engine tx rdef (:id row) (:lines inp)
+                                principal false))
               record (store/append-transition!
                       (:storage engine) tx
                       {:kind kind
