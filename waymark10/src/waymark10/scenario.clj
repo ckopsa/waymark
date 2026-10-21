@@ -955,11 +955,11 @@
                       :when (and (= :done (:ending c)) (= (name (:effect u)) (:door c)))]
                   c))]
     (reduce (fn [w c]
-              (let [door (get-in rdef [:actions (keyword (:door c)) :effect :compensate])
+              (let [[door eff] (effect/compensation rdef (keyword (:door c)))
                     k (effect/undo-key (:key c))]
                 (if (some #(= k (:key %)) (:calls w))
                   w
-                  (call w ctx door (get-in rdef [:actions door :effect]) {} {:key k :undo true}))))
+                  (call w ctx door eff {} {:key k :undo true}))))
             w (reverse undone))))
 
 (defn- after
