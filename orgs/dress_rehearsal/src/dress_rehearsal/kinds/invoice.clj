@@ -14,6 +14,8 @@
    :initial :open
    :terminal #{:paid :written_off}
    :summary "{data.client} · {state}"
+   ;; a film's day reads the row as it stood: its fields, not only its state
+   :retain {:data true}
    :schema [:map
             [:client [:string {:min 1 :max 120}]]
             [:study_id {:optional true :kind :study} [:maybe :waymark/ref]]
