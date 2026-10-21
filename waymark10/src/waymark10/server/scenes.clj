@@ -1189,6 +1189,13 @@
     [:enum "phone" "desktop"]]
    [:commit {:x-display {:raw true :label "Commit" :help "The commit of the house that was filmed."}}
     [:string {:min 1 :max 64}]]
+   ;; an org clone's renderer names both halves of what it filmed
+   [:engine_commit {:optional true
+                    :x-display {:raw true :label "Engine commit" :help "The engine's commit the take was rendered on."}}
+    [:maybe [:string {:max 64}]]]
+   [:org_commit {:optional true
+                 :x-display {:raw true :label "Org commit" :help "The org's commit the take was rendered on, for an org clone."}}
+    [:maybe [:string {:max 64}]]]
    [:film {:optional true
            :x-display {:raw true :label "Film" :help "The id of the film this take made. Empty when none was rendered."}}
     [:maybe [:string {:max 200}]]]
