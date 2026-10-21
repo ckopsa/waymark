@@ -308,4 +308,8 @@
     (testing "its instructions name only the tools its scope holds"
       (let [named (into #{} (map (fn [[_ k a]] (str k "." a)))
                         (re-seq #"\b([a-z]+)__([a-z_]+)" (:instructions seat)))]
-        (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.event" "clone.down"} named))))))
+        (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.event" "clone.down"} named))))
+    (testing "it plays the org's week.edn and improvises no week (ticket 4c70e261)"
+      (is (str/includes? (:instructions seat) "week.edn"))
+      (is (str/includes? (:instructions seat) "week_sha"))
+      (is (not (str/includes? (:instructions seat) "1 to 3"))))))
