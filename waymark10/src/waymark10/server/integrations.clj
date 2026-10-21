@@ -17,9 +17,10 @@
   transaction, and the engine accepts it there: the approver's tap is
   the consent, as an approved ask's is.
 
-  `scope_wanted` is engine-written and empty until the law names the
-  integration (build step 3 reads `:on-event` and `:effect` into it);
-  a grant with neither scope nor seat confers nothing, honestly.
+  `scope_wanted` is engine-written from the law (`integration-for`):
+  the doors of every `:on-event` that names the integration, at its
+  birth and at every boot (`:effect` joins it with build step 5); one
+  the law names nowhere confers nothing, honestly.
 
   WHAT IT SENDS IS KEPT ONCE (§ 3, build step 2). `receive!` is the
   judgment behind POST /api/-/events/<name>: the signature checked in
@@ -27,10 +28,22 @@
   replaced, for 24 hours), the timestamp against `tolerance_s`, then
   one `integration_event` receipt per `(integration, event_id)`. A bad
   signature stores nothing; a duplicate answers the first receipt and
-  changes nothing. Applying a receipt is build step 3."
+  changes nothing.
+
+  WHAT IT SENDS MOVES A DOOR ONCE (§ 3, build step 3). The applier
+  (`apply!`, behind a durable log consumer and a sweep) finds the
+  `:on-event` entries for the receipt's source and type and the one row
+  their `:match` names, and invokes the door as `integration:<id>`,
+  under its grant and `Idempotency-Key: event:<integration>:<event_id>`,
+  so a crash between the door and the ending replays and never moves
+  the row twice. The receipt lands `applied` with the transition,
+  `refused` with the refusal whole, `unmatched`, `ambiguous` or
+  `ignored`; `retry` and `dismiss` are a person's or a seat's."
   (:require [clojure.string :as str]
+            [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -42,6 +55,7 @@
            (java.nio.charset StandardCharsets)
            (java.security MessageDigest)
            (java.time Duration Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
 
@@ -345,14 +359,73 @@
                 :x-display
                 {:label "Cut"
                  :help "True when the body was longer than 64 KB and the receipt keeps the first 64 KB of it."}}
-    [:maybe :boolean]]])
+    [:maybe :boolean]]
+   [:door {:optional true
+           :x-display
+           {:raw true
+            :label "The door"
+            :help "The kind and the door the applier ran, as kind.door. Engine-written."}}
+    [:maybe [:string {:min 1 :max 200}]]]
+   [:target {:optional true
+             :x-display
+             {:raw true
+              :label "The row"
+              :help "The id of the one row the event's match named. Engine-written."}}
+    [:maybe [:string {:min 1 :max 200}]]]
+   [:transition {:optional true
+                 :x-display
+                 {:raw true
+                  :label "The transition"
+                  :help "The id of the transition the door wrote. Engine-written."}}
+    [:maybe [:string {:min 1 :max 200}]]]
+   [:refusal {:optional true
+              :x-display
+              {:raw true
+               :label "The refusal"
+               :help "The door's refusal, whole: its reason, guards and remedies, as JSON. Engine-written."}}
+    [:maybe [:string {:min 1 :max body-cap}]]]
+   [:tell {:optional true
+           :x-display
+           {:label "Who hears it"
+            :help "The seats the entry's :tell names, or the integration's approver, when it was refused. Engine-written."}}
+    [:maybe [:vector [:string {:min 1 :max 200}]]]]
+   [:reason {:optional true
+             :x-display
+             {:label "Why it was let go"
+              :help "The sentence its dismiss gave."}}
+    [:maybe [:string {:min 1 :max 280}]]]])
+
+(defhandler keep-the-ending [row inp _ctx]
+  (update row :data merge inp))
+
+(defhandler clear-the-ending [row _inp _ctx]
+  (update row :data dissoc :door :target :transition :refusal :tell))
+
+(g/defguard not-the-integration
+  {:reads [:principal]
+   :open "No door changes who the caller is: ask a person of the house, or a seat."
+   :explain "A person or a seat retries or dismisses a receipt; the integration that sent it does not."}
+  [_row _inp ctx]
+  (if (integration-principal? (:principal ctx)) (t/deny) (t/allow)))
+
+(def ^:private an-ending
+  "An applier's door: the engine writes how a receipt ended."
+  {:from #{:received}
+   :guards [the-engine-keeps-the-receipt]
+   :handler keep-the-ending
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The applier writes how the receipt ended; retry is the way back from a refusal."}})
+
+(def ^:private ending-text [:string {:min 1 :max 200}])
+
+(def ^:private after-the-ending #{:refused :unmatched :ambiguous})
 
 (defresource integration-event
   {:kind :integration_event
    :plural "integration_events"
-   :states [:received]
+   :states [:received :applied :refused :unmatched :ambiguous :ignored :dismissed]
    :initial :received
-   :terminal #{}
+   :terminal #{:applied :ignored :dismissed}
    :nav :system
    :summary "{data.event_type} {data.event_id} · {state}"
    :label-template "{data.event_id}"
@@ -365,11 +438,48 @@
    :unique [[:integration :event_id]]
    :no-own-surface "A receipt is the house's; only a grant that names the kind shows that one exists."
    :create-guards [the-engine-keeps-the-receipt]
-   ;; the endings and their doors are the applier's, build step 3
+   ;; its exits are the applier's alone, and no seat takes them
    :allow-dead #{:received}
-   :actions {}
+   :actions
+   {:mark_applied (assoc an-ending :to :applied
+                         :waives #{:edit-shape}
+                         :input [:map [:door ending-text] [:target ending-text]
+                                 [:transition {:optional true} [:maybe ending-text]]])
+    :mark_refused (assoc an-ending :to :refused
+                         :waives #{:edit-shape}
+                         :input [:map [:door ending-text] [:target ending-text]
+                                 [:refusal {:x-display {:raw true}}
+                                  [:string {:min 1 :max body-cap}]]
+                                 [:tell {:optional true} [:maybe [:vector ending-text]]]])
+    :mark_unmatched (assoc an-ending :to :unmatched)
+    :mark_ambiguous (assoc an-ending :to :ambiguous)
+    :mark_ignored (assoc an-ending :to :ignored)
+    :retry
+    {:from after-the-ending :to :received
+     :guards [not-the-integration]
+     :handler clear-the-ending
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The applier applies it again, under the law as it stands now."}
+     :display {:label "Retry" :style :primary :order 1
+               :description "Apply this event again, under the law as it stands now"}}
+    :dismiss
+    {:from after-the-ending :to :dismissed
+     :input [:map [:reason {:x-display {:label "Why it is let go"
+                                        :help "One sentence for the next reader."}}
+                   [:string {:min 1 :max 280}]]]
+     :waives #{:edit-shape}
+     :guards [not-the-integration]
+     :handler keep-the-ending
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "A dismissed receipt is kept, and never applied."}
+     :display {:label "Dismiss" :order 2
+               :description "Let this event go, saying why"}}}
    :deviations
-   ["§ 3 lists the endings a receipt moves to (applied, refused, unmatched, ambiguous, ignored) and its retry and dismiss doors; they come with the applier, build step 3. Until then every receipt stays `received`."
+   ["§ 3's endings are states, and the doors that land them (mark_applied, mark_refused, mark_unmatched, mark_ambiguous, mark_ignored) are the engine's own, hidden from everyone else; `dismiss` lands a seventh state, `dismissed`."
+    "§ 3 finds the `:on-event` entries for the source and type, then the row by `:match`. When several entries name the type, the first in kind order whose match names exactly one row runs; the receipt lands `ambiguous` only when none does and one names more than one row."
+    "§ 3's `:tell` wakes the seats it names, or the approver. The refused receipt carries them as `tell`, and a seat hears it through its own wake_on for integration_event/mark_refused; a named seat that does not subscribe is not woken yet."
+    "§ 3 keeps an `ignored` receipt 30 days and then purges it. The purge is not built yet, so an ignored receipt stays."
+    "§ 3's applier is a log consumer, and also a sweep every 30 seconds over the receipts still `received`: the sweep tries a `:retry-unmatched-for` entry again, and applies what a crash or a pause left."
     "§ 3's `received` is the receipt's state; the moment it arrived is the row's own creation time, not a field."]})
 
 ;; ── the receiver (§ 3, build step 2) ────────────────────────────────
@@ -507,3 +617,198 @@
               ;; one, and the other answers it
               (or (and (:waymark10/unique-violation (ex-data e)) (kept))
                   (throw e))))))))
+
+;; ── the law it is held to (§ 2, build step 3) ─────────────────────────────
+
+(defn wanted
+  "`scope_wanted` read from the law: for each kind whose `:on-event`
+  names the integration `nm` as its source, the doors those entries
+  run. nil when the law names it nowhere."
+  [rdefs nm]
+  (not-empty
+   (vec (for [rd (sort-by (comp str :kind) rdefs)
+              :let [doors (into (sorted-set)
+                                (keep #(when (= (name (:source %)) (str nm))
+                                         (name (:door %))))
+                                (:on-event rd))]
+              :when (seq doors)]
+          {:kind (name (:kind rd)) :actions (vec doors)}))))
+
+(defn integration-for
+  "The integration kind an application's law enrols: a row's birth, and
+  every boot after (`:data-migrate`), write its `scope_wanted` from the
+  `:on-event` entries that name it."
+  [rdefs]
+  (let [want (fn [data]
+               (if-some [w (wanted rdefs (:name data))]
+                 (assoc data :scope_wanted w)
+                 (dissoc data :scope_wanted)))]
+    (assoc integration
+           :on-create (fn [row ctx] (update (born row ctx) :data want))
+           :data-migrate want)))
+
+;; ── the applier (§ 3, build step 3) ─────────────────────────────────
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 integrations: " parts))))
+
+(defn- load-one [eng kind id]
+  (let [st (:storage eng)]
+    (some->> (store/with-tx st #(store/load-row st % kind (str id) {}))
+             (inv/decode-row (get (inv/resources eng) kind)))))
+
+(defn- entries-for
+  "The `:on-event` entries of the law that name this source and type,
+  each with the kind it is declared on, in kind order."
+  [eng source type]
+  (for [[k rd] (sort-by (comp str key) (inv/resources eng))
+        e (:on-event rd)
+        :when (and (= (name (:source e)) (str source)) (= (:type e) type))]
+    (assoc e :kind k)))
+
+(defn- known [x scope]
+  (let [v (expr/evaluate x scope)]
+    (when-not (expr/unknown? v) v)))
+
+(defn- candidates
+  "The rows an entry's `:match` names: at most two, enough to tell one
+  from many. A value the event does not carry matches nothing."
+  [eng {:keys [kind match]} scope]
+  (let [filt (into {} (map (fn [[f x]] [f (known x scope)])) match)]
+    (if (some nil? (vals filt)) [] (rows-of eng kind filt))))
+
+(defn- refusal-json
+  "The refusal a door threw, whole: its problem document, as JSON."
+  [e]
+  (let [doc (into {} (remove (comp qualified-keyword? key)) (ex-data e))]
+    (try (wire/write-json doc)
+         (catch Exception _
+           (wire/write-json (select-keys doc [:type :status :title :detail]))))))
+
+(defn- land!
+  "Write how a receipt ended, as the engine. A receipt another pass
+  landed first refuses the door, and that is no news."
+  [eng rid door inp]
+  (try (inv/invoke! eng :integration_event (str rid) door inp {:principal engine-actor})
+       (catch clojure.lang.ExceptionInfo e
+         (warn! "receipt " rid " did not take " (name door) " (" (ex-message e) ")"))))
+
+(defn- invoke-entry!
+  "Run the entry's door on the one row it matched, as the integration,
+  under its grant and the `event:` key, and land what it answered. A
+  refusal is kept whole; a fault that is no refusal is thrown, and the
+  receipt stays `received` for the next pass."
+  [eng irow r {:keys [kind door] :as e} target scope]
+  (let [id (str (:id target))
+        label (str (name kind) "." (name door))
+        told (vec (or (seq (map name (:tell e)))
+                      (some-> (get-in irow [:data :approved_by]) str vector)))
+        refused (fn [doc]
+                  (land! eng (:id r) :mark_refused
+                         (cond-> {:door label :target id :refusal doc}
+                           (seq told) (assoc :tell told))))
+        who (principal irow)
+        vis (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
+              (when (= :active (:standing (grants/grant-standing eng gid)))
+                (grants/visibility eng gid who)))]
+    (if-not (and vis ((:action? vis) kind door) ((:row? vis) kind id))
+      (refused (refusal-json
+                (refuse :not-granted 403 "Not granted"
+                        (str "The grant this integration wears does not admit " label
+                             "; approve it again so it wears what the law asks of it."))))
+      (try
+        (let [res (inv/invoke! eng kind id door
+                               (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v])))
+                                     (:input e))
+                               {:principal who
+                                :grant (:grant vis)
+                                :idempotency-key (str "event:" (:id irow) ":"
+                                                      (get-in r [:data :event_id]))})
+              tid (or (get-in res [:transition :id])
+                      (get-in res [:response :transition :id]))]
+          (land! eng (:id r) :mark_applied
+                 (cond-> {:door label :target id} tid (assoc :transition (str tid)))))
+        (catch clojure.lang.ExceptionInfo ex
+          (if (:waymark10/problem (ex-data ex))
+            (refused (refusal-json ex))
+            (throw ex)))))))
+
+(defn- waiting?
+  "Does an entry that matched nothing still wait, inside its
+  `:retry-unmatched-for`, for the row to exist?"
+  [r found ^Instant now]
+  (when-some [born (instant-of (:created-at r))]
+    (some (fn [{s :retry-unmatched-for}]
+            (and s (.isBefore now (.plusSeconds born (long s)))))
+          found)))
+
+(defn apply!
+  "Apply one receipt that is still `received`, of a `live` integration:
+  run the door its entry names on the one row the match names, or land
+  `ignored` (no entry names the type), `ambiguous` (more than one row)
+  or `unmatched` (none, once no `:retry-unmatched-for` waits). Any
+  other receipt is left as it is, so a replay moves nothing."
+  [eng rid]
+  (when-some [r (load-one eng :integration_event rid)]
+    (let [irow (load-one eng :integration (get-in r [:data :integration]))]
+      (when (and (= :received (:state r)) (= :live (:state irow)))
+        (let [body (try (wire/read-json (str (get-in r [:data :body])))
+                        (catch Exception _ nil))
+              scope {:event body :now ((:now-fn eng))}
+              es (entries-for eng (get-in irow [:data :name]) (get-in r [:data :event_type]))
+              found (mapv #(assoc % :rows (candidates eng % scope)) es)
+              hit (first (filter #(= 1 (count (:rows %))) found))]
+          (cond
+            (empty? es) (land! eng rid :mark_ignored {})
+            hit (invoke-entry! eng irow r hit (first (:rows hit)) scope)
+            (some #(< 1 (count (:rows %))) found) (land! eng rid :mark_ambiguous {})
+            (waiting? r found (:now scope)) nil
+            :else (land! eng rid :mark_unmatched {})))))))
+
+(defn handle-transition!
+  "One committed transition: a receipt's birth, or its `retry`, applies
+  it. Never throws: a parked cursor would stop every later receipt."
+  [eng t]
+  (try
+    (when (and (= :integration_event (some-> (:kind t) keyword))
+               (contains? #{"create" "retry"} (some-> (:action t) name)))
+      (apply! eng (:resource-id t)))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be applied — " (ex-message e))))
+  nil)
+
+(defn sweep!
+  "Apply every receipt still `received`: one a `:retry-unmatched-for`
+  keeps waiting, one a crash or a pause left behind."
+  [eng]
+  (let [st (:storage eng)]
+    (doseq [raw (store/with-tx st #(store/query-rows st % :integration_event
+                                                     {:state :received} {:limit 200}))]
+      (try (apply! eng (:id raw))
+           (catch Exception e
+             (warn! "receipt " (:id raw) " could not be applied — " (ex-message e)))))))
+
+(defn start-applier!
+  "The applier: a durable log consumer (consumer:integrations) that
+  applies each receipt as it is kept or retried, and a sweep every
+  `:sweep-ms`. opts: :dispatcher, :poll-ms, :sweep-ms."
+  [eng {:keys [sweep-ms] :or {sweep-ms 30000} :as opts}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (while (not (.await stop (long sweep-ms) TimeUnit/MILLISECONDS))
+                       (try (sweep! eng)
+                            (catch Exception e
+                              (warn! "the sweep failed (" (ex-message e) ")")))))
+                   "waymark10-integrations-sweep")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:consumer (consumers/register-consumer!
+                eng :integrations (fn [tr] (handle-transition! eng tr))
+                (select-keys opts [:dispatcher :poll-ms]))
+     :stop stop}))
+
+(defn stop-applier! [{:keys [consumer ^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  (some-> consumer consumers/stop-consumer!)
+  nil)
