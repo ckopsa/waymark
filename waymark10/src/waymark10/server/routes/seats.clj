@@ -934,7 +934,10 @@
   action) and, when it states a `filter`, by the row AS IT STANDS NOW:
   one read by `resource-id`, made only for an event whose kind and
   action a filtered cue names, and judged as a grant judges a filter
-  (`grants/row-matches?`). A row that is gone matches no filter."
+  (`grants/row-matches?`). A row that is gone matches no filter.
+
+  A note with {data.field} holes reads the row too, and fills them
+  from it (`seats/cue-note`, ticket 79b29c3e)."
   [eng seat]
   (let [cues (:cues (seats/inbox-of seat))]
     (fn [t]
@@ -948,13 +951,15 @@
         (when (seq named)
           (let [rdef (get (inv/resources eng) (keyword k))
                 st (:storage eng)
-                row (when (and rdef (some #(seq (:filter %)) named))
+                row (when (and rdef (some #(or (seq (:filter %))
+                                               (seats/cue-note-holes? %))
+                                          named))
                       (store/with-tx st
                         #(store/load-row st % (:kind rdef) (str (:resource-id t)) {})))
                 notes (keep (fn [c]
                               (when (or (empty? (:filter c))
                                         (and row (grants/row-matches? row [(:filter c)] rdef)))
-                                (seats/cue-note c a)))
+                                (seats/cue-note c a row)))
                             named)]
             (when (seq notes)
               (str/join " · " notes))))))))

@@ -28,4 +28,4 @@
           {:kind "bench.pull" :actions [] :filter {:repo "ckopsa/waymark"}}]
   ;; ticket 24c4feba: its own plan's findings wake it and cue its open sitting
   :wake_on [{:kind "org_plan" :actions ["record_findings" "record_findings_proposed" "record_findings_simulated" "record_film_findings"] :filter {:name "{{org}}"}}]
-  :inbox {:cues [{:kind "org_plan" :actions ["record_findings" "record_findings_proposed" "record_findings_simulated" "record_film_findings"] :filter {:name "{{org}}"} :note "Your plan's findings are in for its change's head: read next_step."}]}}}
+  :inbox {:cues [{:kind "org_plan" :actions ["record_findings" "record_findings_proposed" "record_findings_simulated" "record_film_findings"] :filter {:name "{{org}}"} :note "Your plan's findings are in for {data.findings_sha}: read next_step."}]}}}
