@@ -18,8 +18,10 @@
   the consent, as an approved ask's is.
 
   `scope_wanted` is engine-written from the law (`integration-for`):
-  the doors of every `:on-event` that names the integration, at its
-  birth and at every boot (`:effect` joins it with build step 5); one
+  the doors of every `:on-event` that names the integration, and the
+  power of every `:effect` whose tool resolves to its `server` row, at
+  its birth, at every boot and again at its approve, so a server whose
+  powers changed since the birth is read as it stands at the tap; one
   the law names nowhere confers nothing, honestly.
 
   WHAT IT SENDS IS KEPT ONCE (§ 3, build step 2). `receive!` is the
@@ -46,6 +48,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
@@ -114,11 +117,17 @@
   (update row :data assoc
           :created_by (str (get-in ctx [:principal :id]))))
 
+(declare law-wants)
+
 (defhandler mint-the-grant [row _inp ctx]
   ;; the grant is born beside the verdict, in its transaction: offered
   ;; by the approver to the integration, and accepted by the engine,
-  ;; because the approver's tap is the consent
-  (let [wanted (not-empty (get-in row [:data :scope_wanted]))
+  ;; because the approver's tap is the consent. The scope is read again
+  ;; first, from the law and the server rows as they stand now
+  (let [row (if-some [rdefs (:rdefs ctx)]
+              (update row :data #(law-wants (rdefs) % ctx))
+              row)
+        wanted (not-empty (get-in row [:data :scope_wanted]))
         res ((:create ctx) :grant
              (cond-> {:audience (principal-id row)}
                wanted (assoc :scope (grants/merge-scope wanted))))
@@ -749,12 +758,30 @@
   (let [names (:create-action-names rd #{:create})]
     (if (contains? names :create) :create (first (sort names)))))
 
+(defn- effect-powers
+  "The tokens of the powers the law's `:effect` doors call whose tool
+  resolves, among the server rows `servers`, to the row `sid`."
+  [rdefs servers sid]
+  (when-some [sid (some-> sid str not-empty)]
+    (into (sorted-set)
+          (for [rd rdefs
+                [_ a] (:actions rd)
+                :let [power (get-in a [:effect :power])]
+                :when power
+                :let [hit (servers/resolve-among servers power)]
+                :when (and (:token hit)
+                           (= sid (str (get-in hit [:row :id]))))]
+            (:token hit)))))
+
 (defn wanted
   "`scope_wanted` read from the law: for each kind whose `:on-event`
   names the integration `nm` as its source, the doors those entries
-  run, and for each kind a `:via :inbox` entry `:makes`, its create.
+  run, and for each kind a `:via :inbox` entry `:makes`, its create;
+  then, given the server rows and the integration's `server` id `sid`,
+  the token of each `:effect` power whose tool resolves to that row.
   nil when the law names it nowhere."
-  [rdefs nm]
+  ([rdefs nm] (wanted rdefs nm nil nil))
+  ([rdefs nm servers sid]
   (let [by-kind (into {} (map (juxt :kind identity)) rdefs)
         doors (reduce
                (fn [m [k door]] (update m k (fnil conj (sorted-set)) door))
@@ -766,21 +793,37 @@
                    [(:makes e) (name (create-verb (get by-kind (:makes e))))]
                    [(:kind rd) (name (:door e))])))]
     (not-empty
-     (vec (for [[k ds] (sort-by (comp str key) doors)]
-            {:kind (name k) :actions (vec ds)})))))
+     (into (vec (for [[k ds] (sort-by (comp str key) doors)]
+                  {:kind (name k) :actions (vec ds)}))
+           (for [token (effect-powers rdefs servers sid)]
+             {:kind token :actions []}))))))
+
+(defn- power-entry? [e] (str/includes? (str (:kind e)) "."))
+
+(defn- law-wants
+  "`data` with its `scope_wanted` written from the law. With a write's
+  `ctx` the server rows are read and the effect powers resolved; a
+  boot reads no rows, so the powers the last birth or approve resolved
+  stand until the next approve resolves them again."
+  [rdefs data ctx]
+  (let [w (if-some [find (:find ctx)]
+            (wanted rdefs (:name data) (find :mcp_server {} {}) (:server data))
+            (not-empty (into (vec (wanted rdefs (:name data)))
+                             (filter power-entry?)
+                             (:scope_wanted data))))]
+    (if w
+      (assoc data :scope_wanted w)
+      (dissoc data :scope_wanted))))
 
 (defn integration-for
   "The integration kind an application's law enrols: a row's birth, and
   every boot after (`:data-migrate`), write its `scope_wanted` from the
-  `:on-event` entries that name it."
+  `:on-event` entries that name it and the `:effect` powers its server
+  holds; the approve writes it again (`mint-the-grant`)."
   [rdefs]
-  (let [want (fn [data]
-               (if-some [w (wanted rdefs (:name data))]
-                 (assoc data :scope_wanted w)
-                 (dissoc data :scope_wanted)))]
-    (assoc integration
-           :on-create (fn [row ctx] (update (born row ctx) :data want))
-           :data-migrate want)))
+  (assoc integration
+         :on-create (fn [row ctx] (update (born row ctx) :data #(law-wants rdefs % ctx)))
+         :data-migrate #(law-wants rdefs % nil)))
 
 ;; ── the applier (§ 3, build step 3) ─────────────────────────────────
 
