@@ -374,9 +374,11 @@ async function renderResource(view, doc, hints) {
     }
   }
   const dataPanel = el("div", {class:"panel"},
-    el("details", kind === "sitting" ? {class:"rowdata"} : {class:"rowdata", open:""},
+    el("details", {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
       dataTable));
+  /* a sitting leads with its calls: its raw data starts folded */
+  if (kind === "sitting") dataPanel.firstChild.removeAttribute("open");
   if (Object.keys(seatRaw).length)
     dataPanel.append(el("details", {class:"rowdata", "data-seat-raw": ""},
       el("summary", {class:"muted"}, "What it opens and what wakes it, as declared"),
