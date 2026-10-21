@@ -69,6 +69,8 @@
   already has."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [waymark10.effect :as effect]
+            [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
@@ -86,7 +88,7 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :given :history :history-mode :expect])
+  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :events :effects :given :history :history-mode :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -109,6 +111,13 @@
 ;; the house's calendar a scenario declares (docs/spec-calendar-time.md
 ;; §6): the same values a work_calendar row keeps
 (def calendar-keys [:zone :workdays :hours :holidays])
+;; one outside event a scenario replays (docs/spec-integrations.md §6):
+;; the integration that sends it, its type — or the one its body carries
+;; — and the body as recorded
+(def event-keys [:source :type :body])
+;; what a fake answers for one power: the call's answer, or the sentence
+;; it failed with; the keyword :unknown is a fake too
+(def fake-keys [:answer :fails])
 
 (def offline-reads
   "The external dependencies a STORAGE-FREE judgment can honestly
@@ -221,6 +230,49 @@
            :id (str (:id as))
            :type (or (:type as) :person)
            :roles (into #{} (map name) (:roles as)))))
+
+(defn- event-type
+  "An event's type: its own :type, or the one its body carries."
+  [e]
+  (or (:type e) (get-in e [:body "type"]) (get-in e [:body :type])))
+
+(defn- events!
+  [sname evs]
+  (when (some? evs)
+    (when-not (vector? evs)
+      (err sname ":events is a vector of {:source … :type … :body {…}}, replayed in order"))
+    (doseq [e evs]
+      (when-not (map? e) (err sname "each :events entry is {:source … :type … :body {…}}"))
+      (closed! sname "event" event-keys e)
+      (let [src (:source e)]
+        (when-not (and (or (keyword? src) (string? src)) (not (str/blank? (name src))))
+          (err sname "each :events entry names its :source, the integration that sends it")))
+      (when-not (map? (:body e {}))
+        (err sname "an :events entry's :body is the event's body as a literal map"))
+      (let [ty (event-type e)]
+        (when-not (and (string? ty) (not (str/blank? ty)))
+          (err sname "each :events entry names its :type, or its :body carries one under \"type\""))))))
+
+(defn- effects!
+  [sname fx]
+  (when (some? fx)
+    (when-not (map? fx)
+      (err sname (str ":effects maps each power to its fake: {\"tool\" {:answer {…}}},"
+                      " {\"tool\" {:fails \"…\"}} or {\"tool\" :unknown}")))
+    (doseq [[power fake] fx]
+      (when-not (and (string? power) (not (str/blank? power)))
+        (err sname ":effects names each power as a string, as an :effect's :power does"))
+      (when-not (= :unknown fake)
+        (when-not (map? fake)
+          (err sname (str ":effects " power " is {:answer {…}}, {:fails \"…\"} or :unknown")))
+        (closed! sname "fake" fake-keys fake)
+        (when-not (= 1 (count (select-keys fake fake-keys)))
+          (err sname (str ":effects " power " is one of {:answer {…}}, {:fails \"…\"} and :unknown")))
+        (when (and (contains? fake :answer) (not (map? (:answer fake))))
+          (err sname (str ":effects " power " :answer is the call's answer as a literal map")))
+        (when (and (contains? fake :fails)
+                   (or (not (string? (:fails fake))) (str/blank? (:fails fake))))
+          (err sname (str ":effects " power " :fails is the sentence the call failed with")))))))
 
 (def handle-pattern
   "How a scenario names a row it STAGED (waymark-fp62.4.1, the blocker
@@ -433,6 +485,8 @@
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
   (calendar! sname (:calendar m))
+  (events! sname (:events m))
+  (effects! sname (:effects m))
   (if (some? (:recurs m))
     (occurrences-expect! sname (:expect m))
     (expect! sname (:expect m)))
@@ -540,6 +594,24 @@
             (some (complement offline-reads) (:reads gd)))
        (some reads-related? (concat (:all gd) (:any gd))))))
 
+(defn- entries-for
+  "The :on-event entries of this kind that one scenario event runs: its
+  source and type, and a door to run — a :via :inbox entry makes a row
+  of another kind, which no check-tier walk follows."
+  [rdef e]
+  (filter #(and (= (name (:source %)) (name (:source e)))
+                (= (:type %) (event-type e))
+                (not= :inbox (:via %)))
+          (:on-event rdef)))
+
+(defn- event-guards
+  "The guards of every door the scenario's :events can run: judged
+  offline as the attempt's are, so they choose the tier with it."
+  [rdef s]
+  (into [] (comp (mapcat #(entries-for rdef %))
+                 (mapcat #(get-in rdef [:actions (:door %) :guards])))
+        (:events s)))
+
 (defn check-tier?
   "Does this scenario keep check.clj's no-storage posture? Two
   declared conditions, both read and neither sniffed: every guard on
@@ -551,7 +623,8 @@
   ;; a recurrence scenario lists a pure function's dates: no door, no
   ;; reads, always here (docs/spec-calendar-time.md §6)
   (or (some? (:recurs s))
-      (let [{:keys [guards missing]} (attempted rdef s)]
+      (let [{:keys [guards missing]} (attempted rdef s)
+            guards (into (vec guards) (event-guards rdef s))]
         (boolean (and (nil? missing)
                       (empty? (mapcat unserved-reads guards))
                       (or (empty? (:given s)) (some reads-related? guards)))))))
@@ -562,7 +635,8 @@
   they tripped."
   [rdef s]
   (when-not (check-tier? rdef s)
-    (let [{:keys [guards missing]} (attempted rdef s)]
+    (let [{:keys [guards missing]} (attempted rdef s)
+          guards (into (vec guards) (event-guards rdef s))]
       (cond
         missing nil
         (and (seq (:given s)) (not-any? reads-related? guards))
@@ -708,7 +782,12 @@
   and answers that one calendar for every ref: a scenario names one
   house. Without one there is no hook, and the engine makes up no
   plausible calendar — structural has already refused the law that
-  reads it."
+  reads it.
+
+  The :effects the scenario declares ride along as the fakes the walk
+  answers each effect call from (docs/spec-integrations.md §6), and its
+  :events are replayed through this same ctx, each door judged as the
+  integration that sent it. No guard reads the fakes."
   [s related?]
   (cond-> {:mode :invoke
            :now (some-> ^String (:at s) Instant/parse)
@@ -717,6 +796,7 @@
            :rate nil}
     (:calendar s) (assoc :calendar (let [c (calendar-answer (:calendar s))]
                                      (fn ([] c) ([_ref] c))))
+    (some? (:effects s)) (assoc :effects (:effects s))
     related? (merge (scenario-reads s))))
 
 (defn- reads-calendar?
@@ -822,40 +902,203 @@
          (str/replace (str/trim (:sentence s)) #"\s+" " ")
          " — " c)))
 
+;; ── the walk: events replayed, effects answered by their fakes ──────
+
+(defn- known [x scope]
+  (let [v (expr/evaluate x scope)]
+    (when-not (expr/unknown? v) v)))
+
+(defn- call
+  "One effect call the walk makes for door `aname`, over its row as the
+  door left it, answered by the scenario's fake for its power — and the
+  row landed as the runner lands it: `done` writes the answer and moves
+  to `:lands`, `failed` holds the row in `:fails-to`, `unknown` leaves
+  it asked. A compensation's answer writes nothing. No fake for the
+  power is a fault, not a default. → the walk"
+  [w ctx aname eff inp {:keys [key undo]}]
+  (let [row (:row w)
+        asked (effect/ask eff row inp (:now ctx))
+        fake (get (:effects ctx) (:power eff))
+        ending (cond (= :unknown fake) :unknown
+                     (contains? fake :answer) :done
+                     (contains? fake :fails) :failed)]
+    (if (nil? ending)
+      (update w :faults conj
+              (str "reaches " (name aname) ", which calls " (:power eff)
+                   ", and :effects names no fake for it — a scenario over effect law"
+                   " answers each call, as one over a timed law names its moment"))
+      (-> w
+          (update :calls conj (cond-> {:door (name aname) :power (:power eff)
+                                       :key (or key (:key asked)) :input (:input asked)
+                                       :ending ending}
+                                (= :failed ending) (assoc :reason (:fails fake))))
+          (assoc :row (case ending
+                        :done (if undo
+                                row
+                                (-> row
+                                    (update :data merge (effect/writes eff (:answer fake)))
+                                    (assoc :state (or (:lands eff) (:state row)))))
+                        :failed (assoc row :state (:fails-to eff))
+                        :unknown row))))))
+
+(defn- unwind
+  "The compensations door `a` asks for (§ 5), as invoke's unwind! keeps
+  them: for each :unwinds entry whose :when holds over the row as the
+  door left it, each `done` call of its effect door, newest first, undone
+  once under its undo: key. → the walk"
+  [w rdef ctx a]
+  (let [row (:row w)
+        undone (distinct
+                (for [u (:unwinds a)
+                      :when (effect/unwinds? u row (:now ctx))
+                      c (:calls w)
+                      :when (and (= :done (:ending c)) (= (name (:effect u)) (:door c)))]
+                  c))]
+    (reduce (fn [w c]
+              (let [[door eff] (effect/compensation rdef (keyword (:door c)))
+                    k (effect/undo-key (:key c))]
+                (if (some #(= k (:key %)) (:calls w))
+                  w
+                  (call w ctx door eff {} {:key k :undo true}))))
+            w (reverse undone))))
+
+(defn- after
+  "The row as door `aname` leaves it once allowed, as invoke's finish!
+  leaves it: its handler run, its :to, its effect's call answered, and
+  the compensations it unwinds — an effect door's when its call lands.
+  → the walk"
+  [w rdef ctx aname inp]
+  (let [a (get-in rdef [:actions aname])
+        row (:row w)
+        handled (if-some [h (:handler a)] (h row inp ctx) row)
+        w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
+    (if-some [eff (:effect a)]
+      (let [n (count (:calls w))
+            w (call w ctx aname eff inp {})]
+        (cond-> w
+          (and (:unwinds a) (< n (count (:calls w))) (= :done (:ending (peek (:calls w)))))
+          (unwind rdef ctx a)))
+      (cond-> w (:unwinds a) (unwind rdef ctx a)))))
+
+(defn- matches?
+  "Does an entry's :match name this row? A value the event does not
+  carry matches nothing, and no row is no match."
+  [row entry scope]
+  (and (some? row)
+       (every? (fn [[f x]]
+                 (let [v (known x scope)]
+                   (and (some? v) (holds? row {:field f :op := :value v}))))
+               (:match entry))))
+
+(defn- replay
+  "The scenario's :events replayed in order over its row (§ 6): each runs
+  the pipeline from step 2 — the scenario is the source, so there is no
+  signature — and its door is judged as the integration that sent it.
+  An event that does not move the row is a fault that says how its
+  receipt would end. → the walk"
+  [w rdef ctx events]
+  (reduce
+   (fn [w e]
+     (let [scope {:event (:body e {}) :now (:now ctx)}
+           label (str (name (:source e)) " " (event-type e))
+           es (entries-for rdef e)
+           hit (first (filter #(matches? (:row w) % scope) es))]
+       (cond
+         (empty? es)
+         (reduced (update w :faults conj (str "replays " label ", which no :on-event of "
+                                              (name (:kind rdef)) " names — the receipt lands ignored")))
+         (nil? hit)
+         (reduced (update w :faults conj (str "replays " label ", which matches no row — the receipt lands unmatched")))
+         :else
+         (let [door (:door hit)
+               a (get-in rdef [:actions door])
+               row (:row w)
+               inp (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v]))) (:input hit))
+               ectx (assoc ctx :principal {:id (str "integration:" (name (:source e)))
+                                           :type :agent :roles #{}})]
+           (if-not (contains? (set (:from a)) (:state row))
+             (reduced (update w :faults conj (str "replays " label ", and " (name door)
+                                                  " is not open in state " (name (:state row))
+                                                  " — the receipt lands refused")))
+             (let [v (verdict (:guards a) row inp ectx)]
+               (if-some [r (:refused v)]
+                 (reduced (update w :faults conj (str "replays " label ", and " (name door)
+                                                      " refused it — " r ": " (:reason v)
+                                                      " — the receipt lands refused")))
+                 (let [w (after w rdef ectx door inp)]
+                   (cond-> w (seq (:faults w)) reduced)))))))))
+   w events))
+
+(defn- prepared
+  "The scenario as the check tier judges it: its run token and its
+  handles filled, a birth's input its declared defaults."
+  [rdef s]
+  (let [s (fill-run s check-run)
+        {:keys [door] door-input :input} (attempted rdef s)
+        ;; a {given/<handle>} names the id the check tier gave it
+        ids (given-ids s)
+        s (cond-> s
+            (seq ids) (-> (update :row fill-handles ids)
+                          (update :input fill-handles ids)))]
+    ;; a birth's guards read the input the door hands them: its
+    ;; declared defaults already filled
+    (cond-> s
+      (= :create door)
+      (update :input #(schema/apply-defaults
+                       (or door-input (:create-schema rdef) (:schema rdef))
+                       (or % {}))))))
+
+(defn- walk
+  "One prepared door scenario walked at the check tier: its :events
+  replayed over its row, then its attempt judged on the row they left
+  and, allowed, walked on as invoke walks it, so the effect calls it
+  makes are answered too. → {:row :calls :faults :got}"
+  [rdef s]
+  (let [{:keys [door action guards]} (attempted rdef s)
+        ctx (offline-ctx s (some reads-related? (into (vec guards) (event-guards rdef s))))
+        w (replay {:row (scenario-row s) :calls [] :faults []} rdef ctx (:events s))
+        row (:row w)]
+    (cond
+      (seq (:faults w)) w
+
+      (and (= :action door)
+           (not (contains? (set (:from action)) (:state row))))
+      ;; the machine's own refusal, before any guard is consulted — the
+      ;; one verdict with no guard behind it
+      (let [states (sort (:from action))]
+        (assoc w :got {:refused out-of-state
+                       :reason (str "Available in state(s) "
+                                    (str/join ", " (map summary/state-label states))
+                                    "; the resource is "
+                                    (summary/state-label (:state row)) ".")
+                       :remedies []}))
+
+      :else
+      (let [got (verdict guards row (:input s) ctx)]
+        (cond-> (assoc w :got got)
+          (and (= :action door) (nil? (:refused got))
+               (or (:effect action) (:unwinds action)))
+          (after rdef ctx (:name action) (:input s)))))))
+
+(defn effect-calls
+  "The effect calls one check-tier door scenario makes, in order — its
+  events' doors' and its attempt's, each answered by its fake:
+  [{:door :power :key :input :ending}], a failed one with its :reason.
+  What a test asserts \"one label, then one void\" over. nil for a
+  scenario with authoring faults."
+  [rdef s]
+  (when-not (or (some? (:recurs s)) (structural rdef s))
+    (:calls (walk rdef (prepared rdef s)))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
   (or (structural rdef s)
-      (let [s (fill-run s check-run)
-            {:keys [door action guards] door-input :input} (attempted rdef s)
-            ;; a {given/<handle>} names the id the check tier gave it
-            ids (given-ids s)
-            s (cond-> s
-                (seq ids) (-> (update :row fill-handles ids)
-                              (update :input fill-handles ids)))
-            ;; a birth's guards read the input the door hands them:
-            ;; its declared defaults already filled
-            s (cond-> s
-                (= :create door)
-                (update :input #(schema/apply-defaults
-                                 (or door-input (:create-schema rdef) (:schema rdef))
-                                 (or % {}))))
-            row (scenario-row s)
-            ctx (offline-ctx s (some reads-related? guards))]
-        (if (and (= :action door)
-                 (not (contains? (set (:from action)) (:state row))))
-          ;; the machine's own refusal, before any guard is consulted —
-          ;; the one verdict with no guard behind it
-          (let [states (sort (:from action))]
-            (vec (remove nil?
-                         [(violation s {:refused out-of-state
-                                        :reason (str "Available in state(s) "
-                                                     (str/join ", " (map summary/state-label states))
-                                                     "; the resource is "
-                                                     (summary/state-label (:state row)) ".")
-                                        :remedies []})])))
-          (vec (remove nil?
-                       [(violation s (verdict guards row (:input s) ctx))]))))))
+      (let [s (prepared rdef s)
+            {:keys [faults got]} (walk rdef s)]
+        (if (seq faults)
+          (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
+          (vec (remove nil? [(violation s got)]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row

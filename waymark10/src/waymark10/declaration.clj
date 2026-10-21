@@ -22,6 +22,13 @@
   verify-undo-pointers reads and strips."
   [:from :to :input :guards :safety :display :handler :emits :edit
    :place :bulk :batch :waives :touches :unless :record :undo
+   ;; the call this door makes (docs/spec-integrations.md § 4), judged,
+   ;; normalized and given its two hidden doors at the def site
+   ;; (effect/weave); law, in the fingerprint's action facet
+   :effect
+   ;; the effects this door undoes, newest first (§ 5): judged at the
+   ;; def site by effect/weave; law, in the fingerprint's action facet
+   :unwinds
    ;; :engine marks a door the ENGINE owns rather than the household —
    ;; the sync machine's bookkeeping, woven in by mirror/declaration.
    ;; No application writes it. The ending wall (waymark-fp62.4.1)
@@ -250,6 +257,14 @@
    ;; entries, default off — write amplification on the one write path
    ;; is bytes on every transition of every kind forever
    :retain
+   ;; which outside event moves which door (docs/spec-integrations.md
+   ;; § 3): [{:source :type :match :door :input …}], judged and its
+   ;; forms normalized at the def site (resource/check-on-event!)
+   :on-event
+   ;; the kind's accounts (docs/spec-ledger-money.md § 3): {name {:unit
+   ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
+   ;; judged at the def site (resource/check-accounts!) — law
+   :accounts
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

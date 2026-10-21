@@ -23,15 +23,17 @@
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
-    :retain
+    :retain :on-event
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
+    :accounts
     :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
-    :place :bulk :batch :waives :touches :unless :record :undo :engine
+    :place :bulk :batch :waives :touches :unless :record :undo :effect :unwinds
+    :engine
     :out-of-state-says :replay :log-says :decided :decided-held})
 
 (def flow-opt-keys

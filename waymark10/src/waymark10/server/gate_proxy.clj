@@ -1429,7 +1429,8 @@
                 (read-tool? row entry tname (:bare hit))
                 ;; the caller rides as headers the engine writes (`caller-headers`)
                 #(binding [servers/*caller* (when (or (:principal opts) (:caller opts))
-                                              (select-keys opts [:principal :caller :sitting]))]
+                                              (select-keys opts [:principal :caller :sitting
+                                                                 :idempotency-key]))]
                    (teach-shape
                     tname schema why
                     (servers/call! eng tname

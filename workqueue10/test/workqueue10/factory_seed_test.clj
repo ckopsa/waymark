@@ -174,8 +174,14 @@
   serves and no seeded seat staffs. A change in
   either direction fails here and is read. Member reinstate's hold
   (HC2, ticket bed1f2f6) is declared `:hold :agents`: it holds only an
-  agent's call, so a suspended member's exit stays a seat's (9b8e9749)."
-  {"cadence_only" 2 "no_exit" 77 "remedy_unheld" 34 "silent_person_exit" 20})
+  agent's call, so a suspended member's exit stays a seat's (9b8e9749).
+  integration_event's `received` is the applier's alone, and its
+  `refused`, `unmatched` and `ambiguous` leave only by a person's retry
+  or dismiss, which no seeded seat holds (docs/spec-integrations.md § 3,
+  ab9a557c). effect_call's `pending` and `held` are left only by the
+  elected runner's own endings (§ 4, § 12 step 6), which no seat
+  holds, so neither has a seat's exit (ticket 30487334)."
+  {"cadence_only" 2 "no_exit" 83 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

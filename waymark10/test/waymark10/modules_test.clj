@@ -116,6 +116,12 @@
            ;; …and the integration (docs/spec-integrations.md § 2): an
            ;; outside system as a row and a principal, :always
            :integration
+           ;; …and its receipt (§ 3, build step 2): one row per event
+           ;; its receiver kept
+           :integration_event
+           ;; …and its outbox (§ 4, build step 5): one row per call an
+           ;; effect door asked for
+           :effect_call
            ;; …and the scene and the take (docs/spec-scenes.md): a demo
            ;; written as shots, and one performance of it
            :scene :take
@@ -252,6 +258,8 @@
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
+               ;; an integration's receiver (docs/spec-integrations.md § 3)
+               "/api/-/events/:name"
                ;; the MCP door's OAuth discovery (waymark-kkx): RFC
                ;; 9728's root document and the path-inserted spelling
                "/.well-known/oauth-protected-resource"
@@ -269,6 +277,8 @@
                "/api/-/render/markdown"
                ;; the performer's fill of a shot's say (docs/spec-scenes.md)
                "/api/-/scenes/say"
+               ;; …and of its open (ticket ce3b28c1)
+               "/api/-/scenes/open"
                ;; the seat's ledger (spec-seat.md R-11.3a): four
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
@@ -451,6 +461,9 @@
             :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
             :curtain :presence :intents
             :discovery
+            ;; the integrations' applier (docs/spec-integrations.md
+            ;; § 3, build step 3): elected, waiting on :dispatcher
+            :integration-applier
             ;; the belief module's one surface: :belief-sweeper
             ;; (waymark-bug) refolds every hypothesis's posterior
             ;; nightly, gated on a hypothesis kind being served. It is

@@ -63,13 +63,37 @@
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
+(def seed-actor-id "waymark10-work-calendar")
+
+(def seed-actor
+  "The actor the boot's default calendar wears
+  (waymark10.server.engine/ensure-default-calendar!)."
+  (t/principal {:id seed-actor-id :type :system :display "Work calendar"}))
+
+(defn house-zone
+  "The house's zone as an IANA name: the two names dayplan10.zone reads,
+  as the guards' house zone does, else UTC."
+  []
+  (or (some #(some-> (System/getenv ^String %) str/trim zone-of str)
+            ["WORKQUEUE10_ZONE" "WORKQUEUE10_HA_ZONE"])
+      "UTC"))
+
+(defn house-default
+  "The default row the boot makes for a house whose law reads the
+  calendar and that has none (§3): Monday to Friday, the house zone, no
+  holidays."
+  []
+  {:name "House" :zone (house-zone) :workdays (vec (take 5 weekdays)) :default true})
+
 (defn- a-person?
   "Whether the caller of `ctx` is a person, in person or through a tool
-  the person is signed in to."
+  the person is signed in to — or the boot making the house's default,
+  which no person is awake to make."
   [ctx]
-  (let [{:keys [type acts-for]} (:principal ctx)]
+  (let [{:keys [type acts-for id]} (:principal ctx)]
     (or (= :human type)
-        (and (= :agent type) (not (str/blank? (str acts-for)))))))
+        (and (= :agent type) (not (str/blank? (str acts-for))))
+        (and (= :system type) (= seed-actor-id (str id))))))
 
 (g/defguard a-person-keeps-the-calendar
   {:reads [:principal]
