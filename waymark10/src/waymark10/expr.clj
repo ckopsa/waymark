@@ -221,7 +221,7 @@
           working?
           (if (<= 2 n 3)
             (reduce (fn [p a] (check a env depth p)) problems args)
-            (conj problems (str "(working? from to) takes a window's two instants, "
+            (conj problems (str "(working? from to) takes a window's two instants or two dates, "
                                 "and a calendar ref third when the resource names one")))
 
           ;; authored (follow <ref> :field); normalized at the def site
@@ -972,6 +972,16 @@
              (every? #(business-day cal (.plusDays first-day (long %)))
                      (range (inc span))))))))
 
+(defn- working-days
+  "True when every day of the whole-day window [from, to] is a business
+  day of `cal` — a :grain :day window, so its hours do not enter (spec
+  §5). A window that ends before it starts is not working."
+  [cal ^LocalDate from ^LocalDate to]
+  (let [span (.between ChronoUnit/DAYS from to)]
+    (and (<= 0 span business-walk-cap)
+         (every? #(business-day cal (.plusDays from (long %)))
+                 (range (inc span))))))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -1041,13 +1051,16 @@
                 :else (let [c (calendar-in scope)]
                         (if (unknown? c) unknown (next-business-day c v)))))
         ;; (working? from to ref): a nil ref is the default calendar, a
-        ;; ref that names no row is unknown
+        ;; ref that names no row is unknown; two dates are a day window
         working?
         (let [from (evaluate (first args) scope)
               to (evaluate (second args) scope)
               ref (when (= 3 (count args)) (evaluate (nth args 2) scope))]
           (cond
             (some unknown? [from to ref]) unknown
+            (and (instance? LocalDate from) (instance? LocalDate to))
+            (let [c (calendar-in scope ref)]
+              (if (unknown? c) unknown (working-days c from to)))
             (not (and (instant-of from) (instant-of to))) false
             :else (let [c (calendar-in scope ref)]
                     (if (unknown? c) unknown (working c (instant-of from) (instant-of to))))))

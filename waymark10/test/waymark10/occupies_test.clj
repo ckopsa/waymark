@@ -7,10 +7,12 @@
   holds the same crew, so the derived tree is one none per occupier."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.checks-assembly :as ca]
+            [waymark10.expr :as e]
             [waymark10.guards :as g]
             [waymark10.occupies :as occupies]
             [waymark10.resource :as r]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time LocalDate ZoneId)))
 
 ;; ── the fixture pair, and time off ───────────────────────────────────
 
@@ -224,6 +226,26 @@
       (is (= (tree '(working? (input :starts_at) (input :ends_at)
                               (follow :crew (data :crew_id) :calendar_id)))
              (:when (guard-on w :booking :reschedule :crew-is-working)))))))
+
+(deftest a-day-window-derives-its-working-guard
+  (let [w (world :booking {:occupies [{:resource :crew_id :from :starts_at :to :ends_at :grain :day
+                                       :in #{:scheduled :in_progress} :doors #{:schedule :reschedule}}]})
+        working (:when (guard-on w :booking :schedule :crew-is-working))
+        week {:zone (ZoneId/of "UTC") :workdays #{:mon :tue :wed :thu :fri} :holidays #{}}
+        days (fn [from to]
+               (e/evaluate working {:calendar (fn [_] week)
+                                    :input {:starts_at (LocalDate/parse from)
+                                            :ends_at (LocalDate/parse to)}}))]
+    (is (= (tree '(working? (input :starts_at) (input :ends_at))) working)
+        "the same reader, over the window's two dates")
+    (testing "every day of [from, to] a business day of the calendar"
+      (is (true? (days "2026-10-19" "2026-10-23")) "Monday to Friday")
+      (is (true? (days "2026-10-21" "2026-10-21")) "one day")
+      (is (false? (days "2026-10-22" "2026-10-24")) "Saturday is in the window")
+      (is (false? (days "2026-10-23" "2026-10-22")) "a window that ends before it starts"))
+    (is (e/unknown? (e/evaluate working {:input {:starts_at (LocalDate/parse "2026-10-19")
+                                                 :ends_at (LocalDate/parse "2026-10-23")}}))
+        "no :calendar hook is unknown")))
 
 (deftest derivation-is-idempotent
   (let [w (world)]

@@ -10,7 +10,8 @@
     resource kind (the row itself is left out by `none`), with a
     `first` naming a free resource in evidence and a remedy on each
     door of the holding row's kind that moves it in a holding state;
-  - `<resource>-is-working`: `working?` over the window, in the
+  - `<resource>-is-working`: `working?` over the window — with
+    `:grain :day`, every day of [from, to] a business day — in the
     resource's own `:calendar` when its kind names one, else the
     default work_calendar.
 
@@ -200,10 +201,10 @@
                       (name kind) " derives")))
     (reduce (fn [ks o]
               (reduce (fn [ks door]
-                        (cond-> (update ks (:kind o) add-guard door
-                                        (free-guard kinds o door (get by-target (:target o))))
-                          (= :instant (:grain o))
-                          (update (:kind o) add-guard door (working-guard kinds o door))))
+                        (-> ks
+                            (update (:kind o) add-guard door
+                                    (free-guard kinds o door (get by-target (:target o))))
+                            (update (:kind o) add-guard door (working-guard kinds o door))))
                       ks
                       (sort (:doors o))))
             kinds
