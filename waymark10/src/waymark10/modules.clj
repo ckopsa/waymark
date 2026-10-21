@@ -303,6 +303,10 @@
               :kinds (fn [_] [transcripts/transcript])}
              {:kind :transcript_entry :enroll :always
               :kinds (fn [_] [transcripts/transcript-entry])}
+             ;; …and the record of each call a sitting made (ticket
+             ;; dc9e5b96), purged with the transcript's lines
+             {:kind :sitting_call :enroll :always
+              :kinds (fn [_] [transcripts/sitting-call])}
              ;; the judgment and the verdict (waymark-fp62.11) are
              ;; core's for the seat's own reason: the seat — core's —
              ;; carries a typed ref to the judgment it walks, so an

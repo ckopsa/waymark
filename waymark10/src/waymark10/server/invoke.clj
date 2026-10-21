@@ -201,7 +201,11 @@
 
   `acted_by` is the seat that acted as this cast member on a clone
   (router/cast-principal, clone guard 2/3): the hand is the cast
-  member's, and the log says whose seat moved it."
+  member's, and the log says whose seat moved it.
+
+  `why` is the hand's own one sentence about this move, given on the
+  invoke (router/move-why, ticket 1d8f5f1c): the row's history shows it
+  beside the move."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
@@ -211,7 +215,8 @@
     (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
     (:requested-by principal) (assoc :requested_by (str (:requested-by principal)))
     (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
-    (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))))
+    (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))
+    (:why principal) (assoc :why (str (:why principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
