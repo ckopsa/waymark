@@ -2839,6 +2839,35 @@
                 " was not carried to " head " (" (ex-message e) ")")
         census))))
 
+(defn- carry-or-void!
+  "A filming plan whose change's head moved off its take (ticket
+  4670d326). A base move that left `org_dir` alone between the take and
+  `head` carries the take (`carry_take_filming`, `:carried` counted):
+  the film is of the org's files, and those did not change. Any other
+  move voids it (`void-stale-take!`), and so does every move under
+  base_follow `always`, the strict head equality. A forge with no path
+  compare voids; one that does not answer costs that plan one pass.
+  → the census."
+  [eng source plan change head base-move? census log-fn]
+  (let [take-sha (some-> (get-in plan [:data :take_sha]) str not-empty)
+        repo (some-> (get-in change [:data :repository]) str not-empty)]
+    (if (or (nil? take-sha) (= head take-sha)
+            (= "always" (some-> (get-in plan [:data :base_follow]) name))
+            (nil? repo) (not (satisfies? ForgePathDiff source)))
+      (void-stale-take! eng plan head census log-fn)
+      (try
+        (if (and (base-move? eng change take-sha head)
+                 (not (forge-path-changed? source repo take-sha head
+                                           (org-dir-of plan))))
+          (do (inv/invoke! eng :org_plan (str (:id plan)) :carry_take_filming
+                           {:head_sha head} (as-opts))
+              (update census :carried (fnil inc 0)))
+          (void-stale-take! eng plan head census log-fn))
+        (catch Exception e
+          (log-fn "the take of " (org-of plan) " at " take-sha
+                  " was not carried to " head " (" (ex-message e) ")")
+          census)))))
+
 (defn findings-pass!
   "Every drafting, proposed or simulated org_plan whose change carries a head its
   findings were not recorded at → the artifact
@@ -2850,7 +2879,8 @@
   artifact not there yet is tried on the next pass. A forge that does
   not answer, or a door the engine refuses, costs that plan one pass and
   nothing else. A filming plan whose change carries a head its take was
-  not made at has the take voided, `:voided` counted, and its findings
+  not made at has the take voided, `:voided` counted, unless a base
+  move left its org_dir alone (`carry-or-void!`, ticket 4670d326), and its findings
   land on a later pass; a simulated plan's goes back to proposed the
   same way (`refilm`, `:refilmed` counted, ticket 87fc7996). The findings are fitted to the plan's caps first
   (`capped-findings`), and a law page or scene past its cap is dropped
@@ -2886,7 +2916,8 @@
                census
                (carry-or-refilm! eng source plan change head base-move? census log-fn))
              (nil? door) census
-             (= :void_take door) (void-stale-take! eng plan head census log-fn)
+             (= :void_take door)
+             (carry-or-void! eng source plan change head base-move? census log-fn)
              (and (= :record_findings_simulated door)
                   (not (org-plan/take-of? (get-in plan [:data :take_sha]) head)))
              (if (= "when_org_dir_changes"

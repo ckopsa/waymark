@@ -144,3 +144,51 @@
       (is (= 1 (:refilmed (pass! eng (a-forge false asked)))))
       (is (= "proposed" (state eng id)))
       (is (empty? @asked)))))
+
+(defn- filming!
+  "The drafting plan `id` proposed with its change at `walk/a-head`, and
+  a take of that head handed in, waiting to be judged. → the id."
+  [eng id]
+  (walk/proposed! eng id the-owner)
+  (inv/invoke! eng :org_plan id :hand_in_film
+               {:film_url "https://example.com/greenleaf.mp4"
+                :take_report "{}" :head_sha walk/a-head}
+               {:principal the-owner})
+  id)
+
+(deftest a-take-waiting-to-be-judged-survives-a-main-only-merge
+  (testing "a base move that left the org alone keeps the take, at the new head"
+    (let [eng (an-engine)
+          id (filming! eng (filed! eng {}))
+          asked (atom [])
+          data #(:data (row-of eng :org_plan id))]
+      (moved! eng id head-2)
+      (let [census (pass! eng (a-forge false asked))]
+        (is (= 1 (:carried census)))
+        (is (nil? (:voided census))))
+      (is (= [[walk/a-head head-2 "orgs/greenleaf"]] @asked))
+      (is (= "filming" (state eng id)))
+      (is (= head-2 (:take_sha (data))))
+      (is (= "https://example.com/greenleaf.mp4" (:take_film_url (data))))
+      (is (not-any? #(= "take_voided" (str (:key %))) (:findings (data))))
+      (testing "and the film pass judges it"
+        (is (nil? (:voided (forge/film-pass! eng {} (fn [& _] nil)
+                                             (fn [_ _] {:rules []})))))
+        (is (not= "proposed" (state eng id))))))
+  (testing "an edit under the org's directory voids it"
+    (let [eng (an-engine)
+          id (filming! eng (filed! eng {}))
+          data #(:data (row-of eng :org_plan id))]
+      (moved! eng id head-2)
+      (is (= 1 (:voided (pass! eng (a-forge true (atom []))))))
+      (is (= "proposed" (state eng id)))
+      (is (nil? (:take_sha (data))))
+      (is (some #(= "take_voided" (str (:key %))) (:findings (data))))))
+  (testing "under base_follow always, every move voids it and the forge is not asked"
+    (let [eng (an-engine)
+          id (filming! eng (filed! eng {:base_follow "always"}))
+          asked (atom [])]
+      (moved! eng id head-2)
+      (is (= 1 (:voided (pass! eng (a-forge false asked)))))
+      (is (= "proposed" (state eng id)))
+      (is (empty? @asked)))))
