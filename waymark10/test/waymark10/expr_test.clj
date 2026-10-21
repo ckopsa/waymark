@@ -12,7 +12,7 @@
             [waymark10.server.judgment :as judgment]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time Instant LocalDate)))
+  (:import (java.time Duration Instant LocalDate Period)))
 
 (def trials 300)
 
@@ -97,6 +97,54 @@
                           {:vars {:on (LocalDate/parse "2026-07-07")
                                   :n 1.5M}}))
         "the calendar still has no fractional day")))
+
+(deftest periods-and-durations
+  (let [on (LocalDate/parse "2026-01-31")
+        at (Instant/parse "2026-03-08T06:30:00Z")
+        ev #(e/evaluate (e/normalize %) {:vars {:on on :at at :n 2}})]
+    (testing "date ± Period is a date; a month past the 31st is its last day"
+      (is (= (LocalDate/parse "2026-02-14") (ev '(+ (var :on) (weeks 2)))))
+      (is (= (LocalDate/parse "2026-02-28") (ev '(+ (var :on) (months 1)))))
+      (is (= (LocalDate/parse "2028-01-31") (ev '(+ (var :on) (years (var :n))))))
+      (is (= (LocalDate/parse "2025-12-31") (ev '(- (var :on) (months 1))))))
+    (testing "date ± Duration is nil: a date has no hour"
+      (is (nil? (ev '(+ (var :on) (hours 1)))))
+      (is (nil? (ev '(- (var :on) (minutes 30))))))
+    (testing "instant ± Duration is an instant"
+      (is (= (Instant/parse "2026-03-09T06:30:00Z") (ev '(+ (var :at) (hours 24)))))
+      (is (= (Instant/parse "2026-03-08T06:00:00Z") (ev '(- (var :at) (minutes 30)))))
+      (is (true? (ev '(<= (var :at) (+ (var :at) (hours 24)))))))
+    (testing "instant ± Period waits on the calendar (step 3): nil, never UTC"
+      (is (nil? (ev '(+ (var :at) (days 1))))))
+    (testing "Period ± Period is a Period"
+      (is (= (Period/of 0 1 7) (ev '(+ (months 1) (weeks 1)))))
+      (is (= (Period/ofDays 5) (ev '(- (weeks 1) (days 2)))))
+      (is (= (Duration/ofMinutes 90) (ev '(+ (hours 1) (minutes 30))))))
+    (testing "a fractional count is no span"
+      (is (nil? (ev '(hours 1.5M)))))))
+
+(deftest days-between-counts-whole-days
+  (let [ev #(e/evaluate % {:vars {:a (LocalDate/parse "2026-01-01")
+                                  :b (LocalDate/parse "2026-03-01")
+                                  :t (Instant/parse "2026-03-01T00:00:00Z")
+                                  :u e/unknown}})]
+    (is (= 59 (ev '(days-between (var :a) (var :b)))))
+    (is (= -59 (ev '(days-between (var :b) (var :a)))))
+    (is (true? (ev '(> (days-between (var :a) (var :b)) 15))))
+    (is (nil? (ev '(days-between (var :a) (var :t)))) "an instant is not a date")
+    (is (e/unknown? (ev '(days-between (var :a) (var :u)))))
+    (is (seq (e/problems '(days-between (var :a))))
+        "days-between takes two expressions")))
+
+(deftest a-week-is-seven-days-in-law
+  (is (= (e/normalize '(days (* 7 (var :n))))
+         (e/normalize '(weeks (var :n)))))
+  (is (= (e/normalize '(weeks (var :n)))
+         (e/normalize (e/normalize '(weeks (var :n)))))
+      "idempotent")
+  (testing "a law spelled with days keeps its tree, so its fingerprint stays"
+    (is (= '(+ (days (- (* (var :weeks) 7) 1)) (var :start_date))
+           (e/normalize '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1))))))))
 
 (deftest quantifiers
   (is (true? (e/evaluate '(every [d (var :days)]
