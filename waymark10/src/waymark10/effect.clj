@@ -139,21 +139,81 @@
      rmap
      (filter (comp :effect val) (:actions rmap)))))
 
-(defn- weave-unwinds
-  "Judge every `:compensate` and `:unwinds` (§ 5), normalize each
-  `:when`, and open each compensation's failed door from the state the
-  unwinding door leaves the row in, so a compensation that fails holds
-  the row in its own `:fails-to`. An effect door that unwinds does so
-  when it lands: its landed door carries the `:unwinds`. → rmap"
+(def ^:private compensate-keys #{:power :input :why :fails-to})
+
+(defn undo-door
+  "The door a power compensation of effect door `aname` is kept under:
+  its effect_call names it, and its failure lands through `<it>_failed`."
+  [aname]
+  (keyword (str (name aname) "_undo")))
+
+(defn compensation
+  "The undo effect door `aname` names (§ 5), as [door eff]: a door of
+  this kind with that door's effect, or a power with its input, kept
+  under `undo-door`. nil when it names none."
+  [rdef aname]
+  (let [c (get-in rdef [:actions aname :effect :compensate])]
+    (cond (keyword? c) [c (get-in rdef [:actions c :effect])]
+          (map? c) [(undo-door aname) c])))
+
+(defn- weave-compensations
+  "Judge every `:compensate` (§ 5): an effect door of this kind, or a
+  power map {:power :input :fails-to}, whose input forms are normalized
+  here. → rmap"
   [rmap]
-  (doseq [[aname a] (:actions rmap)
-          :let [c (get-in a [:effect :compensate])]
-          :when (some? c)]
-    (when-not (and (keyword? c) (get-in rmap [:actions c :effect]))
-      (throw (t/definition-error
-              (str (some-> (:kind rmap) name) "/" (name aname)
-                   " :effect :compensate names its undo, an effect door of this kind; "
-                   (pr-str c) " is not one")))))
+  (let [states (set (:states rmap))]
+    (reduce
+     (fn [r [aname a]]
+       (let [c (get-in a [:effect :compensate])
+             bad (fn [s]
+                   (throw (t/definition-error
+                           (str (some-> (:kind rmap) name) "/" (name aname)
+                                " :effect :compensate " s))))]
+         (cond
+           (nil? c) r
+
+           (and (keyword? c) (get-in rmap [:actions c :effect])) r
+
+           (map? c)
+           (let [door (undo-door aname)]
+             (when-some [k (first (remove compensate-keys (keys c)))]
+               (bad (str "names " k "; a power compensation takes " (vec (sort compensate-keys)))))
+             (when-not (and (string? (:power c)) (not (str/blank? (:power c))))
+               (bad ":power names the tool it calls, as a string"))
+             (when (nil? (:fails-to c))
+               (bad "[effect-no-failure-state] has no :fails-to; name the state a row waits in when the undo fails"))
+             (when-not (contains? states (:fails-to c))
+               (bad (str ":fails-to " (pr-str (:fails-to c)) " is not a state of this kind")))
+             (when-not (or (nil? (:input c))
+                           (and (map? (:input c)) (every? keyword? (keys (:input c)))))
+               (bad ":input maps field names to expressions"))
+             (when-not (or (nil? (:why c)) (string? (:why c)))
+               (bad ":why is a sentence"))
+             (doseq [d [door (failed-door door)]]
+               (when (contains? (:actions rmap) d)
+                 (bad (str "needs the door " d " for itself, and this kind declares one"))))
+             (assoc-in r [:actions aname :effect :compensate]
+                       (assoc c :input
+                              (into {} (map (fn [[f x]]
+                                              (when-some [ps (seq (expr/problems x))]
+                                                (bad (str ":input " f ": " (str/join "; " ps))))
+                                              [f (expr/normalize x)]))
+                                    (:input c)))))
+
+           :else
+           (bad (str "names its undo, an effect door of this kind or a power map"
+                     " {:power :input :fails-to}; " (pr-str c) " is not one")))))
+     rmap
+     (filter (comp :effect val) (:actions rmap)))))
+
+(defn- weave-unwinds
+  "Judge every `:unwinds` (§ 5), normalize each `:when`, and open each
+  compensation's failed door from the state the unwinding door leaves
+  the row in, so a compensation that fails holds the row in its own
+  `:fails-to`; a power compensation's failed door is made here. An
+  effect door that unwinds does so when it lands: its landed door
+  carries the `:unwinds`. → rmap"
+  [rmap]
   (reduce
    (fn [r [aname a]]
      (let [bad (fn [s]
@@ -176,10 +236,13 @@
            held (or (get-in a [:effect :lands]) (:to a))]
        (reduce (fn [r {:keys [effect]}]
                  ;; [unwinds-no-compensate] is the battery's to refuse
-                 (let [c (get-in rmap [:actions effect :effect :compensate])]
-                   (if (and c (contains? (:actions r) (failed-door c)))
-                     (update-in r [:actions (failed-door c) :from] (fnil conj #{}) held)
-                     r)))
+                 (if-let [[door eff] (compensation r effect)]
+                   (let [fd (failed-door door)]
+                     (-> r
+                         (update-in [:actions fd]
+                                    #(or % (assoc (get (hidden-doors door nil eff) fd) :from #{})))
+                         (update-in [:actions fd :from] (fnil conj #{}) held)))
+                   r))
                (cond-> (assoc-in r [:actions aname :unwinds] us)
                  (:effect a) (assoc-in [:actions (landed-door aname) :unwinds] us))
                us)))
@@ -192,7 +255,7 @@
   § 8 — a missing key, failure state or undo — are the battery's
   (checks.clj), which asks each one's question. → rmap"
   [rmap]
-  (-> rmap weave-effects weave-unwinds))
+  (-> rmap weave-effects weave-compensations weave-unwinds))
 
 (def ^:private undo-prefix "undo:")
 
@@ -223,7 +286,7 @@
   [eff row inp now]
   (let [scope {:data (:data row) :input inp :self (some-> (:id row) str) :now now}]
     (cond-> {:power (:power eff)
-             :key (some-> (known (:idempotency-key eff) scope) str)
+             :key (some-> (:idempotency-key eff) (known scope) str)
              :input (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v])))
                           (:input eff))}
       (:why eff)
