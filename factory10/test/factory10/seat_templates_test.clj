@@ -301,11 +301,11 @@
     (testing "it wakes on every door that leaves a plan proposed: propose, refilm and void_take (ticket 82a8c2b6)"
       (is (= [{:kind "org_plan" :actions ["propose" "refilm" "void_take"]}]
              (:wake_on seat))))
-    (testing "its powers are the clone door's five: it calls the clone to write the week"
-      (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.down"}
+    (testing "its powers are the clone door's six: it calls the clone to write the week, and sends the outside world's events"
+      (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.event" "clone.down"}
              (into #{} (comp (map :kind) (filter #(str/includes? % ".")))
                    (:scope seat)))))
     (testing "its instructions name only the tools its scope holds"
       (let [named (into #{} (map (fn [[_ k a]] (str k "." a)))
                         (re-seq #"\b([a-z]+)__([a-z_]+)" (:instructions seat)))]
-        (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.down"} named))))))
+        (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.event" "clone.down"} named))))))

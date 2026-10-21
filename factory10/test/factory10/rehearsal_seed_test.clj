@@ -38,6 +38,47 @@
   (store/with-tx (:storage eng)
     (fn [tx] (store/load-row (:storage eng) tx kind (str id) {}))))
 
+(defn- landscape-engine
+  "A memory engine with the factory's kinds and landscape_rehearsal's."
+  [clone?]
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :clone? clone?
+                            :resources (into (vec (main/resources))
+                                             ((requiring-resolve 'landscape_rehearsal.org/resources)))
+                            :suppress-mirror-refresh true})]
+    (roles/ensure-factory-roles! eng)
+    (domains/ensure-factory! eng)
+    eng))
+
+(defn- landscape-seed []
+  (edn/read-string (slurp (io/resource "landscape_rehearsal/seed.edn"))))
+
+(defn- named-row [eng kind nm]
+  (let [st (:storage eng)]
+    (first (store/with-tx st
+             (fn [tx] (store/query-rows st tx kind {:name nm} {:limit 1}))))))
+
+(deftest a-rehearsal's-integration-is-live-on-a-clone-and-absent-off-one
+  (let [clone-eng (landscape-engine true)
+        clone (seed-load/load! clone-eng
+                               (org-boot/loader-seed (landscape-seed) {:clone? true})
+                               {:params {:signing_secret_payments "whsec-rehearsal"}})
+        live-eng (landscape-engine false)
+        live (seed-load/load! live-eng (org-boot/loader-seed (landscape-seed)) {})]
+    (testing "on a clone, the payments integration is live and its secret holds the key"
+      (is (true? (:seeded clone)))
+      (let [integ (named-row clone-eng :integration "payments")
+            secret (named-row clone-eng :secret "payments-signing")]
+        (is (= :live (keyword (:state integ))))
+        (is (= (str (:id secret)) (str (get-in integ [:data :secret]))))
+        (is (= "whsec-rehearsal"
+               (get-in (load-row clone-eng :secret (:id secret)) [:data :value])))))
+    (testing "off a clone, none of it loads, and no param is asked for"
+      (is (true? (:seeded live)))
+      (is (nil? (named-row live-eng :integration "payments")))
+      (is (nil? (named-row live-eng :secret "payments-signing")))
+      (is (nil? (load-row live-eng :member "bookkeeper"))))))
+
 (deftest a-rehearsal-loads-on-a-clone-and-nowhere-else
   (let [live-eng (org-engine false)
         live (seed-load/load! live-eng (org-boot/loader-seed (example-seed)) {})
