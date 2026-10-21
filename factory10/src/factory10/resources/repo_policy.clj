@@ -759,6 +759,37 @@
   (kit/statement kit/core {:policy own-policy-fields
                            :policy-order policy-order}))
 
+(def ^:private train-schema
+  "One standing train, as the merge pass writes it on `line_train` and
+  on each of `lane_trains`."
+  [:map
+   [:branch [:string {:max 200}]]
+   [:changes [:vector [:string {:max 64}]]]
+   [:prs [:vector [:int {:min 1}]]]
+   ;; the head each change had when the train was built, in the
+   ;; order of `changes`, so a restart still knows what the train
+   ;; judged (ffd36c98)
+   [:heads {:optional true} [:maybe [:vector [:string {:max 64}]]]]
+   [:head {:optional true} [:maybe [:string {:max 64}]]]
+   [:base_head {:optional true} [:maybe [:string {:max 64}]]]
+   [:run_id {:optional true} [:maybe [:string {:max 64}]]]
+   ;; the policy's test workflow the checks ran (90ce5c73), so a
+   ;; train with no run yet is read by the same workflow
+   [:workflow {:optional true} [:maybe [:string {:max 200}]]]
+   ;; a red train's halves count their trains against the train
+   ;; they look in, and a cancelled run is run once more (6033c287)
+   [:tries {:optional true} [:maybe [:int {:min 1}]]]
+   [:size {:optional true} [:maybe [:int {:min 1}]]]
+   [:retried {:optional true} [:maybe :boolean]]
+   ;; the pull request a waiting landing answered (c3f0f094)
+   [:pr {:optional true} [:maybe [:int {:min 1}]]]
+   ;; the pull request's own run is the train's check, and none was
+   ;; dispatched (e2d485c2)
+   [:pr_run {:optional true} [:maybe :boolean]]
+   ;; the lane a train of `lane_trains` rides in (55d584f2)
+   [:lane {:optional true} [:maybe [:string {:max 200}]]]
+   [:started_at :waymark/instant]])
+
 (def ^:private engine-fields
   "What the ENGINE writes about this row, and a person never does: when
   the bench took this repository, and why it did not. They are on the
@@ -969,32 +1000,20 @@
                  {:raw true
                   :label "The train"
                   :help "The changes that ride one train together: its branch, their changes and pull requests, the head each change had when the train was built, the train's head and the base head it was built on, the check run that tests it, and when it started. Empty when no train stands."}}
-    [:maybe
-     [:map
-      [:branch [:string {:max 200}]]
-      [:changes [:vector [:string {:max 64}]]]
-      [:prs [:vector [:int {:min 1}]]]
-      ;; the head each change had when the train was built, in the
-      ;; order of `changes`, so a restart still knows what the train
-      ;; judged (ffd36c98)
-      [:heads {:optional true} [:maybe [:vector [:string {:max 64}]]]]
-      [:head {:optional true} [:maybe [:string {:max 64}]]]
-      [:base_head {:optional true} [:maybe [:string {:max 64}]]]
-      [:run_id {:optional true} [:maybe [:string {:max 64}]]]
-      ;; the policy's test workflow the checks ran (90ce5c73), so a
-      ;; train with no run yet is read by the same workflow
-      [:workflow {:optional true} [:maybe [:string {:max 200}]]]
-      ;; a red train's halves count their trains against the train
-      ;; they look in, and a cancelled run is run once more (6033c287)
-      [:tries {:optional true} [:maybe [:int {:min 1}]]]
-      [:size {:optional true} [:maybe [:int {:min 1}]]]
-      [:retried {:optional true} [:maybe :boolean]]
-      ;; the pull request a waiting landing answered (c3f0f094)
-      [:pr {:optional true} [:maybe [:int {:min 1}]]]
-      ;; the pull request's own run is the train's check, and none was
-      ;; dispatched (e2d485c2)
-      [:pr_run {:optional true} [:maybe :boolean]]
-      [:started_at :waymark/instant]]]]])
+    [:maybe train-schema]]
+   ;; a train per lane (ticket 55d584f2): `line_train` is the engine
+   ;; lane's, and each other lane's train stands here with its `lane`
+   [:lane_trains {:optional true
+                  :examples [[{:branch "train/ckopsa/waymark/7"
+                               :changes ["2847912e-7783-4651-bead-61eab0492776"]
+                               :prs [251]
+                               :lane "docs"
+                               :started_at "2026-09-29T12:00:00Z"}]]
+                  :x-display
+                  {:raw true
+                   :label "The trains of the other lanes"
+                   :help "The trains that stand now in lanes other than engine, each with its lane, shaped as The train. A train never mixes lanes, and the trains of different lanes ride and land at once. Empty when none stands."}}
+    [:maybe [:vector train-schema]]]])
 
 ;; ── the summary line: where the merge line stands ───────────────────
 ;; A list panel shows a row's summary line and nothing else (ticket
