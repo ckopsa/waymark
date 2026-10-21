@@ -19,7 +19,12 @@
                        storage projection, the checks, and the
                        collection grammar already spoke the :decimal
                        head; this registers the type they anticipated.
-                       Properties honor {:min … :max …} exactly."
+                       Properties honor {:min … :max …} exactly.
+    :waymark/money   — a decimal amount and an ISO currency, one value
+                       (docs/spec-ledger-money.md §2); the wire's
+                       amount is a string, and a JSON number is
+                       refused. {:currency …} admits that one only;
+                       {:min … :max …} compare amounts."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -27,7 +32,8 @@
             [malli.json-schema :as json-schema]
             [malli.registry :as mr]
             [malli.transform :as mt]
-            [malli.util :as mu])
+            [malli.util :as mu]
+            [waymark10.money :as money])
   (:import (java.time Instant LocalDate OffsetDateTime)))
 
 (set! *warn-on-reflection* true)
@@ -131,6 +137,48 @@
                        gt (assoc :exclusiveMinimum gt)
                        lt (assoc :exclusiveMaximum lt))}})}))
 
+(def ^:private waymark-money
+  ;; one value, so `+` can refuse dollars to euros; a bare amount
+  ;; string takes the field's declared currency, and a number amount
+  ;; is left undecoded for the pred to refuse
+  (m/-simple-schema
+   {:type :waymark/money
+    :compile
+    (fn [{:keys [currency min max]} _children _opts]
+      (let [lo (some-> min bigdec)
+            hi (some-> max bigdec)]
+        {:pred (fn [x]
+                 (and (money/money? x)
+                      (or (nil? currency) (= currency (:currency x)))
+                      (or (nil? lo)
+                          (>= (.compareTo ^java.math.BigDecimal (:amount x) lo) 0))
+                      (or (nil? hi)
+                          (<= (.compareTo ^java.math.BigDecimal (:amount x) hi) 0))))
+         :type-properties
+         {:error/message (str "must be money: {\"amount\": \"18.00\", \"currency\": \""
+                              (or currency "USD") "\"}, the amount a string"
+                              (when currency (str ", in " currency)))
+          :decode/wire (fn [x] (money/from-wire x currency))
+          :encode/wire (fn [x] (if (money/money? x) (money/->wire x) x))
+          :gen/schema [:int {:min (if lo
+                                    (.longValue (.setScale ^java.math.BigDecimal lo 0
+                                                           java.math.RoundingMode/CEILING))
+                                    0)
+                             :max (if hi
+                                    (.longValue (.setScale ^java.math.BigDecimal hi 0
+                                                           java.math.RoundingMode/FLOOR))
+                                    100)}]
+          :gen/fmap (fn [n] (money/->Money (bigdec n) (or currency "USD")))
+          :json-schema
+          {:type "object"
+           :format "waymark-money"
+           :required ["amount" "currency"]
+           :additionalProperties false
+           :properties
+           {:amount {:type "string" :pattern "^-?[0-9]+(\\.[0-9]+)?$"}
+            :currency (cond-> {:type "string" :pattern "^[A-Z]{3}$"}
+                        currency (assoc :enum [currency]))}}}}))}))
+
 (def registry
   (mr/composite-registry
    (m/default-schemas)
@@ -139,6 +187,7 @@
     :waymark/instant waymark-instant
     :waymark/ref waymark-ref
     :waymark/vocab waymark-vocab
+    :waymark/money waymark-money
     :decimal waymark-decimal}))
 
 (def options {:registry registry})
