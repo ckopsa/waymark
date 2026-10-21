@@ -10,7 +10,8 @@
     resource kind (the row itself is left out by `none`), with a
     `first` naming a free resource in evidence and a remedy on each
     door of the holding row's kind that moves it in a holding state;
-  - `<resource>-is-working`: `working?` over the window, in the
+  - `<resource>-is-working`: `working?` over the window — with
+    `:grain :day`, every day of [from, to] a business day — in the
     resource's own `:calendar` when its kind names one, else the
     default work_calendar.
 
@@ -201,13 +202,17 @@
   (let [[res from-side to-side] (sides kinds o door)
         gname (guard-name (:resource o) "is-working")
         word (resource-word (:resource o))
-        remedies (slot-remedies kinds o door)]
+        slot? (= :instant (:grain o))
+        remedies (when slot? (slot-remedies kinds o door))]
     (d/sentence-guard gname
                       (d/refuse (or (get-in kinds [(:kind o) :explain gname])
-                                    (str "{holiday.day} is {holiday.name}. That " word " does not work then. "
-                                         "That " word " is next free {slot.day} at {slot.time}.")))
+                                    (if slot?
+                                      (str "{holiday.day} is {holiday.name}. That " word " does not work then. "
+                                           "That " word " is next free {slot.day} at {slot.time}.")
+                                      (str "That " word " does not work then."))))
                       (working-form kinds o res from-side to-side)
-                      (cond-> {:evidence {:slot (next-free kinds o door occs)}}
+                      (cond-> {}
+                        slot? (assoc :evidence {:slot (next-free kinds o door occs)})
                         (seq remedies) (assoc :remedies remedies)))))
 
 (defn- add-guard
@@ -252,11 +257,11 @@
                       (name kind) " derives")))
     (reduce (fn [ks o]
               (reduce (fn [ks door]
-                        (cond-> (update ks (:kind o) add-guard door
-                                        (free-guard kinds o door (get by-target (:target o))))
-                          (= :instant (:grain o))
-                          (update (:kind o) add-guard door
-                                  (working-guard kinds o door (get by-target (:target o))))))
+                        (-> ks
+                            (update (:kind o) add-guard door
+                                    (free-guard kinds o door (get by-target (:target o))))
+                            (update (:kind o) add-guard door
+                                    (working-guard kinds o door (get by-target (:target o))))))
                       ks
                       (sort (:doors o))))
             kinds
