@@ -694,6 +694,9 @@
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
              :calendar (tx-calendar engine tx)
+             ;; the house's :rounding (docs/spec-ledger-money.md §2),
+             ;; which (round m) reads
+             :rounding (:rounding engine)
              ;; the vocabulary hook (waymark-vnc): kind → its declared
              ;; action-name strings, nil for a kind this engine does
              ;; not serve — the same registry check-action! and render

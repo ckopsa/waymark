@@ -24,7 +24,9 @@
                        (docs/spec-ledger-money.md §2); the wire's
                        amount is a string, and a JSON number is
                        refused. {:currency …} admits that one only;
-                       {:min … :max …} compare amounts."
+                       {:min … :max …} compare amounts. An amount
+                       past its currency's minor unit is refused,
+                       [money-unrounded], the rounded value named."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -146,18 +148,20 @@
     :compile
     (fn [{:keys [currency min max]} _children _opts]
       (let [lo (some-> min bigdec)
-            hi (some-> max bigdec)]
+            hi (some-> max bigdec)
+            shape (str "must be money: {\"amount\": \"18.00\", \"currency\": \""
+                       (or currency "USD") "\"}, the amount a string"
+                       (when currency (str ", in " currency)))]
         {:pred (fn [x]
                  (and (money/money? x)
+                      (money/rounded? x)
                       (or (nil? currency) (= currency (:currency x)))
                       (or (nil? lo)
                           (>= (.compareTo ^java.math.BigDecimal (:amount x) lo) 0))
                       (or (nil? hi)
                           (<= (.compareTo ^java.math.BigDecimal (:amount x) hi) 0))))
          :type-properties
-         {:error/message (str "must be money: {\"amount\": \"18.00\", \"currency\": \""
-                              (or currency "USD") "\"}, the amount a string"
-                              (when currency (str ", in " currency)))
+         {:error/fn (fn [{:keys [value]} _] (or (money/unrounded value) shape))
           :decode/wire (fn [x] (money/from-wire x currency))
           :encode/wire (fn [x] (if (money/money? x) (money/->wire x) x))
           :gen/schema [:int {:min (if lo
