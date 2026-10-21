@@ -165,3 +165,132 @@
            (if (= even up)
              (str even " " cur)
              (str even " " cur " half-even, " up " " cur " half-up"))))))
+
+;; ── accounts (§3) ───────────────────────────────────────────────────
+
+(defn unit?
+  "An account's unit (§3): :count (an integer quantity), :decimal (kilos
+  of clay) or [:money cur] with an ISO 4217 code."
+  [u]
+  (or (= :count u)
+      (= :decimal u)
+      (and (vector? u) (= 2 (count u)) (= :money (first u)) (currency-code? (second u)))))
+
+(def account-keys
+  "What one account declares: its unit, and the bounds step 5 judges."
+  #{:unit :never-below :never-above :may-go-negative})
+
+(defn- bound-problem
+  "What is wrong with account n's bound k: a number of its unit (a whole
+  one for :count, never a float), or the name of another account of the
+  same unit declared beside it. nil when it is whole or absent."
+  [accounts n a k]
+  (let [b (get a k)
+        unit (:unit a)]
+    (cond
+      (not (contains? a k)) nil
+      (keyword? b)
+      (cond (= b n) (str (name n) " " k " names itself")
+            (not (contains? accounts b)) (str (name n) " " k " " b " names no account declared beside it")
+            (not= unit (get-in accounts [b :unit])) (str (name n) " " k " " b " is of another unit"))
+      (= :count unit)
+      (when-not (integer? b)
+        (str (name n) " " k " is a whole number for a :count account, or another account's name"))
+      (not (or (integer? b) (decimal? b)))
+      (str (name n) " " k " is a number (an integer or a decimal, never a float), or another account's name"))))
+
+(defn account-problems
+  "What is wrong with an :accounts or :house-accounts map, one sentence
+  each, `where` naming the declaration: each name a snake_case keyword,
+  each entry a map of `account-keys` that names its :unit; a bound a
+  number of that unit or another account of the same unit;
+  :may-go-negative a boolean, and never beside :never-below. Empty when
+  it is whole."
+  [where accounts]
+  (if-not (map? accounts)
+    [(str where " maps each account's name to {:unit …}")]
+    (vec
+     (for [[n a] (sort-by (comp str key) accounts)
+           p (cond
+               (not (and (keyword? n) (nil? (namespace n))
+                         (re-matches #"[a-z][a-z0-9_]*" (name n))))
+               [(str where " " (pr-str n) " is not an account name: a snake_case keyword, such as :on_hand")]
+               (not (map? a))
+               [(str where " " (name n) " is a map, {:unit …}")]
+               :else
+               (concat
+                (for [k (sort-by str (remove account-keys (keys a)))]
+                  (str where " " (name n) " names " k "; an account takes " (vec (sort account-keys))))
+                (if (unit? (:unit a))
+                  (keep #(some->> (bound-problem accounts n a %) (str where " "))
+                        [:never-below :never-above])
+                  [(str where " " (name n) " :unit is :count, :decimal or [:money \"USD\"]; got "
+                        (pr-str (:unit a)))])
+                (when-not (or (nil? (:may-go-negative a)) (boolean? (:may-go-negative a)))
+                  [(str where " " (name n) " :may-go-negative is true or false")])
+                (when (and (:may-go-negative a) (contains? a :never-below))
+                  [(str where " " (name n) " says :may-go-negative beside :never-below; it is one or the other")])))]
+       p))))
+
+(defn by-postings
+  "The sentence that refuses a write of account n's balance (§3)."
+  [n]
+  (str (name n) " moves only by postings"))
+
+(defn account-field
+  "The read-only field account n projects on its row (§3, ledger step
+  3c): its own name, typed by its unit, :engine-written so no create or
+  edit door offers it, and :ledger-account so the engine knows it moves
+  only by postings. Its :filter and :sort marks are colocated sugar the
+  declaration gate joins into :filterable and :sortable."
+  [n {:keys [unit]}]
+  [n {:optional true
+      :engine-written true
+      :ledger-account true
+      :filter (if (= :count unit) #{:eq :range} #{:range})
+      :sort true
+      :x-display {:label (name n)
+                  :help (str "The balance as of the last commit; " (by-postings n) ".")}}
+   (case unit
+     :count :int
+     :decimal :decimal
+     :waymark/money)])
+
+(defn zero
+  "An account's balance before its first posting: nothing, in its unit."
+  [unit]
+  (case unit
+    :count 0
+    :decimal 0M
+    (let [m (->Money 0M (second unit))]
+      (or (round m nil) m))))
+
+(defn opening-balances
+  "What a row of a kind with these accounts is born holding: each at zero."
+  [accounts]
+  (into {} (map (fn [[n a]] [n (zero (:unit a))])) accounts))
+
+(defn plus
+  "a + b for two balances of one unit: two numbers, or two Money of one
+  currency. Money never meets a bare number or another currency."
+  [a b]
+  (cond
+    (and (money? a) (money? b))
+    (if-some [why (mixed-currency a b)]
+      (throw (ex-info why {:a a :b b}))
+      (->Money (.add ^java.math.BigDecimal (:amount a) ^java.math.BigDecimal (:amount b))
+               (:currency a)))
+    (or (money? a) (money? b))
+    (throw (ex-info "money meets a bare number: a balance is of one unit" {:a a :b b}))
+    :else (+ a b)))
+
+(defn balances-moved
+  "The accounts whose balance differs between `before` and `after` —
+  {field [why]}, or nil. No door's hand moves one (§3); postings do."
+  [accounts before after]
+  (not-empty
+   (into {}
+         (keep (fn [n]
+                 (when (not= (get before n) (get after n))
+                   [n [(by-postings n)]])))
+         (keys accounts))))

@@ -124,11 +124,15 @@
     (is (= ["approval_request" "attachment" "definition"
             ;; epic aff24e84, piece 1: the domain a seat names
             "domain"
+            ;; docs/spec-integrations.md § 4: one call an effect door asked for
+            "effect_call"
             ;; demo scorecard: one measured rule of a good demo film
             "film_rule"
             "grant" "held_call"
             ;; docs/spec-integrations.md § 2: an outside system as a principal
             "integration"
+            ;; § 3: and one receipt per event its receiver kept
+            "integration_event"
             "invitation" "job" "judgment" "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan"

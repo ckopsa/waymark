@@ -5,6 +5,7 @@
   nothing reads, and the cracks audit names a deadline nobody hears."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.checks-assembly :as ca]
             [waymark10.resource :as r]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.live-cracks :as live])
@@ -94,6 +95,16 @@
                {:until '(frobnicate (data :due_on))}]]
     (is (= :expected-age (refused-by (assoc base :expected-age {:open age})))
         (pr-str age))))
+
+(deftest an-age-on-the-calendar-is-a-calendar-reader
+  (let [readers #(ca/calendar-readers
+                  {:kinds {:thing (load-quietly (assoc base :expected-age {:open %}))}})]
+    (testing "business days and a date are counted on the default calendar"
+      (is (= ["thing open :expected-age"] (readers {:business-days 2})))
+      (is (= ["thing open :expected-age"]
+             (readers {:until '(+ (data :due_on) (days 15))}))))
+    (testing "seconds need no calendar"
+      (is (= [] (readers 86400))))))
 
 (defn- date-unread [m]
   (filterv #(str/starts-with? % "[date-unread]")

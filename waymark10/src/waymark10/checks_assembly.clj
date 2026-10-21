@@ -860,8 +860,11 @@
   "The laws of `reg` that read the work calendar: `kind door guard` for
   each guard whose tree asks (today), business-days, working? or
   another calendar reader, `kind fact` for each derived fact that does
-  or names :today in :over — what [business-days-no-calendar] names at
-  boot (waymark10.server.work-calendar/check-default!)."
+  or names :today in :over, and `kind state :expected-age` for each age
+  in `{:business-days n}` or `{:until form}` — live-cracks counts those
+  on the default calendar, and with none it ages nothing. What
+  [business-days-no-calendar] names at boot
+  (waymark10.server.engine/ensure-default-calendar!)."
   [reg]
   (into []
         (mapcat (fn [[kind r]]
@@ -872,7 +875,12 @@
                    (for [[fact d] (sort-by key (:derived r))
                          :when (or (some #{:today} (:over d))
                                    (some-> (:expr d) expr/info :uses-calendar))]
-                     (str (name kind) " " (name fact))))))
+                     (str (name kind) " " (name fact)))
+                   (for [[state age] (sort-by (comp str key) (:expected-age r))
+                         :when (and (map? age)
+                                    (or (contains? age :business-days)
+                                        (contains? age :until)))]
+                     (str (name kind) " " (name state) " :expected-age")))))
         (sort-by key (:kinds reg))))
 
 ;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────

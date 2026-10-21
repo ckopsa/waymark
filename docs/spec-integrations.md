@@ -413,8 +413,10 @@ app moves until step 12. The repository is named on each step.
    `idempotent` field on a powers entry (`mcp_servers.clj`). Test: each row
    of §4's table.
 7. **Engine — `:compensate` and `:unwinds`.** The `undo:` key, `:when`,
-   newest first, a failed compensation held. Test: refund voids an
-   unshipped label and not a shipped one.
+   newest first, a failed compensation held; the undo a door or a power
+   with its input (`<effect>_undo`, failing through `<effect>_undo_failed`).
+   Test: refund voids an unshipped label and not a shipped one, and a
+   power undo adds that call.
 8. **Engine — scenario `:events` and `:effects`.** `offline-ctx` serves
    both; an effect law without a fake is refused.
 9. **ckopsa/waymark-doors (clone) — the wall records effects.**

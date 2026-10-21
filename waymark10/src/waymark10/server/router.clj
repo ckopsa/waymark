@@ -546,6 +546,37 @@
     (assoc env "waiting_on" (p/wire-value w))
     env))
 
+(defn- with-effects
+  "A row's envelope with the calls its effect doors still wait on
+  (docs/spec-integrations.md § 7): `meta.effects`, one
+  {power, state, since} per `pending` effect_call that names this row,
+  so a reader does not take `label_asked` for stuck. It names the
+  power alone, never the call's input or answer. An engine with no
+  effect_call kind, an effect_call itself, and a row with no pending
+  call leave the envelope as it was. It rides the row READ alone, as
+  `waiting_on` does: an action's answer must replay byte for byte."
+  [eng rdef row env]
+  (let [crd (get (inv/resources eng) :effect_call)
+        st (:storage eng)
+        pending (when (and crd (not= :effect_call (:kind rdef)))
+                  (store/with-tx st
+                    (fn [tx]
+                      (store/query-rows st tx :effect_call
+                                        {:target_kind (name (:kind rdef))
+                                         :target (str (:id row))
+                                         :state :pending}
+                                        {:limit 20}))))]
+    (if (seq pending)
+      (assoc-in env ["meta" "effects"]
+                (p/wire-value
+                 (mapv (fn [raw]
+                         (let [c (inv/decode-row crd raw)]
+                           {:power (get-in c [:data :power])
+                            :state (name (:state c))
+                            :since (some-> (:created-at c) str)}))
+                       pending)))
+      env)))
+
 (defn envelope-response
   "The one envelope answer: rendered through the shared ctx-opts, sent
   as waymark+json with its ETag. A module's route that answers with a
@@ -625,6 +656,9 @@
                     (:judged result) (assoc :judged (:judged result))
                     (:awaiting result) (assoc :awaiting (:awaiting result))
                     (:preview result) (assoc :preview (:preview result))
+                    ;; an effect door's rehearsal says the call it
+                    ;; would add (docs/spec-integrations.md § 7)
+                    (:effects result) (assoc :effects (:effects result))
                     (:verdicts result)
                     (assoc :verdicts (mapv p/prune (:verdicts result)))))
                  media-type nil))
@@ -1341,7 +1375,8 @@
                              opts
                              (embed-overrides req)))
         env (cond->> env
-              (not= :summary depth) (with-waiting-on eng rdef row))]
+              (not= :summary depth) (with-waiting-on eng rdef row)
+              true (with-effects eng rdef row))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
                    {"ETag" (get-in env ["meta" "etag"])})))

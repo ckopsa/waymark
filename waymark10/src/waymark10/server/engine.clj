@@ -75,6 +75,7 @@
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -236,6 +237,15 @@
                                           (str ":rounding is :half-even or :half-up; got "
                                                (pr-str (:rounding opts)))
                                           {:check :rounding})))
+                    ;; the house's accounts (docs/spec-ledger-money.md
+                    ;; §3): money no product or order owns, addressed
+                    ;; [:house name]; a malformed one refuses the boot
+                    :house-accounts (let [ha (or (:house-accounts opts) {})]
+                                      (when-some [p (first (money/account-problems
+                                                            ":house-accounts" ha))]
+                                        (throw (t/definition-error
+                                                p {:check :house-accounts})))
+                                      ha)
                     ;; the engine's own name: the :name option, else
                     ;; WAYMARK_ENGINE_NAME, else "waymark". The
                     ;; well-known document answers it and a walk's
@@ -371,22 +381,32 @@
   [eng]
   (router/handler eng (modules/route-sets eng (:modules eng))))
 
-(defn- check-default-calendar!
-  "[business-days-no-calendar] (docs/spec-calendar-time.md §7), at boot:
-  when a law reads the house's calendar — (today), business-days,
+(defn ensure-default-calendar!
+  "[business-days-no-calendar] (docs/spec-calendar-time.md §3, §7), at
+  boot: when a law reads the house's calendar — (today), business-days,
   working? or another calendar reader, or :today in a fact's :over —
-  and the engine has no default work_calendar, throw, naming the laws."
+  and the engine has no default work_calendar, make the house's default
+  (Monday to Friday, the house zone, no holidays) and say so, naming the
+  laws. A default the org's seed made is kept, and a second boot makes
+  none. The finding never stops a boot: the check does not fail on it
+  either."
   [eng]
   (when-some [readers (seq (checks-assembly/calendar-readers
                             {:kinds (inv/resources eng)}))]
     (when-some [calendar-of (:calendar (inv/render-hooks eng))]
       (when (nil? (calendar-of))
-        (throw (t/definition-error
-                (str "[business-days-no-calendar] " (str/join ", " readers)
-                     " read the house's calendar, and this engine has no default "
-                     "work_calendar — create one: which days does the house "
-                     "work, and in which zone?")
-                {:check :business-days-no-calendar}))))))
+        (binding [*out* *err*]
+          (try
+            (inv/create! eng work-calendar/kind (work-calendar/house-default)
+                         {:principal work-calendar/seed-actor})
+            (println (str "[business-days-no-calendar] " (str/join ", " readers)
+                          " read the house's calendar, and this engine had no default "
+                          "work_calendar — made one, Monday to Friday in "
+                          (work-calendar/house-zone) " with no holidays: restate it, "
+                          "or add the house's holidays"))
+            (catch Exception e
+              (println (str "waymark10 work calendar: seed of the default failed — "
+                            (ex-message e))))))))))
 
 (defn start-runtime!
   "Start the engine's running surfaces into its :runtime atom, and
@@ -410,8 +430,8 @@
   alone. It is a seed and no running surface, so it is no hook."
   [eng]
   (when-some [rt (:runtime eng)]
-    ;; a law that reads the house's calendar needs one (calendar spec §7)
-    (check-default-calendar! eng)
+    ;; a law that reads the house's calendar gets the default (calendar spec §3)
+    (ensure-default-calendar! eng)
     (film-rules/ensure-seed-rules! eng)
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 

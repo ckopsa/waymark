@@ -171,7 +171,8 @@ async function render() {
   const {ok, body} = await api(href);
   let hints = {};
   if (ok && body && body.kind)
-    hints = await kindSchema(String(body.kind).replace(/_collection$/, ""));
+    hints = await kindSchema(body.kind === "as_of" ? String(body.data?.kind)
+                             : String(body.kind).replace(/_collection$/, ""));
   if (seq !== renderSeq) return;
   clearLiveTimers();
   view.textContent = "";
@@ -194,6 +195,7 @@ async function render() {
      an app's own unrelated "dashboard" kind keeps its kv table */
   else if (body.kind === "dashboard" && ((body.links || {}).slots || {}).embedded)
     renderDashboard(view, body);
+  else if (body.kind === "as_of") renderAsOf(view, body, hints);
   else renderResource(view, body, hints);
 }
 
