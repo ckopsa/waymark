@@ -207,6 +207,12 @@ instant on the take's run (`take-run`). `check` refuses any other
 {"say": ["Tuesday. ", {"$day": {"window": "shot", "domain": "acme"}}]}
 ```
 
+In place of `since` and `until`, a `$rows` hole may say
+`"window": "take"`: it reads the rows whose `field` falls since the take
+began, up to the moment the performer fills it, the instant the take
+began kept on the take's run. `check` refuses any other `window` on it,
+and a `window` beside a `since` or an `until`.
+
 The performer has the engine fill a say over the wire:
 `POST /api/-/scenes/say` with `{"say": <the shot's say, as the scene
 holds it>, "take": <a string the performer names the take by>}` answers
@@ -228,7 +234,9 @@ seats day by day, and separates the days with `clock_shift` and
 is born the day it boots, so a dated `$day` would put the whole week on
 day 1; the caption's `{"window": "shot"}` reads instead what the seats
 did since the last caption. factorykit's `scenes/first-week.edn` does
-so; its weekday words are labels.
+so; its weekday words are labels. Its closing's `$rows` holes say
+`{"window": "take"}` for the same reason: dated ones would read the
+week the audit rendered, and a take played after it would count nothing.
 
 ## `wearing`
 
