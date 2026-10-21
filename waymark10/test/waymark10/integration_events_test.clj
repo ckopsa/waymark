@@ -233,7 +233,15 @@
       (job! eng "pi_2")
       (is (= :ambiguous (:state (applied! eng (paid "evt_4" "pi_2"))))))
     (testing "no entry names the type"
-      (is (= :ignored (:state (applied! eng "{\"id\":\"evt_5\",\"type\":\"charge.refunded\"}")))))))
+      (let [ignored (applied! eng "{\"id\":\"evt_5\",\"type\":\"charge.refunded\"}")
+            rid (str (:id ignored))]
+        (is (= :ignored (:state ignored)))
+        (testing "and it is kept 30 days, then purged"
+          (is (zero? (integrations/purge-ignored! eng)))
+          (is (some? (row-of eng :integration_event rid)))
+          (is (= 1 (integrations/purge-ignored!
+                    eng (.plus (java.time.Instant/now) (java.time.Duration/ofDays 31)))))
+          (is (nil? (row-of eng :integration_event rid))))))))
 
 (deftest retry-applies-under-the-law-of-now-and-dismiss-lets-go
   (let [eng (job-engine)
