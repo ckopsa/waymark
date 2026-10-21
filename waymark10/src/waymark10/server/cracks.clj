@@ -50,6 +50,12 @@
                  8186d41a); where the kind declares another kind's
                  door out of the state, that door is the one that
                  moves the work
+  deadline_untold
+                 the kind declares an `:expected-age {:until …}` on a
+                 state that is no_exit or unwoken here, and nothing
+                 tells a person a row arrived there, so the aged
+                 ticket its deadline files reaches nobody
+                 (docs/spec-calendar-time.md §7)
 
   Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
   which rows a seat is handed, not what brings it, so a walk alone
@@ -88,6 +94,7 @@
   back (`machine/ways-back`), which is a correction and nobody's work."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
+            [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.machine :as machine]
@@ -500,6 +507,31 @@
             seat-rows)
       (conj "inbox_cue"))))
 
+(defn- deadline-cracks
+  "deadline_untold, for one kind: an `:expected-age {:until …}` on a
+  state whose own crack in `states` (this kind's `state-cracks`) is
+  no_exit or unwoken, and that nothing tells a person of (`tellers`)."
+  [rdef seat-rows world states]
+  (let [kind (text (:kind rdef))
+        untold (into #{}
+                     (comp (filter #(contains? #{"no_exit" "unwoken"} (:crack %)))
+                           (map :state))
+                     states)]
+    (for [[state age] (sort-by (comp text key) (:expected-age rdef))
+          :when (and (map? age) (contains? age :until))
+          :when (contains? untold (text state))
+          :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))
+          :let [fields (vec (sort (map name (:data (expr/info (:until age))))))
+                named (str/join ", " fields)]]
+      {:kind kind :state (text state) :crack "deadline_untold"
+       :fields fields
+       :what_would_close_it
+       (str "A row of " kind " in " (text state) " past its deadline (" named
+            ") is filed as aged, and no seat is woken to " (text state)
+            " to hear it. Wake a seat on that state, or add a notice rule on "
+            kind " whose `when` names to_state " (text state) ".")
+       :question (str "Who should hear when a " kind " is past " named "?")})))
+
 (defn- person-cracks
   "silent_person_exit, for one kind: a state every exit from which
   waits on a person, with nothing that tells the person. A state the
@@ -824,13 +856,15 @@
          seat-rows (vec seat-rows)]
      (into []
            (mapcat (fn [rdef]
-                     (concat (state-cracks rdef seat-rows by-kind
-                                           (get (:rows world) (:kind rdef)))
+                     (let [states (vec (state-cracks rdef seat-rows by-kind
+                                                     (get (:rows world) (:kind rdef))))]
+                       (concat states
                              (person-cracks rdef seat-rows world)
                              (remedy-cracks rdef seat-rows)
                              (wait-cracks rdef seat-rows by-kind)
                              (value-cracks rdef seat-rows by-kind
-                                           (get (:rows world) (:kind rdef))))))
+                                           (get (:rows world) (:kind rdef)))
+                             (deadline-cracks rdef seat-rows world states)))))
            (sort-by (comp text :kind) rdefs)))))
 
 ;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
@@ -878,7 +912,7 @@
   "The cracks `audit` grades by the notice rules, the subscriptions and
   the rows. A seat door's guard reads none of them, so it does not
   judge these."
-  #{"silent_person_exit" "unwalked_value"})
+  #{"silent_person_exit" "unwalked_value" "deadline_untold"})
 
 (defn opened
   "`added`, as a seat door's guard reads it: over the declarations and

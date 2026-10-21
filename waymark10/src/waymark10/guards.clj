@@ -147,12 +147,26 @@
   (cond-> (into (vec (vals (:input r))) (filter seq?) (:fields r))
     (:id r) (conj (:id r))))
 
-(defn evidence-names
-  "The evidence names a guard declares its refusal returns — and the
-  binder of each exists/none/count-rows it asks, which binds its match."
+(defn- evidence-slots
+  "The `next-free`s of a guard's :evidence map, canonical {name
+  {:next-free {:from side :to side :resource side :of kind :calendar
+  ref} :pred tree}} (docs/spec-calendar-time.md §5): each bound to the
+  next window as long as the refused one in which its pred — the
+  guard's tree over the moved window — holds, its end as name_ends.
+  Evidence-only: asked when the guard refuses, never in a verdict."
   [g]
   (let [e (:evidence g)]
-    (into (set (if (map? e) (keys e) e)) (keys (:binders g)))))
+    (clojure.core/when (map? e) (filter (comp :next-free val) e))))
+
+(defn evidence-names
+  "The evidence names a guard declares its refusal returns — and the
+  binder of each exists/none/count-rows it asks, which binds its match,
+  and the end of each next-free's slot."
+  [g]
+  (let [e (:evidence g)]
+    (into (set (if (map? e) (keys e) e))
+          (concat (keys (:binders g))
+                  (map #(keyword (str (clojure.core/name (key %)) "_ends")) (evidence-slots g))))))
 
 (defn- bound-value [[op k] row inp evidence]
   (case op
@@ -291,7 +305,9 @@
       (map? (:evidence g))
       (update :evidence (fn [e]
                           (into {}
-                                (map (fn [[k v]] [k (if (fn? v) v (expr/normalize-first v))]))
+                                (map (fn [[k v]] [k (cond (fn? v) v
+                                                          (:next-free v) (update v :pred expr/normalize)
+                                                          :else (expr/normalize-first v))]))
                                 e))))))
 
 (defn leaf? [g] (clojure.core/and (nil? (:all g)) (nil? (:any g))))
@@ -651,7 +667,7 @@
   Evidence-only: asked when the guard refuses, never in a verdict."
   [g]
   (let [e (:evidence g)]
-    (when (map? e) (filter (comp map? val) e))))
+    (when (map? e) (filter #(clojure.core/and (map? (val %)) (nil? (:next-free (val %)))) e))))
 
 (defn- row-face
   "A row as a `first`'s pred reads its candidate: (get c :id),
@@ -709,6 +725,70 @@
        {}
        (concat (:binders g) (evidence-firsts g))))))
 
+(def ^:private ^DateTimeFormatter slot-weekday (DateTimeFormatter/ofPattern "EEEE" Locale/ENGLISH))
+(def ^:private ^DateTimeFormatter slot-clock (DateTimeFormatter/ofPattern "H:mm"))
+(def ^:private ^DateTimeFormatter holiday-date
+  (DateTimeFormatter/ofPattern "EEEE d MMMM" Locale/ENGLISH))
+
+(defn- slot-binders
+  "The binders a guard's next-frees bind in its sentence: each one's
+  name — {slot.day}, {slot.time}, the resource's own {slot.field} —
+  and holiday, the refused window's day when it is one ({holiday.day},
+  {holiday.name})."
+  [g]
+  (clojure.core/when-some [s (seq (evidence-slots g))]
+    (cons "holiday" (map (comp clojure.core/name key) s))))
+
+(defn- moved
+  "[row inp] with one window side, (input :f) or (data :f), set to `v`."
+  [[row inp] [op k] v]
+  (if (= 'input op) [row (assoc inp k v)] [(assoc-in row [:data k] v) inp]))
+
+(defn- slot-evidence
+  "Each next-free of a refusing guard, bound (evidence-slots): {:evidence
+  {name start, name_ends end}} for a remedy, and {:vars {\"name.day\"
+  \"Tuesday\" \"name.time\" \"8:00\" …}} for the sentence, the resource's
+  own fields beside them, a secret one rendered empty — and the
+  holiday's vars when the refused day is one. No calendar hook, or no
+  free window in 30 business days: no slot is bound, and the sentence
+  that reads it goes."
+  [g row inp ctx]
+  (let [scope (expr-scope row inp ctx)]
+    (reduce
+     (fn [acc [b {:keys [next-free pred]}]]
+       (let [{:keys [from to calendar resource of]} next-free
+             free? (fn [s e]
+                     (let [[row' inp'] (-> [row (clojure.core/or inp {})]
+                                           (moved from (str s))
+                                           (moved to (str e)))]
+                       (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))
+             {:keys [zone day holiday] slot :from end :to} (expr/next-free scope from to calendar free?)
+             at (fn [k] (str (clojure.core/name b) "." (clojure.core/name k)))]
+         (cond-> acc
+           (string? holiday)
+           (update :vars merge {"holiday.id" (str day)
+                                "holiday.name" holiday
+                                "holiday.day" (.format ^DateTimeFormatter holiday-date ^LocalDate day)})
+           (some? slot)
+           (-> (update :evidence merge {b (str slot)
+                                        (keyword (str (clojure.core/name b) "_ends")) (str end)})
+               (update :vars merge
+                       (let [res (clojure.core/when (some? resource) (expr/evaluate resource scope))
+                             hit (clojure.core/when-some [rd (:read ctx)]
+                                   (clojure.core/when (clojure.core/and of (string? res)) (rd of res)))
+                             hidden (clojure.core/or (clojure.core/when-some [rdef-of (:rdef-of ctx)]
+                                                       (some-> (rdef-of of) :schema schema/secret-fields))
+                                                     #{})
+                             z (.atZone ^Instant slot ^ZoneId zone)]
+                         (merge (into {} (map (fn [[k v]] [(at k) (if (hidden k) "" v)])) (:data hit))
+                                {(at :id) (str slot)
+                                 (at :starts_at) (str slot)
+                                 (at :ends_at) (str end)
+                                 (at :day) (.format ^DateTimeFormatter slot-weekday z)
+                                 (at :time) (.format ^DateTimeFormatter slot-clock z)})))))))
+     {}
+     (evidence-slots g))))
+
 (defn- with-evidence
   "A denying leaf's evidence: the verdict's own, else what the guard's
   :evidence fns find over (row, ctx), each nil left out — and, for a
@@ -727,8 +807,10 @@
             (if (seq ev) [(assoc v :evidence ev) g] res))
           res)]
     (if (clojure.core/and (t/deny? v)
-                          (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))))
-      (let [{:keys [evidence vars]} (binder-evidence g row inp ctx)
+                          (clojure.core/or (seq (:binders g)) (seq (evidence-firsts g))
+                                           (seq (evidence-slots g))))
+      (let [{:keys [evidence vars]} (merge-with merge (binder-evidence g row inp ctx)
+                                                (slot-evidence g row inp ctx))
             clock (delay (sentence-clock row inp ctx))]
         [(cond-> v
            (seq evidence) (update :evidence merge evidence)
@@ -841,7 +923,7 @@
   (let [garnish (clojure.core/when (clojure.core/and (:vars-fn g) (some? row))
                   (try ((:vars-fn g) row) (catch Exception _ nil)))
         vars (merge garnish (:vars deny))
-        binders (into #{} (map (comp clojure.core/name key))
+        binders (into (set (slot-binders g)) (map (comp clojure.core/name key))
                       (concat (:binders g) (evidence-firsts g)))]
     (if (empty? binders)
       (format-map (:explain g) vars)
