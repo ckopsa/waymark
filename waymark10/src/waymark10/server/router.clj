@@ -625,6 +625,9 @@
                     (:judged result) (assoc :judged (:judged result))
                     (:awaiting result) (assoc :awaiting (:awaiting result))
                     (:preview result) (assoc :preview (:preview result))
+                    ;; an effect door's rehearsal says the call it
+                    ;; would add (docs/spec-integrations.md § 7)
+                    (:effects result) (assoc :effects (:effects result))
                     (:verdicts result)
                     (assoc :verdicts (mapv p/prune (:verdicts result)))))
                  media-type nil))

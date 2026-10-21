@@ -30,6 +30,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.declaration :as declaration]
+            [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
@@ -2056,7 +2057,10 @@
   ;; process before decision: the two are refused together (one
   ;; machine per kind), and the process's projected doors must exist
   ;; before :flow can be told it collides with them
-  (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields)
+  ;; effects last: an effect door's two hidden doors are woven from the
+  ;; states and doors the spellings above left
+  (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields
+                 effect/weave)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]

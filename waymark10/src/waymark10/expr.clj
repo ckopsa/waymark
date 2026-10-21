@@ -72,6 +72,11 @@
   `:on-event`'s :match and :input (docs/spec-integrations.md § 3). It
   reads the scope's :event, and is unknown without one.
 
+  result: the value at one path in an effect call's answer, or nil
+  where it has none — (result \"object_id\") — earned by `:effect`'s
+  :writes (docs/spec-integrations.md § 4). It reads the scope's
+  :result, and is unknown without one.
+
   str: its parts joined into one string, in order — earned by
   factory10's its-change-is-under-review, which finds a change by its
   stored born_from, (= (str \"ticket:\" (self))). An unknown part is
@@ -115,7 +120,7 @@
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso
      every some count sum
-     follow did me self event
+     follow did me self event result
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
@@ -222,6 +227,11 @@
           (if (and (pos? n) (every? string? args))
             problems
             (conj problems "(event \"a\" …) takes the path of one value in the event's body, as strings"))
+
+          result
+          (if (and (pos? n) (every? string? args))
+            problems
+            (conj problems "(result \"a\" …) takes the path of one value in the call's answer, as strings"))
 
           get
           (if (and (= n 2) (keyword? (second args)))
@@ -1110,6 +1120,17 @@
                                 (clojure.core/get m k)))))
                         (:event scope) args)
                 unknown)
+        ;; a value in an effect call's answer, by its path; no answer
+        ;; to read is unknown
+        result (if (contains? scope :result)
+                 (reduce (fn [m k]
+                           (when (map? m)
+                             (let [kw (clojure.core/keyword k)]
+                               (if (contains? m kw)
+                                 (clojure.core/get m kw)
+                                 (clojure.core/get m k)))))
+                         (:result scope) args)
+                 unknown)
 
         ;; true when a face of the principal acting now is a face of
         ;; any logged actor of one of the doors; no log to ask is unknown
