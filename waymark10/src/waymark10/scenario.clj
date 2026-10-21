@@ -70,6 +70,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
+            [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
@@ -85,7 +86,7 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :row :input :as :at :calendar :given :history :history-mode :expect])
+  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :given :history :history-mode :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -330,6 +331,30 @@
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
     expect))
 
+;; a recurrence scenario's verdict (docs/spec-calendar-time.md §6): the
+;; occurrence list's first and last dates, its length, or the whole list
+(def occurrences-keys [:first :last :count :dates])
+
+(defn- iso-date? [v]
+  (and (string? v)
+       (some? (try (LocalDate/parse ^String v) (catch DateTimeParseException _ nil)))))
+
+(defn- occurrences-expect! [sname expect]
+  (when-not (and (map? expect) (= [:occurrences] (vec (keys expect))) (map? (:occurrences expect)))
+    (err sname "a recurrence scenario expects its list: :expect {:occurrences {:first … :last … :count …}}"))
+  (let [o (:occurrences expect)]
+    (closed! sname "occurrences" occurrences-keys o)
+    (when (empty? o)
+      (err sname ":expect :occurrences names at least one of :first, :last, :count and :dates"))
+    (doseq [k [:first :last]
+            :when (and (contains? o k) (not (iso-date? (get o k))))]
+      (err sname (str ":occurrences " k " is a date, \"2027-04-06\"")))
+    (when (and (contains? o :count) (not (nat-int? (:count o))))
+      (err sname ":occurrences :count is how many dates the list holds"))
+    (when (and (contains? o :dates) (not (and (vector? (:dates o)) (every? iso-date? (:dates o)))))
+      (err sname ":occurrences :dates is the whole list, a vector of dates"))
+    expect))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -349,8 +374,13 @@
   (when-not (map? m) (err sname "a scenario is a map of the closed scenario keys"))
   (closed! sname "scenario" scenario-keys m)
   (when-not (keyword? (:kind m)) (err sname ":kind names the resource this scenario judges"))
-  (when-not (keyword? (:attempt m))
-    (err sname ":attempt names the action, or the create door by its own name"))
+  (if (some? (:recurs m))
+    (do (when-not (keyword? (:recurs m))
+          (err sname ":recurs names the rule whose dates this scenario lists, by its :name"))
+        (when (some? (:attempt m))
+          (err sname "a recurrence scenario lists a rule's dates and attempts no door — drop :attempt")))
+    (when-not (keyword? (:attempt m))
+      (err sname ":attempt names the action, or the create door by its own name")))
   (row! sname ":row" row-keys (:row m))
   (when (some? (:given m))
     (when-not (vector? (:given m))
@@ -403,7 +433,9 @@
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
   (calendar! sname (:calendar m))
-  (expect! sname (:expect m))
+  (if (some? (:recurs m))
+    (occurrences-expect! sname (:expect m))
+    (expect! sname (:expect m)))
   (cond-> (assoc m
                  :name sname
                  :sentence sentence
@@ -516,10 +548,13 @@
   related rows — a :given row nothing declarative reads is a row to
   stage for real."
   [rdef s]
-  (let [{:keys [guards missing]} (attempted rdef s)]
-    (boolean (and (nil? missing)
-                  (empty? (mapcat unserved-reads guards))
-                  (or (empty? (:given s)) (some reads-related? guards))))))
+  ;; a recurrence scenario lists a pure function's dates: no door, no
+  ;; reads, always here (docs/spec-calendar-time.md §6)
+  (or (some? (:recurs s))
+      (let [{:keys [guards missing]} (attempted rdef s)]
+        (boolean (and (nil? missing)
+                      (empty? (mapcat unserved-reads guards))
+                      (or (empty? (:given s)) (some reads-related? guards)))))))
 
 (defn deferral-reason
   "Why a scenario waits for the suite, in the author's own terms —
@@ -787,11 +822,8 @@
          (str/replace (str/trim (:sentence s)) #"\s+" " ")
          " — " c)))
 
-(defn judge
-  "Judge one CHECK-TIER scenario against its declaration, with no
-  storage of any kind → a vector of violation strings (empty when the
-  law kept its promise). The tier is the caller's question; this
-  judges what it is handed."
+(defn- judge-door
+  "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
   (or (structural rdef s)
       (let [s (fill-run s check-run)
@@ -824,6 +856,41 @@
                                         :remedies []})])))
           (vec (remove nil?
                        [(violation s (verdict guards row (:input s) ctx))]))))))
+
+(defn- judge-recurrence
+  "One recurrence scenario judged: the rule's occurrences for its :row
+  under its :calendar, against :expect :occurrences — sentence first,
+  the dates that differ after."
+  [rdef s]
+  (let [head (str (name (:name s)) " [" (name (:kind s)) "/recurs " (name (:recurs s)) "] ")
+        rule (some #(when (= (:recurs s) (:name %)) %) (:recurs rdef))]
+    (if (nil? rule)
+      [(str head ":recurs names " (:recurs s) ", which is no rule of " (name (:kind s))
+            " — its rules are " (pr-str (vec (sort (map :name (:recurs rdef))))))]
+      (let [got (recurs/occurrences rule (get-in s [:row :data] {})
+                                    (some-> (:calendar s) calendar-answer))
+            seen {:first (some-> (first got) str)
+                  :last (some-> (peek got) str)
+                  :count (count got)
+                  :dates (mapv str got)}
+            want (get-in s [:expect :occurrences])
+            off (for [k occurrences-keys
+                      :when (and (contains? want k) (not= (get want k) (get seen k)))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (if (empty? off)
+          []
+          [(str head (str/replace (str/trim (:sentence s)) #"\s+" " ")
+                " — the occurrences answer " (str/join "; " off))])))))
+
+(defn judge
+  "Judge one CHECK-TIER scenario against its declaration, with no
+  storage of any kind → a vector of violation strings (empty when the
+  law kept its promise). The tier is the caller's question; this
+  judges what it is handed."
+  [rdef s]
+  (if (some? (:recurs s))
+    (judge-recurrence rdef s)
+    (judge-door rdef s)))
 
 ;; ── the report both callers print ───────────────────────────────────
 
