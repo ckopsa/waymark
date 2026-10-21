@@ -62,7 +62,12 @@
    ;; {:none "why"}: the door's :decided sentence names a person's tap
    ;; as narrative, and the AI may act (ticket 7315ae72). Read by the
    ;; org audit and the law page; prose, never law, like :decided
-   :decided-held])
+   :decided-held
+   ;; the entries this door posts (docs/spec-ledger-money.md §4),
+   ;; normalized at the def site by waymark10.posts, and the posting
+   ;; doors an :undo reverses — stamped by verify-undo-pointers from
+   ;; the pointers it strips, so a declaration normalized twice keeps it
+   :posts :reverses-posts])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
