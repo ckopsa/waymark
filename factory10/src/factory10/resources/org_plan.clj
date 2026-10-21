@@ -1166,6 +1166,25 @@
                           :help "A field name, and the value it must equal: state, or a field the kind filters by."}}
      [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]]])
 
+(defn- log-workarounds-door
+  "The log_workarounds door as a self-loop on `state`. A run learns
+  workarounds after drafting too, so the door is spelled once per state
+  it stays in (a v10 action declares one :to). It only appends to
+  `workarounds`: no law, no head, so no refilm, findings run or void
+  (ticket beb733af)."
+  [state label order]
+  {:from #{state} :to state
+   :guards [the-name-is-snake-case]
+   :handler log-the-workarounds
+   :input [:map
+           [:entries {:x-display {:label "The workarounds"
+                                  :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
+            [:vector {:min 1 :max 50} workaround-schema]]]
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
+   :display {:label label :order order
+             :description "Log the workarounds onboarding had to make"}})
+
 (def ^:private hire-seat-schema
   "The seat a hire plan hires, as factorykit.hire's seed step drafts it
   (M4b): what the engine opens in the org's domain once the hire merges."
@@ -1556,17 +1575,18 @@
                :description "Answer a question the onboarding seat asked"}}
 
     :log_workarounds
-    {:from #{:drafting} :to :drafting
-     :guards [the-name-is-snake-case]
-     :handler log-the-workarounds
-     :input [:map
-             [:entries {:x-display {:label "The workarounds"
-                                    :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
-              [:vector {:min 1 :max 50} workaround-schema]]]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
-     :display {:label "Log workarounds" :order 16
-               :description "Log the workarounds onboarding had to make"}}
+    (log-workarounds-door :drafting "Log workarounds" 16)
+
+    ;; AFTER DRAFTING (ticket beb733af): a run that proposes, films and
+    ;; simulates still logs what it worked around, in the state it is in.
+    :log_workarounds_proposed
+    (log-workarounds-door :proposed "Log workarounds while proposed" 17)
+
+    :log_workarounds_simulated
+    (log-workarounds-door :simulated "Log workarounds while simulated" 18)
+
+    :log_workarounds_going_live
+    (log-workarounds-door :going_live "Log workarounds while going live" 19)
 
     :propose
     {:from #{:drafting} :to :proposed
