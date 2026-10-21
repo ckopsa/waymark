@@ -251,8 +251,9 @@ sentence.
   `:recurs` `:input`.
 - **Occurrences** are a pure function of the rule, the source row's data
   and the calendar. They are listed from `:from`, every `:every`, at each
-  `:on` weekday within the period (or at `:from`'s own weekday). Each one
-  is then moved under `:holidays`, and the list is cut at `:until` and
+  `:on` weekday in the first week of the period (or at `:from`'s own
+  weekday): `:every (weeks 2) :on #{:tue}` is one Tuesday every two
+  weeks, not two. Each one is then moved under `:holidays`, and the list is cut at `:until` and
   `:times`. Pure means testable at the check tier (§6).
 - **Shapes in the ticket:** every 2 weeks from April to October is the
   example above. Two visits a week for six weeks is `:every (weeks 1) :on
@@ -399,7 +400,7 @@ There are two new keys:
   {:kind :contract :recurs :visits
    :row {:state "active" :data {:season_starts_on "2027-04-01" :season_ends_on "2027-10-31"}}
    :calendar {…}
-   :expect {:occurrences {:first "2027-04-06" :last "2027-10-26" :count 15}}}
+   :expect {:occurrences {:first "2027-04-06" :last "2027-10-19" :count 15}}}
   ```
 
 ---

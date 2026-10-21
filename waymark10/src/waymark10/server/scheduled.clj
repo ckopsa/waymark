@@ -69,6 +69,7 @@
             [waymark10.confirm :as confirm]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
+            [waymark10.recurs :as recurs]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
@@ -85,8 +86,8 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
-           (java.time DateTimeException Instant LocalDateTime OffsetDateTime
-                      ZoneId ZoneOffset ZonedDateTime)
+           (java.time DateTimeException Instant LocalDate LocalDateTime LocalTime
+                      OffsetDateTime Period ZoneId ZoneOffset ZonedDateTime)
            (java.time.format DateTimeFormatter)
            (java.time.temporal ChronoUnit)
            (java.util.concurrent CountDownLatch TimeUnit)))
@@ -274,10 +275,14 @@
   (let [who (some-> (get-in ctx [:principal :id]) str not-empty)
         rows (:find ctx)
         limit (long open-limit)]
+    ;; a :recurs rule's own action counts on no scheduler: one per
+    ;; source row and rule bounds them (docs/spec-calendar-time.md §4)
     (if (and who rows
-             (<= limit (count (mapcat #(rows kind {:scheduler who :state %}
-                                             {:limit (inc limit)})
-                                      open-states))))
+             (nil? (get-in ctx [:principal :recurrence]))
+             (<= limit (count (remove #(get-in % [:data :recurrence])
+                                      (mapcat #(rows kind {:scheduler who :state %}
+                                                     {:limit (inc limit)})
+                                              open-states)))))
       (t/deny {:vars {:limit (str limit)}})
       (t/allow))))
 
@@ -660,6 +665,23 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
+(defn series-of
+  "`recurs:<source_id>:<rule>`: one :recurs rule on one source row, and
+  the head of its occurrences' idempotency keys
+  (docs/spec-calendar-time.md §4)."
+  [source-id rule]
+  (str "recurs:" source-id ":" (name rule)))
+
+(defn- run-key
+  "The key a run's call lands under: `scheduled_action:<id>`, or for a
+  :recurs rule's action `recurs:<source_id>:<rule>:<occurs_on>`, so
+  cancelling and re-arming can never make one date twice
+  (docs/spec-calendar-time.md §4, Running it 3)."
+  [id data]
+  (if-some [{:keys [source_id rule occurs_on]} (:recurrence data)]
+    (str (series-of source_id rule) ":" occurs_on)
+    (str "scheduled_action:" id)))
+
 (defn- born
   "The birth stamps, read from the principal and never from the body:
   who scheduled it, who the run runs as, and the id of the grant it
@@ -679,7 +701,10 @@
         snapshot (if-some [tool (tool-of (get-in row [:data :target]))]
                    (power-snapshot tool ctx)
                    (snapshot-of (:data row) ctx))
-        held (hold-met (:data row) ctx)]
+        held (hold-met (:data row) ctx)
+        ;; the arming of a :recurs rule hands its occurrence over on
+        ;; the owner's principal, never in the body (calendar step 8b)
+        recurrence (:recurrence p)]
     (cond-> (update row :data
                     #(cond-> (assoc %
                                     :scheduler (str (:id p))
@@ -691,6 +716,9 @@
                        grant (assoc :grant grant)
                        snapshot (assoc :snapshot snapshot)
                        held (assoc :held_call (str (random-uuid)))
+                       recurrence (assoc :recurrence recurrence
+                                         :recurs_series (series-of (:source_id recurrence)
+                                                                   (:rule recurrence)))
                        (and told (= "all" tell)) (assoc :tell_done told)
                        told (assoc :tell_problem told)))
       held (assoc :state :proposed))))
@@ -997,7 +1025,9 @@
                      (str/join ", " (keep #(some-> (:name %) name) warned)) ".")}
           {:end :land
            :res (attempt eng door data
-                         (assoc opts :idempotency-key (str "scheduled_action:" id)))}))
+                         (cond-> (assoc opts :idempotency-key (run-key id data))
+                           ;; the made row keeps the key it was made under
+                           (:recurrence data) (assoc :recurs-from (run-key id data))))}))
       (catch clojure.lang.ExceptionInfo e
         (if (:waymark10/problem (ex-data e))
           {:end :skip :why (str (call-of door) " was refused: " (said e))}
@@ -1041,17 +1071,165 @@
       (when-not (#{:wrong-state :not-found} (:waymark10/problem (ex-data e)))
         (throw e)))))
 
+;; ── :recurs (docs/spec-calendar-time.md §4, build step 8b) ──────────
+
+(declare quietly warn!)
+
+(defn- calendar-now
+  "The house's default calendar as the :calendar hook answers it, or nil."
+  [eng]
+  (when-some [calendar-of (:calendar (inv/render-hooks eng))]
+    (calendar-of)))
+
+(defn- rule-of [rdef rule-name]
+  (some #(when (= (name rule-name) (name (:name %))) %) (:recurs rdef)))
+
+(defn- going?
+  "Does the source row keep its rule going: there, not ended, and in one
+  of the rule's :while states when it names any."
+  [rdef rule source]
+  (boolean
+   (and source
+        (not (contains? (:terminal rdef) (:state source)))
+        (or (nil? (:while rule)) (contains? (:while rule) (:state source))))))
+
+(defn- recurs-why
+  "Running it 2: a :recurs action reads its rule and its source again at
+  the run. The sentence that skips it — the rule is gone, the row is gone
+  or left its :while states, or the date is no longer an occurrence — or
+  nil."
+  [eng data]
+  (when-some [{:keys [source_kind source_id rule occurs_on]} (:recurrence data)]
+    (let [sk (keyword source_kind)
+          rdef (get (inv/resources eng) sk)
+          r (rule-of rdef rule)
+          source (when r (stored-row eng sk source_id))
+          head (str "Not run: rule " rule " of " source_kind " " source_id)]
+      (cond
+        (nil? r) (str head " is no longer declared.")
+        (nil? source) (str head ": the row is gone.")
+        (not (going? rdef r source))
+        (str head ": the row is " (name (:state source)) ", which keeps no occurrence going.")
+        (not-any? #(= (str occurs_on) (str %))
+                  (recurs/occurrences r (:data source) (calendar-now eng)))
+        (str head ": " occurs_on " is no longer one of its occurrences.")))))
+
+(defn- outstanding
+  "One source row's rule's actions that have not run."
+  [eng series]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) kind)]
+    (store/with-tx st
+      (fn [tx]
+        (mapv #(inv/decode-row rdef %)
+              (store/search-rows st tx kind
+                                 [{:target :state :op :in :values (mapv name open-states)}
+                                  {:target :data :field :recurs_series :op := :value series}]
+                                 {:limit 10}))))))
+
+(defn- next-due
+  "The rule's first occurrence on or after `today`, and after `after`
+  when one is named, that no create has landed under its key yet."
+  [eng rule series data calendar ^LocalDate today ^LocalDate after]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (->> (recurs/occurrences rule data calendar)
+             (remove #(.isBefore ^LocalDate % today))
+             (remove #(and after (not (.isAfter ^LocalDate % after))))
+             (remove #(store/idempotency-lookup st tx (str series ":" %) (:makes rule)))
+             first)))))
+
+(defn- due-at
+  "Running it 1: when the action for occurrence `on` runs — the date less
+  :lead, at the calendar's opening hour (else midnight) in its zone (else
+  UTC), and never sooner than two minutes from now, so the scheduling
+  check's one minute holds."
+  ^Instant [rule data calendar ^LocalDate on ^Instant now]
+  (let [^ZoneId z (or (:zone calendar) ZoneOffset/UTC)
+        lead (recurs/lead-of rule data calendar)
+        ^LocalDate day (if lead (.minus on ^Period lead) on)
+        ^LocalTime opens (or (get-in calendar [:hours :from]) LocalTime/MIDNIGHT)
+        at (.toInstant (ZonedDateTime/of day opens z))
+        soonest (whole-minute (.plusSeconds now 120))]
+    (if (.isBefore at soonest) soonest at)))
+
+(defn- create-verb
+  "The made kind's create door: `create` when it has one, else the first
+  it names."
+  [mrdef]
+  (let [names (:create-action-names mrdef #{:create})]
+    (name (if (contains? names :create) :create (first (sort names))))))
+
+(defn- arm!
+  "Running it 1, 4 and 6: keep exactly one action outstanding for one
+  source row and one of its rules — the next occurrence on or after
+  today (and after `after`, the date whose action just ended) whose key
+  has made no row. An outstanding action for any other date or input is
+  cancelled first, and a source that left its :while states, ended or
+  is gone keeps none. The action runs as the rule's :owner and its
+  scheduling check is that owner's, so an owner who could not make the
+  create is refused here; an owner who is no member arms nothing."
+  [eng rdef source-id rule ^LocalDate after]
+  (let [source (stored-row eng (:kind rdef) source-id)
+        series (series-of source-id (:name rule))
+        open (outstanding eng series)
+        calendar (calendar-now eng)
+        data (:data source)
+        ^Instant now ((:now-fn eng))
+        today (LocalDate/ofInstant now (or (:zone calendar) ZoneOffset/UTC))
+        on (when (going? rdef rule source)
+             (next-due eng rule series data calendar today after))
+        input (when on (recurs/input-of rule data (str source-id) on calendar))
+        kept? (fn [r] (and on
+                           (= (str on) (str (get-in r [:data :recurrence :occurs_on])))
+                           (= input (get-in r [:data :input]))))
+        why (cond
+              (nil? source) "its row is gone"
+              (nil? on) (str "it has no next occurrence while the row is " (name (:state source)))
+              :else (str "its next occurrence is " on))]
+    (doseq [r open :when (not (kept? r))]
+      (inv/invoke! eng kind (str (:id r)) :cancel
+                   {:outcome_why (cut (str "Rule " (name (:name rule)) " moved on: " why ".") 240)}
+                   {:principal engine-actor}))
+    (when (and on (not-any? kept? open))
+      (let [owner (recurs/owner-of rule data calendar)
+            p (when owner (members/principal-for eng owner))]
+        (if (nil? p)
+          (warn! "rule " (name (:name rule)) " of " (name (:kind rdef)) " " source-id
+                 " arms nothing: its owner " (pr-str owner) " is no member here.")
+          (inv/create! eng kind
+                       {:target {:kind (name (:makes rule))
+                                 :action (create-verb (get (inv/resources eng) (:makes rule)))}
+                        :input input
+                        :run_at (str (due-at rule data calendar on now))
+                        :zone (str (or (:zone calendar) "UTC"))
+                        :tell "problems"}
+                       {:principal (assoc p :recurrence
+                                          {:source_kind (name (:kind rdef))
+                                           :source_id (str source-id)
+                                           :rule (name (:name rule))
+                                           :occurs_on (str on)})}))))))
+
+(defn- arm-next!
+  "Running it 4: the action for one occurrence ended, so its rule arms
+  the occurrence after that date."
+  [eng {:keys [source_kind source_id rule occurs_on]}]
+  (let [rdef (get (inv/resources eng) (keyword source_kind))]
+    (when-some [r (rule-of rdef rule)]
+      (arm! eng rdef source_id r (LocalDate/parse (str occurs_on))))))
+
 (defn- landed
   "What the call wrote, when it already landed under the row's derived
-  key: `{kind, action, id, state}` from the stored answer, or nil. A
-  row a stopped engine left `running` may have made its call, and the
-  validity rule would then read the row the call itself moved, so the
-  run asks here before it reads that rule (R-5.4)."
-  [eng id {:keys [rdef kind action] target :id}]
+  key `k` (`run-key`): `{kind, action, id, state}` from the stored
+  answer, or nil. A row a stopped engine left `running` may have made
+  its call, and the validity rule would then read the row the call
+  itself moved, so the run asks here before it reads that rule (R-5.4)."
+  [eng k {:keys [rdef kind action] target :id}]
   (let [st (:storage eng)
         hit (store/with-tx st
               (fn [tx]
-                (store/idempotency-lookup st tx (str "scheduled_action:" id) kind)))
+                (store/idempotency-lookup st tx k kind)))
         did (some-> (:action hit) name)
         births (into #{} (map name) (:create-action-names rdef))]
     (when (and did (or (= did (name action))
@@ -1092,7 +1270,7 @@
     (when (= :running (:state row))
       (let [data (:data row)
             door (door-of (:target data) (registry-ctx eng))
-            before (when-not (:problem door) (landed eng id door))
+            before (when-not (:problem door) (landed eng (run-key id data) door))
             {:keys [principal why]} (when-not before (runner-of eng row))
             leash (when (and principal (nil? (:problem door)))
                     (leash-of eng data principal))
@@ -1100,6 +1278,7 @@
                   (or why
                       (some->> (:problem door) (str "The door is gone: "))
                       (:why leash)
+                      (recurs-why eng data)
                       (stale eng door data (:sight leash))))
             {:keys [end why res]} (cond
                                     before {:end :land}
@@ -1108,9 +1287,14 @@
                                                      (:grant leash)))]
         (when (= :land end)
           (walks/record-own! eng principal (:sight leash) res))
-        (end! eng id end
-              (or why (ran-words door data))
-              (or before (when (= :land end) (outcome-of eng door res))))))))
+        (let [ended (end! eng id end
+                          (or why (ran-words door data))
+                          (or before (when (= :land end) (outcome-of eng door res))))]
+          ;; Running it 4: the occurrence is over either way, so its
+          ;; rule arms the one after it
+          (when-some [rec (:recurrence data)]
+            (quietly id #(arm-next! eng rec)))
+          ended)))))
 
 (def ^:private maybe-sent "It may or may not have been sent.")
 
@@ -1459,6 +1643,22 @@
 
       :else out)))
 
+(defn recurs-after-write!
+  "THE ARMING SEAM of :recurs (docs/spec-calendar-time.md §4, Running it
+  1 and 6), on the engine's post-commit :maintain hook: a committed,
+  non-replayed write of a kind that declares :recurs re-arms each of its
+  rules for that row — the next occurrence while it is in a :while
+  state, none once it left them. An action whose date and input did not
+  move is kept, so a write that changes nothing the rule reads writes
+  nothing here. A failure is warned and survived: the write it follows
+  has committed."
+  [eng source-kind _action res]
+  (let [rdef (get (inv/resources eng) source-kind)
+        id (get-in res [:row :id])]
+    (when (and (seq (:recurs rdef)) id (:transition res) (nil? (:replayed? res)))
+      (doseq [rule (:recurs rdef)]
+        (quietly id #(arm! eng rdef (str id) rule nil))))))
+
 (defn sweep-due!
   "One pass of the clock, and the one call a test makes instead of
   waiting for it (R-5.1). Answers how many rows each step ended:
@@ -1668,7 +1868,21 @@
    [:outcome_why {:optional true
                   :x-display {:label "How it ended"
                               :help "One sentence, written at the run and kept: what was to happen, when, and what did."}}
-    [:maybe [:string {:max 240}]]]])
+    [:maybe [:string {:max 240}]]]
+   ;; calendar step 8b: the occurrence a :recurs rule armed this for
+   [:recurrence {:optional true
+                 :x-display {:label "Made by a rule"
+                             :help "The :recurs rule this keeps one occurrence of: the source row, the rule and the date. Written by the engine when it arms the rule, never by hand."}}
+    [:maybe [:map
+             [:source_kind {:x-display {:raw true :label "Source kind"}} [:string {:min 1 :max 64}]]
+             [:source_id {:x-display {:raw true :label "Source row"}} [:string {:min 1 :max 128}]]
+             [:rule {:x-display {:raw true :label "Rule"}} [:string {:min 1 :max 64}]]
+             [:occurs_on {:x-display {:raw true :label "Occurs on"}} [:string {:min 10 :max 10}]]]]]
+   [:recurs_series {:optional true
+                    :x-display {:hidden true
+                                :label "Rule series"
+                                :help "recurs:<source_id>:<rule>, which the engine finds this rule's outstanding action by."}}
+    [:maybe [:string {:min 1 :max 260}]]]])
 
 (def ^:private why-input
   [:map
