@@ -3,14 +3,19 @@
   :lines gets an engine-made line kind with its :owns edge; its create
   and edit doors take `lines` and write the line rows in their own
   transaction; an edit replaces the set whole; a bad line refuses the
-  whole door; and no hand writes a line directly. Needs the test
-  database (WAYMARK10_TEST_DSN)."
+  whole door; and no hand writes a line directly. Step 6b: guards and
+  posts read the door's lines — (lines), (line :f), and :each in
+  :posts. Needs the test database (WAYMARK10_TEST_DSN)."
   (:require [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
+            [waymark10.expr :as expr]
+            [waymark10.guards :as g]
             [waymark10.lines :as lines]
+            [waymark10.posts :as posts]
             [waymark10.modules :as modules]
             [waymark10.resource :as r]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -62,6 +67,7 @@
       (store/with-tx st
         (fn [tx]
           (doseq [table ["ln_products" "ln_orders" "ln_order_lines"
+                         "ln_stocks" "ln_sales" "ln_sale_lines" "postings"
                          "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
@@ -142,3 +148,102 @@
                                     {:order oid :n 5 :product mug :qty 1}
                                     {:principal elena})))
           (is (= 1 (count (lines-of oid)))))))))
+
+;; ── ledger step 6b: (lines), (line :f), and :each in :posts ─────────────
+
+(deftest step-6b-lines-and-line-in-the-law
+  (let [ls [{:qty 2} {:qty 3}]]
+    (testing "(lines) reads the scope's lines, and a delay only when asked"
+      (is (= 2 (expr/evaluate (expr/normalize '(count (lines))) {:lines ls})))
+      (is (= 2 (expr/evaluate (expr/normalize '(count (lines))) {:lines (delay ls)}))))
+    (testing "(line :f) reads the line a sum over (lines) binds"
+      (is (= 5 (expr/evaluate (expr/normalize '(sum [l (lines)] (line :qty))) {:lines ls}))))
+    (testing "no lines to read is unknown, as on the probe"
+      (is (expr/unknown? (expr/evaluate '(lines) {}))))
+    (testing "(line :f) with no line bound is refused at the def site"
+      (is (seq (expr/problems '(< 0 (line :qty)))))
+      (is (empty? (expr/problems '(< 0 (line :qty)) 1))))
+    (testing ":each normalizes and repeats its entry per line"
+      (let [ps (posts/normalize :k :d '[{:each (lines) :account [:k (line :k) :a]
+                                         :amount (line :qty) :sign :-}])]
+        (is (= ps (posts/normalize :k :d ps)))
+        (is (= [{:account-kind :k :account-row "x" :account-name :a :amount -2}
+                {:account-kind :k :account-row "y" :account-name :a :amount -3}]
+               (posts/entries ps {:lines [{:k "x" :qty 2} {:k "y" :qty 3}]})))))))
+
+(def ^:private stock
+  (r/resource {:kind :ln_stock
+               :plural "ln_stocks"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:sold {:unit :count}}}))
+
+(def ^:private sale
+  (r/resource {:kind :ln_sale
+               :plural "ln_sales"
+               :states [:open :placed]
+               :initial :open
+               :terminal #{}
+               :summary "{data.note} · {state}"
+               :schema [:map [:note [:string {:max 40}]]]
+               :lines {:kind :ln_sale_line
+                       :parent :sale
+                       :fields [[:stock {:kind :ln_stock} :waymark/ref]
+                                [:qty [:int {:min 1}]]]}
+               :actions {:place {:from #{:open} :to :placed :undo :unplace
+                                 :guards [(g/expr {:name :has-lines
+                                                   :severity :refuse
+                                                   :explain "An order needs at least one line."
+                                                   :when '(< 0 (count (lines)))})]
+                                 :posts '[{:each (lines)
+                                           :account [:ln_stock (line :stock) :sold]
+                                           :amount (line :qty) :sign :+}]
+                                 :safety {:idempotent false :reversible true :confirm false}
+                                 :display {:label "Place"}}
+                         :unplace {:from #{:placed} :to :open :undo :place
+                                   :safety {:idempotent false :reversible true :confirm false}
+                                   :display {:label "Unplace"}}}}))
+
+(def ^:private sale-line (lines/line-kind sale))
+
+(deftest step-6b-an-order-of-two-lines-posts-two-postings-and-undo-reverses-both
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [stock sale sale-line postings/posting]})
+            mint #(str (get-in (inv/create! eng :ln_stock {:name %} {:principal elena})
+                               [:row :id]))
+            mug (mint "mug")
+            tea (mint "tea")
+            sold #(get-in (store/with-tx st (fn [tx] (store/load-row st tx :ln_stock % {})))
+                          [:data :sold])
+            postings-of #(store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {})))
+            as-elena (fn [k] {:principal elena :idempotency-key k})
+            sid (get-in (inv/create! eng :ln_sale
+                                     {:note "two" :lines [{:stock mug :qty 2} {:stock tea :qty 1}]}
+                                     {:principal elena})
+                        [:row :id])
+            none (get-in (inv/create! eng :ln_sale {:note "none"} {:principal elena})
+                         [:row :id])]
+        (testing "a guard over (lines) refuses an empty order"
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (inv/invoke! eng :ln_sale none :place nil (as-elena "place-0"))))
+          (is (empty? (postings-of))))
+        (testing "a door with :each posts one posting per line, each the line's amount, atomically"
+          (inv/invoke! eng :ln_sale sid :place nil (as-elena "place-1"))
+          (let [ps (postings-of)]
+            (is (= 2 (count ps)))
+            (is (= 1 (count (set (map #(get-in % [:data :log_id]) ps)))))
+            (is (== 2 (sold mug)))
+            (is (== 1 (sold tea)))))
+        (testing "undo reverses them all"
+          (inv/invoke! eng :ln_sale sid :unplace nil (as-elena "unplace-1"))
+          (let [ps (postings-of)]
+            (is (= 4 (count ps)))
+            (is (= 2 (count (filter #(get-in % [:data :reverses]) ps)))))
+          (is (== 0 (sold mug)))
+          (is (== 0 (sold tea))))))))
