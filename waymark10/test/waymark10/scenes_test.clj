@@ -303,6 +303,29 @@
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
                                         {:principal mayor})))))))
 
+(deftest a-take-keeps-its-shots-ids-and-roles
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        take {:scene (str id)
+              :scene_version 1
+              :device "phone"
+              :commit "9c4248d"
+              :shots [{:shot 1 :ok true :id 1}
+                      {:shot 2 :ok true :id 2 :role "friction"}
+                      {:shot 3 :ok true :id 3 :role "turn"}
+                      {:shot 4 :ok true :id 4 :role "payoff"}]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)]
+    (is (= [1 2 3 4] (mapv :id (get-in row [:data :shots]))))
+    (is (= ["friction" "turn" "payoff"] (keep :role (get-in row [:data :shots]))))
+    (testing "a role outside the film rules' vocabulary is refused"
+      (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :role] "climax")
+                                        {:principal mayor})))))
+    (testing "a shot id below 1 is refused"
+      (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :id] 0)
+                                        {:principal mayor})))))))
+
 (defn- hole [since until]
   {"$rows" {:kind "chore" :since (str since) :until (str until)}})
 

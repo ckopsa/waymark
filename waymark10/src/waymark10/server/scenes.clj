@@ -1165,7 +1165,15 @@
     [:maybe [:string {:max 500}]]]
    [:still {:optional true
             :x-display {:raw true :label "Still" :help "Where the still of this shot is kept."}}
-    [:maybe [:string {:max 500}]]]])
+    [:maybe [:string {:max 500}]]]
+   ;; the scene shot's own id and role, carried onto the take so the
+   ;; film rules (the week arc) can read the roles
+   [:id {:optional true
+         :x-display {:label "Shot id" :help "The id the scene gave this shot."}}
+    [:maybe [:int {:min 1}]]]
+   [:role {:optional true
+           :x-display {:label "Role" :help "The shot's part in the arc: friction, turn or payoff."}}
+    [:maybe (into [:enum] film-rules/roles)]]])
 
 (def ^:private take-fields
   "What the runner writes: the create model."
