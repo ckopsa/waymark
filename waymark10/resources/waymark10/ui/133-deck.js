@@ -53,7 +53,7 @@ VIEW_RENDERERS.deck = function renderDeck(view, doc, hints, decl) {
   const panel = el("div", {class: "panel deck"});
   panel.append(el("div", {class: "crumbs"},
     el("a", {href: "#"}, "Workspace"), " / ",
-    el("a", {href: "#" + tableHref}, title(kind) + "s"), " / ", viewLabel));
+    el("a", {href: "#" + tableHref}, titles(kind)), " / ", viewLabel));
   panel.append(el("h2", {}, viewLabel));
   const vs = viewSwitcher(doc.views);
   if (vs) panel.append(vs);

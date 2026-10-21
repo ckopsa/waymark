@@ -11,7 +11,7 @@ function renderAsOf(view, doc, hints) {
   const panel = el("div", {class:"panel"});
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, title(d.kind || "row") + "s"),
+    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, titles(d.kind || "row")),
     el("span", {class:"idsep"}, " / "),
     el("a", {class:"id", href:"#"+of, title:"this row as it stands now"},
       String(d.id || of.split("/").pop()).slice(0, 8))));
@@ -48,7 +48,7 @@ async function renderResource(view, doc, hints) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("a", {href:"#"+colHref}, titles(kind)),
     el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
