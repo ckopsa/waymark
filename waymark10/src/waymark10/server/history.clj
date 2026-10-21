@@ -63,11 +63,14 @@
   second visibility surface with its own bugs. The recorded evidence
   is the projected surface; the inputs stay where the audit query can
   reach them and the wire cannot."
-  (:require [waymark10.server.decision :as decision]
+  (:require [clojure.string :as str]
+            [waymark10.server.decision :as decision]
             [waymark10.server.definitions :as definitions]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
-            [waymark10.server.store :as store])
-  (:import (java.time Instant)
+            [waymark10.server.store :as store]
+            [waymark10.summary :as summary])
+  (:import (java.time Instant OffsetDateTime)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -349,6 +352,86 @@
   [rows instant]
   (last (filter #(at-or-before? instant %) rows)))
 
+(defn- instant-of
+  "A stored time as an Instant, whichever spelling the store gave it;
+  nil when it is no time."
+  ^Instant [v]
+  (cond
+    (instance? Instant v) v
+    (instance? OffsetDateTime v) (.toInstant ^OffsetDateTime v)
+    (inst? v) (Instant/ofEpochMilli (inst-ms v))
+    (string? v) (try (Instant/parse v) (catch DateTimeParseException _ nil))
+    :else nil))
+
+(defn- fld [m k] (when (map? m) (if (contains? m k) (get m k) (get m (name k)))))
+
+(defn- door-of? [kind id data]
+  (let [door (fld data :door)]
+    (and (= (name kind) (some-> (fld door :kind) name))
+         (= (str id) (some-> (fld door :id) str)))))
+
+(defn held-at
+  "The held call pending on row `kind`/`id` at the instant: born at or
+  before it and not yet out of `held` then. `calls` are {:id
+  :created-at :ended-at :data}, `ended-at` the call's first move out of
+  `held`, nil while it still waits. The latest such call wins; nil when
+  none was pending — a day nobody was asked anything."
+  [kind id ^Instant instant calls]
+  (when-some [c (->> calls
+                     (filter (fn [{:keys [created-at ended-at data]}]
+                               (let [born (instant-of created-at)
+                                     end (instant-of ended-at)]
+                                 (and (door-of? kind id data)
+                                      born (not (.isAfter born instant))
+                                      (or (nil? end) (.isAfter end instant))))))
+                     (sort-by #(instant-of (:created-at %)))
+                     last)]
+    (let [data (:data c)
+          door (fld data :door)]
+      (cond-> {:call (str (:id c))
+               :action (some-> (fld door :action) name)}
+        (fld data :waits_on) (assoc :waits_on (str (fld data :waits_on)))
+        (fld data :owner) (assoc :owner (str (fld data :owner)))
+        (fld data :why) (assoc :why (str (fld data :why)))
+        (:who c) (assoc :who (:who c))))))
+
+(defn- held-calls
+  "The held calls whose door would walk row `kind`/`id`, each with the
+  moment it left `held` read from its own log — the input `held-at`
+  folds. A call that is out of `held` now with no such move in its log
+  is taken as ended at birth: no pending call is invented."
+  [eng st tx kind id]
+  (when (get (inv/resources eng) :held_call)
+    (let [mrdef (get (inv/resources eng) :member)
+          who (fn [mid]
+                (when (and mrdef mid)
+                  (try
+                    (some->> (store/load-row st tx :member (str mid) {})
+                             (inv/decode-row mrdef)
+                             (#(assoc % :kind :member))
+                             (summary/line mrdef)
+                             str
+                             (#(first (str/split % #" · " 2)))
+                             not-empty)
+                    (catch Exception _ nil))))]
+      (vec
+       (for [raw (store/query-rows st tx :held_call {} {:limit fold-cap
+                                                        :newest-first true})
+             :when (door-of? kind id (:data raw))]
+         (let [out (->> (store/transitions st tx {:kind :held_call
+                                                  :resource-id (str (:id raw))}
+                                           {:limit fold-cap})
+                        (filter #(and (= "held" (some-> (:from-state %) name))
+                                      (not= "held" (some-> (:to-state %) name))))
+                        first)]
+           {:id (:id raw)
+            :created-at (:created-at raw)
+            :ended-at (cond out (:at out)
+                            (= "held" (some-> (:state raw) name)) nil
+                            :else (:created-at raw))
+            :data (:data raw)
+            :who (who (fld (:data raw) :waits_on))}))))))
+
 (defn row-as-of
   "GET /api/{plural}/{id}?as-of=INSTANT — the row's state, its law and
   its summary as they stood.
@@ -367,13 +450,17 @@
   [eng rdef id instant visibility]
   (let [st (:storage eng)
         visible? (visible-fn rdef visibility)
-        rows (store/with-tx st
-               (fn [tx]
-                 (store/transitions st tx {:kind (:kind rdef)
-                                           :resource-id (str id)}
-                                    {:limit fold-cap})))
+        [rows calls] (store/with-tx st
+                       (fn [tx]
+                         [(store/transitions st tx {:kind (:kind rdef)
+                                                    :resource-id (str id)}
+                                             {:limit fold-cap})
+                          (held-calls eng st tx (:kind rdef) id)]))
         t (fold-entry rows instant)
-        e (when t (entry rdef (law-resolver eng rdef) t visible?))]
+        e (when t (entry rdef (law-resolver eng rdef) t visible?))
+        ;; the person's tap the row waited on then, so a film's day
+        ;; shows who it was waiting on and not only where it stood
+        held (when t (held-at (:kind rdef) id instant calls))]
     {:waymark "10"
      :kind "as_of"
      :self (str "/api/" (:plural rdef) "/" id "?as-of=" instant)
@@ -409,6 +496,7 @@
                                               " true}, so this as-of read"
                                               " answers no `data`."))))}
              e (assoc :put_there_by e)
+             held (assoc :held held)
              ;; tier 3: the retained copy, through the same closure the
              ;; row read narrows with — never unprojected
              (some? (:after t)) (assoc :data (decision/project-data
