@@ -119,6 +119,9 @@
            ;; …and its receipt (§ 3, build step 2): one row per event
            ;; its receiver kept
            :integration_event
+           ;; …and its outbox (§ 4, build step 5): one row per call an
+           ;; effect door asked for
+           :effect_call
            ;; …and the scene and the take (docs/spec-scenes.md): a demo
            ;; written as shots, and one performance of it
            :scene :take

@@ -484,6 +484,100 @@
     "§ 3's `:via :inbox` entry makes its row with the entry's `:input`; with none, the event body's top-level fields are the create's input. A refused create is a `refused` receipt with no target."
     "§ 8 puts `[source-unsigned]` in the declaration battery, which reads the law; an integration's signature is a row's data, so `findings` reads the rows and is not yet in that battery."]})
 
+;; ── the outbox (§ 4, build step 5) ──────────────────────────────────
+
+(g/defguard the-engine-keeps-the-call
+  {:reads [:principal]
+   :hide true
+   :explain "The engine keeps an effect call when a door that declares an :effect is walked; nobody writes one by hand."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow)
+    (t/deny)))
+
+(def answer-cap
+  "How much of an answer an effect_call keeps: 16 KB, as a held call's."
+  16384)
+
+(def ^:private call-text [:string {:min 1 :max 200}])
+
+(def ^:private call-fields
+  [[:power {:x-display {:raw true :label "The power"
+                        :help "The tool the call names, as server__tool."}}
+    call-text]
+   [:idempotency_key {:x-display {:raw true :label "Its key"
+                                  :help "What makes it once: one call per power and key."}}
+    call-text]
+   [:target_kind {:x-display {:raw true :label "The kind"
+                              :help "The kind of the row whose door asked for the call."}}
+    call-text]
+   [:target {:x-display {:raw true :label "The row"
+                         :help "The id of the row whose door asked for the call."}}
+    call-text]
+   [:door {:x-display {:raw true :label "The door"
+                       :help "The door that asked for the call."}}
+    call-text]
+   [:input {:optional true
+            :x-display {:raw true :label "What it sends"
+                        :help "The call's input as JSON, read from the row as the door left it."}}
+    [:maybe [:string {:max answer-cap}]]]
+   [:why {:optional true
+          :x-display {:label "Why"
+                      :help "The sentence a person who approves a held call reads."}}
+    [:maybe [:string {:min 1 :max 480}]]]
+   [:on_behalf_of {:x-display {:raw true :label "On behalf of"
+                               :help "Who walked the door that asked for the call."}}
+    call-text]
+   [:answer {:optional true
+             :x-display {:raw true :label "The answer"
+                         :help "What the call answered, as JSON, cut at 16 KB. Engine-written."}}
+    [:maybe [:string {:max answer-cap}]]]
+   [:reason {:optional true
+             :x-display {:label "Why it failed"
+                         :help "The server's sentence when it refused the call. Engine-written."}}
+    [:maybe [:string {:min 1 :max 480}]]]])
+
+(def ^:private a-call-ending
+  "A runner's door: the engine writes how a call ended."
+  {:from #{:pending}
+   :guards [the-engine-keeps-the-call]
+   :handler keep-the-ending
+   :waives #{:edit-shape}
+   :safety {:idempotent true :reversible false :confirm false
+            :one-way "A call that ended stays ended; the row's own doors are the way on."}})
+
+(defresource effect-call
+  {:kind :effect_call
+   :plural "effect_calls"
+   :states [:pending :done :failed]
+   :initial :pending
+   :terminal #{:done :failed}
+   :nav :system
+   :summary "{data.power} {data.idempotency_key} · {state}"
+   :label-template "{data.idempotency_key}"
+   :schema (into [:map] call-fields)
+   :filterable {:state #{:eq :in}
+                :power #{:eq}
+                :idempotency_key #{:eq}
+                :target #{:eq}}
+   :sortable {:fields [:idempotency_key] :default "idempotency_key"}
+   :unique [[:power :idempotency_key]]
+   :no-own-surface "An effect call is the house's; only a grant that names the kind shows that one exists."
+   :create-guards [the-engine-keeps-the-call]
+   ;; its exits are the runner's alone, and no seat takes them
+   :allow-dead #{:pending}
+   :actions
+   {:mark_done (assoc a-call-ending :to :done
+                      :input [:map [:answer {:x-display {:raw true}}
+                                    [:string {:max answer-cap}]]])
+    :mark_failed (assoc a-call-ending :to :failed
+                        :input [:map [:reason [:string {:min 1 :max 480}]]])}
+   :deviations
+   ["§ 4's `unknown` and `held` endings arrive with the runner that reaches them (build step 6); until then a call is `pending`, `done` or `failed`, and `mark_done` and `mark_failed` are the engine's own, hidden from everyone else."
+    "§ 4 names two hidden doors, `effect_landed` and `effect_failed`; each effect door has its own pair, `<door>_landed` and `<door>_failed`, because each names its own `:lands` and `:fails-to`."
+    "§ 4 says what a `done` key does when a door asks again; a `failed` key lands its failure again through the door's failed door in the same way, and a `pending` one adds nothing and lands on its own."
+    "§ 4's `:why` fills each {field} from the row's data, as a summary does."]})
+
 ;; ── the receiver (§ 3, build step 2) ────────────────────────────────
 
 (def default-signature
