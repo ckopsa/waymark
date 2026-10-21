@@ -152,6 +152,100 @@
                  {:principal runner})
     (is (= :label_failed (:state (row-of eng pid))))))
 
+(def ^:private void-label
+  {:power "postage__refund_label"
+   :input {:label '(data :label_ref)}
+   :idempotency-key '(str "void:" (self))
+   :fails-to :void_failed})
+
+(defn- shipment-law [unwinds]
+  {:kind :shipment
+   :states [:packed :label_asked :labelled :label_failed :shipped :refunded
+            :label_voided :void_failed]
+   :initial :packed
+   :summary "{data.number} · {state}"
+   :schema [:map
+            [:number [:string {:min 1 :max 40}]]
+            [:label_ref {:optional true} [:maybe [:string {:max 120}]]]
+            [:shipped_at {:optional true} [:maybe [:string {:max 40}]]]]
+   :actions {:buy_label {:from #{:packed} :to :label_asked
+                         :safety once
+                         :effect (assoc buy-label :compensate :void_label)}
+             :void_label {:from #{:labelled :label_asked} :to :label_voided
+                          :safety once
+                          :effect void-label}
+             :ship {:from #{:labelled} :to :shipped :safety once}
+             :refund {:from #{:labelled :shipped} :to :refunded
+                      :safety once
+                      :unwinds unwinds}
+             :reopen {:from #{:label_failed :refunded :label_voided :void_failed} :to :packed
+                      :safety once}}})
+
+(defresource shipment
+  (shipment-law [{:effect :buy_label :when '(not (is-set (data :shipped_at)))}]))
+
+(defn- labelled! [eng fields]
+  (let [sid (str (get-in (inv/create! eng :shipment fields {:principal colton}) [:row :id]))
+        _ (inv/invoke! eng :shipment sid :buy_label {} {:principal colton})
+        cid (some #(when (= sid (str (get-in % [:data :target]))) (str (:id %))) (calls eng))
+        answer "{\"object_id\":\"L-" ]
+    (inv/invoke! eng :effect_call cid :mark_done {:answer (str answer sid "\"}")}
+                 {:principal runner})
+    (inv/invoke! eng :shipment sid :buy_label_landed
+                 {:effect_call cid :answer (wire/read-json (str answer sid "\"}"))}
+                 {:principal runner})
+    sid))
+
+(defn- shipment-of [eng id]
+  (let [st (:storage eng)]
+    (some->> (store/with-tx st #(store/load-row st % :shipment (str id) {}))
+             (inv/decode-row (get (inv/resources eng) :shipment)))))
+
+(defn- calls-on [eng id]
+  (filterv #(= (str id) (str (get-in % [:data :target]))) (calls eng)))
+
+(deftest a-refund-voids-an-unshipped-label-and-not-a-shipped-one
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [shipment]
+                            :now-fn (fn [] clock)})]
+    (testing "an unshipped label: the refund adds its void, keyed undo:"
+      (let [sid (labelled! eng {:number "S-1"})]
+        (is (= :labelled (:state (shipment-of eng sid))))
+        (inv/invoke! eng :shipment sid :refund {} {:principal colton})
+        (is (= :refunded (:state (shipment-of eng sid))))
+        (let [undo (some #(when (= "postage__refund_label" (get-in % [:data :power])) %)
+                         (calls-on eng sid))]
+          (is (= 2 (count (calls-on eng sid))))
+          (is (= :pending (:state undo)))
+          (is (= (str "undo:label:" sid) (get-in undo [:data :idempotency_key])))
+          (is (= "void_label" (str (get-in undo [:data :door]))))
+          (is (re-find (re-pattern (str "L-" sid)) (str (get-in undo [:data :input])))
+              "its input read from the row")
+          (testing "and a void that fails holds the row, the refund standing"
+            (inv/invoke! eng :effect_call (str (:id undo)) :mark_failed
+                         {:reason "The carrier refused the refund."} {:principal runner})
+            (inv/invoke! eng :shipment sid :void_label_failed
+                         {:effect_call (str (:id undo)) :reason "The carrier refused the refund."}
+                         {:principal runner})
+            (is (= :void_failed (:state (shipment-of eng sid))))
+            (is (= :failed (:state (some #(when (= (:id undo) (:id %)) %) (calls eng)))))))))
+    (testing "a shipped label: the refund voids nothing"
+      (let [sid (labelled! eng {:number "S-2" :shipped_at "2026-10-20"})]
+        (inv/invoke! eng :shipment sid :ship {} {:principal colton})
+        (inv/invoke! eng :shipment sid :refund {} {:principal colton})
+        (is (= :refunded (:state (shipment-of eng sid))))
+        (is (= ["postage__create_label"]
+               (mapv #(get-in % [:data :power]) (calls-on eng sid))))))))
+
+(deftest unwinds-names-an-effect-with-its-undo
+  (is (thrown-with-msg? Exception #"unwinds-no-compensate"
+                        (resource/resource
+                         (assoc-in (shipment-law [{:effect :void_label}])
+                                   [:actions :void_label :effect :idempotency-key]
+                                   '(str "void:" (self))))))
+  (is (thrown-with-msg? Exception #"not an effect door"
+                        (resource/resource (shipment-law [{:effect :ship}])))))
+
 (deftest an-effect-names-its-key-and-its-failure-state
   (is (thrown-with-msg? Exception #"effect-no-key"
                         (resource/resource (parcel-law (dissoc buy-label :idempotency-key)))))

@@ -89,7 +89,7 @@
       :log-says (fn [_row inp] (:reason inp))
       :safety safety}}))
 
-(defn weave
+(defn- weave-effects
   "Judge every action's `:effect`, normalize its forms, and add its two
   hidden doors. `[effect-no-key]` and `[effect-no-failure-state]` are
   refused here, at the def site. → rmap"
@@ -140,6 +140,80 @@
                (update :actions merge doors)))))
      rmap
      (filter (comp :effect val) (:actions rmap)))))
+
+(defn- weave-unwinds
+  "Judge every `:compensate` and `:unwinds` (§ 5), normalize each
+  `:when`, and open each compensation's failed door from the state the
+  unwinding door leaves the row in, so a compensation that fails holds
+  the row in its own `:fails-to`. An effect door that unwinds does so
+  when it lands: its landed door carries the `:unwinds`. → rmap"
+  [rmap]
+  (doseq [[aname a] (:actions rmap)
+          :let [c (get-in a [:effect :compensate])]
+          :when (some? c)]
+    (when-not (and (keyword? c) (get-in rmap [:actions c :effect]))
+      (throw (t/definition-error
+              (str (some-> (:kind rmap) name) "/" (name aname)
+                   " :effect :compensate names its undo, an effect door of this kind; "
+                   (pr-str c) " is not one")))))
+  (reduce
+   (fn [r [aname a]]
+     (let [bad (fn [s]
+                 (throw (t/definition-error
+                         (str (some-> (:kind rmap) name) "/" (name aname) " :unwinds " s))))
+           us (:unwinds a)
+           _ (when-not (and (sequential? us) (seq us) (every? map? us))
+               (bad "is a vector of {:effect <door> :when <expression>} maps"))
+           us (mapv (fn [u]
+                      (when-some [k (first (remove #{:effect :when} (keys u)))]
+                        (bad (str "names " k "; an entry takes [:effect :when]")))
+                      (let [e (:effect u)]
+                        (when-not (get-in rmap [:actions e :effect])
+                          (bad (str (pr-str e) " is not an effect door of this kind")))
+                        (when (nil? (get-in rmap [:actions e :effect :compensate]))
+                          (bad (str "[unwinds-no-compensate] names " (name e)
+                                    ", which declares no :compensate; name its undo")))
+                        (when-some [ps (seq (some-> (:when u) expr/problems))]
+                          (bad (str ":when: " (str/join "; " ps))))
+                        (cond-> {:effect e}
+                          (some? (:when u)) (assoc :when (expr/normalize (:when u))))))
+                    us)
+           held (or (get-in a [:effect :lands]) (:to a))]
+       (reduce (fn [r {:keys [effect]}]
+                 (let [c (get-in rmap [:actions effect :effect :compensate])]
+                   (update-in r [:actions (failed-door c) :from] (fnil conj #{}) held)))
+               (cond-> (assoc-in r [:actions aname :unwinds] us)
+                 (:effect a) (assoc-in [:actions (landed-door aname) :unwinds] us))
+               us)))
+   rmap
+   (filter (comp :unwinds val) (:actions rmap))))
+
+(defn weave
+  "Judge every action's `:effect`, `:compensate` and `:unwinds` at the
+  def site, and add the hidden doors they land through. → rmap"
+  [rmap]
+  (-> rmap weave-effects weave-unwinds))
+
+(def ^:private undo-prefix "undo:")
+
+(defn undo-key
+  "The key a compensation's call is kept under (§ 5): the original's."
+  [k]
+  (str undo-prefix k))
+
+(defn undo-of
+  "The key of the call an undo effect_call compensates, or nil when the
+  call undoes nothing."
+  [c]
+  (let [k (str (get-in c [:data :idempotency_key]))]
+    (when (str/starts-with? k undo-prefix) (subs k (count undo-prefix)))))
+
+(defn unwinds?
+  "Whether an `:unwinds` entry's `:when` holds over the row as the
+  unwinding door leaves it; an entry with none always holds."
+  [u row now]
+  (or (nil? (:when u))
+      (true? (expr/evaluate (:when u) {:data (:data row) :self (some-> (:id row) str) :now now}))))
 
 (defn ask
   "The call a door asks for, over the row as the door leaves it:

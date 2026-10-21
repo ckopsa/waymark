@@ -26,6 +26,9 @@
    ;; normalized and given its two hidden doors at the def site
    ;; (effect/weave); law, in the fingerprint's action facet
    :effect
+   ;; the effects this door undoes, newest first (§ 5): judged at the
+   ;; def site by effect/weave; law, in the fingerprint's action facet
+   :unwinds
    ;; :engine marks a door the ENGINE owns rather than the household —
    ;; the sync machine's bookkeeping, woven in by mirror/declaration.
    ;; No application writes it. The ending wall (waymark-fp62.4.1)

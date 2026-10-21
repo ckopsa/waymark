@@ -94,8 +94,10 @@
                   " (" (ex-message e) ")")))))
 
 (defn- done! [eng c answer]
-  (when (end! eng (:id c) :mark_done
-              {:answer (cut (wire/write-json (or answer {})) integrations/answer-cap)})
+  ;; an undo (§ 5) lands nothing: its row left with the door that unwound
+  (when (and (end! eng (:id c) :mark_done
+                   {:answer (cut (wire/write-json (or answer {})) integrations/answer-cap)})
+             (nil? (effect/undo-of c)))
     (land-row! eng c effect/landed-door (if (map? answer) {:answer answer} {}))))
 
 (defn- failed! [eng c door reason]
@@ -255,7 +257,19 @@
 ;; ── the consumer and the sweep ───────────────────────────────────────
 
 (defn- effect-door? [eng kind action]
-  (some? (get-in (inv/resources eng) [kind :actions action :effect])))
+  (let [a (get-in (inv/resources eng) [kind :actions action])]
+    (some? (or (:effect a) (:unwinds a)))))
+
+(defn- run-order
+  "The order calls are made in: each effect's own call, then the undos,
+  newest effect first (§ 5) — by when the call each undoes was kept."
+  [eng cs]
+  (let [born (fn [c]
+               (some-> (rows-of eng :effect_call {:idempotency_key (effect/undo-of c)
+                                                  :target (str (get-in c [:data :target]))})
+                       first :created-at))]
+    (concat (remove effect/undo-of cs)
+            (sort-by born #(compare %2 %1) (filter effect/undo-of cs)))))
 
 (defn handle-transition!
   "One committed transition: an effect door's makes its row's pending
@@ -272,7 +286,7 @@
           (settle! eng (:id c)))
 
         (and kind action (effect-door? eng kind action))
-        (doseq [c (rows-of eng :effect_call {:target rid :state :pending})]
+        (doseq [c (run-order eng (rows-of eng :effect_call {:target rid :state :pending}))]
           (run-call! eng (:id c)))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be run — " (ex-message e))))
@@ -282,7 +296,7 @@
   "Make every call still `pending`, and settle every `held` one whose
   held call ended: what a crash, a pause or a missed transition left."
   [eng]
-  (doseq [c (rows-of eng :effect_call {:state :pending})]
+  (doseq [c (run-order eng (rows-of eng :effect_call {:state :pending}))]
     (try (run-call! eng (:id c))
          (catch Exception e
            (warn! "call " (:id c) " could not be made — " (ex-message e)))))
