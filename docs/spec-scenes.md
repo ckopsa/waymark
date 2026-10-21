@@ -82,6 +82,7 @@ scene's shots.
 | `hold` | `ms`, `on?` | `ms` is a whole number above zero; `on`, when given, is a target |
 | `wait_for` | `expect`, `within_ms` | `within_ms` is a whole number above zero; `expect` as below |
 | `meanwhile` | a call | as a call: another cast member acts while the camera stays |
+| `call` | `as`, `kind`, `action`, `row?`, `name?`, `input?` | a week.edn call (docs/orgkit.md § The week) the performer makes as the shot plays: `as` is in the cast; `kind` is a kind this engine serves; `action` is a door of it or, with no `row`, the kind's create; `row` is a `name` an earlier `call` shot made; every key of `input` is a field the door takes. The shot's `bind` names the row the call moved |
 
 A shot may be a card: `{card: "text", hold: {ms: n}}` shows the text
 alone, full screen, for the hold. The text is plain, at most 280
@@ -339,7 +340,7 @@ be performed, as `given N: <why>`, `wearing <key>: <why>` or
 | `wearing` | `$<bind>` names no given. |
 | `wearing` | `$<bind>` is bound by a given that does not read kind `grant`. |
 | a shot | a shot is a map with one verb. |
-| a shot | unknown verb `<key>`; the verbs are open, tap, press, focus, type, hold, wait_for, meanwhile. |
+| a shot | unknown verb `<key>`; the verbs are open, tap, press, focus, type, hold, wait_for, meanwhile, call. |
 | a shot | a shot has one verb, and this one has `<n>`. |
 | a shot | `<role>` is not a role; the roles are friction, turn, payoff. |
 | a shot | `speed` is a number from 0.25 to 8, and this one is `<speed>`. |

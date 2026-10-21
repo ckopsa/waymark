@@ -426,6 +426,65 @@
                               (assoc opts :idempotency-key (str (random-uuid))))]
         (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
 
+(def ^:private a-two-day-week
+  "A week.edn of two days, a mayor and a person's tap on each (ticket
+  1b89ca49)."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. A hedge request arrives."
+           :calls [{:as :world :kind "request" :action "create" :name "hedge"
+                    :input {:title "Trim the front hedge"}}
+                   {:as :mayor :kind "request" :action "accept" :row "hedge"}
+                   {:as :person :kind "request" :action "accept" :row "hedge"
+                    :focus [:title]}]}
+          {:day 2 :card "Tuesday. The lawn waits on the owner."
+           :calls [{:as :world :kind "request" :action "create" :name "lawn"
+                    :input {:title "Mow the back lawn"}}
+                   {:as :person :kind "request" :action "accept" :row "lawn"}]}]})
+
+(defn- beat
+  "A shot as the verb it plays and what it names."
+  [s]
+  (cond (:card s) [:card]
+        (:call s) [:call (get-in s [:call :as]) (true? (:trim s))]
+        (:open s) [:open (first (keys (:open s)))]
+        (:focus s) [:focus (get-in s [:focus :target])]
+        (:press s) [:press (get-in s [:press :target])]
+        :else [:hold]))
+
+(deftest a-week-script-plays-its-calls-as-the-camera-rolls
+  (let [seed' (update seed :seats conj {:template "org-mayor" :params {:org "example"}})
+        doc (first-week/scene seed' (assoc filmed-on :resources (example-kinds)
+                                           :week_script a-two-day-week))
+        shots (:shots (:scene doc))]
+    (testing "day 1 in full, a later day its person's tap, the rest trimmed"
+      (is (= [[:open :collection] [:hold]
+              [:card] [:open :collection] [:call "world" false] [:open :self]
+              [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false] [:open :self]
+              [:open :self] [:focus "held"] [:focus "field:title"] [:press "allow"] [:hold]
+              [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
+              [:hold]]
+             (map beat shots))))
+    (testing "the seat and the sitting are the mayor's"
+      (is (= [{:seat "example-mayor"} {:sitting {:of "example-mayor" :which "latest"}}]
+             (filter #(or (:seat %) (:sitting %)) (map :open shots)))))
+    (testing "a named create binds its row, and each call's cast joins the scene's"
+      (is (= ["row_hedge" "row_lawn"] (keep :bind shots)))
+      (is (= ["owner" "world" "mayor"] (get-in doc [:scene :cast]))))
+    (let [e (eng)
+          opts {:principal mayor}
+          check (fn [scene]
+                  (let [id (str (:id (:row (inv/create! e :scene scene opts))))]
+                    (inv/invoke! e :scene id :check {}
+                                 (assoc opts :idempotency-key (str (random-uuid))))))]
+      (testing "it checks ready beside the org's kinds"
+        (let [done (check (:scene doc))]
+          (is (= "ready" (some-> done :row :state name)) (pr-str done))))
+      (testing "a call whose cast the scene does not declare does not"
+        (let [why (try (check (update (:scene doc) :cast (partial filterv #{"owner" "world"})))
+                       nil
+                       (catch Exception x (str (inv/problem-reason x))))]
+          (is (str/includes? (str why) "`mayor`, which is not in the cast")))))))
+
 (deftest a-seed-with-no-create-opens-a-kind-never-an-empty-name
   (let [shots (:shots (:scene (first-week/scene (assoc seed :steps [])
                                                 (assoc filmed-on :resources (example-kinds)))))

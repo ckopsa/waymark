@@ -63,7 +63,7 @@
 
 (def verbs
   "The one verb a shot has, in the order the spec lists them."
-  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile"])
+  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call"])
 
 (def ops
   "What an expectation may compare with."
@@ -215,6 +215,54 @@
       (cond-> (assoc st :found rdef)
         (some? (get c "bind"))
         (assoc-in [:bound (str (get c "bind"))] (or rdef true))))))
+
+(defn- call-shot-step
+  "One `call` shot, {as, kind, action, row?, name?, input?}: the walk
+  after it, or {:problem}. It is a week.edn call (docs/orgkit.md § The
+  week) the performer makes as the shot plays (ticket 1b89ca49). `row`
+  is the `name` an earlier call shot gave the row it made, and with no
+  `row` an action the kind does not declare is the kind's create."
+  [v st people rdef-of]
+  (let [k (some-> (get v "kind") str)
+        rdef (when k (rdef-of k))
+        action (some-> (get v "action") str)
+        row (some-> (get v "row") str)
+        door (when (and rdef action) (get-in rdef [:actions (keyword action)]))
+        create? (and rdef (nil? door) (nil? row))
+        names (if create?
+                (names-of (or (:create-schema rdef) (:schema rdef)))
+                (names-of (:input door)))
+        input (get v "input")
+        stray (when (map? input) (first (remove names (keys input))))]
+    (cond
+      (not (some #{(str (get v "as"))} people))
+      (fail "`as` names " (tick (get v "as")) ", which is not in the cast.")
+
+      (nil? k)
+      (fail "a `call` names its `kind`.")
+
+      (nil? rdef)
+      (fail (tick k) " is not a kind this engine serves.")
+
+      (str/blank? action)
+      (fail "a `call` names its `action`.")
+
+      (and (nil? door) (not create?))
+      (fail (tick action) " is not a door of " k ".")
+
+      (and row (not (contains? (:named st) row)))
+      (fail "`row` names " (tick row) ", which no earlier call shot made.")
+
+      (and (some? input) (not (map? input)))
+      (fail "a `call`'s `input` is a map.")
+
+      (some? stray)
+      (fail (tick stray) " is not a field " (tick action) " takes.")
+
+      :else
+      (cond-> (assoc st :found rdef)
+        (some? (get v "name"))
+        (update :named (fnil conj #{}) (str (get v "name")))))))
 
 (defn- check-problem
   "Why one expectation cannot be read; nil when it can."
@@ -416,7 +464,10 @@
         (fail "`wait_for` names `within_ms`, a whole number above zero."))
 
       "meanwhile"
-      (call-step v st people rdef-of))))
+      (call-step v st people rdef-of)
+
+      "call"
+      (call-shot-step v st people rdef-of))))
 
 ;; ── holes in a say ──────────────────────────────────────────────────
 
