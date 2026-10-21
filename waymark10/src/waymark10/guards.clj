@@ -516,7 +516,7 @@
   principal), which row this is, and the log through `:actor-of`; for
   (follow …), the ctx's :read hook memoized for this verdict; for
   (exists …), (none …), (count-rows …), its :rows-matching and
-  :count-matching. A
+  :count-matching; for (balance …), its :balance. A
   ctx without a principal or a log leaves its key out, and the form
   that asks for it answers unknown."
   [row inp ctx]
@@ -525,7 +525,8 @@
     (cond-> {:data (:data row) :input inp :now (:now ctx)
              :read (memo-read (:read ctx))
              :rows-matching (:rows-matching ctx)
-             :count-matching (:count-matching ctx)}
+             :count-matching (:count-matching ctx)
+             :balance (:balance ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
@@ -1059,7 +1060,8 @@
 (defn- derived-reads
   "What a :when tree and its :vars read beyond the row: (did …) the log
   and the actor, (me) the actor, (now) the clock — in that order, once
-  each — then every kind a (follow …) reaches, sorted; so a tree that
+  each — then every kind a (follow …) reaches or a (balance …) reads,
+  sorted; so a tree that
   asks none of them keeps the :reads it had."
   [w vars]
   (let [infos (cons (expr/info w) (map expr/info (vals vars)))
@@ -1069,7 +1071,7 @@
                            (reads? :uses-me) (conj :principal)
                            (reads? #(clojure.core/or (:uses-now %) (:uses-today %))) (conj :now)
                            (reads? :uses-calendar) (conj :calendar))))
-          (sort (into #{} (mapcat #(concat (:follows %) (:queries %))) infos)))))
+          (sort (into #{} (mapcat #(concat (:follows %) (:queries %) (:balances %))) infos)))))
 
 (defn expr
   "The verdict as data: :when is a guard-scope expression form; the

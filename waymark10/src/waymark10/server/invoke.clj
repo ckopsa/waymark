@@ -693,6 +693,20 @@
                                (when-some [trdef (get (resources engine) target-kind)]
                                  (store/count-matching (:storage engine) tx target-kind
                                                        (law-conds trdef conds))))
+             ;; the ledger's reader (docs/spec-ledger-money.md §4, step
+             ;; 5): an account's balance, read under its row's lock in
+             ;; the write's own transaction, so two doors judged at once
+             ;; for the last mug are judged one after the other. nil —
+             ;; unknown to the law — for an account no kind declares and
+             ;; for a house account, whose balance no row carries yet
+             :balance (fn [account-kind id account-name]
+                        (when-some [trdef (get (resources engine) account-kind)]
+                          (when-some [acct (get-in trdef [:accounts account-name])]
+                            (when (some? id)
+                              (when-some [raw (store/load-row (:storage engine) tx account-kind
+                                                              (str id) {:for-update true})]
+                                (let [v (get-in (decode-row trdef raw) [:data account-name])]
+                                  (if (some? v) v (money/zero (:unit acct)))))))))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
