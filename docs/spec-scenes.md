@@ -74,7 +74,7 @@ scene's shots.
 
 | Verb | Keys | What `check` judges |
 |---|---|---|
-| `open` | `self` or `collection` | `self` is a bound `$ref` or `/api/<plural>/<id>`; `collection` is a kind this engine serves |
+| `open` | `self` or `collection`, or `$day-row` | `self` is a bound `$ref` or `/api/<plural>/<id>`; `collection` is a kind this engine serves; `$day-row` is judged as a `$day` of the clock's window (below) |
 | `tap` | `surface` | the target (below) |
 | `press` | `surface` | the target; judged as `tap` is |
 | `type` | `field`, `value` | `field` is `dialog.field:<name>`; where the door last tapped is known, the first dotted part of `<name>` is a field it takes |
@@ -239,6 +239,25 @@ keeps one take run per caller and `take` (`take-run-of`): the first
 call for a take begins it, later calls reuse it, so a
 `window: "shot"` hole reads since that take's previous `$day`; a run
 is dropped two hours after it began.
+
+A shot's `open` may name its clock day instead of a screen:
+`{"$day-row": {"window": "clock", "day": k, "domain": d}}`, judged by
+`check` as a `$day` hole of the clock's window is, and alone in its
+`open`. The performer resolves it over the wire: `POST
+/api/-/scenes/open` with `{"open": <the shot's open, as the scene holds
+it>, "take": <the take's string>}` answers `{"open": <a concrete
+open>}`, under the say door's principal rules and concealment 404. It
+ranks day k's moves as a `$day` does (a held call or an ask first, then
+a door that cannot be undone, then another seat's move, then a create)
+and opens the top move's kind: when the moves of the best rank on that
+kind are one row, that row's page, `{"self": "/api/<plural>/<id>"}`;
+when several, its collection, unfiltered, for an open names no filter.
+A quiet day, a day the clock has not played, or a caller who does not
+see the domain whole opens the domain's first kind by name that the
+caller sees; a domain of which it sees none answers 422. Any other
+`open` passes through unchanged, so a performer may call the door for
+every shot. factorykit's `scenes/first-week.edn` opens each day so,
+with the same day as its caption.
 
 A filmed week is played this way. The week is played by the clone's
 own seats: the director sits the clone's `world` and `<org>-mayor`

@@ -277,6 +277,8 @@
                "/api/-/render/markdown"
                ;; the performer's fill of a shot's say (docs/spec-scenes.md)
                "/api/-/scenes/say"
+               ;; …and of its open (ticket ce3b28c1)
+               "/api/-/scenes/open"
                ;; the seat's ledger (spec-seat.md R-11.3a): four
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
