@@ -246,10 +246,30 @@
           (comp (remove seats/interactive-seat?)
                 (map (fn [row]
                        {:id (str (:id row))
+                        :name (some-> (get-in row [:data :name]) str)
                         :wake-on (seats/effective-wake-on row (walk-rdef row))
                         :interval (interval-of row)
                         :max-open (max-open-of row)})))
           (rows-where eng :seat {:state :active} seat-page))))
+
+(defn- told-of
+  "The seats a refused receipt names in its `tell` (spec-integrations
+  § 3): the `:on-event` entry's `:tell`, or the integration's approver,
+  as the applier wrote them — seat names, or a principal's id. Empty
+  for any other transition, and for a receipt that names no one."
+  [eng t]
+  (if (and (= :integration_event (:kind t)) (= :mark_refused (:action t)))
+    (into #{} (comp (map str) (remove empty?))
+          (get-in (raw-row eng :integration_event (:resource-id t)) [:data :tell]))
+    #{}))
+
+(defn- told?
+  "Whether a receipt's `tell` names this seat: by its name, its id, or
+  the principal id it acts under."
+  [told seat]
+  (boolean (or (some-> (:name seat) told)
+               (told (:id seat))
+               (told (str "seat:" (:id seat))))))
 
 (defn- seats-of
   "The active seats, cached for the life of the registration and
@@ -2199,7 +2219,9 @@
       everything else          match it against every active seat's
                                effective wake_on, count for the count
                                entries it matched, and wake the seats
-                               that asked
+                               that asked — and, for a refused
+                               integration receipt, the seats its
+                               `tell` names, asked or not
 
   Never throws: a throwing consumer parks its cursor, and a parked
   cursor stops the whole house from being woken by anything."
@@ -2217,9 +2239,12 @@
         (contains? own-kinds kind) nil
 
         :else
-        (let [at (now eng)]
+        (let [at (now eng)
+              told (told-of eng t)]
           (doseq [seat (seats-of eng cache)
-                  :let [wake (wake-for eng seat (:wake-on seat) t)]
+                  :let [wake (or (wake-for eng seat (:wake-on seat) t)
+                                 (when (told? told seat)
+                                   {:text (wake-text t)}))]
                   :when wake]
             (wake-seat! eng seat t at wake)))))
     (catch Exception e

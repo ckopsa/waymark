@@ -478,7 +478,7 @@
    :deviations
    ["§ 3's endings are states, and the doors that land them (mark_applied, mark_refused, mark_unmatched, mark_ambiguous, mark_ignored) are the engine's own, hidden from everyone else; `dismiss` lands a seventh state, `dismissed`."
     "§ 3 finds the `:on-event` entries for the source and type, then the row by `:match`. When several entries name the type, the first in kind order whose match names exactly one row runs; the receipt lands `ambiguous` only when none does and one names more than one row."
-    "§ 3's `:tell` wakes the seats it names, or the approver. The refused receipt carries them as `tell`, and a seat hears it through its own wake_on for integration_event/mark_refused; a named seat that does not subscribe is not woken yet."
+    "§ 3's `:tell` wakes the seats it names, or the approver. The refused receipt carries them as `tell`, and the wakes consumer fires each active seat it names, by name or id, whatever its wake_on; an approver who is a person, not a seat, is not told yet."
     "§ 3 keeps an `ignored` receipt 30 days and then purges it. The purge is not built yet, so an ignored receipt stays."
     "§ 3's applier is a log consumer, and also a sweep every 30 seconds over the receipts still `received`: the sweep tries a `:retry-unmatched-for` entry again, and applies what a crash or a pause left."
     "§ 3's `received` is the receipt's state; the moment it arrived is the row's own creation time, not a field."
