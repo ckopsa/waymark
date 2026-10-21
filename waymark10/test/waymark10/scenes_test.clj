@@ -600,6 +600,68 @@
       (is (some? (scenes/say-refusal eng [{"$day" {:window "clock" :domain "acme"}}])))
       (is (some? (scenes/say-refusal eng [{"$day" {:window "shot" :day 1 :domain "acme"}}]))))))
 
+(deftest a-day-row-open-resolves-to-its-clock-days-top-move
+  (let [eng (clock-shift/install!
+             (engine/engine (clock-shift/with-clock
+                             {:storage (memory/storage)
+                              :resources (mapv org-kind [:study :invoice :note])
+                              :name "demo-scenes-open"
+                              :clone? true})))
+        h (engine/handler eng)
+        seat (t/principal {:id "seat:s1" :type :agent :display "s1"})
+        open (fn [k] {"$day-row" {:window "clock" :day k :domain "acme"}})
+        opened (fn [o] (scenes/open-as eng o (constantly true)))
+        pause #(Thread/sleep 5)
+        write! (fn [kind title]
+                 (pause)
+                 (:row (inv/create! eng kind {:title title :domain "acme"} {:principal mayor})))
+        shift! (fn []
+                 (pause)
+                 (inv/create! eng :clock_shift {:by "P1D"} {:principal mayor}))
+        post! (fn [headers body]
+                (let [resp (h {:request-method :post :uri "/api/-/scenes/open"
+                               :headers (merge {"content-type" "application/json"} headers)
+                               :body (wire/write-json body)})]
+                  (assoc resp :parsed (some-> (:body resp) wire/read-json))))
+        as-mayor {"x-waymark-principal" "mayor"}
+        study (write! :study "Acme's study")]
+    (shift!)
+    (pause)
+    (inv/invoke! eng :study (str (:id study)) :send {} {:principal seat})
+    (shift!)
+    (write! :note "Acme's note")
+    (write! :note "Acme's second note")
+    (shift!)
+    (pause)
+    (testing "a study moved on day 2: the study's page"
+      (is (= {"self" (str "/api/studys/" (:id study))} (opened (open 2)))))
+    (testing "two notes written on day 3: the notes collection"
+      (is (= {"collection" "notes"} (opened (open 3)))))
+    (testing "a quiet day, and a day the clock has not played: the domain's first kind"
+      (is (= {"collection" "invoices"} (opened (open 4))))
+      (is (= {"collection" "invoices"} (opened (open 9)))))
+    (testing "a caller who does not see the domain whole: the first kind it sees"
+      (is (= {"collection" "notes"} (scenes/open-as eng (open 2) #{:study :note})))
+      (is (nil? (scenes/open-as eng (open 2) #{}))))
+    (testing "a concrete open passes through"
+      (is (= {:collection "notes"} (opened {:collection "notes"}))))
+    (testing "check admits a `$day-row` of the clock's window, 1 to 31, alone"
+      (is (nil? (scenes/open-refusal (open 7))))
+      (is (nil? (scenes/open-refusal {:collection "notes"})))
+      (is (some? (scenes/open-refusal (open 32))))
+      (is (some? (scenes/open-refusal {"$day-row" {:window "shot" :day 1 :domain "acme"}})))
+      (is (some? (scenes/open-refusal {"$day-row" {:window "clock" :day 1}})))
+      (is (some? (scenes/open-refusal (assoc (open 1) "collection" "notes")))))
+    (testing "the door answers on the wire"
+      (let [{:keys [status parsed]} (post! as-mayor {:take "t" :open (open 3)})]
+        (is (= 200 status))
+        (is (= {:open {:collection "notes"}} parsed)))
+      (is (= {:open {:collection "notes"}}
+             (:parsed (post! as-mayor {:take "t" :open {:collection "notes"}}))))
+      (is (= 422 (:status (post! as-mayor {:take "t" :open (open 32)}))))
+      (is (= 422 (:status (post! as-mayor {:open (open 3)}))))
+      (is (= 404 (:status (post! {} {:take "t" :open (open 3)})))))))
+
 (deftest a-take-window-rows-hole-reads-since-the-take-began
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (mapv org-kind [:study :invoice :note])})

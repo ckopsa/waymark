@@ -97,10 +97,11 @@
         shots (:shots (:scene (first-week/scene three-kind-seed
                                                 (assoc filmed-on :brief brief :resources three-kinds))))
         closing (last shots)]
-    (testing "the shots open the knocked kind's collection, and tap no nav"
+    (testing "the opening opens the knocked kind's collection, each day its own day's row, and no shot taps nav"
       (is (not-any? #(some-> % :tap :surface (str/starts-with? "nav.")) shots))
       (is (= {:collection "prospects"} (:open (first shots))))
-      (is (= 8 (count (filter #(= {:collection "prospects"} (:open %)) shots)))))
+      (is (= (for [k (range 1 8)] {"$day-row" {:window "clock" :day k :domain "example"}})
+             (filter #(contains? % "$day-row") (keep :open shots)))))
     (testing "the opening says the business and its brief's first sentence"
       (is (= "Example Landscaping. A six-person landscaping business in Provo."
              (:say (second shots))))

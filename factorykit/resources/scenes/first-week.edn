@@ -53,9 +53,10 @@
  ;; what moved on day {{day}} of the clone's clock, between its (day-1)th
  ;; and day-th clock_shift, for the week is played by the clone's own
  ;; world and mayor seats, before the performance or as meanwhile shots.
- ;; The weekday is a label.
+ ;; The weekday is a label. The day opens the screen of the same day's
+ ;; top move, resolved when the shot plays (ticket ce3b28c1).
  :day
- [{:open {:collection "{{kind_plural}}"}}
+ [{:open {"$day-row" {:window "clock" :day "{{day}}" :domain "{{seed}}"}}}
   {:hold {:ms 5000}
    :say ["{{weekday}}. "
          {"$day" {:window "clock" :day "{{day}}" :domain "{{seed}}"}}]}]
