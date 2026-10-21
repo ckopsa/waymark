@@ -97,12 +97,14 @@
   quotient — money ÷ a number is money, unrounded, to 12 places when it
   does not terminate. Money adds to and compares with money of its own
   currency only; of two currencies, or with a bare number, the answer
-  is unknown, and the unknown says why (`unknown-why`)."
+  is unknown, and the unknown says why (`unknown-why`). (round m) is
+  m at its currency's minor unit in the house's rounding, the scope's
+  :rounding (:half-even unless the house says :half-up)."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * / min max abs
-     money amount currency
+     money amount currency round
      str
      days weeks months years hours minutes days-between
      today local-date business-days business-day? next-business-day working?
@@ -223,7 +225,7 @@
                                 (pr-str (vec args)))))
 
           (days weeks months years hours minutes date-of is-set clock day iso not abs
-           local-date business-days business-day? next-business-day amount currency)
+           local-date business-days business-day? next-business-day amount currency round)
           (if (= n 1)
             (check (first args) env depth problems)
             (conj problems (str "(" op " …) takes exactly one expression")))
@@ -1106,6 +1108,13 @@
         (let [v (evaluate (first args) scope)]
           (cond (unknown? v) v
                 (money/money? v) (clojure.core/get v (keyword op))))
+        ;; to the currency's minor unit, in the house's rounding
+        round
+        (let [v (evaluate (first args) scope)]
+          (cond (unknown? v) v
+                (money/money? v)
+                (or (money/round v (:rounding scope))
+                    (Unknown. (str (:currency v) " has no minor unit this engine knows, so it does not round")))))
 
         date
         (try (LocalDate/parse ^String (first args))

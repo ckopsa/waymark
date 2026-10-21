@@ -110,6 +110,46 @@
       (is (not (schema/validate [:waymark/money {:min "0"}] (usd "-0.01"))))
       (is (schema/validate [:waymark/money {:min "0"}] (usd "0.00"))))))
 
+;; ── rounding (step 2) ───────────────────────────────────────────────
+
+(deftest round-goes-to-the-currencys-minor-unit
+  (is (same-money? (usd "3.33") (ev '(round (/ (money "10" "USD") 3)))))
+  (is (= 2 (.scale ^java.math.BigDecimal (:amount (ev '(round (money "18" "USD"))))))
+      "USD has two places")
+  (is (same-money? (money/money "1234" "JPY") (ev '(round (money "1234.5" "JPY"))))
+      "JPY has none")
+  (is (same-money? (money/money "1.235" "KWD") (ev '(round (money "1.23456" "KWD"))))
+      "KWD has three")
+  (is (nil? (ev '(round (data :missing)))))
+  (is (e/unknown? (ev '(round (money "1" "XXX")))) "no minor unit, no rounding")
+  (is (seq (e/problems '(round (money "1" "USD") 2))) "round takes one expression"))
+
+(deftest the-house-rounding-mode
+  (testing "half-even unless the house says: a half goes to the even cent"
+    (is (same-money? (usd "0.12") (ev '(round (money "0.125" "USD")))))
+    (is (same-money? (usd "0.12") (ev '(round (money "0.125" "USD")) {:rounding :half-even}))))
+  (testing "half-up when the house says so"
+    (is (same-money? (usd "0.13") (ev '(round (money "0.125" "USD")) {:rounding :half-up}))))
+  (testing "the house's :rounding is one of the two"
+    (is (= :half-even (money/rounding-mode nil)))
+    (is (= :half-up (money/rounding-mode :half-up)))
+    (is (nil? (money/rounding-mode :ceiling)))))
+
+(deftest an-unrounded-write-is-refused
+  (let [f [:waymark/money]
+        why (fn [m] (first (:price (schema/errors [:map [:price :waymark/money]] {:price m}))))]
+    (is (schema/validate f (usd "18.00")))
+    (is (schema/validate f (usd "18.000")) "trailing zeros are at the scale")
+    (is (not (schema/validate f (usd "18.005"))))
+    (is (not (schema/validate f (money/money "1.5" "JPY"))))
+    (is (schema/validate f (money/money "1.5" "XXX")) "no minor unit, no scale to hold it to")
+    (testing "the refusal names the rounded value"
+      (is (str/includes? (why (usd "18.004")) "[money-unrounded]"))
+      (is (str/includes? (why (usd "18.004")) "rounds to 18.00 USD"))
+      (is (str/includes? (why (usd "0.125")) "0.12 USD half-even, 0.13 USD half-up")
+          "a half names both modes"))
+    (is (str/starts-with? (why 18) "must be money") "anything else keeps its sentence")))
+
 ;; ── storage ──────────────────────────────────────────────────────────
 
 (deftest the-two-storage-columns
