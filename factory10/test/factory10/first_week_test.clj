@@ -57,12 +57,12 @@
         shots))
 
 (defn- day-captions
-  "What `captions` answers for days named `weekdays`: each reads since
-  the last day caption."
+  "What `captions` answers for days named `weekdays`: day k reads day k
+  of the clone's clock."
   [weekdays]
-  (map (fn [weekday]
-         [(str weekday ". ") {:window "shot" :domain "example"}])
-       weekdays))
+  (map-indexed (fn [i weekday]
+                 [(str weekday ". ") {:window "clock" :day (inc i) :domain "example"}])
+               weekdays))
 
 (defn- counts
   "The `$rows` holes of a shot's say, its `$list`'s too."
@@ -114,7 +114,7 @@
               ["invoice" "paid" "invoice paid" "invoices paid"]
               ["held_call" nil "tap from you" "taps from you"]]
              (map (juxt :kind :state :one :many) (counts closing))))
-      (is (every? #(= {:since "2026-10-19" :until "2026-10-26"} (select-keys % [:since :until]))
+      (is (every? #(= {:window "take"} (select-keys % [:since :until :window]))
                   (counts closing)))
       (is (str/ends-with? (last (:say closing)) "Merge to make it real.")))
     (testing "it reads each count by its noun and end, a zero dropping its clause"
@@ -245,8 +245,9 @@
         {:keys [scene clone day_one]} (edn/read-string text)]
     (testing "it names its day one, the day the clone's seed counts [:days 0] from"
       (is (= (:day_one filmed-on) day_one))
-      (is (some #(and (map? %) (= day_one (:since %)))
-                (tree-seq coll? seq (:shots scene)))))
+      (is (not-any? #(and (map? %) (contains? % :since))
+                    (tree-seq coll? seq (:shots scene)))
+          "no hole reads the dates the audit rendered"))
     (testing "it is the scene the seed renders, as edn text"
       (is (= (:scene (first-week/scene seed (assoc filmed-on :clone_url ""
                                                    :resources (example-kinds))))

@@ -40,13 +40,16 @@
   (edn/read-string (slurp (io/resource "scenes/first-week.edn"))))
 
 (defn- fill
-  "`form` with each {{param}} in its strings replaced by its value."
+  "`form` with each {{param}} in its strings replaced by its value; a
+  string that is one {{param}} whole, of a number, becomes that number."
   [form values]
   (walk/postwalk
    (fn [x]
      (if (string? x)
-       (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
-                  x values)
+       (or (some (fn [[k v]] (when (and (number? v) (= x (str "{{" (name k) "}}"))) v))
+                 values)
+           (reduce-kv (fn [s k v] (str/replace s (str "{{" (name k) "}}") (str v)))
+                      x values))
        x))
    form))
 
@@ -209,8 +212,7 @@
                 :clone_url clone_url
                 :head_sha head_sha
                 :brief_line (or line "")
-                :day_one (str day-one)
-                :week_end (str (.plusDays day-one (long days)))}
+                :day_one (str day-one)}
         roles (get-in t [:template :roles])
         day (fn [k]
               (let [date (.plusDays day-one (long (dec k)))
