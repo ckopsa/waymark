@@ -531,6 +531,145 @@
     "`tool` and `tool_use_id` are empty strings rather than null on a line with no tool, because a `:maybe` field promotes no column and an audit must be able to filter by tool."
     "`n` is not in R-3.3. It is the line's place among all the transcript's lines and the default sort, because a collection sorts by one field."]})
 
+;; ── :sitting_call ────────────────────────────────────────────────────
+;;
+;; The sitting's `served` keeps per-tool counts and bytes, so no page
+;; could say "Read Acme Robotics", then "Qualified Acme Robotics", in
+;; order (ticket dc9e5b96). This is that order: one row per call the
+;; MCP door answered on an open sitting — what it named, the row's
+;; summary line at that moment, and what it came to. Nothing else of
+;; the call's payload is kept, and it goes with the transcript's lines.
+
+(def call-outcomes
+  "What one call came to. A read is `read`; a call that is neither a
+  read nor a move (the sit, a power, a pursue) is `answered`."
+  ["read" "moved" "held" "refused" "rehearsed" "scheduled" "answered"])
+
+(def ^:private read-tools
+  #{"waymark_get" "waymark_query" "waymark_history" "waymark_resolve"
+    "waymark_in_flight" "waymark_schema" "waymark_discover"})
+
+(defresource sitting-call
+  {:kind :sitting_call
+   :plural "sitting_calls"
+   :states [:held]
+   :initial :held
+   :terminal #{:held}
+   :nav :system
+   :summary "{data.n} · {data.tool} {data.outcome} {data.row_summary}"
+   :schema
+   [:map
+    [:sitting {:kind :sitting
+               :x-display {:raw true :label "The sitting"}}
+     :waymark/ref]
+    [:n {:x-display {:label "Call in the sitting"
+                     :help "From 1, in the order the door answered. The default sort."}}
+     [:int {:min 1}]]
+    [:at {:x-display {:label "When" :help "The moment the door answered."}}
+     :waymark/instant]
+    [:tool {:x-display {:raw true :label "Tool"}}
+     [:string {:min 1 :max 200}]]
+    [:row_kind {:x-display {:raw true :label "Kind"
+                            :help "The kind the call named. Empty when it named none."}}
+     [:string {:max 120}]]
+    [:row_id {:x-display {:raw true :label "Row"
+                          :help "The row the call named or made. Empty for a collection read or a bulk call."}}
+     [:string {:max 200}]]
+    [:row_summary {:x-display {:raw true :label "Summary line"
+                               :help "The row's summary line as the answer gave it at that moment."}}
+     [:string {:max 400}]]
+    [:action {:x-display {:raw true :label "Action"
+                          :help "The action an invoke named. Empty on every other call."}}
+     [:string {:max 120}]]
+    [:outcome {:x-display {:raw true :label "Outcome"}}
+     (into [:enum] call-outcomes)]
+    [:count {:x-display {:label "Rows"
+                         :help "The rows a collection read answered, or the rows a bulk call named; 0 otherwise."}}
+     [:int {:min 0}]]
+    [:log_id {:x-display {:raw true :label "Log entry"
+                          :help "The transition a move wrote. Empty for every other outcome."}}
+     [:string {:max 64}]]]
+   :create-guards [the-engine-writes-it]
+   :filterable {:sitting #{:eq}
+                :tool #{:eq :in}
+                :row_kind #{:eq}
+                :row_id #{:eq}
+                :outcome #{:eq :in}
+                :at #{:after :before :range}}
+   :sortable {:fields [:n :at] :default "n"}
+   :links [{:rel "sitting" :kind :sitting
+            :href "/api/sittings/{data.sitting}"
+            :summary "The sitting that made the call"}]
+   :deviations
+   ["Each call is inserted by the engine's quiet birth door (`inv/insert-quiet!`) with no transition of its own, transcript_entry's precedent: a log line per call would cost more than the thing it records."
+    "The record is purged with the sitting's transcript lines (`purge-lines!`), so it is kept exactly as long as the words beside it."]})
+
+(defn call-entry
+  "One call's record, from the tool's name, its arguments, the document
+  it answered (nil when the answer was no JSON) and whether that answer
+  was an error. Pure: `record-call!` adds the sitting, the place and
+  the time."
+  [tool args doc error?]
+  (let [arg (fn [k] (some-> (get args k) str not-empty))
+        field (fn [k] (when (map? doc) (get doc k)))
+        invoke? (= "waymark_invoke" tool)
+        bulk (some (fn [k] (when (sequential? (get args k)) (count (get args k))))
+                   [:ids :items])
+        items (field :items)
+        row-id (or (arg :id)
+                   (when (and invoke? (not bulk) (not error?))
+                     (some-> (field :id) str not-empty))
+                   "")]
+    {:tool tool
+     :row_kind (cap (or (arg :kind) "") 120)
+     :row_id (cap row-id 200)
+     :row_summary (cap (if error? "" (str (or (field :summary) ""))) 400)
+     :action (cap (or (when invoke? (arg :action)) "") 120)
+     :outcome (cond error? "refused"
+                    (true? (field :held)) "held"
+                    invoke? (cond (true? (get args :dry_run)) "rehearsed"
+                                  (some? (get args :at)) "scheduled"
+                                  :else "moved")
+                    (contains? read-tools tool) "read"
+                    :else "answered")
+     :count (long (cond bulk bulk
+                        (sequential? items) (count items)
+                        (number? (field :total)) (field :total)
+                        :else 0))}))
+
+(defn record-call!
+  "Append one call to an OPEN sitting's record of calls (ticket
+  dc9e5b96). `n` is the call's place in the sitting, and a move names
+  the transition it wrote. → the row, or nil when there is no record to
+  keep: no sitting, a sitting no longer open, or an engine that does
+  not serve the kind."
+  [eng sitting-id tool args doc error?]
+  (when (and sitting-id (some-> tool str not-empty)
+             (contains? (inv/resources eng) :sitting_call))
+    (let [st (:storage eng)
+          entry (call-entry (str tool) (or args {}) doc error?)]
+      (store/with-tx st
+        (fn [tx]
+          (when (= :open (:state (store/load-row st tx :sitting (str sitting-id) {})))
+            (let [n (inc (long (store/count-matching
+                                st tx :sitting_call
+                                [{:target :data :field :sitting :cast "text"
+                                  :op := :value (str sitting-id)}])))
+                  log-id (when (and (= "moved" (:outcome entry))
+                                    (seq (:row_kind entry)) (seq (:row_id entry)))
+                           (some-> (first (store/transitions
+                                           st tx {:kind (keyword (:row_kind entry))
+                                                  :resource-id (:row_id entry)}
+                                           {:newest-first true :limit 1}))
+                                   :id str))]
+              (inv/insert-quiet! eng tx :sitting_call
+                                 (assoc entry
+                                        :sitting (str sitting-id)
+                                        :n n
+                                        :at ((:now-fn eng))
+                                        :log_id (or log-id ""))
+                                 {:principal seats/seats-actor}))))))))
+
 ;; ── reads ───────────────────────────────────────────────────────────
 
 (defn- serves? [eng] (contains? (inv/resources eng) :transcript))
@@ -949,22 +1088,32 @@
                                 (:next-flip-at row))))))
     (inv/invoke! eng :transcript id :seal {} {:principal seats/seats-actor})))
 
+(defn- purge-rows!
+  "Delete every row of `kind` whose `field` is `value`. → how many."
+  [st kind field value]
+  (loop [n 0]
+    (let [ids (store/with-tx st
+                (fn [tx]
+                  (store/ids-matching st tx kind
+                                      [{:target :data :field field
+                                        :cast "text" :op :=
+                                        :value (str value)}]
+                                      5000)))]
+      (if (empty? ids)
+        n
+        (recur (+ n (long (store/with-tx st
+                            (fn [tx] (store/delete-rows! st tx kind ids))))))))))
+
 (defn purge-lines!
-  "Delete every line of one transcript. → how many."
+  "Delete every line of one transcript, and its sitting's record of
+  calls with them (ticket dc9e5b96). → how many lines."
   [eng transcript-id]
   (let [st (:storage eng)]
-    (loop [n 0]
-      (let [ids (store/with-tx st
-                  (fn [tx]
-                    (store/ids-matching st tx :transcript_entry
-                                        [{:target :data :field :transcript
-                                          :cast "text" :op :=
-                                          :value (str transcript-id)}]
-                                        5000)))]
-        (if (empty? ids)
-          n
-          (recur (+ n (long (store/with-tx st
-                              (fn [tx] (store/delete-rows! st tx :transcript_entry ids)))))))))))
+    (when (contains? (inv/resources eng) :sitting_call)
+      (when-some [sitting (some-> (load-raw eng :transcript transcript-id)
+                                  (get-in [:data :sitting]) str not-empty)]
+        (purge-rows! st :sitting_call :sitting sitting)))
+    (purge-rows! st :transcript_entry :transcript transcript-id)))
 
 (defn sweep!
   "The transcripts' half of the seat pass. → {:sealed n :purged n}."
