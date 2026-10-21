@@ -2272,6 +2272,36 @@
                 "the row has no field ")
               (name k)))))
 
+(defn- check-guard-writers
+  "[guard-create-only], a WARNING: a guard on a door other than create
+  reads a data field only create's input takes, so a refused caller is
+  sent to make a new row. [guard-unwritable], an ERROR: the field is in
+  no door's input, create's included, so the guard refuses with nowhere
+  to send it. A field the engine writes (a :derived roll-up, a stamped
+  principal) is neither, and a kind whose code writes (a :handler, an
+  :on-event) is not called unwritable (ticket 7cc2315b)."
+  [r]
+  (let [acts (machine/actions-seq r)
+        created (g/door-accepts r :create)]
+    (into []
+          (for [{:keys [door guard]} (guard-sites r)
+                :when (not= :create door)
+                f (g/data-reads guard)
+                :when (contains? (data-keys r) f)
+                :when (not (g/engine-written? r f))
+                :when (not (some #(contains? (g/door-accepts r (:name %)) f) acts))
+                :when (or (contains? created f) (not (g/code-writes? r)))]
+            (if (contains? created f)
+              (str "[guard-create-only] guard " (name (:name guard)) " on "
+                   (name (:kind r)) "." (name door) " reads " (name f)
+                   ", which only create takes. Add " (name f) " to " (name door)
+                   "'s input, or confirm it is a fact fixed at birth.")
+              (err r :guard-unwritable
+                   (str "guard " (name (:name guard)) " on " (name (:kind r)) "."
+                        (name door) " reads " (name f) ", which no door's input "
+                        "takes, create's included: add it to the input of "
+                        (name door) " or of a door before it")))))))
+
 (defn- check-owned-surface
   "A kind whose row carries a `:x-ref {:principal true}` field its
   `:create-schema` omits has an owner no caller names: the engine
@@ -2673,6 +2703,6 @@
           check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
-          check-follow check-remedy-bindings
+          check-follow check-remedy-bindings check-guard-writers
           check-ref-unjudged
           check-owned-surface])})
