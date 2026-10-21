@@ -1992,9 +1992,29 @@
     (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
                                           {:check :accounts}))]
       (some-> (first (money/account-problems ":accounts" accts)) bad)
-      (when-some [f (some (set (keys accts)) (keys (schema/entry-map (:schema rmap))))]
+      (when-some [f (some (set (keys accts))
+                          ;; the projected fields themselves, when a
+                          ;; normalized declaration comes through again
+                          (keep (fn [[k {:keys [properties]}]]
+                                  (when-not (:ledger-account properties) k))
+                                (schema/entry-map (:schema rmap))))]
         (bad (str ":accounts " (name f) " is also a field; an account is its own"
                   " read-only field, and only postings move it"))))))
+
+(defn- project-accounts
+  "Each account appears on its row as a read-only field of its own name
+  (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
+  joins the schema, before project-colocated turns its :filter and
+  :sort marks into :filterable and :sortable. A field already projected
+  — a declaration normalized twice — stays as it is."
+  [rmap]
+  (if-some [accts (not-empty (:accounts rmap))]
+    (let [have (set (keys (schema/entry-map (:schema rmap))))]
+      (update rmap :schema into
+              (for [[n a] (sort-by (comp str key) accts)
+                    :when (not (contains? have n))]
+                (money/account-field n a))))
+    rmap))
 
 (def ^:private on-event-keys
   #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
@@ -2124,6 +2144,7 @@
     ;; filter/facet surface it forbids
     (check-secret!
      (-> rmap
+        project-accounts
         project-colocated
         desugar-owns
         (update :plural #(or % (str (name kind) "s")))

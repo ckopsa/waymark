@@ -430,7 +430,7 @@ plain question for the person who owns the kind:
 | `[occupies-unfiltered]` | error | The resource, `from`, `to` or state field is not `:filter` on the occupying kind (`[exists-unfiltered]`'s reason). | Declare them filterable. | — |
 | `[resource-uncalendared]` | info | A kind is occupied, and neither it nor the default names hours. | Give the resource a calendar, or accept the whole day. | "What hours does a {resource} work?" |
 | `[utc-today]` | warning | A guard or fact compares `(date-of (now))` (or `(var :now)`) with a date field. | Use `(today)`, which is the house's day and not Greenwich's. | — |
-| `[business-days-no-calendar]` | error at boot | The law uses `business-days`, `(today)` or `working?`, and the engine has no default `work_calendar`. | Create one; the first-run walk offers it. | "Which days does the house work, and in which zone?" |
+| `[business-days-no-calendar]` | finding | The law uses `business-days`, `(today)` or `working?`, and the engine has no default `work_calendar`. It never stops a boot: the boot makes the house's default (Monday to Friday, the house zone, no holidays) and says so. | Restate the default, or add the house's holidays. | "Which days does the house work, and in which zone?" |
 
 ---
 
