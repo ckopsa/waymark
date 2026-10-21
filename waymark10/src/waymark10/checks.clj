@@ -2429,7 +2429,7 @@
          (for [[_ d] (:derived r)
                f (concat (:over d) (some-> (:expr d) expr/info :data))]
            f)
-         (for [[_ age] (:expected-age r)
+         (for [[_ age] (let [ages (:expected-age r)] (when (map? ages) ages))
                :when (and (map? age) (contains? age :until))
                f (:data (expr/info (:until age)))]
            f))))
