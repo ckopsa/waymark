@@ -39,6 +39,45 @@ function renderAsOf(view, doc, hints) {
   view.append(panel);
 }
 
+/* the band on a live row some held call waits on (ticket f6808194):
+   "Waiting on your tap: <action> <row>", the AI's reason under it, and
+   Allow and Deny — the held call's own doors, drawn only when its
+   envelope affords them to this viewer. After Allow it says who
+   allowed, until the page refreshes with the move. */
+function heldBand(doc) {
+  const band = el("div", {class: "asof-band waiting held-band", "data-focus": "held"});
+  const what = String(doc.summary || "").split(" · ")[0];
+  for (const h of doc.held || []) {
+    const line = el("div", {class: "held-call"},
+      el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim()));
+    if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    band.append(line);
+    api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
+      const acts = (ok && body && body.actions) || {};
+      if (!acts.allow && !acts.refuse) return;
+      const bar = el("div", {class: "actions"});
+      if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
+        onclick: async () => {
+          const r = await invokeBare(acts.allow, body);
+          if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+          bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
+            `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
+        }}, "Allow"));
+      if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
+        onclick: async () => {
+          const reason = (window.prompt("Why not? One sentence the caller reads.") || "").trim();
+          if (!reason) return;
+          const r = await api(acts.refuse.href, {method: acts.refuse.method || "POST",
+                                                 body: JSON.stringify({reason})});
+          if (!r.ok) { toast((r.body || {}).detail || "Deny was refused"); return; }
+          render();
+        }}, "Deny"));
+      line.append(bar);
+    }).catch(() => {});
+  }
+  return band;
+}
+
 async function renderResource(view, doc, hints) {
   hints = hints || {};
   /* the ref labels this envelope carries, before any cell asks */
@@ -60,6 +99,8 @@ async function renderResource(view, doc, hints) {
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* a held call waiting on this row: the person's tap, up top */
+  if ((doc.held || []).length) panel.append(heldBand(doc));
   /* the row's own path is the crumb's title, on every kind, and is
      not header text */
   /* the viewing dots: who else is looking at this screen right now

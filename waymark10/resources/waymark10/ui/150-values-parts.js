@@ -296,7 +296,7 @@ function kvTable(obj, schema) {
   for (const k of groupFields(
          Object.keys(obj).filter(f => !fieldHidden(schema, f)), schema)) {
     const v = obj[k];
-    t.append(el("tr", {},
+    t.append(el("tr", {"data-field": k},
       el("td", {class:"k", title: k}, fieldLabel(schema, k)),
       el("td", {}, fieldCell(schema, k, v, obj))));
   }
