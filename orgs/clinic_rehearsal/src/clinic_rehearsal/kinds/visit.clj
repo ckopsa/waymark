@@ -9,23 +9,18 @@
 (defguard has-plan
   (refuse "A visit is booked from a plan of care; name the plan first.")
   '(present? :plan_id))
-
 (defguard has-therapist
   (refuse "A visit is booked into a therapist's slot; name the therapist.")
   '(present? :therapist))
-
 (defguard has-time
   (refuse "A visit is booked into a slot; name its time.")
   '(present? :starts_at))
-
 (defguard has-note
   (refuse "Every visit note is written before it is signed.")
   '(is-set (input :note)))
-
 (defguard has-signer
   (refuse "Every visit note is signed by the treating therapist; name who signs.")
   '(is-set (input :signer)))
-
 (defguard has-author-role
   (refuse "Say whether a physical therapist or an assistant wrote the note.")
   '(is-set (input :author_role)))
@@ -48,26 +43,28 @@
    :row {:state :attended :data {:therapist "pt_a" :starts_at "2026-10-21T16:00:00Z"}}
    :input {:note "Left knee post-op, session 1: flexion to 95 degrees." :signer "pt_a" :author_role "pt"}
    :expect {:allowed true}})
-
 (defscenario sign-without-note
   "A visit signed without its note is refused."
   {:kind :visit :attempt :sign :at "2026-10-21T20:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :attended :data {:therapist "pt_a" :starts_at "2026-10-21T16:00:00Z"}}
    :input {}
    :expect {:refused :has-note}})
-
 (defscenario note-past-a-day
   "A note signed 26 hours after the visit is late."
   {:kind :visit :attempt :sign :at "2026-10-22T18:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :attended :data {:therapist "pt_b" :starts_at "2026-10-21T16:00:00Z"}}
    :input {:note "Low back, session 3: tolerated progression." :signer "pt_b" :author_role "pt"}
    :expect {:refused :note-in-time}})
-
 (defscenario second-no-show-with-fee
   "The front desk marks a second no-show with its $40 fee."
   {:kind :visit :attempt :no_show :at "2026-10-29T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :booked :data {:therapist "pt_b" :starts_at "2026-10-28T14:00:00Z"}}
    :input {:no_show_fee_cents 4000}
+   :expect {:allowed true}})
+(defscenario reminder-day-before
+  "The front desk sends a reminder the day before a booked visit, and the visit stays booked."
+  {:kind :visit :attempt :remind :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :booked :data {:therapist "pt_a" :patient_id "pat-1" :starts_at "2026-10-22T15:00:00Z"}}
    :expect {:allowed true}})
 
 (defresource visit
@@ -110,7 +107,11 @@
    :expected-age {:booked 1209600
                   :attended {:until '(+ (data :starts_at) (hours 24))}}
    :actions
-   {:attend   {:from #{:booked} :to :attended
+   {:remind   {:from #{:booked} :to :booked :safety {:idempotent true :reversible true :confirm false}
+               :effect {:power "messaging.send_reminder" :why "The patient gets a reminder of tomorrow's visit." :idempotency-key '(data :starts_at)
+                        :input {:patient_id '(data :patient_id) :starts_at '(data :starts_at)} :lands :booked :fails-to :booked}
+               :decided "The front desk sends the patient a reminder on its own the day before each visit."}
+    :attend   {:from #{:booked} :to :attended
                :guards [has-plan has-therapist has-time]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "An attended visit is noted and signed from here."}

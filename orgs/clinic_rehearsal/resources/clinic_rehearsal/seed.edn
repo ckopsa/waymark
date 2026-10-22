@@ -26,16 +26,22 @@
   :seats [{:template "world"
            :params {:brief "We are a small outpatient physical therapy clinic. A physician refers a patient by sending a prescription; we cannot book a first visit until we have it, and it expires after 90 days."
                     :kinds "referral" :cast "dr_vance,dr_okafor" :day_one [:days 0]
-                    :domain_id [:ref :clinic_rehearsal]}}]}
+                    :domain_id [:ref :clinic_rehearsal]}}]
+  :effects {"insurer.submit_claim" {:status "done" :result {:claim_number "ACME-1009"}}
+            "insurer.check_coverage" {:status "done" :result {:coverage "verified"}}
+            "messaging.send_reminder" {:status "done" :result {:sent true}}}
+  ;; each integration's signing secret, a value only the clone knows
+  :steps [{:as :owner :kind :secret :ref :insurer-signing :create {:name "insurer-signing" :value [:param :signing_secret_insurer]}}
+          {:as :owner :kind :secret :ref :messaging-signing :create {:name "messaging-signing" :value [:param :signing_secret_messaging]}}]}
  :seats
  [{:template "org-mayor"
    :params {:org "clinic_rehearsal" :domain "clinic_rehearsal"
             :domain_id [:ref :clinic_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
             :kinds [{:kind "referral" :actions ["accept" "decline" "expire"]}
-                    {:kind "patient" :actions ["create" "admit" "discharge" "purge"]}
+                    {:kind "patient" :actions ["create" "check_coverage" "admit" "discharge" "purge"]}
                     {:kind "plan_of_care" :actions ["create" "activate" "resign" "end" "lapse"]}
-                    {:kind "visit" :actions ["create" "attend" "sign" "no_show" "cancel"]}
+                    {:kind "visit" :actions ["create" "remind" "attend" "sign" "no_show" "cancel"]}
                     {:kind "claim" :actions ["create" "submit" "post_payment" "deny" "resubmit" "write_off" "bill_patient"]}]
             :wakes [{:kind "referral" :actions ["create"]}
                     {:kind "patient" :actions ["create" "admit" "discharge"]}

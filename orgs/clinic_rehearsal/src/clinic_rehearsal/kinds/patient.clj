@@ -10,39 +10,30 @@
 (defguard has-referral
   (refuse "A chart is opened from the physician's accepted referral; name it first.")
   '(present? :referral_id))
-
 (defguard consent-signed
   (refuse "The patient signs the consent form at intake, before any care.")
   '(is-set (input :consent_signed_on)))
-
 (defguard privacy-signed
   (refuse "The patient signs the privacy notice at intake, before any care.")
   '(is-set (input :privacy_signed_on)))
-
 (defguard consent-not-future
   (refuse "The day the patient signed the consent form cannot be later than today.")
   '(<= (input :consent_signed_on) (today)))
-
 (defguard privacy-not-future
   (refuse "The day the patient signed the privacy notice cannot be later than today.")
   '(<= (input :privacy_signed_on) (today)))
-
 ;; :coverage is unset until the desk asks the insurer; its two values are the ways out of intake
 (defguard coverage-settled
   (refuse "The front desk verifies coverage with the insurer before the first visit; without verified coverage the patient is self-pay.")
   '(is-set (input :coverage)))
-
 (defguard owner-purges
   (hold "A chart is purged only on the owner's tap."))
-
 (defguard has-last-visit
   (refuse "A chart is purged seven years after the last visit; the last visit's day must be on it.")
   '(present? :last_visit_on))
-
 (defguard last-visit-given
   (refuse "A chart is purged seven years after the last visit; the last visit's day must be on it.")
   '(is-set (input :last_visit_on)))
-
 (defguard last-visit-not-future
   (refuse "The day of the last visit cannot be later than today.")
   '(<= (input :last_visit_on) (today)))
@@ -87,6 +78,12 @@
    :row {:state :discharged :data {:name "Ana Ruiz" :last_visit_on "2020-10-01"}}
    :expect {:refused :retention-has-passed}})
 
+(defscenario coverage-check-goes-to-insurer
+  "The front desk asks the insurer about a patient at intake, and the chart waits at intake for the answer."
+  {:kind :patient :attempt :check_coverage :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :intake :data {:name "Pat Example" :insurer "acme" :insurance_member_no "AH-1" :referral_id "ref-1"}}
+   :expect {:allowed true}})
+
 (defresource patient
   {:kind :patient
    :plural "patients"
@@ -120,7 +117,12 @@
    :expected-age {:intake 604800 :active 5184000
                   :discharged {:until '(+ (data :last_visit_on) (years 7))}}
    :actions
-   {:admit     {:from #{:intake} :to :active
+   {:check_coverage {:from #{:intake} :to :intake :safety {:idempotent true :reversible true :confirm false}
+                     :effect {:power "insurer.check_coverage" :why "The front desk asks the insurer whether the patient is covered."
+                              :idempotency-key '(data :insurance_member_no) :lands :intake :fails-to :intake
+                              :input {:insurer '(data :insurer) :member_no '(data :insurance_member_no)}}
+                     :decided "The front desk checks a patient's coverage with the insurer on its own at intake."}
+    :admit     {:from #{:intake} :to :active
                 :input [:map
                         [:consent_signed_on :waymark/date]
                         [:privacy_signed_on :waymark/date]

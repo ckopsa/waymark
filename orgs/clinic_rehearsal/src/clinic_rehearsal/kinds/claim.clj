@@ -1,32 +1,35 @@
 (ns clinic_rehearsal.kinds.claim
   "A claim: after each visit we submit a claim to the insurer, track
   what they pay, and bill the patient's copay or balance. A claim the
-  insurer denies goes to the billing specialist within 2 business days."
+  insurer denies goes to the billing specialist within 2 business days.
+  Submitting is an effect on the insurer integration."
   (:require [waymark10.dsl :refer [defguard defresource defscenario refuse warn]]))
 
 (defguard has-visit
   (refuse "A claim is for one signed visit; name it first.")
   '(present? :visit_id))
-
 (defguard has-amount
   (refuse "A claim says what it bills the insurer, in cents.")
   '(present? :billed_cents))
-
 (defguard has-payment
   (refuse "A paid claim says what the insurer paid, in cents.")
   '(is-set (input :paid_cents)))
-
 (defguard has-denial-reason
   (refuse "A denied claim says why the insurer denied it.")
   '(is-set (input :denial_reason)))
-
 (defguard has-submitted-on
   (refuse "A submitted claim says the day it went to the insurer.")
   '(is-set (input :submitted_on)))
-
 (defguard submitted-on-not-future
   (refuse "The day a claim went to the insurer cannot be later than today.")
   '(<= (input :submitted_on) (today)))
+(defguard has-patient-owes
+  (refuse "A patient's bill says what they owe after the insurer paid, in cents.")
+  '(is-set (input :patient_owes_cents)))
+;; advisory: a late payment is still posted; the :submitted age tells the specialist
+(defguard paid-within-net-30
+  (warn "The insurer paid this claim more than 30 days after it was submitted.")
+  '(<= (today) (+ (data :submitted_on) (days 30))))
 
 (defscenario submit-with-day
   "The billing specialist submits a claim by putting on it the day it went to the insurer."
@@ -34,64 +37,53 @@
    :row {:state :draft :data {:visit_id "visit-1" :insurer "Acme Health" :billed_cents 18000}}
    :input {:submitted_on "2026-10-22"}
    :expect {:allowed true}})
-
 (defscenario submit-without-day
   "A claim submitted without the day it went to the insurer is refused."
   {:kind :claim :attempt :submit :at "2026-10-22T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :draft :data {:visit_id "visit-1" :insurer "Acme Health" :billed_cents 18000}}
    :input {}
    :expect {:refused :has-submitted-on}})
-
 (defscenario post-payment-without-amount
   "A payment posted without what the insurer paid is refused."
   {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {}
    :expect {:refused :has-payment}})
-
 (defscenario deny-with-reason
   "The billing specialist records a denial by putting the insurer's reason on the claim."
   {:kind :claim :attempt :deny :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {:denial_reason "CO-197: precertification absent."}
    :expect {:allowed true}})
-
 (defscenario deny-without-reason
   "A denial recorded without the insurer's reason is refused."
   {:kind :claim :attempt :deny :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {}
    :expect {:refused :has-denial-reason}})
-
-(defguard has-patient-owes
-  (refuse "A patient's bill says what they owe after the insurer paid, in cents.")
-  '(is-set (input :patient_owes_cents)))
-
 (defscenario bill-patient-with-balance
   "The billing specialist bills the patient by putting on the claim the copay or balance they owe."
   {:kind :claim :attempt :bill_patient :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :paid :data {:insurer "Acme Health" :billed_cents 18000 :paid_cents 14400 :submitted_on "2026-10-09"}}
    :input {:patient_owes_cents 3600}
    :expect {:allowed true}})
-
-;; advisory: a late payment is still posted; the :submitted age tells the specialist
-(defguard paid-within-net-30
-  (warn "The insurer paid this claim more than 30 days after it was submitted.")
-  '(<= (today) (+ (data :submitted_on) (days 30))))
-
 (defscenario claim-inside-net-30
   "A payment posted 20 days after the claim was submitted is inside net-30."
   {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {:paid_cents 14000}
    :expect {:allowed true}})
-
 (defscenario claim-past-net-30
   "A payment posted 35 days after the claim was submitted is past net-30."
   {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-09-16"}}
    :input {:paid_cents 14000}
    :expect {:refused :paid-within-net-30}})
+(defscenario remittance-records-what-was-paid
+  "The insurer's remittance puts on the claim what it paid, with nobody retyping it, and the claim moves to paid."
+  {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:visit_id "visit-1" :insurer "acme" :billed_cents 18000 :submitted_on "2026-10-09"}}
+   :input {:paid_cents 14400} :expect {:state "paid"}})
 
 (defresource claim
   {:kind :claim
@@ -120,6 +112,8 @@
    {:submit      {:from #{:draft} :to :submitted
                   :input [:map [:submitted_on :waymark/date]]
                   :guards [has-visit has-amount has-submitted-on submitted-on-not-future]
+                  :effect {:power "insurer.submit_claim" :why "The claim goes to the insurer." :idempotency-key '(data :visit_id)
+                           :input {:visit_id '(data :visit_id) :billed_cents '(data :billed_cents)} :lands :submitted :fails-to :draft}
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A submitted claim is the insurer's to pay or deny."}
                   :decided "The billing specialist submits a claim on their own after each visit, because after each visit we submit a claim to the insurer."}
