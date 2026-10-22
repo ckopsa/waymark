@@ -13,6 +13,27 @@
   (ex-info (str "definition error: " msg)
            (merge {:waymark10/definition-error true} data)))
 
+(defn unique-groups
+  "A kind's :unique declaration as [{:fields [f …] :while #{state …}} …].
+  A group is a field keyword or a vector of them; a map {:while #{…}}
+  after a group (or inside its vector) narrows it to the rows in those
+  states: `[[:order_id] {:while #{:open :scheduled}}]` is at most one
+  open-or-scheduled row per order. A group with no :while counts every
+  state, as it always did."
+  [u]
+  (let [narrow (fn [g m] (assoc g :while (set (:while m))))]
+    (reduce (fn [acc x]
+              (cond
+                (map? x) (if (seq acc)
+                           (update acc (dec (count acc)) narrow x)
+                           (conj acc (narrow {:fields []} x)))
+                (keyword? x) (conj acc {:fields [x]})
+                :else (let [m (first (filter map? x))]
+                        (conj acc (cond-> {:fields (vec (remove map? x))}
+                                    m (narrow m))))))
+            []
+            (if (keyword? u) [u] u))))
+
 (defn acknowledged!
   "The written escape hatch: a non-blank sentence acknowledging a
   usability cost (one-way doors, open judged fields). Returns the

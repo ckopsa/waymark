@@ -137,12 +137,12 @@
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
-  (testing "the table knows capability, saved_view and the dashboard pair"
-    (is (= #{:capability :saved_view :dashboard :dashboard_slot}
+  (testing "the table knows capability, saved_view, the dashboard pair and goal"
+    (is (= #{:capability :saved_view :dashboard :dashboard_slot :goal}
            (into #{} (comp (filter (comp #{:app-opt-in} :enroll)) (map :kind))
                  modules/enrollment))))
   (testing "and hands the registry none of them — the app's vector does"
-    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot}
+    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot :goal}
                         (enrolled-kinds [] nil)))))
   (testing "so an app naming one is opting in, not colliding"
     (is (empty? (modules/warnings [{:kind :capability}] nil)))))
@@ -452,7 +452,7 @@
             ;; and its seventh: the scheduled actions' clock
             ;; (spec-scheduled-actions R-5)
             :scheduled-actions
-            :attachments-purge :webhooks-deliverer
+            :attachments-purge :retention :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
             ;; jobs and realtime in the inventory, and its four hooks

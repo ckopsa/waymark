@@ -156,6 +156,7 @@
             [waymark10.machine :as machine]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -448,7 +449,19 @@
         #(first (store/with-tx
                  st (fn [tx] (store/transitions
                               st tx {:kind (:kind row) :resource-id (:id row)}
-                              {:newest-first true :limit 1}))))))}))
+                              {:newest-first true :limit 1}))))))
+     ;; …and the day a row last entered a state, which a :keep that
+     ;; counts from {:state s} reads (docs/spec-documents.md §4)
+     :entered-at
+     (fn [row state]
+       (through
+        [:entered-at (:kind row) (str (:id row)) (name state)]
+        #(retention/entered
+          (store/with-tx
+           st (fn [tx] (store/transitions
+                        st tx {:kind (:kind row) :resource-id (:id row)}
+                        {:newest-first true})))
+          state)))}))
 
 (defn render-hooks
   "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
@@ -905,7 +918,17 @@
                (first (store/transitions
                        (:storage engine) tx
                        {:kind (:kind row) :resource-id (:id row)}
-                       {:newest-first true :limit 1})))}))))
+                       {:newest-first true :limit 1})))
+             ;; the instant a row last entered a state: a :keep that
+             ;; counts from {:state s} dates its period from it
+             ;; (docs/spec-documents.md §4)
+             :entered-at
+             (fn [row state]
+               (retention/entered
+                (store/transitions (:storage engine) tx
+                                   {:kind (:kind row) :resource-id (:id row)}
+                                   {:newest-first true})
+                state))}))))
 
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
@@ -914,6 +937,33 @@
   "The row's line, read on the engine's clock `now` (ticket d10e6c45)."
   [rdef row now]
   (summary/line rdef (assoc row :kind (:kind rdef)) now))
+
+(defn- live-unique-clash!
+  "A :unique group narrowed by :while refuses, in the write's own
+  transaction, a row that would be a second live one under the same
+  values, naming the live one by its line. The partial index stays the
+  law under a race: two writes at once meet it, and the second is the
+  plain 409."
+  [engine tx rdef row]
+  (let [state (name (:state row))
+        words #(str/replace (str/replace (name %) #"_id$" "") "_" " ")]
+    (doseq [{:keys [fields while]} (t/unique-groups (:unique rdef))
+            :when (contains? (into #{} (map name) while) state)
+            :let [data (:data (encode-row rdef row))]
+            :when (every? #(some? (get data %)) fields)
+            s (sort-by name while)
+            other (store/query-rows (:storage engine) tx (:kind rdef)
+                                    (into {:state s}
+                                          (map (fn [f] [f (get data f)]))
+                                          fields)
+                                    {:limit 2})
+            :when (not= (:id other) (:id row))]
+      (let [line (summary-of rdef (decode-row rdef other) ((:now-fn engine)))]
+        (throw (p/unique-live
+                (str line " is already " (words s) " for this "
+                     (str/join " and " (map words fields))
+                     "; finish or drop it first.")
+                {:id (:id other) :summary line}))))))
 
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
@@ -1340,16 +1390,11 @@
   grant says of the attachment kind."
   (t/principal {:id "waymark10-purge" :type :system :display "Purge"}))
 
-(def ^:private purge-scan-limit
-  "How many rows of a kind a purge reads to learn whether a list field
-  still holds a file: the store asks a field for equality only."
-  1000)
-
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
-  that refers to attachments? A single ref is asked by equality, one
-  live state at a time, so terminal holders cannot use up the limit; a
-  list is read row by row, up to purge-scan-limit rows of its kind."
+  that refers to attachments? A single ref is asked by equality and a
+  list by containment ({:has aid}), one live state at a time, so the
+  store answers either and terminal holders cannot use up the limit."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1360,13 +1405,12 @@
             (when (:schema rd)
               (some (fn [[f {:keys [properties schema]}]]
                       (when (= :attachment (:kind properties))
-                        (if (= :vector (schema-head* schema))
-                          (some #(and (other? k rd %)
-                                      (some #{aid} (map str (get-in % [:data f]))))
-                                (store/query-rows st tx k {} {:limit purge-scan-limit}))
+                        (let [want (if (= :vector (schema-head* schema))
+                                     {:has aid}
+                                     aid)]
                           (some (fn [s]
                                   (some #(other? k rd %)
-                                        (store/query-rows st tx k {f aid :state s} {:limit 2})))
+                                        (store/query-rows st tx k {f want :state s} {:limit 2})))
                                 (remove (set (:terminal rd)) (:states rd))))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
@@ -1536,6 +1580,7 @@
                      (assoc :state (:to defn))
                      (update :version inc))
         advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
+        _ (live-unique-clash! engine tx rdef advanced)
         record (store/append-transition!
                 (:storage engine) tx
                 {:kind (:kind rdef)
@@ -3389,6 +3434,7 @@
                           #(labels-and-groups engine tx rdef % nil))
               row (derived/materialize rdef row now (:calendar ctx))
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
+              _ (live-unique-clash! engine tx rdef row)
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
               ;; its lines (ledger step 6a) follow it in, in this

@@ -395,6 +395,41 @@
                     ", which the schema requires; declare :waives #{:required}"))))))
   nil)
 
+(defn- check-keep
+  "A :keep map (docs/spec-documents.md §4) ends the keeping through a
+  :purge true door [purge-unheld], and counts from a field the kind
+  declares :filterable, so the rows that are due can be asked for
+  [keep-unfiltered]."
+  [r]
+  (let [k (:keep r)]
+    (when (map? k)
+      (let [door (some #(when (= (:then k) (:name %)) %) (machine/actions-seq r))
+            from (:from k)]
+        (when-not (true? (:purge door))
+          (err r :purge-unheld
+               (str ":keep :then " (:then k) " is not a purge door; point it "
+                    "at the door that says :purge true")))
+        (when (and (keyword? from)
+                   (not (and (:schema r)
+                             (contains? (schema/entry-map (:schema r)) from)
+                             (contains? (:filterable r) from))))
+          (err r :keep-unfiltered
+               (str ":keep :from " from " is not a date field the kind "
+                    "declares :filterable; the sweep asks for the rows that "
+                    "are due by it"))))))
+  nil)
+
+(defn- check-keep-undeclared
+  "[keep-undeclared], info: a kind that holds personal fields says how
+  long it keeps them, or :keep :forever."
+  [r]
+  (when (and (nil? (:keep r)) (:schema r)
+             (seq (schema/personal-fields (:schema r))))
+    [(str "[keep-undeclared] info: " (name (:kind r)) " holds personal "
+          "fields and declares no :keep. Declare :keep {:for :from :then}, "
+          "or :keep :forever to say it is kept on purpose. How long must a "
+          (str/replace (name (:kind r)) "_" " ") " be kept, and from when?")]))
+
 (defn- check-place [r]
   (doseq [a (machine/actions-seq r)
           :when (:place a)]
@@ -1508,11 +1543,15 @@
   (let [dkeys (data-keys r)
         promoted (into (set (keys (:filterable r)))
                        (get-in r [:sortable :fields]))
-        u (:unique r)]
-    (doseq [group (map #(if (keyword? %) [%] (vec %))
-                       (if (keyword? u) [u] u))]
+        states (set (:states r))]
+    (doseq [{group :fields live :while} (t/unique-groups (:unique r))]
       (when (empty? group)
         (err r :unique "unique declares an empty field group"))
+      (when (and (some? live) (empty? live))
+        (err r :unique "unique :while names no state"))
+      (doseq [s live]
+        (when-not (contains? states s)
+          (err r :unique (str "unique :while state " s " is not a declared state"))))
       (doseq [f group]
         (when-not (contains? dkeys f)
           (err r :unique (str "unique field " f " is not a data field")))
@@ -2999,7 +3038,8 @@
              (into (check-date-unread rmap))
              (into (check-integration-in-prose rmap))
              (into (check-goal-in-prose rmap))
-             (into (check-account-unbounded rmap)))
+             (into (check-account-unbounded rmap))
+             (into (check-keep-undeclared rmap)))
    :warnings
    (into []
          (mapcat #(% rmap))
@@ -3009,7 +3049,7 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens check-purge
+          check-summary-template check-waive-tokens check-purge check-keep
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
