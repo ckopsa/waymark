@@ -189,26 +189,30 @@
   :sitting-close-hook)
 
 (def closed-by-paths
-  "The four ways a sitting ends closed: through the `close` DOOR, by
-  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`), or
-  born closed as a MISSED fire (`wakes/sweep-missed!`)."
-  ["door" "hook" "sweep" "missed"])
+  "The five ways a sitting ends closed: through the `close` DOOR, by
+  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`),
+  born closed as a MISSED fire (`wakes/sweep-missed!`), or by a
+  TAKEOVER, when a new sit of its seat finds it silent past the seat's
+  `claim_silence_seconds` (`take-over-silent!`, ticket e3add1a6)."
+  ["door" "hook" "sweep" "missed" "takeover"])
 
 (def ^:private closed-by-choices
   {"door" "Door — closed through the sitting's own close action"
    "hook" "Hook — closed by the run's stop hook"
    "sweep" "Sweep — closed by the engine after the sitting went idle"
-   "missed" "Missed — a fire nobody sat in, born closed"})
+   "missed" "Missed — a fire nobody sat in, born closed"
+   "takeover" "Takeover — closed by a new sitting of its seat after it went silent"})
 
 (def outcomes
   "What a closed sitting came to (seat health 1, ticket fad586b7): ONE
   value, the first of these that holds, in this order. `sitting-health`
   is the judge, and nothing else writes the field."
-  ["submitted" "stalled" "never_sat" "refused_out" "completed" "cut_short"
-   "idle"])
+  ["superseded" "submitted" "stalled" "never_sat" "refused_out" "completed"
+   "cut_short" "idle"])
 
 (def ^:private outcome-choices
-  {"submitted" "Submitted — it submitted a change"
+  {"superseded" "Superseded — it went silent and a new sitting of its seat took its rows"
+   "submitted" "Submitted — it submitted a change"
    "stalled" "Stalled — it stalled a change"
    "never_sat" "Never sat — a missed fire, or a run that took no turn"
    "refused_out" "Refused out — its last write was a refusal"
@@ -268,7 +272,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. superseded: a new sitting of its seat took its rows after it was silent past the seat's `claim_silence_seconds` (closed_by takeover). submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
 
@@ -1253,10 +1257,14 @@
   ;; with the idle limit it judged by — every other hand passes, the
   ;; seats actor's own endings at a sit included. A row with no stamp
   ;; is judged by the sweep's other clocks alone.
+  ;; A takeover at a sit (ticket e3add1a6) carries its seat's
+  ;; `claim_silence_seconds` the same way, so a call stamped after the
+  ;; sit read the row keeps the claim.
   (let [{:keys [action idle-seconds]} (:within ctx)
         at (->instant (get-in row [:data :last_call_at]))
         now (->instant (:now ctx))]
-    (if (or (not= :sweep action) (nil? idle-seconds) (nil? at) (nil? now))
+    (if (or (not (#{:sweep :takeover} action)) (nil? idle-seconds) (nil? at)
+            (nil? now))
       (t/allow)
       (if (.isBefore ^java.time.Instant at
                      (.minusSeconds ^java.time.Instant now
@@ -1507,8 +1515,8 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds :health_window :health_alerts :health_breaker
-   :delivers :delegates :acts_as_cast])
+   :release_grace_seconds :claim_silence_seconds :health_window
+   :health_alerts :health_breaker :delivers :delegates :acts_as_cast])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -1835,6 +1843,7 @@
   [ctx]
   (let [p (:principal ctx)]
     (cond
+      (= :takeover (:action (:within ctx))) "takeover"
       (= (:id seats-actor) (:id p)) "sweep"
       (contains? (set (:roles p)) hook-role) "hook"
       :else "door")))
@@ -1934,6 +1943,7 @@
         ;; a later call answered and the close said so: not refused out
         recovered (boolean (and refused-last (answered-since? data)))
         outcome (cond
+                  (= "takeover" closed) "superseded"
                   (delivered? transitions delivers) "submitted"
                   (change-moved? transitions "stall") "stalled"
                   (or (= "missed" closed) (true? (:missed data))
@@ -1973,6 +1983,11 @@
 
               (>= (long (or (:repeat_calls data) 0)) poll-calls)
               (conj "poll_loop")
+
+              ;; taken over before its hook ever tallied: the counts it
+              ;; was closed with are zeroes, not a report (e3add1a6)
+              (and (= "takeover" closed) (nil? (:tallied_at data)))
+              (conj "unreported")
 
               ;; which law refused it out, beside the outcome; a sitting
               ;; that recovered keeps the record of what refused it
@@ -3392,6 +3407,15 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
      [:int {:min 0 :max 3600}]]
+    ;; HOW LONG A SILENT SITTING KEEPS ITS ROWS (ticket e3add1a6). A
+    ;; new sit of the seat closes an open sitting whose last call is
+    ;; older than this, and takes its rows (`take-over-silent!`).
+    [:claim_silence_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Silence before a sitting's rows are taken over, in seconds"
+                              :help "A new sitting of the seat closes an open sitting that has made no call for this long, as superseded, and is handed its rows. A sitting that called within it keeps them."}}
+     [:int {:min 60 :max 3600}]]
     ;; SEAT HEALTH 2 (ticket 64a835b4). `health` is the rollup of the
     ;; seat's last `health_window` closed sittings, written again each
     ;; time one of them closes (`roll-health!`). WRITTEN BY NO DOOR,
@@ -3737,6 +3761,12 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
      [:int {:min 0 :max 3600}]]
+    [:claim_silence_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Silence before a sitting's rows are taken over, in seconds"
+                              :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Five minutes is the default."}}
+     [:int {:min 60 :max 3600}]]
     [:health_window {:default (:window health-thresholds)
                      :examples [(:window health-thresholds)]
                      :x-display
@@ -3963,6 +3993,12 @@
                                       {:label "Grace before a closed sitting's rows are handed on, in seconds"
                                        :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
               [:int {:min 0 :max 3600}]]
+             [:claim_silence_seconds {:default 300
+                                      :examples [300]
+                                      :x-display
+                                      {:label "Silence before a sitting's rows are taken over, in seconds"
+                                       :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Raise it when a run can think that long between calls."}}
+              [:int {:min 60 :max 3600}]]
              [:health_window {:default (:window health-thresholds)
                               :examples [(:window health-thresholds)]
                               :x-display
@@ -4028,7 +4064,8 @@
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
-                      :release_grace_seconds :health_window
+                      :release_grace_seconds :claim_silence_seconds
+                      :health_window
                       :health_alerts :health_breaker :delivers :delegates
                       :acts_as_cast :domain :serves]
             :draft {:shared true :live true}}
@@ -7347,6 +7384,9 @@
       (let [since (.minusSeconds ^Instant now grace)]
         (into #{}
               (comp (remove #(= (str sitting-id) (str (:id %))))
+                    ;; a sitting taken over was silent, not mid-call: its
+                    ;; rows went to the sitting that took them (e3add1a6)
+                    (remove #(= "takeover" (str (get-in % [:data :closed_by]))))
                     (filter #(when-some [ended (instant-of
                                                 (get-in % [:data :ended_at]))]
                                (.isAfter ^Instant ended since)))
@@ -7568,6 +7608,64 @@
                                   {:limit open-sitting-page
                                    :newest-first true})))))
     #{}))
+
+(def ^:private claim-silence-default
+  "The silence, in seconds, after which a seat that names no
+  `claim_silence_seconds` lets a new sitting take an open one's rows."
+  300)
+
+(defn take-over-silent!
+  "The OTHER open sittings of this seat that hold rows and have made no
+  call for the seat's `claim_silence_seconds`, closed so the sitting
+  `sitting-id` names may be handed their rows (ticket e3add1a6). A
+  run lost to a restart otherwise held its rows until the idle sweep,
+  half an hour later, and every new sit of the seat walked nothing.
+
+  Each is closed through its own `close` door under the seats actor,
+  `:within` a `:takeover` that `closed-by` reads as `takeover`, with
+  the counts it last tallied and a note naming the new sitting; the
+  close judges it `superseded`, and `unreported` when it never
+  tallied. `still-quiet-for-the-sweep` judges the silence again under
+  the close's own lock, so a call stamped since keeps the claim. A
+  sitting with no `last_call_at` is judged by its `started_at`.
+  → the ids closed."
+  [eng seat-id sitting-id]
+  (let [st (:storage eng)
+        now (instant-of ((:now-fn eng)))]
+    (if-not (and seat-id sitting-id now (get (inv/resources eng) :sitting))
+      []
+      (let [[seat-row open]
+            (store/with-tx st
+              (fn [tx]
+                [(store/load-row st tx :seat (str seat-id) {})
+                 (store/query-rows st tx :sitting
+                                   {:seat (str seat-id) :state :open}
+                                   {:limit open-sitting-page
+                                    :newest-first true})]))
+            silence (long (or (get-in seat-row [:data :claim_silence_seconds])
+                              claim-silence-default))
+            since (.minusSeconds ^Instant now silence)]
+        (into []
+              (keep
+               (fn [row]
+                 (let [data (:data row)
+                       ^Instant last-call (instant-of (or (:last_call_at data)
+                                                          (:started_at data)))]
+                   (when (and (not= (str sitting-id) (str (:id row)))
+                              (seq (:walked_rows data))
+                              last-call (.isBefore last-call since))
+                     (try
+                       (inv/invoke! eng :sitting (:id row) :close
+                                    (assoc (into {} (map (fn [f] [f (long (or (get data f) 0))]))
+                                                 counted-fields)
+                                           :note (str "Superseded by sitting " sitting-id
+                                                      ", silent since " last-call "."))
+                                    {:principal seats-actor
+                                     :within {:kind :sitting :action :takeover
+                                              :idle-seconds silence}})
+                       (str (:id row))
+                       (catch Exception _ nil))))))
+              open)))))
 
 (defn holding-sittings
   "The ids of this seat's open sittings that hold any of `row-ids` in
