@@ -939,28 +939,9 @@
       (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
       (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
-(defn unref'd-id-hits
-  "The fields check-unref'd-ids refuses in one kind, a string each
-  (`<where> field <k> (<reading>)`), empty when it refuses none: its
-  own door so the assembly gate can list every kind's hits in one
-  failure. The rule:
-
-  A plain string field named after a kind the registry serves, or
-  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
-  says so: the form draws a free-text box and the dangling-ref wall
-  never resolves it. member's notify.notifier was one, and a saved
-  `\"Telegram\"` silently skipped every notice rule. So does a field
-  named after a principal (`owner`, `author`, `caller`, `member`,
-  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
-  `kind`. So such a field is a ref, or it says why not with
-  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
-  waiver with no reason waives nothing. A field that plainly holds no
-  id — a prose widget, or a string longer than any id — is not judged
-  at all (`plainly-no-id?`); a principal-named field or an id beside a
-  kind is spared only for a prose widget, since a principal id or a
-  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
-  assembly (waymark10.checks-assembly) over every form
-  `deep-surfaces` walks, nested maps at any depth."
+(defn- unref'd-id-entries
+  "Every field unref'd-id-hits judges a hit in one kind, as
+  {:where :k :reading}, the `team` ones among them."
   [r kinds]
   (for [[where form nested?] (deep-surfaces r)
         :let [entries (schema/entry-map form)
@@ -979,6 +960,53 @@
                           (prose-widget? properties))))
         :let [why (:not-a-ref properties)]
         :when (not (and (string? why) (not (str/blank? why))))]
+    {:where where :k k :reading reading}))
+
+(defn- team-hit?
+  "Is this hit's only reason a field named `team` or `team_id`? The
+  `team` kind enrols in every house (PR #1830), so law already stored
+  with a plain `team` string would be refused at assembly after an
+  upgrade, and the assembly cannot tell stored law from new: such a hit
+  is a warning (unref'd-team-hits), never an error."
+  [{:keys [k]}]
+  (= :team (named-kind k)))
+
+(defn unref'd-team-hits
+  "The `team`/`team_id` fields unref'd-id-hits spares in one kind, a
+  warning string each, empty when there are none."
+  [r kinds]
+  (for [{:keys [where k] :as h} (unref'd-id-entries r kinds)
+        :when (team-hit? h)]
+    (str where " field " k " is a plain string, and this house has a "
+         "team kind; declare it (ref :team) when it means a team, or "
+         "waive it with {:not-a-ref \"why\"}")))
+
+(defn unref'd-id-hits
+  "The fields check-unref'd-ids refuses in one kind, a string each
+  (`<where> field <k> (<reading>)`), empty when it refuses none: its
+  own door so the assembly gate can list every kind's hits in one
+  failure. A field named `team` or `team_id` is left to
+  unref'd-team-hits, a warning. The rule:
+
+  A plain string field named after a kind the registry serves, or
+  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
+  says so: the form draws a free-text box and the dangling-ref wall
+  never resolves it. member's notify.notifier was one, and a saved
+  `\"Telegram\"` silently skipped every notice rule. So does a field
+  named after a principal (`owner`, `author`, `caller`, `member`,
+  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
+  `kind`. So such a field is a ref, or it says why not with
+  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
+  waiver with no reason waives nothing. A field that plainly holds no
+  id — a prose widget, or a string longer than any id — is not judged
+  at all (`plainly-no-id?`); a principal-named field or an id beside a
+  kind is spared only for a prose widget, since a principal id or a
+  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
+  assembly (waymark10.checks-assembly) over every form
+  `deep-surfaces` walks, nested maps at any depth."
+  [r kinds]
+  (for [{:keys [where k reading] :as h} (unref'd-id-entries r kinds)
+        :when (not (team-hit? h))]
     (str where " field " k " (" reading ")")))
 
 (def unref'd-ids-remedy
