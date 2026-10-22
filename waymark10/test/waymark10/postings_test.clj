@@ -208,6 +208,48 @@
 (defn- postings-of [st]
   (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {}))))
 
+(deftest step-9a-a-posting-is-dated-the-house-day-or-its-entry-on
+  (testing "a commit at 23:30 in a UTC-7 house is dated the house's day"
+    (fresh!)
+    (with-st
+      (fn [st]
+        (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+              mug-id (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                             [:row :id])]
+          (store/with-tx st
+            (fn [tx]
+              (postings/post! eng tx {:kind :pt_product :id mug-id :action :pay :log-id "log-9a"
+                                      :at (java.time.Instant/parse "2026-10-03T06:30:00Z")
+                                      :zone (java.time.ZoneOffset/ofHours -7)}
+                              [{:account-kind :house :account-name :processor_in
+                                :amount (usd "1.00")}])))
+          (is (= ["2026-10-02"]
+                 (->> (postings-of st)
+                      (filter #(= "log-9a" (get-in % [:data :log_id])))
+                      (mapv #(str (get-in % [:data :effective_on]))))))))))
+  (let [ps (posts/normalize :k :d '[{:account [:house :sales] :amount 1 :sign :+
+                                     :on (data :placed_on)}])]
+    (testing ":on is stored as written"
+      (is (= [(LocalDate/parse "2026-09-30")]
+             (mapv :effective-on
+                   (posts/entries ps {:data {:placed_on (LocalDate/parse "2026-09-30")}})))))
+    (testing "a non-date :on refuses the entry"
+      (is (:posts-refused
+           (ex-data (try (posts/entries ps {:data {:placed_on "soon"}})
+                         (catch clojure.lang.ExceptionInfo e e)))))))
+  (testing "only laws using :on change fingerprint"
+    (let [fp (r/fingerprint till)
+          dated (r/fingerprint
+                 (assoc-in till [:actions :overcharge :posts]
+                           (posts/normalize :pt_till :overcharge
+                                            '[{:account [:pt_till (self) :cash]
+                                               :amount (money "-1.00" "USD") :sign :+
+                                               :on (data :placed_on)}])))]
+      (is (not-any? #(contains? % "posts_on") (vals (get-in fp ["machine" "actions"]))))
+      (is (contains? (get-in dated ["machine" "actions" "overcharge"]) "posts_on"))
+      (is (= (dissoc (get-in fp ["machine" "actions"]) "overcharge")
+             (dissoc (get-in dated ["machine" "actions"]) "overcharge"))))))
+
 (deftest step-4-posts-normalize-at-the-def-site
   (testing ":move is the two entries it means"
     (is (= (vec (take 2 (get-in till [:actions :pay :posts])))
