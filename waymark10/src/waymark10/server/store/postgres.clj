@@ -977,6 +977,23 @@
                                   (into (mapcat second parts)))
                            jdbc-opts))))
 
+  (transition-marks [_ tx kind action since until conds limit]
+    ;; transition-times' one query, the row id read beside each at
+    (let [table (table-for tables kind)
+          parts (map #(cond-sql (get @promoted kind) %) conds)
+          sql (str "SELECT at, resource_id FROM waymark10_transitions"
+                   " WHERE kind = ? AND action = ? AND at >= ? AND at < ?"
+                   " AND resource_id IN (SELECT id FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   ") ORDER BY at LIMIT " (long limit))]
+      (mapv (fn [r] {:at (->inst (:at r)) :resource-id (str (:resource_id r))})
+            (jdbc/execute! tx (-> [sql (name kind) (name action)
+                                   (Timestamp/from ^java.time.Instant since)
+                                   (Timestamp/from ^java.time.Instant until)]
+                                  (into (mapcat second parts)))
+                           jdbc-opts))))
+
   (corrections-by-model [_ tx actor-ids since excluded-kinds]
     ;; the lag is computed over the WHOLE log and filtered afterwards:
     ;; the transition a person corrects is routinely older than the
