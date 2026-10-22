@@ -177,4 +177,26 @@
                  " Ask: Must complete wait for the photos?")]
            (said spoken)))
     (testing "a door that names its :evidence is not asked"
-      (is (empty? (said (assoc-in spoken [:actions :complete :evidence] {:photos {}})))))))
+      (is (empty? (said (assoc-in spoken [:actions :complete :evidence] {:photos {}})))))
+    (testing "a kind with a document field is asked of a form"
+      (is (= [(str "[evidence-in-prose] warning: job.complete speaks of \"form\" and names no :evidence."
+                   " Declare the document field and name it in :evidence."
+                   " Ask: Must complete wait for the form?")]
+             (said (assoc-in spoken [:actions :complete :display :description]
+                             "Upload the signed form first.")))))
+    (testing "consent and signature are still asked of"
+      (is (= 1 (count (said (assoc-in patient [:actions :leave :display]
+                                      {:label "Leave" :description "Take the patient's signature first."})))))
+      (is (= 1 (count (said (assoc-in patient [:actions :leave :display]
+                                      {:label "Leave" :description "Withdraw the consent before leaving."}))))))
+    (testing "a kind with no document field is not asked of its receipts"
+      (is (empty? (said {:kind :webhook
+                         :plural "webhooks"
+                         :states [:received :applied]
+                         :initial :received
+                         :terminal #{:applied}
+                         :summary "{data.source} · {state}"
+                         :schema [:map [:source [:string {:min 1 :max 80}]]]
+                         :actions {:apply {:from #{:received} :to :applied :safety quiet
+                                           :display {:label "Apply"
+                                                     :description "Apply the receipt to the row it names; the form of the receipt is the source's."}}}}))))))
