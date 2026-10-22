@@ -1598,6 +1598,25 @@
                                  (catch clojure.lang.ExceptionInfo _ nil))
                             ctx false)))
 
+(defn- create-entries
+  "The entries a create posts (ledger step 4, at birth): its kind's
+  :create-posts over the row as it is born — its data, the create's
+  input, (lines) as the input carries them. An entry that cannot be
+  written refuses the create, and so does [period-closed], before any
+  row is inserted."
+  [engine tx rdef row inp ctx action]
+  (when-some [ps (seq (:create-posts rdef))]
+    (let [entries (try (posts/entries ps (cond-> {:data (:data row) :input inp
+                                                  :now (:now ctx) :self (str (:id row))
+                                                  :calendar (:calendar ctx)}
+                                           (:lines rdef) (assoc :lines (vec (:lines inp)))))
+                       (catch clojure.lang.ExceptionInfo e
+                         (if (:posts-refused (ex-data e))
+                           (throw (p/schema-invalid action {:posts [(ex-message e)]}))
+                           (throw e))))]
+      (refuse-closed-periods! engine tx rdef row {:name action} entries ctx)
+      entries)))
+
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
   idempotency store — of the row the handler answered."
@@ -1637,7 +1656,8 @@
         ;; the label and clears the other arm
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
-        materialized (derived/materialize rdef handled now (:calendar ctx))
+        ;; a fact that reads (state) reads the state the door enters
+        materialized (derived/materialize rdef (assoc handled :state (:to defn)) now (:calendar ctx))
         ;; the door's postings (ledger step 4): this row's own accounts
         ;; move here, before it is saved; post! moves the others and
         ;; writes every posting, in this transaction, under the log row
@@ -3503,6 +3523,12 @@
               row (update row :data
                           #(labels-and-groups engine tx rdef % nil))
               row (derived/materialize rdef row now (:calendar ctx))
+              ;; its :create-posts (ledger step 4, at birth): this row's
+              ;; own accounts move before it is inserted; post! moves
+              ;; the others under the birth's log row, below
+              entries (create-entries engine tx rdef row inp ctx create-action)
+              own [(name kind) (str (:id row))]
+              row (update row :data own-balances own entries)
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (live-unique-clash! engine tx rdef row)
               _ (store/insert-row! (:storage engine) tx kind
@@ -3543,6 +3569,11 @@
                        ;; to actions-from-feed without it
                        :idempotency-key idempotency-key
                        :summary (:summary row)})
+              _ (when (seq entries)
+                  ((requiring-resolve 'waymark10.server.postings/post!)
+                   engine tx {:kind kind :id (:id row) :action create-action
+                              :log-id (:id record) :zone (house-zone ctx)}
+                   entries {:settled own}))
               ;; drain the :on-create births: full create algorithm,
               ;; same transaction, each riding the inner sink so
               ;; after-write! owes it the post-commit passes and the

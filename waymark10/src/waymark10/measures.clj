@@ -195,6 +195,14 @@
   (try (expr/problems w)
        (catch Exception e [(ex-message e)])))
 
+(defn where-scope
+  "The scope a :rate measure's :where reads one row under: its data, its
+  state when the reading is taken — (state) — the clock and the
+  calendar. The sweep and a scenario's reading both ask here."
+  [row now calendar]
+  (cond-> {:data (:data row) :now now :calendar calendar}
+    (some? (:state row)) (assoc :state (expr/state-of row))))
+
 (defn shape-problems
   "One measure's [measure-shape] problems (§2, §8), each naming its key;
   empty when it is well-formed. Judged alone: what :of, :among and :at
