@@ -768,7 +768,11 @@
   "A kind's :unique groups, each a vector of field keywords."
   [rd]
   (let [u (:unique rd)]
-    (map #(if (keyword? %) [%] (vec %)) (if (keyword? u) [u] u))))
+    ;; a {:while …} map narrows the group before it; it names no field
+    (keep #(cond (keyword? %) [%]
+                 (map? %) nil
+                 :else (vec (remove map? %)))
+          (if (keyword? u) [u] u))))
 
 (defn- adopt-unique-row
   "A `:reuse true` given: the id of the row already on record with

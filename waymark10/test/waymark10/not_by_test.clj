@@ -16,6 +16,8 @@
    :schema [:map
             [:label [:string {:max 40}]]
             [:packed_by {:optional true :kind :member} [:maybe :waymark/ref]]]
+   ;; a stamped field is writable only by its stamp, at create too
+   :create-schema [:map [:label [:string {:max 40}]]]
    :flow [[:open :pack :packed {:stamp {:packed_by '(actor)}
                                 :one-way "Packed is packed; the check is the next step."}]
           [:packed :check :checked {:not-by [:packed_by]
@@ -53,6 +55,31 @@
       (is (t/allow? (first (g/evaluate wall {:id "o2" :data {:label "Cups"}} {}
                                        {:principal {:id "ana" :type :person}})))))))
 
+(deftest the-refusal-names-the-member-it-read
+  (let [members {"ana" {:id "ana" :data {:display "Ana Lopez"}}}
+        read (fn [kind id] (when (= :member kind) (members (str id))))
+        row {:id "o1" :data {:label "Mugs" :packed_by "ana"}}
+        reason (fn [wall]
+                 (let [[v d] (g/evaluate wall row {} {:principal {:id "ana" :type :person}
+                                                     :read read})]
+                   (is (t/deny? v))
+                   (g/render-reason d v row)))]
+    (testing "worded from the stamping door, the kind and this door"
+      (is (= "Ana Lopez packed this order, so someone else checks it."
+             (reason (g/not-by [:packed_by] {:did {:packed_by (g/past-tense "Pack")}
+                                              :noun "order"
+                                              :verb (g/third-person "Check")})))))
+    (testing "a declared kind's wall reads the member in its judgment"
+      (let [wall (wall-of (r/normalize-resource order))]
+        (is (some #{:member} (:reads wall)))
+        (is (re-find #"^Ana Lopez .*, so someone else checks it\.$" (reason wall)))))))
+
+(deftest a-stamped-field-is-writable-only-by-its-stamp
+  (testing "a create input that carries the stamped field fails declaration"
+    (is (thrown-with-msg?
+         Exception #"\[stamp-typed\].*create input"
+         (r/resource (dissoc order :create-schema))))))
+
 (deftest the-wall-and-the-stamp-fingerprint
   (let [bare (assoc order :flow [[:open :pack :packed {:one-way "Packed."}]
                                  [:packed :check :checked {:one-way "Done."}]])
@@ -71,9 +98,11 @@
   (testing "a :not-by field no door stamps or takes"
     (is (thrown-with-msg?
          Exception #"never names anyone"
-         (r/resource (assoc order :flow [[:open :pack :packed {:one-way "Packed."}]
-                                         [:packed :check :checked {:not-by [:packed_by]
-                                                                   :one-way "Done."}]])))))
+         ;; no stamp, so the create keeps the whole schema as its input
+         (r/resource (assoc (dissoc order :create-schema)
+                            :flow [[:open :pack :packed {:one-way "Packed."}]
+                                   [:packed :check :checked {:not-by [:packed_by]
+                                                             :one-way "Done."}]])))))
   (testing "a :not-by field that is no member ref"
     (is (thrown-with-msg?
          Exception #"must be a \(ref \{:kind :member\}\)"

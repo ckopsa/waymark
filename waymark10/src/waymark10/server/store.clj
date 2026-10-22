@@ -540,11 +540,12 @@
   field whose own one-field :unique group indexes it takes no second."
   [rmap table promoted]
   (let [cols (set (map :name promoted))
+        ;; a :while group's index is partial, so it serves no other read
         uniq (into #{}
-                   (keep (fn [g]
-                           (cond (keyword? g) g
-                                 (= 1 (count g)) (first g))))
-                   (:unique rmap))]
+                   (keep (fn [{:keys [fields while]}]
+                           (when (and (nil? while) (= 1 (count fields)))
+                             (first fields))))
+                   (t/unique-groups (:unique rmap)))]
     (into {}
           (keep (fn [[field ops]]
                   (let [fname (definition-checked-name field)
@@ -622,16 +623,27 @@
       ;; index per :unique group over the promoted generated columns —
       ;; check-unique already demands every field be promoted, so the
       ;; columns exist by construction
+      ;; A :while group is a PARTIAL unique index over the rows in its
+      ;; states, so two concurrent writes cannot both leave a second
+      ;; live row. The planner matches indexes by name, so the name
+      ;; carries a hash of the states: a changed :while reconciles.
       (into {}
-            (map (fn [group]
-                   (let [fields (mapv definition-checked-name
-                                      (if (keyword? group) [group] group))
-                         nm (str "ux_" table "_" (str/join "_" fields))]
+            (map (fn [{group :fields live :while}]
+                   (let [fields (mapv definition-checked-name group)
+                         states (sort (map definition-checked-name live))
+                         nm (str "ux_" table "_" (str/join "_" fields)
+                                 (when (seq states)
+                                   (str "_live_" (Integer/toHexString
+                                                  (.hashCode (str/join "," states))))))]
                      [nm (str "CREATE UNIQUE INDEX IF NOT EXISTS " nm
                               " ON " table " ("
                               (str/join ", " (map #(str "f_" %) fields))
-                              ")")])))
-            (:unique rmap)))}))
+                              ")"
+                              (when (seq states)
+                                (str " WHERE state IN ("
+                                     (str/join ", " (map #(str "'" % "'") states))
+                                     ")")))])))
+            (t/unique-groups (:unique rmap))))}))
 
 (defn projection-snapshot
   "A projection reduced to the comparable shape the live snapshot

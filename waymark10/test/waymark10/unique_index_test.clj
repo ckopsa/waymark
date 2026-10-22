@@ -10,6 +10,7 @@
             [next.jdbc :as jdbc]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.law-words :as lw]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -41,7 +42,7 @@
 (def ^:private elena (t/principal {:id "elena" :display "Elena"}))
 
 (def ^:private tables
-  ["ux_bookings" "definitions" "waymark10_transitions"
+  ["ux_bookings" "ux_holds" "definitions" "waymark10_transitions"
    "waymark10_idempotency" "waymark10_observations"])
 
 (defn- fresh! []
@@ -139,3 +140,72 @@
           (is (= :never_ensured (:kind (ex-data e))))
           (is (str/includes? (str (ex-message e)) "never_ensured")))
         (finally (pg/close! st))))))
+
+;; ── 3. one live row per key: :unique … {:while …} ────────────────────
+
+(def ^:private one-way
+  {:idempotent true :reversible false :confirm false
+   :one-way "The log keeps the move."})
+
+(def ^:private hold
+  (r/resource
+   {:kind :ux_hold
+    :plural "ux_holds"
+    :states [:open :scheduled :done :dropped]
+    :initial :open
+    :terminal #{:dropped}
+    :summary "{data.order_id} · {state}"
+    :schema [:map [:order_id {:filter #{:eq}} [:string {:min 1 :max 20}]]]
+    :unique [[:order_id] {:while #{:open :scheduled}}]
+    :actions {:schedule {:from #{:open} :to :scheduled :safety one-way}
+              :finish {:from #{:open :scheduled} :to :done :safety one-way}
+              :reopen {:from #{:done} :to :open :safety one-way}
+              :drop {:from #{:done} :to :dropped :safety one-way}}}))
+
+(deftest one-live-row-per-key
+  (testing "the projection is a partial unique index over the :while states"
+    (let [[nm sql] (first (filter #(str/starts-with? (key %) "ux_")
+                                  (:indexes (store/kind-projection hold))))]
+      (is (str/starts-with? nm "ux_ux_holds_order_id_live_"))
+      (is (str/includes? sql "WHERE state IN ('open', 'scheduled')"))))
+  (testing "the law page states it as a rule"
+    (is (= ["At most one ux hold per order is open or scheduled at a time."]
+           (lw/unique-rules hold))))
+  (fresh!)
+  (let [st (pg/storage db/dsn)]
+    (try
+      (let [eng (engine/engine {:storage st :resources [hold]})
+            h (engine/handler eng)
+            hdrs {"x-waymark-principal" "elena"
+                  "content-type" "application/json"}
+            post #(h {:request-method :post :uri "/api/ux_holds"
+                      :headers hdrs :body (wire/write-json {:order_id %})})
+            rows (fn [where]
+                   (store/with-tx st
+                     (fn [tx] (store/query-rows st tx :ux_hold where {:limit 50}))))]
+        (is (= 201 (:status (post "o-1"))))
+        (testing "a second live row is refused, naming the live one"
+          (let [resp (post "o-1")
+                problem (wire/read-json (:body resp))]
+            (is (= 409 (:status resp)))
+            (is (str/includes? (str (:detail problem)) "o-1"))
+            (is (str/includes? (str (:detail problem)) "already open"))))
+        (testing "once the first leaves the :while states, a second is allowed"
+          (inv/invoke! eng :ux_hold (:id (first (rows {:state :open}))) :finish nil
+                       {:principal elena})
+          (is (= 201 (:status (post "o-1")))))
+        (testing "a transition back into a :while state is refused while another is live"
+          (let [e (try (inv/invoke! eng :ux_hold (:id (first (rows {:state :done})))
+                                    :reopen nil {:principal elena})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (some? e) "the reopen is refused")
+            (is (str/includes? (str (ex-message e) (pr-str (ex-data e)))
+                               "already open"))
+            (is (= 1 (count (rows {:state :done})))
+                "the refused row did not move")))
+        (testing "two creates at once yield one row"
+          (let [both (mapv deref [(future (post "o-2")) (future (post "o-2"))])]
+            (is (= [201 409] (sort (map :status both))))
+            (is (= 1 (count (rows {:order_id "o-2"})))))))
+      (finally (pg/close! st)))))
