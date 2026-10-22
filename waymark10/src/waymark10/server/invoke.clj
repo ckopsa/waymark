@@ -383,10 +383,12 @@
   "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
   §3) over their own :read and :find: the render probe and the
   law-sweep name the governing work_calendar from the same memo the
-  rest of their reads ride."
+  rest of their reads ride. The hook carries that :read as its metadata,
+  so an age's :until can follow a ref (`live-cracks/deadline`)."
   [engine]
   (let [hooks (read-hooks engine)]
-    (assoc hooks :calendar (work-calendar/hook (:read hooks) (:find hooks)))))
+    (assoc hooks :calendar (some-> (work-calendar/hook (:read hooks) (:find hooks))
+                                   (with-meta {:read (:read hooks)})))))
 
 (defn- law-conds
   "An exists/none/count-rows where as the store's conds
@@ -1166,7 +1168,8 @@
    (concat
     (when-some [ps (seq (:posts defn))]
       (try (posts/entries ps (cond-> {:data (:data materialized) :input inp
-                                      :now (:now ctx) :self (str (:id row))}
+                                      :now (:now ctx) :self (str (:id row))
+                                      :calendar (:calendar ctx)}
                                (:lines rdef) (assoc :lines (door-lines engine tx rdef row inp))))
            (catch clojure.lang.ExceptionInfo e
              (if (:posts-refused (ex-data e))
@@ -1190,6 +1193,13 @@
                       #(if (some? %) (money/plus % amount) amount))
               d))
           data entries))
+
+(defn- house-zone
+  "The zone of the calendar that governs the write (ledger step 9a), as
+  ctx's :calendar hook answers it — nil when nothing governs."
+  [ctx]
+  (when-some [calendar-of (:calendar ctx)]
+    (:zone (calendar-of))))
 
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
@@ -1256,7 +1266,7 @@
     (when (seq entries)
       ((requiring-resolve 'waymark10.server.postings/post!)
        engine tx {:kind (:kind rdef) :id (:id row) :action (:name defn)
-                  :log-id (:id record)}
+                  :log-id (:id record) :zone (house-zone ctx)}
        entries {:settled own}))
     ;; the effort landed; its draft has served its purpose — consumed
     ;; in the same commit as the write it composed (phase 7)

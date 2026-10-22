@@ -29,7 +29,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Instant LocalDate ZoneOffset)))
+  (:import (java.time Instant LocalDate ZoneId ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -182,8 +182,10 @@
   the posting door's transition — so the postings, the row and the log
   row commit together or not at all. Each entry is {:account-kind
   :account-row (nil for a house account) :account-name :amount (a Money,
-  signed) :effective-on (a LocalDate; the commit's UTC date when absent)
-  :reverses (optional)}; `source` is {:kind :id :action :log-id :at}.
+  signed) :effective-on (a LocalDate; when absent, the commit's date in
+  the source's :zone — the governing calendar's, the house's day — or
+  UTC when nothing governs) :reverses (optional)}; `source` is {:kind
+  :id :action :log-id :at :zone}.
   Each row account's balance moves in the same transaction (step 3c),
   its row locked and saved a version on — so a door that posts to its
   own row saves that row first, then posts, naming it `:settled` when
@@ -194,9 +196,10 @@
   → the postings as stored."
   ([eng tx source entries] (post! eng tx source entries {}))
   ([eng tx source entries {:keys [settled]}]
-   (let [{:keys [kind id action log-id at]} source
+   (let [{:keys [kind id action log-id at zone]} source
          ^Instant at (or at (Instant/now))
-         today (LocalDate/ofInstant at ZoneOffset/UTC)]
+         ^ZoneId zone (or zone ZoneOffset/UTC)
+         today (LocalDate/ofInstant at zone)]
      (if-some [done (not-empty (posted eng tx log-id))]
        (vec done)
        (do

@@ -1874,7 +1874,8 @@
   The key is a map, each state it names is a state this kind declares,
   and each value is a positive integer of seconds, `{:business-days n}`
   or `{:until <form>}` (docs/spec-calendar-time.md §2, §3): a
-  well-formed form that reads only (data …), periods and the calendar."
+  well-formed form that reads only (data …), a (follow (data :f) :g)
+  one hop to a linked row, periods and the calendar."
   [r]
   (let [ages (:expected-age r)
         states (set (:states r))]
@@ -1904,12 +1905,19 @@
       (contains? age :until)
       (let [form (:until age)]
         (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
-            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries follows]}
-                  (expr/info form)]
-              (when (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
-                        uses-me uses-self (seq queries) (seq follows))
-                (str "its :until reads only (data …), periods and the calendar; "
-                     "not the clock, an input, a var, the actor or another row")))))
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries]}
+                  (expr/info form)
+                  follows (expr/follows form)]
+              (cond
+                (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
+                    uses-me uses-self (seq queries))
+                (str "its :until reads only (data …), (follow (data :f) :g), periods "
+                     "and the calendar; not the clock, an input, a var, the actor or a query")
+                (some (fn [[_ ref]] (not= 'data (first ref))) follows)
+                "its :until follows only a ref the row holds: (follow (data :f) :g)"
+                (some (fn [[kind]] (nil? kind)) follows)
+                (str "its :until follows a field that names no kind; declare the ref "
+                     "field with {:kind …} so the follow knows the row it reaches")))))
       :else shape)))
 
 (defn- check-unless [r]
