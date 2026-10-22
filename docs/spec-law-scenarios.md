@@ -311,3 +311,28 @@ Two more were added by building it:
   `core-kinds-keep-their-own-scenarios` stays — it asks the same question of
   a different caller — and the burndown the widening exposed (most enrolled
   kinds have written no wall down at all) is `waymark-a2b`.
+
+## An age scenario (ticket 4b20e9e1)
+
+A scenario could attempt a door or list a rule's dates, and nothing else;
+so a dated `:expected-age` (`{:until form}`, `{:business-days n}`) had no
+scenario of its own, and an org restated its net-30 as a warn guard just to
+have a wall to test — two statements of one deadline that can disagree.
+
+`:age <state>` names the state whose dated age the scenario judges. It
+attempts no door, so it is always CHECK tier. Its verdict is closed:
+
+- `:expect {:due "2027-03-31"}` — the last day still on time in the
+  `:calendar`'s zone (a deadline at midnight closes the day before it), or
+  `:due` as an instant for the deadline itself;
+- `:expect {:late true}` — past the deadline at `:at`, as the live pass
+  judges `aged`. `:late` without `:at` refuses at the def line.
+
+`:row :data` is what `:until` reads; `:entered` (an instant) is the row's
+entry to the state, which `:business-days` counts from; `:calendar` gives the
+zone and the holidays. The deadline is `waymark10.age/deadline` — the very
+function `live-cracks` and `waiting_on` read — so the scenario and the live
+pass cannot disagree. A state with no dated age, a missing calendar or a
+missing `:entered` is a violation that says which. `check` prints *"2 dated
+ages, 1 named by a scenario"* beside the refusing guards: counted, never
+enforced, for the reason the walls are.

@@ -217,6 +217,29 @@ a guard over `(today)`, not an age:
                :inactive    {:until '(+ (data :last_visit_on) (years 7))}}
 ```
 
+A dated age is proved by an `:age` scenario at the check tier, read by
+the same deadline function the live pass uses — so do not write a warn
+guard that restates the age just to have something to test. `:due` is
+the last day still on time (or the deadline's instant); `:late` is
+judged at `:at`; a `{:business-days n}` age counts from `:entered`. The
+scenario's `:calendar` gives the zone and the holidays:
+
+```clojure
+{:kind :claim :age :submitted
+ :row {:state :submitted :data {:submitted_on "2027-03-01"}}  ; :until '(+ (data :submitted_on) (days 30))
+ :calendar {:zone "America/Denver"}
+ :expect {:due "2027-03-31"}}
+
+{:kind :claim :age :denied                      ; {:business-days 2}
+ :entered "2027-05-28T15:00:00Z" :at "2027-06-02T15:01:00Z"
+ :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}
+            :holidays ["2027-05-31"]}
+ :expect {:due "2027-06-02" :late true}}
+```
+
+`check` counts the dated ages an `:age` scenario names beside the
+refusing guards.
+
 **`:recurs`.** A rule on the source kind makes rows of another kind on
 its dates. The engine keeps one `scheduled_action` ahead per source row
 and rule, run as `:owner` under that principal's grant, and never makes
