@@ -926,7 +926,14 @@
 
   The phase-6 named seam is WIRED (batch C): the definitions
   lifecycle calls (backfill! eng kind (fingerprint/stale-facts diff))
-  in its promote effect."
+  in its promote effect.
+
+  Backfill tells nobody: no tell-facts! here, unlike
+  recompute-counts! and sweep-clocks!. A fact that turns true here
+  turns true because the LAW changed, not the row; the person learns
+  of a law change from the change itself, and a flood of notices on
+  every revision would train them to ignore notices
+  (docs/spec-measures.md §7)."
   [eng kind _facts & {:keys [batch] :or {batch 500}}]
   (loop [after "" total 0]
     (let [ids (store/with-tx (:storage eng)
