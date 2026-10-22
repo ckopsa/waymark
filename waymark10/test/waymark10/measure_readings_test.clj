@@ -4,7 +4,8 @@
   against the goal in force — met and unknown counted, unjudged below
   :at-least and over the read cap, sealed after the window ends and
   never written again. In memory."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.goals :as goals]
@@ -78,6 +79,60 @@
                                                 {:measure measure-token} {:limit 50})))))))
 
 (defn- dec= [a b] (zero? (compare (bigdec (str a)) (bigdec (str b)))))
+
+(defn- misses
+  "How many times this reading went through `missed`."
+  [eng rd]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (count (filter #(= "missed" (name (:action %)))
+                       (store/transitions st tx {:kind :measure_reading
+                                                 :resource-id (:id rd)} {})))))))
+
+(deftest a-miss-tells-once-per-window
+  (let [clock (atom (at "2026-10-07T12:00:00Z"))
+        eng (eng! clock)
+        sweep! (fn []
+                 (swap! clock #(.plusSeconds ^Instant % 7200))
+                 (maintainer/sweep-measures! eng))]
+    (orders! eng 12 9 "2026-10-06T10:00:00Z")
+    (goal! eng 0.95M)
+    (maintainer/sweep-measures! eng)
+    (let [[rd] (readings-of eng token)
+          d (:data rd)]
+      (testing "the first miss tells, stamped with the sentence"
+        (is (= "missed" (:verdict d)))
+        (is (some? (:told_at d)))
+        (is (= 1 (misses eng rd)))
+        (is (str/starts-with?
+             (str (:told d))
+             "Orders on time: 75% for the window from 2026-10-05, against a goal of ≥ 95% (9 of 12). Late: #")))
+      (testing "a second miss in the window tells nobody"
+        (sweep!)
+        (is (= "missed" (:verdict (:data (first (readings-of eng token))))))
+        (is (= 1 (misses eng rd)))
+        (is (= (str (:told_at d))
+               (str (:told_at (:data (first (readings-of eng token))))))))
+      (testing "flapping to met and back tells nobody either"
+        (orders! eng 100 100 "2026-10-07T10:00:00Z")
+        (sweep!)
+        (is (= "met" (:verdict (:data (first (readings-of eng token))))))
+        (orders! eng 20 0 "2026-10-07T11:00:00Z")
+        (sweep!)
+        (is (= "missed" (:verdict (:data (first (readings-of eng token))))))
+        (is (= 1 (misses eng rd)))))
+    (testing "a miss in the next window tells again"
+      (reset! clock (at "2026-10-14T12:00:00Z"))
+      (orders! eng 12 9 "2026-10-13T10:00:00Z")
+      (maintainer/sweep-measures! eng)
+      (let [[old nxt] (readings-of eng token)]
+        (is (= "sealed" (name (:state old))))
+        (is (= 1 (misses eng old)))
+        (is (= "2026-10-12" (str (get-in nxt [:data :window_start]))))
+        (is (= "missed" (get-in nxt [:data :verdict])))
+        (is (some? (get-in nxt [:data :told_at])))
+        (is (= 1 (misses eng nxt)))))))
 
 (deftest a-sweep-counts-met-and-unknown-against-the-goal
   (let [clock (atom (at "2026-10-07T12:00:00Z"))
