@@ -210,10 +210,43 @@
 
 (defn- cast-of [c] (some-> (:as c) name keyword))
 
+(defn- row-name
+  "The name the scene knows the week's row `nm` by: `nm` with each
+  character a `$ref` cannot spell made `_`."
+  [nm]
+  (str/replace (str nm) #"[^A-Za-z0-9_]" "_"))
+
 (defn- row-bind
   "The name the scene binds the week's row `nm` to, as a `$ref` spells it."
   [nm]
-  (str "row_" (str/replace (str nm) #"[^A-Za-z0-9_]" "_")))
+  (str "row_" (row-name nm)))
+
+(defn- pressed-names
+  "Each row of `week-script` a person's create makes by their own press,
+  its week.edn name to the one name its bind carries (ticket 0b5333a5)."
+  [week-script]
+  (into {} (for [{:keys [calls]} (:days week-script)
+                 c calls
+                 :when (and (not (contains? c :event)) (= :person (cast-of c))
+                            (nil? (:row c)) (some? (:name c)))]
+             [(str (:name c)) (row-name (:name c))])))
+
+(defn- renamed
+  "Call `c` with each reference to a pressed row, its `:row` and each
+  `{\"$row\" name}` in its input, renamed by `names` (`pressed-names`), so
+  the scene names that row as its press bound it. A call-made row's
+  references stay as they are."
+  [c names]
+  (let [rename #(get names (str %) %)]
+    (cond-> c
+      (contains? names (some-> (:row c) str)) (update :row rename)
+      (some? (:input c))
+      (update :input (fn [input]
+                       (walk/postwalk
+                        #(if (and (map? %) (= 1 (count %)) (contains? % "$row"))
+                           {"$row" (rename (get % "$row"))}
+                           %)
+                        input))))))
 
 (defn- shown?
   "Whether the film shows call `c`, `last?` when it is its day's last:
@@ -299,6 +332,7 @@
   (`shown?`)."
   [week-script seed resources]
   (let [mayor-seat (the-mayor-seat seed)
+        names (pressed-names week-script)
         play-day (fn [[acc seen] {:keys [day calls]}]
                    (let [n (count calls)
                          [shots seen]
@@ -307,7 +341,7 @@
                                          as (cast-of c)]
                                      [(into shots (if (contains? c :event)
                                                     (event-shots c show?)
-                                                    (call-shots c (not (seen as)) mayor-seat
+                                                    (call-shots (renamed c names) (not (seen as)) mayor-seat
                                                                 resources show?)))
                                       (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]
