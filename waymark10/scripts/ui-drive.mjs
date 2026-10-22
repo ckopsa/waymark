@@ -1017,6 +1017,68 @@ async function accessStory() {
       .find(b => b.textContent === "Cancel").click(); return true; })()`);
   await waitFor(`!document.querySelector("dialog[open]")`, "the restate form closed");
 
+  /* a list of member refs narrowed by in_team (data :crew) (ticket
+     84db596f). access-dev's crew_job assigns hands from the team its
+     crew names: Crew A is ana and luis, Crew B is luis and dana. With
+     ana and luis picked under Crew A, the crew changes to Crew B:
+     every row offers only Crew B, luis's pick is kept, ana's is let
+     go, and a row added after offers Crew B too. Nothing is written;
+     the form is cancelled. */
+  console.log("· a list of member refs narrowed by in_team (data :crew)");
+  const crewTeams = {};
+  for (const it of (await get("/api/teams")).data?.items || [])
+    crewTeams[(await get(it.self)).data?.name] = it.self.split("/").pop();
+  ok("the boot seeded Crew A and Crew B", !!crewTeams["Crew A"] && !!crewTeams["Crew B"]);
+  const crewJobs = (await get("/api/crew_jobs")).data?.items || [];
+  ok("the boot seeded one crew job", crewJobs.length === 1);
+  const crewJob = "/api/crew_jobs/" + crewJobs[0].self.split("/").pop();
+  await evaljs(`location.hash = ${JSON.stringify(crewJob)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify(crewJob)} &&
+                 !!document.querySelector('#view [data-action="assign"]')`,
+                "the crew job's assign door");
+  await evaljs(`document.querySelector('#view [data-action="assign"]').click(); true`);
+  const crewSel = `document.querySelector('dialog[open] select[name="crew"]')`;
+  const handsList = `document.querySelector('dialog[open] [data-list="hands"]')`;
+  const handsRows = `[...${handsList}.querySelectorAll(":scope > .listrows > .listrow")]`;
+  const handsOffered = `${handsRows}.map(r => [...r.querySelector("select").options]
+    .map(o => o.value).filter(v => v !== "").sort().join())`;
+  const handsPicked = `${handsRows}.map(r => r.querySelector("select").value)`;
+  const pickCrew = name => evaljs(`(() => {
+    const s = ${crewSel};
+    s.value = ${JSON.stringify(crewTeams[name])};
+    s.dispatchEvent(new Event("change", {bubbles: true})); return true; })()`);
+  await waitFor(`!!${handsList} && !!${crewSel} &&
+                 [...${crewSel}.options].some(o => o.value === ${JSON.stringify(crewTeams["Crew A"])})`,
+                "the assign form's crew and hands");
+  await pickCrew("Crew A");
+  await evaljs(`(() => {
+    for (const r of ${handsRows}) r.querySelector(":scope > .listdrop").click();
+    for (let n = 0; n < 2; n++) ${handsList}.querySelector(":scope > .listadd").click();
+    return true; })()`);
+  await waitFor(`(${handsOffered}).join("|") === "ana,luis|ana,luis"`,
+                "both rows offering Crew A", 6000, handsOffered);
+  ok("under Crew A every row offers ana and luis, and no one else", true);
+  await evaljs(`(() => {
+    const rs = ${handsRows};
+    rs[0].querySelector("select").value = "ana";
+    rs[1].querySelector("select").value = "luis"; return true; })()`);
+  await pickCrew("Crew B");
+  await waitFor(`(${handsOffered}).join("|") === "dana,luis|dana,luis"`,
+                "both rows offering Crew B", 6000, handsOffered);
+  ok("with the crew changed to Crew B every row offers luis and dana", true);
+  const crewKept = await evaljs(handsPicked);
+  ok("the pick Crew B still holds is kept, and the one it does not is let go",
+     crewKept[0] === "" && crewKept[1] === "luis");
+  await evaljs(`${handsList}.querySelector(":scope > .listadd").click(); true`);
+  await waitFor(`${handsRows}.length === 3 && (${handsOffered})[2] === "dana,luis"`,
+                "the row added after offering Crew B", 6000, handsOffered);
+  ok("a row added after the change offers only Crew B", true);
+  ok("and the rows above it keep their picks",
+     (await evaljs(handsPicked)).slice(0, 2).join() === ",luis");
+  await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
+    .find(b => b.textContent === "Cancel").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the assign form closed");
+
   /* a ref_card (access-dev's fixture) carries the other two forms: a
      plain :kind ref and a typed address, both naming one ref_target,
      and a second address naming a row that is not there. */

@@ -4,6 +4,8 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
             [factory10.law-text]
+            [factory10.sources.forge :as forge]
+            [factorykit.conform :as conform]
             [waymark10.check-all :as check-all]
             [waymark10.checks :as checks]
             [waymark10.server.engine :as engine]))
@@ -61,9 +63,29 @@
 ;; ── the week (ticket 62297746) ──────────────────────────────────────────────────
 
 (deftest a-stalling-week-fails-the-check-naming-week-stalls
-  ;; the fixture's day-1 quote is refused by has-budget
+  ;; the fixture's day-1 quote is refused by has-budget; judged as an
+  ;; org that is no fixture
+  (let [n (volatile! nil)
+        out (with-redefs [conform/fixture? (constantly false)]
+              (with-out-str
+                (vreset! n (check-all/report-orgs [(io/file "../orgs/week_fixture")]))))]
+    (is (pos? @n))
+    (is (re-find #"✗ orgs/week_fixture \[week-stalls\] week-stalls/0: day 1: garden_job quote refused by has-budget" out) out)))
+
+;; ── the fixture (ticket 911a4c1e) ───────────────────────────────────────────────
+
+(deftest a-fixture-orgs-stalling-week-has-no-week-finding
   (let [n (volatile! nil)
         out (with-out-str
               (vreset! n (check-all/report-orgs [(io/file "../orgs/week_fixture")])))]
-    (is (pos? @n))
-    (is (re-find #"✗ orgs/week_fixture \[week-stalls\] week-stalls/0: day 1: garden_job quote refused by has-budget" out) out)))
+    (is (zero? @n) out)
+    (is (not (re-find #"week-stalls" out)) out)
+    (is (re-find #"orgs/week_fixture is a fixture; its week is not judged" out) out)))
+
+(deftest a-planned-org-may-not-be-a-fixture
+  (is (true? (:fixture_flag (conform/live-report "../orgs/week_fixture"))))
+  (is (nil? (:fixture_flag (conform/live-report "../orgs/example"))))
+  (is (= ["manifest/fixture"]
+         (mapv :key (forge/fixture-findings {"live_flag" false "fixture_flag" true} "week_fixture")))
+      "the plan's findings pass refuses a fixture manifest")
+  (is (= [] (forge/fixture-findings {"live_flag" false} "example"))))

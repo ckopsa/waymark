@@ -343,15 +343,36 @@
         shot {:shot 1 :id 1 :ok true :pressed "held" :focus "field:title"
               :expects [{:surface "held" :path "title" :op "=" :value "x" :was "x" :ok true}]
               :why nil :still "stills/1.png" :role "turn"
-              :card "Monday" :hold_ms 1200}
+              :card "Monday" :hold_ms 1200
+              :refused {:kind "chore" :action "close" :refusal "The chore is not done."}}
         take {:scene (str id) :scene_version 1 :device "phone"
               :commit "9c4248d" :film "film-1" :shots [shot]}
         made (:id (:row (inv/create! eng :take take {:principal mayor})))
         row (row-of eng :take made)]
     (is (= "recorded" (name (:state row))))
     (is (= "field:title" (:focus (first (get-in row [:data :shots])))))
+    (is (= "close" (:action (:refused (first (get-in row [:data :shots]))))))
     (testing "the shot schema stays closed"
       (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :stray] 1)
+                                        {:principal mayor})))))))
+
+(deftest a-take-records-a-call-shots-outcome
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        shot {:shot 1 :id 1 :ok false
+              :call {:outcome "held" :sentence "Held for the mayor's tap."}}
+        take {:scene (str id) :scene_version 1 :device "phone"
+              :commit "9c4248d" :shots [shot]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)
+        call (:call (first (get-in row [:data :shots])))]
+    (is (= "recorded" (name (:state row))))
+    (is (= "held" (name (:outcome call))))
+    (is (= "Held for the mayor's tap." (:sentence call)))
+    (testing "an outcome outside moved, held and refused is refused"
+      (is (some? (refusal #(inv/create! eng :take
+                                        (assoc-in take [:shots 0 :call :outcome] "lost")
                                         {:principal mayor})))))))
 
 (deftest a-take-names-its-engine-and-org-commits

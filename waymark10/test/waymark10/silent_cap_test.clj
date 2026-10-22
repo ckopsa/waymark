@@ -1,8 +1,7 @@
 (ns waymark10.silent-cap-test
-  "The silent cap's warn mode and its lint (ticket 2636da5a). A
-  query-rows or search-rows call that names neither :limit nor :all
-  still gets the store's page of 100, and logs [silent-cap] naming its
-  call site. The lint finds every such call in the source — a grep for
+  "The silent cap's refusal (ticket 651352d3) and its lint (ticket
+  2636da5a). A query-rows or search-rows call that names neither
+  :limit nor :all throws, naming its call site. The lint finds every such call in the source — a grep for
   the call, then a read of its form to resolve its opts — and writes
   the list to docs/silent-cap.md, which each directory's ticket
   empties. The money and measure sites hold to none."
@@ -14,17 +13,18 @@
   (:import (clojure.lang LineNumberingPushbackReader LispReader$Resolver)
            (java.io File StringReader StringWriter)))
 
-;; ── the warn mode ───────────────────────────────────────────────────────
+;; ── the refusal ─────────────────────────────────────────────────────────
 
-(deftest page-limit-reads-all-limit-or-warns
+(deftest page-limit-reads-all-limit-or-refuses
   (is (nil? (store/page-limit {:all true})))
   (is (= 7 (store/page-limit {:limit 7})))
-  (let [err (StringWriter.)
-        n (binding [*err* err] (store/page-limit {}))]
-    (is (= store/silent-cap n))
-    (is (str/includes? (str err) "[silent-cap]"))
-    (testing "the warning names its call site"
-      (is (str/includes? (str err) "waymark10.silent-cap-test")))))
+  (let [e (try (store/page-limit {}) nil
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (some? e))
+    (is (true? (:waymark10/silent-cap (ex-data e))))
+    (is (str/includes? (str (ex-message e)) "[silent-cap]"))
+    (testing "the refusal names its call site"
+      (is (str/includes? (str (ex-message e)) "waymark10.silent-cap-test")))))
 
 (deftest all-reads-past-the-page
   (let [st (memory/storage)]
@@ -33,10 +33,11 @@
     (is (= 150 (count (store/query-rows st nil :thing {} {:all true}))))
     (is (= 150 (count (store/search-rows st nil :thing [] {:all true}))))
     (is (= 20 (count (store/query-rows st nil :thing {} {:limit 20}))))
-    (testing "naming neither still answers the page, while it warns"
-      (is (= store/silent-cap
-             (count (binding [*err* (StringWriter.)]
-                      (store/search-rows st nil :thing [] {}))))))))
+    (testing "naming neither refuses"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (doall (store/search-rows st nil :thing [] {}))))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (doall (store/query-rows st nil :thing {} {})))))))
 
 ;; ── the lint ────────────────────────────────────────────────────────────
 
@@ -85,6 +86,13 @@
                   (or (map? opts) (nil? opts)) :flagged
                   :else :passed))))
 
+(defn- lists?
+  "Whether a verdict puts its call on the list: a pass-through (:passed)
+  has no cap of its own, its callers' opts are its cap, so it is judged
+  at them and not listed."
+  [v]
+  (contains? #{:flagged :unread} v))
+
 (defn- repo-root
   "The checkout's root: the nearest directory up from here holding
   waymark10/deps.edn."
@@ -116,7 +124,7 @@
                          m (re-matcher call-re text)]
                    offset (vec (take-while some? (repeatedly #(when (.find m) (.start m)))))
                    :let [v (verdict (read-at text offset))]
-                   :when v]
+                   :when (lists? v)]
                {:path p
                 :line (inc (count (filter #{\newline} (subs text 0 offset))))
                 :verdict v
@@ -133,21 +141,20 @@
 
 (def ^:private heading
   {:flagged "Opts that name neither `:limit` nor `:all`"
-   :passed "Opts handed on from a caller (the warning names that caller at run time)"
    :unread "Calls the lint could not read (look at them by hand)"})
 
 (defn- doc-text [found]
   (str "# The silent cap: sites left to convert\n\n"
        "Written by `waymark10.silent-cap-test` (ticket 2636da5a) each time it\n"
        "runs; do not edit it by hand. A `query-rows` or `search-rows` call\n"
-       "that names neither `:limit n` nor `:all true` still gets the store's\n"
-       "page of " store/silent-cap ", and logs a `[silent-cap]` warning naming its call\n"
-       "site. Each directory's ticket converts its sites — an aggregate goes\n"
-       "to `count-matching`, `sum-matching` or `sum-amounts`; a listing page\n"
-       "keeps a `:limit` with a one-line reason — and empties its part of\n"
-       "this list. The last ticket turns the warning into a refusal once\n"
-       "the list is empty. Calls through an engine's `:find` (a ctx's, or\n"
-       "`find'`) are not grepped here: their warning names them at run time.\n"
+       "that names neither `:limit n` nor `:all true` now throws: the store\n"
+       "refuses it with a `[silent-cap]` error naming its call site, rather\n"
+       "than answer a page of " store/silent-cap ". An aggregate goes to `count-matching`,\n"
+       "`sum-matching` or `sum-amounts`; a listing page keeps a `:limit` with\n"
+       "a one-line reason. The entries left below are pass-through sites,\n"
+       "where the caller's opts decide. Calls through an engine's `:find`\n"
+       "(a ctx's, or `find'`) are not grepped here: their refusal names them\n"
+       "at run time. A call that hands its opts on is judged at its callers.\n"
        (str/join
         (for [[a in-area] (sort-by key (group-by (comp area :path) found))]
           (str "\n## " a "\n"
@@ -170,6 +177,12 @@
   (is (nil? (verdict '(store/search-rows st tx :k [] {:all true}))))
   (is (nil? (verdict '(store/search-rows st tx :k [] (assoc opts :limit n)))))
   (is (= :passed (verdict '(store/search-rows st tx :k conds opts))))
+  (testing "a pass-through is not listed: its callers' opts are its cap"
+    (is (not (lists? (verdict '(store/query-rows st tx :k where opts)))))
+    (is (not (lists? (verdict '(store/query-rows st tx :k (or where {}) (or opts {})))))))
+  (testing "a wrapper that merges a default :limit is judged on that cap of its own, not passed"
+    (is (nil? (verdict '(store/query-rows st tx :k where (merge {:limit 50} opts)))))
+    (is (not (lists? (verdict '(store/query-rows st tx :k where (merge {:order :id} opts)))))))
   (testing "a definition is not a call"
     (is (nil? (verdict '(query-rows [st tx kind where opts] "doc")))))
   (is (= :flagged (verdict (read-at "x (store/query-rows st tx ::a/k {} {})" 2)))))

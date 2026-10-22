@@ -39,6 +39,15 @@ copies `orgs/` there), keeps the live ones, loads each one's `src` and
 runs its seed, as `WAYMARK10_ORG` does for one org on the classpath.
 No live org is a deps root of the engine.
 
+A test-only org may also say `:fixture true` (ticket 911a4c1e), as
+`orgs/week_fixture/org.edn` does: its week may stall on purpose, so
+`waymark10.check-all` does not judge it and says so in one line
+(`factorykit.conform/fixture?`). Conform's live report carries the
+flag as `fixture_flag`, and a planned org may not say it: on an org
+that has an org_plan, the findings pass refuses it with the error
+`manifest/fixture` (`factory10.sources.forge/fixture-findings`), since
+a planned org's week is judged.
+
 ## Naming rules
 
 - The org name is the namespace root and the domain name: org
@@ -768,6 +777,25 @@ goal, red on a miss.
 **When not to use it.** A threshold on one row (a job 15% over its
 quote) has no window and no share: it is a derived fact and a notice
 when the fact becomes true.
+
+**Proving the fact notice.** A law scenario stages the rule in
+`:rules` and counts what it tells in `:expect :notices`, with `:told`
+for the members it addresses. Its `:row` data holds the facts as
+stored; the walk recomputes them at `:at`, and each rule whose fact
+turns true tells once:
+
+```clojure
+{:kind :job :attempt :touch
+ :at "2026-10-07T12:00:00Z"
+ :calendar {:zone "UTC"}
+ :row {:state :open :data {:owner "m-1" :due_on "2026-10-06" :overdue false}}
+ :rules [{:kind "job" :when {:fact "overdue" :becomes true}
+          :address {:field "owner"} :notifier "n-1"}]
+ :expect {:allowed true :notices 1 :told ["m-1"]}}
+```
+
+A fact that stays false, or was already true, tells nobody: say
+`:notices 0`. The scenario is judged in the check tier; it needs `:at`.
 
 ## One live row
 

@@ -942,7 +942,7 @@
                (store/with-tx st
                  (fn [tx]
                    (store/query-rows st tx target-kind (or where {})
-                                     (merge {:limit 100} opts))))))}))
+                                     (or opts {}))))))}))
 
 (defn stale-entries
   "The entries of one stored scope that no longer resolve, each beside

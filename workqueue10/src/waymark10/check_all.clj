@@ -33,7 +33,9 @@
   resources/<org>/week.edn has it played with workqueue10.week — what
   CI's `org-findings (<org>)` job plays — and judged with
   factory10.week/judge-week, so a week that stalls shows `[week-stalls]`
-  here before a submit."
+  here before a submit. An org whose manifest says :fixture true
+  (ticket 911a4c1e) is a test-only org whose week may stall on purpose:
+  its week is not judged, and the check says so in one line."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.string :as str]
@@ -143,10 +145,14 @@
   (reduce
    (fn [n ^File dir]
      (let [file (str "orgs/" (.getName dir))
+           fixture? (conform/fixture? dir)
            errs (org-errors dir)
            errs (if (some #(= :load (:class %)) errs)
                   errs
-                  (-> errs (into (law-errors dir)) (into (week-errors dir))))]
+                  (-> errs (into (law-errors dir))
+                      (into (when-not fixture? (week-errors dir)))))]
+       (when fixture?
+         (println (str "  [org] " file " is a fixture; its week is not judged")))
        (if (empty? errs)
          (println (str "  [org] " file ": conforms, its law page renders"))
          (doseq [{:keys [class key sentence remedy]} errs]
