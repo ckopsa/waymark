@@ -519,6 +519,34 @@
                               (assoc opts :idempotency-key (str (random-uuid))))]
         (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
 
+(def ^:private a-week-the-person-creates-a-hyphenated-row-in
+  "A week.edn whose person's create is named with a hyphen (ticket
+  0b5333a5), named again by a later `:row` and `$row`."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. The owner files a birch request."
+           :calls [{:as :person :kind "request" :action "create" :name "birch-2025"
+                    :input {:title "Trim the birch"}}
+                   {:as :mayor :kind "request" :action "accept" :row "birch-2025"}
+                   {:as :mayor :kind "work_order" :action "create"
+                    :input {:title "Trim the birch" :request_id {"$row" "birch-2025"}}}]}]})
+
+(deftest a-pressed-create's-row-is-named-as-its-bind-everywhere
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-the-person-creates-a-hyphenated-row-in))
+        calls (keep :call (:shots (:scene doc)))]
+    (testing "the press binds the normalized name"
+      (is (some #(= "row_birch_2025" (:bind %)) (:shots (:scene doc)))))
+    (testing "a later `row` and `$row` read the name the bind carries"
+      (is (= ["birch_2025"] (keep :row calls)))
+      (is (= [{"$row" "birch_2025"}] (keep #(get-in % [:input :request_id]) calls))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
 (def ^:private a-week-over-a-weekend
   "A week.edn of days 1, 2 and 5 from a Monday: the weekend between is
   skipped (ticket 0f6632ad)."
