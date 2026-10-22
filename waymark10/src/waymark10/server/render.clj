@@ -317,18 +317,61 @@
     (schema/conceal js (schema/engine-written-fields (:schema rdef)))
     js))
 
+(defn- purge-word
+  "A personal field as a purge's sentence names it: its label, read as
+  prose (lower-cased, unless it reads as an acronym), else its name
+  with the underscores spaced."
+  [k props]
+  (let [^String l (or (some #(when (and (string? %) (not (str/blank? %))) %)
+                            [(:title props) (:label props)
+                             (get-in props [:x-display :label])])
+                      (str/replace (name k) "_" " "))]
+    (if (and (> (count l) 1) (Character/isUpperCase (.charAt l 1)))
+      l
+      (str (str/lower-case (subs l 0 1)) (subs l 1)))))
+
+(defn purge-consequence
+  "A :purge door's confirm sentence, derived from the declaration and
+  this row (docs/spec-documents.md §5): the row named by its summary
+  line, the personal fields the purge clears by label and the documents
+  they hold by count. No pronoun — a declaration does not say one."
+  [rdef row]
+  (let [form (:schema rdef)
+        em (when form (schema/entry-map form))
+        words (into []
+                    (comp (remove #(get-in em [% :properties :waymark/document]))
+                          (map #(purge-word % (get-in em [% :properties]))))
+                    (schema/personal-fields form))
+        n (count (schema/document-ids form (:data row)))
+        parts (cond-> words
+                (pos? n) (conj (str n (if (= 1 n) " document" " documents"))))]
+    (str (summary/line rdef (assoc row :kind (:kind rdef))) "'s "
+         (case (count parts)
+           0 "personal fields"
+           1 (first parts)
+           (str (str/join ", " (pop parts)) " and " (peek parts)))
+         (if (and (= 1 (count parts)) (<= n 1)) " is" " are")
+         " erased for good; the record stays.")))
+
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         ;; per-origin consequence (batch H): a {from-state sentence}
         ;; map resolves by the row's CURRENT state at render time —
         ;; the one moment the origin is known. A string consequence
         ;; already landed in :display :description at normalize.
-        display (if (and (map? (:consequence safety))
-                         (nil? (:description display)))
+        display (cond
+                  ;; a purge says what it erases, read off this row
+                  ;; (docs/spec-documents.md §5), unless it wrote its own
+                  (and (:purge defn') row (nil? (:description display)))
+                  (assoc display :description (purge-consequence rdef row))
+
+                  (and (map? (:consequence safety))
+                       (nil? (:description display)))
                   (if-some [sentence (get (:consequence safety) (:state row))]
                     (assoc display :description sentence)
                     display)
-                  display)
+
+                  :else display)
         href (str self "/-/" (name (:name defn')))
         input-js (when (:input defn')
                    (-> (fold-acceptance (schema/json-schema (:input defn'))

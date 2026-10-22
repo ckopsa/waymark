@@ -114,6 +114,25 @@
           (is (seq paths))
           (is (every? #(= :truth (fp/classify-path %)) paths)))))))
 
+(deftest a-kinds-frozen-states-are-law
+  ;; docs/spec-documents.md §8: :frozen-in refuses writes, so adding or
+  ;; removing a frozen state mints a revision. A kind without it carries
+  ;; no facet and keeps its hash.
+  (let [h (comp fp/fingerprint-hash fp/fingerprint-of)
+        frozen (assoc (plan-rmap) :frozen-in [:done])]
+    (is (not (contains? (fp/fingerprint-of (plan-rmap)) "frozen_in")))
+    (is (= (h (plan-rmap)) (h (assoc (plan-rmap) :frozen-in []))))
+    (is (not= (h (plan-rmap)) (h frozen)))
+    (is (= (h frozen) (h (assoc (plan-rmap) :frozen-in #{:done}))))
+    (testing "adding a frozen state moves the hash, and the move is truth"
+      (let [other (assoc (plan-rmap) :frozen-in [:done :abandoned])
+            d (fp/diff-fingerprints (fp/fingerprint-of frozen)
+                                    (fp/fingerprint-of other))
+            paths (map :path (concat (:added d) (:removed d) (:changed d)))]
+        (is (not= (h frozen) (h other)))
+        (is (seq paths))
+        (is (every? #(= :truth (fp/classify-path %)) paths))))))
+
 (deftest a-fingerprint-diffs-empty-against-itself
   ;; regression: leaves holding nil/false (a guard's check, an off
   ;; safety flag) are present paths, not added/removed ones
