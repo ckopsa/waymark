@@ -867,3 +867,59 @@
           (is (== -150 (reduce + (map (comp :amount :amount) back)))))
         (testing "posting the transition again answers all 150 it posted"
           (is (= 150 (count (store/with-tx st (fn [tx] (postings/post! eng tx source entries)))))))))))
+
+;; ── ledger step 4 at birth: :create-posts ───────────────────────────────────
+
+(def ^:private stock-kind
+  (r/resource {:kind :pt_stock
+               :plural "pt_stocks"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:on_hand {:unit :count :never-below 0}
+                          :reserved {:unit :count :never-below 0}}
+               :actions {:restock {:from #{:open} :to :open
+                                   :input [:map [:qty [:int {:min 1}]]]
+                                   :posts '[{:account [:pt_stock (self) :on_hand]
+                                             :amount (input :qty) :sign :+}]
+                                   :safety {:idempotent false :reversible false :confirm false}
+                                   :display {:label "Restock"}}}}))
+
+(def ^:private hold-kind
+  (r/resource {:kind :pt_hold
+               :plural "pt_holds"
+               :states [:held]
+               :initial :held
+               :terminal #{}
+               :allow-dead #{:held}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]] [:mug [:string {:max 80}]]
+                        [:qty [:int {:min 1}]]]
+               :create-posts '[{:move (input :qty)
+                                :from [:pt_stock (input :mug) :on_hand]
+                                :to [:pt_stock (input :mug) :reserved]}]}))
+
+(deftest step-4-a-create-posts-in-its-own-transaction
+  (let [st (memory/storage)
+        eng (inv/engine {:storage st :resources [stock-kind hold-kind postings/posting]})
+        mug-id (str (get-in (inv/create! eng :pt_stock {:name "speckled"} {:principal elena})
+                            [:row :id]))
+        stock #(get-in (store/with-tx st (fn [tx] (store/load-row st tx :pt_stock mug-id {})))
+                       [:data %])
+        holds #(count (store/with-tx st (fn [tx] (store/search-rows st tx :pt_hold [] {:all true}))))]
+    (inv/invoke! eng :pt_stock mug-id :restock {:qty 5}
+                 {:principal elena :idempotency-key "restock-5"})
+    (testing "a hold born for 2 moves on_hand to reserved as it is placed"
+      (inv/create! eng :pt_hold {:name "a" :mug mug-id :qty 2} {:principal elena})
+      (is (== 3 (stock :on_hand)))
+      (is (== 2 (stock :reserved)))
+      (is (= 3 (count (postings-of st)))))
+    (testing "a posting that cannot be written refuses the create, and no row is born"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/create! eng :pt_hold {:name "b" :mug "" :qty 1} {:principal elena})))
+      (is (= 1 (holds)))
+      (is (== 3 (stock :on_hand)))
+      (is (= 3 (count (postings-of st)))))))

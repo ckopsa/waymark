@@ -111,6 +111,20 @@
   (testing "fire_batch from the house's made, then place, ship and restock_return as moves"
     (is (nil? (refusal (shop))))))
 
+(deftest a-create-that-posts-to-one-side-only-is-unbalanced
+  (testing "a batch born with its pieces in on_hand from nowhere"
+    (is (re-find #"ml_batch \[unbalanced-door\] create posts to ml_product\.on_hand on one side only"
+                 (str (refusal (shop :ml_batch (r/resource
+                                                (batch-decl :create-posts
+                                                            '[{:account [:ml_product (data :product) :on_hand]
+                                                               :amount (data :pieces) :sign :+}]))))))))
+  (testing "the same entry as a :move from the house's made loads"
+    (is (nil? (refusal (shop :ml_batch (r/resource
+                                        (batch-decl :create-posts
+                                                    '[{:move (data :pieces)
+                                                       :from [:house :made]
+                                                       :to [:ml_product (data :product) :on_hand]}]))))))))
+
 (deftest a-door-that-posts-to-one-side-only-is-unbalanced
   (testing "a restock that adds to on_hand from nowhere"
     (let [msg (str (refusal (shop :ml_product (r/resource (product-decl :actions restock-from-nowhere)))))]

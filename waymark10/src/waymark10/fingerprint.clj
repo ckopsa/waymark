@@ -474,6 +474,12 @@
                                 g))
                     (:create-guards rmap)))
 
+      ;; what a create posts at birth is law as its guards are.
+      ;; Non-empty-only, so every kind that posts nothing at birth
+      ;; hashes byte-identical to before
+      (seq (:create-posts rmap))
+      (update "create" assoc "posts" (pr-str (:create-posts rmap)))
+
       ;; recorded deviations are reviewable law (advertisement-class):
       ;; editing one shows in the diff and mints a revision. Projected
       ;; only when non-empty, so every deviation-free kind's hash is
