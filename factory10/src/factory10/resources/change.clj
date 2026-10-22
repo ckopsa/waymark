@@ -438,6 +438,23 @@
               (or (not (map? landing))
                   (and landed-head head (not= landed-head head))))))))
 
+(defn- base-only-round?
+  "True when the bench says all that is new since the last push is
+  merges of the base (ticket 50f09817): one merge or more, no other
+  commit and no dirty path. That round is upkeep, not a fix cycle, so
+  the round ceiling does not stop it and it does not count. A status
+  with no `since_push`, or no status at all, is a round like any other."
+  [status]
+  (let [since (:since_push status)
+        n (fn [v] (cond (sequential? v) (count v)
+                        (number? v) (long v)
+                        :else -1))]
+    (boolean
+     (and (map? since)
+          (pos? (n (:merges_of_base since)))
+          (zero? (n (:other_commits since)))
+          (zero? (n (:dirty_paths since)))))))
+
 (defn- rig-refusal!
   "The rig's own refusal, said again as this door's.
 
@@ -553,6 +570,7 @@
       (let [;; the lane's own ceiling when every path sits in one
             ;; (ticket bacb84f2), and max_lines otherwise
             ceiling (bench/max-lines-for policy (:paths status))
+            base-only (base-only-round? status)
             answer (bench/ask ctx :submit
                               (cond-> {:repo repo
                                        :branch branch
@@ -598,8 +616,12 @@
                              ;; round before the forge was re-read
                              ;; (ticket 5f12e772)
                              :mergeable "unknown"
-                             :rounds (inc (long (or (get-in row [:data :rounds])
-                                                    0)))}
+                             ;; a round that only merges the base does
+                             ;; not count (ticket 50f09817)
+                             :rounds (cond-> (long (or (get-in row [:data :rounds])
+                                                       0))
+                                       (not base-only) inc)
+                             :last_round_kind (when base-only "base_merge")}
                       (:commit answer) (assoc :head_sha
                                               (str (:commit answer)))))))))))
 
@@ -782,7 +804,14 @@
     (let [policy (bench/policy-of row ctx)
           rounds (long (or (get-in row [:data :rounds]) 0))
           ceiling (bench/rounds-of policy)]
-      (if (< rounds ceiling)
+      ;; at the ceiling the rig says whether this round only merges
+      ;; the base, which passes (ticket 50f09817); an unreachable rig
+      ;; counts the round as any other
+      (if (or (< rounds ceiling)
+              (base-only-round?
+               (bench/ask ctx :status
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (bench/branch-of row policy)})))
         (t/allow)
         (t/deny {:vars {:rounds rounds :ceiling ceiling}})))))
 
@@ -1140,7 +1169,8 @@
                  :review_state :missing_checks :behind_base :base_compared_at
                  :missing_checks_head :green_head :held_head :held_since
                  :held_again :held_threw :held_reason :branch :worktree_dirty
-                 :rounds :failing_checks :conflicts :rerun_head :rerun_note
+                 :rounds :last_round_kind :failing_checks :conflicts
+                 :rerun_head :rerun_note
                  :landing_error :train_red_head :train_red :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :url :born_from
@@ -1152,6 +1182,10 @@
    ;; and url.
    :schema
    [:map
+    ;; what the last submit was (ticket 50f09817): "base_merge" when it
+    ;; only merged the base and so did not count toward `rounds`
+    [:last_round_kind {:optional true :x-display {:hidden true}}
+     [:maybe [:enum "base_merge"]]]
     ;; the head the forge pass last read green on every required check
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
