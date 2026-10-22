@@ -28,13 +28,16 @@
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
     :accounts
+    :lines
+    :rate-table
     :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :effect :unwinds
     :engine
-    :out-of-state-says :replay :log-says :decided :decided-held})
+    :out-of-state-says :replay :log-says :decided :decided-held
+    :posts :reverses-posts})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

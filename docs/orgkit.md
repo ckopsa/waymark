@@ -15,6 +15,7 @@ orgs/<org>/
   src/<org>/org.clj        the module: resources, check-resources, domain
   src/<org>/kinds/*.clj    one defresource per kind, guards as defguard sentences
   resources/<org>/seed.edn what a fresh engine holds at boot
+  resources/<org>/week.edn the first week, as a script (§ The week)
   README.md                what each file is
 ```
 
@@ -342,6 +343,75 @@ it:
   org.edn waives it for an org that only works inside.
 
 The loader that walks it on a fresh engine is M1b's.
+
+## The week
+
+`resources/<org>/week.edn` is the org's first week as a script, beside
+the first-week scene the director films: each day's calls, in order,
+and who makes each.
+
+```clojure
+{:day-one "2026-10-21"
+ :goal {:kind "prospect" :state "engaged"}
+ :days [{:day 1
+         :calls [{:as :world :kind "prospect" :action "create" :name "hillside"
+                  :input {:company "Hillside Labs"}}
+                 {:as :mayor :kind "prospect" :action "qualify" :row "hillside"
+                  :input {:note "Referred by Jordan Lee."}}]}
+        {:day 2
+         :calls [{:as :mayor :kind "study" :action "create"
+                  :input {:prospect_id {"$row" "hillside"}}}]}]}
+```
+
+- `:as` is a cast role: `:world`, a rehearsal cast member (the call's
+  `:cast` key, or the first); `:mayor`, the org's mayor, an agent
+  acting for the owner; or `:person`, the seed's `:owner`.
+- A call with `:row` walks that row's `:action`; one without it walks a
+  create door of the kind. `:name` names the row a create made, and
+  `{"$row" "hillside"}` anywhere in a later input is that row's id.
+- A day's `:person-allows` is `:today` unless it says `:yesterday` or
+  `:none`: after the day's calls the owner allows each call held that
+  day, as the director does, since a held call expires 24h after it is
+  made. `:yesterday` allows them at the start of the next day instead,
+  and the report warns `[week-allow-late]` beside each such allow: its
+  call had expired by then. `:none` allows nothing that day.
+- `:goal` is the payoff: the rows of that kind in that state.
+- The first-week scene plays the week as the camera rolls: day 1 in
+  full, a later day only the calls marked `:show true` (with no mark, a
+  person's call and the day's last); a call not shown is still played,
+  its shots trimmed. A person's call on a `:row` is filmed as the
+  owner's tap on that row's held call, framing the fields its `:focus`
+  lists.
+- `:card`, on the week or on a day, is a line of text of at most 280
+  characters: the week's (the seed's) opens the first-week scene as a
+  full-screen card, and each day's comes before that day's shots.
+
+`clojure -M -m workqueue10.week <org-dir> [--json]`, from
+`workqueue10/`, plays it headlessly. It boots the org in-process as an
+org clone over a memory store, seeded with its rehearsal, sets the
+demo clock to 09:00 UTC on `:day-one`, makes each day's calls through
+the engine's doors as their cast, and shifts the clock P1D between
+days. The mayor wears a grant the owner mints over the doors the
+script's mayor calls name. It prints a report: per call its day, cast,
+kind, action and outcome, `moved`, `held` or `refused`, with the guard
+and its sentence when refused; `person_asks`, the calls held for the
+owner; and the goal's rows. It exits non-zero only for a broken script
+(a row name no earlier call made, a cast or kind it does not know),
+never for a refusal: a refusal is part of the report. Nothing renders
+and nothing leaves the process. `orgs/week_fixture` is a week that
+plays a refusal, a hold allowed the same day, and its payoff.
+
+The week is judged three ways, each an error that blocks propose:
+`[week-stalls]`, one for each refused call, naming its day, door and
+guard; `[week-no-ask]` when no call was held for the owner's tap; and
+`[week-no-payoff]` when the goal counts no row by the last day. The
+audit's `org-findings` job plays the week.edn and hands the report to
+the findings pass, which records these findings on the org_plan and
+the compact week as `dry_week`; an org with no week.edn carries
+`[week-missing]`, a warning for now. The bench check
+(`cd workqueue10 && clojure -M:check`) plays and judges the week of
+each org the change touches, so a seat sees the three before it
+submits.
 
 ## Conformance
 

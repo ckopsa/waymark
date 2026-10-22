@@ -533,6 +533,17 @@
                 {:label "The size ceiling, in lines"
                  :help "The most changed lines one submit may carry, added plus removed. The bench refuses a larger change before it commits it."}}
     [:int {:min 1 :max 100000}]]
+   ;; a lane's own ceiling (ticket bacb84f2). OPTIONAL: a policy
+   ;; without it keeps max_lines for every change (bench's
+   ;; `lane-max-lines-of`)
+   [:lane_max_lines {:optional true
+                     :examples [{:orgs 3000}]
+                     :x-display
+                     {:raw true
+                      :label "A lane's own size ceiling"
+                      :spelled-by-hand "A lane prefix is any path the policy's lanes name, and no form can list them, so each pair is typed: the prefix, then its ceiling."
+                      :help "A lane prefix and its ceiling in lines, as {\"orgs\": 3000}. A change whose touched paths all stand in a lane under that prefix takes that ceiling; any other change keeps the size ceiling above."}}
+    [:maybe [:map-of :keyword [:int {:min 1 :max 100000}]]]]
    [:opens_pr {:default true
                :x-display
                {:label "A push opens a pull request"
@@ -759,8 +770,8 @@
 (def ^:private policy-order
   "Where the kit's base fields stand among factory10's own on the
   form. A field this does not name follows, in its own place."
-  [:repository :clone_url :branch_pattern :base :max_lines :opens_pr
-   :auto_merge :merge_by :required_checks :merge_method
+  [:repository :clone_url :branch_pattern :base :max_lines :lane_max_lines
+   :opens_pr :auto_merge :merge_by :required_checks :merge_method
    :merge_wait_seconds :deploy_check :deploy_wait_seconds
    :rounds_per_change])
 

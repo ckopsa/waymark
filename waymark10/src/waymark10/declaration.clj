@@ -62,7 +62,12 @@
    ;; {:none "why"}: the door's :decided sentence names a person's tap
    ;; as narrative, and the AI may act (ticket 7315ae72). Read by the
    ;; org audit and the law page; prose, never law, like :decided
-   :decided-held])
+   :decided-held
+   ;; the entries this door posts (docs/spec-ledger-money.md §4),
+   ;; normalized at the def site by waymark10.posts, and the posting
+   ;; doors an :undo reverses — stamped by verify-undo-pointers from
+   ;; the pointers it strips, so a declaration normalized twice keeps it
+   :posts :reverses-posts])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
@@ -265,6 +270,14 @@
    ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
    ;; judged at the def site (resource/check-accounts!) — law
    :accounts
+   ;; the kind's line items (docs/spec-ledger-money.md § 6): {:kind
+   ;; :parent :fields}, a child kind the engine makes (waymark10.lines)
+   ;; and writes only through this kind's create and edit doors
+   :lines
+   ;; the kind's rows as a table (rate …) reads (docs/spec-ledger-money.md
+   ;; § 8): {:name :key [fields] :value field :effective date-field},
+   ;; judged at the def site (resource/check-rate-table!) — law
+   :rate-table
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

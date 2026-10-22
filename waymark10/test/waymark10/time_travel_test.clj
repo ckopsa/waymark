@@ -422,6 +422,29 @@
         (is (some #(re-find #"declares no :retain \{:data true\}" (str %))
                   (get-in ldoc [:data :notes])))))))
 
+;; ── the held call pending then ──────────────────────────────────────
+
+(deftest held-at-names-the-call-pending-at-the-instant
+  (let [t0 (java.time.Instant/parse "2026-10-01T09:00:00Z")
+        t1 (java.time.Instant/parse "2026-10-02T09:00:00Z")
+        t2 (java.time.Instant/parse "2026-10-03T09:00:00Z")
+        call {:id "h1" :created-at t0 :ended-at t2 :who "Dana"
+              :data {:door {:kind "tt_almanac" :id "a1" :action "close"}
+                     :waits_on "m1" :why "Close the almanac."}}]
+    (testing "between its birth and its ending the call is pending"
+      (is (= {:call "h1" :action "close" :waits_on "m1" :who "Dana"
+              :why "Close the almanac."}
+             (history/held-at :tt_almanac "a1" t1 [call]))))
+    (testing "before its birth, at its ending, or on another row it is not"
+      (is (nil? (history/held-at :tt_almanac "a1"
+                                 (java.time.Instant/parse "2026-09-30T09:00:00Z")
+                                 [call])))
+      (is (nil? (history/held-at :tt_almanac "a1" t2 [call])))
+      (is (nil? (history/held-at :tt_almanac "a2" t1 [call]))))
+    (testing "a call still waiting has no ending"
+      (is (= "h1" (:call (history/held-at :tt_almanac "a1" t2
+                                          [(assoc call :ended-at nil)])))))))
+
 ;; ── waymark_history rides the route (waymark-zp5) ───────────────────
 
 (deftest the-mcp-tool-is-a-pass-through

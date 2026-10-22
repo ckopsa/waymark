@@ -245,6 +245,11 @@ jobs:
       calendar10: ${{ steps.detect.outputs.calendar10 }}
       factory10: ${{ steps.detect.outputs.factory10 }}
       localfire: ${{ steps.detect.outputs.localfire }}
+      # Whether the diff can move the UI walks (ticket 3ca3e028):
+      # scripts/ui-paths.sh's answer from ci/ui-paths.edn on a pull
+      # request or an engine train, true on a push and any other event.
+      # ui-access, ui-quest-phone and ui-guided run on it.
+      ui: ${{ steps.detect.outputs.ui }}
       # Whether the diff touches .github/workflows/ or a shell script
       # the workflows and hooks call — true too whenever there is no
       # diff to read. `actionlint` (and its shellcheck step) runs on it.
@@ -340,7 +345,16 @@ jobs:
             done
           }
 
-          say_yes () { emit true all; echo "workflows=true" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+          # ui= is written once: by the event below, or from the diff on a
+          # pull request, or as true by say_yes when it ends the step first.
+          ui_said=false
+          say_ui () { echo "ui=$1" >> "$GITHUB_OUTPUT"; ui_said=true; }
+
+          say_yes () {
+            emit true all; echo "workflows=true" >> "$GITHUB_OUTPUT"
+            [ "$ui_said" = true ] || say_ui true
+            echo "$1"; exit 0
+          }
 
           # ── A TRAIN'S LANE: ITS JOBS, NOT THE DIFF'S ─────────────────
           #
@@ -374,6 +388,31 @@ jobs:
               echo "refused=lane: '$LANE' is not docs, orgs/<name> or engine" >> "$GITHUB_OUTPUT"
               echo "::error title=changes / lane::'$LANE' is not docs, orgs/<name> or engine"
               exit 1 ;;
+          esac
+
+          # ── THE UI WALKS: WHETHER THIS DIFF CAN MOVE THEM ───────────
+          #
+          # ui-access, ui-quest-phone and ui-guided run when a changed
+          # path matches ci/ui-paths.edn (ticket 3ca3e028). A push to main
+          # runs them always: a red walk after a landing is the net under
+          # this narrowing. An engine train has no base of its own, so its
+          # diff is taken from where it left main; a pull request's is
+          # read below, with the suites'. Any other event runs them.
+          case "$EVENT:${LANE:-}" in
+            workflow_dispatch:engine)
+              ui_files=""
+              if ui_base=$(git merge-base origin/main HEAD 2>/dev/null); then
+                ui_files=$(git diff --name-only "$ui_base" HEAD)
+              fi
+              if [ -n "$ui_files" ]; then
+                ui=$(bash scripts/ui-paths.sh <<< "$ui_files")
+                say_ui "${ui#ui=}"
+              else
+                echo "ui-paths: no diff from main to read — the walks run"
+                say_ui true
+              fi ;;
+            pull_request:*) ;;
+            *) say_ui true ;;
           esac
 
           # A workflow_dispatch has no base, and a brand-new branch's
@@ -429,6 +468,8 @@ jobs:
           # and whether the self-host walk runs.
           if [ "$EVENT" = pull_request ]; then
             echo "selfhost=$selfhost" >> "$GITHUB_OUTPUT"
+            ui=$(bash scripts/ui-paths.sh <<< "$files")
+            say_ui "${ui#ui=}"
             org_list=()
             for o in "${!orgs[@]}"; do
               [ -d "orgs/$o" ] && org_list+=("$o")
@@ -776,6 +817,22 @@ jobs:
           set -uo pipefail
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
             || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
+      # The org's week.edn played headlessly rides the same artifact as
+      # `week_report`, for the forge pass to judge and record (tickets
+      # 7fba2e9b, 62297746). No week.edn, or a week that does not play,
+      # hands null: the pass records [week-missing].
+      - name: week
+        working-directory: workqueue10
+        run: |
+          set -uo pipefail
+          : > "$RUNNER_TEMP/week.json"
+          if [ -f "../orgs/$ORG/resources/$ORG/week.edn" ]; then
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m workqueue10.week "../orgs/$ORG" --json > "$RUNNER_TEMP/week.out" \
+              || echo "workqueue10.week exited $?; the artifact carries no week"
+            # The JSON object is the last line the player prints.
+            tail -n 1 "$RUNNER_TEMP/week.out" > "$RUNNER_TEMP/week.json"
+            jq -e 'type == "object"' "$RUNNER_TEMP/week.json" > /dev/null 2>&1 || : > "$RUNNER_TEMP/week.json"
+          fi
       # Lint keys leave the line out, so a finding keeps its key when code
       # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
       # for repeats of one slug in one file, in line order.
@@ -783,7 +840,8 @@ jobs:
         run: |
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
-             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" '
+             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
+             --rawfile week "$RUNNER_TEMP/week.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -801,6 +859,7 @@ jobs:
             | {($org): (($c[0][$org] // []) + .)}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
+              + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
@@ -1646,6 +1705,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      needs.changes.outputs.ui == 'true' &&
       (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
@@ -1835,6 +1895,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      needs.changes.outputs.ui == 'true' &&
       (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
@@ -2001,6 +2062,7 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.code == 'true' && needs.changes.outputs.waymark10 == 'true' &&
+      needs.changes.outputs.ui == 'true' &&
       (inputs.lane || 'engine') == 'engine' &&
       (github.event_name != 'workflow_dispatch' || inputs.only == '')
     runs-on: ubuntu-latest
@@ -2441,6 +2503,7 @@ jobs:
           RUN_CALENDAR10: ${{ needs.changes.outputs.calendar10 }}
           RUN_FACTORY10: ${{ needs.changes.outputs.factory10 }}
           RUN_LOCALFIRE: ${{ needs.changes.outputs.localfire }}
+          RUN_UI: ${{ needs.changes.outputs.ui }}
           WORKFLOWS: ${{ needs.changes.outputs.workflows }}
           ACTIONLINT: ${{ needs.actionlint.result }}
           LINKS: ${{ needs.links.result }}
@@ -2502,23 +2565,29 @@ jobs:
           # none does. A pull request skips every job the path table in
           # `changes` left out, on purpose too — but only a job it left
           # out: a selected job that was skipped is still a failure. On a
-          # push every flag is true, so a skip there always fails.
+          # push every flag is true, so a skip there always fails. The UI
+          # walks are selected by ui= as well (ticket 3ca3e028), which an
+          # engine train reads from its diff too: a walk its paths cannot
+          # move is skipped on purpose there, and on a dispatch every other
+          # flag is true, so nothing else may skip.
           quick_sel=false
           for f in "${RUN_WORKQUEUE10:-}" "${RUN_CALENDAR10:-}" "${RUN_LOCALFIRE:-}"; do
             if [ "$f" = true ]; then quick_sel=true; fi
           done
+          ui_sel=false
+          if [ "${RUN_WAYMARK10:-}" = true ] && [ "${RUN_UI:-}" = true ]; then ui_sel=true; fi
           for job in "quick $QUICK $quick_sel" \
                      "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
                      "test10 $TEST10 ${RUN_WAYMARK10:-}" \
                      "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
-                     "ui-access $UI_ACCESS ${RUN_WAYMARK10:-}" \
-                     "ui-quest-phone $UI_QUEST_PHONE ${RUN_WAYMARK10:-}" \
-                     "ui-guided $UI_GUIDED ${RUN_WAYMARK10:-}"; do
+                     "ui-access $UI_ACCESS $ui_sel" \
+                     "ui-quest-phone $UI_QUEST_PHONE $ui_sel" \
+                     "ui-guided $UI_GUIDED $ui_sel"; do
             read -r name r selected <<< "$job"
             if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
               continue
             fi
-            if [ "$EVENT" = pull_request ] && [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
+            if [ "$EVENT" != push ] && [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
               echo "gate: $name skipped on purpose — this diff's paths do not reach it."
               continue
             fi

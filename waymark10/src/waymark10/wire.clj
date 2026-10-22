@@ -58,6 +58,14 @@
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
         (= op 'money) {"dec" (money/canonical-amount (first args)) "cur" (second args)}
+        (= op 'balance) (let [[k r n :as a] (first args)]
+                          (if (= 2 (count a))
+                            ["balance" (name k) (name r)]
+                            ["balance" (name k) (form->wire r) (name n)]))
+        (= op 'rate) (let [[t ks & more] args]
+                       (into ["rate" (name t)
+                              (into {} (map (fn [[f x]] [(name f) (form->wire x)])) ks)]
+                             (map form->wire) more))
         (= op 'follow) (let [[ref field] (take-last 2 args)]
                          (cond-> ["follow"]
                            (= 3 (count args)) (conj (name (first args)))
@@ -118,6 +126,26 @@
                       {:tree tree}))
 
             (= op 'now) (list 'now)
+
+            (= op 'balance)
+            (let [[k r n] args]
+              (cond
+                (and (= 2 (count args)) (string? k) (string? r))
+                (list 'balance [(keyword k) (keyword r)])
+                (and (= 3 (count args)) (string? k) (string? n))
+                (list 'balance [(keyword k) (decode r) (keyword n)])
+                :else
+                (refuse "(balance …) wire node takes kind, row and account, or house and account"
+                        {:tree tree})))
+
+            (= op 'rate)
+            (let [[t ks & more] args]
+              (if (and (<= 2 (count args) 3) (string? t) (map? ks))
+                (list* 'rate (keyword t)
+                       (into {} (map (fn [[f x]] [(keyword (name f)) (decode x)])) ks)
+                       (map decode more))
+                (refuse "(rate …) wire node takes a table, a key object and a date"
+                        {:tree tree})))
 
             (= op 'it)
             (if (and (= 1 (count args)) (nat-int? (first args)))

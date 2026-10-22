@@ -35,6 +35,11 @@
   of an org's day (`day-in-window`), and a hole that finds none says so
   plainly.
 
+  A CARD IS A FULL-SCREEN TEXT. A shot `{card, hold: {ms}}` shows its
+  text alone on black for the hold. The text is plain, at most 280
+  characters, and may hold holes as a `say` does; `check` asks a hold
+  of at least 1500 ms and 60 ms a word (`card-ms`).
+
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
   (:require [clojure.string :as str]
@@ -58,7 +63,7 @@
 
 (def verbs
   "The one verb a shot has, in the order the spec lists them."
-  ["open" "tap" "press" "type" "hold" "wait_for" "meanwhile"])
+  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day"])
 
 (def ops
   "What an expectation may compare with."
@@ -211,6 +216,54 @@
         (some? (get c "bind"))
         (assoc-in [:bound (str (get c "bind"))] (or rdef true))))))
 
+(defn- call-shot-step
+  "One `call` shot, {as, kind, action, row?, name?, input?}: the walk
+  after it, or {:problem}. It is a week.edn call (docs/orgkit.md § The
+  week) the performer makes as the shot plays (ticket 1b89ca49). `row`
+  is the `name` an earlier call shot gave the row it made, and with no
+  `row` an action the kind does not declare is the kind's create."
+  [v st people rdef-of]
+  (let [k (some-> (get v "kind") str)
+        rdef (when k (rdef-of k))
+        action (some-> (get v "action") str)
+        row (some-> (get v "row") str)
+        door (when (and rdef action) (get-in rdef [:actions (keyword action)]))
+        create? (and rdef (nil? door) (nil? row))
+        names (if create?
+                (names-of (or (:create-schema rdef) (:schema rdef)))
+                (names-of (:input door)))
+        input (get v "input")
+        stray (when (map? input) (first (remove names (keys input))))]
+    (cond
+      (not (some #{(str (get v "as"))} people))
+      (fail "`as` names " (tick (get v "as")) ", which is not in the cast.")
+
+      (nil? k)
+      (fail "a `call` names its `kind`.")
+
+      (nil? rdef)
+      (fail (tick k) " is not a kind this engine serves.")
+
+      (str/blank? action)
+      (fail "a `call` names its `action`.")
+
+      (and (nil? door) (not create?))
+      (fail (tick action) " is not a door of " k ".")
+
+      (and row (not (contains? (:named st) row)))
+      (fail "`row` names " (tick row) ", which no earlier call shot made.")
+
+      (and (some? input) (not (map? input)))
+      (fail "a `call`'s `input` is a map.")
+
+      (some? stray)
+      (fail (tick stray) " is not a field " (tick action) " takes.")
+
+      :else
+      (cond-> (assoc st :found rdef)
+        (some? (get v "name"))
+        (update :named (fnil conj #{}) (str (get v "name")))))))
+
 (defn- check-problem
   "Why one expectation cannot be read; nil when it can."
   [where c st rdef-of]
@@ -249,14 +302,47 @@
             (some #(check-problem where % st rdef-of) (get e where)))
           ["envelope" "screen"])))
 
+(defn- named? [x] (and (string? x) (not (str/blank? x))))
+
+(defn- seat-open-refusal
+  "Why a `seat` or `sitting` open cannot be resolved: `{seat <name>}`
+  alone, or `{sitting {of <name>, which latest}}` alone. nil when it
+  can; whether the seat exists is known only when the shot plays."
+  [o]
+  (let [h (get o "sitting")
+        stray (when (map? h) (remove #{"of" "which"} (keys h)))
+        which (get h "which")]
+    (cond
+      (< 1 (count o))
+      "a `seat` or `sitting` open names nothing beside it."
+
+      (contains? o "seat")
+      (when-not (named? (get o "seat"))
+        "a `seat` open names the seat by its name, a string.")
+
+      (not (map? h))
+      "a `sitting` open is a map of `of` and `which`."
+
+      (seq stray)
+      (str "a `sitting` open takes of and which, not " (tick (first stray)) ".")
+
+      (not (named? (get h "of")))
+      "a `sitting` open names its seat in `of`, by name."
+
+      (not= "latest" (if (keyword? which) (name which) which))
+      (str "a `sitting` open's `which` is \"latest\", and this one is " (tick which) "."))))
+
 (defn open-refusal
   "Why a shot's `open` cannot be resolved, as `check` says it of a
   `$day-row` open: one key, a map of `window` (the clock's), `day` and
   `domain`, judged as a `$day` hole of the clock's window is, and beside
-  it only `as_of` false, for the row as it stands now. nil for any other
-  open, which POST /api/-/scenes/open passes through as given."
+  it only `as_of` false, for the row as it stands now; and of a `seat`
+  or `sitting` open (`seat-open-refusal`). nil for any other open, which
+  POST /api/-/scenes/open passes through as given."
   [open]
   (let [o (plain open)]
+    (if (and (map? o) (or (contains? o "seat") (contains? o "sitting")))
+      (seat-open-refusal o)
     (when (and (map? o) (contains? o "$day-row"))
       (let [h (get o "$day-row")
             stray (when (map? h) (remove #{"window" "day" "domain"} (keys h)))]
@@ -282,7 +368,21 @@
 
           (not (and (integer? (get h "day")) (<= 1 (get h "day") 31)))
           (str "a `$day-row` open names its `day`, a whole number from 1 to 31, and this one is "
-               (tick (get h "day")) "."))))))
+               (tick (get h "day")) ".")))))))
+
+(def ^:private press-targets
+  "What a `press` `target` names: the held band's buttons, as surfaces."
+  {"allow" "held.allow" "deny" "held.deny"})
+
+(defn- focus-problem
+  "Why a `focus` `target` cannot be framed: `held`, the held band
+  (data-focus=\"held\"), or `field:<name>`, the field row carrying
+  data-field=\"<name>\". nil when it can."
+  [tg]
+  (when-not (or (and (= "held" tg) (surface-of "held"))
+                (and (string? tg) (str/starts-with? tg "field:")
+                     (not (str/blank? (subs tg 6)))))
+    (str (tick tg) " is not a focus target; the targets are held and field:<name>.")))
 
 (defn- verb-step
   "One shot's verb: the walk after it, or {:problem}."
@@ -290,8 +390,8 @@
   (let [bound (:bound st)]
     (case verb
       "open"
-      (if (contains? v "$day-row")
-        ;; the row is the clock day's, known only when the shot plays
+      (if (some #(contains? v %) ["$day-row" "seat" "sitting"])
+        ;; the row is the clock day's or the seat's, known only when the shot plays
         (if-some [p (open-refusal v)] (fail p) (assoc st :shown nil :door nil))
         (let [self (get v "self")
               coll (get v "collection")
@@ -308,7 +408,14 @@
 
             :else (assoc st :shown rdef :door nil :found rdef))))
 
+      "focus"
+      (if-some [p (focus-problem (get v "target"))] (fail p) st)
+
       ("tap" "press")
+      (if (and (= "press" verb) (contains? v "target"))
+        (if (some-> (get press-targets (get v "target")) surface-of)
+          st
+          (fail (tick (get v "target")) " is not a press target; the targets are allow and deny."))
       (let [tg (target (get v "surface") st rdef-of)]
         (cond
           (:problem tg) tg
@@ -320,7 +427,7 @@
           (= "tracker.go" (get-in tg [:surface :name]))
           (assoc st :door nil)
 
-          :else st))
+          :else st)))
 
       "type"
       (let [tg (target (get v "field") st rdef-of)
@@ -357,7 +464,31 @@
         (fail "`wait_for` names `within_ms`, a whole number above zero."))
 
       "meanwhile"
-      (call-step v st people rdef-of))))
+      (call-step v st people rdef-of)
+
+      "call"
+      (call-shot-step v st people rdef-of)
+
+      ;; where a day of the clone's clock starts (ticket 0f6632ad): it
+      ;; renders nothing, and its number and date increase through the scene
+      "day"
+      (let [n (get v "n")
+            date (try (LocalDate/parse (str (get v "date"))) (catch Exception _ nil))
+            prev (:day-mark st)]
+        (cond
+          (not (pos-int? n))
+          (fail "`day` names `n`, a whole number above zero.")
+
+          (nil? date)
+          (fail "`day` names `date`, an ISO date (YYYY-MM-DD).")
+
+          (and prev (or (<= (long n) (long (:n prev)))
+                        (not (.isAfter ^LocalDate date ^LocalDate (:date prev)))))
+          (fail "day " (tick n) " on " (tick date) " does not come after day "
+                (tick (:n prev)) " on " (tick (:date prev))
+                "; the days and their dates increase through the scene.")
+
+          :else (assoc st :day-mark {:n n :date date}))))))
 
 ;; ── holes in a say ──────────────────────────────────────────────────
 
@@ -606,6 +737,50 @@
                     (list-problem (list-hole-of part) rdef-of)
                     :else say-shape))
                 say)))
+
+(def card-max
+  "The most characters a card's text holds."
+  280)
+
+(defn- card-text
+  "A card's written text: the string, or a list's strings joined."
+  [card]
+  (if (string? card) card (apply str (filter string? card))))
+
+(defn card-ms
+  "The least a card of `text` is held, in ms: 1500, and 60 a word."
+  [text]
+  (+ 1500 (* 60 (count (re-seq #"\S+" (str text))))))
+
+(defn- card-problem
+  "Why a shot's `card` cannot be shown; nil when it can. A card is plain
+  text of at most `card-max` characters, or a list of text and holes as
+  a `say` is, and its shot holds it: the verb is `hold`, its `ms` at
+  least `card-ms`."
+  [shot rdef-of]
+  (let [card (get shot "card")
+        text (when (or (string? card) (sequential? card)) (card-text card))
+        ms (get-in shot ["hold" "ms"])]
+    (cond
+      (nil? text)
+      "a `card` is text, or a list of text and holes as a `say` is."
+
+      (and (str/blank? text) (not-any? map? card))
+      "a `card` has text, and this one is empty."
+
+      (> (count text) card-max)
+      (str "a `card` is at most " card-max " characters, and this one has "
+           (count text) ".")
+
+      (say-problem card rdef-of)
+      (say-problem card rdef-of)
+
+      (not (map? (get shot "hold")))
+      "a `card` is held: its shot's verb is `hold`."
+
+      (and (pos-int? ms) (< ms (card-ms text)))
+      (str "a `card` of " (count (re-seq #"\S+" text)) " words is held at least "
+           (card-ms text) " ms, and this one is held " ms "."))))
 
 (defn- dollars
   "Whole dollars `n` with a comma between thousands: 1250 as 1,250."
@@ -1111,13 +1286,43 @@
                                         :asks? (boolean (sees? :approval_request))})))
               run)))
 
+(defn seat-open
+  "The concrete open of a `seat` or `sitting` open, as the shot plays:
+  the page of the seat of that name, an active one first, {self
+  /api/seats/<id>}, or of its newest sitting, {self
+  /api/sittings/<id>}. {:problem} with one sentence when no seat the
+  caller sees (`sees?`) has the name, or the seat has not sat yet."
+  [eng o sees?]
+  (let [st (:storage eng)
+        rdefs (inv/resources eng)
+        plural #(or (:plural (get rdefs %)) (str (name %) "s"))
+        sitting? (contains? o "sitting")
+        nm (str/trim (str (if sitting? (get-in o ["sitting" "of"]) (get o "seat"))))
+        seat (when (sees? :seat)
+               (store/with-tx st
+                 (fn [tx]
+                   (let [rows (store/query-rows st tx :seat {:name nm} {})]
+                     (or (first (filter #(= "active" (some-> (:state %) name)) rows))
+                         (first rows))))))
+        sat (when (and seat sitting? (sees? :sitting))
+              (store/with-tx st
+                (fn [tx]
+                  (first (store/query-rows st tx :sitting {:seat (str (:id seat))}
+                                           {:limit 1 :newest-first true})))))]
+    (cond
+      (nil? seat) {:problem (str "no seat is named " (tick nm) ".")}
+      (not sitting?) {"self" (str "/api/" (plural :seat) "/" (:id seat))}
+      (nil? sat) {:problem (str "the seat " (tick nm) " has not sat yet.")}
+      :else {"self" (str "/api/" (plural :sitting) "/" (:id sat))})))
+
 (defn open-as
   "A shot's `open` as the performer takes it, for one caller (POST
   /api/-/scenes/open): a `$day-row` open resolved to its clock day's
   screen (`day-row-open`, the day ending now; its row as of the day's
   end unless the open says `as_of` false), through `sees?` as
-  `fill-say-as` fills a `$day`; any other open as given. nil when the
-  caller sees no kind of the domain."
+  `fill-say-as` fills a `$day`; a `seat` or `sitting` open to its page
+  (`seat-open`); any other open as given. nil when the caller sees no
+  kind of the domain."
   [eng open sees?]
   (let [o (plain open)]
     (if-some [h (when (map? o) (get o "$day-row"))]
@@ -1127,7 +1332,9 @@
                     {:sees? #(boolean (sees? %))
                      :held? (boolean (sees? :held_call))
                      :asks? (boolean (sees? :approval_request))})
-      open)))
+      (if (and (map? o) (or (contains? o "seat") (contains? o "sitting")))
+        (seat-open eng o #(boolean (sees? %)))
+        open))))
 
 (defn- shot-step
   "One shot: the walk after it, or {:problem}."
@@ -1135,13 +1342,16 @@
   (if-not (map? shot)
     (fail "a shot is a map with one verb.")
     (let [named (filter (set verbs) (keys shot))
-          stray (remove (into #{"say" "expect" "bind" "role" "speed" "trim" "id"} verbs)
+          stray (remove (into #{"say" "card" "expect" "bind" "role" "speed" "trim" "id"} verbs)
                         (keys shot))
           verb (first named)]
       (cond
         (seq stray)
         (fail "unknown verb " (tick (first stray)) "; the verbs are "
               (str/join ", " verbs) ".")
+
+        (and (contains? shot "card") (card-problem shot rdef-of))
+        (fail (card-problem shot rdef-of))
 
         (not= 1 (count named))
         (fail "a shot has one verb, and this one has " (count named) ".")
@@ -1426,7 +1636,14 @@
     [:maybe [:int {:min 1}]]]
    [:role {:optional true
            :x-display {:label "Role" :help "The shot's part in the arc: friction, turn or payoff."}}
-    [:maybe (into [:enum] film-rules/roles)]]])
+    [:maybe (into [:enum] film-rules/roles)]]
+   ;; a card shot's text as it was shown, and how long it was held
+   [:card {:optional true
+           :x-display {:widget "prose" :label "Card" :help "The text a card shot showed, its holes filled."}}
+    [:maybe [:string {:max 2000}]]]
+   [:hold_ms {:optional true
+              :x-display {:label "Held (ms)" :help "How long the card was held, in ms."}}
+    [:maybe [:int {:min 0}]]]])
 
 (def ^:private take-fields
   "What the runner writes: the create model."

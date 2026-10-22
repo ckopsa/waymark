@@ -11,14 +11,25 @@ function renderAsOf(view, doc, hints) {
   const panel = el("div", {class:"panel"});
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, title(d.kind || "row") + "s"),
+    el("a", {href:"#"+of.split("/").slice(0, 3).join("/")}, titles(d.kind || "row")),
     el("span", {class:"idsep"}, " / "),
     el("a", {class:"id", href:"#"+of, title:"this row as it stands now"},
       String(d.id || of.split("/").pop()).slice(0, 8))));
-  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
   const at = new Date(d.as_of);
   const day = isNaN(at) ? String(d.as_of)
     : at.toLocaleDateString(undefined, {weekday: "long"});
+  /* the band: which day this page is, before anything on it */
+  const when = isNaN(at) ? String(d.as_of)
+    : at.toLocaleDateString(undefined, {weekday: "long", year: "numeric",
+                                        month: "long", day: "numeric"}) +
+      " " + at.toLocaleTimeString(undefined, {hour: "2-digit", minute: "2-digit"});
+  panel.append(el("div", {class:"asof-band"}, `As of ${when}`));
+  panel.append(el("h2", {class:"prose"}, d.summary || doc.summary));
+  /* the held call pending then: whose tap the row was waiting on */
+  const h = d.held;
+  if (h) panel.append(el("div", {class:"asof-band waiting"},
+    `Waiting on ${h.who || h.owner || "a person"}'s tap: ` +
+    title(h.action || "allow") + (h.why ? ` — ${h.why}` : "")));
   panel.append(el("div", {},
     el("span", {class:"statechip", title: d.kind || ""},
       d.existed ? String(d.state) : "not yet"),
@@ -26,6 +37,103 @@ function renderAsOf(view, doc, hints) {
       `as of ${day}`)));
   if (d.data && typeof d.data === "object") panel.append(kvTable(d.data, hints || {}));
   view.append(panel);
+}
+
+/* the band on a live row some held call waits on (ticket f6808194):
+   "Waiting on your tap: <action> <row>", the AI's reason under it, and
+   Allow and Deny — the held call's own doors, drawn only when its
+   envelope affords them to this viewer. After Allow it says who
+   allowed, until the page refreshes with the move. */
+function heldBand(doc) {
+  const band = el("div", {class: "asof-band waiting held-band", "data-focus": "held",
+                          "data-surface": "held"});
+  const what = String(doc.summary || "").split(" · ")[0];
+  for (const h of doc.held || []) {
+    const line = el("div", {class: "held-call"},
+      el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim()));
+    if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    band.append(line);
+    api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
+      const acts = (ok && body && body.actions) || {};
+      if (!acts.allow && !acts.refuse) return;
+      const bar = el("div", {class: "actions"});
+      if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
+        "data-surface": "held.allow",
+        onclick: async () => {
+          const r = await invokeBare(acts.allow, body);
+          if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+          bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
+            `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
+        }}, "Allow"));
+      if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
+        "data-surface": "held.deny",
+        onclick: async () => {
+          const reason = (window.prompt("Why not? One sentence the caller reads.") || "").trim();
+          if (!reason) return;
+          const r = await api(acts.refuse.href, {method: acts.refuse.method || "POST",
+                                                 body: JSON.stringify({reason})});
+          if (!r.ok) { toast((r.body || {}).detail || "Deny was refused"); return; }
+          render();
+        }}, "Deny"));
+      line.append(bar);
+    }).catch(() => {});
+  }
+  return band;
+}
+
+/* a seat's page leads with the seat in words (ticket 9935e3a3): its
+   charter's first sentence, what wakes it and what it may do, spelled
+   by the server as the org's law page spells them, and the queues it
+   works, each a link with the rows waiting in a state it can move */
+function seatReadsAs(r) {
+  const box = el("div", {class:"seat-reads", "data-seat-reads": ""});
+  for (const k of ["charter", "wakes", "may"])
+    if (r[k]) box.append(el("p", {class:"prose"}, r[k]));
+  const works = r.works || [];
+  if (works.length) {
+    const line = el("p", {class:"prose"}, "Works: ");
+    works.forEach((w, i) => {
+      if (i) line.append(", ");
+      line.append(el("a", {href:"#"+w.href, title: w.kind}, w.label));
+    });
+    line.append(".");
+    box.append(line);
+  }
+  if (r.sitting)
+    box.append(el("p", {class:"prose"},
+      el("a", {href:"#"+r.sitting.href, "data-seat-sitting": ""}, r.sitting.label)));
+  return box;
+}
+
+/* a sitting's page leads with the seat at work (ticket ff5bfbb9): its
+   name, Working or Done, and its calls in the owner's words, newest
+   last. While it works the page asks for the row again and appends
+   the calls that landed since */
+function sittingAtWork(doc) {
+  const box = el("div", {class:"sitting-at-work", "data-sitting-at-work": ""});
+  const lead = el("p", {class:"prose"});
+  const list = el("ol", {class:"prose", "data-sitting-calls": ""});
+  box.append(lead, list);
+  let shown = 0;
+  const paint = (w) => {
+    lead.replaceChildren(el("strong", {}, w.lead || ""));
+    for (const c of (w.calls || []).filter(c => c.n > shown)) {
+      list.append(el("li", {"data-call": String(c.n), title: c.outcome},
+        c.href ? el("a", {href:"#"+c.href}, c.text) : c.text));
+      shown = Math.max(shown, c.n);
+    }
+  };
+  paint(doc.data.at_work);
+  if (doc.data.at_work.working) {
+    const tick = setInterval(async () => {
+      if (!box.isConnected) { clearInterval(tick); return; }
+      const {ok, body} = await api(doc.self);
+      const w = ok && body && body.data && body.data.at_work;
+      if (w) paint(w);
+      if (!box.isConnected || (ok && !(w && w.working))) clearInterval(tick);
+    }, 4000);
+  }
+  return box;
 }
 
 async function renderResource(view, doc, hints) {
@@ -37,11 +145,15 @@ async function renderResource(view, doc, hints) {
   const colHref = doc.self.split("/").slice(0, 3).join("/");
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
-    el("a", {href:"#"+colHref}, title(kind) + "s"),
+    el("a", {href:"#"+colHref}, titles(kind)),
     el("span", {class:"idsep"}, " / "),
     el("span", {class:"id", title: doc.self},
       doc.self.split("/").pop().slice(0, 8))));
   panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));
+  if (kind === "seat" && doc.data?.reads_as)
+    panel.append(seatReadsAs(doc.data.reads_as));
+  if (kind === "sitting" && doc.data?.at_work)
+    panel.append(sittingAtWork(doc));
   const meta = doc.meta || {};
   panel.append(el("div", {},
     el("span", {class:"statechip", title: kind}, doc.state),
@@ -49,6 +161,8 @@ async function renderResource(view, doc, hints) {
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* a held call waiting on this row: the person's tap, up top */
+  if ((doc.held || []).length) panel.append(heldBand(doc));
   /* the row's own path is the crumb's title, on every kind, and is
      not header text */
   /* the viewing dots: who else is looking at this screen right now
@@ -210,6 +324,16 @@ async function renderResource(view, doc, hints) {
   const goalInputLabels = (kind === "quest" && plainData.input_labels) || {};
   if (kind === "quest")
     for (const k of ["action_label", "input_labels"]) delete plainData[k];
+  /* a seat said in words above: the words leave the kv table, and its
+     raw scope and wake_on fold below it, closed */
+  const seatRaw = {};
+  /* …and a sitting's calls, said above: its raw fields fold, closed */
+  if (kind === "sitting") delete plainData.at_work;
+  if (kind === "seat") {
+    delete plainData.reads_as;
+    for (const k of ["scope", "wake_on"])
+      if (k in plainData) { seatRaw[k] = plainData[k]; delete plainData[k]; }
+  }
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -256,6 +380,12 @@ async function renderResource(view, doc, hints) {
     el("details", {class:"rowdata", open:""},
       el("summary", {class:"muted"}, "Data"),
       dataTable));
+  /* a sitting leads with its calls: its raw data starts folded */
+  if (kind === "sitting") dataPanel.firstChild.removeAttribute("open");
+  if (Object.keys(seatRaw).length)
+    dataPanel.append(el("details", {class:"rowdata", "data-seat-raw": ""},
+      el("summary", {class:"muted"}, "What it opens and what wakes it, as declared"),
+      kvTable(seatRaw, hints)));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */

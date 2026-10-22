@@ -352,6 +352,212 @@
     (testing "a plan with no scene drops nothing"
       (is (= [] (first-week/dropped-roles {:shots [{:hold_s 1.0}]} nil))))))
 
+(deftest the-audit's-scene-carries-the-org's-week-script-and-its-sha
+  (let [dir (io/file (.getParentFile (io/file (example-dir))) "week_fixture")
+        f (io/file dir "resources" "week_fixture" "week.edn")]
+    (testing "the script is the org's week.edn, as data"
+      (is (= (edn/read-string (slurp f)) (:week_script (first-week/week-of dir)))))
+    (testing "its sha is the file's git blob sha, as git hash-object names it"
+      (let [tmp (.toFile (java.nio.file.Files/createTempDirectory
+                          "week" (make-array java.nio.file.attribute.FileAttribute 0)))
+            w (io/file tmp "resources" "empty" "week.edn")]
+        (io/make-parents w)
+        (spit w "")
+        (is (= "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" (:week_sha (first-week/week-of tmp))))))
+    (testing "an org with no week.edn carries none"
+      (is (nil? (first-week/week-of (example-dir)))))))
+
+(deftest a-week-with-cards-opens-on-its-card-and-cards-each-day
+  (let [dir (io/file (.getParentFile (io/file (example-dir))) "week_fixture")
+        cards {1 "Wednesday. Two jobs arrive."
+               2 "Thursday. The lawn waits on the owner."
+               3 "Friday. The hedge is let go."}
+        script (-> (:week_script (first-week/week-of dir))
+                   (assoc :card "A garden crew takes its first jobs.")
+                   (update :days (partial mapv #(assoc % :card (cards (:day %))))))
+        shots (:shots (:scene (first-week/scene seed (assoc filmed-on
+                                                            :resources (example-kinds)
+                                                            :week_script script))))
+        at (keep-indexed (fn [i s] (when (:card s) i)) shots)]
+    (testing "the scene opens with the week's card"
+      (is (= (:card script) (:card (first shots)))))
+    (testing "each day's card comes before that day's shots, in order"
+      (is (= (cons (:card script) (map :card (:days script))) (keep :card shots)))
+      (is (every? (fn [[a b]] (< (inc a) b)) (partition 2 1 at))))
+    (testing "each card is held as long as the scene check asks"
+      (is (every? #(>= (get-in % [:hold :ms]) (scenes/card-ms (:card %)))
+                  (filter :card shots))))
+    (testing "a scene with no week script shows no card"
+      (is (not-any? :card (:shots (:scene (first-week/scene seed (assoc filmed-on
+                                                                        :resources (example-kinds))))))))))
+
+(def ^:private a-business-week
+  "A week.edn starting on a Monday with five days, played for a work
+  order done (ticket 6c3d93db)."
+  {:day-one "2026-10-26"
+   :goal {:kind "work_order" :state "done"}
+   :days (vec (for [d (range 1 6)]
+                {:day d
+                 :calls [{:as :world :kind "request" :action "create"
+                          :input {:title (str "Job " d)}}]}))})
+
+(deftest a-scene-takes-its-days-from-the-org's-week
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-business-week))
+        shots (:shots (:scene doc))
+        coll (get-in (first shots) [:open :collection])]
+    (testing "day 1 is the week's :day-one, not the day it was rendered"
+      (is (= "2026-10-26" (:day_one doc))))
+    (testing "one day per entry, captioned with its date's weekday: no weekend"
+      (is (= (day-captions ["Monday" "Tuesday" "Wednesday" "Thursday" "Friday"])
+             (captions shots))))
+    (testing "the opening opens the collection of the first call's kind"
+      (is (some #(= coll (or (:plural %) (str (name (:kind %)) "s"))) (example-kinds)))
+      (is (str/starts-with? coll "request")))
+    (testing "the payoff counts the week's goal first, then the taps"
+      (let [rows (counts (last shots))]
+        (is (= ["work_order" "done"] ((juxt :kind :state) (first rows))))
+        (is (= "held_call" (:kind (last rows))))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
+(def ^:private a-two-day-week
+  "A week.edn of two days, a mayor and a person's tap on each (ticket
+  1b89ca49)."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. A hedge request arrives."
+           :calls [{:as :world :kind "request" :action "create" :name "hedge"
+                    :input {:title "Trim the front hedge"}}
+                   {:as :mayor :kind "request" :action "accept" :row "hedge"}
+                   {:as :person :kind "request" :action "accept" :row "hedge"
+                    :focus [:title]}]}
+          {:day 2 :card "Tuesday. The lawn waits on the owner."
+           :calls [{:as :world :kind "request" :action "create" :name "lawn"
+                    :input {:title "Mow the back lawn"}}
+                   {:as :person :kind "request" :action "accept" :row "lawn"}]}]})
+
+(defn- beat
+  "A shot as the verb it plays and what it names."
+  [s]
+  (cond (:day s) [:day (get-in s [:day :n])]
+        (:card s) [:card]
+        (:call s) [:call (get-in s [:call :as]) (true? (:trim s))]
+        (:open s) [:open (first (keys (:open s)))]
+        (:focus s) [:focus (get-in s [:focus :target])]
+        (:press s) [:press (get-in s [:press :target])]
+        :else [:hold]))
+
+(deftest a-week-script-plays-its-calls-as-the-camera-rolls
+  (let [seed' (update seed :seats conj {:template "org-mayor" :params {:org "example"}})
+        doc (first-week/scene seed' (assoc filmed-on :resources (example-kinds)
+                                           :week_script a-two-day-week))
+        shots (:shots (:scene doc))]
+    (testing "day 1 in full, a later day its person's tap, the rest trimmed"
+      (is (= [[:open :collection] [:hold]
+              [:day 1] [:card] [:open :collection] [:call "world" false] [:open :self]
+              [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false] [:open :self]
+              [:open :self] [:focus "held"] [:focus "field:title"] [:press "allow"] [:hold]
+              [:day 2] [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
+              [:hold]]
+             (map beat shots))))
+    (testing "the seat and the sitting are the mayor's"
+      (is (= [{:seat "example-mayor"} {:sitting {:of "example-mayor" :which "latest"}}]
+             (filter #(or (:seat %) (:sitting %)) (map :open shots)))))
+    (testing "a named create binds its row, and each call's cast joins the scene's"
+      (is (= ["row_hedge" "row_lawn"] (keep :bind shots)))
+      (is (= ["owner" "world" "mayor"] (get-in doc [:scene :cast]))))
+    (let [e (eng)
+          opts {:principal mayor}
+          check (fn [scene]
+                  (let [id (str (:id (:row (inv/create! e :scene scene opts))))]
+                    (inv/invoke! e :scene id :check {}
+                                 (assoc opts :idempotency-key (str (random-uuid))))))]
+      (testing "it checks ready beside the org's kinds"
+        (let [done (check (:scene doc))]
+          (is (= "ready" (some-> done :row :state name)) (pr-str done))))
+      (testing "a call whose cast the scene does not declare does not"
+        (let [why (try (check (update (:scene doc) :cast (partial filterv #{"owner" "world"})))
+                       nil
+                       (catch Exception x (str (inv/problem-reason x))))]
+          (is (str/includes? (str why) "`mayor`, which is not in the cast")))))))
+
+(def ^:private a-week-over-a-weekend
+  "A week.edn of days 1, 2 and 5 from a Monday: the weekend between is
+  skipped (ticket 0f6632ad)."
+  {:day-one "2026-10-26"
+   :days (vec (for [d [1 2 5]]
+                {:day d :card (str "Day " d ".")
+                 :calls [{:as :world :kind "request" :action "create"
+                          :input {:title (str "Job " d)}}]}))})
+
+(deftest each-day-of-a-week-opens-on-a-day-shot-before-its-card
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-over-a-weekend))
+        shots (:shots (:scene doc))]
+    (testing "three :day shots, with each day's number and date, in order"
+      (is (= [{:n 1 :date "2026-10-26"} {:n 2 :date "2026-10-27"} {:n 5 :date "2026-10-30"}]
+             (keep :day shots))))
+    (testing "each :day shot comes right before its day's card"
+      (is (every? (fn [[a b]] (or (not (:day a)) (string? (:card b))))
+                  (partition 2 1 shots))))
+    (let [e (eng)
+          opts {:principal mayor}
+          check (fn [scene]
+                  (let [id (str (:id (:row (inv/create! e :scene scene opts))))]
+                    (inv/invoke! e :scene id :check {}
+                                 (assoc opts :idempotency-key (str (random-uuid))))))]
+      (testing "it checks ready"
+        (is (= "ready" (some-> (check (:scene doc)) :row :state name))))
+      (testing "check refuses a date that goes back"
+        (let [back (update (:scene doc) :shots
+                           (partial mapv #(if (= 5 (get-in % [:day :n]))
+                                            (assoc-in % [:day :date] "2026-10-27")
+                                            %)))
+              why (try (check back)
+                       nil
+                       (catch Exception x (str (inv/problem-reason x))))]
+          (is (str/includes? (str why) "the days and their dates increase")))))))
+
+(deftest a-seed-with-no-create-opens-a-kind-never-an-empty-name
+  (let [shots (:shots (:scene (first-week/scene (assoc seed :steps [])
+                                                (assoc filmed-on :resources (example-kinds)))))
+        coll (get-in (first shots) [:open :collection])]
+    (is (not (str/blank? coll)))
+    (is (not= "s" coll))))
+
+(def ^:private dry-week
+  [{:day 1 :as "world" :kind "booking" :action "create" :outcome "moved"}
+   {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "moved"}
+   {:day 2 :as "mayor" :kind "booking" :action "confirm" :outcome "refused"
+    :guard "only-the-owner-books"}])
+
+(def ^:private a-take-report
+  "A fixture take report, as the director hands it in: the film's report
+  with the week it played and its script's sha."
+  {:film {:chrome_leaks 0 :dead_air_s 0.4}
+   :week {:sha "9d3c6a0e1f2b4c5d6e7f8091a2b3c4d5e6f70812"
+          :calls dry-week}})
+
+(deftest a-call-the-dry-week-moved-and-the-clone-refused-is-take-differs
+  (testing "a fixture take report carries the sha of the week it played"
+    (is (re-matches #"[0-9a-f]{40}" (get-in a-take-report [:week :sha]))))
+  (testing "a take that plays the dry week call for call differs in nothing"
+    (is (= [] (first-week/take-differs a-take-report dry-week))))
+  (testing "a call the dry week moved and the clone refused is [take-differs]"
+    (let [tk (assoc-in a-take-report [:week :calls 1 :outcome] "refused")
+          [w :as ws] (first-week/take-differs tk dry-week)]
+      (is (= ["take-differs"] (map :key ws)))
+      (is (= "warning" (:severity w)))
+      (is (str/includes? (:sentence w) "day 2: booking confirm"))))
+  (testing "a take with no week, or a plan with no dry week, differs in nothing"
+    (is (= [] (first-week/take-differs {:film {}} dry-week)))
+    (is (= [] (first-week/take-differs a-take-report nil)))))
+
 (deftest a-green-film's-warning-lands-beside-it
   (let [e (eng)
         id (proposed! e)
@@ -407,6 +613,17 @@
       (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
       (is (str/includes? (:remedy (second findings)) "shot.caption")))
     (is (nil? (get-in row [:data :film_url])))))
+
+(deftest a-first-week-with-no-goal-state-lands-no-arc-finding
+  (let [e (eng)
+        id (proposed! e)
+        tk (-> (week-take quiet-week)
+               (update :shots (partial mapv #(dissoc % :goal_state)))
+               (first-week/marked "{:first-week true}"))
+        answer (film-rules/judge (filterv #(= "arc" (:name %)) film-rules/seed-rules) tk)
+        row (:row (first-week/land! e id answer film {:principal the-forge}))]
+    (is (= [] (:unmeasured answer)))
+    (is (not-any? #{"film/arc"} (map :key (get-in row [:data :findings]))))))
 
 (deftest a-warn-rule-the-film-cannot-measure-does-not-block-it
   (let [e (eng)

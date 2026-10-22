@@ -550,6 +550,9 @@
     ;; the sitting this session is bound to rides every door call, so
     ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
     (:sitting session) (assoc :waymark10/sitting (:sitting session))
+    ;; waymark_invoke's `why` (ticket 1d8f5f1c): the router judges it
+    ;; and the log entry keeps it
+    (:why session) (assoc :waymark10/why (:why session))
     query (assoc :query-string query)
     ;; store conds a collection read adds to its own (`walk-of`)
     conds (assoc :waymark10/extra-conds conds)
@@ -1129,7 +1132,13 @@
                    :acknowledge_warnings
                    {:type "array" :items {:type "string"}
                     :description (str "Guard names from a previous advisory refusal, "
-                                      "accepted so the call may proceed.")}}
+                                      "accepted so the call may proceed.")}
+                   :why {:type "string" :maxLength 280
+                         :description (str "One sentence, at most 280 characters: why you "
+                                           "make this move, in the words of the person "
+                                           "you work for. It is stored on the move's log "
+                                           "entry, on its held call when it is held, and "
+                                           "shown in the row's history.")}}
                   :required ["kind" "action"]
                   :additionalProperties false}})
 
@@ -2571,6 +2580,11 @@
   [eng call session {:keys [kind id ids items action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
+        ;; the move's one sentence of why (ticket 1d8f5f1c) rides every
+        ;; request this call makes (`request`)
+        session (if-some [why (some-> (:why args) str str/trim not-empty)]
+                  (assoc session :why why)
+                  session)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))
         ;; a caption inside `input` is the call's own (§ 3): it leaves
@@ -5175,8 +5189,10 @@
   "What `submit` does on this seat, in one sentence built from the
   policy. The model reads it and asks for nothing: the sentence says
   whether a push opens a pull request, who merges, how large the
-  change may be, and how many rounds it gets."
-  [policy]
+  change may be, and how many rounds it gets. A change whose lane a
+  `lane_max_lines` prefix names is told that lane's ceiling (ticket
+  bacb84f2), as factory10's `bench/lane-max-lines-of` judges it."
+  [policy change]
   (if (nil? policy)
     ;; the same sentence the submit door's first guard says, said
     ;; early: a repository nobody has stated a policy for is a
@@ -5187,7 +5203,18 @@
     (let [d (:data policy)
           opens? (not (false? (:opens_pr d)))
           merges? (not (false? (:auto_merge d)))
-          lines (long (or (:max_lines d) 400))
+          lane (some-> (get-in change [:data :lane]) str not-empty)
+          lane-lines (when lane
+                       (some (fn [[k n]]
+                               (let [p (str/replace (if (keyword? k) (subs (str k) 1) (str k))
+                                                    #"/+$" "")]
+                                 (when (and (integer? n) (not-empty p)
+                                            (or (= lane p)
+                                                (str/starts-with? lane (str p "/"))))
+                                   n)))
+                             (sort-by #(- (count (str (key %))))
+                                      (:lane_max_lines d))))
+          lines (long (or lane-lines (:max_lines d) 400))
           rounds (long (or (:rounds_per_change d) 3))]
       (str "Submit writes your changes to the branch with your sentence,"
            " then pushes them: "
@@ -5197,7 +5224,11 @@
            (if merges? "the gate merges the change when the checks are green"
                "a person merges the change")
            ". The change must have not more than " lines
-           " changed lines, and this change gets " rounds
+           " changed lines"
+           (when lane-lines
+             (str " (the " lane " lane's ceiling, while every path it"
+                  " touches stands in that lane)"))
+           ", and this change gets " rounds
            (if (= 1 rounds) " round." " rounds.")))))
 
 (def ^:private bench-dark-note
@@ -5365,7 +5396,7 @@
                                  {:repo repo :branch branch :base base})
           made (bench-payload answer)
           refusal (bench-refusal answer)
-          means (submit-means policy)
+          means (submit-means policy change)
           ;; what the last submit caused, for a change that HAS one:
           ;; a person's own branch, or a round this house already
           ;; pushed (R-12.31). A worktree the rig did not make is
@@ -6561,6 +6592,22 @@
         (let [status (::status (meta out))]
           (not (and (number? status) (<= 500 (long status))))))))
 
+(defn- record-call!
+  "Ticket dc9e5b96: one line of the sitting's record of calls, beside
+  the count `count-served!` keeps — what the call read or moved, and
+  when. It never throws, for `count-served!`'s reason."
+  [eng session tool-name args out]
+  (try
+    (when-some [sitting-id (calling-sitting eng session)]
+      (transcripts/record-call! eng sitting-id tool-name args
+                                (body-json {:body (some-> out :content first :text)})
+                                (and (map? out) (true? (:isError out)))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp call record" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn- count-refused!
   "R-10.6 at the power door: one refusal on the open sitting of the
   session's grant, for each `waymark_power` answer `power-refusal?`
@@ -6673,9 +6720,10 @@
                            " — this engine serves exactly "
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
-           (do (count-served! eng session
-                               (served-name eng (:name params) params) out)
-               (count-refused! eng session (:name params) out)
+           (let [served (served-name eng (:name params) params)]
+             (count-served! eng session served out)
+             (record-call! eng session served (:arguments params) out)
+             (count-refused! eng session (:name params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

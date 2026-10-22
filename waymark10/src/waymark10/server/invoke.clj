@@ -151,8 +151,10 @@
             [waymark10.effect :as effect]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
+            [waymark10.lines :as line-items]
             [waymark10.machine :as machine]
             [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -200,7 +202,11 @@
 
   `acted_by` is the seat that acted as this cast member on a clone
   (router/cast-principal, clone guard 2/3): the hand is the cast
-  member's, and the log says whose seat moved it."
+  member's, and the log says whose seat moved it.
+
+  `why` is the hand's own one sentence about this move, given on the
+  invoke (router/move-why, ticket 1d8f5f1c): the row's history shows it
+  beside the move."
   [principal grant-id]
   (cond-> {:type (name (:type principal))
            :id (:id principal)
@@ -210,7 +216,8 @@
     (:allowed-by principal) (assoc :allowed_by (str (:allowed-by principal)))
     (:requested-by principal) (assoc :requested_by (str (:requested-by principal)))
     (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
-    (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))))
+    (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))
+    (:why principal) (assoc :why (str (:why principal)))))
 
 (defn- body-digest [body]
   ;; exact decimals in a wire body digest as their {"dec" …} nodes
@@ -275,6 +282,22 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
+(defn- balance-in
+  "An account's balance as its row carries it (docs/spec-ledger-money.md
+  §4): nil — unknown to the law — for an account no kind declares, for a
+  house account, whose balance no row carries yet, and for a row that is
+  not there. `opts` is load-row's: {:for-update true} for the write's
+  locked read."
+  [engine tx account-kind id account-name opts]
+  (when-some [trdef (get (resources engine) account-kind)]
+    (when-some [acct (get-in trdef [:accounts account-name])]
+      (when (some? id)
+        (when-some [raw (store/load-row (:storage engine) tx account-kind (str id) opts)]
+          (let [v (get-in (decode-row trdef raw) [:data account-name])]
+            (if (some? v) v (money/zero (:unit acct)))))))))
+
+(declare rate-on)
+
 (defn- read-hooks
   "The render probe's :read/:find/:sum — make-ctx's enforcement hooks
   twinned for the READ path, each call over a short transaction of
@@ -328,6 +351,19 @@
                 (store/with-tx
                  st (fn [tx] (store/sum-matching st tx target-kind
                                                  field conds))))))
+     ;; the ledger's read-path twins (docs/spec-ledger-money.md §9): a
+     ;; balance as its row carries it, unlocked, and the rate in effect,
+     ;; so a door a bound or a rate decides is judged on the probe and in
+     ;; the sweep instead of pending
+     :balance (fn [account-kind id account-name]
+                (through
+                 [:balance account-kind (str id) account-name]
+                 #(store/with-tx
+                   st (fn [tx] (balance-in engine tx account-kind id account-name {})))))
+     :rate-of (fn [table key-vals on]
+                (through
+                 [:rate-of table key-vals (str on)]
+                 #(store/with-tx st (fn [tx] (rate-on engine tx table key-vals on)))))
      ;; the log's read-path twin (docs/spec-undo.md). An undo door is
      ;; the one affordance whose availability is a fact about the CLOCK
      ;; and about whose hand is asking, so a card that advertised it
@@ -377,6 +413,23 @@
               (= :in op) (assoc :values (mapv text values))
               (not= :in op) (assoc :value (text value))))
           conds)))
+
+(defn- rate-on
+  "(rate …)'s read (docs/spec-ledger-money.md §8, ledger step 7): the
+  :value of the row of the kind declaring `table` whose :key fields
+  carry `key-vals` and whose :effective is the latest on or before
+  `on`. nil where no row is, where no kind declares the table, or where
+  the key names other fields than the table's."
+  [engine tx table key-vals on]
+  (when-some [trdef (some #(when (= table (get-in % [:rate-table :name])) %)
+                          (vals (resources engine)))]
+    (let [{ks :key value :value eff :effective} (:rate-table trdef)]
+      (when (= (set ks) (set (keys key-vals)))
+        (let [conds (law-conds trdef (conj (mapv (fn [k] {:field k :op := :value (get key-vals k)}) ks)
+                                           {:field eff :op :<= :value (str on)}))
+              [hit] (store/search-rows (:storage engine) tx (:kind trdef) conds
+                                       {:order-by eff :desc true :limit 1})]
+          (when hit (get-in (decode-row trdef hit) [:data value])))))))
 
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
          create-guard-pass)
@@ -692,6 +745,18 @@
                                (when-some [trdef (get (resources engine) target-kind)]
                                  (store/count-matching (:storage engine) tx target-kind
                                                        (law-conds trdef conds))))
+             ;; the ledger's reader (docs/spec-ledger-money.md §4, step
+             ;; 5): an account's balance, read under its row's lock in
+             ;; the write's own transaction, so two doors judged at once
+             ;; for the last mug are judged one after the other. nil —
+             ;; unknown to the law — for an account no kind declares and
+             ;; for a house account, whose balance no row carries yet
+             :balance (fn [account-kind id account-name]
+                        (balance-in engine tx account-kind id account-name {:for-update true}))
+             ;; the rate tables' reader (docs/spec-ledger-money.md §8,
+             ;; step 7): nil — unknown to the law — where no row is.
+             ;; :rate-of, since :rate is the rate limiter's coordinator
+             :rate-of (fn [table key-vals on] (rate-on engine tx table key-vals on))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
@@ -942,7 +1007,9 @@
   Reasons render over the secret-concealed row (waymark-kyg); id,
   state and the gate-safe summary keep the full row."
   [acc v d row inp acknowledged defn rdef now]
-  (let [nrow (narration-row rdef row)]
+  (let [nrow (narration-row rdef row)
+        ;; a guard naming no remedy still says where its fields are written
+        d (g/with-writers rdef (:name defn) d)]
     (cond
       (= :warning (:severity d))
       (if (contains? acknowledged (:name d))
@@ -958,7 +1025,7 @@
       :else
       (throw (p/guard-refused
               (:name defn) (:state row)
-              (g/render-reason d v nrow)
+              (g/writers-reason d (g/render-reason d v nrow))
               {:guard (:name d)
                :remedies (g/remedy-doors d)
                :resolved-remedies (g/resolve-remedies d nrow inp (:evidence v))
@@ -1069,6 +1136,61 @@
   [row]
   (vary-meta row assoc ::unchanged true))
 
+(defn- stored-lines
+  "The line rows one parent holds now, as their data in place order —
+  what (lines) reads at a door that does not take `lines` (ledger step
+  6b, docs/spec-ledger-money.md §6)."
+  [engine tx rdef parent-id]
+  (let [{child :kind via :parent} (:lines rdef)
+        crdef (get (resources engine) child)]
+    (mapv #(:data (if crdef (decode-row crdef %) %))
+          (store/search-rows (:storage engine) tx child
+                             [{:target :data :field via :op := :value (str parent-id)}]
+                             {:order-by :n}))))
+
+(defn- door-lines
+  "(lines) at a door: the input's when the door takes `lines`, the
+  stored set otherwise."
+  [engine tx rdef row inp]
+  (if (and (map? inp) (contains? inp :lines))
+    (vec (:lines inp))
+    (stored-lines engine tx rdef (:id row))))
+
+(defn- posting-entries
+  "The entries a landing door posts (ledger step 4): its :posts over the
+  row as it leaves it, then — when it is the :undo of a posting door
+  that made the row's last move — that move's postings, reversed. An
+  entry that cannot be written refuses the door."
+  [engine tx rdef row defn inp ctx materialized]
+  (vec
+   (concat
+    (when-some [ps (seq (:posts defn))]
+      (try (posts/entries ps (cond-> {:data (:data materialized) :input inp
+                                      :now (:now ctx) :self (str (:id row))}
+                               (:lines rdef) (assoc :lines (door-lines engine tx rdef row inp))))
+           (catch clojure.lang.ExceptionInfo e
+             (if (:posts-refused (ex-data e))
+               (throw (p/schema-invalid (:name defn) {:posts [(ex-message e)]}))
+               (throw e)))))
+    (when-some [undoes (not-empty (:reverses-posts defn))]
+      (let [[latest] (store/transitions (:storage engine) tx
+                                        {:kind (:kind rdef) :resource-id (:id row)}
+                                        {:newest-first true :limit 1})]
+        (when (and latest (contains? undoes (keyword (name (:action latest)))))
+          ((requiring-resolve 'waymark10.server.postings/reversals)
+           engine tx (:id latest))))))))
+
+(defn- own-balances
+  "`data` with this row's own accounts moved by `entries`, so the row a
+  posting door saves already holds its balance; `own` is [kind id]."
+  [data own entries]
+  (reduce (fn [d {:keys [account-kind account-row account-name amount]}]
+            (if (= own [(name account-kind) (str account-row)])
+              (update d (keyword (name account-name))
+                      #(if (some? %) (money/plus % amount) amount))
+              d))
+          data entries))
+
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
   idempotency store — of the row the handler answered."
@@ -1091,7 +1213,13 @@
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
         materialized (derived/materialize rdef handled now (:calendar ctx))
+        ;; the door's postings (ledger step 4): this row's own accounts
+        ;; move here, before it is saved; post! moves the others and
+        ;; writes every posting, in this transaction, under the log row
+        entries (posting-entries engine tx rdef row defn inp ctx materialized)
+        own [(name (:kind rdef)) (str (:id row))]
         advanced (-> materialized
+                     (update :data own-balances own entries)
                      (assoc :state (:to defn))
                      (update :version inc))
         advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
@@ -1125,6 +1253,11 @@
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
+    (when (seq entries)
+      ((requiring-resolve 'waymark10.server.postings/post!)
+       engine tx {:kind (:kind rdef) :id (:id row) :action (:name defn)
+                  :log-id (:id record)}
+       entries {:settled own}))
     ;; the effort landed; its draft has served its purpose — consumed
     ;; in the same commit as the write it composed (phase 7)
     (when (get-in defn [:edit :draft])
@@ -1278,18 +1411,53 @@
                          (:why call) (assoc :why (:why call)))
                        {:principal principal})))))
 
+(declare write-lines!)
+
+(defn- defaulted-lines
+  "The input with each of its lines' omitted :defaults filled (ledger
+  step 6c, docs/spec-ledger-money.md §6), read through follow over the
+  door's own :read, so a line's price is its product's when the door
+  ran."
+  [rdef ctx inp]
+  (cond-> inp
+    (and (get-in rdef [:lines :defaults]) (map? inp) (contains? inp :lines))
+    (update :lines #(line-items/defaulted rdef (:read ctx) %))))
+
+(defn- with-totals
+  "The row's data with its kind's :totals (ledger step 6c) computed
+  from these lines, in the door's own transaction, so the row is
+  written with them and its postings read them. A total with no value
+  is left out."
+  [data rdef ls]
+  (if-some [ts (not-empty (get-in rdef [:lines :totals]))]
+    (merge (apply dissoc data (keys ts)) (line-items/totals rdef ls))
+    data))
+
+(defn- sans-lines
+  "The input as the row's own data reads it: a kind that declares
+  :lines (ledger step 6a) takes its `lines` into line rows, never into
+  the parent's data."
+  [rdef inp]
+  (cond-> inp (and (:lines rdef) (map? inp)) (dissoc :lines)))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
-  `unchanged` on an in-state door, which writes nothing."
+  `unchanged` on an in-state door, which writes nothing. A door that
+  took `lines` replaces its row's lines in this transaction."
   [engine tx rdef row defn inp ctx opts]
   (let [handled (if-some [h (:handler defn)]
-                  (let [out (h row inp ctx)]
+                  (let [out (h row (sans-lines rdef inp) ctx)]
                     (when-not (map? out)
                       (throw (t/definition-error
                               (str "handler for " (name (:name defn))
                                    " must return the row"))))
                     out)
-                  row)]
+                  row)
+        ;; its totals (ledger step 6c) are computed here, in this
+        ;; transaction, from the lines the door writes
+        handled (cond-> handled
+                  (and (:lines rdef) (map? inp) (contains? inp :lines))
+                  (update :data with-totals rdef (:lines inp)))]
     (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
       (let [[latest] (store/transitions (:storage engine) tx
                                         {:kind (:kind rdef) :resource-id (:id row)}
@@ -1303,7 +1471,11 @@
         ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
         (when (and (:unwinds defn) (not (:effect defn)))
           (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
-        (land! engine tx rdef row defn inp ctx handled opts)))))
+        (let [res (land! engine tx rdef row defn inp ctx handled opts)]
+          (when (and (:lines rdef) (map? inp) (contains? inp :lines))
+            (write-lines! engine tx rdef (:id row) (:lines inp)
+                          (:principal opts) true))
+          res)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -1629,7 +1801,11 @@
                           ;; a77bf705): a guard several doors carry
                           ;; reads which one judges it from here, and
                           ;; not from the shape of the body
-                          (assoc :door action-name))]
+                          (assoc :door action-name)
+                          ;; the row's stored lines (ledger step 6b),
+                          ;; read only when a guard asks for (lines)
+                          (cond-> (:lines rdef)
+                            (assoc :stored-lines (delay (stored-lines engine tx rdef id)))))]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest within)
@@ -1718,7 +1894,11 @@
                           (throw (p/schema-invalid
                                   action-name
                                   (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
-                          nil))]
+                          nil))
+                  ;; a line's omitted defaults fill here (ledger step
+                  ;; 6c), so the guards, the handler and the lines
+                  ;; written all read the line as the door placed it
+                  inp (defaulted-lines rdef ctx inp)]
               ;; 8. natural replay before guards
               (or (when (and (not dry-run)
                              (get-in defn [:safety :idempotent])
@@ -2676,6 +2856,28 @@
                                                                (update :version inc)))
                                           (:version row)))))))
 
+(defn- write-lines!
+  "Ledger step 6a (docs/spec-ledger-money.md §6): the line rows of one
+  parent, written in the door's transaction through the quiet birth
+  door. The parent's transition is the write the log records, and its
+  :inputs carry the lines; a transition per line would say it twice.
+  `replace?` (an edit) deletes the stored set first, so the door's list
+  IS the set. Each line is stamped with its parent and its place, `n`."
+  [engine tx rdef parent-id lines principal replace?]
+  (let [{child :kind via :parent} (:lines rdef)
+        st (:storage engine)
+        pid (str parent-id)]
+    (when replace?
+      (when-some [ids (seq (store/ids-matching
+                            st tx child
+                            [{:target :data :field via :cast "text"
+                              :op := :value pid}]
+                            10000))]
+        (store/delete-rows! st tx child (vec ids))))
+    (doseq [[n line] (map-indexed vector lines)]
+      (insert-quiet! engine tx child (assoc line via pid :n n)
+                     {:principal principal}))))
+
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
   bodies, chunk-transacted: one commit per chunk of 200 instead of
@@ -2753,10 +2955,14 @@
                            :within within
                            :grant grant
                            :self {:kind kind :action create-action}})
+            inp (defaulted-lines rdef ctx inp)
             {:keys [warned overridden basis]}
             (create-guard-pass door-guards
-                               inp (dissoc ctx :invoke :create :inner-sink
-                                           :power :follow-up :follow-sink)
+                               inp (cond-> (dissoc ctx :invoke :create :inner-sink
+                                                   :power :follow-up :follow-sink)
+                                     ;; a birth holds no lines yet: (lines)
+                                     ;; reads the input's (ledger step 6b)
+                                     (:lines rdef) (assoc :stored-lines []))
                                acknowledged
                                ;; the birth's evidence scope: no row
                                ;; exists yet, so the create input IS
@@ -2771,7 +2977,11 @@
                    :version 1
                    ;; each account is born at zero (ledger step 3c),
                    ;; so "under 5" finds a row nothing posted to yet
-                   :data (merge (money/opening-balances (:accounts rdef)) inp)
+                   :data (cond-> (merge (money/opening-balances (:accounts rdef))
+                                        (sans-lines rdef inp))
+                           ;; its totals (ledger step 6c), from the
+                           ;; lines it is born with
+                           (:lines rdef) (with-totals rdef (:lines inp)))
                    :shape (:shape rdef 1)
                    :owner (:id principal)
                    :law-revision (create-law-revision engine rdef kind)}
@@ -2817,6 +3027,11 @@
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
+              ;; its lines (ledger step 6a) follow it in, in this
+              ;; transaction: a refused line already refused the door
+              _ (when (and (:lines rdef) (seq (:lines inp)))
+                  (write-lines! engine tx rdef (:id row) (:lines inp)
+                                principal false))
               record (store/append-transition!
                       (:storage engine) tx
                       {:kind kind

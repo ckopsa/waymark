@@ -598,6 +598,8 @@
          [:vector
           [:map
            [:caption {:optional true} :string]
+           ;; a card shot's text; its hold is `hold_s`
+           [:card {:optional true} :string]
            [:role {:optional true} (into [:enum] roles)]
            [:goal_state {:optional true} :string]
            [:zoom {:optional true} :boolean]
@@ -873,6 +875,11 @@
      (cond
        ;; the output filter is the film's, so it is judged before any shot
        (not (judges? (dissoc rule :role) (:film tk) nil)) {:verdict "unscored"}
+       ;; a first week pins no quest, so it has no goal_state; week-arc
+       ;; judges its story (ticket 567b5cf8). Read from the scene's mark,
+       ;; not the roles a walk take carries too.
+       (and (= "arc" metric) (true? (get-in tk [:scene :first_week])))
+       {:verdict "unscored"}
        ;; the week's rules judge the takes their scene or the arc's roles mark
        (and (or (week-metrics metric) (played-metrics metric))
             (not (first-week? tk)))
@@ -1046,7 +1053,7 @@
     :origin "craft"}
    {:name "arc" :metric "arc" :op "=" :threshold 1M
     :scope "film" :severity "fail"
-    :why "When the scene declares roles, the shots run friction, turn, payoff, and the last shot's goal is done."
+    :why "When the scene declares roles, the shots run friction, turn, payoff, and the last shot's goal is done. A first week is judged by week-arc instead."
     :origin "craft"}
    {:name "caption-not-list" :metric "bare_lists" :op "=" :threshold 0M
     :scope "film" :severity "fail"

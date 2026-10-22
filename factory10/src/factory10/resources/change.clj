@@ -377,10 +377,17 @@
   (str "The branch moved under you. Call the power bench__pull with "
        "from: head, read what it answers, and submit again."))
 
-(def ^:private ceiling-remedy
-  (str "Make the change smaller: submit the part that stands on its "
-       "own, or ask a person to raise max_lines on the repository "
-       "policy."))
+(defn- ceiling-remedy
+  "What an over-ceiling refusal tells the seat, naming the ceiling this
+  change's paths took when the door knows it (ticket bacb84f2)."
+  [ceiling]
+  (str "Make the change smaller"
+       (when ceiling
+         (str " than " ceiling " changed lines, the ceiling this "
+              "change's lane takes"))
+       ": submit the part that stands on its own, or ask a person to "
+       "raise max_lines (or lane_max_lines, for a change in one lane) "
+       "on the repository policy."))
 
 (def ^:private clean-remedy
   (str "There is nothing to submit. Edit a file with the power "
@@ -439,7 +446,7 @@
   tells the seat what to do next. The rig's `remedy` sentence rides
   beside it when it sent one — it is the rig that knows what it
   refused."
-  [what answer & [row]]
+  [what answer & [row ceiling]]
   (let [named (bench/refused answer)
         reason (some-> (:reason answer) str not-empty)
         theirs (some-> (:remedy answer) str not-empty)]
@@ -448,7 +455,7 @@
           (when reason (str " — " reason)) ".")
      (cond-> (case named
                "push_rejected" [pull-remedy]
-               "over_ceiling" [ceiling-remedy]
+               "over_ceiling" [(ceiling-remedy ceiling)]
                "nothing_to_commit" (if (and row (in-review? row))
                                       [submitted-detail submitted-remedy]
                                       [clean-remedy])
@@ -543,7 +550,10 @@
            (not (landing-owed? status)))
       (bench/refuse! nothing-detail [clean-remedy])
       :else
-      (let [answer (bench/ask ctx :submit
+      (let [;; the lane's own ceiling when every path sits in one
+            ;; (ticket bacb84f2), and max_lines otherwise
+            ceiling (bench/max-lines-for policy (:paths status))
+            answer (bench/ask ctx :submit
                               (cond-> {:repo repo
                                        :branch branch
                                        :message (str (:why inp))
@@ -557,11 +567,11 @@
                                        ;; was a SEAT's, in this
                                        ;; sitting
                                        :trailers (bench/trailers ctx)
-                                       :max_lines (bench/max-lines-of policy)}
+                                       :max_lines ceiling}
                                 title (assoc :title title)))]
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
-          (bench/refused answer) (rig-refusal! "submit" answer row)
+          (bench/refused answer) (rig-refusal! "submit" answer row ceiling)
           :else
           (do
             ;; the round is out: the ticket leaves the walk until its

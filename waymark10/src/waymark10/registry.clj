@@ -8,7 +8,8 @@
 
   Duplicate :kind or :plural across resources is a :registry error:
   one law per kind, one collection URL per plural."
-  (:require [waymark10.checks-assembly :as assembly]
+  (:require [waymark10.bounds :as bounds]
+            [waymark10.checks-assembly :as assembly]
             [waymark10.fingerprint :as fp]
             [waymark10.occupies :as occupies]
             [waymark10.recurs :as recurs]
@@ -70,7 +71,10 @@
   ;; field, law on that kind as those guards are on theirs
   (let [kinds (-> (into {} (map (juxt :kind identity)) resources)
                   occupies/derive-kinds
-                  recurs/derive-kinds)
+                  recurs/derive-kinds
+                  ;; …and an account's bounds write the guards of every
+                  ;; door whose :posts could break them (ledger step 5)
+                  bounds/derive-kinds)
         reg {:kinds (into (sorted-map) (map (fn [[k r]] [k (assemble r)])) kinds)}
         {:keys [warnings info]} (assembly/run-all reg)]
     (doseq [w warnings]

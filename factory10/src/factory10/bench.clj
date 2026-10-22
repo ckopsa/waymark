@@ -574,6 +574,41 @@
         (if (and (= 1 (count orgs)) (first orgs)) (first orgs) engine-lane))
       :else (:name lane))))
 
+(defn lane-max-lines-of
+  "The size ceiling for a change in LANE (ticket bacb84f2): the policy's
+  `lane_max_lines` maps a lane prefix to a ceiling of its own, and the
+  lane `orgs/<x>` takes the entry `orgs` as the lane `orgs` does. The
+  longest prefix that names the lane wins. A lane no entry names —
+  `engine-lane` among them — and every lane of a policy without the map
+  takes `max-lines-of`."
+  [policy lane]
+  (let [lane (some-> lane str not-empty)
+        names? (fn [prefix]
+                 (and (not-empty prefix)
+                      (or (= lane prefix)
+                          (str/starts-with? lane (str prefix "/")))))
+        hit (when lane
+              (some (fn [[prefix n]]
+                      (when (and (integer? n) (names? prefix)) n))
+                    (->> (get-in policy [:data :lane_max_lines])
+                         (map (fn [[k n]]
+                                ;; a JSON key `orgs/x` reads as the
+                                ;; keyword :orgs/x, whose name is x
+                                [(str/replace (if (keyword? k) (subs (str k) 1) (str k))
+                                              #"/+$" "")
+                                 n]))
+                         (sort-by (comp - count first)))))]
+    (long (or hit (max-lines-of policy)))))
+
+(defn max-lines-for
+  "The size ceiling for one submit that touches PATHS: the ceiling of
+  the lane `lane-of` puts those paths in. A submit that names no paths
+  stands in `engine-lane`, and so takes max_lines."
+  [policy paths]
+  (let [paths (keep #(some-> (if (map? %) (:path %) %) str not-empty) paths)]
+    (lane-max-lines-of policy
+                       (lane-of {:data {:touched_paths (vec paths)}} policy))))
+
 (defn house-merges-change?
   "Does the house's merge pass merge THIS change? Only when its policy
   `house-pass-merges?` and the change touches no path the policy keeps

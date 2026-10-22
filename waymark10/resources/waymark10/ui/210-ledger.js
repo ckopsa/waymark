@@ -94,7 +94,11 @@ function historySection(streamHref) {
             evTime(ev.at), " ", actorChip(ev.actor), lawStampChip(ev)),
           el("div", {class:"ev-body"},
             `${pretty(ev.action || "")} · `,
-            `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+            `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`),
+          /* the hand's own sentence about the move (ticket 1d8f5f1c) */
+          ev.actor && ev.actor.why
+            ? el("div", {class:"ev-why muted"}, `“${ev.actor.why}”`)
+            : null));
     }).catch(() => {
       if (!document.contains(body)) return;
       body.textContent = "";
