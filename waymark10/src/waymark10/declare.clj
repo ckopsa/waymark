@@ -395,7 +395,7 @@
                    (and (= :by k) (next xs) (not (contains? m :by)))
                    (recur (assoc m :by a) (drop 2 xs))
                    :else
-                   (werr (str "hold takes its sentence, then :for :role \"…\" "
+                   (werr (str "hold takes only its sentence, then :for :role \"…\" "
                               "and :by '(expr), each at most once; " (pr-str more)
                               " declares nothing")))))
         by (some-> (:by said) expr/normalize)]
