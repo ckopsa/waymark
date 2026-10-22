@@ -153,11 +153,19 @@
     (when (seq vs) (reduce money/plus vs))))
 
 (defn- posted
-  "The postings the transition `log-id` wrote, as stored."
+  "The postings the transition `log-id` wrote, as stored — every one,
+  paged to the end: search-rows answers one page, and an undo that read
+  only the first would take back only part of the transition."
   [eng tx log-id]
-  (store/search-rows (:storage eng) tx :posting
-                     [{:target :data :field :log_id :op := :value (str log-id)}]
-                     {}))
+  (let [page 500
+        conds [{:target :data :field :log_id :op := :value (str log-id)}]]
+    (loop [offset 0 acc []]
+      (let [rows (store/search-rows (:storage eng) tx :posting conds
+                                    {:limit page :offset offset})
+            acc (into acc rows)]
+        (if (< (count rows) page)
+          acc
+          (recur (+ offset page) acc))))))
 
 (defn reversals
   "The entries that take back what the transition `log-id` posted
