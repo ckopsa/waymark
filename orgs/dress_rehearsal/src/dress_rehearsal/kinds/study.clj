@@ -16,10 +16,6 @@
   (refuse "Drafting starts once the cost records are complete; say when the last one came.")
   '(present? :records_complete_on))
 
-(defguard records-confirmed
-  (refuse "The specialist decides the cost records are complete; name who confirmed them.")
-  '(present? :records_confirmed_by))
-
 (defguard has-preparer
   (refuse "A study goes to review with the name of who prepared it.")
   '(present? :preparer))
@@ -27,10 +23,6 @@
 (defguard has-credit
   (refuse "A study goes to review once the credit is calculated.")
   '(present? :credit_usd))
-
-(defguard has-signer
-  (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
-  '(present? :signed_off_by))
 
 (defresource study
   {:kind :study
@@ -49,17 +41,34 @@
             [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
             [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
             [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
-            [:records_confirmed_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+            ;; who took records_in, stamped by that door: no one types it
+            [:records_confirmed_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:missing_records {:optional true} [:maybe [:string {:max 500}]]]
             [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
             [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
-            [:signed_off_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]]
+            ;; who took sign_off, stamped by that door
+            [:signed_off_by {:optional true :kind :member} [:maybe :waymark/ref]]]
+   ;; the schema less the two stamped fields: who acted is never typed at birth
+   :create-schema [:map
+                   [:client [:string {:min 1 :max 120}]]
+                   [:tax_year [:int {:min 2000 :max 2100}]]
+                   [:prospect_id {:optional true :kind :prospect} [:maybe :waymark/ref]]
+                   [:cpa {:optional true} [:maybe [:string {:max 120}]]]
+                   [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
+                   [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
+                   [:records_complete_on {:optional true} [:maybe [:string {:max 10}]]]
+                   [:missing_records {:optional true} [:maybe [:string {:max 500}]]]
+                   [:chases_sent {:optional true} [:maybe [:int {:min 0 :max 2}]]]
+                   [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
+                   [:preparer {:optional true} [:maybe [:string {:max 80}]]]
+                   [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :tax_year #{:eq} :preparer #{:eq}}
    :actions
    {:records_in {:from #{:collecting} :to :drafting
-                 :guards [records-complete records-confirmed]
+                 :guards [records-complete]
+                 :stamp {:records_confirmed_by '(actor)}
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review
@@ -68,7 +77,7 @@
     :send_back  {:from #{:review} :to :drafting
                  :safety {:idempotent true :reversible true :confirm false}}
     :sign_off   {:from #{:review} :to :signed_off
-                 :guards [has-signer]
+                 :stamp {:signed_off_by '(actor)}
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "A signed-off study is final; correct it with a new study."}}
     :deliver    {:from #{:signed_off} :to :delivered

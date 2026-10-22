@@ -268,13 +268,17 @@
 
 (defn engine-written?
   "True when the engine writes `field` itself — a :derived count or
-  roll-up, a principal it stamps, or who acted, a door's :stamp
+  roll-up, a principal the owned-surface create stamps (one its
+  :create-schema leaves out), or who acted, a door's :stamp
   (spec-teams §4) — so no caller is sent to write it."
   [rdef field]
-  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))]
+  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))
+        cform (:create-schema rdef)]
     (clojure.core/or (contains? (:derived rdef) field)
                      (some? (:derived props))
-                     (true? (get-in props [:x-ref :principal]))
+                     (clojure.core/and (true? (get-in props [:x-ref :principal]))
+                                       (some? cform)
+                                       (not (contains? (set (schema/entry-keys cform)) field)))
                      (boolean (some #(contains? (:stamp %) field)
                                     (machine/actions-seq rdef))))))
 
