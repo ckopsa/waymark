@@ -729,9 +729,9 @@
                             distinct
                             (take 5)
                             vec)})
-          (let [value-of (measure/value-fn (measures/parse-field (measures/spelled (:field m))))]
+          (let [value-of (measures/value-fn (measures/parse-field (measures/spelled (:field m))))]
             {:among n
-             :value (when (pos? n) (decimal-of (measure/stat-of stat (map value-of rows))))
+             :value (when (pos? n) (decimal-of (measures/stat-of stat (map value-of rows))))
              :evidence []}))))))
 
 (defn- verdict

@@ -83,7 +83,7 @@
             [waymark10.types :as t]
             [waymark10.windows :as windows])
   (:import (java.math BigDecimal RoundingMode)
-           (java.time Instant LocalDate LocalTime ZoneId)
+           (java.time Duration Instant LocalDate LocalTime ZoneId)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -1191,9 +1191,9 @@
 
 (defn- readings-faults
   "What the assembled declaration says of a scenario's :goals and
-  :expect :readings: each token a measure this kind declares, of a stat
-  a scenario reads (:rate or :count) over a time field, its :among by
-  equality on a declared field; and the door judged here, where
+  :expect :readings: each token a measure this kind declares, over a
+  time field, its :among on a declared field (by equality or a grammar
+  suffix such as placed_at_gte); and the door judged here, where
   readings are read, so its guards read nothing this tier cannot answer."
   [rdef s guards]
   (let [want (get-in s [:expect :readings])
@@ -1202,21 +1202,18 @@
     (concat
      (for [token (sort (keys want))
            :let [m (measure-of rdef token)
-                 stat (some-> m :stat measures/spelled)
                  stray (when (= (:kind rdef) (some-> m :of measures/spelled keyword))
-                         (seq (remove fields (keys (measures/parse-among (:among m))))))
+                         (seq (remove fields (measures/among-fields
+                                              fields (measures/parse-among (:among m))))))
                  fault (cond
                          (nil? m)
                          (str ":expect :readings names " token ", which " (name (:kind rdef))
                               " does not declare — its measures are " declared)
-                         (not (#{"rate" "count"} stat))
-                         (str ":expect :readings " token " is a :" stat
-                              " measure; a scenario reads :rate and :count")
                          (measures/transition-action (measures/spelled (:at m)))
                          (str ":expect :readings " token " counts the log, which a scenario does not read")
                          stray
                          (str ":expect :readings " token "'s :among filters by " (pr-str (vec stray))
-                              ", and a scenario reads :among by equality on a declared field"))]
+                              ", and a scenario reads :among on a declared field"))]
            :when fault]
        fault)
      (for [gl (:goals s) :when (nil? (measure-of rdef (:measure gl)))]
@@ -1645,27 +1642,66 @@
         (string? v) (or (try (Instant/parse ^String v) (catch DateTimeParseException _ nil))
                         (try (LocalDate/parse ^String v) (catch DateTimeParseException _ nil)))))
 
+(defn- bound-order
+  "Where a row's value v stands against an :among bound b — negative,
+  zero or positive — as the collection grammar compares them: a number
+  as a number, an instant or a date as a point (a negative duration,
+  -P3D, the point that long before now), anything else as text. nil
+  when v is absent or the bound does not read."
+  [v ^String b ^Instant now]
+  (when (and (some? v) (not (str/blank? b)))
+    (if (number? v)
+      (when-some [n (try (bigdec b) (catch NumberFormatException _ nil))]
+        (compare (bigdec v) n))
+      (let [pv (point v)
+            pb (if (str/starts-with? b "-P")
+                 (try (.minus now (Duration/parse (subs b 1)))
+                      (catch DateTimeParseException _ nil))
+                 (point b))]
+        (if (and pv pb (= (class pv) (class pb)))
+          (compare pv pb)
+          (compare (if (keyword? v) (name v) (str v)) b))))))
+
 (defn- among?
-  "Does this row pass a parsed :among, by equality — its state for
-  `state`, its field for any other key?"
-  [among row]
+  "Does this row pass a parsed :among — its state for `state`, its
+  field for any other key, by equality or by the grammar suffix the key
+  carries (_ne, _gte, _lte, _after, _before, _set, _contains), read back
+  to its field by measures/among-term?"
+  [field? among row ^Instant now]
   (every? (fn [[k vs]]
-            (let [v (if (= :state k) (:state row) (get-in row [:data k]))]
-              (contains? (set vs) (if (keyword? v) (name v) (str v)))))
+            (let [[f sfx] (measures/among-term field? k)
+                  v (if (= :state f) (:state row) (get-in row [:data f]))
+                  text (if (keyword? v) (name v) (str v))
+                  order #(bound-order v (first vs) now)]
+              (case sfx
+                "_ne" (not (contains? (set vs) text))
+                "_gte" (boolean (some-> (order) (>= 0)))
+                "_lte" (boolean (some-> (order) (<= 0)))
+                "_after" (boolean (some-> (order) pos?))
+                "_before" (boolean (some-> (order) neg?))
+                "_set" (= (= "true" (first vs)) (and (some? v) (not= "" text)))
+                "_contains" (and (some? v)
+                                 (str/includes? (str/lower-case text)
+                                                (str/lower-case (str (first vs)))))
+                (contains? (set vs) text))))
           among))
 
 (defn- reading
   "One measure read as the sweep reads it, over the scenario's own rows:
   those whose :at falls in the window `now` falls in and that pass
   :among → {:among :met :value}, a rate to four places as the sweep
-  rounds it."
-  [m rows cal ^Instant now]
+  rounds it, any other stat by measures/stat-of as the sweep reads it."
+  [rdef m rows cal ^Instant now]
   (let [at (keyword (measures/spelled (:at m)))
         w (windows/window (:over m) cal now)
+        field? (conj (set (schema/entry-keys (:schema rdef))) :state)
         among (measures/parse-among (:among m))
-        in (filterv #(and (windows/within? w (point (get-in % [:data at]))) (among? among %)) rows)
-        n (count in)]
-    (if (= "rate" (measures/spelled (:stat m)))
+        in (filterv #(and (windows/within? w (point (get-in % [:data at])))
+                          (among? field? among % now))
+                    rows)
+        n (count in)
+        stat (measures/spelled (:stat m))]
+    (if (= "rate" stat)
       (let [form (expr/normalize (:where m))
             calendar (fn ([] cal) ([_ref] cal))
             met (count (filter #(true? (expr/evaluate form {:data (:data %) :now now :calendar calendar}))
@@ -1675,8 +1711,9 @@
          :value (when (pos? n)
                   (.divide (BigDecimal/valueOf (long met)) (BigDecimal/valueOf (long n))
                            4 RoundingMode/HALF_UP))})
-      {:among n
-       :value (when (pos? n) (BigDecimal/valueOf (long n)))})))
+      (let [value-of (measures/value-fn (measures/parse-field (measures/spelled (:field m))))]
+        {:among n
+         :value (when (pos? n) (measures/decimal (measures/stat-of stat (map value-of in))))}))))
 
 (defn- readings-clause
   "Where the readings the scenario expects differ from the ones its walk
@@ -1695,7 +1732,7 @@
                           of (some-> m :of measures/spelled keyword)
                           rows (cond-> (filterv #(= of (:kind %)) (:given s))
                                  (and walked (= of (:kind s))) (conj walked))
-                          r (reading m rows cal now)
+                          r (reading rdef m rows cal now)
                           gl (first (filter #(= token (:measure %)) (:goals s)))
                           verdict (measures/verdict m r (:op gl) (:target gl))
                           value (:value r)
