@@ -62,8 +62,9 @@ function heldBand(doc) {
         onclick: async () => {
           const r = await invokeBare(acts.allow, body);
           if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+          const decider = ((r.body || {}).data || {}).decided_by || viewerId();
           bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
-            `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
+            "Allowed by ", deciderRef(decider)));
         }}, "Allow"));
       if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
         "data-surface": "held.deny",
