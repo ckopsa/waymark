@@ -373,7 +373,8 @@
   :summary that reads a field the purge clears needs :retain {:data
   true} [purge-summary]: the purge re-renders each old log line's
   summary from its redacted `after`, and only a retained document has
-  one."
+  one. A :summary-line fn is opaque, so it is taken to read anything:
+  a purge door beside one needs :retain {:data true} too."
   [r]
   (doseq [a (machine/actions-seq r)
           :when (some? (:purge a))]
@@ -406,7 +407,11 @@
             (err r :purge-summary
                  (str "`" (name (:kind r)) "`'s summary reads `" f
                       "`, which its purge clears; declare :retain {:data true}"
-                      " so a purge can redact its past log.")))))))
+                      " so a purge can redact its past log."))))))
+    (when (and (fn? (:summary-line r)) (not (get-in r [:retain :data])))
+      (err r :purge-summary
+           (str "`" (name (:kind r)) "` has a purge door and a :summary-line fn;"
+                " declare :retain {:data true} so a purge can redact its past log."))))
   nil)
 
 (defn- check-keep
