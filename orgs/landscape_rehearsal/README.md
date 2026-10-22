@@ -6,7 +6,11 @@ step 10). A `booking` and an approved `time_off` hold a `crew` for a
 window through `:occupies`, so the engine writes the crew-is-free and
 crew-is-working guards; a `contract` makes its `visit` rows on a
 `:recurs` rule. The film's three steps are scenarios on `booking` and
-`contract`.
+`contract`. A booking's `rain_day` door is its `:occupies` entry's
+`:bumps` door: one atomic bulk call, filtered with `where` by
+`crew_id` and a `starts_at` range for the day, moves each of that
+crew's scheduled bookings to its next free window on a later business
+day, skipping holidays and held slots.
 
 | File | What it is |
 | --- | --- |
