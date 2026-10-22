@@ -296,6 +296,34 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
+(defn- balance-over
+  "What an account's postings effective on or after `from` and before
+  `until` add (docs/spec-ledger-money.md §7, ledger step 9b), read from
+  the posting rows themselves — so a house account, whose balance no row
+  carries, has an answer too. A period no posting falls in is zero in
+  the account's unit: live, nothing moved. nil — unknown to the law —
+  for an account no kind or house declares, a row account with no row
+  named, and an engine that serves no posting kind. A posting's amount
+  is money, stored as an object, so the rows are summed here, as
+  postings/recomputed-balance sums them, not by sum-matching's numeric
+  SUM."
+  [engine tx account-kind id account-name from until]
+  (let [house? (= :house (keyword account-kind))
+        unit (if house?
+               (get-in engine [:house-accounts (keyword account-name) :unit])
+               (get-in (resources engine) [account-kind :accounts account-name :unit]))]
+    (when (and unit (get (resources engine) :posting) (or house? (some? id)))
+      (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
+                 (completing money/plus)
+                 (money/zero unit)
+                 (store/search-rows
+                  (:storage engine) tx :posting
+                  [{:target :data :field :account :op :=
+                    :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}
+                   {:target :data :field :effective_on :cast "date" :op :>= :value (str from)}
+                   {:target :data :field :effective_on :cast "date" :op :< :value (str until)}]
+                  {})))))
+
 (declare rate-on)
 
 (defn- read-hooks
@@ -360,6 +388,11 @@
                  [:balance account-kind (str id) account-name]
                  #(store/with-tx
                    st (fn [tx] (balance-in engine tx account-kind id account-name {})))))
+     :balance-over (fn [account-kind id account-name from until]
+                     (through
+                      [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
+                      #(store/with-tx
+                        st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
      :rate-of (fn [table key-vals on]
                 (through
                  [:rate-of table key-vals (str on)]
@@ -755,6 +788,11 @@
              ;; for a house account, whose balance no row carries yet
              :balance (fn [account-kind id account-name]
                         (balance-in engine tx account-kind id account-name {:for-update true}))
+             ;; …and over a period (step 9b): the postings in [from,
+             ;; until) summed in the write's own transaction, house
+             ;; accounts included
+             :balance-over (fn [account-kind id account-name from until]
+                             (balance-over engine tx account-kind id account-name from until))
              ;; the rate tables' reader (docs/spec-ledger-money.md §8,
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
@@ -2131,6 +2169,36 @@
           (mapv (fn [id] {:id id :input input :acknowledged acknowledged})
                 ids))))))
 
+(defn- where-items
+  "The third bulk body shape (rain day C): `{:where {param value}
+  …input}` — one input over every row the collection's own filter
+  matches, acknowledged at call level as `ids` is. `resolve` is the
+  router's seam (this namespace reads no collection): given the where
+  map it answers the matched ids, in the collection's order, read under
+  the caller's grant. They are resolved HERE, before anything runs or
+  defers, so a job runs a fixed list. An empty match is an empty list,
+  and the report says nothing ran."
+  [action-name body acknowledged resolve]
+  (let [where (:where body)]
+    (cond
+      (or (contains? body :ids) (contains? body :items))
+      (throw (p/schema-invalid action-name
+                               {:where ["one of ids, items or where, not two"]}))
+
+      (not (and (map? where) (seq where)))
+      (throw (p/schema-invalid
+              action-name
+              {:where ["required, a non-empty object of the collection's query parameters"]}))
+
+      (nil? resolve)
+      (throw (p/schema-invalid action-name
+                               {:where ["this door takes ids or items"]}))
+
+      :else
+      (let [input (not-empty (dissoc body :where :on_error))]
+        (mapv (fn [id] {:id id :input input :acknowledged acknowledged})
+              (resolve where))))))
+
 (defn- item-verdict
   "One bulk item's rehearsal verdict — self-keyed, the guard's own
   sentence on a refusal, and on an ok the `would`: the state the row
@@ -2180,7 +2248,9 @@
   refusal; the report says what ran and what did not), atomic (one
   transaction, any refusal rolls all back) — and may only tighten
   the declaration's own. opts: :principal, :idempotency-key,
-  :acknowledged, :correlation-id, :dry-run, :grant.
+  :acknowledged, :correlation-id, :dry-run, :grant, and :where-ids —
+  the router's resolver for the third shape, `{:where {…} …input}`
+  (`where-items`), called with the where map and :max-items.
 
   Whole-call idempotency is the convention both shapes keep: the
   call's key stores the report (`fan-out-store!`), and a replay is
@@ -2206,7 +2276,7 @@
   a throw from it is logged and changes nothing."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant on-item on-refused]
+           dry-run grant on-item on-refused where-ids]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -2216,7 +2286,10 @@
         spec (fan-out-spec (:bulk defn))
         max-items (:max-items spec 100)
         body (or body {})
-        items (bulk-items action-name body acknowledged)
+        items (if (contains? body :where)
+                (where-items action-name body acknowledged
+                             (when where-ids #(where-ids % max-items)))
+                (bulk-items action-name body acknowledged))
         mode (on-error-mode action-name spec body)
         href #(str "/api/" (:plural rdef) "/" %)]
     (if (and (not dry-run)
