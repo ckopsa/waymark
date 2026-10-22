@@ -383,10 +383,12 @@
   "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
   §3) over their own :read and :find: the render probe and the
   law-sweep name the governing work_calendar from the same memo the
-  rest of their reads ride."
+  rest of their reads ride. The hook carries that :read as its metadata,
+  so an age's :until can follow a ref (`live-cracks/deadline`)."
   [engine]
   (let [hooks (read-hooks engine)]
-    (assoc hooks :calendar (work-calendar/hook (:read hooks) (:find hooks)))))
+    (assoc hooks :calendar (some-> (work-calendar/hook (:read hooks) (:find hooks))
+                                   (with-meta {:read (:read hooks)})))))
 
 (defn- law-conds
   "An exists/none/count-rows where as the store's conds
