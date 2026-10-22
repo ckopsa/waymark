@@ -11,6 +11,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -63,6 +64,113 @@
                {:principal grants/approvals-actor :id id :mint? true}))
 
 (defn- person [id] (t/principal {:id id :display id}))
+
+;; ── :team-of (docs/spec-teams.md §6) ────────────────────────────────
+
+;; a crew's job: `crew` names its team, `lead` the member who leads it
+(defresource team-job
+  {:kind :team_job
+   :plural "team_jobs"
+   :states [:open :closed]
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 120}]]
+            [:crew {:kind :team} :waymark/ref]
+            [:lead {:kind :member} :waymark/ref]]
+   :filterable {:state #{:eq :in}}
+   :actions {:close close}})
+
+(defn- team-eng! []
+  (engine/engine {:storage (memory/storage) :resources [team-job]}))
+
+(defn- team! [eng inp]
+  (:row (inv/create! eng :team inp {:principal (person "olive")})))
+
+(defn- team-edit! [eng id inp]
+  (let [r (#'grants/load-decoded eng :team id)]
+    (inv/invoke! eng :team (str id) :edit inp
+                 {:principal (person "olive")
+                  :if-match (inv/etag :team (str id) (:version r))})))
+
+(defn- job! [eng id crew lead]
+  (:row (inv/create! eng :team_job {:name id :crew (str crew) :lead lead}
+                     {:principal members/registrar :id id})))
+
+(defn- team-grant! [eng id audience team-of]
+  (inv/create! eng :grant
+               {:audience audience
+                :scope [{:kind "team_job" :actions [] :team-of team-of}]}
+               {:principal grants/approvals-actor :id id :mint? true}))
+
+(defn- sees
+  "What `who` reads of these team_job ids, both ways: the row judgment,
+  and the conds the collection ANDs into its search (`conds-of`, with
+  `ids-of` as collections adds it). The two must agree."
+  [eng who ids]
+  (let [vis (grants/unscoped-visibility eng (person who))
+        st (:storage eng)
+        conds (cond-> (vec ((:conds-of vis) :team_job))
+                (some? ((:ids-of vis) :team_job))
+                (conj {:target :id :op :in :values ((:ids-of vis) :team_job)}))
+        listed (into #{} (map (comp str :id))
+                     (store/with-tx st
+                       (fn [tx] (store/search-rows st tx :team_job conds {:limit 100}))))]
+    {:row (into #{} (filter #((:row? vis) :team_job %)) ids)
+     :listed (into #{} (filter listed) ids)}))
+
+(deftest a-team-of-grant-reads-membership-live
+  (let [eng (team-eng!)]
+    (member! eng "luis" nil)
+    (member! eng "ana" nil)
+    (let [crew-b (team! eng {:name "Crew B" :members ["luis"]})
+          crew-c (team! eng {:name "Crew C" :members ["ana"]})
+          ids #{"job-b" "job-c"}]
+      (job! eng "job-b" (:id crew-b) "luis")
+      (job! eng "job-c" (:id crew-c) "ana")
+      (team-grant! eng "grant-luis" "luis" {:field "crew"})
+      (testing "a member reads the jobs of the crews they are on"
+        (is (= {:row #{"job-b"} :listed #{"job-b"}} (sees eng "luis" ids))))
+      (testing "added to a team, they read its rows on the next query"
+        (team-edit! eng (:id crew-c) {:members ["ana" "luis"]})
+        (is (= {:row ids :listed ids} (sees eng "luis" ids))))
+      (testing "a retired team admits nothing"
+        (inv/invoke! eng :team (str (:id crew-b)) :retire nil
+                     {:principal (person "olive")})
+        (is (= {:row #{"job-c"} :listed #{"job-c"}} (sees eng "luis" ids)))))))
+
+(deftest a-team-of-on-a-member-field-names-its-team
+  (let [eng (team-eng!)]
+    (member! eng "luis" nil)
+    (member! eng "ana" nil)
+    (let [crew-b (team! eng {:name "Crew B" :members ["luis"]})
+          ids #{"job-1" "job-2"}]
+      (job! eng "job-1" (:id crew-b) "luis")
+      (job! eng "job-2" (:id crew-b) "ana")
+      (team-grant! eng "grant-ana" "ana"
+                   {:field "lead" :team (str (:id crew-b))})
+      (testing "a row whose member is on the named team is admitted"
+        (is (= {:row #{"job-1"} :listed #{"job-1"}} (sees eng "ana" ids))))
+      (testing "a retired team admits nothing, in both halves"
+        (inv/invoke! eng :team (str (:id crew-b)) :retire nil
+                     {:principal (person "olive")})
+        (is (= {:row #{} :listed #{}} (sees eng "ana" ids)))))))
+
+(deftest a-team-of-on-a-plain-field-refuses
+  (let [eng (team-eng!)]
+    (member! eng "luis" nil)
+    ;; through the guarded door: a :mint? create walks no guard
+    (is (re-find #"team-of name"
+                 (pr-str
+                  (try (inv/create! eng :grant
+                                    {:audience "luis"
+                                     :scope [{:kind "team_job" :actions []
+                                              :team-of {:field "name"}}]}
+                                    {:principal (person "olive") :id "grant-bad"})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e (ex-data e)))))
+        "a field that names no team and no member admits nothing to judge by")))
 
 (deftest a-person-with-a-standing-grant-wears-it
   (let [eng (eng!)]
