@@ -533,7 +533,13 @@
       ;; replaces :terminal as the ending set), absent otherwise, so
       ;; every :over-free kind hashes byte-identical to before
       (some? (:over rmap))
-      (assoc "over" (over-fp (:over rmap))))))
+      (assoc "over" (over-fp (:over rmap)))
+
+      ;; :frozen-in (docs/spec-documents.md §6, §8): the states in which
+      ;; no door may change the data refuse writes, so they are law.
+      ;; Non-empty-only, so every frozen-free kind hashes as before
+      (seq (:frozen-in rmap))
+      (assoc "frozen_in" (vec (sort (map name (:frozen-in rmap))))))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -547,7 +553,7 @@
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
                               "create" "over" "recurs" "on_event"
-                              "accounts"})
+                              "accounts" "frozen_in"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
