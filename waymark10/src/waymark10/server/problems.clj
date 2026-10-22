@@ -80,6 +80,14 @@
                          " with these values already exists"
                          (when constraint (str " (" constraint ")")) ".")}))
 
+(defn unique-live
+  "A :unique group narrowed by :while already holds a live row with
+  these values: the refusal names that row by its line, so the person
+  knows which one to finish or drop."
+  [detail other]
+  (problem :unique-conflict 409 "Already exists"
+           {:detail detail :conflicting other}))
+
 (defn schema-invalid [action errors]
   (problem :schema-invalid 422 "Input failed validation"
            {:action-attempted action :errors errors}))

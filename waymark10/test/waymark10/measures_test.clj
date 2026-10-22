@@ -108,7 +108,13 @@
                  (str (assembles (with {:among "state=shiped"}))))))
   (testing "an :among value its field's schema does not admit"
     (is (re-find #"\[measure-shape\] measure shipped_on_time :among placed_at=\"notadate\""
-                 (str (assembles (with {:among "state=shipped&placed_at=notadate"})))))))
+                 (str (assembles (with {:among "state=shipped&placed_at=notadate"}))))))
+  (testing "a suffixed :among key's value its base field's schema does not admit"
+    (is (re-find #"\[measure-shape\] measure shipped_on_time :among placed_at_gte=\"notadate\""
+                 (str (assembles (with {:among "state=shipped&placed_at_gte=notadate"})))))
+    (is (re-find #"\[measure-shape\] measure shipped_on_time :among state_ne=\"shiped\" is not a state"
+                 (str (assembles (with {:among "state_ne=shiped"})))))
+    (is (nil? (assembles (with {:among "state=shipped&placed_at_gte=-P3D"}))))))
 
 (deftest a-field-no-index-serves-is-unfiltered
   (testing "the :at field"
