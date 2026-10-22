@@ -1396,6 +1396,57 @@
                  " — both sides and the tolerance are in one unit"))))
    []))
 
+(defn house-accounts
+  "The house's accounts (docs/spec-ledger-money.md §3): the engine's
+  :house-accounts option merged with each kind's, which an org's
+  in-domain stamps on every kind it declares. A malformed map refuses
+  the boot with its sentence, and one name declared in two units
+  refuses it naming both declarers."
+  [reg opt-accounts]
+  (let [declarers (cons ["the engine's option" ":house-accounts" opt-accounts]
+                        (for [[kind r] (sort-by key (:kinds reg))
+                              :when (seq (:house-accounts r))
+                              :let [who (if-some [d (:domain r)]
+                                          (str "domain " (name d) " (" (name kind) ")")
+                                          (str "kind " (name kind)))]]
+                          [who (str who " :house-accounts") (:house-accounts r)]))]
+    (doseq [[_ label ha] declarers]
+      (when-some [p (first (money/account-problems label ha))]
+        (throw (t/definition-error p {:check :house-accounts}))))
+    (->> declarers
+         (reduce (fn [acc [who _ ha]]
+                   (reduce-kv
+                    (fn [acc n spec]
+                      (if-some [[who0 spec0] (get acc n)]
+                        (if (= (:unit spec0) (:unit spec))
+                          acc
+                          (throw (t/definition-error
+                                  (str "house account " (name n) " is " (pr-str (:unit spec0))
+                                       " in " who0 " and " (pr-str (:unit spec)) " in " who
+                                       " — one house account has one unit")
+                                  {:check :house-accounts})))
+                        (assoc acc n [who spec])))
+                    acc ha))
+                 {})
+         (into {} (map (fn [[n [_ spec]]] [n spec]))))))
+
+(defn check-house-addresses
+  "[house-undeclared] (docs/spec-ledger-money.md §3): every [:house n]
+  a door's :posts names is a house account some declaration names —
+  `house-accounts` is the merged map the boot holds. An undeclared one
+  would post to an account no balance, bound or close reads."
+  [reg house-accounts]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          [aname a] (sort-by key (:actions r))
+          n (distinct (for [{:keys [account]} (:posts a)
+                            :when (and (= 2 (count account)) (= :house (first account)))]
+                        (second account)))
+          :when (not (contains? house-accounts n))]
+    (err kind :house-undeclared
+         (str (name aname) " posts to house " (name n)
+              ", a house account nothing declares — declare it in the org's"
+              " in-domain :house-accounts"))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
