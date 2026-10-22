@@ -19,6 +19,7 @@
     :schema [:map
              [:note [:string {:min 1 :max 60}]]
              [:owner {:optional true} [:maybe :string]]
+             [:plan_id {:optional true} [:maybe :string]]
              [:due_on :waymark/date]
              [:overdue {:optional true} [:maybe :boolean]]]
     :derived {:overdue {:over [:due_on :now]
@@ -85,6 +86,28 @@
                                                         (finishing "2026-10-06" false
                                                                    {:told ["member-elena"]}))))
                        "told [\"member-jack\"], not [\"member-elena\"]"))))
+
+(deftest a-rule-addresses-a-member-through-a-ref
+  (let [through (fn [plan-member expect]
+                  (-> (finishing "2026-10-06" false expect)
+                      (assoc-in [:row :data :plan_id] "{given/plan}")
+                      (assoc :given [{:kind :nl_plan :handle :plan :state :open
+                                      :data {:member plan-member}}]
+                             :rules [(assoc rule :address {:field "plan_id" :then "member"})])))]
+    (testing "the notice tells the member on the :given row the ref names"
+      (is (= [] (scenario/judge reminder (scenario/scenario
+                                          :through sentence
+                                          (through "member-elena" {:notices 1 :told ["member-elena"]}))))))
+    (testing "not the member on the walked row"
+      (is (str/includes? (first (scenario/judge reminder (scenario/scenario
+                                                          :through sentence
+                                                          (through "member-elena" {:told ["member-jack"]}))))
+                         "told [\"member-elena\"], not [\"member-jack\"]")))
+    (testing "a :then that is not spelled is refused"
+      (is (str/includes? (refusal #(scenario/scenario :through sentence
+                                                      (assoc (through "member-elena" {:notices 1})
+                                                             :rules [(assoc rule :address {:field "plan_id" :then ""})])))
+                         ":then")))))
 
 (deftest a-rule-the-kind-cannot-hear-is-an-authoring-fault
   (is (str/includes? (first (scenario/judge reminder (scenario/scenario
