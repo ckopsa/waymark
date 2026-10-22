@@ -1,7 +1,5 @@
 (ns shop_rehearsal.kinds.return-request
-  "A return: a customer sends back an item within 30 days of delivery.
-  It comes back into stock only after a staff member inspects it and
-  finds it unbroken."
+  "A return within 30 days of delivery; back into stock only once inspected and unbroken."
   (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-order
@@ -14,11 +12,11 @@
 
 (defguard inspected
   (refuse "An item comes back into stock only after a staff member inspects it; say who inspected it.")
-  '(present? :inspected_by))
+  '(is-set (input :inspected_by)))
 
 (defguard unbroken
   (refuse "Only an unbroken item goes back into stock.")
-  '(= (data :condition) "unbroken"))
+  '(= (input :condition) "unbroken"))
 
 (defresource return-request
   {:kind :return_request
@@ -52,28 +50,21 @@
                        :one-way "A declined return is closed; nothing is refunded for it."}
               :decided "The mayor declines a return on its own when it is asked more than 30 days after delivery: \"returns are accepted within 30 days of delivery for unbroken items.\""}
     :restock {:from #{:received} :to :restocked
+              :input [:map [:inspected_by {:kind :member} :waymark/ref] [:condition [:enum "unbroken" "broken"]]]
               :guards [inspected unbroken]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A restocked item is back on sale; its refund follows."}
               :decided "The mayor restocks a return on its own once a staff member has inspected it and found it unbroken."}
     :reject  {:from #{:received} :to :rejected
+              :input [:map [:inspected_by {:kind :member} :waymark/ref]]
               :guards [inspected]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A rejected return does not go back into stock."}
               :decided "The mayor rejects a return on its own when the inspecting staff member finds it broken, and says why."}}})
 
-(defscenario return-inside-window
-  "A return asked for 30 days after delivery is received."
-  {:kind :return_request :attempt :receive
-   :row {:state :requested
-         :data {:customer "Ana" :item "Blue mug" :order_id "order-1"
-                :delivered_on "2026-09-01" :requested_on "2026-10-01"}}
-   :expect {:allowed true}})
-
-(defscenario return-past-window
-  "A return asked for 31 days after delivery is refused."
-  {:kind :return_request :attempt :receive
-   :row {:state :requested
-         :data {:customer "Ana" :item "Blue mug" :order_id "order-1"
-                :delivered_on "2026-09-01" :requested_on "2026-10-02"}}
-   :expect {:refused :within-returns-window}})
+(defscenario return-past-window "A return asked for 31 days after delivery is refused."
+  {:kind :return_request :attempt :receive :row {:state :requested :data {:customer "Ana" :item "Blue mug" :order_id "order-1" :delivered_on "2026-09-01" :requested_on "2026-10-02"}} :expect {:refused :within-returns-window}})
+(defscenario not-restocked-without-inspector "A received return does not go back into stock until the staff member who inspected it is named."
+  {:kind :return_request :attempt :restock :input {:condition "unbroken"} :row {:state :received :data {:customer "Ana" :item "Blue mug" :order_id "order-1"}} :expect {:refused :inspected}})
+(defscenario broken-not-restocked "A received return found broken does not go back into stock."
+  {:kind :return_request :attempt :restock :input {:inspected_by "staff2" :condition "broken"} :row {:state :received :data {:customer "Ana" :item "Blue mug" :order_id "order-1"}} :expect {:refused :unbroken}})

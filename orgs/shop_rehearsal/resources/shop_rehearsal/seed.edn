@@ -22,11 +22,14 @@
                      :scope [{:kind "wholesale_account" :actions ["create"]}
                              {:kind "wholesale_order" :actions ["create"]}]}
          :processor {:id "processor" :display "Payment Processor" :type :agent
-                     :scope [{:kind "payment" :actions ["create"]}]}}
+                     :scope [{:kind "payment" :actions ["create"]}]}
+         ;; the carrier sells the shop its postage: one label per order
+         :carrier   {:id "carrier" :display "Parcel Carrier" :type :agent
+                     :scope [{:kind "shipping_label" :actions ["create"]}]}}
   :seats [{:template "world"
            :params {:brief "A small online shop selling handmade ceramics: mugs, bowls and planters the owner throws and fires in batches. Customers order and pay at checkout through the payment processor; orders ship within 3 business days; returns are accepted within 30 days of delivery for unbroken items; breakage in transit ends in a replacement or refund; a few cafes buy wholesale on net-30 invoices."
-                    :kinds "order,payment,return_request,breakage_claim,wholesale_account,wholesale_order"
-                    :cast "maya,cafe,processor" :day_one [:days 0]
+                    :kinds "order,payment,shipping_label,return_request,breakage_claim,wholesale_account,wholesale_order"
+                    :cast "maya,cafe,processor,carrier" :day_one [:days 0]
                     :domain_id [:ref :shop_rehearsal]}}]}
  ;; the org's mayor holds every door out of every state; doors that
  ;; wait on the owner hold for her tap in the kind itself
@@ -43,7 +46,7 @@
                     {:kind "refund" :actions ["approve" "send" "decline"]}
                     {:kind "breakage_claim" :actions ["claim" "settle" "deny"]}
                     {:kind "wholesale_account" :actions ["approve" "decline" "close"]}
-                    {:kind "invoice" :actions ["pay" "mark_overdue" "void"]}
+                    {:kind "invoice" :actions ["create" "pay" "mark_overdue" "void"]}
                     {:kind "wholesale_order" :actions ["accept" "decline" "ship"]}
                     {:kind "monthly_close" :actions ["balance"]}]
             ;; every door that lands a row in a state the mayor leaves

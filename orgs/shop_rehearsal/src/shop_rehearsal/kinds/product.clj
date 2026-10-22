@@ -1,7 +1,5 @@
 (ns shop_rehearsal.kinds.product
-  "A product: one ceramic piece the shop sells (a mug, a bowl, a
-  planter). Its count on hand is what the storefront may sell; a kiln
-  batch adds to it and an order takes from it."
+  "A ceramic piece the shop sells; its count on hand is what the storefront may sell."
   (:require [waymark10.dsl :refer [defguard defresource hold]]))
 
 (defguard owner-retires

@@ -1,8 +1,6 @@
 (ns shop_rehearsal.kinds.wholesale-order
-  "A wholesale order: a cafe's order on its account, invoiced net-30
-  once shipped. A cafe with an invoice more than 15 days past due gets
-  no new wholesale order until it pays."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  "A cafe's order on its account, invoiced net-30 once shipped."
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-account
   (refuse "A wholesale order is placed on an active wholesale account; name it first.")
@@ -12,11 +10,11 @@
 ;; not read from its account and invoices (concept 1)
 (defguard in-good-standing
   (refuse "A cafe with an invoice more than 15 days past due gets no new wholesale order until it pays.")
-  '(= (data :account_standing) "good"))
+  '(= (input :account_standing) "good"))
 
 (defguard has-invoice
   (refuse "A shipped wholesale order is invoiced; name its invoice first.")
-  '(present? :invoice_id))
+  '(is-set (input :invoice_id)))
 
 (defresource wholesale-order
   {:kind :wholesale_order
@@ -39,6 +37,7 @@
    :expected-age {:placed 172800 :accepted 604800}
    :actions
    {:accept  {:from #{:placed} :to :accepted
+              :input [:map [:account_standing [:enum "good" "past_due"]]]
               :guards [names-account in-good-standing]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "An accepted wholesale order will be made and shipped."}
@@ -48,7 +47,13 @@
                        :one-way "A declined wholesale order is closed; the cafe orders again once it pays."}
               :decided "The mayor declines a wholesale order on its own when the cafe has an invoice more than 15 days past due, and says so."}
     :ship    {:from #{:accepted} :to :shipped
+              :input [:map [:invoice_id {:kind :invoice} :waymark/ref]]
               :guards [has-invoice]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A shipped wholesale order is owed on its invoice."}
               :decided "The mayor marks a wholesale order shipped on its own once its invoice is issued."}}})
+
+(defscenario past-due-cafe-not-accepted "A cafe more than 15 days past due gets no new wholesale order."
+  {:kind :wholesale_order :attempt :accept :input {:account_standing "past_due"} :row {:state :placed :data {:cafe "Corner Cup Cafe" :account_id "acct-1" :items "24 speckled mugs" :total_cents 38400}} :expect {:refused :in-good-standing}})
+(defscenario not-shipped-without-invoice "An accepted wholesale order does not ship until its invoice is named."
+  {:kind :wholesale_order :attempt :ship :input {} :row {:state :accepted :data {:cafe "Corner Cup Cafe" :account_id "acct-1" :items "24 speckled mugs" :total_cents 38400}} :expect {:refused :has-invoice}})

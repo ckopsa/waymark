@@ -1,8 +1,6 @@
 (ns shop_rehearsal.kinds.kiln-batch
-  "A kiln batch: pieces of one product the owner threw and fired
-  together. Once unloaded, the sound pieces are added to the product's
-  stock."
-  (:require [waymark10.dsl :refer [defguard defresource refuse]]))
+  "Pieces of one product fired together; the sound ones go into its stock."
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-product
   (refuse "A kiln batch adds stock to one product; name the product first.")
@@ -30,6 +28,9 @@
    :expected-age {:firing 259200}
    :actions
    {:stock {:from #{:firing} :to :stocked
+            :input [:map
+                    [:product_id {:kind :product} :waymark/ref]
+                    [:sound_pieces [:int {:min 0}]]]
             :guards [names-product counts-sound]
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "A stocked batch has been counted into its product; fire a new batch for more."}
@@ -38,3 +39,6 @@
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "A lost batch adds nothing to stock."}
             :decided "The mayor marks a batch lost on its own when the owner says the whole firing failed."}}})
+
+(defscenario not-stocked-without-sound-count "A fired batch is not stocked until its sound pieces are counted."
+  {:kind :kiln_batch :attempt :stock :input {:product_id "mug"} :row {:state :firing :data {:title "October mug firing" :pieces 20}} :expect {:refused :counts-sound}})

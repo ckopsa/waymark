@@ -1,25 +1,28 @@
 (ns shop_rehearsal.kinds.order
-  "An order: a customer's checkout on the storefront. It reserves its
-  items when placed, is packed only once its payment has cleared, and
-  ships within 3 business days."
+  "An order: a checkout that is paid, packed, and shipped within 3 business days."
   (:require [waymark10.dsl :refer [defguard defresource defscenario refuse warn]]))
 
-(defguard payment-cleared
+;; packed only from paid, and only mark_paid naming its payment reaches paid
+(defguard names-payment
   (refuse "An order is not packed until the payment has cleared; name the cleared payment first.")
-  '(present? :payment_id))
+  '(is-set (input :payment_id)))
 
 (defguard names-packer
   (refuse "Say which staff member packed the order.")
-  '(present? :packed_by))
+  '(is-set (input :packed_by)))
 
 (defguard has-label
   (refuse "An order ships on a label bought from the carrier; name its label first.")
-  '(present? :label_id))
+  '(is-set (input :label_id)))
+
+(defguard paid-not-in-future
+  (refuse "A payment cannot have cleared after today; give the day it cleared.")
+  '(<= (input :paid_on) (today)))
 
 ;; advisory: a late order still ships, but whoever ships it is told
 (defguard ships-in-time
   (warn "This order ships later than 3 business days after its payment cleared.")
-  '(<= (today) (+ (data :paid_on) (business-days 3))))
+  '(<= (today) (+ (input :paid_on) (business-days 3))))
 
 (defresource order
   {:kind :order
@@ -57,7 +60,7 @@
    :actions
    {:mark_paid {:from #{:placed} :to :paid
                 :input [:map [:payment_id [:string {:min 1 :max 120}]]]
-                :guards [payment-cleared]
+                :guards [names-payment]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A paid order stays paid; a refund gives the money back."}
                 :decided "The mayor marks an order paid on its own when the processor's payment for it has cleared: \"a payment that clears should move the order to paid without anyone retyping it.\""}
@@ -66,12 +69,14 @@
                          :one-way "A cancelled order releases its items; the customer orders again."}
                 :decided "The mayor cancels an unpaid order on its own after a day, and says why."}
     :pack      {:from #{:paid} :to :packed
-                :guards [payment-cleared names-packer]
+                :input [:map [:packed_by {:kind :member} :waymark/ref]]
+                :guards [names-packer]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A packed order is boxed; it ships from here."}
                 :decided "The mayor marks an order packed on its own once a staff member says they packed it."}
     :ship      {:from #{:packed} :to :shipped
-                :guards [has-label ships-in-time]
+                :input [:map [:label_id {:kind :shipping_label} :waymark/ref] [:paid_on :waymark/date]]
+                :guards [has-label paid-not-in-future ships-in-time]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A shipped order is with the carrier."}
                 :decided "The mayor marks an order shipped on its own once its label is used."}
@@ -80,36 +85,11 @@
                          :one-way "A delivered order starts its 30 days for returns."}
                 :decided "The mayor marks an order delivered on its own when the carrier says it was delivered."}}})
 
-(defscenario ships-on-third-business-day
-  "An order paid on a Thursday ships on the Tuesday after, its third business day."
-  {:kind :order :attempt :ship
-   :at "2026-10-27T18:00:00Z"
-   :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}}
-   :row {:state :packed
-         :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200
-                :buyer_state "CO" :tax_cents 0 :total_cents 3200
-                :label_id "label-1" :paid_on "2026-10-22"}}
-   :expect {:allowed true}})
-
-(defscenario ships-late-is-told
-  "An order paid on a Thursday and shipped the Wednesday after is late, and the shipper is told."
-  {:kind :order :attempt :ship
-   :at "2026-10-28T18:00:00Z"
-   :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}}
-   :row {:state :packed
-         :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200
-                :buyer_state "CO" :tax_cents 0 :total_cents 3200
-                :label_id "label-1" :paid_on "2026-10-22"}}
-   :expect {:refused :ships-in-time}})
-
-(defscenario paid-with-its-payment
-  "A placed order is marked paid when its cleared payment is named."
-  {:kind :order :attempt :mark_paid :input {:payment_id "pay-1"}
-   :row {:state :placed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}}
-   :expect {:allowed true}})
-
-(defscenario not-paid-without-payment
-  "A placed order is not marked paid until its payment is named."
-  {:kind :order :attempt :mark_paid :input {}
-   :row {:state :placed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}}
-   :expect {:refused :payment-cleared}})
+(defscenario ships-on-third-business-day "An order paid on a Thursday ships on the Tuesday after, its third business day."
+  {:kind :order :attempt :ship :input {:label_id "label-1" :paid_on "2026-10-22"} :at "2026-10-27T18:00:00Z" :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}} :row {:state :packed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}} :expect {:allowed true}})
+(defscenario ships-late-is-told "An order paid on a Thursday and shipped the Wednesday after is late, and the shipper is told."
+  {:kind :order :attempt :ship :input {:label_id "label-1" :paid_on "2026-10-22"} :at "2026-10-28T18:00:00Z" :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}} :row {:state :packed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}} :expect {:refused :ships-in-time}})
+(defscenario not-paid-without-payment "A placed order is not marked paid until its payment is named."
+  {:kind :order :attempt :mark_paid :input {} :row {:state :placed :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}} :expect {:refused :names-payment}})
+(defscenario not-packed-without-packer "A paid order is not packed until the staff member who packed it is named."
+  {:kind :order :attempt :pack :input {} :row {:state :paid :data {:customer "Ana" :items "Blue mug" :subtotal_cents 3200 :buyer_state "CO" :tax_cents 0 :total_cents 3200}} :expect {:refused :names-packer}})

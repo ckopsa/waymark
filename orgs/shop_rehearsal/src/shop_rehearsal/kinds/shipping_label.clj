@@ -1,7 +1,5 @@
 (ns shop_rehearsal.kinds.shipping-label
-  "A shipping label: postage bought from the carrier for one order,
-  once. It is used when the order ships, or voided when the order is
-  refunded before it ships."
+  "Postage bought from the carrier once per order: used when it ships, voided if refunded first."
   (:require [waymark10.dsl :refer [defguard defresource refuse]]))
 
 (defguard names-order

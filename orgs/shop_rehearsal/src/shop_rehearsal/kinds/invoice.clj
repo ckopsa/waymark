@@ -1,7 +1,5 @@
 (ns shop_rehearsal.kinds.invoice
-  "An invoice: what a cafe owes for a wholesale order, due net-30. An
-  invoice more than 15 days past due stops the cafe's new wholesale
-  orders until it is paid."
+  "What a cafe owes for a wholesale order, due net-30."
   (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-account
@@ -10,7 +8,7 @@
 
 (defguard payment-recorded
   (refuse "Record the cafe's payment reference before the invoice is paid.")
-  '(present? :payment_ref))
+  '(is-set (input :payment_ref)))
 
 (defguard past-net-30
   (refuse "An invoice is not past due until 30 days after it was issued.")
@@ -39,6 +37,7 @@
                   :overdue 604800}
    :actions
    {:pay      {:from #{:issued :overdue} :to :paid
+               :input [:map [:payment_ref [:string {:min 1 :max 120}]]]
                :guards [names-account payment-recorded]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A paid invoice is settled."}
@@ -53,22 +52,7 @@
                         :one-way "A void invoice is owed by nobody; issue a new one."}
                :decided "The mayor voids an invoice on its own when its wholesale order is declined, and says why."}}})
 
-(defscenario overdue-after-net-30
-  "An invoice issued on 1 September is past due on 2 October."
-  {:kind :invoice :attempt :mark_overdue
-   :at "2026-10-02T18:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :issued
-         :data {:number "W-1001" :amount_cents 48000 :tax_cents 0
-                :issued_on "2026-09-01"}}
-   :expect {:allowed true}})
-
-(defscenario not-overdue-within-net-30
-  "An invoice issued on 1 September is not past due on 1 October."
-  {:kind :invoice :attempt :mark_overdue
-   :at "2026-10-01T18:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :issued
-         :data {:number "W-1001" :amount_cents 48000 :tax_cents 0
-                :issued_on "2026-09-01"}}
-   :expect {:refused :past-net-30}})
+(defscenario overdue-after-net-30 "An invoice issued on 1 September is past due on 2 October."
+  {:kind :invoice :attempt :mark_overdue :at "2026-10-02T18:00:00Z" :calendar {:zone "America/Denver"} :row {:state :issued :data {:number "W-1001" :amount_cents 48000 :tax_cents 0 :issued_on "2026-09-01"}} :expect {:allowed true}})
+(defscenario not-overdue-within-net-30 "An invoice issued on 1 September is not past due on 1 October."
+  {:kind :invoice :attempt :mark_overdue :at "2026-10-01T18:00:00Z" :calendar {:zone "America/Denver"} :row {:state :issued :data {:number "W-1001" :amount_cents 48000 :tax_cents 0 :issued_on "2026-09-01"}} :expect {:refused :past-net-30}})

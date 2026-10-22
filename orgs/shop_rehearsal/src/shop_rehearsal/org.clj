@@ -1,9 +1,5 @@
 (ns shop_rehearsal.org
-  "shop_rehearsal: the org's module. A small online shop selling
-  handmade ceramics. Products are stocked by kiln batches and sold by
-  orders; payments clear through the processor, labels are bought from
-  the carrier, returns and breakage end in refunds, cafes buy wholesale
-  on invoices, and every month the books are closed."
+  "shop_rehearsal: a small online shop selling handmade ceramics, retail and wholesale."
   (:require [shop_rehearsal.kinds.product :refer [product]]
             [shop_rehearsal.kinds.kiln-batch :refer [kiln-batch]]
             [shop_rehearsal.kinds.order :refer [order]]

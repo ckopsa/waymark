@@ -1,8 +1,6 @@
 (ns shop_rehearsal.kinds.refund
-  "A refund: money given back through the processor, for a return, a
-  breakage or a cancelled order. Never more than was paid; the owner
-  approves any over $100; whoever packed the order does not approve it."
-  (:require [waymark10.dsl :refer [defguard defresource hold refuse]]))
+  "A refund through the processor: never more than was paid, the owner approves any over $100, never its packer."
+  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]]))
 
 (defguard names-order
   (refuse "A refund names the order it gives money back for.")
@@ -14,11 +12,11 @@
 
 (defguard names-approver
   (refuse "Say who approves this refund.")
-  '(present? :approved_by))
+  '(is-set (input :approved_by)))
 
 (defguard packer-does-not-approve
   (refuse "Whoever packed an order does not approve its refund.")
-  '(not= (data :approved_by) (data :packed_by)))
+  '(not= (input :approved_by) (data :packed_by)))
 
 (defguard owner-over-100
   (hold "A refund over $100 waits for the owner's approval.")
@@ -26,7 +24,7 @@
 
 (defguard has-processor-ref
   (refuse "A refund goes back through the processor; record the processor's refund reference.")
-  '(present? :processor_ref))
+  '(is-set (input :processor_ref)))
 
 (defresource refund
   {:kind :refund
@@ -50,11 +48,13 @@
    :expected-age {:requested 172800 :approved 86400}
    :actions
    {:approve {:from #{:requested} :to :approved
+              :input [:map [:approved_by {:kind :member} :waymark/ref]]
               :guards [names-order not-over-paid names-approver packer-does-not-approve owner-over-100]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "An approved refund will be paid back."}
               :decided "The mayor approves a refund of $100 or less on its own once a staff member who did not pack the order approves it."}
     :send    {:from #{:approved} :to :sent
+              :input [:map [:processor_ref [:string {:min 1 :max 120}]]]
               :guards [has-processor-ref]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A sent refund has gone back to the customer through the processor."}
@@ -63,3 +63,8 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A declined refund pays nothing."}
               :decided "The mayor declines a refund on its own when its return was declined or rejected, and says why."}}})
+
+(defscenario packer-cannot-approve "The staff member who packed the order cannot approve its refund."
+  {:kind :refund :attempt :approve :input {:approved_by "staff1"} :row {:state :requested :data {:order_id "order-1" :reason "return" :amount_cents 3200 :paid_cents 3200 :packed_by "staff1"}} :expect {:refused :packer-does-not-approve}})
+(defscenario not-sent-without-processor-ref "An approved refund is not sent until the processor's refund reference is recorded."
+  {:kind :refund :attempt :send :input {} :row {:state :approved :data {:order_id "order-1" :reason "return" :amount_cents 3200 :paid_cents 3200}} :expect {:refused :has-processor-ref}})

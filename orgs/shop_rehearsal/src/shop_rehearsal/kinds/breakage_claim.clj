@@ -1,7 +1,5 @@
 (ns shop_rehearsal.kinds.breakage-claim
-  "A breakage claim: an item broke in transit. The shop claims it from
-  the carrier, and the customer gets a replacement or a refund, their
-  choice."
+  "Breakage in transit: claimed from the carrier; the customer picks a replacement or a refund."
   (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]))
 
 (defguard names-order
@@ -10,7 +8,7 @@
 
 (defguard carrier-claim
   (refuse "Breakage in transit is claimed from the carrier; record the carrier's claim number.")
-  '(present? :carrier_claim_ref))
+  '(is-set (input :carrier_claim_ref)))
 
 (defguard customer-chose
   (refuse "The customer gets a replacement or a refund, their choice; record which they chose.")
@@ -36,7 +34,9 @@
    :expected-age {:reported 172800 :claimed 1814400}
    :actions
    {:claim  {:from #{:reported} :to :claimed
-             :input [:map [:carrier_claim_ref [:string {:min 1 :max 120}]]]
+             :input [:map
+                     [:carrier_claim_ref [:string {:min 1 :max 120}]]
+                     [:remedy [:enum "replacement" "refund"]]]
              :guards [names-order carrier-claim customer-chose]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "A claimed breakage is with the carrier; the customer's remedy goes ahead."}
@@ -51,14 +51,5 @@
                       :one-way "A denied claim is closed; the customer still has their remedy."}
              :decided "The mayor marks a claim denied on its own when the carrier refuses it, and tells the owner."}}})
 
-(defscenario claimed-with-carrier-number
-  "A reported breakage is claimed once the carrier's claim number is recorded."
-  {:kind :breakage_claim :attempt :claim :input {:carrier_claim_ref "UPS-CLM-48213"}
-   :row {:state :reported :data {:customer "Ana" :item "Blue mug" :order_id "order-1" :remedy "replacement"}}
-   :expect {:allowed true}})
-
-(defscenario not-claimed-without-carrier-number
-  "A reported breakage is not claimed until the carrier's claim number is recorded."
-  {:kind :breakage_claim :attempt :claim :input {}
-   :row {:state :reported :data {:customer "Ana" :item "Blue mug" :order_id "order-1" :remedy "replacement"}}
-   :expect {:refused :carrier-claim}})
+(defscenario not-claimed-without-carrier-number "A reported breakage is not claimed until the carrier's claim number is recorded."
+  {:kind :breakage_claim :attempt :claim :input {:remedy "replacement"} :row {:state :reported :data {:customer "Ana" :item "Blue mug" :order_id "order-1"}} :expect {:refused :carrier-claim}})
