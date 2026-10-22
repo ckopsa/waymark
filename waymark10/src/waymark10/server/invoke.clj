@@ -1140,15 +1140,20 @@
   commit, so they have no transition to hang from."
   [defn row inp ctx acknowledged rdef]
   (let [scope (when (decision/retains? rdef)
-                (decision/evidence-scope rdef row inp ctx))]
+                (decision/evidence-scope rdef row inp ctx))
+        ;; the members a team reader read, per guard (spec-teams §2)
+        reads (when scope (atom (sorted-set)))
+        ctx (cond-> ctx reads (assoc :member-reads reads))]
     (reduce
      (fn [acc guard]
        (let [[v d] (g/evaluate guard row inp ctx)
              deny? (t/deny? v)
+             members (when reads (let [m @reads] (reset! reads (sorted-set)) m))
              acc (cond-> acc
                    scope (update :basis conj
-                                 (decision/entry guard deny? d acknowledged
-                                                 scope)))]
+                                 (cond-> (decision/entry guard deny? d acknowledged
+                                                         scope)
+                                   (seq members) (assoc :members (vec members)))))]
          (if-not deny?
            acc
            (deny-outcome acc v d row inp acknowledged defn rdef (:now ctx)))))
