@@ -2599,9 +2599,10 @@
                     (map (fn [[aname a]]
                            (if-some [nb (:not-by a)]
                              (let [bare (g/not-by nb)
+                                   act (or (label a) (name aname))
                                    wall (g/not-by nb {:did did :noun noun
-                                                      :verb (g/third-person
-                                                             (or (label a) (name aname)))})]
+                                                      :verb (g/third-person act)
+                                                      :act (str/lower-case (str/trim act))})]
                                [aname (update a :guards
                                               (fn [gs]
                                                 (mapv #(if (and (= (:name bare) (:name %))
