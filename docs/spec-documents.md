@@ -319,7 +319,7 @@ check-queue`):
 
 | Finding | Level | Says | Remedy | Question |
 |---|---|---|---|---|
-| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
+| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. Only a kind that declares a `:waymark/document` field is judged: a kind with none has nowhere to file a paper, and its receipts and forms are the engine's own. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
 | `[retention-undeclared]` | info | A kind holds `:personal` fields or document fields, or is named in a rehearsal's retention note, and has no `:retain`. | Declare `:retain`, or `:retain :forever` to say it is kept on purpose. | "How long must a {kind} be kept, and from when?" |
 | `[purge-unheld]` | error | A `:purge true` door that an agent's grant can run without a person's tap, or a `:retain :then` that is not a purge door. | Hold the door for a person's tap (the sweep is exempt), or point `:then` at the purge. | — |
 | `[frozen-edited]` | error | An `:edit` door's `:from` includes a `:frozen-in` state. | Take the state out, or add a child kind for corrections. | — |

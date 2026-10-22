@@ -2833,18 +2833,27 @@
     :remedy "Declare the document field and name it in :evidence."
     :question "Must {door} wait for the {document}?"}})
 
-;; §8 lists receipts too; here a receipt is as often the engine's own
-;; record of an event as a filed paper, so the word is left out
+;; §8's whole list. A receipt or a form is as often the engine's own
+;; record or the UI's form as a filed paper, so the check judges only
+;; kinds that hold a document field — the ones with somewhere to file it
 (def ^:private document-word
-  #"(?i)\b(?:photo|consent form|consent|signature)s?\b")
+  #"(?i)\b(?:photo|consent form|consent|signature|form|receipt)s?\b")
+
+(defn- files-documents?
+  "Whether `r` declares at least one :waymark/document field."
+  [r]
+  (boolean (some #(get-in (val %) [:properties :waymark/document])
+                 (when (:schema r) (schema/entry-map (:schema r))))))
 
 (defn- check-evidence-in-prose
   "[evidence-in-prose], warning: a door's words — its display or a
-  guard's sentence — name a document (a photo, a consent form, a
-  signature) and the door names no :evidence. One finding per door, for
-  the first document its words name."
+  guard's sentence — name a document (a photo, a form, a consent, a
+  signature, a receipt) and the door names no :evidence. Only a kind
+  that declares a :waymark/document field is judged: one with none has
+  nowhere to file a paper. One finding per door, for the first document
+  its words name."
   [r]
-  (when (map? (:actions r))
+  (when (and (map? (:actions r)) (files-documents? r))
     (for [[door a] (sort-by (comp str key) (:actions r))
           :when (and (map? a) (not (:engine a)) (empty? (:evidence a)))
           :let [prose (concat (prose-strings (:display a))
