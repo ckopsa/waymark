@@ -35,7 +35,9 @@
            :create {:name "payments-signing" :value [:param :signing_secret_payments]}}
           {:as :owner :kind :integration :ref :payments
            :create {:name "payments" :system "Stripe, the payment processor" :secret [:ref :pay_key]}}
-          {:as :bookkeeper :on :payments :action :approve}]}
+          {:as :bookkeeper :on :payments :action :approve}]
+  ;; the clone's wall answers the invoice in place of the processor
+  :effects {"payments__send_invoice" {:status "done" :result {"id" "in_hendersons"}}}}
  ;; the org's mayor: it holds every door out of each kind's open
  ;; states, so no booking, time off, contract, visit or materials order is left without
  ;; a leaver; its scope names only the org's own kinds
@@ -43,12 +45,12 @@
  [{:template "org-mayor"
    :params {:org "landscape_rehearsal" :domain "landscape_rehearsal" :domain_id [:ref :landscape_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
-            :kinds [{:kind "booking" :actions ["reschedule" "start" "finish" "cancel"]}
+            :kinds [{:kind "booking" :actions ["reschedule" "start" "finish" "cancel" "send_invoice"]}
                     {:kind "time_off" :actions ["approve" "withdraw"]}
                     {:kind "contract" :actions ["end"]}
                     {:kind "visit" :actions ["finish" "skip"]}
                     {:kind "materials_order" :actions ["delay" "deliver" "cancel"]}]
-            :wakes [{:kind "booking" :actions ["create" "start"]}
+            :wakes [{:kind "booking" :actions ["create" "start" "finish"]}
                     {:kind "time_off" :actions ["create" "approve"]}
                     {:kind "contract" :actions ["create"]}
                     {:kind "visit" :actions ["create"]}
