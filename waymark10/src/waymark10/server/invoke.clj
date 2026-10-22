@@ -305,22 +305,39 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
-(defn- period-postings
-  "The posting rows of one account effective on or after `from` and
+(defn- period-conds
+  "The conds of one account's postings effective on or after `from` and
   before `until`: with `id` :all, the account on every row of the kind,
   matched by account_kind and account_name; with `from` and `until`
-  nil, whenever effective. `opts` is search-rows' own."
-  [engine tx account-kind id account-name from until opts]
-  (store/search-rows
-   (:storage engine) tx :posting
-   (cond-> (if (= :all id)
+  nil, whenever effective."
+  [account-kind id account-name from until]
+  (cond-> (if (= :all id)
              [{:target :data :field :account_kind :op := :value (name account-kind)}
               {:target :data :field :account_name :op := :value (name account-name)}]
              [{:target :data :field :account :op :=
                :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
      from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
-     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
-   opts))
+     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)})))
+
+(defn- period-postings
+  "The posting rows of `period-conds`. `opts` is search-rows' own, and
+  its page of 100 when no :limit is named — so no sum reads these."
+  [engine tx account-kind id account-name from until opts]
+  (store/search-rows (:storage engine) tx :posting
+                     (period-conds account-kind id account-name from until)
+                     opts))
+
+(defn amount-sums
+  "store/sum-amounts' answer as the values a balance in `unit` adds:
+  each currency's sum as Money, :number's as the unit's number (a
+  :count a long). Folded with money/plus, a second currency or money
+  in a numeric account refuses as it always has."
+  [unit sums]
+  (keep (fn [[k s]]
+          (if (= :number k)
+            (if (= :count unit) (long s) (bigdec s))
+            (money/money (bigdec s) k)))
+        sums))
 
 (defn- balance-over
   "What an account's postings effective on or after `from` and before
@@ -329,10 +346,10 @@
   carries, has an answer too. A period no posting falls in is zero in
   the account's unit: live, nothing moved. nil — unknown to the law —
   for an account no kind or house declares, a row account with no row
-  named, and an engine that serves no posting kind. A posting's amount
-  is money, stored as an object, so the rows are summed here, as
-  postings/recomputed-balance sums them, not by sum-matching's numeric
-  SUM. With `id` :all (step 9c) it is the account on every row of the
+  named, and an engine that serves no posting kind. The store sums
+  every posting of the period (store/sum-amounts: one SUM per
+  currency, no row limit — search-rows' page of 100 once dropped the
+  rest), and the sums are added here. With `id` :all (step 9c) it is the account on every row of the
   kind, the postings matched by account_kind and account_name; with
   `from` and `until` nil, every posting, whenever effective."
   [engine tx account-kind id account-name from until]
@@ -341,10 +358,12 @@
                (get-in engine [:house-accounts (keyword account-name) :unit])
                (get-in (resources engine) [account-kind :accounts account-name :unit]))]
     (when (and unit (get (resources engine) :posting) (or house? (some? id)))
-      (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
-                 (completing money/plus)
-                 (money/zero unit)
-                 (period-postings engine tx account-kind id account-name from until {})))))
+      (reduce money/plus
+              (money/zero unit)
+              (amount-sums unit
+                           (store/sum-amounts (:storage engine) tx :posting :amount
+                                              (period-conds account-kind id account-name
+                                                            from until)))))))
 
 (defn- postings-over
   "An account's `limit` postings effective in [from, until) with the
