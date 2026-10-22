@@ -206,9 +206,16 @@
 (def outcomes
   "What a closed sitting came to (seat health 1, ticket fad586b7): ONE
   value, the first of these that holds, in this order. `sitting-health`
-  is the judge, and nothing else writes the field."
-  ["superseded" "submitted" "stalled" "never_sat" "refused_out" "completed"
+  is the judge, and nothing else writes the field. A takeover's
+  `superseded` comes before all of them and is no part of seat health:
+  `sitting-outcomes` is the field's whole vocabulary."
+  ["submitted" "stalled" "never_sat" "refused_out" "completed"
    "cut_short" "idle"])
+
+(def sitting-outcomes
+  "Every value a sitting's `outcome` may hold: a takeover's `superseded`,
+  then `outcomes`."
+  (into ["superseded"] outcomes))
 
 (def ^:private outcome-choices
   {"superseded" "Superseded — it went silent and a new sitting of its seat took its rows"
@@ -5414,7 +5421,7 @@
                {:label "What it came to"
                 :choices outcome-choices
                 :help outcome-help}}
-     (into [:enum] outcomes)]
+     (into [:enum] sitting-outcomes)]
     [:flags {:optional true
              :x-display
              {:label "Health flags"
