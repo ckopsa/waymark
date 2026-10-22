@@ -59,7 +59,8 @@
                    eng say
                    (scenes/take-run-of [(str (:id principal)) take-name]
                                        (java.time.Instant/now) (:now-fn eng))
-                   (sees (router/visibility-of req)))}))))
+                   (sees (router/visibility-of req))
+                   (str (:id principal)))}))))
 
 (defn- open-doc
   "POST /api/-/scenes/open {open, take} → {open}: the shot's `open` as
