@@ -31,6 +31,7 @@
     :lines
     :rate-table
     :conserves
+    :measures
     :scenarios})
 
 (def action-keys
