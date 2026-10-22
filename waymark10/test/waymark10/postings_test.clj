@@ -215,13 +215,13 @@
   (testing "normalizing twice is normalizing once"
     (let [ps (get-in till [:actions :pay :posts])]
       (is (= ps (posts/normalize :pt_till :pay ps)))))
-  (testing "a bad sign, an unknown key and :each refuse at the def site"
+  (testing "a bad sign, an unknown key and a line read outside :each refuse at the def site"
     (is (thrown? clojure.lang.ExceptionInfo
                  (posts/normalize :k :d '[{:account [:k (self) :a] :amount 1 :sign :up}])))
     (is (thrown? clojure.lang.ExceptionInfo
                  (posts/normalize :k :d '[{:account [:k (self) :a] :amount 1 :sign :+ :memo "x"}])))
     (is (thrown? clojure.lang.ExceptionInfo
-                 (posts/normalize :k :d '[{:each (lines) :account [:k (self) :a] :amount 1 :sign :+}]))))
+                 (posts/normalize :k :d '[{:account [:k (self) :a] :amount (line :qty) :sign :+}]))))
   (testing "the undo of a posting door knows the door it reverses"
     (is (= #{:pay} (get-in till [:actions :unpay :reverses-posts])))
     (is (nil? (get-in till [:actions :pay :reverses-posts])))))

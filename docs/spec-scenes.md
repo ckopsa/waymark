@@ -74,13 +74,15 @@ scene's shots.
 
 | Verb | Keys | What `check` judges |
 |---|---|---|
-| `open` | `self` or `collection`, or `$day-row` | `self` is a bound `$ref` or `/api/<plural>/<id>`; `collection` is a kind this engine serves; `$day-row` is judged as a `$day` of the clock's window (below) |
+| `open` | `self` or `collection`, or `$day-row`, or `seat`, or `sitting` | `self` is a bound `$ref` or `/api/<plural>/<id>`; `collection` is a kind this engine serves; `$day-row` is judged as a `$day` of the clock's window (below); `seat` is a seat's name, and `sitting` is `{of: <seat name>, which: "latest"}`, each alone, resolved by POST /api/-/scenes/open when the shot plays, which refuses a seat no one has named or one that has not sat |
 | `tap` | `surface` | the target (below) |
-| `press` | `surface` | the target; judged as `tap` is |
+| `press` | `surface`, or `target` | the target; judged as `tap` is. `target` is `allow` or `deny`: the held band's buttons (`held.allow`, `held.deny`) on the open row |
+| `focus` | `target` | `held`, the band carrying `data-focus="held"`, or `field:<name>`, the field row carrying `data-field="<name>"`; the camera frames it as a zoom does |
 | `type` | `field`, `value` | `field` is `dialog.field:<name>`; where the door last tapped is known, the first dotted part of `<name>` is a field it takes |
 | `hold` | `ms`, `on?` | `ms` is a whole number above zero; `on`, when given, is a target |
 | `wait_for` | `expect`, `within_ms` | `within_ms` is a whole number above zero; `expect` as below |
 | `meanwhile` | a call | as a call: another cast member acts while the camera stays |
+| `call` | `as`, `kind`, `action`, `row?`, `name?`, `input?` | a week.edn call (docs/orgkit.md § The week) the performer makes as the shot plays: `as` is in the cast; `kind` is a kind this engine serves; `action` is a door of it or, with no `row`, the kind's create; `row` is a `name` an earlier `call` shot made; every key of `input` is a field the door takes. The shot's `bind` names the row the call moved |
 
 A shot may be a card: `{card: "text", hold: {ms: n}}` shows the text
 alone, full screen, for the hold. The text is plain, at most 280
@@ -338,7 +340,7 @@ be performed, as `given N: <why>`, `wearing <key>: <why>` or
 | `wearing` | `$<bind>` names no given. |
 | `wearing` | `$<bind>` is bound by a given that does not read kind `grant`. |
 | a shot | a shot is a map with one verb. |
-| a shot | unknown verb `<key>`; the verbs are open, tap, press, type, hold, wait_for, meanwhile. |
+| a shot | unknown verb `<key>`; the verbs are open, tap, press, focus, type, hold, wait_for, meanwhile, call. |
 | a shot | a shot has one verb, and this one has `<n>`. |
 | a shot | `<role>` is not a role; the roles are friction, turn, payoff. |
 | a shot | `speed` is a number from 0.25 to 8, and this one is `<speed>`. |

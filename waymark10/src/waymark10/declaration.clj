@@ -274,6 +274,10 @@
    ;; :parent :fields}, a child kind the engine makes (waymark10.lines)
    ;; and writes only through this kind's create and edit doors
    :lines
+   ;; the kind's rows as a table (rate …) reads (docs/spec-ledger-money.md
+   ;; § 8): {:name :key [fields] :value field :effective date-field},
+   ;; judged at the def site (resource/check-rate-table!) — law
+   :rate-table
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

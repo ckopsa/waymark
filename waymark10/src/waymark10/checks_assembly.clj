@@ -997,6 +997,21 @@
                                              checks/unref'd-ids-remedy)))
               {:check :unref'd-ids})))))
 
+(defn- check-rate-tables
+  "[rate-unfiltered]: a :rate-table's :key and :effective fields are
+  declared :filterable on its kind — (rate …) asks for its row by them,
+  latest :effective first, on every write that reads it — an error, as
+  [exists-unfiltered] is (docs/spec-ledger-money.md §8)."
+  [reg]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          :let [{n :name ks :key e :effective} (:rate-table r)]
+          :when n
+          f (concat ks [e])
+          :when (not (contains? (:filterable r) f))]
+    (err kind :rate-unfiltered
+         (str "rate table " (name n) " is read by " (name f) ", a field " (name kind)
+              " does not declare :filterable — an unindexed rate lookup runs on every write"))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1009,5 +1024,5 @@
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-recurs
-          check-rows-queries check-utc-today check-unref'd-ids])
+          check-rows-queries check-rate-tables check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})

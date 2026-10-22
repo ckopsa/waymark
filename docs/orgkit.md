@@ -376,6 +376,12 @@ and who makes each.
   and the report warns `[week-allow-late]` beside each such allow: its
   call had expired by then. `:none` allows nothing that day.
 - `:goal` is the payoff: the rows of that kind in that state.
+- The first-week scene plays the week as the camera rolls: day 1 in
+  full, a later day only the calls marked `:show true` (with no mark, a
+  person's call and the day's last); a call not shown is still played,
+  its shots trimmed. A person's call on a `:row` is filmed as the
+  owner's tap on that row's held call, framing the fields its `:focus`
+  lists.
 - `:card`, on the week or on a day, is a line of text of at most 280
   characters: the week's (the seed's) opens the first-week scene as a
   full-screen card, and each day's comes before that day's shots.
