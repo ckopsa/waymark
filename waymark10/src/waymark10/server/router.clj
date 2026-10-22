@@ -788,6 +788,10 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the entry an ask for this kind
+                                           ;; is offered (docs/spec-teams.md §6)
+                                           (:scope-default r)
+                                           (assoc :scope_default (:scope-default r))
                                            ;; the kind's named measures, by
                                            ;; the token a goal, a reading and
                                            ;; a slot name them with
