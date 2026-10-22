@@ -334,7 +334,7 @@ function refListWidget(name, prop, value) {
    past the first page) the id keeps its seat raw rather than vanish. */
 /* the fetch, apart from the seating: ONE field's options, which a
    list of refs asks for once and seats in every row */
-async function refEntries(rawProp, admitted) {
+async function refEntries(rawProp, admitted, inTeam) {
   const prop = schemaProp(rawProp);
   const xref = (rawProp["x-ref"] || prop["x-ref"]) || {};
   const kind = xref.kind;
@@ -351,11 +351,14 @@ async function refEntries(rawProp, admitted) {
   for (const [f, v] of Object.entries(xref.pick || {}))
     params[f] = Array.isArray(v) ? v.join(",") : String(v);
   /* who may be named (spec-teams §3): the member collection narrows by
-     the x-ref's role, and by in_team when it names a team outright — an
-     expression over the form, (data :crew), is left to the write */
+     the x-ref's role, and by in_team when it names a team outright. An
+     expression over the form, (data :crew), narrows by the value the
+     caller read from that sibling (wireTeamPicker); a sibling not yet
+     answered narrows nothing, and the write still judges */
   if (xref.role) params.role = String(xref.role);
   if (xref.in_team && !String(xref.in_team).startsWith("("))
     params.in_team = String(xref.in_team);
+  else if (xref.in_team && inTeam) params.in_team = String(inTeam);
   /* the whole collection, not the first page: next links are followed
      until the edge (a kind past the sanity cap offers its first
      thousand — a picker that big wants a filter, not a scroll) */
@@ -386,6 +389,37 @@ function seatRefSelect(select, {entries, full}, current) {
 }
 async function refOptions(select, rawProp, current, admitted) {
   seatRefSelect(select, await refEntries(rawProp, admitted), current);
+}
+/* an in_team written over the form — (data :crew), (input :crew) —
+   names the sibling field the picker reads; null for a team named
+   outright, or none */
+function inTeamHole(x) {
+  const m = /^\(\s*(?:data|input)\s+:([^\s()]+)\s*\)$/
+    .exec(String((x || {}).in_team || ""));
+  return m ? m[1] : null;
+}
+/* a member picker narrowed by such an expression reads the sibling it
+   names and fetches again when that sibling changes: the options are
+   re-seated from blank, the combobox a previous seating built is taken
+   down, the person's pick is kept when the new team still holds it,
+   and a later answer wins the race */
+function wireTeamPicker(form, select, rawProp, seed, admitted, hole) {
+  const sib = holeNode(form, select, hole);
+  let seq = 0;
+  const refresh = async () => {
+    const mine = ++seq;
+    const current = select.value || (seed == null ? null : String(seed));
+    const choices = await refEntries(rawProp, admitted, sib ? sib.value : null)
+      .catch(() => ({entries: [], full: false}));
+    if (mine !== seq) return;
+    const combo = select.nextElementSibling;
+    if (combo && combo.classList.contains("combo")) combo.remove();
+    select.style.display = "";
+    select.replaceChildren(el("option", {value: ""}, "…"));
+    seatRefSelect(select, choices, current);
+  };
+  refresh();
+  if (sib) sib.addEventListener("change", refresh);
 }
 /* type-to-filter over an already-loaded ref picker: filtering is
    client-side (refOptions fetched the whole collection), selection
@@ -682,6 +716,9 @@ function buildForm(schema, prefill, kind) {
      list row landing later finds its way back up to (listWidget) */
   const form = el("div", {"data-form": ""});
   const required = new Set((schema.required || []).map(String));
+  /* a member picker whose in_team reads a sibling waits for the whole
+     form too: that sibling may be declared later */
+  const teamPicks = [];
   /* x-options wiring waits for the whole form: a recipe interpolates
      SIBLING values, and a sibling declared later is not in the DOM yet
      — a widget carries its recipe (markOptions) until the walk below */
@@ -710,7 +747,9 @@ function buildForm(schema, prefill, kind) {
     if (xref(rawProp) && prop.type !== "array") {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
       /* prop.enum here is the guard-folded admitted set — honor it */
-      refOptions(widget, rawProp, seed, prop.enum);
+      const hole = inTeamHole(xref(rawProp));
+      if (hole) teamPicks.push([widget, rawProp, seed, prop.enum, hole]);
+      else refOptions(widget, rawProp, seed, prop.enum);
     } else {
       widget = fieldWidget(name, rawProp, seed);
     }
@@ -750,6 +789,7 @@ function buildForm(schema, prefill, kind) {
   /* one walk wires every marked widget — the top level's and the
      sub-forms' alike, the rows a list opened with included */
   wireOptions(form, form);
+  for (const p of teamPicks) wireTeamPicker(form, ...p);
   wireWhen(form, "");
   return form;
 }

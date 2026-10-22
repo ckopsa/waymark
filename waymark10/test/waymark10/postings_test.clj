@@ -748,6 +748,15 @@
             (is (= :period-closed (:guard refused)))
             (is (re-find #"Post it to the open period" (str (:detail refused))))
             (is (= "house/processor_in" (get-in refused [:evidence :account])))))
+        (testing "a posting door names [period-closed] among its guards, and a dry run rehearses it"
+          (is (some #{:period-closed}
+                    (map :name (g/walled-guards desk (assoc (get-in desk [:actions :deposit]) :name :deposit)
+                                                {:state :open}))))
+          (let [rehearsed (try (inv/invoke! eng :pt_desk desk-id :deposit {:on "2026-10-15"}
+                                            {:principal elena :dry-run true})
+                               (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+            (is (= :period-closed (:guard rehearsed)))
+            (is (re-find #"Post it to the open period" (pr-str rehearsed)))))
         (testing "the same account dated after the period passes"
           (is (= :landed (book! :deposit "2026-11-01"))))
         (testing "an account the close does not cover passes"

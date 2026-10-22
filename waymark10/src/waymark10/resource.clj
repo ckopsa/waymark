@@ -2211,7 +2211,8 @@
   "The units a :reconciles declaration can see for itself: its
   tolerance's, each (money …) literal in a side, and each account of
   this kind a side's balance reads. A house account's unit and another
-  kind's are the engine's to know, not the def site's."
+  kind's are the assembly's to know (checks-assembly/
+  check-reconciles-units), not the def site's."
   [rmap tol-unit sides]
   (into (if tol-unit #{tol-unit} #{})
         (for [form (vals sides)
@@ -2599,9 +2600,10 @@
                     (map (fn [[aname a]]
                            (if-some [nb (:not-by a)]
                              (let [bare (g/not-by nb)
+                                   act (or (label a) (name aname))
                                    wall (g/not-by nb {:did did :noun noun
-                                                      :verb (g/third-person
-                                                             (or (label a) (name aname)))})]
+                                                      :verb (g/third-person act)
+                                                      :act (str/lower-case (str/trim act))})]
                                [aname (update a :guards
                                               (fn [gs]
                                                 (mapv #(if (and (= (:name bare) (:name %))
