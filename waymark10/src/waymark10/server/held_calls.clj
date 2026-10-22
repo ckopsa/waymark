@@ -239,7 +239,8 @@
            :explain "The caller of this tool call cannot be the one who allows or refuses it; another person decides."})
          :open (str "The wall is about WHO, not about a field of this "
                     "door: there is nothing to send that opens it. Ask "
-                    "somebody who holds the approver role to answer.")))
+                    "somebody who holds the approver role to answer.")
+         :fixed-at-birth [:caller]))
 
 (defn- the-owner?
   "Is this principal the PERSON a door call was held for? The person
