@@ -11,6 +11,7 @@
             [clinic_rehearsal.kinds.plan-of-care :refer [plan-of-care]]
             [clinic_rehearsal.kinds.visit :refer [visit]]
             [clinic_rehearsal.kinds.claim :refer [claim]]
+            [clinic_rehearsal.kinds.note-addendum :refer [note-addendum]]
             [waymark10.dsl :refer [in-domain]]))
 
 (set! *warn-on-reflection* true)
@@ -26,7 +27,7 @@
   "Every kind this org declares, stamped with its domain."
   []
   (in-domain domain {:default-expected-age default-expected-age}
-             [referral patient plan-of-care visit claim]))
+             [referral patient plan-of-care visit note-addendum claim]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."

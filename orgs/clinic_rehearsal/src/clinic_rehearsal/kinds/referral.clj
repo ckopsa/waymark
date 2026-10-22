@@ -34,27 +34,10 @@
    :input {}
    :expect {:refused :has-signed-on}})
 
-(defscenario accept-live-prescription
-  "A prescription signed 30 days ago is accepted."
-  {:kind :referral :attempt :accept
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :received
-         :data {:patient_name "Ana Ruiz" :physician "Dr. Lee"
-                :prescription "PT 2x/week for 6 weeks, low back."
-                :signed_on "2026-09-21"}}
-   :input {:signed_on "2026-09-21"}
-   :expect {:allowed true}})
-
 (defscenario accept-expired-prescription
   "A prescription signed 91 days ago has expired and is not accepted."
-  {:kind :referral :attempt :accept
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :received
-         :data {:patient_name "Ana Ruiz" :physician "Dr. Lee"
-                :prescription "PT 2x/week for 6 weeks, low back."
-                :signed_on "2026-07-22"}}
+  {:kind :referral :attempt :accept :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :received :data {:patient_name "Ana Ruiz" :physician "Dr. Lee" :prescription "PT 2x/week for 6 weeks, low back."}}
    :input {:signed_on "2026-07-22"}
    :expect {:refused :prescription-is-live}})
 

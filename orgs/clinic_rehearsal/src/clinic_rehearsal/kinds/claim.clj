@@ -74,31 +74,22 @@
    :input {:patient_owes_cents 3600}
    :expect {:allowed true}})
 
-;; advisory: a late payment is still posted, and says it came past
-;; net-30; the :until age on :submitted is what tells the specialist
+;; advisory: a late payment is still posted; the :submitted age tells the specialist
 (defguard paid-within-net-30
   (warn "The insurer paid this claim more than 30 days after it was submitted.")
   '(<= (today) (+ (data :submitted_on) (days 30))))
 
 (defscenario claim-inside-net-30
   "A payment posted 20 days after the claim was submitted is inside net-30."
-  {:kind :claim :attempt :post_payment
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :submitted
-         :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
-                :submitted_on "2026-10-01"}}
+  {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {:paid_cents 14000}
    :expect {:allowed true}})
 
 (defscenario claim-past-net-30
   "A payment posted 35 days after the claim was submitted is past net-30."
-  {:kind :claim :attempt :post_payment
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :submitted
-         :data {:insurer "Blue Plains" :billed_cents 18000 :paid_cents 14000
-                :submitted_on "2026-09-16"}}
+  {:kind :claim :attempt :post_payment :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-09-16"}}
    :input {:paid_cents 14000}
    :expect {:refused :paid-within-net-30}})
 
@@ -111,7 +102,7 @@
    :summary "{data.insurer} · {data.billed_cents}¢ · {state}"
    :schema [:map
             [:visit_id {:optional true :kind :visit} [:maybe :waymark/ref]]
-            [:insurer {:optional true} [:maybe [:string {:max 120}]]]
+            [:insurer {:optional true :kind :member :role "insurer"} [:maybe :waymark/ref]]
             [:billed_cents {:optional true} [:maybe [:int {:min 0}]]]
             [:submitted_on {:optional true} [:maybe :waymark/date]]
             [:paid_cents {:optional true} [:maybe [:int {:min 0}]]]

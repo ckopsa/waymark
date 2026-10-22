@@ -4,7 +4,8 @@
   insurance; the front desk verifies coverage before the first visit,
   and a patient with no verified coverage pays self-pay rates. A chart
   is kept seven years after the last visit, then purged."
-  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]]
+            [waymark10.resource :as r]))
 
 (defguard has-referral
   (refuse "A chart is opened from the physician's accepted referral; name it first.")
@@ -26,8 +27,7 @@
   (refuse "The day the patient signed the privacy notice cannot be later than today.")
   '(<= (input :privacy_signed_on) (today)))
 
-;; :coverage is absent until the front desk has asked the insurer; its
-;; two values are the only ways out of intake
+;; :coverage is unset until the desk asks the insurer; its two values are the ways out of intake
 (defguard coverage-settled
   (refuse "The front desk verifies coverage with the insurer before the first visit; without verified coverage the patient is self-pay.")
   '(is-set (input :coverage)))
@@ -75,27 +75,17 @@
    :input {}
    :expect {:refused :last-visit-given}})
 
-(defguard seven-years-kept
-  (refuse "A chart is kept seven years after the last visit before it is purged.")
-  '(>= (today) (+ (data :last_visit_on) (years 7))))
-
 (defscenario purge-after-seven-years
-  "A chart whose last visit was over seven years ago may be purged."
-  {:kind :patient :attempt :purge
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :discharged
-         :data {:name "Ana Ruiz" :last_visit_on "2019-10-01"}}
-   :expect {:allowed true}})
+  "A chart whose last visit was over seven years ago is purged: its name and insurance number are erased."
+  {:kind :patient :attempt :purge :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :discharged :data {:name "Ana Ruiz" :insurance_member_no "AH-1" :last_visit_on "2019-10-01"}}
+   :expect {:state "purged" :cleared [:name :insurance_member_no]}})
 
 (defscenario purge-before-seven-years
   "A chart whose last visit was six years ago is kept, not purged."
-  {:kind :patient :attempt :purge
-   :at "2026-10-21T16:00:00Z"
-   :calendar {:zone "America/Denver"}
-   :row {:state :discharged
-         :data {:name "Ana Ruiz" :last_visit_on "2020-10-01"}}
-   :expect {:refused :seven-years-kept}})
+  {:kind :patient :attempt :purge :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :discharged :data {:name "Ana Ruiz" :last_visit_on "2020-10-01"}}
+   :expect {:refused :retention-has-passed}})
 
 (defresource patient
   {:kind :patient
@@ -105,17 +95,24 @@
    :terminal #{:purged}
    :summary "{data.name} · {state}"
    :schema [:map
-            [:name [:string {:min 1 :max 120}]]
+            [:name {:personal true} [:string {:min 1 :max 120}]]
             [:referral_id {:optional true :kind :referral} [:maybe :waymark/ref]]
             [:consent_signed_on {:optional true} [:maybe :waymark/date]]
             [:privacy_signed_on {:optional true} [:maybe :waymark/date]]
-            [:insurer {:optional true} [:maybe [:string {:max 120}]]]
-            [:insurance_member_no {:optional true} [:maybe [:string {:max 60}]]]
+            [:consent_form {:optional true :waymark/document {:accept ["application/pdf" "image/*"]}}
+             [:maybe :waymark/ref]]
+            [:privacy_form {:optional true :waymark/document {:accept ["application/pdf" "image/*"]}}
+             [:maybe :waymark/ref]]
+            [:insurer {:optional true :kind :member :role "insurer"} [:maybe :waymark/ref]]
+            [:insurance_member_no {:optional true :personal true} [:maybe [:string {:max 60}]]]
             [:coverage {:optional true} [:maybe [:enum "verified" "self_pay"]]]
             [:care_team {:optional true} [:maybe [:string {:max 240}]]]
             [:no_shows {:optional true} [:maybe [:int {:min 0}]]]
             [:last_visit_on {:optional true} [:maybe :waymark/date]]]
-   :filterable {:state #{:eq :in} :coverage #{:eq}}
+   :filterable {:state #{:eq :in} :coverage #{:eq} :last_visit_on #{:eq}}
+   ;; the summary reads the name a purge clears
+   :retain {:data true}
+   :keep {:for '(years 7) :from :last_visit_on :then :purge}
    :default-filters {:state "intake"}
    :decided {:intake "A patient may wait at intake for a week while the front desk verifies coverage; past that, the mayor tells the owner."
              :active "A patient stays active while a plan of care runs; the mayor tells the owner of a chart with no visit in 60 days."
@@ -127,18 +124,24 @@
                 :input [:map
                         [:consent_signed_on :waymark/date]
                         [:privacy_signed_on :waymark/date]
-                        [:coverage [:enum "verified" "self_pay"]]]
+                        [:coverage [:enum "verified" "self_pay"]]
+                        [:consent_form {:optional true :kind :attachment} :waymark/ref]
+                        [:privacy_form {:optional true :kind :attachment} :waymark/ref]]
+                :handler (r/field-writer [:consent_signed_on :privacy_signed_on :coverage
+                                          :consent_form :privacy_form])
                 :guards [has-referral consent-signed privacy-signed consent-not-future privacy-not-future coverage-settled]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "An admitted patient stays on the books until discharged."}
                 :decided "The front desk admits a patient on its own once the consent form and privacy notice are signed and coverage is verified or the patient is self-pay, because the front desk verifies coverage with the insurer before the first visit."}
     :discharge {:from #{:active} :to :discharged
                 :input [:map [:last_visit_on :waymark/date]]
+                :handler (r/field-writer [:last_visit_on])
                 :guards [last-visit-given last-visit-not-future]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A discharged patient returns with a new referral."}
                 :decided "The treating therapist discharges a patient on their own when the plan of care has ended."}
-    :purge     {:from #{:discharged} :to :purged
-                :guards [has-last-visit seven-years-kept owner-purges]
-                :safety {:idempotent true :reversible false :confirm false
-                         :one-way "A purged chart is gone for good."}}}})
+    :purge     {:from #{:discharged} :to :purged :purge true
+                :waives #{:required}
+                :guards [has-last-visit owner-purges]
+                :safety {:idempotent true :reversible false :confirm true
+                         :consequence "Everything personal on the chart is erased for good; the row stays as the record that the patient was seen."}}}})

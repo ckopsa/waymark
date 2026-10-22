@@ -67,7 +67,7 @@
    :summary "{data.therapist} · {data.visits_per_week}x/week for {data.weeks} weeks · {state}"
    :schema [:map
             [:patient_id {:optional true :kind :patient} [:maybe :waymark/ref]]
-            [:therapist [:string {:min 1 :max 80}]]
+            [:therapist {:kind :member :role "pt"} :waymark/ref]
             [:evaluation {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 4000}]]]
             [:visits_per_week {:optional true} [:maybe [:int {:min 1 :max 7}]]]

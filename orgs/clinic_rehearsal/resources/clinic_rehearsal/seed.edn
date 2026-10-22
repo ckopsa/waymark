@@ -4,16 +4,19 @@
  :version 1
  :org "clinic_rehearsal"
  :domains [{:name "clinic_rehearsal" :label "Outpatient PT Clinic" :ref :clinic_rehearsal}]
- ;; the clinic's team. The owner is a physical therapist; the cast has
- ;; no group or license field, so each role is a :roles string
+ ;; the clinic's team. The owner is a physical therapist; "clinician"
+ ;; is whoever may write and sign a note, PT or assistant. The insurers
+ ;; are outside parties, named on claims, never on the team
  :cast
  {:owner   {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner (PT)" :type :human
-            :roles ["approver" "pt"]}
-  :pt_a    {:id "pt_a"    :display "Dana Holt (PT)"     :type :human :roles ["pt"]}
-  :pt_b    {:id "pt_b"    :display "Sam Ortiz (PT)"     :type :human :roles ["pt"]}
-  :pta     {:id "pta"     :display "Jo Kim (PTA)"       :type :human :roles ["pta"]}
+            :roles ["approver" "pt" "clinician"]}
+  :pt_a    {:id "pt_a"    :display "Dana Holt (PT)"     :type :human :roles ["pt" "clinician"]}
+  :pt_b    {:id "pt_b"    :display "Sam Ortiz (PT)"     :type :human :roles ["pt" "clinician"]}
+  :pta     {:id "pta"     :display "Jo Kim (PTA)"       :type :human :roles ["pta" "clinician"]}
   :desk    {:id "desk"    :display "Ari Lane (front desk)" :type :human :roles ["front_desk"]}
-  :billing {:id "billing" :display "Mo Reyes (billing)" :type :human :roles ["billing"]}}
+  :billing {:id "billing" :display "Mo Reyes (billing)" :type :human :roles ["billing"]}
+  :acme    {:id "acme"    :display "Acme Health"        :type :outside :roles ["insurer"]}
+  :blue_plains {:id "blue_plains" :display "Blue Plains" :type :outside :roles ["insurer"]}}
  ;; the outside world, which only a clone loads: physicians who send referrals
  :rehearsal
  {:cast {:dr_vance {:id "dr_vance" :display "Dr. Lena Vance" :type :human
@@ -45,4 +48,4 @@
    :create {:patient_name "Pat Example" :physician "Dr. Lena Vance"
             :prescription "PT eval and treat, left knee, post-op."}}
   {:as :owner :kind :patient :ref :pat-1
-   :create {:name "Pat Example" :insurer "Acme Health"}}]}
+   :create {:name "Pat Example" :insurer "acme"}}]}
