@@ -15,7 +15,7 @@
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
     :schema :create-schema :create-safety :fields :shape :upcasts
     :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
-    :allow-undo
+    :allow-undo :frozen-in
     :derived :computed :one-of :unique :part-scopes
     :occupies :calendar :explain :recurs
     :filterable :index :sortable :faceted :worksheet :default-filters :views
