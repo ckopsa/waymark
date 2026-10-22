@@ -30,6 +30,7 @@
    :initial :active
    :terminal #{:purged}
    :summary "{data.name}"
+   :retain {:data true}
    :schema [:map
             [:name {:personal true :x-display {:label "Name"}} [:string {:min 1 :max 80}]]
             [:phone {:optional true :personal true :x-display {:label "Phone"}}
@@ -224,6 +225,17 @@
   (testing "[purge-required]: a required field cleared without waiving :required"
     (is (= :purge-required
            (refused-by (update-in patient-decl [:actions :purge] dissoc :waives)))))
+  (testing "[purge-summary]: a summary reading a cleared field, no retained document"
+    (let [e (try (load-quietly (dissoc patient-decl :retain)) nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :purge-summary (:check (ex-data e))))
+      (is (str/includes? (ex-message e)
+                         (str "`patient`'s summary reads `name`, which its purge clears; "
+                              "declare :retain {:data true} so a purge can redact its past log.")))))
+  (testing "[purge-summary]: a summary reading no cleared field needs no retained document"
+    (is (nil? (refused-by (-> patient-decl
+                              (dissoc :retain)
+                              (assoc :summary "{data.clinic} · {state}"))))))
   (testing "[purge-terminal]: a purge that does not end the row"
     (is (= :purge-terminal
            (refused-by (-> patient-decl

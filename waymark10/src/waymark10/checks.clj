@@ -362,12 +362,18 @@
            (str "action " (:name a) " waives unknown usability checks "
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
 
+(def ^:private template-data-field #"\{data\.([A-Za-z0-9_-]+)")
+
 (defn- check-purge
   "A :purge true door is legal erasure (docs/spec-documents.md §5): it
   is confirm, an agent's call to it is held for a person's tap
   [purge-unheld], it ends in a terminal state [purge-terminal], and it
   waives :required when it clears a field the schema requires
-  [purge-required] — no per-state requiredness, the door says it."
+  [purge-required] — no per-state requiredness, the door says it. A
+  :summary that reads a field the purge clears needs :retain {:data
+  true} [purge-summary]: the purge re-renders each old log line's
+  summary from its redacted `after`, and only a retained document has
+  one."
   [r]
   (doseq [a (machine/actions-seq r)
           :when (some? (:purge a))]
@@ -392,7 +398,15 @@
         (when (and (seq required) (not (contains? (:waives a) :required)))
           (err r :purge-required
                (str "action " (:name a) " clears " (vec required)
-                    ", which the schema requires; declare :waives #{:required}"))))))
+                    ", which the schema requires; declare :waives #{:required}"))))
+      (when-not (get-in r [:retain :data])
+        (let [cleared (set (map name (schema/personal-fields (:schema r))))]
+          (when-some [f (some #(cleared (second %))
+                              (re-seq template-data-field (str (:summary r))))]
+            (err r :purge-summary
+                 (str "`" (name (:kind r)) "`'s summary reads `" f
+                      "`, which its purge clears; declare :retain {:data true}"
+                      " so a purge can redact its past log.")))))))
   nil)
 
 (defn- check-keep
