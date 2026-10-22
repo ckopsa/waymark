@@ -241,6 +241,11 @@ jobs:
       # true except on a pull_request, which runs only what its paths
       # reach.
       waymark10: ${{ steps.detect.outputs.waymark10 }}
+      # The waymark10 test namespaces a pull request runs when its paths
+      # reach waymark10 only through orgs/** or factorykit/**: test10
+      # runs just these, in one shard, and waymark10 stays false so the
+      # UI walks are not woken. Empty otherwise.
+      waymark10_focus: ${{ steps.detect.outputs.waymark10_focus }}
       workqueue10: ${{ steps.detect.outputs.workqueue10 }}
       calendar10: ${{ steps.detect.outputs.calendar10 }}
       factory10: ${{ steps.detect.outputs.factory10 }}
@@ -293,8 +298,10 @@ jobs:
           #   localfire/**      localfire, waymark10 (localfire_pull_test)
           #   calendar10/**     calendar10, workqueue10
           #   factory10/**      factory10, workqueue10
-          #   factorykit/**     factory10, workqueue10
-          #   orgs/**, orgkit/** factory10 (orgkit-test loads them via :test)
+          #   factorykit/**     factory10, workqueue10, test10's org boot test
+          #   orgs/**           factory10 (orgkit-test loads them via :test),
+          #                     test10's org boot test
+          #   orgkit/**         factory10
           #   workqueue10/**    workqueue10
           #   waymark10/**      waymark10, calendar10, factory10, workqueue10
           #   anything else     all of them: .github/, Makefile, Dockerfile.*,
@@ -315,16 +322,26 @@ jobs:
           # ONLY a pull_request is narrowed. A push to main and a dispatch
           # run every suite whenever the diff touches code, exactly as
           # before, so a narrowed PR cannot hide a break past its merge.
+          #
+          # "test10's org boot test" is waymark10.org-boot-sit-test alone:
+          # it boots orgs/landscape_rehearsal from disk with factorykit's
+          # seat templates and sits its mayor, so a seed or template that
+          # leaves the mayor unsittable cannot merge green. When nothing
+          # else reaches waymark10, test10 runs only that namespace
+          # (waymark10_focus) and seed-only changes stay cheap.
           SUITES=(waymark10 workqueue10 calendar10 factory10 localfire)
+          FOCUS10=waymark10.org-boot-sit-test
           declare -A reach=()
+          focus10=
           suites_for () {
             case "$1" in
               docs/*|*.md)    ;;
               localfire/*)    reach[localfire]=1; reach[waymark10]=1 ;;
               calendar10/*)   reach[calendar10]=1; reach[workqueue10]=1 ;;
-              factory10/*|factorykit/*)
-                              reach[factory10]=1; reach[workqueue10]=1 ;;
-              orgs/*|orgkit/*) reach[factory10]=1 ;;
+              factory10/*)    reach[factory10]=1; reach[workqueue10]=1 ;;
+              factorykit/*)   reach[factory10]=1; reach[workqueue10]=1; focus10=1 ;;
+              orgs/*)         reach[factory10]=1; focus10=1 ;;
+              orgkit/*)       reach[factory10]=1 ;;
               workqueue10/*)  reach[workqueue10]=1 ;;
               waymark10/*)    reach[waymark10]=1; reach[calendar10]=1
                               reach[factory10]=1; reach[workqueue10]=1 ;;
@@ -495,6 +512,11 @@ jobs:
                 echo "  $s: skipped"
               fi
             done
+            if [ -n "$focus10" ] && [ -z "${reach[waymark10]:-}" ]; then
+              code=true
+              echo "  waymark10: runs $FOCUS10 only"
+              echo "waymark10_focus=$FOCUS10" >> "$GITHUB_OUTPUT"
+            fi
             emit "$code" table
           else
             emit "$code" all
@@ -950,6 +972,8 @@ jobs:
           ONLY: ${{ inputs.only }}
           # Checked there too: namespaces of one suite, or empty.
           ORDER: ${{ inputs.order }}
+          # A pull request's org boot focus, from `changes`, or empty.
+          FOCUS_WAYMARK10: ${{ needs.changes.outputs.waymark10_focus }}
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -1047,11 +1071,18 @@ jobs:
               print(f"# order: {' '.join(order)}, one {suite} shard", file=__import__("sys").stderr)
               raise SystemExit(0)
 
+          # A pull request whose paths reach waymark10 only through orgs/
+          # or factorykit/: its focus namespaces, in one shard, as a
+          # narrowed dispatch's are. A focus naming no namespace leaves
+          # the matrix empty, and the gate fails the skipped test10.
+          focus = {"waymark10": os.environ.get("FOCUS_WAYMARK10", "").split()}
+
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
               names = namespaces(root)
-              if only:
-                  mine = [t for t in only if t.split("/", 1)[0] in names]
+              ask = only or focus.get(key)
+              if ask:
+                  mine = [t for t in ask if t.split("/", 1)[0] in names]
                   m = [{"id": 1, "nses": "\n".join(mine)}] if mine else []
                   print(f"{key}={json.dumps(m)}")
                   print(f"# {key}: only={' '.join(mine)}, {len(m)} shard",
@@ -1067,7 +1098,8 @@ jobs:
     needs: [changes, discover]
     if: >-
       needs.changes.outputs.code == 'true' && needs.discover.outputs.waymark10 != '[]' &&
-      needs.changes.outputs.waymark10 == 'true' && (inputs.lane || 'engine') == 'engine'
+      (needs.changes.outputs.waymark10 == 'true' || needs.changes.outputs.waymark10_focus != '') &&
+      (inputs.lane || 'engine') == 'engine'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       # One shard failing must not hide the others: the point of a
@@ -2499,6 +2531,7 @@ jobs:
           REFUSED: ${{ needs.changes.outputs.refused }}
           EVENT: ${{ github.event_name }}
           RUN_WAYMARK10: ${{ needs.changes.outputs.waymark10 }}
+          FOCUS_WAYMARK10: ${{ needs.changes.outputs.waymark10_focus }}
           RUN_WORKQUEUE10: ${{ needs.changes.outputs.workqueue10 }}
           RUN_CALENDAR10: ${{ needs.changes.outputs.calendar10 }}
           RUN_FACTORY10: ${{ needs.changes.outputs.factory10 }}
@@ -2576,9 +2609,13 @@ jobs:
           done
           ui_sel=false
           if [ "${RUN_WAYMARK10:-}" = true ] && [ "${RUN_UI:-}" = true ]; then ui_sel=true; fi
+          # test10 is selected by its org boot focus too: an orgs/ or
+          # factorykit/ pull request must run that namespace.
+          test10_sel=${RUN_WAYMARK10:-}
+          if [ -n "${FOCUS_WAYMARK10:-}" ]; then test10_sel=true; fi
           for job in "quick $QUICK $quick_sel" \
                      "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
-                     "test10 $TEST10 ${RUN_WAYMARK10:-}" \
+                     "test10 $TEST10 $test10_sel" \
                      "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
                      "ui-access $UI_ACCESS $ui_sel" \
                      "ui-quest-phone $UI_QUEST_PHONE $ui_sel" \
