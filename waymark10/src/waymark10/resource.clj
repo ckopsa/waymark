@@ -2065,6 +2065,105 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
+(defn- balance-forms
+  "The (balance …) forms inside a law form."
+  [form]
+  (filter #(and (seq? %) (= 'balance (first %))) (tree-seq coll? seq form)))
+
+(defn- tolerance-unit
+  "The unit a :reconciles :tolerance is in — [:money cur], :count or
+  :decimal — or nil when it is not an amount."
+  [v]
+  (cond (money/money? v) [:money (:currency v)]
+        (integer? v) :count
+        (decimal? v) :decimal))
+
+(defn- reconcile-tolerance
+  "The :tolerance of a :reconciles, evaluated: a constant, so no scope."
+  [form]
+  (when (empty? (expr/problems form))
+    (let [v (expr/evaluate (expr/normalize form) {})]
+      (when-not (expr/unknown? v) v))))
+
+(defn- reconcile-units
+  "The units a :reconciles declaration can see for itself: its
+  tolerance's, each (money …) literal in a side, and each account of
+  this kind a side's balance reads. A house account's unit and another
+  kind's are the engine's to know, not the def site's."
+  [rmap tol-unit sides]
+  (into (if tol-unit #{tol-unit} #{})
+        (for [form (vals sides)
+              f (tree-seq coll? seq form)
+              :let [u (cond
+                        (and (seq? f) (= 'money (first f)) (string? (nth f 2 nil)))
+                        [:money (nth f 2)]
+
+                        (and (seq? f) (= 'balance (first f)) (vector? (second f)))
+                        (let [a (second f)]
+                          (when (and (= 3 (count a))
+                                     (= (:kind rmap) (if (= :all (first a)) (second a) (first a))))
+                            (get-in rmap [:accounts (nth a 2) :unit]))))]
+              :when u]
+          u)))
+
+(defn- check-reconciles!
+  "`:reconciles` (docs/spec-ledger-money.md §7, ledger step 9d): a close
+  kind's two :sides, each an expression over (balance …) that names no
+  period of its own; its :period, two date expressions [start end]; its
+  :tolerance, a constant in the sides' unit. Each side and their :gap
+  are facts the engine computes, so no field and no door input names
+  one: nobody types a total."
+  [rmap]
+  (when-some [rc (:reconciles rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :reconciles " %)
+                                          {:check :reconciles}))]
+      (when-not (map? rc) (bad "is a map {:period :sides :tolerance}"))
+      (when-some [extra (seq (remove #{:period :sides :tolerance} (keys rc)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a reconciliation reads :period, :sides and :tolerance")))
+      (let [{:keys [period sides tolerance]} rc]
+        (when-not (and (vector? period) (= 2 (count period)))
+          (bad "takes :period, two date expressions [start end], as [(data :period_start) (data :period_end)]"))
+        (when-some [p (first (mapcat expr/problems period))]
+          (bad (str ":period is refused: " p)))
+        (when-not (and (map? sides) (= 2 (count sides)) (every? keyword? (keys sides)))
+          (bad (str "names exactly two :sides, {name expression}; got "
+                    (if (map? sides) (str (count sides) " sides") (pr-str sides)))))
+        (when (contains? sides :gap)
+          (bad "names a side gap; gap is the difference between the two sides"))
+        (doseq [[n form] sides]
+          (when-some [p (first (expr/problems form))]
+            (bad (str "side " (name n) " is refused: " p)))
+          (when (empty? (balance-forms form))
+            (bad (str "side " (name n) " reads no (balance …); a side is a sum of postings")))
+          (when (some #(< 2 (count %)) (balance-forms form))
+            (bad (str "side " (name n) " gives a (balance …) its own period;"
+                      " inside :reconciles the :period applies to every balance"))))
+        (when-not (contains? rc :tolerance)
+          (bad "takes :tolerance, the gap allowed, in the sides' unit, as (money \"0.00\" \"USD\")"))
+        (let [tu (tolerance-unit (reconcile-tolerance tolerance))]
+          (when-not tu
+            (bad (str ":tolerance is a constant amount, as (money \"0.00\" \"USD\"); got "
+                      (pr-str tolerance))))
+          (let [units (reconcile-units rmap tu sides)]
+            (when (< 1 (count units))
+              (bad (str "mixes units " (vec (sort-by pr-str units))
+                        "; both sides and the tolerance are in one unit")))))
+        (let [facts (set (conj (keys sides) :gap))
+              fields (set (keys (schema/entry-map (:schema rmap))))
+              computed (set (keep (fn [[k c]] (when-not (::reconciles c) k)) (:computed rmap)))]
+          (when-some [f (first (sort (filter #(or (fields %) (computed %)) facts)))]
+            (bad (str (name f) " is also a field; a side and the gap are read-only"
+                      " facts the engine computes")))
+          (doseq [[a d] (sort-by key (:actions rmap))
+                  :let [in (:input d)
+                        named (when (vector? in)
+                                (try (keys (schema/entry-map in)) (catch Exception _ nil)))]
+                  f (sort named)
+                  :when (contains? facts f)]
+            (bad (str "door " (name a) "'s input names " (name f)
+                      ", a fact the engine computes from the postings; nobody types a total"))))))))
+
 (defn- check-conserves!
   "`:conserves [account …]` (docs/spec-ledger-money.md §5, §10): the
   accounts of this kind whose sum its doors keep. Every door that posts
@@ -2093,6 +2192,59 @@
               (for [[n a] (sort-by (comp str key) accts)
                     :when (not (contains? have n))]
                 (money/account-field n a))))
+    rmap))
+
+(defn- over-period
+  "A side with the period applied (docs/spec-ledger-money.md §7): every
+  (balance a) inside it reads (balance a {:from start :until end})."
+  [form [start end :as period]]
+  (cond
+    (and (seq? form) (= 'balance (first form)))
+    (list 'balance (second form) {:from start :until end})
+
+    (seq? form) (apply list (map #(over-period % period) form))
+    (vector? form) (mapv #(over-period % period) form)
+    (map? form) (into {} (map (fn [[k v]] [k (over-period v period)])) form)
+    :else form))
+
+(defn- reconcile-fact
+  "One :reconciles fact as a :computed field: `form`, the period
+  applied, evaluated over the row's data through the read's
+  :balance-over hook. Unknown — no hook, an unset period, an account
+  nothing declares — renders nil."
+  [form ty help]
+  {:schema ty
+   :reads? true
+   ::reconciles true
+   :x-display {:help help}
+   :fn (fn [row ctx]
+         (let [data (into {} (map (fn [[k v]] [(keyword (name k)) v])) (:data row))
+               v (expr/evaluate form {:data data :balance-over (:balance-over ctx)})]
+           (when-not (expr/unknown? v) v)))})
+
+(defn- project-reconciles
+  "`:reconciles` (docs/spec-ledger-money.md §7, ledger step 9d): each
+  side, and their gap — the first side less the second, as declared —
+  appears on the close row as a read-only :computed field, summed over
+  the period from the postings themselves, so nobody types a total. The
+  accounts the sides name are what the close closes, recorded as
+  :closes."
+  [rmap]
+  (if-some [rc (:reconciles rmap)]
+    (let [{:keys [period sides tolerance]} rc
+          ty (case (tolerance-unit (reconcile-tolerance tolerance))
+               :count :int
+               :decimal :decimal
+               :waymark/money)
+          [[a fa] [b fb]] (seq sides)
+          help (str "Summed from the postings effective in the period; never written by hand.")]
+      (-> rmap
+          (update :computed merge
+                  {a (reconcile-fact (expr/normalize (over-period fa period)) ty help)
+                   b (reconcile-fact (expr/normalize (over-period fb period)) ty help)
+                   :gap (reconcile-fact (expr/normalize (over-period (list '- fa fb) period)) ty
+                                        (str (name a) " less " (name b) " over the period; never written by hand."))})
+          (assoc :closes (into #{} (map second) (mapcat balance-forms (vals sides))))))
     rmap))
 
 (defn- line-reads
@@ -2351,6 +2503,7 @@
     (check-over! rmap)
     (check-accounts! rmap)
     (check-rate-table! rmap)
+    (check-reconciles! rmap)
     (check-conserves! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
@@ -2372,6 +2525,7 @@
      (-> rmap
         project-accounts
         project-totals
+        project-reconciles
         project-colocated
         desugar-owns
         project-lines

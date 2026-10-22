@@ -1034,6 +1034,9 @@
                 :find (or (:find ctx-opts) (:find hooks))
                 ;; the request's own clock, for a field that reads time
                 :now (:now ctx-opts)
+                ;; a close's :reconciles sides, summed over the period
+                ;; (docs/spec-ledger-money.md §7)
+                :balance-over (or (:balance-over ctx-opts) (:balance-over hooks))
                 :rdef-of (when-some [rs (:resources ctx-opts)]
                            (fn [token]
                              (let [t (name token)]
