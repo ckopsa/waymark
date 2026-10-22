@@ -4111,6 +4111,88 @@
     (seat-do! seat :retire)
     (seat-do! groomer :retire)))
 
+;; Ticket cbe4d495. org-director was woken for a plan that the sitting
+;; of another seat still held: its run had ended, but the sitting stayed
+;; open until the idle sweep, and the wake read `empty_walk` and was
+;; spent. That hold now lapses one release grace after the sitting's
+;; last call, and the wake waits for the lapse, with its text.
+
+(defn- called-at!
+  "Write what a sit and its calls leave on an open sitting: the rows it
+  was handed and the moment of its last call."
+  [sitting-id row-ids ^Instant at]
+  (let [st (:storage *eng*)
+        row (raw :sitting sitting-id)]
+    (store/with-tx st
+      (fn [tx]
+        (store/update-data! st tx :sitting (str sitting-id)
+                            (assoc (:data row)
+                                   :walked_rows (mapv str row-ids)
+                                   :last_call_at (str at))
+                            (:next-flip-at row))))))
+
+(deftest a-wake-another-seats-idle-sitting-emptied-fires-when-the-hold-lapses
+  (let [wn :wake-held-elsewhere
+        fn' :wake-held-elsewhere-fires
+        batch "held-elsewhere"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [scope [{:kind "wake_item" :actions ["complete"]
+                    :filter {:batch batch}}]
+            holder (seat! "heldholder" {:walk "wake_item" :scope scope})
+            {:keys [seat]}
+            (linked-seat! "helddirector"
+                          {:walk "wake_item"
+                           :scope scope
+                           :wake_on [{:kind "wake_item" :actions ["create"]
+                                      :filter {:batch batch}}]}
+                          fn')
+            held? #(contains? (seats/unwalkable-rows *eng* (raw :seat seat) nil)
+                              (str %))
+            holding (sitting! holder)
+            item (item! batch)]
+        (called-at! holding [item] t0)
+
+        (testing "the create fires nothing while the other seat's run is
+                  live, and the wake is due when its hold lapses"
+          (drain-wakes! wn)
+          (is (held? item))
+          (is (empty? (seat-fires seat)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "the wake is remembered, not spent")
+          (is (= (.plusSeconds t0 120) (due-of seat))))
+
+        (testing "inside the grace the tick still fires nothing"
+          (at 60)
+          (wakes/tick! *eng*)
+          (is (empty? (seat-fires seat))))
+
+        (testing "past the grace the idle sitting, still open, yields the
+                  row, and one fire goes out naming it"
+          (at 121)
+          (is (= :open (:state (raw :sitting holding))))
+          (is (not (held? item)))
+          (wakes/tick! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 1 (count ts)))
+            (is (str/includes? (str (get-in (first ts) [:inputs :text]))
+                               (str item))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (testing "a holder that calls again holds again, and its close
+                  ends the hold"
+          (called-at! holding [item] @clock)
+          (is (held? item))
+          (close-sitting! holding)
+          (is (not (held? item))))
+
+        (seat-do! seat :retire)
+        (seat-do! holder :retire)))))
+
 ;; Ticket 7c4f0392. ops-seat was woken by a burst of fourteen creates
 ;; and handed ten, its `rows_per_firing`. No create came after, so the
 ;; four it was not handed waited for the silent crack. The close of a
