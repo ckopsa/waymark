@@ -226,9 +226,10 @@
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
-  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
-  the row's schema, (input :f) the door's own input. A ref that names
-  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  expression guards and its ages' :until forms
+  (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
+  (input :f) the door's own input. A ref that names no kind stays as
+  written, and the gate's [follow-not-a-ref] names it."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
         bind (fn [input-form guards]
@@ -242,7 +243,15 @@
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)
-      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs)))
+      ;; an age's (follow (data :f) :g) counts from a date on the row f names
+      (map? (:expected-age rmap))
+      (update :expected-age update-vals
+              (fn [age]
+                (if (and (map? age) (contains? age :until))
+                  (update age :until expr/bind-follows
+                          (fn [[op f]] (when (= 'data op) (get data-kinds f))))
+                  age))))))
 
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
