@@ -225,6 +225,41 @@
         (is (= ["resources" "{target}" "actions"]
                (get-in items [:verbs :x-options :at])))))))
 
+;; …and a MAP that holds such a list is the same question one level out:
+;; a member invite's `grant` is an object whose `scope` is the list.
+
+(g/defguard names-declared-things-in-a-grant
+  {:judges [:grant]
+   :vars []
+   :open "The legal tokens are the registry's, one GET away."
+   :explain "That grant names something this engine does not serve."}
+  [_row _inp _ctx]
+  (t/allow))
+
+(defn- with-grant [item-map]
+  (assoc-in compliant [:actions :retitle]
+            {:from #{:pending} :to :pending
+             :input [:map
+                     [:grant {:x-display {:label "Their grant"
+                                          :help "Its scope, entry by entry."}}
+                      [:maybe [:map
+                               [:scope {:x-display {:label "What it opens"
+                                                    :help "One entry per collection."}}
+                                [:vector item-map]]]]]]
+             :guards [names-declared-things-in-a-grant]
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A retitle is a retitle."}
+             :display {:label "Retitle"}}))
+
+(deftest a-map-whose-PROPERTIES-advertise-has-advertised
+  (is (seq (warns (with-grant [:map [:target [:string {:max 60}]]])
+                  "effort-honesty"))
+      "a map holding a list of blank entries is still a blank rectangle")
+  (is (= [] (warns (with-grant [:map [:target {:x-options {:from :kinds}}
+                                      [:string {:max 60}]]])
+                   "effort-honesty"))
+      "and the same map, with its list's item fields named, owes nothing"))
+
 ;; ── the narrowing: a guard that reads ROWS (waymark-7rw) ─────────────
 
 (g/defguard the-name-is-not-taken

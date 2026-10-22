@@ -653,6 +653,7 @@
             ;; promoted (:filter): the plan's sums run on these
             [:estimated_total_cents {:optional true
                                      :derived estimated-total-cents
+                                     :not-money "household estimate in cents, never posted"
                                      :filter #{:eq :range}
                                      :x-display {:widget "money"
                                                  :label "Est. total"}}

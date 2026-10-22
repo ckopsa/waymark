@@ -84,6 +84,7 @@ scene's shots.
 | `meanwhile` | a call | as a call: another cast member acts while the camera stays |
 | `call` | `as`, `kind`, `action`, `row?`, `name?`, `input?` | a week.edn call (docs/orgkit.md § The week) the performer makes as the shot plays: `as` is in the cast; `kind` is a kind this engine serves; `action` is a door of it or, with no `row`, the kind's create; `row` is a `name` an earlier `call` shot made; every key of `input` is a field the door takes. The shot's `bind` names the row the call moved |
 | `day` | `n`, `date` | where a day of the clone's clock starts, for the performer to shift the clock to; it renders nothing. `n` is a whole number above zero and `date` an ISO date (YYYY-MM-DD), and both increase through the scene: a weekend skips from day 5 to day 8 |
+| `event` | `source`, `body` | an outside event the clone hears as the shot plays: the performer signs `body` as the integration named `source` signs and posts it to `/api/-/events/<source>`. `source` is a non-empty name and `body` a map; the shot's `bind` names the receipt the event keeps |
 
 A shot may be a card: `{card: "text", hold: {ms: n}}` shows the text
 alone, full screen, for the hold. The text is plain, at most 280
@@ -361,6 +362,8 @@ be performed, as `given N: <why>`, `wearing <key>: <why>` or
 | `day` | `day` names `n`, a whole number above zero. |
 | `day` | `day` names `date`, an ISO date (YYYY-MM-DD). |
 | `day` | day `<n>` on `<date>` does not come after day `<n>` on `<date>`; the days and their dates increase through the scene. |
+| `event` | `event` names `source`, the name of the integration that sends it. |
+| `event` | `event` names `body`, the event's body as a map. |
 | `expect` | `expect` is a map of `envelope` and `screen`. |
 | `expect` | `expect` holds `envelope` and `screen`, and not `<key>`. |
 | `expect` | an expectation is a map of `path`, `op` and `value`. |

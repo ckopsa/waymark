@@ -161,12 +161,12 @@
                            (store/search-rows st tx :widget
                                               [{:target :data :field :priority
                                                 :cast "bigint" :op := :value 2}]
-                                              {})))))
+                                              {:all true})))))
             (testing "(a) sort orders by the generated column"
               (is (= ["w2" "w1"]
                      (mapv #(get-in % [:data :name])
                            (store/search-rows st tx :widget []
-                                              {:order-by :priority}))))))))))
+                                              {:order-by :priority :all true}))))))))))
   (testing "(b) a dropped promotion drops its column — derived data"
     (let [steps (steps-of [v-base])]
       (is (= [:drop-column :drop-index] (mapv :kind steps)))

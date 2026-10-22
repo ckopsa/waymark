@@ -112,6 +112,23 @@
                     "door: there is nothing to send that opens it. Ask "
                     "another person of the house to approve.")))
 
+(g/defguard speaks-for-an-outside-member
+  {:reads [:storage]
+   :vars [:problem]
+   :explain "{problem}"
+   :open "Name an outside member in `on_behalf_of`, or leave it empty for an integration that acts as itself."}
+  [row inp ctx]
+  (let [mid (some-> (or (:on_behalf_of inp) (get inp "on_behalf_of")
+                        (get-in row [:data :on_behalf_of]))
+                    str not-empty)
+        read' (:read ctx)]
+    (if (or (nil? mid) (nil? read'))
+      (t/allow)
+      (if (= "outside" (str (get-in (read' :member mid) [:data :actor_type])))
+        (t/allow)
+        (t/deny {:vars {:problem (str "This integration would speak on behalf of member " mid
+                                      ", who is no outside member; name an outside member, or none.")}})))))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defn- born [row ctx]
@@ -206,6 +223,14 @@
              :help "The MCP server row its effects call. Leave it empty for an integration the house only hears from."}}
    [:maybe :waymark/ref]])
 
+(def ^:private on-behalf-of-field
+  [:on_behalf_of {:optional true
+                  :kind :member
+                  :x-display
+                  {:label "The outside party it speaks for"
+                   :help "An outside member whose own system this is. What it sends is logged as that member, via this integration. Leave it empty for an integration that acts as itself."}}
+   [:maybe :waymark/ref]])
+
 (def ^:private person-fields
   [name-field
    system-field
@@ -215,7 +240,8 @@
                "The path to the event's own id in the body, as [\"id\"].")
    (path-field :event_type_path "Where the event's type is"
                "The path to the event's type in the body, as [\"type\"].")
-   server-field])
+   server-field
+   on-behalf-of-field])
 
 (defresource integration
   {:kind :integration
@@ -271,12 +297,12 @@
    :sortable {:fields [:name] :default "name"}
    :unique [[:name]]
    :no-own-surface "An integration is the house's; only a grant that names the kind shows that one exists."
-   :create-guards [a-person-holds-it]
+   :create-guards [a-person-holds-it speaks-for-an-outside-member]
    :on-create born
    :actions
    {:approve
     {:from #{:proposed} :to :live
-     :guards [a-person-holds-it the-creator-does-not-decide]
+     :guards [a-person-holds-it the-creator-does-not-decide speaks-for-an-outside-member]
      :touches [{:kind :grant :action :create}
                {:kind :grant :action :accept}]
      :safety {:idempotent true :reversible false :confirm false
@@ -873,6 +899,33 @@
        (catch clojure.lang.ExceptionInfo e
          (warn! "receipt " rid " did not take " (name door) " (" (ex-message e) ")"))))
 
+(defn- party-of
+  "Who an event's door is logged as (docs/spec-teams.md §7, build step
+  8). The integration itself, `it`, unless the row names `on_behalf_of`:
+  then that outside member, marked :via the integration, so `(actor)`,
+  `:stamps` and `:not-by` read the party and the log still says whose
+  system spoke — \"report_lost by Parcelco (via Shippo)\". The grant
+  judged stays the integration's. An :agent, as a link's arrival is:
+  no person's wall opens to a system. nil when the member it names is
+  no outside member, or is suspended."
+  [eng irow it]
+  (if-some [mid (some-> (get-in irow [:data :on_behalf_of]) str not-empty)]
+    (let [st (:storage eng)
+          m (some->> (store/with-tx st #(store/load-row st % :member mid {}))
+                     (inv/decode-row (get (inv/resources eng) :member)))]
+      (when (and m
+                 (= "outside" (str (get-in m [:data :actor_type])))
+                 (not= "suspended" (name (:state m))))
+        (assoc (t/principal
+                {:id (let [s (str (get-in m [:data :subject]))]
+                       (if (str/blank? s) (str (:id m)) s))
+                 :type :agent
+                 :display (or (not-empty (str (get-in m [:data :display]))) (str (:id m)))
+                 :roles (set (map str (get-in m [:data :roles])))})
+               :via (:id it)
+               :via-display (:display it))))
+    it))
+
 (defn- invoke-entry!
   "Run the entry's door on the one row it matched, as the integration,
   under its grant and the `event:` key, and land what it answered. A
@@ -893,6 +946,7 @@
                            id (assoc :target id)
                            (seq told) (assoc :tell told))))
         who (principal irow)
+        actor (party-of eng irow who)
         vis (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
               (when (= :active (:standing (grants/grant-standing eng gid)))
                 (grants/visibility eng gid who)))
@@ -901,15 +955,25 @@
                     (:event scope))
               (into {} (keep (fn [[f x]] (when-some [v (known x scope)] [f v])))
                     (:input e)))
-        opts (fn [g] {:principal who
+        opts (fn [g] {:principal actor
                       :grant g
                       :idempotency-key (str "event:" (:id irow) ":"
                                             (get-in r [:data :event_id]))})]
-    (if-not (and vis ((:action? vis) kind door) (or made ((:row? vis) kind id)))
+    (cond
+      (not (and vis ((:action? vis) kind door) (or made ((:row? vis) kind id))))
       (refused (refusal-json
                 (refuse :not-granted 403 "Not granted"
                         (str "The grant this integration wears does not admit " label
                              "; approve it again so it wears what the law asks of it."))))
+
+      (nil? actor)
+      (refused (refusal-json
+                (refuse :not-an-outside-party 403 "Not an outside party"
+                        (str "This integration acts on behalf of member "
+                             (get-in irow [:data :on_behalf_of])
+                             ", who is no outside member able to act; name an outside member, or none."))))
+
+      :else
       (try
         (let [res (if made
                     (inv/create! eng kind inp (assoc (opts (:grant vis)) :action door))

@@ -663,7 +663,10 @@
                         (update-in row [:data :fingerprint] wire-keys))
       ;; the promote recomputes stale facts under the new law —
       ;; grandfathered survivors repair under their birth law
-      (repair-stale! eng kind (get-in row [:data :diff])))))
+      (repair-stale! eng kind (get-in row [:data :diff]))
+      ;; a measure the new law declares with a :default-target gets
+      ;; its first goal (docs/spec-measures.md §3)
+      (maintainer/default-goals! eng))))
 
 (defn- after-withdraw! [eng row]
   (let [kind (keyword (get-in row [:data :target_kind]))
@@ -939,7 +942,7 @@
                (store/with-tx st
                  (fn [tx]
                    (store/query-rows st tx target-kind (or where {})
-                                     (merge {:limit 100} opts))))))}))
+                                     (or opts {}))))))}))
 
 (defn stale-entries
   "The entries of one stored scope that no longer resolve, each beside

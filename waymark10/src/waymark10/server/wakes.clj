@@ -255,13 +255,21 @@
 (defn- told-of
   "The seats a refused receipt names in its `tell` (spec-integrations
   § 3): the `:on-event` entry's `:tell`, or the integration's approver,
-  as the applier wrote them — seat names, or a principal's id. Empty
-  for any other transition, and for a receipt that names no one."
+  as the applier wrote them — seat names, or a principal's id. And the
+  seat a missed measure reading names in its `tell`
+  (docs/spec-measures.md §4). Empty for any other transition, and for
+  a receipt that names no one."
   [eng t]
-  (if (and (= :integration_event (:kind t)) (= :mark_refused (:action t)))
+  (cond
+    (and (= :integration_event (:kind t)) (= :mark_refused (:action t)))
     (into #{} (comp (map str) (remove empty?))
           (get-in (raw-row eng :integration_event (:resource-id t)) [:data :tell]))
-    #{}))
+
+    (and (= :measure_reading (:kind t)) (= :missed (:action t)))
+    (into #{} (comp (keep identity) (map str) (remove empty?))
+          [(get-in (raw-row eng :measure_reading (:resource-id t)) [:data :tell])])
+
+    :else #{}))
 
 (defn- told?
   "Whether a receipt's `tell` names this seat: by its name, its id, or
@@ -1143,7 +1151,7 @@
 
     (fired-recently? schedule-row (interval-of seat-row) at) "fire_gap"))
 
-(declare empty-walk? grace-lift)
+(declare empty-walk? grace-lift elsewhere-lift)
 
 (defn- wake-seat!
   "One active seat, one transition it asked to be woken by, and the
@@ -1275,9 +1283,13 @@
           ;; for the grace to end rather than being spent now
           (mark-settling! eng (update row :data schedules/keep-textless)
                           (due-at row lift 0))
-          (do (warn! "seat " (:id seat) " has an empty walk — its wake"
-                     " fires nothing")
-              (stamp-silent! eng row at "empty_walk")))
+          (if-some [lift (elsewhere-lift eng (raw-row eng :seat (:id seat)) at)]
+            ;; another seat's run holds the row: the wake waits for that
+            ;; hold to end, with the text it earned (ticket cbe4d495)
+            (mark-settling! eng row (due-at row lift 0) text)
+            (do (warn! "seat " (:id seat) " has an empty walk — its wake"
+                       " fires nothing")
+                (stamp-silent! eng row at "empty_walk"))))
 
         ;; the row the wake names rests in a closed sitting's grace
         ;; while others wait (ticket afb445d4): the wake waits for the
@@ -1440,6 +1452,16 @@
     (when-some [queue (not-empty (ids-under eng kind f nil))]
       (seats/grace-lifts-at eng seat-row queue at))))
 
+(defn- elsewhere-lift
+  "When the rows of this seat's walk that an open sitting of ANOTHER
+  seat holds are let go (`seats/elsewhere-lifts-at`), or nil. An empty
+  walk with such a lift ahead is not empty: its wake waits for it, and
+  the tick asks again then (ticket cbe4d495)."
+  [eng seat-row ^Instant at]
+  (when-some [[kind f] (walk-query eng seat-row)]
+    (when-some [queue (not-empty (ids-under eng kind f nil))]
+      (seats/elsewhere-lifts-at eng seat-row queue at))))
+
 (defn- empty-walk?
   "Would a release put this seat's session in front of an empty queue?
   Only a seat with a walk is asked, and not one that wakes when its
@@ -1501,10 +1523,14 @@
       (if-some [lift (grace-lift eng seat-row at)]
         ;; a row still in a closed sitting's grace: held until it ends
         (mark-settling! eng schedule-row (due-at schedule-row lift 0))
-        (do (write-pending! eng (silent schedule-row at "empty_walk") false)
-            (warn! "seat " (:id seat-row) " has an empty queue — its pending"
-                   " wake is cleared without a fire")
-            nil))
+        (if-some [lift (elsewhere-lift eng seat-row at)]
+          ;; another seat's run still holds the row: asked again when
+          ;; that hold lapses (ticket cbe4d495)
+          (mark-settling! eng schedule-row (due-at schedule-row lift 0))
+          (do (write-pending! eng (silent schedule-row at "empty_walk") false)
+              (warn! "seat " (:id seat-row) " has an empty queue — its pending"
+                     " wake is cleared without a fire")
+              nil)))
 
       ;; the fuel wall still holds: the wake keeps waiting, and the
       ;; next release after the window rolls fires it

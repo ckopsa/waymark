@@ -115,6 +115,7 @@
             [reitit.ring :as ring]
             [waymark10.checks :as checks]
             [waymark10.confirm :as confirm]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
@@ -441,7 +442,9 @@
       :else
       (assoc (t/principal {:id (str (:id member))
                            :display (str (get-in member [:data :display]))
-                           :type (keyword (or (get-in member [:data :actor_type]) "human"))
+                           ;; an outside member acts as the person they
+                           ;; are, as members/principal-for has them arrive
+                           :type (if (= "agent" (get-in member [:data :actor_type])) :agent :human)
                            :roles roles'})
              :acted-by (str (:id principal))))))
 
@@ -522,7 +525,7 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
-(declare ref-summary-hook)
+(declare ref-summary-hook document-log-hook)
 
 (defn- render-opts
   "The one ctx-opts map every render call shares: identity, clock,
@@ -619,7 +622,9 @@
   row answers with THIS — the envelope is the wire's promise, not each
   handler's."
   [eng rdef row req status extra-headers]
-  (let [env (render/envelope rdef row (render-opts eng req))]
+  (let [env (render/envelope rdef row
+                             (assoc (render-opts eng req)
+                                    :document-log (document-log-hook eng req)))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -785,6 +790,16 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the entry an ask for this kind
+                                           ;; is offered (docs/spec-teams.md §6)
+                                           (:scope-default r)
+                                           (assoc :scope_default (:scope-default r))
+                                           ;; the kind's named measures, by
+                                           ;; the token a goal, a reading and
+                                           ;; a slot name them with
+                                           ;; (docs/spec-measures.md §2)
+                                           (seq (:measures r))
+                                           (assoc :measures (measures/tokens r))
                                            ;; a decision kind advertises
                                            ;; itself, and the field its
                                            ;; requester is stamped into
@@ -1001,8 +1016,14 @@
             hooks (inv/render-hooks eng)
             ctx {:principal p :now ((:now-fn eng))
                  :read (:read hooks) :find (:find hooks)}
+            ev (:evidence d)
+            ;; an addressed hold (spec-teams §5) waits on its addressee,
+            ;; so a person's own call is held as well as an agent's
+            addressed (or (:member ev) (:team ev))
+            _ (when-some [why (some-> (:refused ev) str not-empty)]
+                (throw (ex-info (str (:title d) ": " why) (assoc d :detail why) e)))
             owner (delegation/hold-owner ctx)
-            _ (when (nil? owner)
+            _ (when (and (nil? owner) (not addressed))
                 (let [detail (str/join " " (remove str/blank?
                                                   [(str (:detail d))
                                                    delegation/no-person]))]
@@ -1014,7 +1035,9 @@
                                       :body body
                                       :caller (:id p)
                                       :owner owner
-                                      :role (get-in d [:evidence :role])
+                                      :role (:role ev)
+                                      :addressee (when addressed
+                                                   (select-keys ev [:member :team :name :field]))
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
                                       ;; the caller's own why when it gave
@@ -1378,6 +1401,16 @@
             (swap! seen assoc k v)
             v))))))
 
+(defn- document-log-hook
+  "The ctx-opt :document-log (docs/spec-documents.md §2): one
+  attachment's {:added_by :added_at}, read from its own log — whose
+  hand created it, and when its bytes were stored (when it was created,
+  while they are not) — under THIS request's visibility; nil when the
+  grant does not admit it or it has no log. The walk's envelopes read
+  the same hook (walks/document-logs) under the recorder's sight."
+  [eng req]
+  (walks/document-logs eng (visibility-of req)))
+
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
   [eng rdef plural id req]
@@ -1409,7 +1442,9 @@
                              (render/envelope
                               rdef row
                               (assoc opts :ref-summary
-                                     (ref-summary-hook eng req)))
+                                     (ref-summary-hook eng req)
+                                     :document-log
+                                     (document-log-hook eng req)))
                              opts
                              (embed-overrides req)))
         env (cond->> env
@@ -1562,7 +1597,9 @@
         ;; invite answers the sign-in link beside the held call, to
         ;; them alone; it is stored nowhere, so a replay lacks it
         (:invite-link result)
-        (let [env (render/envelope rdef (:row result) (render-opts eng req))]
+        (let [env (render/envelope rdef (:row result)
+                                   (assoc (render-opts eng req)
+                                          :document-log (document-log-hook eng req)))]
           (json-response 200 (assoc env "invite_link" (:invite-link result))
                          media-type
                          {"ETag" (get-in env ["meta" "etag"])
@@ -2642,6 +2679,50 @@
 
           :else (bulk req))))))
 
+(def ^:private named-page
+  ;; the most rows of one kind the link page reads
+  200)
+
+(defn- named-doc
+  "GET /api/-/named — the link page (docs/spec-teams.md §7): every row
+  the caller's grant admits by row, on a kind it narrows, each with its
+  href and the doors that grant opens on it now. An outside party's
+  grant is :names-me entries alone, so for them this is the rows that
+  name them and their doors. With no grant, or anonymous, the
+  concealment 404."
+  [eng]
+  (fn [req]
+    (let [principal (principal-of req)
+          vis (visibility-of req)]
+      (when (or (nil? principal) (nil? vis)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (json-response
+       200
+       {:waymark "10"
+        :member (str (:id principal))
+        :rows (vec (for [[k rdef] (inv/resources eng)
+                         :when (and ((:kind? vis) k)
+                                    (seq (get-in vis [:surface (name k) :filters])))
+                         raw (store/with-tx (:storage eng)
+                               (fn [tx] (store/query-rows (:storage eng) tx k {}
+                                                          {:limit named-page})))
+                         :let [row (inv/decode-row rdef raw)
+                               id (str (:id row))
+                               state (some-> (:state row) name)]
+                         :when ((:row? vis) k id)]
+                     {:kind (name k)
+                      :id id
+                      :state state
+                      :summary (render/target-summary rdef row vis)
+                      :href (str "/api/" (:plural rdef) "/" id)
+                      :doors (vec (sort (for [[a adef] (:actions rdef)
+                                              :when (contains? (into #{} (map name) (:from adef))
+                                                               state)
+                                              :when ((:action-on? vis) k a id)]
+                                          (name a))))}))}))))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2660,6 +2741,7 @@
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]
+    ["/api/-/named" {:get (named-doc eng)}]
     ["/agentInvite" {:get (agent-invite-doc eng)
                      :post (agent-invite-mint eng)}]
     ["/api/-/agent-invite" {:get (agent-invite-doc eng)

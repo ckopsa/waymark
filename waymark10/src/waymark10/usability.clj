@@ -172,7 +172,11 @@
   (waymark-7rw): an item's fields are each other's siblings, so `:of`
   resolves inside the entry a person is filling in, and the annotation
   lands in the item schema where a client meets it. A list whose ITEMS
-  advertise has advertised."
+  advertise has advertised.
+
+  And a map that HOLDS such a list is the same question one level
+  out: a member invite's `grant` is an object whose `scope` is that
+  list, and a map any of whose properties advertises has advertised."
   [prop]
   ;; an OPTIONAL list is the same list: `[:maybe …]` reaches the wire
   ;; as a null arm beside the array, and the vocabulary sits on the
@@ -187,7 +191,8 @@
   (let [p (unwrap-maybe prop)]
     (boolean (or (:x-options prop)
                  (:x-options p)
-                 (some :x-options (vals (get-in p [:items :properties])))))))
+                 (some :x-options (vals (get-in p [:items :properties])))
+                 (some options-advertised? (vals (:properties p)))))))
 
 (defn effort-honesty
   "No recall where selection is possible.

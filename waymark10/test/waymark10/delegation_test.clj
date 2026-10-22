@@ -247,7 +247,7 @@
     (is (str/includes? why "the nearest ceiling entry is {kind dl_ticket, actions [create, finish], filter repo=bench}"))
     (is (nil? (store/with-tx (:storage eng)
                 (fn [tx] (first (store/query-rows (:storage eng) tx :seat
-                                                  {:name "bench-wide"} {})))))
+                                                  {:name "bench-wide"} {:limit 1})))))
         "no seat was written")
 
     (testing "a filter the child drops is a widening too"
@@ -842,7 +842,7 @@
         (is (str/includes? why "serves any"))
         (is (nil? (store/with-tx (:storage eng)
                     (fn [tx] (first (store/query-rows (:storage eng) tx :seat
-                                                      {:name "house-desk"} {})))))
+                                                      {:name "house-desk"} {:limit 1})))))
             "no seat was written")))
     (testing "own is the mayor's to state with no tap"
       (let [made (author! h as "house-cook" {:domain house :serves "own"})]

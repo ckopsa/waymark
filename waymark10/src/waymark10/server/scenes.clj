@@ -63,7 +63,7 @@
 
 (def verbs
   "The one verb a shot has, in the order the spec lists them."
-  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day"])
+  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day" "event"])
 
 (def ops
   "What an expectation may compare with."
@@ -468,6 +468,23 @@
 
       "call"
       (call-shot-step v st people rdef-of)
+
+      ;; an outside event the clone hears (ticket 524685a0): the performer
+      ;; signs `body` as the integration `source` signs and posts it, and
+      ;; the shot's `bind` names the receipt it keeps
+      "event"
+      (let [src (get v "source")]
+        (cond
+          (not (and (or (string? src) (keyword? src)) (not (str/blank? (name src)))))
+          (fail "`event` names `source`, the name of the integration that sends it.")
+
+          (not (map? (get v "body")))
+          (fail "`event` names `body`, the event's body as a map.")
+
+          (unbound (get v "body") bound)
+          (fail (unbound (get v "body") bound))
+
+          :else (assoc st :found (rdef-of "integration_event"))))
 
       ;; where a day of the clone's clock starts (ticket 0f6632ad): it
       ;; renders nothing, and its number and date increase through the scene
@@ -944,7 +961,7 @@
       []
       (store/with-tx st
         (fn [tx]
-          (->> (store/query-rows st tx (keyword kind) {} {})
+          (->> (store/query-rows st tx (keyword kind) {} {:all true})
                (filter within?)
                (filter ended?)
                (sort-by #(inst-ms (get % at)))
@@ -1291,7 +1308,8 @@
   the page of the seat of that name, an active one first, {self
   /api/seats/<id>}, or of its newest sitting, {self
   /api/sittings/<id>}. {:problem} with one sentence when no seat the
-  caller sees (`sees?`) has the name, or the seat has not sat yet."
+  caller sees (`sees?`) has the name, the caller cannot see sittings,
+  or the seat has not sat yet."
   [eng o sees?]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
@@ -1301,7 +1319,7 @@
         seat (when (sees? :seat)
                (store/with-tx st
                  (fn [tx]
-                   (let [rows (store/query-rows st tx :seat {:name nm} {})]
+                   (let [rows (store/query-rows st tx :seat {:name nm} {:all true})]
                      (or (first (filter #(= "active" (some-> (:state %) name)) rows))
                          (first rows))))))
         sat (when (and seat sitting? (sees? :sitting))
@@ -1312,6 +1330,9 @@
     (cond
       (nil? seat) {:problem (str "no seat is named " (tick nm) ".")}
       (not sitting?) {"self" (str "/api/" (plural :seat) "/" (:id seat))}
+      (not (sees? :sitting))
+      {:problem (str "this caller cannot see sittings, so the sitting of "
+                     (tick nm) " cannot be opened.")}
       (nil? sat) {:problem (str "the seat " (tick nm) " has not sat yet.")}
       :else {"self" (str "/api/" (plural :sitting) "/" (:id sat))})))
 
@@ -1616,12 +1637,23 @@
    [:pressed {:optional true
               :x-display {:label "Pressed" :help "The surface the runner acted on, as it resolved."}}
     [:maybe [:string {:max 300}]]]
+   ;; a focus shot's surface, as the performer names it beside pressed
+   [:focus {:optional true
+            :x-display {:label "Focus" :help "The surface a focus shot drew the eye to, by name."}}
+    [:maybe [:string {:max 300}]]]
    [:expects {:optional true
               :x-display {:raw true
                           :label "Expectations"
                           :help "One entry per expectation: what was asked, what was read, and whether it held."
                           :spelled-by-hand "An entry repeats its expectation's own keys beside what was read."}}
     [:maybe [:vector {:max 40} [:map-of :keyword :any]]]]
+   ;; a meanwhile call the engine refused: its kind, action and sentence
+   [:refused {:optional true
+              :x-display {:raw true
+                          :label "Refused"
+                          :help "The call a meanwhile made that the engine refused, and why."
+                          :spelled-by-hand "The entry repeats the refused call's own kind and action beside the engine's sentence."}}
+    [:maybe [:map-of {:max 40} :keyword :any]]]
    [:why {:optional true
           :x-display {:label "Why it failed"
                       :help "The runner's sentence for a shot that failed: the verb it could not perform, or the expectation that did not hold."}}

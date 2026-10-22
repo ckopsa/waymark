@@ -340,7 +340,11 @@
   ;; carries a btree index by default. Re-pinned from the bench's run
   ;; 39454221923, where this assertion alone failed; re-pinned over
   ;; a9f4f61d's hash from the bench's run 39470505770 after the merge.
-  "729b614662ed880099956d78922ee9c00141d9d3296850cd248579b707b1b367")
+  ;;
+  ;; THE SCOPE ENTRY GREW (ticket a0ac8694, docs/spec-teams.md §6): an
+  ;; ask's scope entry may carry :team-of. Re-pinned from the bench's
+  ;; run 39725113095.
+  "70e5fdacf5233d1337b5c66acfe4d7e4718e33b73a0e3d9265f2b671cf56c1f0")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

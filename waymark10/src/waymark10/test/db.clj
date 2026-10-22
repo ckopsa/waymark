@@ -10,6 +10,7 @@
   Postgres suite loads it, and with no key a field declared :at-rest
   :encrypted refuses its write."
   (:require [next.jdbc :as jdbc]
+            [waymark10.modules :as modules]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -36,11 +37,44 @@
 
 (defonce ^:private test-key-in-place (use-test-key!))
 
+(def ^:private built-in-kinds
+  "Kind -> plural of every kind the module table enrolls on every
+  engine. A test rdef may claim neither: its table is the shard's
+  shared one, and building it from the test's rdef corrupts it for
+  every namespace after (ticket 4d791724)."
+  (delay
+    (into {}
+          (comp (filter #(= :always (:enroll %)))
+                (mapcat #((:kinds %) []))
+                (map (juxt :kind :plural)))
+          (mapcat :enrols modules/inventory))))
+
+(defn shadowed-built-ins
+  "The clashes of `resources` with the built-in kinds: one
+  {:kind :plural :shadows} per rdef whose kind or plural a built-in
+  module kind already holds."
+  [resources]
+  (let [kinds @built-in-kinds
+        by-plural (into {} (map (fn [[k p]] [p k])) kinds)]
+    (vec (for [{:keys [kind plural]} resources
+               :let [shadows (or (when (contains? kinds kind) kind)
+                                 (get by-plural plural))]
+               :when shadows]
+           {:kind kind :plural plural :shadows shadows}))))
+
 (defn with-test-engine
   "Connect, drop the resources' tables plus the engine's transition
   and idempotency tables, build the engine over `resources`
-  (normalized declarations), call (f eng), close the pool."
+  (normalized declarations), call (f eng), close the pool.
+
+  Refuses, before touching the database, an rdef whose kind or plural
+  shadows a built-in module kind, naming the clash."
   [resources f]
+  (when-let [clashes (seq (shadowed-built-ins resources))]
+    (throw (ex-info (str "with-test-engine: test kind(s) shadow built-in module kind(s) — "
+                         (pr-str (vec clashes))
+                         "; rename the test kind and its plural")
+                    {:check :shadows-built-in :clashes (vec clashes)})))
   (let [st (pg/storage dsn)]
     (try
       (store/with-tx st

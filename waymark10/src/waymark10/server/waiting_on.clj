@@ -180,9 +180,22 @@
      :person (first (filter :person hs))
      :source (first (filter #(= "source" (:held_by %)) doors))}))
 
+(defn- addressee-of
+  "The member or team a held call's door is addressed to ((hold … :by),
+  spec-teams §5), as the block's holder {type name}, or nil."
+  [data]
+  (let [door (fget data :door)
+        n (some-> (fget door :for_name) text not-empty)
+        m (some-> (fget door :for_member) text not-empty)
+        t (some-> (fget door :for_team) text not-empty)]
+    (cond
+      m {:type "member" :name (or n m)}
+      t {:type "team" :name (or n t)})))
+
 (defn- holder-of
   "The choice as the block carries it: {type name}, type one of seat,
-  source, person or nobody; nil for a state a row rests in."
+  source, person or nobody; nil for a state a row rests in. An
+  addressed held call names its member or team instead (addressee-of)."
   [doors walking]
   (when doors
     (let [{:keys [pick person source]} (choose doors walking)]
@@ -273,7 +286,8 @@
                                          (live-cracks/walk-admits? by-kind reads % rdef row)))
                             (map seat-name))
                       seat-rows)
-        holder (holder-of doors walking)]
+        addressed (when doors (addressee-of data))
+        holder (or addressed (holder-of doors walking))]
     (cond-> {:state state
              :since (cond-> {}
                       at (assoc :at (str at))
@@ -281,7 +295,9 @@
                       expected (assoc :expected_seconds expected)
                       due (assoc :due (str due)))
              :next (or doors [])
-             :verdict (verdict kind state doors walking for-words age-words held kept)}
+             :verdict (if addressed
+                        (str "waiting on " (:name addressed) age-words)
+                        (verdict kind state doors walking for-words age-words held kept))}
       holder (assoc :holder holder)
       (seq held) (assoc :held_by held)
       kept (assoc :note (str "waits on a person's tap: " kept)))))

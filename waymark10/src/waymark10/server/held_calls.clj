@@ -252,15 +252,39 @@
        (or (and (= :human (:type p)) (= owner (str (:id p))))
            (and (= :agent (:type p)) (= owner (str (:acts-for p)))))))
 
+(defn- addressee
+  "The member or team a (hold … :by) addressed this held call to, as
+  [:member id] or [:team id], or nil."
+  [row]
+  (let [door (get-in row [:data :door])]
+    (if-some [m (some-> (:for_member door) str not-empty)]
+      [:member m]
+      (when-some [t (some-> (:for_team door) str not-empty)]
+        [:team t]))))
+
+(defn- the-addressee?
+  "Is this principal the member the held call is addressed to, or on
+  its team? Never a seat's sitter."
+  [row ctx]
+  (let [id (some-> (get-in ctx [:principal :id]) str not-empty)
+        [k a] (addressee row)]
+    (boolean
+     (when (and id a (not (str/starts-with? id "seat:")))
+       (case k
+         :member (= id a)
+         :team (when-some [in? (:in-team? (g/team-reads ctx))] (in? id a)))))))
+
 (defn- an-approver?
-  "`an-approver-decides`'s reading: the person a held seat call was
-  held for, a holder of the role a declarative hold named ((hold \"…\"
-  :for :role \"x\")), or a holder of the approver role for a held tool
-  call."
-  [row p]
-  (let [owner (some-> (get-in row [:data :owner]) str not-empty)
+  "`an-approver-decides`'s reading: the addressee of an addressed hold
+  ((hold \"…\" :by …)), the person a held seat call was held for, a
+  holder of the role a declarative hold named ((hold \"…\" :for :role
+  \"x\")), or a holder of the approver role for a held tool call."
+  [row ctx]
+  (let [p (:principal ctx)
+        owner (some-> (get-in row [:data :owner]) str not-empty)
         role (some-> (get-in row [:data :door :for_role]) str not-empty)]
     (cond
+      (addressee row) (the-addressee? row ctx)
       role (and (not (str/starts-with? (str (:id p)) "seat:"))
                 (contains? (set (map str (:roles p))) role))
       (some? (get-in row [:data :door])) (the-owner? p owner)
@@ -276,9 +300,52 @@
   ;; the person its author acts for, and that person alone answers it:
   ;; the delegation is theirs, so the approver role is not enough. A
   ;; held TOOL call is the role's, as it always was.
-  (if (an-approver? row (:principal ctx))
+  (if (an-approver? row ctx)
     (t/allow)
     (t/deny)))
+
+(defn- addressee-words
+  "The addressee as the refusal names it: \"Dana Ruiz, this visit's
+  therapist,\"."
+  [row]
+  (let [door (get-in row [:data :door])
+        who (or (some-> (:for_name door) str not-empty) (second (addressee row)))
+        field (some-> (:for_field door) str not-empty)]
+    (str who (when field (str ", this " (str/replace (str (:kind door)) "_" " ") "'s " field ",")))))
+
+(g/defguard the-addressee-decides
+  {:reads [:principal :member]
+   :open "The addressee is the member or team the hold's :by named on the row when the call was held; no field of this door names another."
+   :vars [:who]
+   :explain "Only {who} may allow this."}
+  [row _inp ctx]
+  ;; spec-teams §5: an addressed hold is opened by its addressee alone,
+  ;; the caller's own person included among everyone else
+  (if (or (nil? (addressee row)) (the-addressee? row ctx))
+    (t/allow)
+    (t/deny {:vars {:who (addressee-words row)}})))
+
+(defn- outside-caller?
+  "Is this principal an outside party — a member row of actor_type
+  \"outside\" (docs/spec-teams.md §7)? Read through the ctx's :read
+  hook; false where the ctx cannot look."
+  [ctx]
+  (let [id (some-> (get-in ctx [:principal :id]) str not-empty)
+        read' (:read ctx)]
+    (boolean
+     (when (and id read')
+       (= "outside" (some-> (read' :member id) (get-in [:data :actor_type]) str))))))
+
+(g/defguard an-outside-party-answers-what-names-it
+  {:reads [:principal :member]
+   :open "An outside party answers a hold addressed to it by :by and nothing else; no field of this door addresses it."
+   :explain "An outside party allows only what is addressed to it, and this call is not."}
+  [row _inp ctx]
+  ;; spec-teams §7: whatever role an outside party holds, it allows
+  ;; only a hold its :by names
+  (if (and (nil? (addressee row)) (outside-caller? ctx))
+    (t/deny)
+    (t/allow)))
 
 (defn- the-persons-delegate?
   "Is this principal the sitter of a DELEGATING seat whose person is
@@ -304,7 +371,7 @@
   [row _inp ctx]
   ;; Refuse only: a no takes nothing out of the person's hands, so the
   ;; seat that keeps their house may say it. Allow stays the person's.
-  (if (or (an-approver? row (:principal ctx))
+  (if (or (an-approver? row ctx)
           (the-persons-delegate? row ctx))
     (t/allow)
     (t/deny)))
@@ -313,7 +380,8 @@
   "The two walls, apart rather than folded. The order is the refusal
   order: `not you` is the sentence the caller most needs, and the
   role is the sentence everybody else needs."
-  [the-caller-does-not-decide an-approver-decides])
+  [the-caller-does-not-decide the-addressee-decides
+   an-outside-party-answers-what-names-it an-approver-decides])
 
 (def ^:private refuser-walls
   "The refuse door's walls: the first wall as it is, and the second
@@ -658,13 +726,23 @@
     ;; and the allow replays it at this door, as that sitter, with
     ;; `forward` as its body. `author` is the seat it was written for.
     ;; `for_role` is the role a (hold "…" :for :role "x") waits on: a
-    ;; member holding it answers, in place of the owner.
+    ;; member holding it answers, in place of the owner. `for_member`
+    ;; or `for_team` is the addressee a (hold "…" :by …) named, with its
+    ;; `for_name` and the row's `for_field` that named it.
     [:door {:optional true
             :x-display {:label "The door"
                         :help "The kind, the action and the row a held seat call would write, and the seat that asked."}}
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:for_role {:optional true :x-display {:raw true :label "Waits on the role"}}
+               [:maybe [:string {:min 1 :max 64}]]]
+              [:for_member {:optional true :x-display {:raw true :label "Waits on the member"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:for_team {:optional true :x-display {:raw true :label "Waits on the team"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:for_name {:optional true :x-display {:label "Waits on"}}
+               [:maybe [:string {:min 1 :max 200}]]]
+              [:for_field {:optional true :x-display {:raw true :label "Named by the field"}}
                [:maybe [:string {:min 1 :max 64}]]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
               [:id {:optional true :x-ref {:kind-from :kind}
@@ -806,6 +884,14 @@
      [:maybe [:map
               [:kind {:x-display {:raw true :label "Kind"}} [:string {:min 1 :max 64}]]
               [:for_role {:optional true :x-display {:raw true :label "Waits on the role"}}
+               [:maybe [:string {:min 1 :max 64}]]]
+              [:for_member {:optional true :x-display {:raw true :label "Waits on the member"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:for_team {:optional true :x-display {:raw true :label "Waits on the team"}}
+               [:maybe [:string {:min 1 :max 128}]]]
+              [:for_name {:optional true :x-display {:label "Waits on"}}
+               [:maybe [:string {:min 1 :max 200}]]]
+              [:for_field {:optional true :x-display {:raw true :label "Named by the field"}}
                [:maybe [:string {:min 1 :max 64}]]]
               [:action {:x-display {:raw true :label "Action"}} [:string {:min 1 :max 64}]]
               [:id {:optional true :x-ref {:kind-from :kind}
@@ -1040,14 +1126,16 @@
   reader of a door hold's call reads `forward`. The engine writes the row
   (`the-power-door-mints-it`), `caller` names the author's sitter and
   `owner` the one person who may answer it — or, when the hold names a
-  `for_role` ((hold \"…\" :for :role \"x\")), any member holding that role.
+  `for_role` ((hold \"…\" :for :role \"x\")), any member holding that role,
+  and when it is addressed ((hold \"…\" :by …), `addressee`), that
+  member or team alone, as `for_member` or `for_team`.
 
   A FENCED door keeps what its edit is about beside `if_match`: for a
   door whose edit declares a prefill list, one digest per field as the
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner role author why if-match] said :shown}]
+  [eng {:keys [kind action id body caller owner role addressee author why if-match] said :shown}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
@@ -1090,6 +1178,12 @@
                             (some-> id str not-empty) (assoc :id (str id))
                             (some-> author str not-empty) (assoc :author (str author))
                             (some-> role str not-empty) (assoc :for_role (str role))
+                            (some-> (:member addressee) str not-empty) (assoc :for_member (str (:member addressee)))
+                            (some-> (:team addressee) str not-empty) (assoc :for_team (str (:team addressee)))
+                            (and (some-> (:name addressee) str not-empty) (or (:member addressee) (:team addressee)))
+                            (assoc :for_name (:text (capped (str (:name addressee)) 200)))
+                            (and (some-> (:field addressee) str not-empty) (or (:member addressee) (:team addressee)))
+                            (assoc :for_field (str (:field addressee)))
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
              (:cut kept) (assoc :why_cut true)
@@ -1123,8 +1217,18 @@
   [row]
   (let [caller (str (get-in row [:data :caller]))
         owner (some-> (get-in row [:data :owner]) str not-empty)
-        {:keys [kind action id]} (get-in row [:data :door])]
-    (if (and owner
+        {:keys [kind action id] :as door} (get-in row [:data :door])
+        decided (some-> (get-in row [:data :decided_by]) str not-empty)]
+    (cond
+      ;; spec-teams §5: an addressed hold held a PERSON's own call (no
+      ;; agent, so no owner), and the replay is that person's hand
+      (and (nil? owner)
+           (or (some-> (:for_member door) str not-empty)
+               (some-> (:for_team door) str not-empty)))
+      (cond-> (t/principal {:id caller :display caller})
+        decided (assoc :allowed-by decided))
+
+      (and owner
              (or (and (#{"grant" "member"} (str kind)) (nil? (some-> id str not-empty)))
                  ;; HC2 (ticket bed1f2f6): an agent's member suspend or
                  ;; reinstate is the person's own, the same way
@@ -1136,10 +1240,11 @@
       ;; the log names the agent that asked as `requested_by`. HC3
       ;; (ticket a052edca): an agent's invite is the same
       (assoc (t/principal {:id owner :display owner}) :requested-by caller)
+
+      :else
       (cond-> (t/principal {:id caller :type :agent :display caller})
         owner (assoc :acts-for owner)
-        (some-> (get-in row [:data :decided_by]) str not-empty)
-        (assoc :allowed-by (str (get-in row [:data :decided_by])))))))
+        decided (assoc :allowed-by decided)))))
 
 (defn- invite-link
   "The sign-in link of an invite a replay just made (HC3, ticket
@@ -2341,7 +2446,9 @@
   A scheduled action's three endings (docs/spec-scheduled-actions.md
   R-6.1): each addresses the ref the birth stamped, as `tell` allowed,
   and says the sentence the run kept. `cancelled` has no rule: the
-  person did it."
+  person did it. A measure reading's `missed` (docs/spec-measures.md
+  §4) addresses the person seat's person the sweep stamped, and says
+  the miss sentence; a model seat is woken on it instead (wakes)."
   {:scheduled_action
    [{:name "A scheduled action ran"
      :when {:to_state "done"}
@@ -2354,7 +2461,12 @@
     {:name "A scheduled action failed"
      :when {:to_state "failed"}
      :address {:field "tell_problem"}
-     :says "outcome_why"}]})
+     :says "outcome_why"}]
+   :measure_reading
+   [{:name "A measure missed its goal"
+     :when {:action "missed"}
+     :address {:field "tell_member"}
+     :says "told"}]})
 
 (defn- declared-rules
   "The engine's own rules for the moved kind, in a rule row's shape and

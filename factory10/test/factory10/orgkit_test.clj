@@ -18,6 +18,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
             [waymark10.server.seed :as seed-load]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]))
 
 (def ^:private orgs ["myorg" "example"])
@@ -92,3 +93,25 @@
                      (catch clojure.lang.ExceptionInfo e
                        {:refused (ex-message e) :data (ex-data e)}))]
         (is (true? (:seeded out)) (pr-str out))))))
+
+(defn- rows-of [eng kind]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {:all true})))))
+
+(deftest an-org-without-the-factory-seed-gets-a-house-model
+  ;; ticket 239d8101: with no factory seed there was no model row, and
+  ;; every seat the org's seed made stayed model-less, so none could be sat
+  (doseq [org orgs
+          [params want] [[{} "house"] [{:model "claude-test-1"} "claude-test-1"]]]
+    (testing (str org " " (pr-str params))
+      (let [eng (org-engine org)
+            out (seed-load/load! eng (org-boot/loader-seed (seed org)) {:params params})
+            models (rows-of eng :model)
+            id (some-> (first models) :id str)]
+        (is (true? (:seeded out)) (pr-str out))
+        (is (= [want] (mapv #(get-in % [:data :name]) models)))
+        (is (= "active" (some-> (first models) :state name)))
+        (doseq [s (rows-of eng :seat)]
+          (is (seq (get-in s [:data :held_for])) (get-in s [:data :name])))
+        (is (some #(= [id] (mapv str (get-in % [:data :held_for]))) (rows-of eng :seat))
+            "a seated seat is held for the house model")))))

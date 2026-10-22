@@ -21,6 +21,8 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.measures :as measures]
+            [waymark10.money :as money]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
@@ -752,6 +754,34 @@
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (name tk) "." (name field) ", a field " (name tk) " does not "
                 "have — follow reads a data field, :state or :id")))
+    ;; a second hop reads a declared ref on the kind the first reached,
+    ;; and that ref names the kind the second hop wrote
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (and tk (seq? ref) (= 'follow (first ref)) (= 4 (count ref)))
+            :let [[_ k1 _ f1] ref
+                  target (get kinds k1)]
+            :when (and target
+                       (not-any? #(and (= f1 (:field %)) (= tk (:kind %)) (not (:listed %)))
+                                 (schema/ref-fields (:schema target))))]
+      (err kind :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (name k1) "." (name f1) " on to " (name tk) ", but " (name f1)
+                " is not a ref to " (name tk) " on " (name k1)
+                " — each hop of a follow reads a declared ref")))
+    ;; a second hop, or a binder over a follow, the registry could not
+    ;; bind: the field the first hop reads is not a ref on its kind
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (nil? tk)]
+      (err kind :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (pr-str ref) " on, but no kind could be written in — each "
+                "hop of a follow reads a declared ref")))
     []))
 
 ;; ── exists / none / count-rows: an index to ask, evidence on its kind ──
@@ -798,6 +828,90 @@
                   (pr-str (:door rmd)) " acts on (evidence " b "), a row of "
                   (name tk) " — name a door of " (name tk))))))
   [])
+
+;; ── measures (docs/spec-measures.md §8) ──────────────────────────────
+
+(defn- check-measures
+  "What a measure names on the kind it reads, judged where that kind is
+  known. [measure-shape]: :of names a kind of this registry, :at a date
+  or instant field of it or transition:<action> naming its door.
+  [measure-unfiltered]: every field :among names, and the :at field,
+  is :filterable on the :of kind — an error, for [exists-unfiltered]'s
+  reason: the sweep reads through :find. Then [measure-shape] again:
+  each :among value a plain filter key carries is one the :of kind
+  admits — a state name, a value its field's schema admits — by the
+  battery a view's :where meets (checks/view-where-problems); a
+  suffixed key (placed_at_gte, state_ne) is judged against its base
+  field as the collection door reads it: _after/_before on an instant
+  bound, a negative duration on an instant's range, _contains any text."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :when (map? (:measures r))
+            [mname m] (sort-by (comp str key) (:measures r))
+            :when (map? m)
+            :let [of (:of m kind)
+                  target (get kinds of)
+                  label (str "measure " (name mname))]]
+      (when-not target
+        (err kind :measure-shape (str label " :of " (pr-str of)
+                                      " names no kind this engine serves")))
+      (let [own? #(contains? #{:id :state} %)
+            head #(some-> (schema/field-schema (:schema target) %) schema/leaf-head)
+            field? #(or (own? %) (some? (schema/field-schema (:schema target) %)))
+            at (measures/spelled (:at m))
+            action (when at (measures/transition-action at))]
+        (when (and action (not (contains? (:actions target) (keyword action))))
+          (err kind :measure-shape (str label " :at " (pr-str at) " names no action of " (name of))))
+        (when (and at (nil? action)
+                   (not (#{:waymark/instant :waymark/date} (head (keyword at)))))
+          (err kind :measure-shape (str label " :at " (pr-str at)
+                                        " is not a date or instant field of " (name of)
+                                        " (nor " measures/transition-prefix "<action>)")))
+        (doseq [f (concat (measures/among-fields field? (measures/parse-among (:among m)))
+                          (when (and at (nil? action)) [(keyword at)]))
+                :when (not (or (own? f) (contains? (:filterable target) f)))]
+          (err kind :measure-unfiltered
+               (str label " reads " (name of) " by " (name f) ", a field " (name of)
+                    " does not declare :filterable — the sweep reads through :find")))
+        (when target
+          (doseq [problem (checks/view-where-problems
+                           target
+                           (into (sorted-map)
+                                 (for [[k vs] (measures/parse-among (:among m))
+                                       :when (checks/where-field? target k)]
+                                   [k (str/join "," vs)])))]
+            (err kind :measure-shape
+                 (str label " :among " (str/replace-first problem #"^:where " ""))))
+          (doseq [[k vs] (measures/parse-among (:among m))
+                  :when (not (checks/where-field? target k))
+                  :let [n (name k)
+                        [sfx f] (some (fn [sfx]
+                                        (when (str/ends-with? n sfx)
+                                          (let [f (keyword (subs n 0 (- (count n) (count sfx))))]
+                                            (when (field? f) [sfx f]))))
+                                      ["_ne" "_gte" "_lte" "_after" "_before" "_contains"])
+                        h (when (and f (not= :state f)) (head f))]
+                  :when (and f (not= "_contains" sfx) (or (= :state f) h))
+                  v vs
+                  :when (not (str/blank? v))
+                  :let [relative? (and (= :waymark/instant h) (not= "_ne" sfx)
+                                       (str/starts-with? v "-P")
+                                       (try (java.time.Duration/parse (subs v 1)) true
+                                            (catch java.time.format.DateTimeParseException _ false)))
+                        problem (cond
+                                  (= :state f)
+                                  (when-not (contains? (into #{} (map name) (:states target)) v)
+                                    (str "is not a state; one of "
+                                         (vec (sort (map name (:states target))))))
+                                  relative? nil
+                                  (and (#{"_after" "_before"} sfx) (not= :waymark/date h))
+                                  (schema/filter-value-problem :waymark/instant v)
+                                  :else (schema/filter-value-problem h v))]
+                  :when problem]
+            (err kind :measure-shape
+                 (str label " :among " n "=" (pr-str v) " " problem))))))
+    []))
 
 ;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
 
@@ -882,6 +996,26 @@
                                         (contains? age :until)))]
                      (str (name kind) " " (name state) " :expected-age")))))
         (sort-by key (:kinds reg))))
+
+(defn followed-fields
+  "The fields each kind's rows are followed to by the law of `reg`'s
+  kinds — guards, facts and ages' :until, each (follow :kind <ref>
+  :field) — as {kind #{field}}: what [date-unread] counts as read,
+  though no law of the kind itself reads it."
+  [reg]
+  (reduce (fn [acc [kind field]] (update acc kind (fnil conj #{}) field))
+          {}
+          (mapcat (comp checks/law-follows val) (sort-by key (:kinds reg)))))
+
+(defn date-unread-in-world
+  "`r` with its info's [date-unread] findings judged against the world:
+  a date another kind follows to (`followed`, from followed-fields) is
+  read."
+  [followed r]
+  (vary-meta r assoc :waymark10/info
+             (into (filterv #(not (str/starts-with? % "[date-unread]"))
+                            (:waymark10/info (meta r)))
+                   (checks/date-unread r (get followed (:kind r) #{})))))
 
 ;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────
 
@@ -1010,6 +1144,18 @@
                                              checks/unref'd-ids-remedy)))
               {:check :unref'd-ids})))))
 
+(defn- check-unref'd-teams
+  "[unref'd-ids], a warning: a plain string field named `team` or
+  `team_id` (waymark10.checks/unref'd-team-hits). Every other hit is
+  check-unref'd-ids' error."
+  [reg]
+  (let [kinds (set (keys (:kinds reg)))]
+    (into []
+          (mapcat (fn [[kind r]]
+                    (map #(str (name kind) " [unref'd-ids] " %)
+                         (checks/unref'd-team-hits r kinds))))
+          (sort-by key (:kinds reg)))))
+
 (defn- check-rate-tables
   "[rate-unfiltered]: a :rate-table's :key and :effective fields are
   declared :filterable on its kind — (rate …) asks for its row by them,
@@ -1086,6 +1232,30 @@
                 " does not declare :filterable — declare it filterable")))
     []))
 
+(defn- check-all-accounts
+  "[all-account-unknown]: a (balance [:all k n]) in any kind's law names
+  a kind k that declares account n (docs/spec-ledger-money.md §4, ledger
+  step 9c). The def site judges only k = its own kind
+  (resource/check-accounts!); here every kind is known, so a sum over
+  another kind's accounts — month_close's [:all :order :paid] — is
+  judged too, and not first answered unknown at the write."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :let [a (first (for [f (tree-seq coll? seq (dissoc r :schema))
+                                 :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                                 :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                            (not (contains? (get-in kinds [(second a) :accounts]) (nth a 2))))]
+                             a))]
+            :when a]
+      (err kind :all-account-unknown
+           (str "(balance " (pr-str a) ") sums "
+                (if (contains? kinds (second a))
+                  (str (name (nth a 2)) ", which is not an account of " (name (second a))
+                       " — declare it in " (name (second a)) "'s :accounts")
+                  (str "accounts of " (pr-str (second a)) ", which is no kind of this assembly")))))
+    []))
+
 (defn- account-currency
   "The currency account n of `r` holds, when its unit is [:money cur]."
   [r n]
@@ -1116,7 +1286,8 @@
         line (when (and (keyword? a) (:lines r))
                (schema-currency (into [:map] (get-in r [:lines :fields])) a))
         balance (when (and (vector? a) (= 3 (count a)))
-                  (account-currency (get kinds (first a)) (nth a 2)))
+                  (account-currency (get kinds (if (= :all (first a)) (second a) (first a)))
+                                    (nth a 2)))
         (+ - * / round) (some #(currency-of kinds r %) (rest form))
         nil))))
 
@@ -1162,6 +1333,69 @@
                       ", an account of " into-cur remedy))))))
     []))
 
+(defn- tolerance-unit
+  "The unit a :reconciles :tolerance evaluates to — [:money cur], :count
+  or :decimal — nil when it is not a constant amount (the def site
+  refuses that one)."
+  [form]
+  (when (and (some? form) (empty? (expr/problems form)))
+    (let [v (expr/evaluate (expr/normalize form) {})]
+      (cond (expr/unknown? v) nil
+            (money/money? v) [:money (:currency v)]
+            (integer? v) :count
+            (decimal? v) :decimal))))
+
+(defn- reconcile-sightings
+  "Each unit a :reconciles declares, as [phrase unit]: its tolerance's,
+  each (money …) literal's in a side, and each account a side's
+  (balance …) names — this kind's, another kind's, and the house's when
+  `house-accounts` is known. An account nobody declares adds nothing."
+  [kinds house-accounts {:keys [sides tolerance]}]
+  (concat
+   (when-some [u (tolerance-unit tolerance)] [["the tolerance" u]])
+   (for [[_ form] (sort-by key sides)
+         f (tree-seq coll? seq form)
+         :let [[op a c] (when (seq? f) f)
+               hit (cond
+                     (and (= 'money op) (string? c))
+                     [(pr-str f) [:money c]]
+
+                     (and (= 'balance op) (vector? a) (= 2 (count a))
+                          (= :house (first a)) (keyword? (second a)) house-accounts)
+                     [(str "house " (name (second a))) (get-in house-accounts [(second a) :unit])]
+
+                     (and (= 'balance op) (vector? a) (= 3 (count a)))
+                     (let [k (if (= :all (first a)) (second a) (first a))
+                           n (nth a 2)]
+                       (when (and (keyword? k) (keyword? n))
+                         [(str (name k) "." (name n)) (get-in kinds [k :accounts n :unit])])))]
+         :when (second hit)]
+     hit)))
+
+(defn check-reconciles-units
+  "[reconciles-units] (docs/spec-ledger-money.md §7, ledger step 9d): a
+  close kind's :reconciles reads one unit across both sides and its
+  :tolerance. The def site (resource/check-reconciles!) sees only its
+  own kind's accounts; here every account a side's (balance …) names
+  resolves — another kind's at assembly, and the house's at boot, where
+  the engine passes its :house-accounts (the registry holds none, so a
+  nil `house-accounts` leaves them to that call). A mixed unit would
+  leave the gap no answer at every read: refuse it, naming each account
+  and its unit."
+  ([reg] (check-reconciles-units reg nil))
+  ([reg house-accounts]
+   (let [kinds (:kinds reg)]
+     (doseq [[kind r] (sort-by key kinds)
+             :let [rc (:reconciles r)]
+             :when (map? (:sides rc))
+             :let [seen (distinct (reconcile-sightings kinds house-accounts rc))]
+             :when (< 1 (count (distinct (map second seen))))]
+       (err kind :reconciles-units
+            (str ":reconciles mixes units: "
+                 (str/join ", " (map (fn [[l u]] (str l " is " (pr-str u))) seen))
+                 " — both sides and the tolerance are in one unit"))))
+   []))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1174,6 +1408,7 @@
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
-          check-rows-queries check-rate-tables check-conserves check-posts-unfiltered
-          check-mixed-currency check-utc-today check-unref'd-ids])
+          check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
+          check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids
+          check-unref'd-teams])
    :info (check-resource-uncalendared reg)})

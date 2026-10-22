@@ -16,11 +16,11 @@
    :terminal #{:withdrawn}
    :summary "Time off · {state}"
    :schema [:map
-            [:crew_id {:kind :crew} :waymark/ref]
+            [:crew {:kind :team} :waymark/ref]
             [:starts_at :waymark/instant]
             [:ends_at :waymark/instant]]
-   :filterable {:state #{:eq :in} :crew_id #{:eq} :starts_at #{:eq} :ends_at #{:eq}}
-   :occupies [{:resource :crew_id :from :starts_at :to :ends_at
+   :filterable {:state #{:eq :in} :crew #{:eq} :starts_at #{:eq} :ends_at #{:eq}}
+   :occupies [{:resource :crew :from :starts_at :to :ends_at
                :in #{:approved} :doors #{:create :approve}}]
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:requested "A time off request waits three days; past that, the mayor tells the owner."

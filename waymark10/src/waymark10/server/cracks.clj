@@ -56,6 +56,11 @@
                  tells a person a row arrived there, so the aged
                  ticket its deadline files reaches nobody
                  (docs/spec-calendar-time.md §7)
+  measure-tell-unseated
+                 a measure the kind declares tells a seat (`:tell`)
+                 that is not an active seat, so a miss would tell
+                 nobody (docs/spec-measures.md §8). A measure with no
+                 :tell is checks' [measure-untold]
 
   Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
   which rows a seat is handed, not what brings it, so a walk alone
@@ -510,7 +515,9 @@
 (defn- deadline-cracks
   "deadline_untold, for one kind: an `:expected-age {:until …}` on a
   state whose own crack in `states` (this kind's `state-cracks`) is
-  no_exit or unwoken, and that nothing tells a person of (`tellers`)."
+  no_exit or unwoken, and that nothing tells a person of (`tellers`).
+  Its fields are the ones the :until reads on the row, and each field
+  it follows to on another kind as kind.field (`checks/law-follows`)."
   [rdef seat-rows world states]
   (let [kind (text (:kind rdef))
         untold (into #{}
@@ -521,7 +528,10 @@
           :when (and (map? age) (contains? age :until))
           :when (contains? untold (text state))
           :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))
-          :let [fields (vec (sort (map name (:data (expr/info (:until age))))))
+          :let [own (map name (:data (expr/info (:until age))))
+                followed (for [[k f] (checks/law-follows {:expected-age {state age}})]
+                           (str (name k) "." (name f)))
+                fields (vec (sort (distinct (concat own followed))))
                 named (str/join ", " fields)]]
       {:kind kind :state (text state) :crack "deadline_untold"
        :fields fields
@@ -531,6 +541,24 @@
             " to hear it. Wake a seat on that state, or add a notice rule on "
             kind " whose `when` names to_state " (text state) ".")
        :question (str "Who should hear when a " kind " is past " named "?")})))
+
+(defn- measure-cracks
+  "measure-tell-unseated, for one kind: a declared measure whose `:tell`
+  names no active seat, by its name or its id. The law battery reads
+  the :tell and not the seat rows, so this is where it is judged."
+  [rdef seat-rows]
+  (let [kind (text (:kind rdef))
+        seated (into #{} (mapcat (fn [s] [(seat-name s) (str (:id s))])) seat-rows)]
+    (for [[mname m] (when (map? (:measures rdef)) (sort-by (comp text key) (:measures rdef)))
+          :when (map? m)
+          :let [tell (some-> (:tell m) text not-empty)
+                token (str kind "." (text mname))]
+          :when (and tell (not (contains? seated tell)))]
+      {:kind kind :measure (text mname) :crack "measure-tell-unseated"
+       :seat tell
+       :what_would_close_it
+       (str token " tells `" tell "`, which is not an active seat; a miss would tell nobody.")
+       :question (str "Who should hear when " (or (:label m) token) " misses its goal?")})))
 
 (defn- person-cracks
   "silent_person_exit, for one kind: a state every exit from which
@@ -870,7 +898,8 @@
                              (wait-cracks rdef seat-rows by-kind)
                              (value-cracks rdef seat-rows by-kind
                                            (get (:rows world) (:kind rdef)))
-                             (deadline-cracks rdef seat-rows world states)))))
+                             (deadline-cracks rdef seat-rows world states)
+                             (measure-cracks rdef seat-rows)))))
            (sort-by (comp text :kind) rdefs)))))
 
 ;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
@@ -884,7 +913,7 @@
 (defn- crack-key
   "What makes a crack the same one before a change and after it."
   [c]
-  (select-keys c [:kind :state :crack :door :remedy :on :outcome]))
+  (select-keys c [:kind :state :crack :door :remedy :on :outcome :measure]))
 
 (defn added
   "The cracks the seats in `after` leave and the seats in `before` did

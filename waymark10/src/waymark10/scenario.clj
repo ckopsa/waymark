@@ -73,14 +73,17 @@
             [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
-            [waymark10.types :as t])
-  (:import (java.time Instant LocalDate LocalTime ZoneId)
+            [waymark10.types :as t]
+            [waymark10.windows :as windows])
+  (:import (java.math BigDecimal RoundingMode)
+           (java.time Duration Instant LocalDate LocalTime ZoneId)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -92,15 +95,32 @@
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
   [:name :sentence :kind :attempt :recurs :age :entered :row :input :as :at :calendar :events :effects :given :history
-   :history-mode :postings :rates :expect])
+   :history-mode :postings :rates :cast :teams :goals :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
   :because and :remedies as optional tightenings of a refusal, and
   :balances the accounts the walk leaves as it says
   (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
-  the fields the allowed door's handler leaves on its row."
-  [:allowed :refused :because :remedies :balances :lands])
+  the fields the allowed door's handler leaves on its row,
+  :readings the measures the walk leaves at :at (docs/spec-measures.md
+  §7), and the purge skeleton (docs/spec-documents.md §7) — :state,
+  :cleared and :deleted-attachments — which is an allowance of its own."
+  [:allowed :refused :because :remedies :balances :lands :readings
+   :state :cleared :deleted-attachments])
+
+;; what a purge leaves: the state it lands in, the personal fields it
+;; clears by name, and how many files it deletes
+(def purge-expect-keys [:state :cleared :deleted-attachments])
+
+(defn- skeleton? [expect]
+  (boolean (some #(contains? expect %) purge-expect-keys)))
+
+(defn- allowance?
+  "Does :expect say the door opens — :allowed true, or a skeleton it
+  leaves?"
+  [expect]
+  (or (true? (:allowed expect)) (skeleton? expect)))
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -115,9 +135,21 @@
 ;; on, unless the scenario says `:leashed false` — which is how "an
 ;; unleashed agent sees nothing" stays a sentence a scenario can say.
 (def principal-keys [:id :type :roles :leashed])
+;; one cast member a scenario declares (docs/spec-teams.md §8): its
+;; member id (the key's name when absent), display, actor type —
+;; :person, :agent or :outside — and the roles on its own row; `:as
+;; :ana` then acts as that member
+(def cast-keys [:id :display :type :roles])
+;; one team a scenario declares: its name (the key's when absent), the
+;; cast members on it, and the roles it confers
+(def team-keys [:name :members :roles])
 ;; the house's calendar a scenario declares (docs/spec-calendar-time.md
 ;; §6): the same values a work_calendar row keeps
 (def calendar-keys [:zone :workdays :hours :holidays])
+;; one goal a scenario holds a measure to, as a goal row says it, and one
+;; reading it expects (docs/spec-measures.md §7)
+(def goal-keys [:measure :op :target])
+(def reading-keys [:value :verdict :among :met])
 ;; one outside event a scenario replays (docs/spec-integrations.md §6):
 ;; the integration that sends it, its type — or the one its body carries
 ;; — and the body as recorded
@@ -220,6 +252,50 @@
         (when-not (and (string? on)
                        (try (LocalDate/parse ^String on) (catch DateTimeParseException _ nil)))
           (err sname (str ":calendar :holidays names " (pr-str h) ", which is not a date")))))))
+
+(defn- cast-id
+  "The member id a cast key names: its :id, else the key's own name."
+  [cast who]
+  (str (or (get-in cast [who :id]) (name who))))
+
+(defn- cast!
+  [sname cast teams]
+  (when (some? cast)
+    (when-not (map? cast)
+      (err sname ":cast is a map of member keys to {:type … :roles […]}"))
+    (doseq [[who m] cast]
+      (when-not (keyword? who) (err sname "each :cast member is named by a keyword"))
+      (when-not (map? m) (err sname (str ":cast " who " is a map, {} or {:type … :roles […]}")))
+      (closed! sname "cast member" cast-keys m)
+      (when-not (contains? #{nil :person :human :agent :outside} (:type m))
+        (err sname (str ":cast " who " :type is :person, :agent or :outside")))
+      (when-not (coll? (:roles m []))
+        (err sname (str ":cast " who " :roles is a vector of role names")))))
+  (when (some? teams)
+    (when-not (map? teams)
+      (err sname ":teams is a map of team keys to {:members […] :roles […]}"))
+    (doseq [[team m] teams]
+      (when-not (keyword? team) (err sname "each :teams entry is named by a keyword"))
+      (when-not (map? m) (err sname (str ":teams " team " is a map, {:members […] :roles […]}")))
+      (closed! sname "team" team-keys m)
+      (when-not (and (coll? (:members m [])) (coll? (:roles m [])))
+        (err sname (str ":teams " team " :members and :roles are vectors")))
+      (when-some [who (first (remove #(contains? cast %) (:members m)))]
+        (err sname (str ":teams " team " names " who ", whom :cast does not declare"))))))
+
+(defn- as-cast
+  "The scenario's :as as principal! reads it: a keyword names a :cast
+  member, who acts as their own member id with the roles on their row
+  — an outside member as the person they are, as the engine's
+  acts_as_cast seat acts as one."
+  [sname {:keys [as cast]}]
+  (if-not (keyword? as)
+    as
+    (if-some [m (get cast as)]
+      {:id (cast-id cast as)
+       :type (if (= :agent (:type m)) :agent :person)
+       :roles (set (:roles m))}
+      (err sname (str ":as names " as ", whom :cast does not declare")))))
 
 (defn- principal!
   [sname as]
@@ -373,9 +449,12 @@
   (when-not (map? expect)
     (err sname "a scenario is a verdict: :expect {:allowed true} or {:refused <guard-name>}"))
   (closed! sname "expect" expect-keys expect)
-  (let [{:keys [allowed refused because remedies lands]} expect]
-    (when (= (some? allowed) (some? refused))
-      (err sname ":expect declares exactly one of :allowed and :refused"))
+  (let [{:keys [allowed refused because remedies lands state cleared]} expect]
+    (when (if (some? refused)
+            (or (some? allowed) (skeleton? expect))
+            (and (nil? allowed) (not (skeleton? expect))))
+      (err sname (str ":expect declares exactly one of :allowed and :refused"
+                      " — a purge skeleton (:state, :cleared, :deleted-attachments) is an allowance")))
     (when (and (some? allowed) (not (true? allowed)))
       (err sname ":expect :allowed is true — a false allowance is a refusal, and a refusal names its guard"))
     (when (and (some? refused) (not (keyword? refused)))
@@ -388,8 +467,17 @@
     (when (and (seq remedies)
                (or (nil? refused) (not (every? keyword? remedies))))
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
-    (when (and (some? lands) (nil? allowed))
+    (when (and (some? lands) (some? refused))
       (err sname ":expect :lands judges what an allowed door lands; a refusal lands nothing"))
+    (when (and (contains? expect :state)
+               (not (or (keyword? state) (and (string? state) (not (str/blank? state))))))
+      (err sname ":expect :state is the state the door leaves its row in, \"purged\""))
+    (when (and (contains? expect :cleared)
+               (not (and (vector? cleared) (every? keyword? cleared))))
+      (err sname ":expect :cleared is a vector of the fields the purge clears, [:name :phone]"))
+    (when (and (contains? expect :deleted-attachments)
+               (not (nat-int? (:deleted-attachments expect))))
+      (err sname ":expect :deleted-attachments is how many files the purge deletes"))
     (when (and (some? lands)
                (not (and (map? lands) (seq lands) (every? keyword? (keys lands)))))
       (err sname ":expect :lands is {field value} — the fields the allowed door leaves on its row"))
@@ -527,6 +615,48 @@
           (err sname (str ":expect :balances " (pr-str a)
                           " is a whole number, a decimal or money written \"0.00 USD\"")))))))
 
+(defn- readings!
+  "The scenario's :goals and :expect :readings (docs/spec-measures.md
+  §7): each goal {:measure \"kind.name\" :op \">=\" :target n}, each
+  expected reading {:value n :verdict :met} under its measure's token.
+  A reading is a window's, and a window is a moment's in the house's
+  zone: expecting one with no :at, or no :calendar, is refused here, as
+  a clock-reading law is."
+  [sname m]
+  (when-some [goals (:goals m)]
+    (when-not (vector? goals)
+      (err sname ":goals is a vector of {:measure \"kind.name\" :op \">=\" :target n}"))
+    (doseq [gl goals]
+      (when-not (map? gl)
+        (err sname "each :goals entry is {:measure \"kind.name\" :op \">=\" :target n}"))
+      (closed! sname "goal" goal-keys gl)
+      (when-not (and (string? (:measure gl)) (str/includes? (:measure gl) "."))
+        (err sname "a goal names its :measure by token, \"kind.name\""))
+      (when-not (some #{(:op gl)} measures/goal-ops)
+        (err sname (str "a goal's :op is one of " measures/goal-ops)))
+      (when-not (number? (:target gl))
+        (err sname "a goal's :target is a number")))
+    (when-some [twice (seq (for [[tk n] (frequencies (map :measure goals)) :when (> n 1)] tk))]
+      (err sname (str "two :goals name " (first twice) " — one active goal per measure"))))
+  (when-some [want (get-in m [:expect :readings])]
+    (when-not (and (map? want) (seq want) (every? string? (keys want)))
+      (err sname ":expect :readings maps each measure's token to its reading, {\"order.on_time\" {:value 0.5 :verdict :missed}}"))
+    (doseq [[token r] want]
+      (when-not (and (map? r) (seq r))
+        (err sname (str ":expect :readings " token " is {:value … :verdict …}")))
+      (closed! sname "reading" reading-keys r)
+      (when (and (some? (:value r)) (not (number? (:value r))))
+        (err sname (str ":expect :readings " token " :value is a number, or nil for a window with no rows")))
+      (when (and (some? (:verdict r)) (not (#{:met :missed :unjudged} (:verdict r))))
+        (err sname (str ":expect :readings " token " :verdict is :met, :missed or :unjudged")))
+      (doseq [k [:among :met]]
+        (when (and (some? (get r k)) (not (nat-int? (get r k))))
+          (err sname (str ":expect :readings " token " " k " is a count of rows")))))
+    (when (nil? (:at m))
+      (err sname ":expect :readings reads a window, and a window is a moment's: say :at"))
+    (when (nil? (:calendar m))
+      (err sname ":expect :readings reads a window in the house's zone: say :calendar"))))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -618,9 +748,11 @@
   (when (and (some? (:entered m)) (not (iso-instant? (:entered m))))
     (err sname ":entered is the row's entry to the state, an ISO instant string"))
   (calendar! sname (:calendar m))
+  (cast! sname (:cast m) (:teams m))
   (events! sname (:events m))
   (effects! sname (:effects m))
   (ledger! sname m)
+  (readings! sname m)
   (cond
     (some? (:recurs m)) (occurrences-expect! sname (:expect m))
     (some? (:age m)) (age-expect! sname m)
@@ -629,10 +761,15 @@
                  :name sname
                  :sentence sentence
                  :given (vec (:given m))
-                 :as (principal! sname (:as m))
+                 :as (principal! sname (as-cast sname m))
                  :expect (:expect m))
-    ;; only when spoken, so a scenario without one normalizes as before
-    (some? (:history m)) (assoc :history (vec (:history m)))))
+    ;; only when spoken, so a scenario without one normalizes as before;
+    ;; an entry's :as may name a cast member, who acted as their id
+    (some? (:history m))
+    (assoc :history (mapv (fn [h]
+                            (cond-> h
+                              (contains? (:cast m) (:as h)) (assoc :as (cast-id (:cast m) (:as h)))))
+                          (:history m)))))
 
 ;; ── the attempted door ──────────────────────────────────────────────
 
@@ -760,6 +897,9 @@
   ;; (docs/spec-calendar-time.md §6, ticket 4b20e9e1)
   (or (some? (:recurs s))
       (some? (:age s))
+      ;; a reading scenario is read here, over its own rows; structural
+      ;; refuses a door whose guards read more than this tier answers
+      (some? (get-in s [:expect :readings]))
       (let [{:keys [guards missing]} (attempted rdef s)
             guards (into (vec guards) (event-guards rdef s))]
         (boolean (and (nil? missing)
@@ -843,6 +983,30 @@
                           :data (fill-handles (:data gv {}) ids)}))
           (:given s))))
 
+(defn- cast-rows
+  "The :cast and :teams as storage would hand them back: an active
+  member row per cast member under its member id, and an active team
+  row per team — what (holds-role? …) and (in-team? …) read, so a
+  scenario with teams needs no store (docs/spec-teams.md §8)."
+  [{:keys [cast teams]}]
+  (into (mapv (fn [[who m]]
+                {:kind :member
+                 :id (cast-id cast who)
+                 :state "active"
+                 :data (cond-> {:display (str (or (:display m) (name who)))
+                                :actor_type (case (:type m) :agent "agent" :outside "outside" "human")
+                                :subject (cast-id cast who)}
+                         (seq (:roles m)) (assoc :roles (mapv name (:roles m))))})
+              cast)
+        (map (fn [[team m]]
+               {:kind :team
+                :id (str "team:" (name team))
+                :state "active"
+                :data (cond-> {:name (str (or (:name m) (name team)))
+                               :members (mapv #(cast-id cast %) (:members m))}
+                        (seq (:roles m)) (assoc :roles (mapv name (:roles m))))}))
+        teams))
+
 (defn- holds?
   "One where condition over one in-memory row, as the store asks it:
   :state and :id are the row's own, any other field a data field; a
@@ -873,11 +1037,11 @@
 (defn- scenario-reads
   "The read hooks served from the scenario itself (docs/spec-related-
   row-law.md §5): :read, :find, :rows-matching and :count-matching
-  over its :given rows, :actor-of over its :history — the world is
-  exactly what the scenario declares, so no :given is no rows and no
-  :history an empty log."
+  over its :given rows and its :cast and :teams (cast-rows), :actor-of
+  over its :history — the world is exactly what the scenario declares,
+  so no :given is no rows and no :history an empty log."
   [s]
-  (let [rows (given-rows s)
+  (let [rows (into (given-rows s) (cast-rows s))
         of-kind (fn [kind] (filter #(= (keyword kind) (keyword (:kind %))) rows))
         matching (fn [kind conds] (filter (fn [r] (every? #(holds? r %) conds)) (of-kind kind)))
         log (reverse (:history s))]
@@ -906,7 +1070,8 @@
 (defn- scenario-ledger
   "The ledger hooks served from the scenario itself (docs/spec-ledger-
   money.md §9): :balance sums its :postings to one account, and
-  :balance-over those effective in [from, until) (step 9b); :rate-of
+  :balance-over those effective in [from, until) (step 9b), and
+  :postings-over the largest of them (step 9e); :rate-of
   answers its :rates — the row whose :key is the one asked, latest on
   or before the date. An account the postings never name, a period
   none of them falls in, and a rate no row answers are nil, unknown to
@@ -922,15 +1087,28 @@
                (filter (fn [[[k _ n :as a]]] (and (= 3 (count a)) (= kind k) (= account n)))
                        (:postings s))
                (get by-account (if (some? id) [kind (str id) account] [kind account]))))
-        summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))]
+        summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))
+        in-period (fn [^LocalDate from ^LocalDate until ps]
+                    (filter (fn [[_ _ on]]
+                              (let [d (LocalDate/parse ^String on)]
+                                (and (not (.isBefore d from)) (.isBefore d until))))
+                            ps))]
     (cond-> {}
       (some? (:postings s))
       (assoc :balance (fn [kind id account] (summed (of kind id account)))
              :balance-over (fn [kind id account ^LocalDate from ^LocalDate until]
-                             (summed (filter (fn [[_ _ on]]
-                                               (let [d (LocalDate/parse ^String on)]
-                                                 (and (not (.isBefore d from)) (.isBefore d until))))
-                                             (of kind id account)))))
+                             (summed (in-period from until (of kind id account))))
+             ;; …and the largest of them, the evidence a close's
+             ;; refusal shows (step 9e): no row posted these
+             :postings-over (fn [kind id account ^LocalDate from ^LocalDate until limit]
+                              (->> (in-period from until (of kind id account))
+                                   (map (fn [[a amount on]]
+                                          {:account (str/join "/" (map text a))
+                                           :amount (amount-of amount)
+                                           :effective_on on}))
+                                   (sort-by (comp money/magnitude :amount) #(compare %2 %1))
+                                   (take limit)
+                                   vec)))
       (some? (:rates s))
       (assoc :rate-of (fn [table key-vals ^LocalDate on]
                         (let [want (key-of key-vals)]
@@ -1002,6 +1180,50 @@
      :state (:state row)
      :data (:data row {})}))
 
+(defn- measure-of
+  "The measure a token names on this kind, `<kind>.<name>`, with its
+  defaults written in; nil when the kind declares none of that name."
+  [rdef token]
+  (let [[k n] (str/split (str token) #"\." 2)]
+    (when (= k (name (:kind rdef)))
+      (some (fn [[mn m]] (when (= n (measures/spelled mn)) m))
+            (measures/with-defaults (:kind rdef) (:measures rdef))))))
+
+(defn- readings-faults
+  "What the assembled declaration says of a scenario's :goals and
+  :expect :readings: each token a measure this kind declares, over a
+  time field, its :among on a declared field (by equality or a grammar
+  suffix such as placed_at_gte); and the door judged here, where
+  readings are read, so its guards read nothing this tier cannot answer."
+  [rdef s guards]
+  (let [want (get-in s [:expect :readings])
+        fields (conj (set (schema/entry-keys (:schema rdef))) :state)
+        declared (or (measures/tokens rdef) [])]
+    (concat
+     (for [token (sort (keys want))
+           :let [m (measure-of rdef token)
+                 stray (when (= (:kind rdef) (some-> m :of measures/spelled keyword))
+                         (seq (remove fields (measures/among-fields
+                                              fields (measures/parse-among (:among m))))))
+                 fault (cond
+                         (nil? m)
+                         (str ":expect :readings names " token ", which " (name (:kind rdef))
+                              " does not declare — its measures are " declared)
+                         (measures/transition-action (measures/spelled (:at m)))
+                         (str ":expect :readings " token " counts the log, which a scenario does not read")
+                         stray
+                         (str ":expect :readings " token "'s :among filters by " (pr-str (vec stray))
+                              ", and a scenario reads :among on a declared field"))]
+           :when fault]
+       fault)
+     (for [gl (:goals s) :when (nil? (measure-of rdef (:measure gl)))]
+       (str ":goals names " (:measure gl) ", which " (name (:kind rdef))
+            " does not declare — its measures are " declared))
+     (when (seq want)
+       (when-some [beyond (seq (into (sorted-set) (map str) (mapcat unserved-reads guards)))]
+         [(str "expects readings, which are read in the check tier, but " (:attempt s)
+               " reads " (str/join ", " beyond))])))))
+
 (defn- structural
   "What the assembled declaration can answer and the def line could
   not: the door exists, the row suits the door, the expected guard is
@@ -1009,7 +1231,7 @@
   clock the scenario declared. Authoring faults, not broken law —
   they read as themselves rather than as the household's sentence."
   [rdef s]
-  (let [{:keys [door guards missing]} (attempted rdef s)
+  (let [{:keys [door action guards missing]} (attempted rdef s)
         refused (get-in s [:expect :refused])]
     (or
      (when missing [(str (name (:name s)) " " missing)])
@@ -1018,7 +1240,8 @@
             (comp (remove nil?)
                   (map #(str (name (:name s)) " [" (name (:kind s)) "/"
                              (name (:attempt s)) "] " %)))
-            [(when (and (= :create door) (:row s))
+            (concat
+             [(when (and (= :create door) (:row s))
                "attempts the create door with a :row — no instance exists yet")
              (when (and (= :action door) (nil? (:row s)))
                (str "attempts " (:attempt s) " with no :row — an action judges an instance"))
@@ -1060,19 +1283,27 @@
                  ":expect :lands judges an action's handler; a create is judged by its verdict"
                  (when-some [stray (seq (remove (set (schema/entry-keys (:schema rdef))) (keys lands)))]
                    (str ":expect :lands names " (pr-str (vec stray))
-                        ", which " (name (:kind s)) "'s schema does not declare"))))])))))
+                        ", which " (name (:kind s)) "'s schema does not declare"))))
+             (when (and (= :create door) (contains? (:expect s) :state))
+               ":expect :state judges where an action leaves its row; a create is judged by its verdict")
+             (when (and (= :action door)
+                        (some #(contains? (:expect s) %) [:cleared :deleted-attachments])
+                        (not (true? (:purge action))))
+               (str ":expect :cleared and :deleted-attachments judge a purge; " (:attempt s)
+                    " is no :purge true door"))]
+             (readings-faults rdef s guards)))))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
   would. nil when the law kept its promise."
   [s got]
-  (let [{:keys [allowed refused because remedies]} (:expect s)]
+  (let [{:keys [refused because remedies]} (:expect s)]
     (if-some [u (:unreadable got)]
       ;; the door answered something no verdict can be read off — a
       ;; staging failure, a concealment, an unexpected status. The
       ;; sentence still leads; the clause says what came back
       u
-      (if allowed
+      (if (allowance? (:expect s))
         (when-some [r (:refused got)]
           (str "the law refused it — " r ": " (:reason got)))
         (cond
@@ -1302,7 +1533,7 @@
 
       :else
       (let [got (verdict guards row (:input s) ctx)
-            lands? (some? (get-in s [:expect :lands]))]
+            lands? (or (some? (get-in s [:expect :lands])) (skeleton? (:expect s)))]
         (cond-> (assoc w :got got)
           (and (= :action door) (nil? (:refused got))
                (or (:effect action) (:unwinds action) lands?))
@@ -1372,6 +1603,157 @@
         (when (seq off)
           (str "the row lands " (str/join "; " off)))))))
 
+(defn- purge-clause
+  "Where the skeleton the scenario expects its door to leave differs
+  from the one its walk leaves — the state, the personal fields a purge
+  clears by name, the count of files it deletes (docs/spec-documents.md
+  §5, §7) — or nil when each holds what was said. A file a :given row
+  also holds is let go of, not deleted, as purge! lets go of one
+  another live row still holds."
+  [rdef s {:keys [row got]}]
+  (let [want (select-keys (:expect s) purge-expect-keys)]
+    (when (and (seq want) (nil? (:refused got)))
+      (let [form (:schema rdef)
+            held (into #{}
+                       (comp (remove #(= :attachment (keyword (name (:kind %)))))
+                             (mapcat #(vals (:data %)))
+                             (mapcat #(if (sequential? %) % [%]))
+                             (remove nil?)
+                             (map str))
+                       (given-rows s))
+            seen {:state (some-> (:state row) name)
+                  :cleared (schema/personal-fields form)
+                  :deleted-attachments (count (remove held (schema/document-ids form (:data row))))}
+            said (cond-> want (contains? want :state) (update :state name))
+            off (for [k purge-expect-keys
+                      :when (and (contains? said k)
+                                 (not (if (= :cleared k)
+                                        (= (set (get said k)) (set (get seen k)))
+                                        (= (get said k) (get seen k)))))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (when (seq off)
+          (str "the purge leaves " (str/join "; " off)))))))
+
+(defn- point
+  "A row's time field as the instant or date it names; nil when it
+  names neither."
+  [v]
+  (cond (or (instance? Instant v) (instance? LocalDate v)) v
+        (string? v) (or (try (Instant/parse ^String v) (catch DateTimeParseException _ nil))
+                        (try (LocalDate/parse ^String v) (catch DateTimeParseException _ nil)))))
+
+(defn- bound-order
+  "Where a row's value v stands against an :among bound b — negative,
+  zero or positive — as the collection grammar compares them: a number
+  as a number, an instant or a date as a point (a negative duration,
+  -P3D, the point that long before now), anything else as text. nil
+  when v is absent or the bound does not read."
+  [v ^String b ^Instant now]
+  (when (and (some? v) (not (str/blank? b)))
+    (if (number? v)
+      (when-some [n (try (bigdec b) (catch NumberFormatException _ nil))]
+        (compare (bigdec v) n))
+      (let [pv (point v)
+            pb (if (str/starts-with? b "-P")
+                 (try (.minus now (Duration/parse (subs b 1)))
+                      (catch DateTimeParseException _ nil))
+                 (point b))]
+        (if (and pv pb (= (class pv) (class pb)))
+          (compare pv pb)
+          (compare (if (keyword? v) (name v) (str v)) b))))))
+
+(defn- among?
+  "Does this row pass a parsed :among — its state for `state`, its
+  field for any other key, by equality or by the grammar suffix the key
+  carries (_ne, _gte, _lte, _after, _before, _set, _contains), read back
+  to its field by measures/among-term?"
+  [field? among row ^Instant now]
+  (every? (fn [[k vs]]
+            (let [[f sfx] (measures/among-term field? k)
+                  v (if (= :state f) (:state row) (get-in row [:data f]))
+                  text (if (keyword? v) (name v) (str v))
+                  order #(bound-order v (first vs) now)]
+              (case sfx
+                "_ne" (not (contains? (set vs) text))
+                "_gte" (boolean (some-> (order) (>= 0)))
+                "_lte" (boolean (some-> (order) (<= 0)))
+                "_after" (boolean (some-> (order) pos?))
+                "_before" (boolean (some-> (order) neg?))
+                "_set" (= (= "true" (first vs)) (and (some? v) (not= "" text)))
+                "_contains" (and (some? v)
+                                 (str/includes? (str/lower-case text)
+                                                (str/lower-case (str (first vs)))))
+                (contains? (set vs) text))))
+          among))
+
+(defn- reading
+  "One measure read as the sweep reads it, over the scenario's own rows:
+  those whose :at falls in the window `now` falls in and that pass
+  :among → {:among :met :value}, a rate to four places as the sweep
+  rounds it, any other stat by measures/stat-of as the sweep reads it."
+  [rdef m rows cal ^Instant now]
+  (let [at (keyword (measures/spelled (:at m)))
+        w (windows/window (:over m) cal now)
+        field? (conj (set (schema/entry-keys (:schema rdef))) :state)
+        among (measures/parse-among (:among m))
+        in (filterv #(and (windows/within? w (point (get-in % [:data at])))
+                          (among? field? among % now))
+                    rows)
+        n (count in)
+        stat (measures/spelled (:stat m))]
+    (if (= "rate" stat)
+      (let [form (expr/normalize (:where m))
+            calendar (fn ([] cal) ([_ref] cal))
+            met (count (filter #(true? (expr/evaluate form {:data (:data %) :now now :calendar calendar}))
+                               in))]
+        {:among n
+         :met met
+         :value (when (pos? n)
+                  (.divide (BigDecimal/valueOf (long met)) (BigDecimal/valueOf (long n))
+                           4 RoundingMode/HALF_UP))})
+      (let [value-of (measures/value-fn (measures/parse-field (measures/spelled (:field m))))]
+        {:among n
+         :value (when (pos? n) (measures/decimal (measures/stat-of stat (map value-of in))))}))))
+
+(defn- readings-clause
+  "Where the readings the scenario expects differ from the ones its walk
+  leaves at :at — each measure read over the :given rows of its kind and
+  the walked row, wearing the door's :to state once allowed, and judged
+  against the scenario's :goals — or nil when each reads what was said."
+  [rdef s {:keys [row got]}]
+  (when-some [want (not-empty (get-in s [:expect :readings]))]
+    (let [{:keys [door action]} (attempted rdef s)
+          now (Instant/parse ^String (:at s))
+          cal (calendar-answer (:calendar s))
+          walked (cond-> row
+                   (and row (= :action door) (nil? (:refused got))) (assoc :state (:to action)))
+          off (for [[token want-r] (sort-by key want)
+                    :let [m (measure-of rdef token)
+                          of (some-> m :of measures/spelled keyword)
+                          rows (cond-> (filterv #(= of (:kind %)) (:given s))
+                                 (and walked (= of (:kind s))) (conj walked))
+                          r (reading rdef m rows cal now)
+                          gl (first (filter #(= token (:measure %)) (:goals s)))
+                          verdict (measures/verdict m r (:op gl) (:target gl))
+                          value (:value r)
+                          diffs (remove nil?
+                                        [(when (and (contains? want-r :value)
+                                                    (not (if (and (some? (:value want-r)) (some? value))
+                                                           (zero? (compare (bigdec (:value want-r)) value))
+                                                           (= (:value want-r) value))))
+                                           (str "value " (or value "none") ", not " (:value want-r)))
+                                         (when (and (some? (:verdict want-r))
+                                                    (not= (name (:verdict want-r)) verdict))
+                                           (str "verdict " verdict ", not " (name (:verdict want-r))))
+                                         (when (and (some? (:among want-r)) (not= (:among want-r) (:among r)))
+                                           (str "among " (:among r) ", not " (:among want-r)))
+                                         (when (and (some? (:met want-r)) (not= (:met want-r) (:met r)))
+                                           (str "met " (:met r) ", not " (:met want-r)))])]
+                    :when (seq diffs)]
+                (str token " reads " (str/join "; " diffs)))]
+      (when (seq off)
+        (str "the readings answer " (str/join " · " off))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1382,7 +1764,9 @@
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
           (vec (remove nil? [(violation s got)
                              (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
-                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))
+                             (some->> (purge-clause rdef s w) (hash-map :unreadable) (violation s))
+                             (some->> (readings-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
