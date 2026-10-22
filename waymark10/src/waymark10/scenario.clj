@@ -99,8 +99,23 @@
   :because and :remedies as optional tightenings of a refusal, and
   :balances the accounts the walk leaves as it says
   (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
-  the fields the allowed door's handler leaves on its row."
-  [:allowed :refused :because :remedies :balances :lands])
+  the fields the allowed door's handler leaves on its row, and the
+  purge skeleton (docs/spec-documents.md §7) — :state, :cleared and
+  :deleted-attachments — which is an allowance of its own."
+  [:allowed :refused :because :remedies :balances :lands :state :cleared :deleted-attachments])
+
+;; what a purge leaves: the state it lands in, the personal fields it
+;; clears by name, and how many files it deletes
+(def purge-expect-keys [:state :cleared :deleted-attachments])
+
+(defn- skeleton? [expect]
+  (boolean (some #(contains? expect %) purge-expect-keys)))
+
+(defn- allowance?
+  "Does :expect say the door opens — :allowed true, or a skeleton it
+  leaves?"
+  [expect]
+  (or (true? (:allowed expect)) (skeleton? expect)))
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -425,9 +440,12 @@
   (when-not (map? expect)
     (err sname "a scenario is a verdict: :expect {:allowed true} or {:refused <guard-name>}"))
   (closed! sname "expect" expect-keys expect)
-  (let [{:keys [allowed refused because remedies lands]} expect]
-    (when (= (some? allowed) (some? refused))
-      (err sname ":expect declares exactly one of :allowed and :refused"))
+  (let [{:keys [allowed refused because remedies lands state cleared]} expect]
+    (when (if (some? refused)
+            (or (some? allowed) (skeleton? expect))
+            (and (nil? allowed) (not (skeleton? expect))))
+      (err sname (str ":expect declares exactly one of :allowed and :refused"
+                      " — a purge skeleton (:state, :cleared, :deleted-attachments) is an allowance")))
     (when (and (some? allowed) (not (true? allowed)))
       (err sname ":expect :allowed is true — a false allowance is a refusal, and a refusal names its guard"))
     (when (and (some? refused) (not (keyword? refused)))
@@ -440,8 +458,17 @@
     (when (and (seq remedies)
                (or (nil? refused) (not (every? keyword? remedies))))
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
-    (when (and (some? lands) (nil? allowed))
+    (when (and (some? lands) (some? refused))
       (err sname ":expect :lands judges what an allowed door lands; a refusal lands nothing"))
+    (when (and (contains? expect :state)
+               (not (or (keyword? state) (and (string? state) (not (str/blank? state))))))
+      (err sname ":expect :state is the state the door leaves its row in, \"purged\""))
+    (when (and (contains? expect :cleared)
+               (not (and (vector? cleared) (every? keyword? cleared))))
+      (err sname ":expect :cleared is a vector of the fields the purge clears, [:name :phone]"))
+    (when (and (contains? expect :deleted-attachments)
+               (not (nat-int? (:deleted-attachments expect))))
+      (err sname ":expect :deleted-attachments is how many files the purge deletes"))
     (when (and (some? lands)
                (not (and (map? lands) (seq lands) (every? keyword? (keys lands)))))
       (err sname ":expect :lands is {field value} — the fields the allowed door leaves on its row"))
@@ -1105,7 +1132,7 @@
   clock the scenario declared. Authoring faults, not broken law —
   they read as themselves rather than as the household's sentence."
   [rdef s]
-  (let [{:keys [door guards missing]} (attempted rdef s)
+  (let [{:keys [door action guards missing]} (attempted rdef s)
         refused (get-in s [:expect :refused])]
     (or
      (when missing [(str (name (:name s)) " " missing)])
@@ -1156,19 +1183,26 @@
                  ":expect :lands judges an action's handler; a create is judged by its verdict"
                  (when-some [stray (seq (remove (set (schema/entry-keys (:schema rdef))) (keys lands)))]
                    (str ":expect :lands names " (pr-str (vec stray))
-                        ", which " (name (:kind s)) "'s schema does not declare"))))])))))
+                        ", which " (name (:kind s)) "'s schema does not declare"))))
+             (when (and (= :create door) (contains? (:expect s) :state))
+               ":expect :state judges where an action leaves its row; a create is judged by its verdict")
+             (when (and (= :action door)
+                        (some #(contains? (:expect s) %) [:cleared :deleted-attachments])
+                        (not (true? (:purge action))))
+               (str ":expect :cleared and :deleted-attachments judge a purge; " (:attempt s)
+                    " is no :purge true door"))])))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
   would. nil when the law kept its promise."
   [s got]
-  (let [{:keys [allowed refused because remedies]} (:expect s)]
+  (let [{:keys [refused because remedies]} (:expect s)]
     (if-some [u (:unreadable got)]
       ;; the door answered something no verdict can be read off — a
       ;; staging failure, a concealment, an unexpected status. The
       ;; sentence still leads; the clause says what came back
       u
-      (if allowed
+      (if (allowance? (:expect s))
         (when-some [r (:refused got)]
           (str "the law refused it — " r ": " (:reason got)))
         (cond
@@ -1398,7 +1432,7 @@
 
       :else
       (let [got (verdict guards row (:input s) ctx)
-            lands? (some? (get-in s [:expect :lands]))]
+            lands? (or (some? (get-in s [:expect :lands])) (skeleton? (:expect s)))]
         (cond-> (assoc w :got got)
           (and (= :action door) (nil? (:refused got))
                (or (:effect action) (:unwinds action) lands?))
@@ -1468,6 +1502,37 @@
         (when (seq off)
           (str "the row lands " (str/join "; " off)))))))
 
+(defn- purge-clause
+  "Where the skeleton the scenario expects its door to leave differs
+  from the one its walk leaves — the state, the personal fields a purge
+  clears by name, the count of files it deletes (docs/spec-documents.md
+  §5, §7) — or nil when each holds what was said. A file a :given row
+  also holds is let go of, not deleted, as purge! lets go of one
+  another live row still holds."
+  [rdef s {:keys [row got]}]
+  (let [want (select-keys (:expect s) purge-expect-keys)]
+    (when (and (seq want) (nil? (:refused got)))
+      (let [form (:schema rdef)
+            held (into #{}
+                       (comp (remove #(= :attachment (keyword (name (:kind %)))))
+                             (mapcat #(vals (:data %)))
+                             (mapcat #(if (sequential? %) % [%]))
+                             (remove nil?)
+                             (map str))
+                       (given-rows s))
+            seen {:state (some-> (:state row) name)
+                  :cleared (schema/personal-fields form)
+                  :deleted-attachments (count (remove held (schema/document-ids form (:data row))))}
+            said (cond-> want (contains? want :state) (update :state name))
+            off (for [k purge-expect-keys
+                      :when (and (contains? said k)
+                                 (not (if (= :cleared k)
+                                        (= (set (get said k)) (set (get seen k)))
+                                        (= (get said k) (get seen k)))))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (when (seq off)
+          (str "the purge leaves " (str/join "; " off)))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1478,7 +1543,8 @@
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
           (vec (remove nil? [(violation s got)
                              (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
-                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))
+                             (some->> (purge-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
