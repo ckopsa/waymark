@@ -59,9 +59,11 @@
         (= op 'date) {"date" (first args)}
         (= op 'money) {"dec" (money/canonical-amount (first args)) "cur" (second args)}
         (= op 'balance) (let [[[k r n :as a] p] args]
-                          (cond-> (if (= 2 (count a))
-                                    ["balance" (name k) (name r)]
-                                    ["balance" (name k) (form->wire r) (name n)])
+                          (cond-> (cond
+                                    (= 2 (count a)) ["balance" (name k) (name r)]
+                                    ;; every row of a kind: [:all kind name]
+                                    (= :all k) ["balance" "all" (name r) (name n)]
+                                    :else ["balance" (name k) (form->wire r) (name n)])
                             ;; a period rides last: {"from": …, "until": …}
                             (map? p) (conj {"from" (form->wire (:from p))
                                             "until" (form->wire (:until p))})))
@@ -138,6 +140,8 @@
                   a (cond
                       (and (= 2 (count addr)) (string? k) (string? r))
                       [(keyword k) (keyword r)]
+                      (and (= 3 (count addr)) (= "all" k) (string? r) (string? n))
+                      [:all (keyword r) (keyword n)]
                       (and (= 3 (count addr)) (string? k) (string? n))
                       [(keyword k) (decode r) (keyword n)])]
               (cond
