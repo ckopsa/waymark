@@ -45,9 +45,3 @@ Opts handed on from a caller (the warning names that caller at run time):
 - `waymark10/src/waymark10/server/invoke.clj:425` — `(store/query-rows`
 - `waymark10/src/waymark10/server/invoke.clj:562` — `(store/query-rows (:storage engine) tx target-kind`
 - `waymark10/src/waymark10/server/invoke.clj:833` — `(store/query-rows (:storage engine) tx target-kind`
-
-## workqueue10
-
-Opts that name neither `:limit` nor `:all`:
-
-- `workqueue10/src/workqueue10/connections.clj:330` — `(store/query-rows st tx :connection`
