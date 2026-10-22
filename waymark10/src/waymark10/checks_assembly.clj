@@ -753,6 +753,23 @@
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (name tk) "." (name field) ", a field " (name tk) " does not "
                 "have — follow reads a data field, :state or :id")))
+    ;; a second hop reads a declared ref on the kind the first reached,
+    ;; and that ref names the kind the second hop wrote
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (and tk (seq? ref) (= 'follow (first ref)) (= 4 (count ref)))
+            :let [[_ k1 _ f1] ref
+                  target (get kinds k1)]
+            :when (and target
+                       (not-any? #(and (= f1 (:field %)) (= tk (:kind %)) (not (:listed %)))
+                                 (schema/ref-fields (:schema target))))]
+      (err kind :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (name k1) "." (name f1) " on to " (name tk) ", but " (name f1)
+                " is not a ref to " (name tk) " on " (name k1)
+                " — each hop of a follow reads a declared ref")))
     []))
 
 ;; ── exists / none / count-rows: an index to ask, evidence on its kind ──

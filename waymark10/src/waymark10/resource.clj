@@ -241,24 +241,34 @@
     (g/bind-follows guard kind-of)))
 
 (defn- ref-kinds
-  "field → target kind, for the single-id refs of a :map schema."
-  [form]
-  (into {}
-        (keep (fn [{:keys [field kind listed]}] (when-not listed [field kind])))
-        (when form (schema/ref-fields form))))
+  "field → target kind, for the single-id refs of a :map schema; with
+  `listed?`, for its lists of ids as well."
+  ([form] (ref-kinds form false))
+  ([form listed?]
+   (into {}
+         (keep (fn [{:keys [field kind listed]}] (when (or listed? (not listed)) [field kind])))
+         (when form (schema/ref-fields form)))))
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
   expression guards and its ages' :until forms
   (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
-  (input :f) the door's own input. A ref that names no kind stays as
-  written, and the gate's [follow-not-a-ref] names it."
+  (input :f) the door's own input, and a quantifier's binder over
+  either, (each (data :f)), the kind its ref or ref-vector names. A ref
+  that names no kind stays as written, and the gate's
+  [follow-not-a-ref] names it."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
+        data-lists (ref-kinds (:schema rmap) true)
         bind (fn [input-form guards]
                (let [input-kinds (ref-kinds input-form)
+                     input-lists (ref-kinds input-form true)
                      kind-of (fn [[op f]]
-                               (get (if (= 'data op) data-kinds input-kinds) f))]
+                               (if (= 'each op)
+                                 (when (seq? f)
+                                   (get (case (first f) data data-lists input input-lists nil)
+                                        (second f)))
+                                 (get (if (= 'data op) data-kinds input-kinds) f)))]
                  (mapv (partial bind-guard-follows kind-of) guards)))]
     (cond-> (-> rmap
                 (update :actions update-vals
