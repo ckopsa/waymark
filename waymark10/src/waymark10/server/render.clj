@@ -1166,7 +1166,12 @@
                     :last-transition (:last-transition ctx-opts)
                     ;; …and the day a row entered a state, which a
                     ;; :keep counting from {:state s} reads
-                    :entered-at (:entered-at ctx-opts)})
+                    :entered-at (:entered-at ctx-opts)
+                    ;; …and the house's calendar (docs/spec-calendar-time.md
+                    ;; §6): a guard that reads today — retention-has-passed
+                    ;; among them — must read it in the zone the invoke
+                    ;; and the sweep read it in, not in UTC
+                    :calendar (:calendar ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
         ;; the field/argument projection closures (batch B) — guards
