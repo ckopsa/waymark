@@ -224,6 +224,9 @@
    :computed
    ;; collection surface
    :filterable :sortable :faceted :worksheet :default-filters :views
+   ;; the scope entry an ask is offered and a member's bare grant
+   ;; entry is minted with (docs/spec-teams.md §6, check-scope-default)
+   :scope-default
    ;; {field value}: the value a row with NO stored value filters (and
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled

@@ -310,6 +310,7 @@
             [:last_seen_on {:optional true :filter #{:eq :range} :sort true}
              [:maybe :waymark/date]]
             [:latest_price_cents {:optional true
+                                  :not-money "household estimate in cents, never posted"
                                   :x-display {:widget "money"
                                               :label "Latest price"}}
              [:maybe [:int {:min 1}]]]

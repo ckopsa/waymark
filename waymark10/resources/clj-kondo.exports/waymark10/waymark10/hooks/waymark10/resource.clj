@@ -27,6 +27,7 @@
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
+    :scope-default
     :accounts
     :lines
     :rate-table

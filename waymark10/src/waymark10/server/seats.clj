@@ -3088,7 +3088,7 @@
   "The new cracks in the audit's own words, one sentence each."
   [cracks]
   (str/join " " (map (fn [c]
-                       (str (:kind c) "/" (:state c) " " (:crack c) ": "
+                       (str (:kind c) "/" (or (:state c) (:measure c)) " " (:crack c) ": "
                             (:what_would_close_it c)))
                      cracks)))
 
@@ -4499,21 +4499,25 @@
                        "economy" "Economy — the floor a seat reaches when the law is spoken at the door"}}}
      [:enum "frontier" "strong" "economy"]]
     [:price_input_per_mtok {:examples [3M]
+                            :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                             :x-display
                             {:label "Input, $ per million tokens"
                              :help "What a million input tokens costs. Every price here is read at the moment a sitting closes and written down beside its cost, so a later reprice never moves a closed bill."}}
      price-entry]
     [:price_output_per_mtok {:examples [15M]
+                             :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                              :x-display
                              {:label "Output, $ per million tokens"
                               :help "What a million output tokens costs."}}
      price-entry]
     [:price_cache_read_per_mtok {:examples [0.3M]
+                                 :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                                  :x-display
                                  {:label "Cache read, $ per million tokens"
                                   :help "What a million cache-read tokens costs — usually the cheapest line, and the reason a charter that fits in the cache is nearly free to carry."}}
      price-entry]
     [:price_cache_write_per_mtok {:examples [3.75M]
+                                  :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                                   :x-display
                                   {:label "Cache write, $ per million tokens"
                                    :help "What a million cache-write tokens costs."}}
