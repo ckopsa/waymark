@@ -20,5 +20,5 @@ day, skipping holidays and held slots.
 | --- | --- |
 | `deps.edn` | The org's deps: waymark10 and factorykit by local root, and nothing else. `clojure -M:check` runs the declaration gate; `clojure -M:conform` the conformance suite. |
 | `src/landscape_rehearsal/org.clj` | The module: `resources` lists the org's kinds and stamps them with the domain `:landscape_rehearsal`. |
-| `src/landscape_rehearsal/kinds/` | One file per kind: `booking`, `time_off`, `contract`, `visit`. A crew is a `team` row, which the engine serves. |
+| `src/landscape_rehearsal/kinds/` | One file per kind: `booking`, `time_off`, `contract`, `visit`, `materials_order` (its `supplier` names the outside supplier, whose grant admits only the orders that name them). A crew is a `team` row, which the engine serves. |
 | `resources/landscape_rehearsal/seed.edn` | What a fresh engine holds at boot: the domain, the owner, the org's mayor, the crews' people, two crews as teams and a crew-lead seat for each; on a clone, the customer, the bookkeeper and the outside supplier. |
