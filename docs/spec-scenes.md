@@ -253,7 +253,9 @@ is dropped two hours after it began.
 
 A shot's `open` may name its clock day instead of a screen:
 `{"$day-row": {"window": "clock", "day": k, "domain": d}}`, judged by
-`check` as a `$day` hole of the clock's window is, and alone in its
+`check` as a `$day` hole of the clock's window is, or an explicit span,
+`{"$day-row": {"since": s, "until": u, "domain": d}}`, judged as an
+explicit `$day` is and read as the day [s, u), and alone in its
 `open`. The performer resolves it over the wire: `POST
 /api/-/scenes/open` with `{"open": <the shot's open, as the scene holds
 it>, "take": <the take's string>}` answers `{"open": <a concrete
