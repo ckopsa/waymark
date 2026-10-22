@@ -115,6 +115,7 @@
             [reitit.ring :as ring]
             [waymark10.checks :as checks]
             [waymark10.confirm :as confirm]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
@@ -522,7 +523,7 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
-(declare ref-summary-hook)
+(declare ref-summary-hook document-log-hook)
 
 (defn- render-opts
   "The one ctx-opts map every render call shares: identity, clock,
@@ -619,7 +620,9 @@
   row answers with THIS — the envelope is the wire's promise, not each
   handler's."
   [eng rdef row req status extra-headers]
-  (let [env (render/envelope rdef row (render-opts eng req))]
+  (let [env (render/envelope rdef row
+                             (assoc (render-opts eng req)
+                                    :document-log (document-log-hook eng req)))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -785,6 +788,12 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the kind's named measures, by
+                                           ;; the token a goal, a reading and
+                                           ;; a slot name them with
+                                           ;; (docs/spec-measures.md §2)
+                                           (seq (:measures r))
+                                           (assoc :measures (measures/tokens r))
                                            ;; a decision kind advertises
                                            ;; itself, and the field its
                                            ;; requester is stamped into
@@ -1383,19 +1392,10 @@
   attachment's {:added_by :added_at}, read from its own log — whose
   hand created it, and when its bytes were stored (when it was created,
   while they are not) — under THIS request's visibility; nil when the
-  grant does not admit it or it has no log."
+  grant does not admit it or it has no log. The walk's envelopes read
+  the same hook (walks/document-logs) under the recorder's sight."
   [eng req]
-  (let [vis (visibility-of req)
-        st (:storage eng)]
-    (fn [id]
-      (when (or (nil? vis) ((:row? vis) :attachment id))
-        (let [ts (store/with-tx st #(store/transitions
-                                     st % {:kind :attachment :resource-id id} {}))
-              born (first ts)
-              stored (last (filter #(= :mark_stored (:action %)) ts))]
-          (when born
-            {:added_by (get-in born [:actor :id])
-             :added_at (str (:at (or stored born)))}))))))
+  (walks/document-logs eng (visibility-of req)))
 
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
@@ -1583,7 +1583,9 @@
         ;; invite answers the sign-in link beside the held call, to
         ;; them alone; it is stored nowhere, so a replay lacks it
         (:invite-link result)
-        (let [env (render/envelope rdef (:row result) (render-opts eng req))]
+        (let [env (render/envelope rdef (:row result)
+                                   (assoc (render-opts eng req)
+                                          :document-log (document-log-hook eng req)))]
           (json-response 200 (assoc env "invite_link" (:invite-link result))
                          media-type
                          {"ETag" (get-in env ["meta" "etag"])
