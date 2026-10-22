@@ -45,10 +45,8 @@
                   :input {:preparer "The tax specialist" :credit_usd 48000}}]}
         ;; Friday: the principal signs off; Birch's study goes to its CPA, and 20% of $48,000 is billed
         {:day 5 :person-allows :none
-         :calls [{:as :mayor :kind "study" :action "sign_off" :row "birch-2025"
-                  :input {:signed_off_by "The Principal"}}
-                 {:as :person :kind "study" :action "sign_off" :row "birch-2025"
-                  :input {:signed_off_by "The Principal"}}
+         :calls [{:as :mayor :kind "study" :action "sign_off" :row "birch-2025" :input {}}
+                 {:as :person :kind "study" :action "sign_off" :row "birch-2025" :input {}}
                  {:as :mayor :kind "study" :action "deliver" :row "birch-2025" :input {}}
                  {:as :mayor :kind "invoice" :action "create" :name "birch-invoice"
                   :input {:client "Birch Instruments" :study_id {"$row" "birch-2025"}

@@ -34,10 +34,6 @@
   (refuse "A study goes to review once the credit is calculated.")
   '(is-set (input :credit_usd)))
 
-(defguard has-signer
-  (refuse "The principal signs off every study, never the one who prepared it; name who signed.")
-  '(is-set (input :signed_off_by)))
-
 (defguardfn records-confirmed-by-a-person
   {:reads [:principal :within]
    :hold true
@@ -89,7 +85,26 @@
             [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
             [:preparer {:optional true} [:maybe [:string {:max 80}]]]
             [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]
-            [:signed_off_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]]
+            [:signed_off_by {:optional true :kind :member} [:maybe :waymark/ref]]]
+   ;; who signed is stamped by sign_off, never typed at birth
+   :create-schema [:map
+                   [:client [:string {:min 1 :max 120}]]
+                   [:tax_year [:int {:min 2000 :max 2100}]]
+                   [:prospect_id {:optional true :kind :prospect} [:maybe :waymark/ref]]
+                   [:cpa {:optional true} [:maybe [:string {:max 120}]]]
+                   [:records_due_on {:optional true} [:maybe [:string {:max 10}]]]
+                   [:filing_date {:optional true} [:maybe [:string {:max 10}]]]
+                   [:records_complete_on {:optional true} [:maybe :waymark/date]]
+                   [:missing_records {:optional true}
+                    [:maybe [:vector {:max 4}
+                             [:map
+                              [:record [:enum "payroll" "contractor_invoices" "cloud_and_supply_costs" "engineering_records"]]
+                              [:last_chased_on {:optional true} [:maybe [:string {:max 10}]]]]]]]
+                   [:chases {:optional true :default 0} [:maybe [:int {:min 0}]]]
+                   [:last_chased_on {:optional true} [:maybe :waymark/date]]
+                   [:principal_told_on {:optional true} [:maybe [:string {:max 10}]]]
+                   [:preparer {:optional true} [:maybe [:string {:max 80}]]]
+                   [:credit_usd {:optional true} [:maybe [:int {:min 0}]]]]
    :filterable {:state #{:eq :in} :client #{:eq} :tax_year #{:eq} :preparer #{:eq}}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:collecting "A study may stay collecting for 14 days: missing documents are chased twice, then the principal is told, and past 14 days the mayor tells The Principal."
@@ -121,8 +136,8 @@
     :send_back  {:from #{:review} :to :drafting
                  :safety {:idempotent true :reversible true :confirm false}}
     :sign_off   {:from #{:review} :to :signed_off
-                 :input [:map [:signed_off_by {:x-ref {:principal true}} [:string {:min 1 :max 80}]]]
-                 :guards [has-signer principal-signs-off]
+                 :stamp {:signed_off_by '(actor)}
+                 :guards [principal-signs-off]
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "A signed-off study is final; correct it with a new study."}}
     :deliver    {:from #{:signed_off} :to :delivered
@@ -156,3 +171,13 @@
    :at "2026-10-21T16:00:00Z"
    :calendar {:zone "America/Denver"}
    :expect {:refused :records-complete}})
+
+(defscenario principal-allows-sign-off-and-is-stamped
+  "The mayor's sign-off waits for The Principal's tap; their Allow signs the study off, and who signed is stamped, not typed."
+  {:kind :study :attempt :sign_off
+   :row {:state :review :data {:client "Birch Instruments" :tax_year 2025
+                               :preparer "The tax specialist" :credit_usd 48000}}
+   :input {}
+   :at "2026-10-30T16:00:00Z"
+   :expect {:allowed true :state :signed_off
+            :lands {:signed_off_by :actor}}})
