@@ -111,6 +111,11 @@
    ;; declaration-time waiver rather than fingerprinted law — the DOOR
    ;; it licenses is in :actions and hashes there
    :allow-undo
+   ;; the states in which no door changes a row's data
+   ;; (docs/spec-documents.md §6): [frozen-edited] refuses an :edit door
+   ;; from one at declaration, and land! refuses a handler's write at
+   ;; runtime. A correction is an :owns child, never an edit
+   :frozen-in
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
    ;; pacing — a spelling, never a mechanism, resolved before the
@@ -286,6 +291,11 @@
    ;; site (resource/check-conserves!) and at assembly
    ;; ([unbalanced-door]) — law
    :conserves
+   ;; named measures (docs/spec-measures.md § 2): {name {:label :of
+   ;; :stat :among :where :field :at :over :tell :at-least}}, judged
+   ;; by checks ([measure-shape]) and at assembly ([measure-unfiltered])
+   ;; — law
+   :measures
    ;; a close kind's reconciliation (docs/spec-ledger-money.md § 7):
    ;; {:period [start end] :sides {name form, name form} :tolerance
    ;; amount}, judged at the def site (resource/check-reconciles!) and

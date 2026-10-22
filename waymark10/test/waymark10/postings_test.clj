@@ -55,6 +55,7 @@
       (store/with-tx st
         (fn [tx]
           (doseq [table ["postings" "pt_products" "pt_tills" "pt_mugs" "pt_orders" "pt_closes"
+                         "pt_desks" "pt_month_closes"
                          "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
@@ -627,6 +628,111 @@
         (testing "at invoke the door's guard reads the same sums as the scenario"
           (is (instance? clojure.lang.ExceptionInfo (close! "2026-10-16" "close-half")))
           (is (= :closed (close! "2026-11-01" "close-month"))))))))
+
+;; ── ledger step 9f: [period-closed] ─────────────────────────────────────────
+
+(def ^:private month-close
+  (r/resource {:kind :pt_month_close
+               :plural "pt_month_closes"
+               :states [:open :closed]
+               :initial :open
+               :terminal #{}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]
+                        [:period_start :waymark/date] [:period_end :waymark/date]]
+               :reconciles {:period '[(data :period_start) (data :period_end)]
+                            :sides '{:processor_in (balance [:house :processor_in])
+                                     :expected (balance [:house :expected_in])}
+                            :tolerance '(money "1000.00" "USD")}
+               ;; nothing may have come in over the period, so a close
+               ;; that sums a racing posting is refused
+               :actions {:close {:from #{:open} :to :closed
+                                 :guards [(g/expr {:name :pt-nothing-came-in
+                                                   :severity :refuse
+                                                   :explain "The processor took money in the period."
+                                                   :when '(<= (balance [:house :processor_in]
+                                                                       {:from (data :period_start)
+                                                                        :until (data :period_end)})
+                                                              (money "0.00" "USD"))})]
+                                 :safety {:idempotent false :reversible true :confirm false}
+                                 :display {:label "Close"}}
+                         :reopen {:from #{:closed} :to :open
+                                  :safety {:idempotent false :reversible true :confirm false}
+                                  :display {:label "Reopen"}}}}))
+
+(def ^:private desk
+  (r/resource {:kind :pt_desk
+               :plural "pt_desks"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :actions {:deposit {:from #{:open} :to :open
+                                   :input [:map [:on :waymark/date]]
+                                   :posts '[{:account [:house :processor_in]
+                                             :amount (money "5.00" "USD") :sign :+ :on (input :on)}]
+                                   :safety {:idempotent false :reversible false :confirm false}
+                                   :display {:label "Deposit"}}
+                         :charge {:from #{:open} :to :open
+                                  :input [:map [:on :waymark/date]]
+                                  :posts '[{:account [:house :fees]
+                                            :amount (money "1.00" "USD") :sign :+ :on (input :on)}]
+                                  :safety {:idempotent false :reversible false :confirm false}
+                                  :display {:label "Charge"}}}}))
+
+(deftest step-9f-no-posting-lands-inside-a-closed-period
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (assoc (inv/engine {:storage st :resources [desk month-close postings/posting]})
+                       :house-accounts {:processor_in {:unit [:money "USD"]}
+                                        :expected_in {:unit [:money "USD"]}
+                                        :fees {:unit [:money "USD"]}})
+            n (atom 0)
+            k! #(str "9f-" (swap! n inc))
+            desk-id (str (get-in (inv/create! eng :pt_desk {:name "front"} {:principal elena})
+                                 [:row :id]))
+            close-row! (fn [from until]
+                         (str (get-in (inv/create! eng :pt_month_close
+                                                   {:name from :period_start from :period_end until}
+                                                   {:principal elena})
+                                      [:row :id])))
+            move! (fn [door id]
+                    (try (inv/invoke! eng :pt_month_close id door {}
+                                      {:principal elena :idempotency-key (k!)})
+                         :landed
+                         (catch clojure.lang.ExceptionInfo e e)))
+            book! (fn [door on]
+                    (try (inv/invoke! eng :pt_desk desk-id door {:on on}
+                                      {:principal elena :idempotency-key (k!)})
+                         :landed
+                         (catch clojure.lang.ExceptionInfo e e)))
+            oct (close-row! "2026-10-01" "2026-11-01")]
+        (testing "what the close closes is the accounts its sides name"
+          (is (= #{[:house :processor_in] [:house :expected_in]} (:closes month-close))))
+        (is (= :landed (move! :close oct)))
+        (testing "a posting to processor_in dated inside the closed month is refused"
+          (let [refused (ex-data (book! :deposit "2026-10-15"))]
+            (is (= :period-closed (:guard refused)))
+            (is (re-find #"Post it to the open period" (str (:detail refused))))
+            (is (= "house/processor_in" (get-in refused [:evidence :account])))))
+        (testing "the same account dated after the period passes"
+          (is (= :landed (book! :deposit "2026-11-01"))))
+        (testing "an account the close does not cover passes"
+          (is (= :landed (book! :charge "2026-10-15"))))
+        (testing "after the reopen door it passes"
+          (is (= :landed (move! :reopen oct)))
+          (is (= :landed (book! :deposit "2026-10-15"))))
+        (testing "a posting racing the close is decided one way, never both"
+          (let [dec-id (close-row! "2026-12-01" "2027-01-01")
+                gate (java.util.concurrent.CountDownLatch. 1)
+                runs [(future (.await gate) (move! :close dec-id))
+                      (future (.await gate) (book! :deposit "2026-12-10"))]
+                _ (.countDown gate)
+                outcomes (mapv deref runs)]
+            (is (= 1 (count (filter #{:landed} outcomes))))))))))
 
 ;; ── ledger step 9c: (balance [:all kind name]) ───────────────────────────────
 

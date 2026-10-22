@@ -528,6 +528,24 @@
                :summary (render/target-summary
                          trdef (inv/decode-row trdef raw) sight)})))))))
 
+(defn document-logs
+  "render's :document-log hook under `sight` (docs/spec-documents.md
+  §2): one attachment's {:added_by :added_at}, read from its own log —
+  whose hand created it, and when its bytes were stored (when it was
+  created, while they are not); nil when `sight` does not admit it or
+  it has no log."
+  [eng sight]
+  (let [st (:storage eng)]
+    (fn [id]
+      (when (or (nil? sight) ((:row? sight) :attachment id))
+        (let [ts (store/with-tx st #(store/transitions
+                                     st % {:kind :attachment :resource-id id} {}))
+              born (first ts)
+              stored (last (filter #(= :mark_stored (:action %)) ts))]
+          (when born
+            {:added_by (get-in born [:actor :id])
+             :added_at (str (:at (or stored born)))}))))))
+
 (defn- doc-of
   "The document of `self` as `principal`'s own read under `sight`
   answers it now: a row's envelope, or a collection's page under
@@ -551,7 +569,8 @@
       id (when-some [row (store/with-tx st
                            (fn [tx] (store/load-row st tx k id {})))]
            (render/envelope rdef (inv/decode-row rdef row)
-                            (assoc opts :ref-summary (ref-summaries eng sight))))
+                            (assoc opts :ref-summary (ref-summaries eng sight)
+                                   :document-log (document-logs eng sight))))
       :else (collections/envelope eng rdef (or params {}) opts))))
 
 (defn- doc-frames

@@ -24,6 +24,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
@@ -377,6 +378,28 @@
                                     (get-in spec [:on-gone :set]))})
       (seq fields) (assoc "fields" fields))))
 
+(defn- measures-fp
+  "The measures facet (docs/spec-measures.md §8): each measure by name,
+  every key but :label and :default-target — :among as the collection
+  grammar parses it, :where as its canonical tree. An optional key left
+  out stays absent."
+  [ms]
+  (into (sorted-map)
+        (map (fn [[n m]]
+               [(name n)
+                (cond-> {"of" (measures/spelled (:of m))
+                         "stat" (measures/spelled (:stat m))
+                         "among" (into (sorted-map)
+                                       (map (fn [[k vs]] [(name k) vs]))
+                                       (measures/parse-among (:among m)))
+                         "at" (measures/spelled (:at m))
+                         "over" (vec (measures/parse-over (:over m)))
+                         "at_least" (:at-least m measures/default-at-least)}
+                  (some? (:where m)) (assoc "where" (form-tree (:where m)))
+                  (some? (:field m)) (assoc "field" (measures/spelled (:field m)))
+                  (some? (:tell m)) (assoc "tell" (measures/spelled (:tell m))))]))
+        ms))
+
 (defn fingerprint-of
   "Deterministic, canonically-encodable projection of a resource
   declaration map. Phase-0 facets: machine (states, actions with
@@ -486,6 +509,12 @@
       ;; hashes as before
       (some? (:conserves rmap))
       (assoc "conserves" (vec (sort (map name (:conserves rmap)))))
+
+      ;; :measures (docs/spec-measures.md §8): which rows a measure reads
+      ;; and how it judges them is law; its label is prose. Present-only,
+      ;; so every other kind hashes as before
+      (and (map? (:measures rmap)) (seq (:measures rmap)))
+      (assoc "measures" (measures-fp (:measures rmap)))
 
       ;; :reconciles (docs/spec-ledger-money.md §7): the close's period,
       ;; sides and tolerance are law. Present-only, so every other kind
