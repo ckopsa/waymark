@@ -442,7 +442,9 @@
       :else
       (assoc (t/principal {:id (str (:id member))
                            :display (str (get-in member [:data :display]))
-                           :type (keyword (or (get-in member [:data :actor_type]) "human"))
+                           ;; an outside member acts as the person they
+                           ;; are, as members/principal-for has them arrive
+                           :type (if (= "agent" (get-in member [:data :actor_type])) :agent :human)
                            :roles roles'})
              :acted-by (str (:id principal))))))
 
