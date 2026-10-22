@@ -1531,7 +1531,7 @@
 
 (def ^:private backfill-limit
   "resolve-refs! and resync! read the kind in ONE bounded fetch
-  (query-rows pages by LIMIT only — no offset — so a loop cannot
+  (the store's read pages by LIMIT only — no offset — so a loop cannot
   advance). Raised from 50k after a prod-scale mirror (paydesk
   support_doc, 100,760 rows) exceeded it and took the silent partial
   heal this bound promised never to allow; a kind at the bound gets

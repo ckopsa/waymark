@@ -778,7 +778,7 @@
   [eng]
   (when (get (inv/resources eng) :model)
     (let [st (:storage eng)
-          rows (store/with-tx st (fn [tx] (store/query-rows st tx :model {} {})))]
+          rows (store/with-tx st (fn [tx] (store/query-rows st tx :model {} {:all true})))]
       (some-> (first (filter #(= "active" (some-> (:state %) name)) rows))
               :id str))))
 
@@ -855,7 +855,7 @@
     (filterv (fn [row]
                (let [have (plain (:data row))]
                  (every? (fn [[k v]] (= v (get have k))) want)))
-             (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {}))))))
+             (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {:all true}))))))
 
 (defn- rebound
   "The row a known unnamed step's `:ref` names on an engine seeded

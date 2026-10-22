@@ -243,7 +243,7 @@
     (store/with-tx st
       (fn [tx]
         (mapv #(inv/decode-row rdef %)
-              (store/query-rows st tx kind {} {}))))))
+              (store/query-rows st tx kind {} {:all true}))))))
 
 (defn- transition-line
   "One readable line per recorded transition — the feed's projection,
