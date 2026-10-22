@@ -836,13 +836,20 @@
 
   (query-rows [_ tx kind where opts]
     (let [table (table-for tables kind)
-          clauses (map (fn [[f _]]
-                         (if (= f :state)
-                           "state = ?"
+          clauses (map (fn [[f v]]
+                         (cond
+                           (= f :state) "state = ?"
+                           ;; {:has v}: array membership, the ?| operator
+                           ;; (JDBC-escaped ??|) the :in-any cond spells
+                           (and (map? v) (contains? v :has))
+                           (str "data->'" (store/definition-checked-name f) "' ??| ARRAY[?]")
+                           :else
                            (str "data->>'" (store/definition-checked-name f) "' = ?")))
                        where)
           params (map (fn [[f v]]
-                        (if (= f :state) (name v) (str v)))
+                        (cond (= f :state) (name v)
+                              (map? v) (str (:has v))
+                              :else (str v)))
                       where)
           sql (str "SELECT * FROM " table
                    (when (seq clauses) (str " WHERE " (str/join " AND " clauses)))
