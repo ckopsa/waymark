@@ -2743,6 +2743,10 @@
         verify-undo-pointers
         word-not-by-walls
         (update :create-guards #(vec (or % [])))
+        ;; ledger step 4 at birth: the entries a create posts, :move
+        ;; spelled out as a door's are
+        (as-> r (cond-> r
+                  (:create-posts r) (update :create-posts #(posts/normalize kind :create %))))
         (update :create-action-names #(or % #{:create}))
         (as-> r (normalize-creates kind r))
         (update :adoption #(or % :immediate))

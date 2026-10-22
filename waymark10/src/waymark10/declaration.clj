@@ -107,6 +107,9 @@
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
+   ;; the entries a create posts at birth (ledger step 4): a door's
+   ;; :posts, read over the row as it is born; law, in the create facet
+   :create-posts
    ;; the create door's own safety (ticket 13e3b323): {:confirm true
    ;; :consequence <fn of input, or a {field} template>} — the create
    ;; refuses until its caller echoes the sentence its input fills
