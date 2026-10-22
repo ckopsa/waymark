@@ -322,7 +322,8 @@
                 #(compare %2 %1)
                 #(compare %1 %2))]
       (into []
-            (take (:limit opts 100))
+            (comp (drop (long (:offset opts 0)))
+                  (take (:limit opts 100)))
             (sort-by keyfn cmp (filter match? rows)))))
 
   (external-ids [_ _tx kind]

@@ -84,11 +84,13 @@
     "Rows matching a {field value} equality map (phase-2 grammar;
     collections widen it in phase 7). A value spelled {:has v} is
     containment instead: the field is a JSON array holding the string
-    v (a listed ref's ids). opts: {:limit n :order-by kw
+    v (a listed ref's ids). opts: {:limit n :offset n :order-by kw
     :newest-first bool}. Ordering is ASCENDING by created_at (or
     :order-by) unless :newest-first flips it — the spelling
     `transitions` already uses, so a bounded window can hold the
-    fresh end of a long table instead of its oldest rows.")
+    fresh end of a long table instead of its oldest rows. :offset
+    skips that many rows of the ordered answer before :limit bites,
+    so a reader that must see every row can page.")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here

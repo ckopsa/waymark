@@ -862,7 +862,8 @@
                    ;; keyword is the caller's, never the client's, and
                    ;; contributes no SQL text beyond this literal.
                    (when (:newest-first opts) " DESC")
-                   " LIMIT " (long (:limit opts 100)))]
+                   " LIMIT " (long (:limit opts 100))
+                   (when-some [o (:offset opts)] (str " OFFSET " (long o))))]
       (mapv #(opened sealed kind (row->map %))
             (jdbc/execute! tx (into [sql] params) jdbc-opts))))
 
