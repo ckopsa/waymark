@@ -30,6 +30,12 @@
   it, and it never reads WAYMARK10_SEED_PARAMS, so CI and a bench play
   the same week.
 
+  A DOCUMENT IS FILED BEFORE ITS CALL (ticket 5a0bc8f3). A call's
+  `:attach {:field <document field> :name … :type …}`, one map or a
+  list, is created as the owner, given stand-in bytes through the bytes
+  route's own path so it is stored, and its ref put in the field of the
+  call's input, so an `:evidence` door can move in the week.
+
   AN EVENT IS THE WORLD'S (ticket 524685a0). A call `{:as :world :event
   <integration> :body {…}}` is an outside system speaking: its body,
   given an `id` when it has none, is signed with the key the
@@ -51,6 +57,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [waymark10.schema :as schema]
+            [waymark10.server.attachments :as attachments]
             [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
             [waymark10.server.integrations :as integrations]
@@ -108,6 +116,18 @@
   [c]
   (let [e (:event c)] (if (or (keyword? e) (string? e)) (name e) "")))
 
+(defn- attaches
+  "The documents a call files first: its `:attach`, one map or a list."
+  [c]
+  (let [a (:attach c)] (cond (nil? a) [] (map? a) [a] :else (vec a))))
+
+(defn- document?
+  "Whether `field` is a :waymark/document field of the kind `rdef`."
+  [rdef field]
+  (some? (get-in (schema/entry-map (:schema rdef)) [field :properties :waymark/document])))
+
+(defn- text? [s] (and (string? s) (not (str/blank? s))))
+
 (defn- checked!
   "Throw for a script the player cannot play: days that do not climb
   from 1 within the clock's 14, a `:card` that is not text of 1 to 280
@@ -136,7 +156,8 @@
                        {:call c})))
       (cond
         (contains? c :event)
-        (when-not (and (= :world (as-of c)) (seq (event-name c)) (map? (:body c {})))
+        (when-not (and (= :world (as-of c)) (seq (event-name c)) (map? (:body c {}))
+                       (not (contains? c :attach)))
           (throw (broken (str "Day " day " posts an event that is not {:as :world :event <integration> :body {…}}.")
                          {:call c})))
 
@@ -146,7 +167,19 @@
 
         (str/blank? (str action))
         (throw (broken (str "Day " day " has a `" kind "` call that names no :action.")
-                       {:call c}))))))
+                       {:call c}))
+
+        :else
+        (doseq [{:keys [field] :as a} (attaches c)]
+          (when-not (and (map? a) (or (keyword? field) (text? field))
+                         (text? (:name a)) (text? (:type a)))
+            (throw (broken (str "Day " day " attaches " (pr-str a) ", and an :attach is"
+                                " {:field <document field> :name \"consent.pdf\" :type \"application/pdf\"}.")
+                           {:call c})))
+          (when-not (document? (get rdefs (keyword (str kind))) (keyword (name field)))
+            (throw (broken (str "Day " day " attaches to `" kind "` `" (name field)
+                                "`, and it is not a :waymark/document field of that kind.")
+                           {:call c}))))))))
 
 ;; ── the engine ────────────────────────────────────────────────────────────────
 
@@ -294,6 +327,21 @@
            (inv/etag kind id (:version (inv/decode-row rdef (row-of eng kind id)))))
     headers))
 
+(defn- attached
+  "`input` with each document the call attaches filed by the owner and
+  its ref in the field: added to the list a listed field holds, else
+  the field's one value."
+  [eng owner rdef c input]
+  (reduce (fn [in a]
+            (let [f (keyword (name (:field a)))
+                  id (attachments/file-stand-in! eng {:name (:name a) :media-type (:type a)}
+                                                 (person owner))]
+              (if (some #(and (= f (:field %)) (:listed %)) (schema/ref-fields (:schema rdef)))
+                (update in f (fnil conj []) id)
+                (assoc in f id))))
+          input
+          (attaches c)))
+
 (defn- refused [entry {:keys [status body]}]
   (cond-> (assoc entry :outcome "refused" :status status
                  :detail (str (or (:detail body) (:title body) (str "the door answered " status))))
@@ -307,7 +355,8 @@
         {:keys [uri id]} (door rdef c names day)
         hs (cond->> (headers-of cast c)
              id (fenced eng rdef kind id action))
-        res (call! h uri hs (resolved names day (or (:input c) {})))
+        input (attached eng (:owner cast) rdef c (or (:input c) {}))
+        res (call! h uri hs (resolved names day input))
         {:keys [status body]} res
         entry (cond-> {:day day :as (name (as-of c)) :kind (str (:kind c)) :action (str action)}
                 (:row c) (assoc :row (str (:row c)))

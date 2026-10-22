@@ -10,6 +10,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [factory10.week :as judged]
             [waymark10.server.store :as store]
             [workqueue10.week :as week]))
 
@@ -44,6 +45,39 @@
           (pr-str (:goal r))))
     (testing "the text report says the same"
       (is (str/includes? (week/text r) "goal: garden_job booked, 1 row(s)")))))
+
+(deftest a-week-files-a-stored-document-so-an-evidence-door-moves
+  ;; ticket 5a0bc8f3: the clinic's sign reads the patient's consent form
+  (let [admit (fn [n who form]
+                (cond-> [{:as :person :kind "patient" :action "create" :name n :input {:name who}}
+                         (cond-> {:as :person :kind "patient" :action "admit" :row n}
+                           form (assoc :attach {:field :consent_form :name "consent.pdf"
+                                                :type "application/pdf"}))
+                         {:as :person :kind "clinic_visit" :action "create" :name (str n "-visit")
+                          :input {:patient_id {"$row" n} :reason "Check-up"}}
+                         {:as :person :kind "clinic_visit" :action "sign" :row (str n "-visit")}]))
+        r (week/play fixture {:day-one "2026-10-21"
+                              :goal {:kind "clinic_visit" :state "signed"}
+                              :days [{:day 1 :calls (into (admit "ana" "Ana Ruiz" true)
+                                                          (admit "ben" "Ben Ortiz" false))}]})]
+    (testing "the admit call filed the form, so its patient's visit is signed"
+      (is (= "moved" (:outcome (entry r 1 "admit" "ana"))) (pr-str (:calls r)))
+      (is (= "moved" (:outcome (entry r 1 "sign" "ana-visit"))) (pr-str (:calls r)))
+      (is (= 1 (:count (:goal r))) (pr-str (:goal r))))
+    (testing "with no form attached, the sign stalls naming the missing document"
+      (let [c (entry r 1 "sign" "ben-visit")
+            f (first (judged/judge-week r))]
+        (is (= "refused" (:outcome c)) (pr-str c))
+        (is (str/includes? (str (:guard c)) "consent-form-is-filed") (pr-str c))
+        (is (= "week-stalls/0" (:key f)) (pr-str f))
+        (is (str/includes? (:sentence f) "consent form") (pr-str f))))))
+
+(deftest an-attach-to-a-field-that-is-no-document-is-a-broken-script
+  (let [w {:day-one "2026-10-21"
+           :days [{:day 1 :calls [{:as :person :kind "patient" :action "create" :input {:name "Ana Ruiz"}
+                                   :attach {:field :name :name "consent.pdf" :type "application/pdf"}}]}]}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a :waymark/document field"
+                          (week/play fixture w)))))
 
 (deftest a-week-that-allows-yesterday-warns-for-each-expired-call
   (let [script (week/read-week (java.io.File. fixture) "week_fixture")

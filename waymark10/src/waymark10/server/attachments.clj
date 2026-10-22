@@ -273,6 +273,18 @@
                  {:size (alength data) :sha256 sha}
                  {:principal bytes-actor})))
 
+(defn file-stand-in!
+  "A stored attachment a rehearsal files with no upload (ticket
+  5a0bc8f3, the week's `:attach`): the row created as `principal`,
+  then a few stand-in bytes through put-bytes!, the bytes route's own
+  path, so it is marked stored as an upload is. → its id."
+  [eng {:keys [name media-type]} principal]
+  (let [id (str (:id (:row (inv/create! eng :attachment
+                                        {:name name :media_type media-type}
+                                        {:principal principal}))))]
+    (put-bytes! eng id (str "stand-in for " name))
+    id))
+
 (defn get-bytes
   "GET …/bytes: the stored file with the declared media type; a row
   without served bytes (pending, deleted, or a lost file) is an
