@@ -1651,7 +1651,8 @@
    [:refused {:optional true
               :x-display {:raw true
                           :label "Refused"
-                          :help "The call a meanwhile made that the engine refused, and why."}}
+                          :help "The call a meanwhile made that the engine refused, and why."
+                          :spelled-by-hand "The entry repeats the refused call's own kind and action beside the engine's sentence."}}
     [:maybe [:map-of {:max 40} :keyword :any]]]
    [:why {:optional true
           :x-display {:label "Why it failed"
