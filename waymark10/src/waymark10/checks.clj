@@ -337,6 +337,16 @@
                         (:guards a []))))
         (machine/actions-seq r)))
 
+(defn- check-state-field
+  "[state-field]: `state` is the row's lifecycle, a column of its own
+  beside `id`, so a data field of that name would be shadowed by it in
+  every filter, sort and template that names `state`."
+  [r]
+  (when (contains? (data-keys r) :state)
+    (err r :state-field
+         (str "declares a data field named state; `state` is the row's "
+              "lifecycle, so name the field another way (region, us_state)"))))
+
 (def ^:private template-root #"\{([A-Za-z0-9_]+)")
 
 (defn- check-summary-template [r]
@@ -3295,7 +3305,7 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens check-purge check-keep
+          check-state-field check-summary-template check-waive-tokens check-purge check-keep
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-scope-default

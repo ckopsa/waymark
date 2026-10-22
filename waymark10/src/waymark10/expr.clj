@@ -153,7 +153,7 @@
   of :posts, or inside a sum/count over (lines).
 
   rate (docs/spec-ledger-money.md §8, ledger step 7): the value of a
-  :rate-table row in effect on a date — (rate :sales_tax {:state
+  :rate-table row in effect on a date — (rate :sales_tax {:region
   (data :ship_state)} (data :placed_on)) — through the scope's :rate
   hook; with no date it reads (today). No row is unknown, not zero, and
   the unknown says which rate is missing."
