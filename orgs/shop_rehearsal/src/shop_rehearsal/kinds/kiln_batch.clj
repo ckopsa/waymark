@@ -1,7 +1,6 @@
 (ns shop_rehearsal.kinds.kiln-batch
   "Pieces of one product fired together; the sound ones go into its stock."
-  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]
-            [waymark10.resource :as r]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]] [waymark10.resource :as r]))
 
 (defguard names-product
   (refuse "A kiln batch adds stock to one product; name the product first.")
@@ -17,25 +16,18 @@
    :initial :firing
    :terminal #{:stocked :lost}
    :summary "{data.title} · {state}"
-   :schema [:map
-            [:title [:string {:min 1 :max 120}]]
-            [:product_id {:optional true :kind :product} [:maybe :waymark/ref]]
-            [:pieces [:int {:min 1}]]
-            [:sound_pieces {:optional true} [:maybe [:int {:min 0}]]]
+   :schema [:map [:title [:string {:min 1 :max 120}]] [:product_id {:optional true :kind :product} [:maybe :waymark/ref]]
+            [:pieces [:int {:min 1}]] [:sound_pieces {:optional true} [:maybe [:int {:min 0}]]]
             ;; the clay supplier is an outside party; what its clay cost posts as a supplier cost on stock
-            [:supplier {:optional true :kind :member :role "supplier"} [:maybe :waymark/ref]]
-            [:clay_cost :waymark/money]
+            [:supplier {:optional true :kind :member :role "supplier"} [:maybe :waymark/ref]] [:clay_cost :waymark/money]
             [:fired_on {:optional true :record-only true} [:maybe :waymark/date]]]
    :filterable {:state #{:eq :in} :product_id #{:eq}}
    :decided {:firing "A batch may stay in the kiln for three days of firing and cooling; past that, the mayor tells the owner."}
    :expected-age {:firing 259200}
    :actions
-   {:stock {:from #{:firing} :to :stocked
-            :input [:map
-                    [:product_id {:kind :product} :waymark/ref]
+   {:stock {:from #{:firing} :to :stocked :input [:map [:product_id {:kind :product} :waymark/ref]
                     [:sound_pieces [:int {:min 0}]]]
-            :handler (r/field-writer [:product_id :sound_pieces])
-            :guards [names-product counts-sound]
+            :handler (r/field-writer [:product_id :sound_pieces]) :guards [names-product counts-sound]
             :posts '[{:move (input :sound_pieces) :from [:house :made] :to [:product (input :product_id) :on_hand]}
                      {:move (data :clay_cost) :from [:house :payables] :to [:house :supplier_costs]}]
             :safety {:idempotent true :reversible false :confirm false :one-way "A stocked batch has been counted into its product; fire a new batch for more."}

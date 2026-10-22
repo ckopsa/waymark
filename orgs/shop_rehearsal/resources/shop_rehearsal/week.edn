@@ -22,15 +22,16 @@
            {:as :world :cast :cafe :kind "wholesale_order" :action "create" :name "corner-mugs" :input {:cafe "Corner Cup Cafe" :account_id {"$row" "corner"} :items "24 × Speckled stoneware mug at $16.00" :total_cents 38400}}
            {:as :mayor :kind "wholesale_order" :action "accept" :row "corner-mugs" :input {:account_standing "good"} :show true}]}
   {:day 3
-   :card "Wednesday. The carrier sells one label for Maya's parcel; it ships on day two of three, on time."
-   :calls [{:as :world :cast :carrier :kind "shipping_label" :action "create" :name "maya-label" :input {:order_id {"$row" "maya-bowls"} :tracking "1Z999AA10123456784" :carrier "carrier" :postage {:amount "12.40" :currency "USD"}}}
+   :card "Wednesday. The mayor buys one label from the carrier for Maya's parcel; it ships on day two of three, on time."
+   :calls [{:as :mayor :kind "shipping_label" :action "create" :name "maya-label" :input {:order_id {"$row" "maya-bowls"} :carrier "carrier" :postage {:amount "12.40" :currency "USD"}}}
+           {:as :mayor :kind "shipping_label" :action "buy" :row "maya-label"}
            {:as :mayor :kind "shipping_label" :action "use" :row "maya-label"}
-           {:as :mayor :kind "order" :action "ship" :row "maya-bowls" :input {:label_id {"$row" "maya-label"} :shipped_on "2026-10-28"} :show true}]}
+           {:as :mayor :kind "order" :action "ship" :row "maya-bowls" :input {:label_id {"$row" "maya-label"} :tracking "1Z999AA10123456784" :shipped_on "2026-10-28"} :show true}]}
   {:day 4
    :card "Thursday. Maya's parcel arrives with one bowl cracked. She wants a replacement; the claim goes to the carrier."
-   :calls [{:as :mayor :kind "order" :action "deliver" :row "maya-bowls"}
+   :calls [{:as :world :event :carrier :body {:type "parcel.delivered" :data {:tracking_number "1Z999AA10123456784"}}}
            {:as :world :cast :maya :kind "breakage_claim" :action "create" :name "maya-crack" :input {:customer "Maya Chen" :order_id {"$row" "maya-bowls"} :item "Ash-glaze serving bowl" :detail "One of the two bowls arrived cracked through the rim; the box was crushed at one corner." :remedy "replacement"}}
-           {:as :mayor :kind "breakage_claim" :action "claim" :row "maya-crack" :input {:carrier_claim_ref "UPS-CLM-48213" :remedy "replacement"} :show true}]}
+           {:as :mayor :kind "breakage_claim" :action "claim" :row "maya-crack" :show true}]}
   {:day 5
    :card "Friday. Corner Cup's 24 mugs ship, billed on invoice W-1001 for $384.00, due net-30."
    :calls [{:as :mayor :kind "invoice" :action "create" :name "w1001" :input {:number "W-1001" :account_id {"$row" "corner"} :wholesale_order_id {"$row" "corner-mugs"} :amount_cents 38400 :tax_cents 0 :issued_on "2026-10-30"}}

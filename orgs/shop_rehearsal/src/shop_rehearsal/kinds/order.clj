@@ -1,7 +1,6 @@
 (ns shop_rehearsal.kinds.order
   "An order: a checkout that is paid, packed, checked by someone else, and shipped within 3 business days of its payment clearing."
-  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]]
-            [waymark10.resource :as r]))
+  (:require [waymark10.dsl :refer [defguard defresource defscenario hold refuse]] [waymark10.resource :as r]))
 
 (defguard names-payment
   (refuse "An order is not packed until the payment has cleared; name the cleared payment first.")
@@ -35,6 +34,8 @@
             [:payment_id {:optional true :kind :payment} [:maybe :waymark/ref]]
             [:packed_by {:optional true :kind :member} [:maybe :waymark/ref]]
             [:label_id {:optional true :kind :shipping_label} [:maybe :waymark/ref]]
+            ;; the carrier's delivered event finds the order by it
+            [:tracking {:optional true} [:maybe [:string {:max 120}]]]
             [:shipped_on {:optional true} [:maybe :waymark/date]]]))
    :lines {:kind :order_line :parent :order
            :fields [[:product {:kind :product} :waymark/ref] [:qty [:int {:min 1}]] [:unit_price :waymark/money]]
@@ -42,13 +43,11 @@
            :totals {:subtotal '(sum [l (lines)] (* (line :qty) (line :unit_price)))
                     :tax '(round (* (data :subtotal) (rate :sales_tax {:us_state (data :buyer_state)})))}}
    :accounts {:paid {:unit [:money "USD"]} :refunded {:unit [:money "USD"] :never-above :paid}}
-   :measures {:shipped_on_time
-              {:label "Orders shipped within 3 business days of payment" :stat :rate
+   :measures {:shipped_on_time {:label "Orders shipped within 3 business days of payment" :stat :rate
                :among "state=shipped,delivered" :where (list '<= '(data :shipped_on) ship-by)
-               :at :placed_on :over '(weeks 4) :tell "shop_rehearsal-mayor"
-               :default-target {:op ">=" :target 0.95M}}}
+               :at :placed_on :over '(weeks 4) :tell "shop_rehearsal-mayor" :default-target {:op ">=" :target 0.95M}}}
    :keep {:for '(years 7) :from {:state :delivered} :then :purge}
-   :filterable {:state #{:eq :in} :customer #{:eq} :buyer_state #{:eq} :placed_on #{:eq :range}}
+   :filterable {:state #{:eq :in} :customer #{:eq} :buyer_state #{:eq} :placed_on #{:eq :range} :tracking #{:eq}}
    :decided {:placed "A placed order may wait a day for its payment to clear; past that, the mayor cancels it and tells the owner."
              :paid "A paid order ships within 3 business days of its payment clearing; past that, the mayor tells the owner."
              :packed "A packed order is checked by someone who did not pack it, within the same 3 business days."
@@ -58,37 +57,35 @@
    :expected-age {:placed 86400 :paid {:until ship-by} :packed {:until ship-by} :checked {:until ship-by}
                   :shipped 1209600 :delivered 220903200}
    :actions
-   {:mark_paid {:from #{:placed} :to :paid
-                :input [:map [:payment_id {:kind :payment} :waymark/ref]]
-                :handler (r/field-writer [:payment_id])
-                :guards [names-payment]
+   {:mark_paid {:from #{:placed} :to :paid :input [:map [:payment_id {:kind :payment} :waymark/ref]]
+                :handler (r/field-writer [:payment_id]) :guards [names-payment]
                 :posts '[{:each (lines) :move (line :qty) :from [:product (line :product) :on_hand] :to [:product (line :product) :reserved]}]
                 :safety (one-way "A paid order stays paid; a refund gives the money back.")
                 :decided "The mayor marks an order paid on its own when the processor's payment for it has cleared: \"a payment that clears should move the order to paid without anyone retyping it.\""}
     :cancel    {:from #{:placed} :to :cancelled
                 :safety (one-way "A cancelled order releases its items; the customer orders again.")
                 :decided "The mayor cancels an unpaid order on its own after a day, and says why."}
-    :pack      {:from #{:paid} :to :packed
-                :stamp {:packed_by '(actor)}
+    :pack      {:from #{:paid} :to :packed :stamp {:packed_by '(actor)}
                 :safety (one-way "A packed order is boxed; it is checked from here.")
                 :decided "The mayor marks an order packed on its own once a staff member says they packed it."}
-    :check     {:from #{:packed} :to :checked
-                :not-by [:packed_by]
+    :check     {:from #{:packed} :to :checked :not-by [:packed_by]
                 :safety (one-way "A checked order is ready for its label.")
                 :decided "Whoever did not pack the order checks it: the owner or the other staff member."}
     :ship      {:from #{:checked} :to :shipped
-                :input [:map [:label_id {:kind :shipping_label} :waymark/ref] [:shipped_on :waymark/date]]
-                :handler (r/field-writer [:label_id :shipped_on])
-                :guards [has-label]
+                :input [:map [:label_id {:kind :shipping_label} :waymark/ref] [:tracking [:string {:min 1 :max 120}]] [:shipped_on :waymark/date]]
+                :handler (r/field-writer [:label_id :tracking :shipped_on]) :guards [has-label]
                 :posts '[{:each (lines) :move (line :qty) :from [:product (line :product) :reserved] :to [:product (line :product) :sold]}]
                 :safety (one-way "A shipped order is with the carrier.")
                 :decided "The mayor marks an order shipped on its own once its label is used."}
-    :deliver   {:from #{:shipped} :to :delivered
-                :safety (one-way "A delivered order starts its 30 days for returns.")
-                :decided "The mayor marks an order delivered on its own when the carrier says it was delivered."}
+    :deliver   {:from #{:shipped} :to :delivered :safety (one-way "A delivered order starts its 30 days for returns.")
+                :decided "The carrier's delivered event marks an order delivered, matched by its tracking number; the mayor does it by hand only when the event never comes."}
     :purge     {:from #{:delivered} :to :purged :purge true :waives #{:required} :guards [owner-purges]
                 :safety {:idempotent true :reversible false :confirm true
-                         :consequence "A purged order's customer details are erased for good; the row stays as the record it existed."}}}})
+                         :consequence "A purged order's customer details are erased for good; the row stays as the record it existed."}}}
+   ;; the carrier's tracking event moves a shipped order on, nobody retyping
+   :left-by [{:in #{:shipped} :by :engine :via :deliver :to :delivered}]
+   :on-event [{:source :carrier :type "parcel.delivered" :match {:tracking '(event "data" "tracking_number")}
+               :door :deliver :tell ["shop_rehearsal-mayor"]}]})
 
 (def ^:private row {:customer "Ana" :buyer_state "CO" :placed_on "2026-10-22"})
 (defscenario not-paid-without-payment "A placed order is not marked paid until its payment is named."
@@ -97,3 +94,8 @@
   {:kind :order :attempt :check :cast {:staff1 {:roles ["packer"]}} :as :staff1 :row {:state :packed :data (assoc row :packed_by "staff1")} :expect {:refused :packed_by-not-by}})
 (defscenario purge-waits-for-owner "An agent's purge of an order waits for the owner's tap."
   {:kind :order :attempt :purge :row {:state :delivered :data row} :expect {:refused :owner-purges}})
+(defscenario the-carrier-says-delivered "The carrier scans Maya's parcel at her door, so its event finds the order by tracking number and it reads Delivered."
+  {:kind :order :attempt :deliver :as {:id "owner" :type :person}
+   :row {:state :shipped :data (assoc row :tracking "1Z999AA10123456784")}
+   :events [{:source :carrier :type "parcel.delivered" :body {:id "evt_maya_delivered" :data {:tracking_number "1Z999AA10123456784"}}}]
+   :expect {:refused :out-of-state :because "the resource is Delivered"}})
