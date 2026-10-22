@@ -588,7 +588,11 @@
      [:int {:min 0}]]
     [:log_id {:x-display {:raw true :label "Log entry"
                           :help "The transition a move wrote. Empty for every other outcome."}}
-     [:string {:max 64}]]]
+     [:string {:max 64}]]
+    [:why {:optional true
+           :x-display {:raw true :label "Why"
+                       :help "The caller's one sentence of why, when the call carried one: what the sitting's page says beside a move or a held call."}}
+     [:string {:max 1000}]]]
    :create-guards [the-engine-writes-it]
    :filterable {:sitting #{:eq}
                 :tool #{:eq :in}
@@ -625,6 +629,7 @@
      :row_id (cap row-id 200)
      :row_summary (cap (if error? "" (str (or (field :summary) ""))) 400)
      :action (cap (or (when invoke? (arg :action)) "") 120)
+     :why (cap (or (arg :why) "") 1000)
      :outcome (cond error? "refused"
                     (true? (field :held)) "held"
                     invoke? (cond (true? (get args :dry_run)) "rehearsed"
