@@ -1561,6 +1561,12 @@
                                         (some-> (says advanced inp) str not-empty))
                                       (:summary advanced))
                             purged (str (purge-says purged)))})
+        ;; …and the row's whole log with it, this line included (§5,
+        ;; 4b): each value of a cleared field reads "‹purged›" in old
+        ;; inputs, retained judgments and retained documents
+        _ (when purged
+            (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
+                               (:cleared purged)))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
