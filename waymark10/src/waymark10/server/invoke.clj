@@ -306,7 +306,9 @@
   named, and an engine that serves no posting kind. A posting's amount
   is money, stored as an object, so the rows are summed here, as
   postings/recomputed-balance sums them, not by sum-matching's numeric
-  SUM."
+  SUM. With `id` :all (step 9c) it is the account on every row of the
+  kind, the postings matched by account_kind and account_name; with
+  `from` and `until` nil, every posting, whenever effective."
   [engine tx account-kind id account-name from until]
   (let [house? (= :house (keyword account-kind))
         unit (if house?
@@ -318,10 +320,13 @@
                  (money/zero unit)
                  (store/search-rows
                   (:storage engine) tx :posting
-                  [{:target :data :field :account :op :=
-                    :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}
-                   {:target :data :field :effective_on :cast "date" :op :>= :value (str from)}
-                   {:target :data :field :effective_on :cast "date" :op :< :value (str until)}]
+                  (cond-> (if (= :all id)
+                            [{:target :data :field :account_kind :op := :value (name account-kind)}
+                             {:target :data :field :account_name :op := :value (name account-name)}]
+                            [{:target :data :field :account :op :=
+                              :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
+                    from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
+                    until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
                   {})))))
 
 (declare rate-on)
@@ -387,7 +392,9 @@
                 (through
                  [:balance account-kind (str id) account-name]
                  #(store/with-tx
-                   st (fn [tx] (balance-in engine tx account-kind id account-name {})))))
+                   st (fn [tx] (if (= :all id)
+                                 (balance-over engine tx account-kind id account-name nil nil)
+                                 (balance-in engine tx account-kind id account-name {}))))))
      :balance-over (fn [account-kind id account-name from until]
                      (through
                       [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
@@ -787,7 +794,11 @@
              ;; unknown to the law — for an account no kind declares and
              ;; for a house account, whose balance no row carries yet
              :balance (fn [account-kind id account-name]
-                        (balance-in engine tx account-kind id account-name {:for-update true}))
+                        ;; [:all kind name] (step 9c) is every row's
+                        ;; postings: no one row to lock
+                        (if (= :all id)
+                          (balance-over engine tx account-kind id account-name nil nil)
+                          (balance-in engine tx account-kind id account-name {:for-update true})))
              ;; …and over a period (step 9b): the postings in [from,
              ;; until) summed in the write's own transaction, house
              ;; accounts included

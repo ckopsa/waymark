@@ -916,7 +916,12 @@
         key-of (fn [m] (into {} (map (fn [[k v]] [(keyword k) (text v)])) m))
         by-account (group-by first (:postings s))
         of (fn [kind id account]
-             (get by-account (if (some? id) [kind (str id) account] [kind account])))
+             (if (= :all id)
+               ;; [:all kind name] (step 9c): every seeded posting to
+               ;; that account on any row of the kind
+               (filter (fn [[[k _ n :as a]]] (and (= 3 (count a)) (= kind k) (= account n)))
+                       (:postings s))
+               (get by-account (if (some? id) [kind (str id) account] [kind account]))))
         summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))]
     (cond-> {}
       (some? (:postings s))

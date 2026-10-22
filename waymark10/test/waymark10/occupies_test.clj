@@ -399,6 +399,62 @@
     (is (= w (occupies/derive-kinds w))
         "a registry built again from its own rdefs adds no second guard")))
 
+;; ── a rain day: :bumps ────────────────────────────────────────────────────
+
+(def ^:private rain-day {:from #{:scheduled} :to :scheduled :safety safety})
+
+(defn- bumping
+  "The world with booking's entry naming :rain_day its bump door; `over`
+  merges into booking's declaration after that."
+  [& [over]]
+  (world :booking (merge {:occupies [(assoc (first (:occupies booking)) :bumps #{:rain_day})]
+                          :actions (assoc (:actions booking) :rain_day rain-day)}
+                         over)))
+
+;; the Hendersons' patio, Friday 28 May 2027, the morning it rains
+(def ^:private rained-out
+  {:id "bk-hendersons" :kind :booking :state :scheduled :created_at "2027-05-01T09:00:00Z"
+   :data {:customer_name "the Hendersons' patio" :crew_id "crew-elm"
+          :starts_at "2027-05-28T08:00:00Z" :ends_at "2027-05-28T12:00:00Z"}})
+
+(defn- bump [w row ctx]
+  ((get-in w [:booking :actions :rain_day :handler]) row nil ctx))
+
+(deftest a-bump-skips-the-holiday-and-the-held-slot
+  (let [busy (conj rows rained-out (elm-booked "bk-wu" "2027-06-01T08:00:00Z" "2027-06-01T12:00:00Z"))
+        moved (bump (bumping) rained-out (housed busy))]
+    (is (= {:starts_at "2027-06-01T12:00:00Z" :ends_at "2027-06-01T16:00:00Z"}
+           (select-keys (:data moved) [:starts_at :ends_at]))
+        "past the weekend, Memorial Day and the Wus' Tuesday morning")
+    (is (= "crew-elm" (get-in moved [:data :crew_id])) "the crew stays the row's")))
+
+(deftest no-window-in-thirty-business-days-refuses
+  (let [w (bumping)
+        free-day (guard-on w :booking :rain_day :crew-has-a-free-day)]
+    (testing "away until the thirtieth business day: the bump lands on it"
+      (let [ctx (housed (conj rows (elm-away "2027-07-12T00:00:00Z")))]
+        (is (t/allow? (first (g/evaluate free-day rained-out nil ctx))))
+        (is (= "2027-07-12T08:00:00Z" (get-in (bump w rained-out ctx) [:data :starts_at])))))
+    (testing "away one business day longer: refused, naming the bound"
+      (let [[v d] (g/evaluate free-day rained-out nil
+                              (housed (conj rows (elm-away "2027-07-13T00:00:00Z"))))]
+        (is (t/deny? v))
+        (is (= "That crew has no free window in the next 30 business days."
+               (g/render-reason d v rained-out)))))))
+
+(deftest an-authored-bump-handler-is-refused
+  (is (thrown-with-msg? Exception #"\[occupies\]"
+                        (bumping {:actions (assoc (:actions booking) :rain_day
+                                                  (assoc rain-day :handler (fn [row _ _] row)))}))))
+
+(deftest a-bump-moves-no-derived-guard
+  (let [w (bumping)]
+    (is (= (get-in (world) [:booking :actions :schedule :guards])
+           (get-in w [:booking :actions :schedule :guards]))
+        "the guards a bump sits beside are the ones derived without it")
+    (is (= w (occupies/derive-kinds w)) "derived again: no second handler or guard")
+    (is (map? (ca/run-all {:kinds w})))))
+
 ;; ── the gate ─────────────────────────────────────────────────────────────
 
 (deftest the-occupying-world-assembles
@@ -408,6 +464,10 @@
   (testing "[occupies-unfiltered]: the window's end is not filterable on booking"
     (is (thrown-with-msg? Exception #"booking \[occupies-unfiltered\]"
                           (ca/run-all {:kinds (world :booking {:filterable (dissoc window-filters :ends_at)})}))))
+  (testing "[bumps-not-a-door]: booking has no hail door"
+    (is (thrown-with-msg? Exception #"booking \[bumps-not-a-door\]"
+                          (ca/run-all {:kinds (bumping {:occupies [(assoc (first (:occupies booking))
+                                                                          :bumps #{:hail})]})}))))
   (testing "[resource-uncalendared]: the crew names no hours"
     (is (some #(re-find #"crew \[resource-uncalendared\]" %)
               (:info (ca/run-all {:kinds (world)}))))

@@ -858,6 +858,26 @@
   [[row inp] [op k] v]
   (if (= 'input op) [row (assoc inp k v)] [(assoc-in row [:data k] v) inp]))
 
+(defn free-window
+  "Where a next-free's window could go: {:zone :day :holiday} with :from
+  and :to the next window its `pred` — the guard's own trees over the
+  moved window — admits (expr/next-free; expr/next-free-days on a
+  :grain :day one), the window's sides read from `row` and `inp`.
+  `first-day-of` maps an instant window's own day to the day the scan
+  starts on. nil when the scope cannot say. The one scan a refusal's
+  slot evidence and an :occupies :bumps door both run."
+  ([nf pred row inp ctx] (free-window nf pred row inp ctx nil))
+  ([{:keys [from to calendar grain]} pred row inp ctx first-day-of]
+   (let [scope (expr-scope row inp ctx)
+         free? (fn [s e]
+                 (let [[row' inp'] (-> [row (clojure.core/or inp {})]
+                                       (moved from (str s))
+                                       (moved to (str e)))]
+                   (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))]
+     (if (= :day grain)
+       (expr/next-free-days scope from to calendar free?)
+       (expr/next-free scope from to calendar free? first-day-of)))))
+
 (defn- slot-evidence
   "Each next-free of a refusing guard, bound (evidence-slots): {:evidence
   {name start, name_ends end}} for a remedy, and {:vars {\"name.day\"
@@ -870,15 +890,8 @@
   (let [scope (expr-scope row inp ctx)]
     (reduce
      (fn [acc [b {:keys [next-free pred]}]]
-       (let [{:keys [from to calendar resource of grain]} next-free
-             free? (fn [s e]
-                     (let [[row' inp'] (-> [row (clojure.core/or inp {})]
-                                           (moved from (str s))
-                                           (moved to (str e)))]
-                       (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))
-             {:keys [zone day holiday] slot :from end :to} (if (= :day grain)
-                                                             (expr/next-free-days scope from to calendar free?)
-                                                             (expr/next-free scope from to calendar free?))
+       (let [{:keys [resource of]} next-free
+             {:keys [zone day holiday] slot :from end :to} (free-window next-free pred row inp ctx)
              at (fn [k] (str (clojure.core/name b) "." (clojure.core/name k)))]
          (cond-> acc
            (string? holiday)

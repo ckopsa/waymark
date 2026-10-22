@@ -627,3 +627,78 @@
         (testing "at invoke the door's guard reads the same sums as the scenario"
           (is (instance? clojure.lang.ExceptionInfo (close! "2026-10-16" "close-half")))
           (is (= :closed (close! "2026-11-01" "close-month"))))))))
+
+;; ── ledger step 9c: (balance [:all kind name]) ───────────────────────────────
+
+(deftest step-9c-every-row-of-a-kind-in-expr-and-on-the-wire
+  (let [seen (atom [])
+        hook (fn [& a] (swap! seen conj (vec a)) (usd "30.00"))]
+    (testing "the hooks are asked for the kind's account, :all for the row, with or without a period"
+      (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid]) {:balance hook})))
+      (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid] {:from "2026-10-01" :until "2026-11-01"})
+                                       {:balance-over hook})))
+      (is (= [[:pt_product :all :paid]
+              [:pt_product :all :paid (day "2026-10-01") (day "2026-11-01")]]
+             @seen)))
+    (testing "it checks, and round-trips the wire"
+      (doseq [f ['(balance [:all :pt_product :paid])
+                 '(balance [:all :pt_product :paid] {:from (data :from) :until (data :until)})]]
+        (is (empty? (expr/problems f)))
+        (is (= (expr/normalize f)
+               (wire/wire->form (wire/read-json (wire/write-json (wire/form->wire f))))))))))
+
+(defn- tally [account]
+  (r/resource {:kind :pt_tally
+               :plural "pt_tallies"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:paid {:unit [:money "USD"]}}
+               :actions {:tally {:from #{:open} :to :open
+                                 :guards [(g/expr {:name :pt-tally-some
+                                                   :severity :refuse
+                                                   :explain "Nothing was taken."
+                                                   :when (list '>= (list 'balance [:all :pt_tally account])
+                                                               '(money "0.00" "USD"))})]
+                                 :safety {:idempotent true :reversible true :confirm false}
+                                 :display {:label "Tally"}}}}))
+
+(deftest step-9c-an-undeclared-account-is-refused-at-def-time
+  (is (some? (tally :paid)))
+  (is (thrown-with-msg? Exception #"refunded, which is not an account of this kind"
+                        (tally :refunded))))
+
+(deftest step-9c-three-rows-summed-live-as-in-a-scenario
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+            ids (mapv #(str (get-in (inv/create! eng :pt_product {:name %} {:principal elena}) [:row :id]))
+                      ["a" "b" "c"])
+            paid (map vector ids ["18.00" "7.50" "4.50"] ["2026-10-03" "2026-10-20" "2026-11-02"])
+            _ (store/with-tx st
+                (fn [tx]
+                  (postings/post! eng tx {:kind :pt_product :id (first ids) :action :pay :log-id "log-9c"}
+                                  (conj (mapv (fn [[id amt on]]
+                                                {:account-kind :pt_product :account-row id :account-name :paid
+                                                 :amount (usd amt) :effective-on (day on)})
+                                              paid)
+                                        {:account-kind :house :account-name :processor_in
+                                         :amount (usd "99.00") :effective-on (day "2026-10-05")}))))
+            live (inv/render-hooks eng)
+            seeded (#'scenario/scenario-ledger
+                    {:postings (conj (mapv (fn [[id amt on]] [[:pt_product id :paid] (str amt " USD") on]) paid)
+                                     [[:house :processor_in] "99.00 USD" "2026-10-05"])})]
+        (doseq [[where {:keys [balance balance-over]}] [["live" live] ["in a scenario" seeded]]]
+          (testing (str "three rows' :paid, " where)
+            (is (usd= "30.00" (balance :pt_product :all :paid)))
+            (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid]) {:balance balance}))))
+          (testing (str "the period composes with :all, " where)
+            (is (usd= "25.50" (balance-over :pt_product :all :paid (day "2026-10-01") (day "2026-11-01"))))
+            (is (usd= "4.50" (expr/evaluate '(balance [:all :pt_product :paid] {:from "2026-11-01" :until "2026-12-01"})
+                                            {:balance-over balance-over})))))
+        (testing "an account the kind does not declare is unknown live"
+          (is (nil? ((:balance live) :pt_product :all :refunded))))))))
