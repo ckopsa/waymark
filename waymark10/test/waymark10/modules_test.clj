@@ -130,7 +130,10 @@
            :secret
            ;; …and the work calendar (docs/spec-calendar-time.md §3),
            ;; core's because the :calendar hook rides every invoke ctx
-           :work_calendar}
+           :work_calendar
+           ;; …and the team (docs/spec-teams.md §2): a crew or a
+           ;; role-conferring group as a row, :always like the role
+           :team}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

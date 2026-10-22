@@ -136,8 +136,7 @@
   {:judges [:roles]
    :reads [:role]
    :explain "No active role named {roles} — register the role first; a team conferring it would confer nothing."
-   :open "The active roles are the roles collection, one query away; the registry judges each name at submit."
-   :remedies [:role/create]}
+   :open "The active roles are the roles collection, one query away; the registry judges each name at submit."}
   [_row inp ctx]
   (if-some [unknown (when (:find ctx)
                       (seq (sort (remove #(roles/active-role? ctx %)

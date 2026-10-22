@@ -180,8 +180,10 @@
   or dismiss, which no seeded seat holds (docs/spec-integrations.md § 3,
   ab9a557c). effect_call's `pending` and `held` are left only by the
   elected runner's own endings (§ 4, § 12 step 6), which no seat
-  holds, so neither has a seat's exit (ticket 30487334)."
-  {"cadence_only" 2 "no_exit" 83 "remedy_unheld" 34 "silent_person_exit" 20})
+  holds, so neither has a seat's exit (ticket 30487334). team's `active`
+  and `retired` are the owner's or a team-admin's (docs/spec-teams.md
+  §2), which no seeded seat holds."
+  {"cadence_only" 2 "no_exit" 85 "remedy_unheld" 34 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
