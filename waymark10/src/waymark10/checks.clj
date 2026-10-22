@@ -2505,10 +2505,31 @@
   to send it. A field the engine writes (a :derived roll-up, a stamped
   principal) is neither, and a kind whose code writes (a :handler, an
   :on-event) is not called unwritable (ticket 7cc2315b). A field the
-  guard names in :fixed-at-birth is confirmed set at create: no warning."
+  guard names in :fixed-at-birth is confirmed set at create: no warning.
+  A principal ref read at any door but create is [guard-unwritable] as
+  well unless create sets it at birth, stamping it (its :create-schema
+  leaves it out) or requiring it in its input: only create writes one,
+  and who acts at a later door is a member ref that door stamps (ticket
+  7f8ce8a0)."
   [r]
   (let [acts (machine/actions-seq r)
-        created (g/door-accepts r :create)]
+        created (g/door-accepts r :create)
+        entries (schema/entry-map (:schema r))
+        born (schema/entry-map (or (:create-schema r) (:schema r)))
+        required-at-birth? (fn [f] (and (contains? born f)
+                                        (not (get-in born [f :properties :optional]))))]
+    (doseq [{:keys [door guard]} (guard-sites r)
+            :when (not= :create door)
+            f (g/data-reads guard)
+            :when (true? (get-in (get entries f) [:properties :x-ref :principal]))
+            :when (not (g/engine-written? r f))
+            :when (not (required-at-birth? f))]
+      (err r :guard-unwritable
+           (str "guard " (name (:name guard)) " on " (name (:kind r)) "."
+                (name door) " reads " (name f) ": " (name f)
+                " is a principal ref, which only create stamps; to record who acts at "
+                (name door) ", make it `[:" (name f) " {:kind :member} :waymark/ref]`"
+                " and stamp it with `:stamp {:" (name f) " (actor)}`")))
     (into []
           (for [{:keys [door guard]} (guard-sites r)
                 :when (not= :create door)
