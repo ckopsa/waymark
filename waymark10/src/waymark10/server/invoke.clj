@@ -385,6 +385,23 @@
               (not= :in op) (assoc :value (text value))))
           conds)))
 
+(defn- rate-on
+  "(rate …)'s read (docs/spec-ledger-money.md §8, ledger step 7): the
+  :value of the row of the kind declaring `table` whose :key fields
+  carry `key-vals` and whose :effective is the latest on or before
+  `on`. nil where no row is, where no kind declares the table, or where
+  the key names other fields than the table's."
+  [engine tx table key-vals on]
+  (when-some [trdef (some #(when (= table (get-in % [:rate-table :name])) %)
+                          (vals (resources engine)))]
+    (let [{ks :key value :value eff :effective} (:rate-table trdef)]
+      (when (= (set ks) (set (keys key-vals)))
+        (let [conds (law-conds trdef (conj (mapv (fn [k] {:field k :op := :value (get key-vals k)}) ks)
+                                           {:field eff :op :<= :value (str on)}))
+              [hit] (store/search-rows (:storage engine) tx (:kind trdef) conds
+                                       {:order-by eff :desc true :limit 1})]
+          (when hit (get-in (decode-row trdef hit) [:data value])))))))
+
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
          create-guard-pass)
 
@@ -713,6 +730,9 @@
                                                               (str id) {:for-update true})]
                                 (let [v (get-in (decode-row trdef raw) [:data account-name])]
                                   (if (some? v) v (money/zero (:unit acct)))))))))
+             ;; the rate tables' reader (docs/spec-ledger-money.md §8,
+             ;; step 7): nil — unknown to the law — where no row is
+             :rate (fn [table key-vals on] (rate-on engine tx table key-vals on))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil

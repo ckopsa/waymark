@@ -29,6 +29,7 @@
     :row-domain
     :accounts
     :lines
+    :rate-table
     :scenarios})
 
 (def action-keys

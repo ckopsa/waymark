@@ -2789,17 +2789,109 @@
                                     :waiting n
                                     :label (str (lw/capital (lw/words plural)) " (" n " waiting)")})))))
                  [] scope))
-        lead (first-sentence charter)]
+        lead (first-sentence charter)
+        ;; its open sitting, so the page links to the seat at work
+        ;; (ticket ff5bfbb9)
+        open (when find'
+               (first (find' :sitting {:seat (str (:id row)) :state "open"}
+                             {:limit 1})))]
     (cond-> {:works (vec works)}
       lead (assoc :charter lead)
       (seq wakes) (assoc :wakes (str "Wakes when: " (lw/either wakes) "."))
-      (seq may) (assoc :may (str "May: " (str/join "; " may) ".")))))
+      (seq may) (assoc :may (str "May: " (str/join "; " may) "."))
+      open (assoc :sitting {:href (str "/api/sittings/" (:id open))
+                            :label "At work now: watch its sitting"}))))
 
 (defn- reads-as-field
   "The seat's :computed `reads_as`: `reads-as` over the registry and the
   find the render ctx lends."
   [row ctx]
   (reads-as (:rdef-of ctx) (:find ctx) row))
+
+(defn- said-done
+  "An action's name said as done, for a line of a sitting: qualify →
+  qualified, mark_paid → marked paid."
+  [action]
+  (let [[head & more] (str/split (lw/words (str action)) #" ")
+        head (cond (str/ends-with? head "e") (str head "d")
+                   (re-find #"[^aeiou]y$" head) (str (subs head 0 (dec (count head))) "ied")
+                   :else (str head "ed"))]
+    (str/join " " (cons head more))))
+
+(defn- call-row-name
+  "What a call named, as its owner calls it: the row's summary line up
+  to its first ` · `, or the kind when the answer carried no line."
+  [{:keys [row_summary row_kind]}]
+  (or (some-> row_summary str (str/split #" · ") first str/trim not-empty)
+      (lw/words (str row_kind))))
+
+(defn call-words
+  "One call of a sitting in its owner's words (ticket ff5bfbb9): `Read
+  Acme Robotics`, `Qualified Acme Robotics: <why>`, `Asked the
+  principal to decline Cedar Bakery: <why>`. `c` is a sitting_call's
+  data; the why is the caller's own sentence, when it gave one."
+  [{:keys [tool action outcome row_id row_kind why] :as c}]
+  (let [what (call-row-name c)
+        door (lw/words (str action))
+        tail (if-some [w (some-> why str str/trim not-empty)] (str ": " w) "")
+        n (long (or (:count c) 0))]
+    (case (str outcome)
+      "read" (cond (seq row_id) (str "Read " what)
+                   (seq row_kind) (str "Looked through " n " " (lw/words (str row_kind))
+                                       (if (= 1 n) " row" " rows"))
+                   :else (str "Read " (lw/words (str/replace (str tool) #"^waymark_" ""))))
+      "moved" (str (lw/capital (said-done action)) " " what tail)
+      "held" (str "Asked the principal to " door " " what tail)
+      "refused" (str "Was refused: " (if (seq action) (str door " " what) (str tool)))
+      "rehearsed" (str "Tried " door " on " what ", without writing")
+      "scheduled" (str "Scheduled " door " " what " for later" tail)
+      (if (= "waymark_sit" (str tool))
+        "Sat in the seat"
+        (str "Called " tool tail)))))
+
+(defn at-work
+  "A sitting as its page leads with it (ticket ff5bfbb9): the seat's
+  name and `Working` while it is open or `Done`, then its calls from
+  the record of calls (sitting_call), newest last, each in its owner's
+  words (`call-words`) with a link to the row it named. A call whose
+  answer carried no summary line (a held call's) borrows the line an
+  earlier call on the same row saw. `rdef-of` answers a kind's rdef or
+  nil, for that link's collection."
+  [rdef-of seat-name row calls]
+  (let [rdef-of (or rdef-of (constantly nil))
+        open? (= "open" (some-> (:state row) name))]
+    {:lead (str (or (some-> seat-name str not-empty) "The seat") " · "
+                (if open? "Working" "Done"))
+     :working open?
+     :calls (first
+             (reduce
+              (fn [[out seen] c]
+                (let [kind (some-> (:row_kind c) str not-empty)
+                      id (some-> (:row_id c) str not-empty)
+                      line (some-> (:row_summary c) str not-empty)
+                      c (cond-> c (and id (not line) (seen id)) (assoc :row_summary (seen id)))
+                      r (when (and kind id) (rdef-of (keyword kind)))]
+                  [(conj out (cond-> {:n (long (or (:n c) 0))
+                                      :outcome (str (:outcome c))
+                                      :text (call-words c)}
+                               r (assoc :href (str "/api/" (or (:plural r) (str kind "s")) "/" id))))
+                   (cond-> seen (and id line) (assoc id line))]))
+              [[] {}]
+              (sort-by #(long (or (:n %) 0)) calls)))}))
+
+(defn- at-work-field
+  "The sitting's :computed `at_work`: `at-work` over the calls the
+  render ctx's find answers and the seat its read answers."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (let [rdef-of (:rdef-of ctx)
+          seat-name (when-some [read' (:read ctx)]
+                      (some->> (get-in row [:data :seat]) str not-empty
+                               (read' :seat) :data :name))
+          calls (when (and rdef-of (rdef-of :sitting_call))
+                  (map :data (find' :sitting_call {:sitting (str (:id row))}
+                                    {:limit 1000})))]
+      (at-work rdef-of seat-name row calls))))
 
 (defn- spend-by-domain-field
   "The seat's :computed `spend_by_domain_7d`: `spend-by-domain` over the
@@ -3095,7 +3187,9 @@
                                   [:kind :string]
                                   [:href :string]
                                   [:waiting :int]
-                                  [:label :string]]]]]
+                                  [:label :string]]]]
+                        [:sitting {:optional true}
+                         [:map [:href :string] [:label :string]]]]
                :x-display
                {:label "In words"
                 :help "What this seat is for, what wakes it, what it may do and the queues it works, worked out at read time in the words of the org's law page. Each queue counts the rows waiting in a state this seat can move."}
@@ -4883,6 +4977,21 @@
    ;; every invoke; this only decides which doors are visible enough to
    ;; be knocked on — the grant's own posture, one kind over.
    :own-surface {:by :member :actions #{"create" "close" "tally"}}
+   :computed {:at_work
+              {:schema [:map
+                        [:lead :string]
+                        [:working :boolean]
+                        [:calls [:vector
+                                 [:map
+                                  [:n :int]
+                                  [:outcome :string]
+                                  [:text :string]
+                                  [:href {:optional true} :string]]]]]
+               :x-display
+               {:label "At work"
+                :help "What the seat did in this sitting, call by call, newest last: what it read, what it moved and why, and what it asked a person to decide. Worked out at read time from the sitting's record of calls."}
+               :reads? true
+               :fn at-work-field}}
    :schema
    [:map
     [:seat {:kind :seat
