@@ -518,7 +518,7 @@
   (clojure.core/when-not (= :system (:type p))
     (some-> (:id p) str not-empty)))
 
-(defn- team-reads
+(defn team-reads
   "(holds-role? m r) and (in-team? m t) for expr-scope: the member row
   (by id, or by the subject a principal carries) and the active teams,
   read through the ctx's :read and :find hooks, the teams once per
@@ -558,7 +558,7 @@
                                 (on? ids %))
                               @teams))))}))))
 
-(defn- expr-scope
+(defn expr-scope
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
   principal), which row this is, and the log through `:actor-of`; for
