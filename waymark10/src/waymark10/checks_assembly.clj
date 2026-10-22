@@ -22,6 +22,7 @@
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
             [waymark10.measures :as measures]
+            [waymark10.money :as money]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
@@ -1264,6 +1265,69 @@
                       ", an account of " into-cur remedy))))))
     []))
 
+(defn- tolerance-unit
+  "The unit a :reconciles :tolerance evaluates to — [:money cur], :count
+  or :decimal — nil when it is not a constant amount (the def site
+  refuses that one)."
+  [form]
+  (when (and (some? form) (empty? (expr/problems form)))
+    (let [v (expr/evaluate (expr/normalize form) {})]
+      (cond (expr/unknown? v) nil
+            (money/money? v) [:money (:currency v)]
+            (integer? v) :count
+            (decimal? v) :decimal))))
+
+(defn- reconcile-sightings
+  "Each unit a :reconciles declares, as [phrase unit]: its tolerance's,
+  each (money …) literal's in a side, and each account a side's
+  (balance …) names — this kind's, another kind's, and the house's when
+  `house-accounts` is known. An account nobody declares adds nothing."
+  [kinds house-accounts {:keys [sides tolerance]}]
+  (concat
+   (when-some [u (tolerance-unit tolerance)] [["the tolerance" u]])
+   (for [[_ form] (sort-by key sides)
+         f (tree-seq coll? seq form)
+         :let [[op a c] (when (seq? f) f)
+               hit (cond
+                     (and (= 'money op) (string? c))
+                     [(pr-str f) [:money c]]
+
+                     (and (= 'balance op) (vector? a) (= 2 (count a))
+                          (= :house (first a)) (keyword? (second a)) house-accounts)
+                     [(str "house " (name (second a))) (get-in house-accounts [(second a) :unit])]
+
+                     (and (= 'balance op) (vector? a) (= 3 (count a)))
+                     (let [k (if (= :all (first a)) (second a) (first a))
+                           n (nth a 2)]
+                       (when (and (keyword? k) (keyword? n))
+                         [(str (name k) "." (name n)) (get-in kinds [k :accounts n :unit])])))]
+         :when (second hit)]
+     hit)))
+
+(defn check-reconciles-units
+  "[reconciles-units] (docs/spec-ledger-money.md §7, ledger step 9d): a
+  close kind's :reconciles reads one unit across both sides and its
+  :tolerance. The def site (resource/check-reconciles!) sees only its
+  own kind's accounts; here every account a side's (balance …) names
+  resolves — another kind's at assembly, and the house's at boot, where
+  the engine passes its :house-accounts (the registry holds none, so a
+  nil `house-accounts` leaves them to that call). A mixed unit would
+  leave the gap no answer at every read: refuse it, naming each account
+  and its unit."
+  ([reg] (check-reconciles-units reg nil))
+  ([reg house-accounts]
+   (let [kinds (:kinds reg)]
+     (doseq [[kind r] (sort-by key kinds)
+             :let [rc (:reconciles r)]
+             :when (map? (:sides rc))
+             :let [seen (distinct (reconcile-sightings kinds house-accounts rc))]
+             :when (< 1 (count (distinct (map second seen))))]
+       (err kind :reconciles-units
+            (str ":reconciles mixes units: "
+                 (str/join ", " (map (fn [[l u]] (str l " is " (pr-str u))) seen))
+                 " — both sides and the tolerance are in one unit"))))
+   []))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1277,5 +1341,5 @@
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
-          check-mixed-currency check-utc-today check-unref'd-ids])
+          check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})
