@@ -987,6 +987,47 @@
      data
      (schema/entry-keys (:schema rdef)))))
 
+(defn- accepts?
+  "Does a document's :accept list take this media type? A `type/*`
+  entry takes the whole family; no list takes every type."
+  [accept media-type]
+  (or (empty? accept)
+      (let [mt (some-> media-type str (str/split #";") first str/trim
+                       str/lower-case)]
+        (boolean
+         (some (fn [a]
+                 (let [a (str/lower-case a)]
+                   (if (str/ends-with? a "/*")
+                     (and mt (str/starts-with? mt (subs a 0 (dec (count a)))))
+                     (= a mt))))
+               accept)))))
+
+(defn- refused-documents
+  "{field [why]} for every :waymark/document entry (docs/spec-documents.md
+  §2) holding an attachment this write sets whose media_type its
+  :accept does not take — each why names the field, the file and the
+  types it takes; nil when all are taken. An id the row already held
+  is not read again, and an attachment that is not there is the
+  dangling-ref wall's to name."
+  [engine tx rdef data before]
+  (let [ids #(let [v (get %1 %2)]
+               (if (sequential? v) v (some-> v vector)))]
+    (not-empty
+     (into {}
+           (keep (fn [[f {:keys [properties]}]]
+                   (when-some [accept (seq (get-in properties
+                                                   [:waymark/document :accept]))]
+                     (let [had (set (map str (ids before f)))
+                           whys (for [id (ids data f)
+                                      :when (not (had (str id)))
+                                      :let [a (target-of engine tx :attachment id)
+                                            mt (get-in a [:data :media_type])]
+                                      :when (and a (not (accepts? accept mt)))]
+                                  (str (name f) " takes " (str/join ", " accept)
+                                       "; " (get-in a [:data :name]) " is " mt))]
+                       (when (seq whys) [f (vec whys)])))))
+           (schema/entry-map (:schema rdef))))))
+
 (defn- labels-and-groups
   "The two engine passes every write's data goes through after the
   handler: ref labels first, then one-of enforcement — so a cleared
@@ -1275,6 +1316,10 @@
                      (not= (:data row) (:data handled)))
             (throw (p/frozen-row (:name defn) (:kind rdef) (:id row) (:state row)
                                  (:owns rdef))))
+        ;; a document field takes only the media types it accepts
+        _ (when-some [bad (refused-documents engine tx rdef (:data handled)
+                                             (:data row))]
+            (throw (p/schema-invalid (:name defn) bad)))
         ;; ref labels + one-of clears (phase 8): engine passes, never
         ;; handler work — the handler sets the ref, the engine writes
         ;; the label and clears the other arm
@@ -3122,6 +3167,10 @@
               ;; closed create model no hand may write it through
               row (cond-> row
                     recurs-from (assoc-in [:data :recurs_from] recurs-from))
+              ;; a document field takes only the media types it
+              ;; accepts, at birth too
+              _ (when-some [bad (refused-documents engine tx rdef (:data row) nil)]
+                  (throw (p/schema-invalid :create bad)))
               ;; ref labels + one-of at birth too: before nil, every
               ;; set ref is newly set
               row (update row :data
