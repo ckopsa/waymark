@@ -252,11 +252,15 @@
     ;; the write path always carries the consult
     (t/allow)))
 
+;; A panel's heading names the number; a target belongs on a goal row,
+;; where it is judged (docs/spec-measures.md §8). Acknowledge the
+;; warning by its name to keep the words. No :open: the label's length
+;; bounds already tell the client what it wants, and there is no
+;; vocabulary to enumerate — any heading without a target passes.
 (g/defguard label-states-no-target
   {:severity :warning
    :judges [:label]
    :vars [:phrase]
-   :open "A panel's heading names the number; a target belongs on a goal row, where it is judged (docs/spec-measures.md §8). Acknowledge the warning by its name to keep the words."
    :explain "This label states a target ({phrase}); set it as a goal row on the measure so it is judged."}
   [_row inp _ctx]
   (if-some [phrase (some-> (:label inp) str checks/target-phrase)]
