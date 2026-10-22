@@ -123,6 +123,9 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
+            ;; the invite's grant is a scope: spelled apart from grants,
+            ;; which requires members, so it requires nothing back
+            [waymark10.server.scope :as scope]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
@@ -1028,10 +1031,11 @@
                      :x-display {:label "Their grant"
                                  :help "The invitee's standing grant, as grant create takes it: its scope, and expires_at when it ends. It is made beside the invite, by the inviter."}}
              [:maybe [:map
-                      [:scope {:x-display {:label "What it opens"
+                      [:scope {:examples [scope/scope-example]
+                               :x-display {:label "What it opens"
                                            :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — as grant create takes it, so each entry is typed by hand."
                                            :help "The leash, entry by entry: a kind and the actions allowed on it. Everything not named here stays shut."}}
-                       [:vector [:map-of :keyword :any]]]
+                       scope/scope-schema]
                       [:expires_at {:optional true
                                     :x-display {:label "Ends at"
                                                 :help "When the invitee's grant stops opening anything. Leave it empty for a grant that does not end on its own."}}
