@@ -2032,6 +2032,28 @@
           :else (t/allow)))
       (t/allow))))
 
+(g/defguard fact-names-a-derived-fact
+  {:reads [:services]
+   :vars [:kind :field :why]
+   :open "The kinds and their derived facts are each kind's published schema, one GET away; enumerating them into this form would duplicate it."
+   :explain "A notice rule's `when.fact` names a derived fact of the kind it hears, and hears it turning true; {kind}.{field} {why}."}
+  [row inp ctx]
+  (let [kind (str (or (:kind inp) (get-in row [:data :kind])))
+        w (or (:when inp) (get-in row [:data :when]))
+        field (some-> (:fact w) str not-empty)
+        rd (when (and field (not (str/blank? kind)))
+             (some-> (:rdef-of ctx) (#(% kind))))]
+    ;; an unknown kind is address-names-a-member's sentence, not this one's
+    (cond
+      (nil? field) (t/allow)
+      (false? (:becomes w))
+      (t/deny {:vars {:kind kind :field field
+                      :why "is heard turning true only, so becomes false would never tell"}})
+      (and rd (not (contains? (:derived rd) (keyword field))))
+      (t/deny {:vars {:kind kind :field field
+                      :why "is not a derived fact of that kind"}})
+      :else (t/allow))))
+
 (def ^:private notice-rule-when
   [:map
    [:action {:optional true
@@ -2045,7 +2067,15 @@
    [:to_state {:optional true
                :x-display {:label "To state"
                            :help "The state the row entered, e.g. active. Empty matches every state."}}
-    [:maybe [:string {:min 1 :max 64}]]]])
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:fact {:optional true
+           :x-display {:label "Fact"
+                       :help "A derived fact of the kind, e.g. over_quote. When set, the rule hears no transition: it tells once each time the maintainer stores that fact turning true."}}
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:becomes {:optional true
+              :x-display {:label "Becomes"
+                          :help "The value the fact turns to. Only true is heard; empty means true."}}
+    [:maybe :boolean]]])
 
 (def ^:private notice-rule-person-fields
   [[:name {:x-display {:label "Name"
@@ -2056,7 +2086,7 @@
     [:string {:min 1 :max 64}]]
    [:when {:optional true
            :x-display {:label "When"
-                       :help "The transition that sends a notice: equality on action, from_state and to_state. Omitted hears every transition of the kind."}}
+                       :help "The transition that sends a notice: equality on action, from_state and to_state. Or a derived fact turning true: {\"fact\": \"over_quote\", \"becomes\": true}. Omitted hears every transition of the kind."}}
     [:maybe notice-rule-when]]
    [:at {:optional true
          :x-display {:label "At"
@@ -2156,13 +2186,14 @@
    :create-schema (into [:map] notice-rule-person-fields)
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [a-person-tells address-names-a-member at-names-a-datetime]
+   :create-guards [a-person-tells address-names-a-member at-names-a-datetime
+                   fact-names-a-derived-fact]
    :actions
    {:restate
     {:from #{:active :paused} :to :active
      :input notice-rule-restate-input
      :guards [a-person-tells address-names-a-member at-names-a-datetime
-              the-notifier-is-not-retired]
+              fact-names-a-derived-fact the-notifier-is-not-retired]
      :edit {:prefill [:name :kind :when :at :address :notifier]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notice-rule
@@ -2302,6 +2333,9 @@
 (defn- at-field [rule]
   (some-> (get-in rule [:data :at :field]) str not-empty keyword))
 
+(defn- fact-field [rule]
+  (some-> (get-in rule [:data :when :fact]) str not-empty keyword))
+
 (def engine-rules
   "The notice rules the engine declares itself, by the kind they hear.
   A scheduled action's three endings (docs/spec-scheduled-actions.md
@@ -2333,18 +2367,49 @@
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
   matches it, the rows and then the rules the engine declares. A rule
-  with `at` hears no transition; the sweep below tells it. Never
+  with `at` hears no transition; the sweep below tells it. A rule with
+  `when.fact` hears none either; `notice-rules-facts!` tells it. Never
   throws."
   [eng t]
   (try
     (doseq [r (concat (active-rows eng :notice_rule) (declared-rules t))
             :when (nil? (at-field r))
+            :when (nil? (fact-field r))
             :when (rule-matches? r t)]
       (tell! eng r t))
     (catch Exception e
       (warn! "transition " (:id t) " could not be addressed — " (ex-message e))
       nil))
   nil)
+
+(defn notice-rules-facts!
+  "A row's derived facts, as the maintainer stored them → one addressed
+  notice per active rule of the kind whose `when.fact` turned true: not
+  true in `before`, true in `after`. A fact turning false, or staying
+  as it was, tells nobody. The maintainer calls it once its write has
+  committed (docs/spec-measures.md §6). → how many rules it told;
+  never throws."
+  [eng kind id before after]
+  (try
+    (let [k (keyword (name kind))
+          turned? (fn [f] (and (true? (get after f)) (not (true? (get before f)))))]
+      (if-not (some turned? (keys after))
+        0
+        (let [t {:id (str "fact " (name k) " " id)
+                 :kind k :resource-id (str id) :actor "maintainer"}
+              rules (filterv (fn [r]
+                               (let [f (fact-field r)]
+                                 (and f
+                                      (= (name k) (str (get-in r [:data :kind])))
+                                      (not (false? (get-in r [:data :when :becomes])))
+                                      (turned? f))))
+                             (active-rows eng :notice_rule))]
+          (doseq [r rules] (tell! eng r t))
+          (count rules))))
+    (catch Exception e
+      (warn! "the derived facts of " (name kind) " " id
+             " could not be addressed — " (ex-message e))
+      0)))
 
 ;; ── the timed notice ────────────────────────────────────────────────
 ;;
