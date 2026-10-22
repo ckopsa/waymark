@@ -69,6 +69,13 @@
   the guard scope fills from its ctx; a scope without them answers
   unknown.
 
+  state: the row's state as a keyword, (= (state) :no_show) — earned
+  by docs/spec-measures.md §10's clinic no-show rate. In a guard it is
+  the state the door leaves, in a derived fact the state the row is
+  in, in a measure's :where the state when the reading is taken. It
+  reads the scope's :state, and is unknown without one (a create has
+  none). A keyword names a state only beside (state), in = and not=.
+
   actor/holds-role?/in-team? (docs/spec-teams.md §4): who acts, and
   what they hold. (actor) is the member the log names — an agent is
   the agent, a seat its sitter — and (actor :acts-for) the person an
@@ -167,7 +174,7 @@
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso instant
      every some count sum
-     follow did me self actor holds-role? in-team? event result
+     follow did me self state actor holds-role? in-team? event result
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
@@ -255,7 +262,7 @@
           today
           (if (zero? n) problems (conj problems "(today) takes no arguments"))
 
-          (me self)
+          (me self state)
           (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
 
           actor
@@ -421,7 +428,12 @@
 
           (= not= < <= > >=)
           (if (= n 2)
-            (reduce (fn [p a] (check a env depth p)) problems args)
+            (reduce (fn [p a]
+                      ;; a state is named by its keyword, beside (state) only
+                      (if (and (keyword? a) (contains? '#{= not=} op) (some #{'(state)} args))
+                        p
+                        (check a env depth p)))
+                    problems args)
             (conj problems (str "(" op " …) compares exactly two expressions")))
 
           (+ * min max)
@@ -698,7 +710,14 @@
         cond
         (cons op (map-indexed (fn [i a] (if (and (even? i) (= :else a)) true a)) args))
 
-        (= not= min max + *)
+        ;; beside (state) a state's name is its keyword, "no_show" or
+        ;; :no_show — one law, and the spelling the wire reads back
+        (= not=)
+        (cons op (sort-by sort-key (if (some #{'(state)} args)
+                                     (map #(if (string? %) (keyword %) %) args)
+                                     args)))
+
+        (min max + *)
         (cons op (sort-by sort-key args))
 
         ;; every/some binder erasure happened in debruijn; other ops
@@ -1238,6 +1257,12 @@
          (every? #(business-day cal (.plusDays from (long %)))
                  (range (inc span))))))
 
+(defn state-of
+  "A row's state as (state) reads it: a keyword, whether the row carries
+  it as a keyword or a string; nil when it has none."
+  [row]
+  (some-> (:state row) name keyword))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -1261,6 +1286,7 @@
         it    (nth (:its scope) (long (first args)) nil)
         me    (if (contains? scope :principal) (:principal scope) unknown)
         self  (if (contains? scope :self) (:self scope) unknown)
+        state (if (contains? scope :state) (:state scope) unknown)
         ;; who acts (spec-teams §4): the member the log names, or the
         ;; person an agent acts for
         actor (cond (not (contains? scope :actor)) unknown
@@ -1397,8 +1423,10 @@
         or  (kleene-or (map #(evaluate % scope) args))
 
         (= not=)
-        (let [a (evaluate (first args) scope)
-              b (evaluate (second args) scope)]
+        ;; a keyword is a state's name, beside (state) only
+        (let [operand #(if (keyword? %) % (evaluate % scope))
+              a (operand (first args))
+              b (operand (second args))]
           (cond
             (or (unknown? a) (unknown? b)) unknown
             (mixed-currency a b) (mixed-currency a b)

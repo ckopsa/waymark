@@ -589,6 +589,8 @@
              :balance-over (:balance-over ctx)
              :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
+      ;; (state): the state the door leaves
+      (some? (:state row)) (assoc :state (expr/state-of row))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
       (contains? ctx :stored-lines)

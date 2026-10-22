@@ -159,7 +159,9 @@
   ;; `calendar` is the :calendar hook: :today in :over binds the house's
   ;; day, and the calendar readers read it; a fact it cannot answer is
   ;; a missing value, never the unknown sentinel stored
-  ([derived data now calendar]
+  ([derived data now calendar] (compute-facts derived data now calendar nil))
+  ;; `state` is the row's state, which (state) reads; nil leaves it unknown
+  ([derived data now calendar state]
    (let [today (delay (let [t (expr/today-in now calendar)]
                         (when-not (expr/unknown? t) t)))]
      (reduce (fn [d [fact spec]]
@@ -169,7 +171,8 @@
                                 (:over spec))
                      v (expr/evaluate (:expr spec)
                                       (cond-> {:vars vars :now now}
-                                        calendar (assoc :calendar calendar)))]
+                                        calendar (assoc :calendar calendar)
+                                        state (assoc :state state)))]
                  (assoc d fact (when-not (expr/unknown? v) v))))
              data
              (expr-facts* derived)))))
@@ -183,7 +186,8 @@
   ([rmap row now] (materialize rmap row now nil))
   ([rmap row now calendar]
    (update row :data
-           #(compute-facts (specs-under rmap (:law-revision row)) % now calendar))))
+           #(compute-facts (specs-under rmap (:law-revision row)) % now calendar
+                           (expr/state-of row)))))
 
 (defn tampered
   "Derived fields the handler wrote values into that disagree with

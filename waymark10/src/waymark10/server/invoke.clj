@@ -1637,7 +1637,8 @@
         ;; the label and clears the other arm
         handled (update handled :data
                         #(labels-and-groups engine tx rdef % (:data row)))
-        materialized (derived/materialize rdef handled now (:calendar ctx))
+        ;; a fact that reads (state) reads the state the door enters
+        materialized (derived/materialize rdef (assoc handled :state (:to defn)) now (:calendar ctx))
         ;; the door's postings (ledger step 4): this row's own accounts
         ;; move here, before it is saved; post! moves the others and
         ;; writes every posting, in this transaction, under the log row

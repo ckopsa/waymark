@@ -711,8 +711,7 @@
           (let [form (expr/normalize (:where m))
                 now ((:now-fn eng))
                 verdicts (mapv (fn [row]
-                                 [row (expr/evaluate form {:data (:data row) :now now
-                                                           :calendar calendar-of})])
+                                 [row (expr/evaluate form (measures/where-scope row now calendar-of))])
                                rows)
                 verdicts (mapv (fn [[placed] [row v]] [row v placed]) points verdicts)
                 met (count (filter (comp true? second) verdicts))]
@@ -1078,8 +1077,10 @@
         (fn [tx raw]
           (let [row (decode-row rdef raw)]
             (when (or (nil? population) (claims? population row))
-              (let [cur-data (derived/compute-facts cur-specs (:data row) now calendar)
-                    prop-data (derived/compute-facts prop-specs (:data row) now calendar)]
+              (let [cur-data (derived/compute-facts cur-specs (:data row) now calendar
+                                                    (expr/state-of row))
+                    prop-data (derived/compute-facts prop-specs (:data row) now calendar
+                                                     (expr/state-of row))]
                 (doseq [fact facts]
                   (let [spec (get (:derived rdef) fact)
                         aggregate? (or (:count spec) (:sum spec))
