@@ -9,7 +9,9 @@
   are the seat (held_call_test's seat and hold-door! seeds), one
   sealed walk the drive replays, and one three-step walkthrough the
   sitter offers the drive's viewer on a led_note fixture row
-  (docs/spec-walkthrough.md § 7 item 5). The RP's
+  (docs/spec-walkthrough.md § 7 item 5), and two crews and one
+  crew_job for the drive's list of member refs narrowed by in_team
+  (ticket 84db596f). The RP's
   session doors are composed (no identity provider, require-auth off,
   so the dev headers still speak): the drive signs a guest in through
   /auth/guest and reads the UI with a session cookie alone.
@@ -195,6 +197,50 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A discarded task is history."}}}}))
 
+;; the in_team list fixture (ticket 84db596f; ui-drive.mjs, "a list of
+;; member refs narrowed by in_team"): assign's hands are a list of
+;; member refs on the team its crew names, read from the form.
+(def ^:private crew-hands
+  [:hands {:optional true :kind :member :in-team '(data :crew)}
+   [:vector :waymark/ref]])
+
+(def crew-job
+  (r/resource
+   {:kind :crew_job
+    :plural "crew_jobs"
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.site} · {state}"
+    :schema [:map
+             [:site [:string {:min 1 :max 80}]]
+             [:crew {:optional true :kind :team} [:maybe :waymark/ref]]
+             crew-hands]
+    :actions
+    {:assign {:from #{:open} :to :open
+              :input [:map
+                      [:crew {:optional true :kind :team} [:maybe :waymark/ref]]
+                      crew-hands]
+              :handler (fn [row inp _ctx]
+                         (update row :data merge (select-keys inp [:crew :hands])))
+              :safety {:idempotent true :reversible true :confirm false}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A finished job is history."}}}}))
+
+(defn- crews!
+  "Four members, Crew A (ana, luis) and Crew B (luis, dana), and one
+  crew_job with neither crew nor hands. → the crew_job's id string."
+  [eng]
+  (doseq [[id display] [["ana" "Ana Lopez"] ["luis" "Luis Ortega"]
+                        ["dana" "Dana Ruiz"] ["sam" "Sam Lee"]]]
+    (inv/create! eng :member {:display display :actor_type "human"}
+                 {:principal members/registrar :id id}))
+  (inv/create! eng :team {:name "Crew A" :members ["ana" "luis"]} {:principal colton})
+  (inv/create! eng :team {:name "Crew B" :members ["luis" "dana"]} {:principal colton})
+  (str (:id (:row (inv/create! eng :crew_job {:site "The Hendersons' patio"}
+                               {:principal colton})))))
+
 (def ^:private viewer
   "The principal the drive's first tab signs in as (ui-drive.mjs,
   accessStory)."
@@ -276,7 +322,8 @@
                           :actor by})
     (inv/invoke! eng :walk wid :seal {} {:principal colton})
     {:member mid :seat sid :held (str (:id h)) :walk wid
-     :walkthrough (lead! eng sitter)}))
+     :walkthrough (lead! eng sitter)
+     :crew_job (crews! eng)}))
 
 (defn start! [port]
   (let [st (pg/storage db/dsn)]
@@ -288,7 +335,7 @@
           (jdbc/execute! tx [(str "DROP TABLE IF EXISTS \"" t "\" CASCADE")]))))
     (let [eng (engine/engine {:storage st
                               :resources [caps/capability ref-target ref-card
-                                          led-note led-task]
+                                          led-note led-task crew-job]
                               :auto-migrate true
                               ;; a led_task's complete is judged by its
                               ;; children: the row page's probe reads them
