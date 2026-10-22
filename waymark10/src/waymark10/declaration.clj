@@ -22,6 +22,9 @@
   verify-undo-pointers reads and strips."
   [:from :to :input :guards :safety :display :handler :emits :edit
    :place :bulk :batch :waives :touches :unless :record :undo
+   ;; who acted, written by the engine, and the wall that reads it
+   ;; back (docs/spec-teams.md §4); law, in the action facet
+   :stamp :not-by
    ;; the call this door makes (docs/spec-integrations.md § 4), judged,
    ;; normalized and given its two hidden doors at the def site
    ;; (effect/weave); law, in the fingerprint's action facet
@@ -29,6 +32,10 @@
    ;; the effects this door undoes, newest first (§ 5): judged at the
    ;; def site by effect/weave; law, in the fingerprint's action facet
    :unwinds
+   ;; the documents this door waits for (docs/spec-documents.md §3):
+   ;; waymark10.evidence derives a <field>-is-filed guard per entry at
+   ;; assembly, and those guards are the law the fingerprint reads
+   :evidence
    ;; :engine marks a door the ENGINE owns rather than the household —
    ;; the sync machine's bookkeeping, woven in by mirror/declaration.
    ;; No application writes it. The ending wall (waymark-fp62.4.1)
@@ -67,7 +74,13 @@
    ;; normalized at the def site by waymark10.posts, and the posting
    ;; doors an :undo reverses — stamped by verify-undo-pointers from
    ;; the pointers it strips, so a declaration normalized twice keeps it
-   :posts :reverses-posts])
+   :posts :reverses-posts
+   ;; :purge true: legal erasure (docs/spec-documents.md §5). The door
+   ;; clears the kind's personal fields and lets go of their files in
+   ;; its own transaction (invoke's land!), says so in a derived
+   ;; consequence sentence (render), and is held and confirmed
+   ;; (checks/check-purge)
+   :purge])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
@@ -108,6 +121,11 @@
    ;; declaration-time waiver rather than fingerprinted law — the DOOR
    ;; it licenses is in :actions and hashes there
    :allow-undo
+   ;; the states in which no door changes a row's data
+   ;; (docs/spec-documents.md §6): [frozen-edited] refuses an :edit door
+   ;; from one at declaration, and land! refuses a handler's write at
+   ;; runtime. A correction is an :owns child, never an edit
+   :frozen-in
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
    ;; pacing — a spelling, never a mechanism, resolved before the
@@ -206,10 +224,18 @@
    :computed
    ;; collection surface
    :filterable :sortable :faceted :worksheet :default-filters :views
+   ;; the scope entry an ask is offered and a member's bare grant
+   ;; entry is minted with (docs/spec-teams.md §6, check-scope-default)
+   :scope-default
    ;; {field value}: the value a row with NO stored value filters (and
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; {param {:reads [field …] :conds (fn [find value] → conds)}}: a
+   ;; query param no column answers, read through the store's
+   ;; query-rows (`find`) when the collection is asked it — member's
+   ;; ?role= and ?in_team= (spec-teams §3). Never law
+   :narrows
    ;; {field :btree|:none}: whether a promoted filterable field carries
    ;; a btree index — by default one filterable by :eq or :in does
    ;; (ticket 68ebaa0f). In the fingerprint through the storage facet
@@ -262,6 +288,10 @@
    ;; entries, default off — write amplification on the one write path
    ;; is bytes on every transition of every kind forever
    :retain
+   ;; how long the kind is kept and which purge door ends it
+   ;; (docs/spec-documents.md §4): {:for :from :then} or :forever,
+   ;; judged at the def site (waymark10.retention/check!)
+   :keep
    ;; which outside event moves which door (docs/spec-integrations.md
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
@@ -278,6 +308,22 @@
    ;; § 8): {:name :key [fields] :value field :effective date-field},
    ;; judged at the def site (resource/check-rate-table!) — law
    :rate-table
+   ;; the accounts of this kind whose sum its doors keep
+   ;; (docs/spec-ledger-money.md § 5): [account …], judged at the def
+   ;; site (resource/check-conserves!) and at assembly
+   ;; ([unbalanced-door]) — law
+   :conserves
+   ;; named measures (docs/spec-measures.md § 2): {name {:label :of
+   ;; :stat :among :where :field :at :over :tell :at-least}}, judged
+   ;; by checks ([measure-shape]) and at assembly ([measure-unfiltered])
+   ;; — law
+   :measures
+   ;; a close kind's reconciliation (docs/spec-ledger-money.md § 7):
+   ;; {:period [start end] :sides {name form, name form} :tolerance
+   ;; amount}, judged at the def site (resource/check-reconciles!) and
+   ;; projected as :computed facts — law; :closes, the accounts its
+   ;; sides name, is the engine's to write
+   :reconciles :closes
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

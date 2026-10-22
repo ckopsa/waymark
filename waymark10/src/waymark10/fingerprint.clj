@@ -24,6 +24,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
@@ -309,9 +310,21 @@
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
                            (:touches a)))
+    ;; the date a posting entry lands on (ledger step 9a): projected only
+    ;; when an entry names :on, so every other door hashes as before
+    (some :on (:posts a))
+    (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; who a door stamps as having acted is law (spec-teams §4),
+    ;; projected only when declared; its :not-by is a guard above
+    (seq (:stamp a))
+    (assoc "stamp" (pr-str (into (sorted-map) (:stamp a))))
     ;; what a door unwinds is law too (§ 5), projected only when declared
     (seq (:unwinds a))
     (assoc "unwinds" (pr-str (:unwinds a)))
+    ;; a purge door is legal erasure, law (docs/spec-documents.md § 8):
+    ;; projected only when declared, so every other door hashes as before
+    (:purge a)
+    (assoc "purge" true)
     ;; the call a door makes is law (docs/spec-integrations.md § 8):
     ;; projected only when declared, so every other door hashes as before
     (:effect a)
@@ -368,6 +381,28 @@
                                     (map (fn [[f v]] [(name f) v]))
                                     (get-in spec [:on-gone :set]))})
       (seq fields) (assoc "fields" fields))))
+
+(defn- measures-fp
+  "The measures facet (docs/spec-measures.md §8): each measure by name,
+  every key but :label and :default-target — :among as the collection
+  grammar parses it, :where as its canonical tree. An optional key left
+  out stays absent."
+  [ms]
+  (into (sorted-map)
+        (map (fn [[n m]]
+               [(name n)
+                (cond-> {"of" (measures/spelled (:of m))
+                         "stat" (measures/spelled (:stat m))
+                         "among" (into (sorted-map)
+                                       (map (fn [[k vs]] [(name k) vs]))
+                                       (measures/parse-among (:among m)))
+                         "at" (measures/spelled (:at m))
+                         "over" (vec (measures/parse-over (:over m)))
+                         "at_least" (:at-least m measures/default-at-least)}
+                  (some? (:where m)) (assoc "where" (form-tree (:where m)))
+                  (some? (:field m)) (assoc "field" (measures/spelled (:field m)))
+                  (some? (:tell m)) (assoc "tell" (measures/spelled (:tell m))))]))
+        ms))
 
 (defn fingerprint-of
   "Deterministic, canonically-encodable projection of a resource
@@ -473,13 +508,48 @@
                             {"name" (name n) "key" (mapv name ks)
                              "value" (name v) "effective" (name e)}))
 
+      ;; :conserves (docs/spec-ledger-money.md §5, §10): which accounts
+      ;; the doors keep in sum is law. Present-only, so every other kind
+      ;; hashes as before
+      (some? (:conserves rmap))
+      (assoc "conserves" (vec (sort (map name (:conserves rmap)))))
+
+      ;; :measures (docs/spec-measures.md §8): which rows a measure reads
+      ;; and how it judges them is law; its label is prose. Present-only,
+      ;; so every other kind hashes as before
+      (and (map? (:measures rmap)) (seq (:measures rmap)))
+      (assoc "measures" (measures-fp (:measures rmap)))
+
+      ;; :reconciles (docs/spec-ledger-money.md §7): the close's period,
+      ;; sides and tolerance are law. Present-only, so every other kind
+      ;; hashes as before
+      (some? (:reconciles rmap))
+      (assoc "reconciles" (let [{:keys [period sides tolerance]} (:reconciles rmap)]
+                            {"period" (mapv form-tree period)
+                             "sides" (into (sorted-map)
+                                           (map (fn [[n f]] [(name n) (form-tree f)]))
+                                           sides)
+                             "tolerance" (form-tree tolerance)}))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
       ;; replaces :terminal as the ending set), absent otherwise, so
       ;; every :over-free kind hashes byte-identical to before
       (some? (:over rmap))
-      (assoc "over" (over-fp (:over rmap))))))
+      (assoc "over" (over-fp (:over rmap)))
+
+      ;; :keep (docs/spec-documents.md §4): how long a kind is kept,
+      ;; from when, and which door ends it are law. Declared-only, so
+      ;; every kind without it hashes as before
+      (some? (:keep rmap))
+      (assoc "keep" (pr-str (:keep rmap)))
+
+      ;; :frozen-in (docs/spec-documents.md §6, §8): the states in which
+      ;; no door may change the data refuse writes, so they are law.
+      ;; Non-empty-only, so every frozen-free kind hashes as before
+      (seq (:frozen-in rmap))
+      (assoc "frozen_in" (vec (sort (map name (:frozen-in rmap))))))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -493,7 +563,7 @@
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
                               "create" "over" "recurs" "on_event"
-                              "accounts"})
+                              "accounts" "frozen_in"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"

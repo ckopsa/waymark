@@ -23,6 +23,7 @@
    "waymark10/ui/134-feed.js"          ; VIEW_RENDERERS.feed (registry: 110)
    "waymark10/ui/136-dashboard.js"     ; renderDashboard (dispatch: 110)
    "waymark10/ui/137-in-flight.js"     ; renderInFlight (dispatch: 110)
+   "waymark10/ui/138-named.js"         ; renderNamed (dispatch: 110)
    "waymark10/ui/140-links-access.js"
    "waymark10/ui/150-values-parts.js"
    "waymark10/ui/160-resource-surface.js"

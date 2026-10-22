@@ -183,6 +183,11 @@ async function render() {
     lawStamp(null);
     return renderInFlight(view, href, seq);
   }
+  /* the link page (138): an outside party's rows and their doors */
+  if (/^\/api\/-\/named(\?|$)/.test(href)) {
+    lawStamp(null);
+    return renderNamed(view, href, seq);
+  }
   if (/^\/api\/surfaces\//.test(href)) {
     const {ok, body} = await api(href);
     if (seq !== renderSeq) return;

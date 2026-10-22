@@ -192,140 +192,26 @@
             ;; the requester role unscoped-visibility narrows (R-3.4);
             ;; roles requires nothing that requires grants
             [waymark10.server.roles :as roles]
+            ;; the scope schema itself: spelled where members (which
+            ;; cannot require grants) can wear it on an invite too
+            [waymark10.server.scope :as scope]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
 
-;; ── the scope schema (shared: grant, approval_request, extend) ──────
+;; ── the scope schema (shared: grant, approval_request, extend, seat,
+;;    and a member's invite) ─────────────────────────────────────────
+;; Spelled in waymark10.server.scope, because members cannot require
+;; grants and an invite's grant is a scope like any other. Named here
+;; as well, so the doors that already say grants/… keep saying it.
 
-(def field-spec-schema
-  "One mode spec: allow renders only :names, deny renders all but."
-  [:map
-   [:mode {:x-display {:label "Allow or deny"
-                       :choices {"allow" "Allow — only the fields named here are readable"
-                                 "deny" "Deny — every field except the ones named here"}}}
-    [:enum "allow" "deny"]]
-   ;; no :x-options here, deliberately: the vocabulary IS this kind's
-   ;; data fields, but :of names a SIBLING and the kind is spelled one
-   ;; level up, on the scope entry this spec hangs off. A recipe
-   ;; reaching out of its own map is a hole no client could fill from
-   ;; the form in front of it, so the sentence says where to look
-   [:names {:x-display {:label "Field names"
-                        :help "Data field names of the kind this entry names — the same names its published schema lists."}}
-    [:vector [:string {:min 1 :max 64}]]]])
-
-(def scope-example
-  "Something in the textarea instead of a blank page (waymark-0ee's
-  composition policy, waymark-7rw's turn at it). An example is offered
-  and never applied: the shape of the smallest honest leash — one
-  kind, one action, nothing else."
-  [{:kind "task" :actions ["claim" "complete"]}])
-
-(def filter-map-schema
-  "A filter in the shape of the kind's query where clause: field →
-  exact value, the collection grammar's :eq only. It is spelled once
-  because two declarations now carry it — the scope entry below,
-  where it narrows what a grant admits, and the seat's `wake_on`
-  entry (seats/wake-entry-schema), where it narrows what a count wake
-  counts. Keys arrive keywordized off the wire."
-  [:map-of :keyword [:string {:min 1 :max 200}]])
-
-(def filter-spelled-by-hand
-  "Why a filter is typed rather than offered, spelled once and worn
-  twice: the scope entry below and the seat's wake entry
-  (seats/wake-entry-schema) wear the same box for the same reason. A
-  row of a list of entries is a sub-form since waymark-fp62.7.9, so
-  every other field of an entry is a widget — this one is the map-of
-  the client can only hand a person as a box, and waymark-2hd0's rule
-  is that such a box wears the declaration's own reason."
-  "No form can list another kind's field names, so this pair is typed: write the field name, then the value it must equal. The field is `state`, or one that kind declares filterable.")
-
-;; The scope form is where a person decides whether to trust an agent,
-;; so it is the last form in this codebase that should have been a
-;; blank JSON textarea. Since waymark-8sg the two vocabularies it is
-;; judged against can be named out loud (:x-options), and waymark-7rw
-;; discovered that the spelling reaches INSIDE an array's item map with
-;; no new capability at all: an item's fields are each other's
-;; siblings, so :of resolves within the entry a person is filling in.
-(def scope-schema
-  [:vector
-   [:map
-    [:kind {:x-options {:from :kinds}
-            :x-display {:label "Kind"
-                        :help "The collection this entry opens — one kind name this engine serves."}}
-     [:string {:min 1 :max 64}]]
-    [:ids {:optional true
-           :x-display {:label "Only these rows"
-                       :help "Row ids, when the leash is a handful of documents rather than a collection. Omit it and the entry covers the whole kind (narrowed by any filter below)."}}
-     [:maybe [:vector [:string {:min 1 :max 64}]]]]
-    [:actions {:x-options {:from :actions :of :kind :each true}
-               :x-display {:label "Actions"
-                           :help "What may be done to those rows, by name. An empty list is the read-only ask — sight without a single lever."}}
-     [:vector [:string {:min 1 :max 64}]]]
-    [:fields {:optional true
-              :x-display {:label "Field disposition"
-                          :help "Which of the kind's data fields are readable at all — allow-list or deny-list. Omit it and every field the kind publishes is readable."}}
-     [:maybe field-spec-schema]]
-    ;; the third disposition (waymark-rci): a field named here renders
-    ;; as a stable opaque token — correlate and reference, never read.
-    ;; hidden = not admitted at all; hashed = admitted-as-token; read =
-    ;; admitted plain. Hashing DOMINATES its kind's sibling entries —
-    ;; a restriction is never absorbed the way openness absorbs.
-    [:hashed {:optional true
-              :x-options {:from :fields :of :kind :each true}
-              :x-display {:label "Tokenised fields"
-                          :help "Fields the holder may correlate but never read — each value crosses as a stable opaque token."}}
-     [:maybe [:vector [:string {:min 1 :max 64}]]]]
-    ;; the filter-scoped entry (waymark: pools as first-class): the
-    ;; rows this entry admits are the ones MATCHING, judged at render
-    ;; — rows minted after the grant land inside the leash the moment
-    ;; they match. field → exact value, the collection grammar's :eq
-    ;; only; the field must be one the kind declares filterable (the
-    ;; scope-filters guard), so the promise is enforceable at the
-    ;; query AND the row. Keys arrive keywordized off the wire.
-    ;; no :x-options: the vocabulary here is the legal KEYS of an
-    ;; object, and the recipe's two composition words (:each for a
-    ;; token list, :composes :query for a field=value string) both
-    ;; describe a value BUILT from tokens. Calling a map one or the
-    ;; other would be a lie about the grammar, so the help sentence
-    ;; carries it and waymark-3ox holds the honest spelling
-    [:filter {:optional true
-              :x-display {:label "Only rows matching"
-                          :spelled-by-hand filter-spelled-by-hand
-                          :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field is `state`, or one the kind declares filterable with eq; one filtered entry per kind."}}
-     [:maybe filter-map-schema]]
-    ;; break glass (ticket b177a14b): an entry that carries `until` is
-    ;; judged absent from that instant on, and the seat's clock sweep
-    ;; takes it off the row. A string and not an instant: it sits
-    ;; inside a list of maps, and `scope-ends-are-stated` parses it.
-    [:until {:optional true
-             :x-display {:label "Ends at"
-                         :help "An RFC 3339 time with an offset, at most 30 days ahead. From that moment the entry is judged absent, and the sweep takes it off the seat."}}
-     [:maybe [:string {:min 1 :max 40}]]]
-    [:because {:optional true
-               :x-display {:label "Why it was added"
-                           :help "One sentence, required with an end: what this entry was added for."}}
-     [:maybe [:string {:min 1 :max 240}]]]
-    [:args {:optional true
-            :x-display {:label "Argument limits"
-                        :help "Per-action limits on WHICH arguments may be sent — {action, allow|deny, names}. Omit it and an admitted action takes any argument its schema accepts."}}
-     [:maybe [:vector
-              [:map
-               ;; :of would have to reach the scope entry one level up
-               ;; for the action vocabulary, the same wall
-               ;; field-spec-schema's :names meets
-               [:action {:x-display {:label "Action"
-                                     :help "One of the action names this entry admits above."}}
-                [:string {:min 1 :max 64}]]
-               [:mode {:x-display {:label "Allow or deny"
-                                   :choices {"allow" "Allow — only the arguments named here"
-                                             "deny" "Deny — every argument except the ones named here"}}}
-                [:enum "allow" "deny"]]
-               [:names {:x-display {:label "Argument names"
-                                    :help "Input field names of that action, as its published schema lists them."}}
-                [:vector [:string {:min 1 :max 64}]]]]]]]]])
+(def field-spec-schema scope/field-spec-schema)
+(def scope-example scope/scope-example)
+(def filter-map-schema scope/filter-map-schema)
+(def filter-spelled-by-hand scope/filter-spelled-by-hand)
+(def scope-schema scope/scope-schema)
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -440,12 +326,29 @@
       (t/allow))
     (t/allow)))
 
+(defn- team-of-ref
+  "The kind a :team-of `fname` names rows of — :team or :member — when it
+  is one unlisted ref field of the kind `rdef` that names one of the
+  two; nil otherwise."
+  [rdef fname]
+  (some (fn [{:keys [field kind listed]}]
+          (when (and (= (str fname) (name field)) (not listed))
+            (#{:team :member} (keyword (name kind)))))
+        (schema/ref-fields (:schema rdef))))
+
+(defn- team-of-key
+  "One :team-of as [field team], however the wire spelled it: what makes
+  two entries' team-of the same."
+  [t]
+  (when (map? t)
+    [(some-> (:field t) name) (some-> (:team t) str)]))
+
 (g/defguard scope-filters-are-filterable
   {:judges [:scope]
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name; a team-of names one field that refs a team or a member, not the field its own filter names, in one entry per kind; a names-me names only fields that each ref a member."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -522,9 +425,42 @@
                            :let [k (str (:kind e))]
                            [f _] (:filter e)
                            :when (not (contains? (get @allowed k) (name f)))]
-                       {:kind k :field (name f)}))]
+                       {:kind k :field (name f)}))
+          ;; :team-of (docs/spec-teams.md §6): one entry per kind, on a
+          ;; kind's single ref to a team or a member, and never the
+          ;; field the entry's own filter already names
+          tes (filter :team-of (:scope inp))
+          team-bad (or (some (fn [[k es]]
+                               (when (next es)
+                                 {:kind (str k) :field "(two team-of entries)"}))
+                             (group-by #(str (some-> (:kind %) name)) tes))
+                       (first
+                        (for [e tes
+                              :let [k (str (some-> (:kind e) name))
+                                    fname (some-> (get-in e [:team-of :field]) name)
+                                    dotted? (str/includes? k ".")
+                                    rdef (when-not dotted? (rdef-of (:kind e)))]
+                              :when (or dotted?
+                                        (and rdef (nil? (team-of-ref rdef fname)))
+                                        (contains? (into #{} (map name) (keys (:filter e)))
+                                                   fname))]
+                          {:kind k :field (str "team-of " fname)})))
+          ;; :names-me (docs/spec-teams.md §7): each field one unlisted
+          ;; ref to a member, on a kind
+          names-bad (first
+                     (for [e (:scope inp)
+                           :when (seq (:names-me e))
+                           :let [k (str (some-> (:kind e) name))
+                                 rdef (when-not (str/includes? k ".")
+                                        (rdef-of (:kind e)))]
+                           f (:names-me e)
+                           :when (or (nil? rdef)
+                                     (not= :member (team-of-ref rdef (name f))))]
+                       {:kind k :field (str "names-me " (name f))}))]
       (cond
         dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
+        team-bad (t/deny {:vars team-bad})
+        names-bad (t/deny {:vars names-bad})
         idle (t/deny {:vars {:kind idle
                              :field "(two filtered entries, neither naming an action)"}})
         bad (t/deny {:vars bad})
@@ -580,6 +516,22 @@
       (t/deny {:vars {:kind bad}})
       (t/allow))
     (t/allow)))
+
+(g/defguard an-outside-grant-names-them
+  {:judges [:scope]
+   :reads [:services :member]
+   :vars [:kind]
+   :open "An outside party's grant is written as :names-me entries — a kind, its actions, and the fields that name the member — on kinds that are not member, team, grant or a :system kind."
+   :explain "An outside party's grant admits rows that name them, and this entry admits every {kind}."}
+  [row inp ctx]
+  ;; docs/spec-teams.md §7: the audience's member row says it is
+  ;; outside; the invite's own twin is members/an-outside-invite-names-them
+  (let [aud (some-> (or (:audience inp) (get-in row [:data :audience])) str not-empty)
+        m (when-some [read' (:read ctx)] (when aud (read' :member aud)))]
+    (if-some [bad (when (= "outside" (str (get-in m [:data :actor_type])))
+                    (members/outside-entry-bad (:rdef-of ctx) (:scope inp)))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))))
 
 (g/defguard not-a-substitute
   {:reads [:principal :grant]
@@ -669,6 +621,12 @@
                                      (every? (:ids n) (map str (:ids e)))))
                             (or (nil? (:filter n)) (rides? (:filter n)))))
                      (:entries sk)))
+           ;; a minter read through :team-of hands the kind on only
+           ;; under the same team-of, or under a sibling that has none
+           (some (fn [n]
+                   (or (nil? (:team-of n))
+                       (= (team-of-key (:team-of e)) (team-of-key (:team-of n)))))
+                 (:entries sk))
            (nil? (:fields sk))
            (empty? (:hashed sk))
            (empty? (:args sk))))))
@@ -849,6 +807,8 @@
                             (map last-spec))
                    specs)
         filt (spelled :filter entries)
+        tofs (spelled :team-of entries)
+        nms (spelled :names-me entries)
         flds (spelled :fields entries)]
     (cond-> {:kind (:kind (first entries))
              :actions (union-scope-names (map :actions entries))}
@@ -856,6 +816,8 @@
       (seq hashed)        (assoc :hashed hashed)
       (seq args)          (assoc :args args)
       (first filt)        (assoc :filter (first filt))
+      (first tofs)        (assoc :team-of (first tofs))
+      (first nms)         (assoc :names-me (first nms))
       (first flds)        (assoc :fields (first flds)))))
 
 (defn- filter-key
@@ -1117,6 +1079,7 @@
                    scope-filters-are-filterable
                    scope-omits-private-kinds
                    scope-ends-are-stated
+                   an-outside-grant-names-them
                    agents-mint-within-their-leash
                    a-mint-past-the-leash-waits-on-its-person]
    :actions
@@ -1155,7 +1118,8 @@
                       scope-names-real-kinds scope-names-real-actions
                       scope-filters-are-filterable
                       scope-omits-private-kinds
-                      scope-ends-are-stated]
+                      scope-ends-are-stated
+                      an-outside-grant-names-them]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -2045,7 +2009,8 @@
                                   {:actions (into #{} (map str) (:actions e))
                                    :ids (when (some? (:ids e))
                                           (into #{} (map str) (:ids e)))
-                                   :filter (:filter e)})
+                                   :filter (:filter e)
+                                   :team-of (:team-of e)})
                                 entries)
                  :args (args-of entries)}]))
         (group-by :kind (get-in row [:data :scope]))))
@@ -2057,14 +2022,18 @@
   `collections/parse-query` makes, so a grant's row check, its query
   conds and a wake's count all read \"a,b\" alike."
   [rdef f v]
-  (let [raw (str v)
-        fname (name f)
-        in? (or (= "state" fname)
-                (contains? (get (:filterable rdef) (keyword fname)) :in))
-        vs (when (and in? (str/includes? raw ","))
-             (into [] (comp (map str/trim) (remove str/blank?))
-                   (str/split raw #",")))]
-    (if (seq vs) vs [raw])))
+  (if (coll? v)
+    ;; a :team-of field, already read to the ids it may name
+    ;; (`resolve-team-of`); empty when it may name none
+    (mapv str v)
+    (let [raw (str v)
+          fname (name f)
+          in? (or (= "state" fname)
+                  (contains? (get (:filterable rdef) (keyword fname)) :in))
+          vs (when (and in? (str/includes? raw ","))
+               (into [] (comp (map str/trim) (remove str/blank?))
+                     (str/split raw #",")))]
+      (if (seq vs) vs [raw]))))
 
 (defn row-matches?
   "Does this decoded row sit inside one of the entry's filter maps?
@@ -2668,6 +2637,87 @@
 
 (declare member-audience)
 
+;; ── :team-of, read live (docs/spec-teams.md §6) ─────────────────────
+
+(def ^:private team-page
+  ;; the most team rows one resolve reads; a house has a handful
+  500)
+
+(defn- active-teams
+  "The active team rows, decoded; empty where no team kind is served."
+  [eng]
+  (if-some [rdef (get (inv/resources eng) :team)]
+    (into []
+          (comp (map #(inv/decode-row rdef %))
+                (filter #(= "active" (some-> (:state %) name))))
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :team {} {:limit team-page}))))
+    []))
+
+(defn- team-of-ids
+  "The ids the field of one :team-of entry may name: the admitted teams'
+  own ids for a team field, their members for a member field. A team is
+  admitted when the entry names it, or, naming none, when `mine` (the
+  ids the grant's member answers to) is on it. Only active teams are
+  read, so a retired one admits nothing."
+  [rdef spec teams mine]
+  (let [team (some-> (:team spec) str)
+        admitted (filter (fn [t]
+                           (if team
+                             (= team (str (:id t)))
+                             (some #(contains? mine (str %))
+                                   (get-in t [:data :members]))))
+                         teams)]
+    (case (team-of-ref rdef (some-> (:field spec) name))
+      :team (into (sorted-set) (map (comp str :id)) admitted)
+      :member (into (sorted-set)
+                    (comp (mapcat #(get-in % [:data :members])) (map str))
+                    admitted)
+      #{})))
+
+(defn- resolve-team-of
+  "The scope with each :team-of read NOW into its entry's filter: the
+  field → the set of ids it may name, ANDed with the entry's own
+  filter. `row-matches?` and `conds-of` then read one answer, so the
+  row judgment and the collection query agree, and the next request
+  reads membership again."
+  [eng mine scope]
+  (if-not (some :team-of scope)
+    scope
+    (let [teams (active-teams eng)
+          rs (inv/resources eng)]
+      (mapv (fn [e]
+              (if-some [spec (:team-of e)]
+                (let [rdef (get rs (keyword (scope-name (:kind e))))]
+                  (assoc e :filter
+                         (assoc (or (:filter e) {})
+                                (keyword (name (:field spec)))
+                                (if rdef (team-of-ids rdef spec teams mine) #{}))))
+                e))
+            scope))))
+
+;; ── :names-me, read live (docs/spec-teams.md §7) ────────────────────
+
+(defn- resolve-names-me
+  "The scope with each :names-me entry read into one entry per field,
+  each filtered to the ids the grant's member answers to (`mine`) and
+  ANDed with the entry's own filter. Entries of one kind are a union,
+  so a row is admitted when any of those fields names the member; an
+  empty `mine` admits nothing."
+  [mine scope]
+  (if-not (some :names-me scope)
+    scope
+    (let [ids (into (sorted-set) (map str) mine)]
+      (into []
+            (mapcat (fn [e]
+                      (if-some [fields (seq (:names-me e))]
+                        (for [f fields]
+                          (-> (dissoc e :names-me)
+                              (assoc :filter (assoc (or (:filter e) {})
+                                                    (keyword (name f)) ids))))
+                        [(dissoc e :names-me)])))
+            scope))))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2722,6 +2772,22 @@
         row (cond-> row
               (seq (get-in row [:data :scope]))
               (update-in [:data :scope] #(live-entries now %)))
+        ;; a :team-of entry is read at this request, into a filter both
+        ;; halves below read (docs/spec-teams.md §6)
+        row (cond-> row
+              (some :team-of (get-in row [:data :scope]))
+              (update-in [:data :scope]
+                         #(resolve-team-of eng
+                                           (if named? (set (members/spellings-of eng pid)) #{})
+                                           %)))
+        ;; a :names-me entry likewise: one entry per field, filtered to
+        ;; the ids this principal answers to (docs/spec-teams.md §7)
+        row (cond-> row
+              (some :names-me (get-in row [:data :scope]))
+              (update-in [:data :scope]
+                         #(resolve-names-me
+                           (if named? (set (members/spellings-of eng pid)) #{})
+                           %)))
         surface (if live? (prune-unusable eng (surface-of row)) dead)
         ;; whole-kind sight is a PER-ENTRY question, judged on the
         ;; SCOPE, never on surface-of's output: surface-of absorbs
@@ -2936,9 +3002,13 @@
                               ;; a comma value on an :in field is any
                               ;; of — `row-matches?` reads it the same
                               :let [vs (filter-values rdef f v)
-                                    one (if (next vs)
-                                          {:op :in :values vs}
-                                          {:op := :value (first vs)})]]
+                                    one (cond
+                                          ;; a :team-of naming nobody (a
+                                          ;; retired team): no row's state
+                                          ;; is empty, so it admits none
+                                          (empty? vs) {:target :state :op := :value ""}
+                                          (next vs) {:op :in :values vs}
+                                          :else {:op := :value (first vs)})]]
                           ;; :vis? marks the cond as the LEASH, never a
                           ;; client filter — facet counting strips a
                           ;; field's own client conds so options don't
@@ -3218,7 +3288,9 @@
   names no row, so the kind and the action alone are judged."
   [eng scope kind action id]
   (let [k (name kind)
-        scope (mapv #(update % :kind scope-name) scope)
+        ;; no audience here: a :team-of naming no team admits nothing,
+        ;; and a :names-me names nobody
+        scope (resolve-names-me #{} (resolve-team-of eng #{} (mapv #(update % :kind scope-name) scope)))
         e (get (prune-unusable eng (surface-of {:data {:scope scope}})) k)]
     (boolean
      (and e

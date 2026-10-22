@@ -595,7 +595,9 @@
         answer (film-rules/judge week-rules (week-take quiet-week))
         row (:row (first-week/land! e id answer film {:principal the-forge}))]
     (is (= "drafting" (some-> row :state name)))
-    (is (= ["film/busy-week" "film/quiet-days"]
+    ;; busy-week reads the week's calls, and this take has none: it is
+    ;; unscored (ticket 4b7af799)
+    (is (= ["film/quiet-days"]
            (mapv :key (get-in row [:data :findings]))))
     (is (nil? (get-in row [:data :film_url])))))
 
@@ -605,13 +607,13 @@
         answer (film-rules/judge week-rules (week-take []))
         row (:row (first-week/land! e id answer film {:principal the-forge}))
         findings (get-in row [:data :findings])]
-    (is (= ["busy-week" "quiet-days"] (:unmeasured answer)))
+    ;; busy-week has no call to read, and is unscored (ticket 4b7af799)
+    (is (= ["quiet-days"] (:unmeasured answer)))
     (is (= "drafting" (some-> row :state name)))
-    (is (= ["film/busy-week" "film/quiet-days"] (mapv :key findings)))
+    (is (= ["film/quiet-days"] (mapv :key findings)))
     (testing "each finding says what could not be measured, and its remedy names the fields"
       (is (every? #(str/starts-with? (:sentence %) "The film could not measure ") findings))
-      (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
-      (is (str/includes? (:remedy (second findings)) "shot.caption")))
+      (is (str/includes? (:remedy (first findings)) "shot.caption")))
     (is (nil? (get-in row [:data :film_url])))))
 
 (deftest a-first-week-with-no-goal-state-lands-no-arc-finding

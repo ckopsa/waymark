@@ -792,3 +792,31 @@
     (is (= #{"open" "in_review" "blocked"}
            (into #{} (comp (filter #(= "no_exit" (:crack %))) (map :state))
                  (ticket-cracks (dissoc ticket :left-by) []))))))
+
+(deftest a-measure-telling-no-active-seat-is-a-crack
+  (let [order {:kind :order
+               :states [:placed :shipped]
+               :initial :placed
+               :terminal #{:shipped}
+               :actions {:ship {:from #{:placed} :to :shipped}}
+               :measures {:shipped_on_time {:label "Shipped on time"
+                                            :tell "owner-seat"}}}
+        owner (seat "owner-seat" {:scope [{:kind "order" :actions ["ship"]}]})
+        told (fn [rdef seats]
+               (filterv #(= "measure-tell-unseated" (:crack %))
+                        (cracks/audit [rdef] seats)))]
+    (testing "a :tell naming an active seat is no crack"
+      (is (empty? (told order [owner]))))
+    (testing "a :tell naming a seat that is not active is"
+      (let [[c & more] (told order [])]
+        (is (nil? more))
+        (is (= {:kind "order" :measure "shipped_on_time" :seat "owner-seat"}
+               (select-keys c [:kind :measure :seat])))
+        (is (= "order.shipped_on_time tells `owner-seat`, which is not an active seat; a miss would tell nobody."
+               (:what_would_close_it c)))))
+    (testing "a measure with no :tell is [measure-untold]'s, not this crack"
+      (is (empty? (told (update-in order [:measures :shipped_on_time] dissoc :tell) []))))
+    (testing "retiring the seat it tells opens the crack at the seat write"
+      (is (= ["measure-tell-unseated"]
+             (into [] (comp (filter :measure) (map :crack))
+                   (cracks/opened [order] [owner] [])))))))

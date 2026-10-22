@@ -93,11 +93,12 @@
         rows (for [r resources]
                {:kind (:kind r)
                 :warnings (vec (:waymark10/warnings (meta r)))
-                :info (vec (:waymark10/info (meta r)))
+                :info (vec (:waymark10/info (meta (get-in reg [:kinds (:kind r)] r))))
                 :usability (usability/warnings r)
                 :deviations (vec (:deviations r))
                 :scenarios (scenario/report r)
-                :coverage (scenario/coverage r)})
+                :coverage (scenario/coverage r)
+                :ages (scenario/age-coverage r)})
         ;; …and their SCENARIOS (waymark-4yn). An enrolled kind's
         ;; declared law used to be judged nowhere at all: check
         ;; walked only the application's own resources, and the
@@ -115,10 +116,11 @@
                        :when (or (seq u) (pos? (long (or (:total s) 0))))]
                    {:kind (:kind r) :enrolled true :warnings []
                     :usability u :deviations []
-                    :scenarios s :coverage (scenario/coverage r)})
+                    :scenarios s :coverage (scenario/coverage r)
+                    :ages (scenario/age-coverage r)})
         all-rows (concat rows enrolled)]
     (doseq [{:keys [kind enrolled warnings info usability deviations scenarios
-                    coverage]}
+                    coverage ages]}
             (sort-by :kind all-rows)]
       (let [n (+ (count warnings) (count usability))]
         (println (str "  " (name kind) (when enrolled " (enrolled)")
@@ -151,7 +153,13 @@
                         (when (not= 1 walls) "s") ", " named
                         " named by a scenario"))
           (doseq [v violations]
-            (println (str "      ✗ " v))))))
+            (println (str "      ✗ " v)))))
+      ;; a dated age is a deadline the law states; an :age scenario
+      ;; is how it is proved, and like the walls it is only counted
+      (let [[named dated] ages]
+        (when (pos? (long (or dated 0)))
+          (println (str "      " dated " dated age" (when (not= 1 dated) "s") ", "
+                        named " named by a scenario")))))
     (doseq [w assembly-warnings]
       (println (str "  [assembly] " w)))
     ;; the fence census (waymark-fp62.2.1): one line beside the kind

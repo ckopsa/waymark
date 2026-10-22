@@ -191,20 +191,30 @@
 
       :else s)))
 
+(defn- made-goal
+  "One entry of a seed's `:goals` as a loader step: a create through the
+  goal door, walked as the owner — {:measure \"kind.name\" :op \">=\"
+  :target 0.95}. A clone boots from the same seed, so it holds the
+  house's goals; readings are never seeded, and each engine sweeps its
+  own (docs/spec-measures.md §7)."
+  [goal]
+  {:as :owner :kind :goal :create goal})
+
 (defn loader-seed
   "An org's seed in the loader's grammar: `:live-ok`, with its domains,
-  then its seats and judgments, made first, as the owner, and its own
-  steps after. `opts` are `rehearsed`'s: with none, the engine is not a
+  then its seats, judgments and goals, made first, as the owner, and its
+  own steps after. `opts` are `rehearsed`'s: with none, the engine is not a
   clone, and the seed's `:rehearsal` is left out."
   ([org-seed] (loader-seed org-seed {}))
   ([org-seed opts]
-   (let [{:keys [domains seats judgments steps] :as s} (rehearsed org-seed opts)]
-     (assoc s
+   (let [{:keys [domains seats judgments goals steps] :as s} (rehearsed org-seed opts)]
+     (assoc (dissoc s :goals)
             :live-ok true
             :steps (-> []
                        (into (map made-domain) domains)
                        (into (map made-step) seats)
                        (into (map made-step) judgments)
+                       (into (map made-goal) goals)
                        (into steps))))))
 
 (defn boot-line

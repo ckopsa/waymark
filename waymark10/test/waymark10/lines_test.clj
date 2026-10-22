@@ -110,7 +110,7 @@
             tea (mint "tea")
             rows-of (fn [kind conds & [opts]]
                       (store/with-tx st
-                        (fn [tx] (store/search-rows st tx kind conds (or opts {})))))
+                        (fn [tx] (store/search-rows st tx kind conds (assoc opts :all true)))))
             lines-of (fn [oid]
                        (mapv (fn [l] [(get-in l [:data :product])
                                       (get-in l [:data :qty])
@@ -313,7 +313,7 @@
             tea (mint "tea")
             sold #(get-in (store/with-tx st (fn [tx] (store/load-row st tx :ln_stock % {})))
                           [:data :sold])
-            postings-of #(store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {})))
+            postings-of #(store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {:all true})))
             as-elena (fn [k] {:principal elena :idempotency-key k})
             sid (get-in (inv/create! eng :ln_sale
                                      {:note "two" :lines [{:stock mug :qty 2} {:stock tea :qty 1}]}

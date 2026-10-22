@@ -2009,6 +2009,34 @@
                             (:next-flip-at schedule-row)))))
   nil)
 
+(defn defer-until-elsewhere-lifts!
+  "A sit that walked nothing because an open sitting of ANOTHER seat
+  holds its rows (ticket bf17ce48): the seat's schedule is marked
+  pending, due when the first of `ids` that such a hold keeps is let go
+  (`seats/elsewhere-lifts-at`, forward only, as `defer-fire!` holds
+  it), so the tick fires the seat again then. A run fired by hand, or a
+  wake that raced the claim, is otherwise not woken once the hold ends.
+  `text` joins the waiting texts (`keep-waiting`); nil keeps a wake of
+  no text, so the release walks the queue. One maintenance write, and
+  no transition. → the due Instant when it was written, else nil."
+  [eng seat-row ids text]
+  (when-some [schedule-row (when seat-row
+                             (schedule-for-seat eng (:id seat-row)))]
+    (when-some [lift (seats/elsewhere-lifts-at eng seat-row ids
+                                               ((:now-fn eng)))]
+      (let [held (instant-of (get-in schedule-row [:data :wake_due_at]))
+            due (if (and held (.isAfter ^Instant held ^Instant lift)) held lift)
+            data (if text
+                   (keep-waiting (:data schedule-row) text)
+                   (assoc (keep-textless (:data schedule-row))
+                          :wake_pending true))]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+                                (assoc data :wake_due_at (str due))
+                                (:next-flip-at schedule-row))))
+        due))))
+
 (defn already-fired?
   "Has this row already been fired FOR this transition? `last_fired_at`
   is stamped after the provider answered, so a stamp at or after the

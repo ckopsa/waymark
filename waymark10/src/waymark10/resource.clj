@@ -35,8 +35,10 @@
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -78,7 +80,14 @@
                               (str (name kind) "/" (name aname) ": " msg))))]
     (when-not (contains? a :safety)
       (err "safety is declared, never inferred — :safety is required"))
-    (let [safety (t/safety (:safety a))
+    (let [;; a purge's confirm sentence is derived from the row it
+          ;; erases (docs/spec-documents.md §5, render/purge-consequence),
+          ;; so it is not a blind confirm for want of a written one
+          derived? (and (true? (:purge a))
+                        (nil? (get-in a [:safety :consequence])))
+          safety (cond-> (t/safety (cond-> (:safety a)
+                                     derived? (assoc :consequence "derived")))
+                   derived? (dissoc :consequence))
           from (let [f (:from a)]
                  (cond
                    (set? f) f
@@ -105,6 +114,21 @@
           guards (vec (:guards a))
           guards (if-some [unless-of (:unless a)]
                    (conj guards (g/unless unless-of))
+                   guards)
+          ;; :stamp and :not-by (docs/spec-teams.md §4): who acted is
+          ;; written by the engine, and read back as a wall
+          _ (when-some [s (:stamp a)]
+              (when-not (and (map? s) (seq s) (every? keyword? (keys s))
+                             (every? #{'(actor) '(actor :acts-for)} (vals s)))
+                (err ":stamp is {field '(actor)} — the member-ref field this door writes with who acted")))
+          _ (when-some [nb (:not-by a)]
+              (when-not (and (sequential? nb) (seq nb) (every? keyword? nb))
+                (err ":not-by is a vector of member-ref fields")))
+          guards (if-some [nb (:not-by a)]
+                   (let [wall (g/not-by nb)]
+                     (if (some #(= (:name wall) (:name %)) guards)
+                       guards
+                       (conj guards wall)))
                    guards)
           display (or (:display a) {})
           ;; a string consequence advertises as the description here;
@@ -218,23 +242,38 @@
     (g/bind-follows guard kind-of)))
 
 (defn- ref-kinds
-  "field → target kind, for the single-id refs of a :map schema."
-  [form]
-  (into {}
-        (keep (fn [{:keys [field kind listed]}] (when-not listed [field kind])))
-        (when form (schema/ref-fields form))))
+  "field → target kind, for the single-id refs of a :map schema; with
+  `listed?`, for its lists of ids as well."
+  ([form] (ref-kinds form false))
+  ([form listed?]
+   (into {}
+         (keep (fn [{:keys [field kind listed]}] (when (or listed? (not listed)) [field kind])))
+         (when form (schema/ref-fields form)))))
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
-  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
-  the row's schema, (input :f) the door's own input. A ref that names
-  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  expression guards and its ages' :until forms
+  (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
+  (input :f) the door's own input, and a quantifier's binder over
+  either, (each (data :f)), the kind its ref or ref-vector names. A ref
+  that names no kind stays as written, and the gate's
+  [follow-not-a-ref] names it; a second hop, or a binder over a follow,
+  is `bind-hop-kinds`' at assembly."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
+        data-lists (ref-kinds (:schema rmap) true)
         bind (fn [input-form guards]
                (let [input-kinds (ref-kinds input-form)
+                     input-lists (ref-kinds input-form true)
                      kind-of (fn [[op f]]
-                               (get (if (= 'data op) data-kinds input-kinds) f))]
+                               (if (= 'each op)
+                                 (when (seq? f)
+                                   (get (case (first f) data data-lists input input-lists nil)
+                                        (second f)))
+                                 (case op
+                                   data (get data-kinds f)
+                                   follow nil
+                                   (get input-kinds f))))]
                  (mapv (partial bind-guard-follows kind-of) guards)))]
     (cond-> (-> rmap
                 (update :actions update-vals
@@ -242,7 +281,37 @@
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)
-      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs)))
+      ;; an age's (follow (data :f) :g) counts from a date on the row f names
+      (map? (:expected-age rmap))
+      (update :expected-age update-vals
+              (fn [age]
+                (if (and (map? age) (contains? age :until))
+                  (update age :until expr/bind-follows
+                          (fn [[op f]] (when (= 'data op) (get data-kinds f))))
+                  age))))))
+
+(defn bind-hop-kinds
+  "Write the target kind into every follow of the kind's guards that
+  `bind-follow-kinds` could not: a second hop, (follow (follow <ref> :f)
+  :g), reaches the kind f's ref names on the first hop's kind, and a
+  binder over a follow, (every [a (follow <ref> :f)] …), the kind f's
+  ref or ref-vector names there. `kinds` is the registry's kind → rmap,
+  every schema known; a field that is not such a ref stays as written,
+  and assembly's [follow-not-a-ref] names it."
+  [rmap kinds]
+  (let [field-kind (fn [k f listed?] (get (ref-kinds (:schema (get kinds k)) listed?) f))
+        hop? #(and (seq? %) (= 'follow (first %)) (= 4 (count %)))
+        kind-of (fn [[op x :as ref]]
+                  (cond
+                    (hop? ref) (field-kind (second ref) (nth ref 3) false)
+                    (and (= 'each op) (hop? x)) (field-kind (second x) (nth x 3) true)))
+        bind #(mapv (partial bind-guard-follows kind-of) %)]
+    (cond-> (-> rmap
+                (update :actions update-vals (fn [a] (update a :guards bind)))
+                (update :create-guards bind))
+      (:creates rmap)
+      (update :creates (fn [cs] (mapv #(update % :guards bind) cs))))))
 
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
@@ -781,7 +850,8 @@
   "A flow row's legal opts — public so the shipped clj-kondo hook's
   copy can be held equal by test (waymark10.declaration-test)."
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless :touches})
+    :record :edit :place :handler :emits :waives :unless :touches
+    :stamp :not-by})
 
 (defn- args->input
   "Flow :args rows → the action's input schema. Every argument is
@@ -896,7 +966,9 @@
       (:emits opts) (assoc :emits (:emits opts))
       (:waives opts) (assoc :waives (:waives opts))
       (:unless opts) (assoc :unless (:unless opts))
-      (:touches opts) (assoc :touches (:touches opts)))))
+      (:touches opts) (assoc :touches (:touches opts))
+      (:stamp opts) (assoc :stamp (:stamp opts))
+      (:not-by opts) (assoc :not-by (:not-by opts)))))
 
 ;; — :decision, the standalone verdict (spec-decision-kind) ──────────
 ;;
@@ -1601,6 +1673,91 @@
                                              (rename :sum))]))
                             derived))))))))
 
+;; ── :waymark/document (docs/spec-documents.md §2) ──────────────────
+
+(def ^:private document-keys #{:accept :min :personal})
+
+(defn- document-ref-form
+  "A document entry's value form, made a ref: an attachment's id where
+  the declaration wrote a string, its :maybe and :vector layers kept.
+  nil when the form holds no id at all."
+  [form]
+  (cond
+    (#{:string :waymark/ref} form) :waymark/ref
+    (and (vector? form) (#{:string :waymark/ref} (first form))) :waymark/ref
+    (and (vector? form) (#{:maybe :vector} (first form)))
+    (when-some [item (document-ref-form (peek form))]
+      (conj (pop form) item))
+    :else nil))
+
+(defn- document-entry
+  "One :map entry carrying :waymark/document, desugared. The field word
+  adds :kind :attachment, so every reader of refs (labels, follow, the
+  form's picker) works unchanged, and makes the value a ref or a list
+  of them. Its own map closes here: :accept media types (`type/*` takes
+  the family), :min the count that makes the field complete (1 unless
+  said; not a schema minimum), :personal (true unless said)."
+  [kind where entry]
+  (let [[k props child] (if (map? (second entry))
+                          entry
+                          [(first entry) nil (second entry)])
+        doc (:waymark/document props)]
+    (if (nil? doc)
+      entry
+      (let [doc (if (true? doc) {} doc)
+            bad #(sugar-err kind (str where " field " k) %)]
+        (when-not (map? doc)
+          (bad ":waymark/document is a map {:accept :min :personal}"))
+        (when-some [unknown (seq (remove document-keys (keys doc)))]
+          (bad (str ":waymark/document takes :accept, :min and :personal, not "
+                    (vec unknown))))
+        (when-some [accept (:accept doc)]
+          (when-not (and (sequential? accept) (seq accept)
+                         (every? #(and (string? %)
+                                       (re-matches #"[^/\s]+/[^/\s]+" %))
+                                 accept))
+            (bad ":accept is a list of media types, \"type/subtype\" or \"type/*\"")))
+        (when-not (pos-int? (:min doc 1))
+          (bad ":min is a positive count"))
+        (when-not (boolean? (:personal doc true))
+          (bad ":personal is true or false"))
+        (when (and (:kind props) (not= :attachment (:kind props)))
+          (bad (str "a document is an attachment, not " (:kind props))))
+        [k
+         (assoc props
+                :kind :attachment
+                :waymark/document (cond-> {:min (:min doc 1)
+                                           :personal (:personal doc true)}
+                                    (:accept doc) (assoc :accept (vec (:accept doc)))))
+         (or (document-ref-form child)
+             (bad (str "a document holds an attachment's id or a list of them; "
+                       (pr-str child) " holds neither")))]))))
+
+(defn- document-form [kind where form]
+  (if (and (vector? form) (= :map (first form)))
+    (into [] (map #(if (vector? %) (document-entry kind where %) %)) form)
+    form))
+
+(defn- desugar-documents
+  "The :waymark/document field word, on the data schema, the create
+  schema and every door's input. Who added a file and when are never
+  stored: the envelope reads them from the attachment's own log."
+  [rmap]
+  (let [kind (:kind rmap)]
+    (cond-> rmap
+      (:schema rmap) (update :schema #(document-form kind "data" %))
+      (:create-schema rmap) (update :create-schema #(document-form kind "create" %))
+      (map? (:actions rmap))
+      (update :actions
+              (fn [actions]
+                (into {}
+                      (map (fn [[n a]]
+                             [n (cond-> a
+                                  (and (map? a) (:input a))
+                                  (update :input #(document-form
+                                                   kind (str (name n) " input") %)))]))
+                      actions))))))
+
 (def ^:private worksheet-column-keys
   #{:field :action :param :ref :on-set :on-clear :create-only})
 
@@ -2003,8 +2160,19 @@
   kind's rows hold, each a declared name with its unit and bounds
   (money/account-problems judges the form). An account projects as a
   read-only field of its own name (step 3c), so a schema field of that
-  name is refused here too."
+  name is refused here too. A law of this kind that sums one of its own
+  accounts across every row, (balance [:all <this kind> n]) (step 9c),
+  names an account the kind declares."
   [rmap]
+  (when-some [a (first (for [f (tree-seq coll? seq (dissoc rmap :schema))
+                             :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                             :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                        (= (:kind rmap) (second a))
+                                        (not (contains? (:accounts rmap) (nth a 2))))]
+                         a))]
+    (throw (t/definition-error (str (name (:kind rmap)) ": (balance " (pr-str a) ") sums "
+                                    (name (nth a 2)) ", which is not an account of this kind")
+                               {:check :accounts})))
   (when-some [accts (:accounts rmap)]
     (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
                                           {:check :accounts}))]
@@ -2045,6 +2213,121 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
+(defn balance-forms
+  "The (balance …) forms inside a law form."
+  [form]
+  (filter #(and (seq? %) (= 'balance (first %))) (tree-seq coll? seq form)))
+
+(defn- tolerance-unit
+  "The unit a :reconciles :tolerance is in — [:money cur], :count or
+  :decimal — or nil when it is not an amount."
+  [v]
+  (cond (money/money? v) [:money (:currency v)]
+        (integer? v) :count
+        (decimal? v) :decimal))
+
+(defn- reconcile-tolerance
+  "The :tolerance of a :reconciles, evaluated: a constant, so no scope."
+  [form]
+  (when (empty? (expr/problems form))
+    (let [v (expr/evaluate (expr/normalize form) {})]
+      (when-not (expr/unknown? v) v))))
+
+(defn- reconcile-units
+  "The units a :reconciles declaration can see for itself: its
+  tolerance's, each (money …) literal in a side, and each account of
+  this kind a side's balance reads. A house account's unit and another
+  kind's are the assembly's to know (checks-assembly/
+  check-reconciles-units), not the def site's."
+  [rmap tol-unit sides]
+  (into (if tol-unit #{tol-unit} #{})
+        (for [form (vals sides)
+              f (tree-seq coll? seq form)
+              :let [u (cond
+                        (and (seq? f) (= 'money (first f)) (string? (nth f 2 nil)))
+                        [:money (nth f 2)]
+
+                        (and (seq? f) (= 'balance (first f)) (vector? (second f)))
+                        (let [a (second f)]
+                          (when (and (= 3 (count a))
+                                     (= (:kind rmap) (if (= :all (first a)) (second a) (first a))))
+                            (get-in rmap [:accounts (nth a 2) :unit]))))]
+              :when u]
+          u)))
+
+(defn- check-reconciles!
+  "`:reconciles` (docs/spec-ledger-money.md §7, ledger step 9d): a close
+  kind's two :sides, each an expression over (balance …) that names no
+  period of its own; its :period, two date expressions [start end]; its
+  :tolerance, a constant in the sides' unit. Each side and their :gap
+  are facts the engine computes, so no field and no door input names
+  one: nobody types a total."
+  [rmap]
+  (when-some [rc (:reconciles rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :reconciles " %)
+                                          {:check :reconciles}))]
+      (when-not (map? rc) (bad "is a map {:period :sides :tolerance}"))
+      (when-some [extra (seq (remove #{:period :sides :tolerance} (keys rc)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a reconciliation reads :period, :sides and :tolerance")))
+      (let [{:keys [period sides tolerance]} rc]
+        (when-not (and (vector? period) (= 2 (count period)))
+          (bad "takes :period, two date expressions [start end], as [(data :period_start) (data :period_end)]"))
+        (when-some [p (first (mapcat expr/problems period))]
+          (bad (str ":period is refused: " p)))
+        (when-not (and (map? sides) (= 2 (count sides)) (every? keyword? (keys sides)))
+          (bad (str "names exactly two :sides, {name expression}; got "
+                    (if (map? sides) (str (count sides) " sides") (pr-str sides)))))
+        (when (contains? sides :gap)
+          (bad "names a side gap; gap is the difference between the two sides"))
+        (doseq [[n form] sides]
+          (when-some [p (first (expr/problems form))]
+            (bad (str "side " (name n) " is refused: " p)))
+          (when (empty? (balance-forms form))
+            (bad (str "side " (name n) " reads no (balance …); a side is a sum of postings")))
+          (when (some #(< 2 (count %)) (balance-forms form))
+            (bad (str "side " (name n) " gives a (balance …) its own period;"
+                      " inside :reconciles the :period applies to every balance"))))
+        (when-not (contains? rc :tolerance)
+          (bad "takes :tolerance, the gap allowed, in the sides' unit, as (money \"0.00\" \"USD\")"))
+        (let [tu (tolerance-unit (reconcile-tolerance tolerance))]
+          (when-not tu
+            (bad (str ":tolerance is a constant amount, as (money \"0.00\" \"USD\"); got "
+                      (pr-str tolerance))))
+          (let [units (reconcile-units rmap tu sides)]
+            (when (< 1 (count units))
+              (bad (str "mixes units " (vec (sort-by pr-str units))
+                        "; both sides and the tolerance are in one unit")))))
+        (let [facts (set (conj (keys sides) :gap))
+              fields (set (keys (schema/entry-map (:schema rmap))))
+              computed (set (keep (fn [[k c]] (when-not (::reconciles c) k)) (:computed rmap)))]
+          (when-some [f (first (sort (filter #(or (fields %) (computed %)) facts)))]
+            (bad (str (name f) " is also a field; a side and the gap are read-only"
+                      " facts the engine computes")))
+          (doseq [[a d] (sort-by key (:actions rmap))
+                  :let [in (:input d)
+                        named (when (vector? in)
+                                (try (keys (schema/entry-map in)) (catch Exception _ nil)))]
+                  f (sort named)
+                  :when (contains? facts f)]
+            (bad (str "door " (name a) "'s input names " (name f)
+                      ", a fact the engine computes from the postings; nobody types a total"))))))))
+
+(defn- check-conserves!
+  "`:conserves [account …]` (docs/spec-ledger-money.md §5, §10): the
+  accounts of this kind whose sum its doors keep. Every door that posts
+  to one nets to zero across them and the house accounts, which the
+  assembly gate judges ([unbalanced-door]); here, the names are
+  accounts this kind declares."
+  [rmap]
+  (when-some [cs (:conserves rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :conserves " %)
+                                          {:check :conserves}))]
+      (when-not (and (vector? cs) (seq cs) (every? keyword? cs))
+        (bad "is a vector of the accounts whose sum the doors keep, as [:on_hand :reserved :sold]"))
+      (when-some [n (first (remove (set (keys (:accounts rmap))) cs))]
+        (bad (str "names " (name n) ", which is not an account of this kind"))))))
+
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
   (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
@@ -2058,6 +2341,59 @@
               (for [[n a] (sort-by (comp str key) accts)
                     :when (not (contains? have n))]
                 (money/account-field n a))))
+    rmap))
+
+(defn over-period
+  "A side with the period applied (docs/spec-ledger-money.md §7): every
+  (balance a) inside it reads (balance a {:from start :until end})."
+  [form [start end :as period]]
+  (cond
+    (and (seq? form) (= 'balance (first form)))
+    (list 'balance (second form) {:from start :until end})
+
+    (seq? form) (apply list (map #(over-period % period) form))
+    (vector? form) (mapv #(over-period % period) form)
+    (map? form) (into {} (map (fn [[k v]] [k (over-period v period)])) form)
+    :else form))
+
+(defn- reconcile-fact
+  "One :reconciles fact as a :computed field: `form`, the period
+  applied, evaluated over the row's data through the read's
+  :balance-over hook. Unknown — no hook, an unset period, an account
+  nothing declares — renders nil."
+  [form ty help]
+  {:schema ty
+   :reads? true
+   ::reconciles true
+   :x-display {:help help}
+   :fn (fn [row ctx]
+         (let [data (into {} (map (fn [[k v]] [(keyword (name k)) v])) (:data row))
+               v (expr/evaluate form {:data data :balance-over (:balance-over ctx)})]
+           (when-not (expr/unknown? v) v)))})
+
+(defn- project-reconciles
+  "`:reconciles` (docs/spec-ledger-money.md §7, ledger step 9d): each
+  side, and their gap — the first side less the second, as declared —
+  appears on the close row as a read-only :computed field, summed over
+  the period from the postings themselves, so nobody types a total. The
+  accounts the sides name are what the close closes, recorded as
+  :closes."
+  [rmap]
+  (if-some [rc (:reconciles rmap)]
+    (let [{:keys [period sides tolerance]} rc
+          ty (case (tolerance-unit (reconcile-tolerance tolerance))
+               :count :int
+               :decimal :decimal
+               :waymark/money)
+          [[a fa] [b fb]] (seq sides)
+          help (str "Summed from the postings effective in the period; never written by hand.")]
+      (-> rmap
+          (update :computed merge
+                  {a (reconcile-fact (expr/normalize (over-period fa period)) ty help)
+                   b (reconcile-fact (expr/normalize (over-period fb period)) ty help)
+                   :gap (reconcile-fact (expr/normalize (over-period (list '- fa fb) period)) ty
+                                        (str (name a) " less " (name b) " over the period; never written by hand."))})
+          (assoc :closes (into #{} (map second) (mapcat balance-forms (vals sides))))))
     rmap))
 
 (defn- line-reads
@@ -2269,6 +2605,41 @@
               es)))
     rmap))
 
+(defn- word-not-by-walls
+  "Each derived :not-by wall built again with the kind in view, so its
+  refusal says what the member did: the stamping door's label in the
+  past tense, this kind's noun and this door's verb — \"Ana Lopez
+  packed this order, so someone else checks it.\" (docs/spec-teams.md
+  §4). A guard declared by hand under the wall's name is left alone."
+  [r]
+  (let [label (fn [a] (not-empty (get-in a [:display :label])))
+        did (into {}
+                  (for [a (vals (:actions r))
+                        :let [l (label a)]
+                        :when l
+                        f (keys (:stamp a))]
+                    [f (g/past-tense l)]))
+        noun (str/replace (name (:kind r)) "_" " ")]
+    (update r :actions
+            (fn [actions]
+              (into (sorted-map)
+                    (map (fn [[aname a]]
+                           (if-some [nb (:not-by a)]
+                             (let [bare (g/not-by nb)
+                                   act (or (label a) (name aname))
+                                   wall (g/not-by nb {:did did :noun noun
+                                                      :verb (g/third-person act)
+                                                      :act (str/lower-case (str/trim act))})]
+                               [aname (update a :guards
+                                              (fn [gs]
+                                                (mapv #(if (and (= (:name bare) (:name %))
+                                                                (= (:explain bare) (:explain %)))
+                                                         wall
+                                                         %)
+                                                      gs)))])
+                             [aname a])))
+                    actions)))))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -2283,7 +2654,7 @@
   ;; effects last: an effect door's two hidden doors are woven from the
   ;; states and doors the spellings above left
   (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields
-                 effect/weave)
+                 desugar-documents effect/weave)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]
@@ -2310,12 +2681,17 @@
         (throw (t/definition-error
                 (str ":retain is {:judgment bool? :data bool?} — what the "
                      "transition log carries forward past the write")))))
+    ;; :keep (docs/spec-documents.md §4) — how long the kind is kept,
+    ;; from when, and which door ends it
+    (retention/check! rmap)
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (check-over! rmap)
     (check-accounts! rmap)
     (check-rate-table! rmap)
+    (check-reconciles! rmap)
+    (check-conserves! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
@@ -2336,9 +2712,17 @@
      (-> rmap
         project-accounts
         project-totals
+        project-reconciles
         project-colocated
         desugar-owns
         project-lines
+        ;; :keep's retention-has-passed on its :then door, woven in
+        ;; before the doors are normalized
+        retention/weave
+        ;; :measures (docs/spec-measures.md §2): each measure's
+        ;; defaults written in, :of this kind and :at-least 10
+        (cond-> (:measures rmap)
+          (update :measures #(measures/with-defaults kind %)))
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)
@@ -2357,6 +2741,7 @@
                                                             true)))]))
                                  actions)))
         verify-undo-pointers
+        word-not-by-walls
         (update :create-guards #(vec (or % [])))
         (update :create-action-names #(or % #{:create}))
         (as-> r (normalize-creates kind r))

@@ -53,13 +53,30 @@
 
   follow: one hop to a field of the row a ref names
   (docs/spec-related-row-law.md §2), earned by the household meal
-  list's meal-is-listed.
+  list's meal-is-listed. Its ref may also be a quantifier's binder,
+  whose kind is the collection's ref kind, or one follow before it —
+  two hops in all — earned by docs/spec-documents.md §3's
+  <field>-is-filed and its :via consent form.
+
+  cond: (cond test value … :else value) is the value of the first test
+  that is true, earned by the same derived :evidence tree, which says
+  one of three sentences. Kleene: a test that is unknown before any
+  true one leaves the choice unknown. :else normalizes to true.
 
   did/me/self (docs/spec-related-row-law.md §4): separation of duties —
   who took a door on this row, who acts now, and which row this is.
   They read the scope's :actors, :faces, :principal and :self, which
   the guard scope fills from its ctx; a scope without them answers
   unknown.
+
+  actor/holds-role?/in-team? (docs/spec-teams.md §4): who acts, and
+  what they hold. (actor) is the member the log names — an agent is
+  the agent, a seat its sitter — and (actor :acts-for) the person an
+  agent acts for, else the actor. (holds-role? m r) is a role on the
+  member's own row or conferred by an active team it is on;
+  (in-team? m t) is membership of an active team, by its id or name.
+  They read the scope's :actor, :acts-for, :holds-role? and :in-team?,
+  which the guard scope fills from its ctx; without them, unknown.
 
   exists/none/count-rows (docs/spec-related-row-law.md §3): other rows
   of a kind, asked through a where the guard's own scope fills, the
@@ -120,7 +137,14 @@
   :on_hand]), or (balance [:house :fees]) — through the scope's
   :balance hook, which the write answers under the row's lock. A row
   part that names no row, or no hook to ask, is unknown, as on the
-  probe.
+  probe. With a period (docs/spec-ledger-money.md §7, ledger step 9b),
+  (balance [:house :processor_in] {:from d1 :until d2}) is what the
+  account's postings effective on or after :from and before :until
+  add, through the scope's :balance-over hook — a house account's too,
+  since that sum reads the postings and no row. Either bound unknown,
+  or no hook to ask, is unknown. (balance [:all :order :paid]) (ledger
+  step 9c) sums account :paid across every row of :order, with or
+  without a period: the hook is asked with :all for the row.
 
   lines/line (docs/spec-ledger-money.md §6, ledger step 6b): (lines) is
   the door's lines — the input's when the door takes `lines`, the
@@ -135,7 +159,7 @@
   the unknown says which rate is missing."
   '#{data input var now it get date balance lines line rate
      = not= < <= > >=
-     and or not
+     and or not cond
      + - * / min max abs
      money amount currency round
      str
@@ -143,7 +167,7 @@
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso instant
      every some count sum
-     follow did me self event result
+     follow did me self actor holds-role? in-team? event result
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
@@ -234,6 +258,17 @@
           (me self)
           (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
 
+          actor
+          (if (or (zero? n) (and (= n 1) (= :acts-for (first args))))
+            problems
+            (conj problems "(actor) takes no argument, or :acts-for"))
+
+          (holds-role? in-team?)
+          (if (= n 2)
+            (check (second args) env depth (check (first args) env depth problems))
+            (conj problems (str "(" op " member " (if (= op 'holds-role?) "role" "team")
+                                ") takes two expressions")))
+
           lines
           (if (zero? n) problems (conj problems "(lines) takes no arguments"))
 
@@ -299,19 +334,30 @@
                                 "and a calendar ref third when the resource names one")))
 
           ;; authored (follow <ref> :field); normalized at the def site
-          ;; to (follow :kind <ref> :field)
+          ;; to (follow :kind <ref> :field). The ref is (data :f),
+          ;; (input :f), (line :f), a quantifier's binder, or one follow
+          ;; before it — two hops in all
           follow
-          (let [[kind ref field] (if (= n 3) args (cons nil args))]
+          (let [[kind ref field] (if (= n 3) args (cons nil args))
+                hop? #(and (seq? %) (= 'follow (first %)))
+                binder? #(or (contains? env %)
+                             (and (seq? %) (= 'it (first %)) (= 2 (count %))
+                                  (nat-int? (second %))
+                                  (< (long (second %)) (+ depth (count env)))))]
             (cond
               (not (<= 2 n 3))
               (conj problems "(follow <ref> :field) takes a ref and a field")
               (and (= n 3) (not (keyword? kind)))
               (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
-              (not (follow-ref? ref))
-              (conj problems (str "(follow …) starts from (data :f), (input :f) or (line :f) — "
-                                  "one hop; got " (pr-str ref)))
+              (and (hop? ref) (hop? (last (butlast ref))))
+              (conj problems (str "(follow …) reaches at most two hops; a third starts from "
+                                  (pr-str (last (butlast ref)))))
+              (not (or (follow-ref? ref) (binder? ref) (hop? ref)))
+              (conj problems (str "(follow …) starts from (data :f), (input :f), (line :f), "
+                                  "a quantifier's binder or one (follow …); got " (pr-str ref)))
               (not (keyword? field))
               (conj problems "(follow …) reads one keyword field of the row it reaches")
+              (hop? ref) (check ref env depth problems)
               :else problems))
 
           ;; authored (exists [b :kind {field (op <expr>)}]); normalized
@@ -326,19 +372,30 @@
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
 
-          ;; (balance [:kind <row> :account]) or (balance [:house :account])
+          ;; (balance [:kind <row> :account]), (balance [:house :account])
+          ;; or (balance [:all :kind :account]), and over a period
+          ;; {:from <date> :until <date>}
           balance
-          (let [a (first args)]
+          (let [[a p] args
+                problems (cond
+                           (not (and (<= 1 n 2) (vector? a)))
+                           (conj problems "(balance [:kind <row> :account]) takes one account address")
+                           (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
+                           problems
+                           (and (= 3 (count a)) (= :all (first a)) (keyword? (second a)) (keyword? (nth a 2)))
+                           problems
+                           (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
+                           (check (nth a 1) env depth problems)
+                           :else
+                           (conj problems (str "(balance …) reads [:kind <row> :account], [:house :account] or [:all :kind :account]; got "
+                                               (pr-str a))))]
             (cond
-              (not (and (= n 1) (vector? a)))
-              (conj problems "(balance [:kind <row> :account]) takes one account address")
-              (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
-              problems
-              (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
-              (check (nth a 1) env depth problems)
+              (< n 2) problems
+              (and (map? p) (= #{:from :until} (set (keys p))))
+              (check (:until p) env depth (check (:from p) env depth problems))
               :else
-              (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
-                                  (pr-str a)))))
+              (conj problems (str "(balance …) takes its period as {:from <date> :until <date>}; got "
+                                  (pr-str p)))))
 
           ;; (rate :table {:key-field <expr>} <date>), the date (today)
           ;; when left out
@@ -388,6 +445,14 @@
           (if (<= 1 n 2)
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems "(- …) takes one or two expressions"))
+
+          ;; (cond test value … :else value): the first true test chooses
+          cond
+          (if (and (pos? n) (even? n))
+            (reduce (fn [p [t v]]
+                      (check v env depth (if (= :else t) p (check t env depth p))))
+                    problems (partition 2 args))
+            (conj problems "(cond test value … :else value) takes its tests and values in pairs"))
 
           (every some count sum)
           (cond
@@ -612,8 +677,10 @@
 
         ;; an address's row part normalizes as any expression does
         balance
-        (let [[a] args]
-          (list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)))
+        (let [[a p] args]
+          (apply list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)
+                 (when (some? p)
+                   [(if (map? p) (into {} (map (fn [[k v]] [k (norm v)])) p) p)])))
 
         ;; a rate with no date is a rate on (today): one law
         rate
@@ -626,6 +693,10 @@
         (if-some [a (money/canonical-amount (first args))]
           (list 'money a (second args))
           (cons op args))
+
+        ;; :else is the test that always holds: one law with true
+        cond
+        (cons op (map-indexed (fn [i a] (if (and (even? i) (= :else a)) true a)) args))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -1190,6 +1261,20 @@
         it    (nth (:its scope) (long (first args)) nil)
         me    (if (contains? scope :principal) (:principal scope) unknown)
         self  (if (contains? scope :self) (:self scope) unknown)
+        ;; who acts (spec-teams §4): the member the log names, or the
+        ;; person an agent acts for
+        actor (cond (not (contains? scope :actor)) unknown
+                    (= :acts-for (first args)) (:acts-for scope)
+                    :else (:actor scope))
+        ;; what a member holds, through the scope's team reads; no
+        ;; hook to ask is unknown, no member or no name is false
+        (holds-role? in-team?)
+        (let [ask (clojure.core/get scope (clojure.core/keyword op))
+              m (evaluate (first args) scope)
+              x (evaluate (second args) scope)]
+          (cond (or (nil? ask) (unknown? m) (unknown? x)) unknown
+                (or (nil? m) (nil? x)) false
+                :else (boolean (ask (str m) (str x)))))
         ;; the door's lines (ledger step 6b), read only when asked
         lines (if (contains? scope :lines)
                 (let [ls (:lines scope)] (vec (if (delay? ls) @ls ls)))
@@ -1372,6 +1457,8 @@
               abs
               (let [v (first all)]
                 (cond
+                  (money/money? v) (money/->Money (.abs ^java.math.BigDecimal (:amount v))
+                                                  (:currency v))
                   (decimal? v) (.abs ^java.math.BigDecimal v)
                   (number? v) (clojure.core/abs v)
                   :else nil)))))
@@ -1388,17 +1475,29 @@
 
         ;; an account's balance through the scope's :balance hook: a row
         ;; part that names no row, an account no row carries, or no hook
-        ;; to ask is unknown
+        ;; to ask is unknown; over a period, through the :balance-over
+        ;; hook, and a bound that is not a known date is unknown too
         balance
-        (let [a (first args)
-              [kind row-form account] (if (= 2 (count a)) [(first a) nil (second a)] a)
+        (let [[a period] args
+              ;; [:all kind name]: the account on every row of the kind
+              all? (and (= 3 (count a)) (= :all (first a)))
+              [kind row-form account] (cond (= 2 (count a)) [(first a) nil (second a)]
+                                            all? [(second a) nil (nth a 2)]
+                                            :else a)
               row (when row-form (evaluate row-form scope))
-              hook (:balance scope)]
+              dated (fn [f]
+                      (let [v (evaluate f scope)]
+                        (if (string? v) (try (LocalDate/parse ^String v) (catch Exception _ nil)) v)))
+              [from until] (when period [(dated (:from period)) (dated (:until period))])
+              hook (if period (:balance-over scope) (:balance scope))]
           (cond
             (unknown? row) unknown
             (and row-form (or (nil? row) (= "" (clojure.core/str row)))) unknown
+            (and period (or (unknown? from) (unknown? until))) unknown
+            (and period (not (and (instance? LocalDate from) (instance? LocalDate until)))) unknown
             (nil? hook) unknown
-            :else (let [v (hook kind (some-> row clojure.core/str) account)]
+            :else (let [id (if all? :all (some-> row clojure.core/str))
+                        v (if period (hook kind id account from until) (hook kind id account))]
                     (if (nil? v) unknown v))))
 
         ;; the rate in effect on a date through the scope's :rate hook:
@@ -1421,6 +1520,16 @@
                                                          (interpose " " (map (comp str-part val) (sort kvs))))
                                                   " on " on))
                       v))))
+
+        ;; the first clause whose test is true chooses; a test that is
+        ;; unknown before any true one leaves the choice unknown
+        cond
+        (loop [cs (partition 2 args)]
+          (when-some [[t v] (first cs)]
+            (let [tv (if (= :else t) true (evaluate t scope))]
+              (cond (unknown? tv) unknown
+                    (truthy? tv) (evaluate v scope)
+                    :else (recur (rest cs))))))
 
         ;; one hop through the scope's :read hook: a nil ref, an id no
         ;; row has and a row the caller may not see answer nil; no
@@ -1466,8 +1575,9 @@
 
 (defn info
   "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
-  A form that asks who acts adds :doors (from did), :uses-me and
-  :uses-self; a form that asks no such thing carries none of them.
+  A form that asks who acts adds :doors (from did), :uses-me (me and
+  actor) and :uses-self; a form that asks no such thing carries none
+  of them. (holds-role? …) and (in-team? …) add :uses-teams.
   A form that follows adds :follows, the kinds written into its follows;
   one that asks exists/none/count-rows adds :queries, the kinds asked;
   one that reads (balance …) adds :balances, the kinds whose rows it reads;
@@ -1484,10 +1594,11 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
-                  balance (let [a (first args)]
-                            (if (and (vector? a) (= 3 (count a)))
-                              (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
-                              acc))
+                  balance (let [[a p] args
+                                acc (if (and (vector? a) (= 3 (count a)))
+                                      (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
+                                      acc)]
+                            (if (map? p) (reduce #(walk %2 %1) acc (vals p)) acc))
                   rate (reduce #(walk %2 %1)
                                (cond-> (update acc :rates (fnil conj #{}) (first args))
                                  (= 2 (count args)) (assoc :uses-today true :uses-calendar true))
@@ -1498,7 +1609,10 @@
                                  (remove keyword? args))
                   did   (update acc :doors (fnil into #{}) args)
                   me    (assoc acc :uses-me true)
+                  actor (assoc acc :uses-me true)
                   self  (assoc acc :uses-self true)
+                  (holds-role? in-team?)
+                  (reduce #(walk %2 %1) (assoc acc :uses-teams true) args)
                   today (assoc acc :uses-today true :uses-calendar true)
                   (local-date business-days business-day? next-business-day working?)
                   (reduce #(walk %2 %1) (assoc acc :uses-calendar true) args)
@@ -1528,11 +1642,13 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self queries rates]} (info form)
+  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self uses-teams queries rates]} (info form)
         undeclared (remove over vars)]
     (cond-> []
       (or (seq doors) uses-me uses-self)
       (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
+      uses-teams
+      (conj "derived expressions read declared inputs, not members and teams: (holds-role? …), (in-team? …)")
       (seq queries)
       (conj "derived expressions read declared inputs, not other rows: (exists …), (none …), (count-rows …)")
       (seq rates)
@@ -1581,20 +1697,60 @@
 (defn bind-follows
   "Write the target kind into every (follow <ref> :field): `kind-of`
   answers the ref form's kind, or nil to leave that follow as written.
-  The stored tree then evaluates under a later revision without the
-  resident schema, and retargeting a ref moves the fingerprint."
+  A quantifier's binder is a ref too: its kind is what `kind-of`
+  answers for (each <coll>), the kind the collection's ids name, so
+  (follow a :state) inside (every [a (data :photos)] …) reaches it. A
+  follow's own ref is bound first, so `kind-of` sees a second hop's ref
+  as the bound (follow :kind <ref> :f), and a binder over a follow as
+  (each (follow :kind <ref> :f)); what those reach is another kind's
+  schema, so the registry answers them (`assembly-ref?`). The stored tree then evaluates
+  under a later revision without the resident schema, and retargeting
+  a ref moves the fingerprint."
   [form kind-of]
-  (cond
-    (seq? form)
-    (let [[op & args] form]
-      (if (and (= 'follow op) (= 2 (count args)))
-        (if-some [kind (kind-of (first args))]
-          (list 'follow kind (first args) (second args))
-          form)
-        (cons op (map #(bind-follows % kind-of) args))))
-    (vector? form) (mapv #(bind-follows % kind-of) form)
-    (map? form) (into {} (map (fn [[k v]] [k (bind-follows v kind-of)])) form)
-    :else form))
+  (letfn [(binder-ref? [x]
+            (or (symbol? x) (and (seq? x) (= 'it (first x)))))
+          (binder-kind [x binders]
+            (if (symbol? x)
+              (some (fn [[b k]] (when (= b x) k)) binders)
+              (when (nat-int? (second x))
+                (second (nth binders (second x) nil)))))
+          (walk [form binders]
+            (cond
+              (seq? form)
+              (let [[op & args] form
+                    head (first args)]
+                (cond
+                  (and (= 'follow op) (= 2 (count args)))
+                  (let [ref (walk head binders)]
+                    (if-some [kind (if (binder-ref? ref)
+                                     (binder-kind ref binders)
+                                     (kind-of ref))]
+                      (list 'follow kind ref (second args))
+                      (list 'follow ref (second args))))
+
+                  ;; (every [a coll] pred) or (every coll pred): the binder
+                  ;; reaches the kind the collection names
+                  (and (contains? quantifier-ops op) (= 2 (count args))
+                       (or (not (vector? head)) (= 2 (count head))))
+                  (let [authored? (vector? head)
+                        coll (walk (if authored? (second head) head) binders)
+                        binder [(when authored? (first head)) (kind-of (list 'each coll))]]
+                    (list op (if authored? (assoc head 1 coll) coll)
+                          (walk (second args) (cons binder binders))))
+
+                  :else (cons op (map #(walk % binders) args))))
+              (vector? form) (mapv #(walk % binders) form)
+              (map? form) (into {} (map (fn [[k v]] [k (walk v binders)])) form)
+              :else form))]
+    (walk form ())))
+
+(defn assembly-ref?
+  "True for a ref whose kind only the registry can write, where every
+  kind's schema is known: a follow, the hop a second hop starts from,
+  or (each (follow …)), the ids a binder over one reaches."
+  [ref]
+  (let [x (if (and (seq? ref) (= 'each (first ref))) (second ref) ref)]
+    (and (seq? x) (= 'follow (first x)))))
 
 ;; ── exists / none / count-rows: the binder kept for evidence (§3) ───
 
@@ -1653,7 +1809,7 @@
        :where (nth (normalize (list 'exists [c kind where])) 2)
        :pred (norm (debruijn pred {c 0} 1))})))
 
-;; ── next-free: the next open window, evidence-only (calendar §5) ─────
+;; ── next-free: the next open window, for evidence and bumps (calendar §5)
 
 (def ^:private next-free-cap
   "How many business days a next-free scan walks (calendar spec §5)."
@@ -1668,36 +1824,41 @@
   business day's candidates start at its opening hour and step by the
   window's length inside its hours, or keep the window's time of day
   when the calendar keeps none; only one later than the window counts.
-  nil when the scope cannot say (no calendar hook, no window). Asked
-  only when a guard refuses, never in a verdict."
-  [scope from-form to-form ref-form free?]
-  (let [from (instant-of (evaluate from-form scope))
-        to (instant-of (evaluate to-form scope))
-        ref (when (some? ref-form) (evaluate ref-form scope))
-        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
-    (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
-      (let [^ZoneId zone (:zone c)
-            len (Duration/between ^Instant from ^Instant to)
-            start (.atZone ^Instant from zone)
-            day (.toLocalDate start)
-            starts (fn [^LocalDate d]
-                     (if-some [{open :from close :to} (:hours c)]
-                       (let [end (.atZone (.atTime d ^LocalTime close) zone)]
-                         (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
-                                     (iterate #(.plus ^ZonedDateTime % len)
-                                              (.atZone (.atTime d ^LocalTime open) zone))))
-                       [(.atZone (.atTime d (.toLocalTime start)) zone)]))
-            found (loop [^LocalDate d day left next-free-cap walked 0]
-                    (cond
-                      (or (zero? left) (>= walked business-walk-cap)) nil
-                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
-                      :else (or (some (fn [^ZonedDateTime z]
-                                        (let [s (.toInstant z)]
-                                          (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
-                                      (starts d))
-                                (recur (.plusDays d 1) (dec left) (inc walked)))))]
-        (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
-          found (assoc :from found :to (.plus ^Instant found len)))))))
+  `first-day-of`, when given, maps the window's day to the day the scan
+  starts on instead — an :occupies :bumps door's, the next one. nil
+  when the scope cannot say (no calendar hook, no window). Asked when a
+  guard refuses, and by a bump door's guard and handler."
+  ([scope from-form to-form ref-form free?]
+   (next-free scope from-form to-form ref-form free? nil))
+  ([scope from-form to-form ref-form free? first-day-of]
+   (let [from (instant-of (evaluate from-form scope))
+         to (instant-of (evaluate to-form scope))
+         ref (when (some? ref-form) (evaluate ref-form scope))
+         c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+     (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
+       (let [^ZoneId zone (:zone c)
+             len (Duration/between ^Instant from ^Instant to)
+             start (.atZone ^Instant from zone)
+             day (.toLocalDate start)
+             starts (fn [^LocalDate d]
+                      (if-some [{open :from close :to} (:hours c)]
+                        (let [end (.atZone (.atTime d ^LocalTime close) zone)]
+                          (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
+                                      (iterate #(.plus ^ZonedDateTime % len)
+                                               (.atZone (.atTime d ^LocalTime open) zone))))
+                        [(.atZone (.atTime d (.toLocalTime start)) zone)]))
+             found (loop [^LocalDate d (if first-day-of (first-day-of day) day)
+                          left next-free-cap walked 0]
+                     (cond
+                       (or (zero? left) (>= walked business-walk-cap)) nil
+                       (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                       :else (or (some (fn [^ZonedDateTime z]
+                                         (let [s (.toInstant z)]
+                                           (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
+                                       (starts d))
+                                 (recur (.plusDays d 1) (dec left) (inc walked)))))]
+         (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
+           found (assoc :from found :to (.plus ^Instant found len))))))))
 
 (defn- date-of
   "A date, or its ISO wire string, as a LocalDate; anything else nil."

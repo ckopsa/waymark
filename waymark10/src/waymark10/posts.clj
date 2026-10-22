@@ -11,19 +11,22 @@
   account arrives in another.
 
   `:each coll` repeats an entry once per element of coll, usually
-  (lines), each read there as (line …) (ledger step 6b). `:on` arrives
-  with the governing calendar (step 9); until then it is refused by
-  name."
+  (lines), each read there as (line …) (ledger step 6b). `:on` dates
+  the entry (step 9a): an expression that evaluates to a date, the
+  posting's effective_on; without it the posting is dated the house's
+  day."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
             [waymark10.money :as money]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time LocalDate)
+           (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
 
-(def entry-keys #{:account :amount :sign :when :each})
+(def entry-keys #{:account :amount :sign :when :each :on})
 
-(def move-keys #{:move :from :to :when :each})
+(def move-keys #{:move :from :to :when :each :on})
 
 (defn- account-problem
   "What is wrong with an entry's :account, or nil; `depth` is 1 inside
@@ -60,8 +63,6 @@
      (mapcat
       (fn [e]
         (when-not (map? e) (bad (str "an entry is a map; got " (pr-str e))))
-        (when (contains? e :on)
-          (bad ":on dates an entry in the governing calendar and arrives with periods (§14, step 9)"))
         (let [move? (contains? e :move)
               allowed (if move? move-keys entry-keys)
               ;; an :each entry's forms stand inside its repetition,
@@ -72,9 +73,11 @@
           (some-> (form-problem (if move? :move :amount) e depth) bad)
           (when (contains? e :when) (some-> (form-problem :when e depth) bad))
           (when (contains? e :each) (some-> (form-problem :each e 0) bad))
+          (when (contains? e :on) (some-> (form-problem :on e depth) bad))
           (let [conditional (cond-> {}
                               (contains? e :when) (assoc :when (expr/normalize (:when e)))
-                              (contains? e :each) (assoc :each (expr/normalize (:each e))))
+                              (contains? e :each) (assoc :each (expr/normalize (:each e)))
+                              (contains? e :on) (assoc :on (expr/normalize (:on e))))
                 entry (fn [acct amount sign]
                         (some-> (account-problem acct depth) bad)
                         (merge {:account (if (= 3 (count acct))
@@ -100,11 +103,19 @@
     (money/->Money (.negate ^java.math.BigDecimal (:amount a)) (:currency a))
     (- a)))
 
+(defn- as-date
+  "An :on value as a LocalDate — a date, or its wire spelling — or nil."
+  [v]
+  (cond (instance? LocalDate v) v
+        (string? v) (try (LocalDate/parse ^String v)
+                         (catch DateTimeParseException _ nil))))
+
 (defn entries
   "The postings canonical `posts` write over `scope` — {:data (the row as
   the door leaves it) :input :now :self :lines} — as postings/post! takes
   them: {:account-kind :account-row :account-name :amount}, the amount
-  signed. An entry with :each writes once per element of its
+  signed, plus :effective-on when the entry names :on — a date, or the
+  entry refuses. An entry with :each writes once per element of its
   collection, in order, each element read as (line …); an :each that is
   unknown or not a list refuses. An entry whose :when is false writes
   nothing. An amount that is
@@ -133,7 +144,10 @@
                        (refuse (str "whether the entry to " (name n) " posts is unknown")))
                      (true? holds))]
        (let [row (when r (expr/evaluate r scope))
-             a (expr/evaluate amount scope)]
+             a (expr/evaluate amount scope)
+             on (when (contains? e :on) (as-date (expr/evaluate (:on e) scope)))]
+         (when (and (contains? e :on) (nil? on))
+           (refuse (str "the entry to " (name n) " posts on a date; its :on is not one")))
          (when (and r (or (nil? row) (expr/unknown? row) (str/blank? (str row))))
            (refuse (str "the entry to " (name n) " names no " (name k) " row")))
          (cond
@@ -143,7 +157,8 @@
            (refuse (str "the amount for " (name n) " is not a number or money"))
            (negative? a)
            (refuse (str "the amount for " (name n) " is negative; the entry's :sign says the direction")))
-         {:account-kind k
-          :account-row (when r (str row))
-          :account-name n
-          :amount (if (= :- sign) (negate a) a)})))))
+         (cond-> {:account-kind k
+                  :account-row (when r (str row))
+                  :account-name n
+                  :amount (if (= :- sign) (negate a) a)}
+           on (assoc :effective-on on)))))))

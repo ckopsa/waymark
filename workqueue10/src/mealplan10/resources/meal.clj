@@ -258,6 +258,7 @@
              [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true :derived meal-est-cost
                               :sort true
+                              :not-money "household estimate in cents, never posted"
                               :x-display {:widget "money"
                                           :label "Est. cost"}}
              [:maybe :int]]

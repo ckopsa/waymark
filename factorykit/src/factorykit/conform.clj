@@ -43,7 +43,9 @@
             expected age (no_wait_limit), a money input no guard reads
             (money_unbounded), a :decided sentence that says a door a
             model seat holds waits for a person while no :hold guard
-            holds it (decided_says_held). Each sentence is a question
+            holds it (decided_says_held), an optional field no door
+            asks for that a door's guard reads off the row
+            (door_time_input). Each sentence is a question
             to put to the person; each clears in code — a :hold guard,
             an :expected-age, or the person's answer as :decided
   no-outside-world
@@ -51,6 +53,12 @@
             a4149376): a :rehearsal cast member whose :scope creates
             one of the org's kinds, and a world seat under
             :rehearsal :seats; org.edn's :world :none waives it
+  rehearsal the week's outside events and effects play on the clone
+            (ticket 524685a0): each integration the week posts an
+            :event from has a :rehearsal :steps step reading
+            [:param :signing_secret_<integration>], and each effect
+            door a week call walks has a :rehearsal :effects fake for
+            its tool
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -518,17 +526,60 @@
              (str "Above what amount should " (words an) " on " (a-an (words k)) " wait for you?")
              (str "Give " k "." an " a guard that reads its amount and holds the door for a person above the line, or write the person's answer as :decided \"…\"."))))
 
+(defn- optional-fields
+  "The names of a :map schema's optional fields."
+  [schema]
+  (when (and (vector? schema) (= :map (first schema)))
+    (keep (fn [e] (when (and (vector? e) (keyword? (first e))
+                             (map? (second e)) (:optional (second e)))
+                    (name (first e))))
+          (rest schema))))
+
+(defn- row-reads
+  "The fields a guard's law reads off the row, as (present? :k) or
+  (data :k)."
+  [g]
+  (let [g (guard-of g)]
+    (when (map? g)
+      (->> (tree-seq coll? seq (dissoc g :name :explain :remedies))
+           (keep #(when (and (seq? %) (symbol? (first %))
+                             (#{"present?" "data"} (name (first %)))
+                             (keyword? (second %)))
+                    (name (second %))))
+           distinct))))
+
+(defn- door-time-input-findings
+  "An optional field no door's :input names, so only the generated
+  editor writes it, that a door's guard reads off the row: the value
+  null on every create and filled by an edit right after, which
+  docs/orgkit.md § Door-time inputs calls the smell. The person's
+  answer on the door, as :decided, clears it."
+  [rs]
+  (for [r rs
+        :let [k (text (:kind r))
+              optional (set (optional-fields (:schema r)))
+              asked (set (mapcat (comp input-fields :input val) (:actions r)))]
+        [aname a] (sort-by (comp text key) (:actions r))
+        :let [an (text aname)]
+        :when (not (decided? a))
+        f (distinct (mapcat row-reads (:guards a)))
+        :when (and (optional f) (not (asked f)))]
+    (finding :decision ["door_time_input" k an f] (str k "." an)
+             (str "Is " (words f) " something you only know when " (words an) " happens?")
+             (str "If so, ask for it on " k "." an ": name it in the door's :input, write it with (r/field-writer [:" f "]) and guard on (input :" f "), as docs/orgkit.md § Door-time inputs shows. If not, make it a required create field, or write the person's answer on the door as :decided \"…\"."))))
+
 (defn- decision-findings
   "The person's business questions (ticket e1ed02c7), pure over the
   declarations and the seed's seats: who may take a final step, how
-  long a row may wait, how much money moves without a tap — in that
-  order, each in the org's kind order, after any :decided sentence the
-  law contradicts."
+  long a row may wait, how much money moves without a tap, which
+  values only a door knows — in that order, each in the org's kind
+  order, after any :decided sentence the law contradicts."
   [rs seats seed]
   (concat (decided-says-held-findings rs seats (owner-tap seed))
           (unheld-final-findings rs seats (owner-tap seed))
           (no-wait-limit-findings rs)
-          (money-unbounded-findings rs seats)))
+          (money-unbounded-findings rs seats)
+          (door-time-input-findings rs)))
 
 ;; ── world ───────────────────────────────────────────────────────────
 
@@ -555,6 +606,46 @@
       [(finding :no-outside-world [org] org
                 "Nobody outside the business starts work in the first week, so the film has nothing to show."
                 "Ask: \"Who outside your business starts work for you, and what do they send?\" Write each as a :rehearsal :cast member whose :scope creates what they send, and the world seat, as orgs/example does; or :world :none in org.edn.")])))
+
+;; ── the rehearsal's integrations ────────────────────────────────────
+
+(defn- week-of
+  "The org's week.edn as data; nil when it has none or it does not read,
+  which the week player reports."
+  [^File dir org]
+  (let [f (io/file dir "resources" org "week.edn")]
+    (when (.isFile f)
+      (try (edn/read-string (slurp f)) (catch Throwable _ nil)))))
+
+(defn- rehearsal-findings
+  "What the week asks of the rehearsal (ticket 524685a0): each
+  integration the week posts an `:event` from has a `:rehearsal :steps`
+  step reading `[:param :signing_secret_<integration>]`, so the clone
+  holds a secret to sign it with, and each effect door a week call walks
+  has a `:rehearsal :effects` fake for its tool, so the clone's wall
+  answers it. Pure over the kinds, the seed and the week."
+  [org rs seed week]
+  (let [calls (mapcat :calls (:days week))
+        steps (get-in seed [:rehearsal :steps])
+        fakes (set (map text (keys (get-in seed [:rehearsal :effects]))))
+        effects (into {} (for [r rs
+                               [a d] (:actions r)
+                               :let [power (get-in d [:effect :power])]
+                               :when (some? power)]
+                           [[(text (:kind r)) (name a)] (text power)]))]
+    (vec
+     (concat
+      (for [nm (distinct (keep #(some-> (:event %) name) calls))
+            :let [p (keyword (str "signing_secret_" nm))]
+            :when (not (some #(= [:param p] %) (tree-seq coll? seq steps)))]
+        (finding :rehearsal ["event-secret" org nm] org
+                 (str "The week posts a " nm " event, but the rehearsal gives the clone no secret to sign it with; add a secret step reading [:param :signing_secret_" nm "].")
+                 (str "Add a :rehearsal :steps step creating the " nm " integration's secret with :value [:param :signing_secret_" nm "], as docs/orgkit.md § Rehearsing an integration shows.")))
+      (for [tool (distinct (keep #(get effects [(text (:kind %)) (text (:action %))]) calls))
+            :when (not (fakes tool))]
+        (finding :rehearsal ["effect-fake" org tool] org
+                 (str "The week walks a door whose effect calls " tool ", but the rehearsal has no fake to answer it; add one under :rehearsal :effects.")
+                 (str "Add a fake for " tool " under the seed's :rehearsal :effects, as docs/orgkit.md § Rehearsing an integration shows.")))))))
 
 ;; ── the suite ───────────────────────────────────────────────────────
 
@@ -633,7 +724,8 @@
                     (scope-findings eng seats cloned))
                   (decision-findings rs (:seats (seed-seats seed)) seed)
                   (world-findings org rs seed
-                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))))))))))
+                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))
+                  (rehearsal-findings org rs seed (week-of dir org))))))))))
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its

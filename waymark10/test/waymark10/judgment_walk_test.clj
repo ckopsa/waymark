@@ -128,7 +128,9 @@
     :schema
     [:map
      [:vendor {:x-display {:label "Who was paid"}} [:string {:min 1 :max 60}]]
-     [:team {:x-display {:label "Whose budget"}} [:string {:min 1 :max 40}]]
+     [:team {:x-display {:label "Whose budget"}
+             :not-a-ref "a budget's name, not a team row"}
+      [:string {:min 1 :max 40}]]
      [:received_at {:x-display {:label "When it arrived"}} :waymark/instant]
      [:nudged {:optional true :x-display {:label "Times nudged"}}
       [:maybe [:int {:min 0 :max 1000}]]]]

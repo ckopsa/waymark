@@ -154,6 +154,8 @@
             ;; docs/spec-scenes.md: one performance of a scene
             "take"
             "task"
+            ;; docs/spec-teams.md §2: a crew or role-conferring group
+            "team"
             ;; docs/spec-transcript.md: and what a sitting said, one
             ;; row per sitting and one per line, core's beside the
             ;; sitting

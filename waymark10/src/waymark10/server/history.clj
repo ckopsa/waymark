@@ -217,12 +217,16 @@
              :action (:action t)
              :from (:from-state t)
              :to (:to-state t)
-             :actor (select-keys (:actor t) [:type :id :display :grant :model])
+             :actor (select-keys (:actor t) [:type :id :display :grant :model :via :via_display])
              :law_revision (:law-revision t)
              :evidence (evidence-tier rdef (:judgment t))}
       (:summary t) (assoc :summary (:summary t))
       ;; the hand's own sentence about the move (ticket 1d8f5f1c)
       (get-in t [:actor :why]) (assoc :why (get-in t [:actor :why]))
+      ;; an outside party through its system (docs/spec-teams.md §7):
+      ;; "Parcelco (via Shippo)"
+      (get-in t [:actor :via]) (assoc :by (str (get-in t [:actor :display])
+                                               " (via " (get-in t [:actor :via_display]) ")"))
       (seq (:acknowledged t)) (assoc :acknowledged (vec (:acknowledged t)))
       (:correlation-id t) (assoc :correlation_id (:correlation-id t))
       b (assoc :basis b)

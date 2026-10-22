@@ -30,7 +30,10 @@
                    of a list — count, sum, median or p90 of the target
                    rows whose :at time falls in the window
                    (waymark10.server.measure serves it at
-                   /api/dashboard_slots/{id}/-/measure); absent, the
+                   /api/dashboard_slots/{id}/-/measure); or
+                   {declared <kind>.<name>}, a measure the target kind
+                   declares, answered from its readings
+                   (docs/spec-measures.md §5); absent, the
                    panel is the list it always was
 
   :target, :where and :view are judged against a vocabulary only the
@@ -66,6 +69,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
@@ -128,8 +132,9 @@
                 (name (:kind trdef)))])))))
 
 (def measure-stats
-  "The statistics a measure panel may ask for."
-  ["count" "sum" "median" "p90"])
+  "The statistics a measure panel may ask for — the slot's own, which a
+  declared measure also speaks (waymark10.measures)."
+  measures/slot-stats)
 
 (def max-window-seconds
   "A measure's window ceiling: thirty days."
@@ -139,41 +144,28 @@
   "A measure's bucket ceiling — the sparkline's widest."
   60)
 
-(defn parse-measure-field
-  "A measure's :field as what it reads off each row: {:field k} for a
-  number field, {:duration [from to]} for duration(<from>,<to>) — the
-  seconds between two time fields. nil when blank or unparseable."
-  [s]
-  (let [s (str/trim (str s))]
-    (when-not (str/blank? s)
-      (if-some [[_ a b] (re-matches
-                         #"duration\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*\)"
-                         s)]
-        {:duration [(keyword a) (keyword b)]}
-        (when (re-matches #"[A-Za-z0-9_]+" s)
-          {:field (keyword s)})))))
+(def parse-measure-field
+  "A measure's :field as what it reads off each row (measures/parse-field,
+  shared with a declared measure)."
+  measures/parse-field)
 
 (def transition-prefix
   "A measure's :at spelling that counts the history log instead of a
   time field: transition:<action> (dashboard measures 2/3)."
-  "transition:")
+  measures/transition-prefix)
 
-(defn transition-action
-  "The action a measure's :at names as transition:<action> — the text
-  after the prefix, blank when none is given — or nil when :at names a
-  time field."
-  [at]
-  (let [s (str at)]
-    (when (str/starts-with? s transition-prefix)
-      (str/trim (subs s (count transition-prefix))))))
+(def transition-action
+  "The action a measure's :at names as transition:<action>, or nil when
+  :at names a time field (measures/transition-action)."
+  measures/transition-action)
 
 (defn- field-head [trdef f]
   (some-> (schema/field-schema (:schema trdef) f) schema/leaf-head))
 
 (def ^:private number-heads #{:int :double :decimal})
 
-(defn measure-problems
-  "One slot's :measure judged against the resolved target rdef: :at a
+(defn- adhoc-problems
+  "An ad-hoc :measure judged against the resolved target rdef: :at a
   time field or transition:<action> naming a declared action — which
   counts, so its stat is count and it reads no field — :field a number
   field or duration(<time>,<time>) — required by every stat but count
@@ -231,6 +223,35 @@
       (not (<= 1 (or (:buckets m) 0) max-buckets))
       (conj (str "measure buckets must be between 1 and " max-buckets)))))
 
+(def ^:private adhoc-keys
+  "The keys of the ad-hoc form, which a declared measure's law replaces."
+  [:stat :field :at :window_seconds :buckets])
+
+(defn- declared-problems
+  "A {:declared token} :measure (docs/spec-measures.md §5): the token
+  names a measure the target kind declares, and none of the ad-hoc
+  keys rides beside it."
+  [trdef m]
+  (let [token (str (measures/spelled (:declared m)))
+        extra (filter #(some? (get m %)) adhoc-keys)]
+    (cond-> []
+      (not (some #{token} (measures/tokens trdef)))
+      (conj (str "measure declared " (pr-str token)
+                 " names no measure of " (name (:kind trdef))))
+
+      (seq extra)
+      (conj (str "measure declared reads the measure's own law: leave out "
+                 (str/join ", " (map name extra)))))))
+
+(defn measure-problems
+  "One slot's :measure judged against the resolved target rdef: the
+  declared form by its token, the ad-hoc form by its keys. Returns
+  problem strings."
+  [trdef m]
+  (if (some? (:declared m))
+    (declared-problems trdef m)
+    (adhoc-problems trdef m)))
+
 (defn slot-problems
   "Every violation of one slot's field set against the live registry:
   rdef-of is the ctx :rdef-of consult, read' the ctx :read hook. An
@@ -261,6 +282,35 @@
       (t/allow))
     ;; no registry in scope (a render probe): advertise optimistically —
     ;; the write path always carries the consult
+    (t/allow)))
+
+;; A panel's heading names the number; a target belongs on a goal row,
+;; where it is judged (docs/spec-measures.md §8). Acknowledge the
+;; warning by its name to keep the words. No :open: the label's length
+;; bounds already tell the client what it wants, and there is no
+;; vocabulary to enumerate — any heading without a target passes.
+;; Broad on purpose: a target in ANY heading belongs on a goal row, so
+;; a slot with an ad-hoc measure, or none, is warned too; a slot naming
+;; a {:declared token} measure is told which measure the goal row is on.
+(defn label-target-vars
+  "The words label-states-no-target names, or nil when the label states
+  no target: the phrase, and the slot's declared measure token when it
+  names one (an empty string when it does not)."
+  [inp]
+  (when-some [phrase (some-> (:label inp) str checks/target-phrase)]
+    {:phrase (str "\"" phrase "\"")
+     :measure (if-some [d (get-in inp [:measure :declared])]
+                (str " " (pr-str (str (measures/spelled d))))
+                "")}))
+
+(g/defguard label-states-no-target
+  {:severity :warning
+   :judges [:label]
+   :vars [:phrase :measure]
+   :explain "This label states a target ({phrase}); set it as a goal row on the measure{measure} so it is judged."}
+  [_row inp _ctx]
+  (if-some [vars (label-target-vars inp)]
+    (t/deny {:vars vars})
     (t/allow)))
 
 ;; ── handlers ────────────────────────────────────────────────────────
@@ -296,9 +346,11 @@
                          ((:find ctx) slot-kind
                           {:dashboard_id (:id row) :state :active}
                           {:limit 200}))]
+        ;; the label was warned, and kept, at its own write
         ((:create ctx) slot-kind
          (-> (select-keys (:data s) slot-fields)
-             (assoc :dashboard_id new-id)))))
+             (assoc :dashboard_id new-id))
+         {:acknowledged #{:label-states-no-target}})))
     row))
 
 ;; ── the kinds ───────────────────────────────────────────────────────
@@ -414,26 +466,35 @@
                          :help "Optional: show one number over a time window instead of a list. Leave it empty for a list panel."}}})
 
 (def ^:private measure-form
-  "The :measure map, one shape for all three slot forms. The window and
-  bucket ceilings are the guard's to judge, so a refusal names them."
+  "The :measure map, one shape for all three slot forms: the ad-hoc
+  keys, or :declared alone. Which keys a form needs, and the window and
+  bucket ceilings, are the guard's to judge, so a refusal names them."
   [:maybe
    [:map
-    [:stat {:x-display {:label "Statistic"
+    [:declared {:optional true
+                :x-display {:raw true :label "Declared measure"
+                            :help "A measure the target kind declares, <kind>.<name>: the panel shows its goal, its verdict and its sealed windows. Leave the other measure keys empty."}}
+     [:maybe [:string {:min 3 :max 120}]]]
+    [:stat {:optional true
+            :x-display {:label "Statistic"
                         :help "count, sum, median or p90 of the rows in the window."}}
-     (into [:enum] measure-stats)]
+     [:maybe (into [:enum] measure-stats)]]
     [:field {:optional true
              :x-display {:label "Reads"
                          :help "A number field of the target, or duration(<time-field>,<time-field>). count needs none."}}
      [:maybe [:string {:max 120}]]]
-    [:at {:x-display {:label "Counted at"
+    [:at {:optional true
+          :x-display {:label "Counted at"
                       :help "The target's time field that places a row in the window — or transition:<action>, which counts that action's transitions from the history log."}}
-     [:string {:min 1 :max 60}]]
-    [:window_seconds {:x-display {:label "Window, in seconds"
+     [:maybe [:string {:min 1 :max 60}]]]
+    [:window_seconds {:optional true
+                      :x-display {:label "Window, in seconds"
                                   :help "How far back the number reads; at most thirty days."}}
-     [:int {:min 1}]]
-    [:buckets {:x-display {:label "Buckets"
+     [:maybe [:int {:min 1}]]]
+    [:buckets {:optional true
+               :x-display {:label "Buckets"
                            :help "How many equal pieces the window splits into for the sparkline; at most 60."}}
-     [:int {:min 1}]]]])
+     [:maybe [:int {:min 1}]]]]])
 
 (defn- slot-entry
   "One [:key props schema] entry of a slot form: the shared prose,
@@ -486,13 +547,13 @@
                    (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])
                    (slot-entry :measure {:optional true} measure-form)]
    :filterable {:state #{:eq :in}}
-   :create-guards [slot-composes-declared-primitives]
+   :create-guards [slot-composes-declared-primitives label-states-no-target]
    :actions
    {:revise {:from #{:active} :to :active
              :input slot-input
              :edit {:prefill [:label :target :where :view :seat :measure]}
              :record true
-             :guards [slot-composes-declared-primitives]
+             :guards [slot-composes-declared-primitives label-states-no-target]
              :safety {:idempotent true :reversible false :confirm false}
              :handler apply-slot
              :display {:label "Revise" :order 1

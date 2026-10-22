@@ -29,6 +29,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.declare :refer [defguard defscenario refuse]]
+            [waymark10.evidence :as evidence]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
@@ -351,6 +352,224 @@
       (is (str/includes? (first (scenario/judge timed s))
                          "consults the clock")))))
 
+;; ── :expect :lands — what an allowed door leaves on its row ────────
+
+(def ^:private retitled
+  "The errand with a door that computes data: its handler writes the
+  title it is given, shouted."
+  (r/resource
+   (-> errand-map
+       (dissoc :scenarios)
+       (assoc-in [:actions :retitle]
+                 {:from #{:open} :to :open
+                  :input [:map [:title [:string {:min 1 :max 80}]]]
+                  :safety {:idempotent true :reversible true :confirm false}
+                  :handler (fn [row inp _ctx]
+                             (assoc-in row [:data :title] (str/upper-case (:title inp))))}))))
+
+(defn- retitle [lands]
+  (scenario/scenario :retitle "Retitling an errand writes the new title."
+                     {:kind :errand :attempt :retitle
+                      :row {:state :open :data {:title "Take the bins out"}}
+                      :input {:title "bins"}
+                      :expect {:allowed true :lands lands}}))
+
+(deftest an-allowed-door-is-judged-by-what-it-lands
+  (testing "the field the handler writes holds what was said"
+    (is (= [] (scenario/judge retitled (retitle {:title "BINS"})))))
+  (testing "a wrong value fails naming the field and both values"
+    (let [[v :as vs] (scenario/judge retitled (retitle {:title "bins"}))]
+      (is (= 1 (count vs)))
+      (is (str/includes? v "Retitling an errand writes the new title."))
+      (is (str/includes? v ":title \"BINS\", not \"bins\""))))
+  (testing "a field the schema does not declare is an authoring fault"
+    (is (str/includes? (first (scenario/judge retitled (retitle {:colour "red"})))
+                       "schema does not declare")))
+  (testing "a handler that reaches for ctx :invoke is judged at the suite tier"
+    (let [reaching (r/resource
+                    (assoc-in errand-map [:actions :close :handler]
+                              (fn [row _ ctx] ((:invoke ctx) :errand "x" :close {} {}) row)))
+          s (scenario/scenario :reach "A curator closes it."
+                               {:kind :errand :attempt :close
+                                :row {:state :open :data {:title "Bins"}}
+                                :as {:id "ada" :type :person :roles #{:curator}}
+                                :expect {:allowed true :lands {:title "Bins"}}})]
+      (is (str/includes? (first (scenario/judge reaching s))
+                         "judge at the suite tier"))))
+  (testing ":lands with :refused is refused at definition"
+    (is (str/includes? (refusal #(scenario/scenario :s "A sentence."
+                                                    {:kind :errand :attempt :close
+                                                     :expect {:refused :curator-only
+                                                              :lands {:title "x"}}}))
+                       "a refusal lands nothing"))))
+
+;; ── teams and outside members, with no store (spec-teams §8) ────────
+
+(defguard crew-b-books
+  (refuse "Only someone on Crew B books this patio; ask one of them.")
+  '(in-team? (actor) "crew-b")
+  {:remedies [:approval_request/create]})
+
+(def ^:private job
+  (r/resource
+   {:kind :job
+    :plural "jobs"
+    :states [:open :booked]
+    :initial :open
+    :terminal #{:booked}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions
+    {:book {:from #{:open} :to :booked
+            :guards [crew-b-books]
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A booked job stays booked."}}}}))
+
+(def ^:private crew-cast
+  {:ana {:roles ["crew-lead"]} :luis {} :dana {}
+   :parcelco {:type :outside :roles ["carrier"]}})
+
+(def ^:private crew-teams
+  {:crew-b {:members [:ana :luis :parcelco]}
+   :therapists {:members [:dana] :roles ["pt"]}})
+
+(defn- booking [who expect]
+  (scenario/scenario :only-crew-b-books "Only someone on Crew B books the Hendersons' patio."
+                     {:kind :job :attempt :book
+                      :row {:state :open :data {:title "Hendersons' patio"}}
+                      :cast crew-cast :teams crew-teams :as who :expect expect}))
+
+(deftest a-scenario-declares-its-teams-and-outside-members
+  (testing "a crew member books, judged at the check tier"
+    (let [s (booking :luis {:allowed true})]
+      (is (scenario/check-tier? job s))
+      (is (= {:id "luis" :type :person :roles #{}} (select-keys (:as s) [:id :type :roles])))
+      (is (= [] (scenario/judge job s)))))
+  (testing ":as an outside member on the team acts as them"
+    (is (= [] (scenario/judge job (booking :parcelco {:allowed true})))))
+  (testing "someone on another team is refused by the wall"
+    (is (= [] (scenario/judge job (booking :dana {:refused :crew-b-books}))))
+    (is (seq (scenario/judge job (booking :dana {:allowed true})))))
+  (testing "a team or :as naming someone the cast does not declare refuses where it is written"
+    (is (str/includes? (refusal #(scenario/scenario :s "A sentence."
+                                                    {:kind :job :attempt :book :cast crew-cast
+                                                     :teams {:crew-c {:members [:otto]}}
+                                                     :expect {:allowed true}}))
+                       "whom :cast does not declare"))
+    (is (str/includes? (refusal #(booking :otto {:allowed true}))
+                       "whom :cast does not declare"))))
+
+;; ── documents: attachments as rows, a purge's skeleton (spec-documents §7) ──
+
+(def ^:private doc-quiet
+  {:idempotent true :reversible false :confirm false
+   :one-way "The prior value is on the audit trail."})
+
+(g/defguard person-erases
+  {:explain "A client is erased by a person; an agent's purge waits for the person's tap."
+   :open "No door clears this one; the call waits for the person's tap."
+   :reads [:principal]
+   :hold true}
+  [_ _ ctx]
+  (if (= :agent (:type (:principal ctx))) (t/deny) (t/allow)))
+
+(def ^:private clinic
+  (binding [*err* (java.io.StringWriter.)]
+    (evidence/derive-kinds
+     {:patient (r/resource
+                {:kind :patient
+                 :plural "patients"
+                 :states [:active :gone]
+                 :initial :active
+                 :terminal #{:gone}
+                 :summary "{data.name} · {state}"
+                 :schema [:map
+                          [:name [:string {:min 1 :max 80}]]
+                          [:consent_form {:optional true :waymark/document {:accept ["application/pdf"]}}
+                           :string]]
+                 :actions {:leave {:from #{:active} :to :gone :safety doc-quiet}}})
+      :note (r/resource
+             {:kind :note
+              :plural "notes"
+              :states [:draft :signed]
+              :initial :draft
+              :terminal #{:signed}
+              :summary "{data.body} · {state}"
+              :schema [:map
+                       [:body [:string {:min 1 :max 400}]]
+                       [:patient_id {:kind :patient} :waymark/ref]]
+              :actions {:sign {:from #{:draft} :to :signed :safety doc-quiet
+                               :evidence {:consent_form {:via :patient_id}}}}})
+      :client (r/resource
+               {:kind :client
+                :plural "clients"
+                :states [:active :purged]
+                :initial :active
+                :terminal #{:purged}
+                :summary "{data.name}"
+                :retain {:data true}
+                :schema [:map
+                         [:name {:personal true} [:string {:min 1 :max 80}]]
+                         [:born_on {:optional true :personal true} [:maybe :string]]
+                         [:phone {:optional true :personal true} [:maybe :string]]
+                         [:clinic {:optional true} [:maybe :string]]
+                         [:forms {:optional true :waymark/document {}} [:maybe [:vector :string]]]]
+                :actions {:purge {:from #{:active} :to :purged :purge true
+                                  :waives #{:required}
+                                  :guards [person-erases]
+                                  :safety {:idempotent true :reversible false :confirm true}}
+                          :rename {:from #{:active} :to :active :safety doc-quiet}}})})))
+
+(defn- signing [expect]
+  (scenario/scenario :unsigned "A note waits for the patient's consent form to finish uploading."
+                     {:kind :note :attempt :sign
+                      :given [{:kind :attachment :handle :f1 :state :pending
+                               :data {:name "consent.pdf" :media_type "application/pdf"}}
+                              {:kind :patient :handle :p1 :state :active
+                               :data {:name "Ana Ruiz" :consent_form "{given/f1}"}}]
+                      :row {:state :draft :data {:body "Seen today." :patient_id "{given/p1}"}}
+                      :expect expect}))
+
+(defn- erasing [attempt expect]
+  (scenario/scenario :erased "Erasing a client clears who they are and deletes their files."
+                     {:kind :client :attempt attempt
+                      :row {:state :active
+                            :data {:name "Ana Ruiz" :born_on "1980-02-03" :phone "555-0101"
+                                   :clinic "North" :forms ["f1" "f2" "f3"]}}
+                      :expect expect}))
+
+(deftest a-scenario-gives-attachments-as-rows
+  (testing "a pending file refuses the door, judged at the check tier"
+    (let [s (signing {:refused :consent-form-is-filed :because "still uploading"})]
+      (is (scenario/check-tier? (:note clinic) s))
+      (is (= [] (scenario/judge (:note clinic) s)))))
+  (testing "the allowance it does not earn fails in the household's words"
+    (let [[v] (scenario/judge (:note clinic) (signing {:allowed true}))]
+      (is (str/includes? v "finish uploading"))
+      (is (str/includes? v "consent-form-is-filed")))))
+
+(deftest a-purge-scenario-expects-the-skeleton
+  (let [client (:client clinic)]
+    (testing "the state, the fields cleared and the files deleted hold"
+      (let [s (erasing :purge {:state "purged" :cleared [:name :born_on :phone :forms]
+                               :deleted-attachments 3})]
+        (is (scenario/check-tier? client s))
+        (is (= [] (scenario/judge client s)))))
+    (testing "a wrong count fails naming both"
+      (let [[v :as vs] (scenario/judge client (erasing :purge {:state "purged" :deleted-attachments 2}))]
+        (is (= 1 (count vs)))
+        (is (str/includes? v "Erasing a client clears who they are"))
+        (is (str/includes? v "deleted-attachments 3, not 2"))))
+    (testing "a field the purge does not clear fails"
+      (is (str/includes? (first (scenario/judge client (erasing :purge {:cleared [:name :clinic]})))
+                         "the purge leaves cleared")))
+    (testing ":cleared on a door that is no purge is an authoring fault"
+      (is (str/includes? (first (scenario/judge client (erasing :rename {:cleared [:name]})))
+                         "is no :purge true door")))
+    (testing "a skeleton beside :refused is refused at definition"
+      (is (str/includes? (refusal #(erasing :purge {:refused :x :state "purged"}))
+                         "exactly one of :allowed and :refused")))))
+
 ;; ── the conformance tier, through the real door ─────────────────────
 
 (def ^:dynamic *eng* nil)
@@ -465,6 +684,24 @@
     (testing ":history-mode is :stage or :refuse, refused where it is written"
       (is (thrown? Exception (someone-finishes {:id "mom" :type :person}
                                                :history-mode :maybe))))))
+
+(deftest a-scenarios-cast-and-teams-are-staged
+  (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:errand :badge]})
+        s (scenario/scenario
+           :a-crew-curator-closes
+           "A curator on the crew closes the errand while a badge stands on record."
+           {:kind    :errand
+            :attempt :close
+            :given   [{:kind :badge :state :open :data {:name "crew_{{run}}"}}]
+            :row     {:state :open :data {:title "Take the bins out"}}
+            :cast    {:mom {:roles ["curator"]}}
+            :teams   {:crew {:members [:mom]}}
+            :as      :mom
+            :expect  {:allowed true}})]
+    (testing "the cast member and the team are rows before the attempt"
+      (is (nil? (#'packs/run-scenario ctx errand s))))
+    (testing "a second attempt on one engine enrols its own, under fresh names"
+      (is (nil? (#'packs/run-scenario ctx errand s))))))
 
 (defn- a-curator-closes-beside
   [given]

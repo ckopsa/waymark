@@ -6,11 +6,13 @@
   the world here is a map and no engine."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.money :as money]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live]
+            [waymark10.server.postings :as postings]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -613,3 +615,86 @@
             filed {:id "t" :state :draft :data (live/ticket-of c)}]
         (is (= "puller_away" (:crack c)))
         (is (empty? (of (live/unfiled (live/find-cracks w) [filed]) "puller_away")))))))
+
+;; [balance-drift] (docs/spec-ledger-money.md §10, ledger step 10c): a
+;; pass rewrites a drifted balance from its postings as the Ledger, with
+;; a log row, and files one ticket naming the row, the account and both
+;; numbers; a second pass finds nothing to repair and files nothing.
+
+(def ^:private till
+  (r/resource {:kind :lc_till
+               :plural "lc_tills"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:cash {:unit [:money "USD"]}}}))
+
+(deftest a-pass-repairs-and-reports-a-drifted-balance-once
+  (let [eng (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket till]})
+                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
+                   :fire-adapter (sch/fake-fire))
+        st (:storage eng)
+        till-id (str (:id (:row (inv/create! eng :lc_till {:name "front"} {:principal elena}))))
+        cash (fn []
+               (:amount (money/from-wire
+                         (get-in (store/with-tx st #(store/load-row st % :lc_till till-id {}))
+                                 [:data :cash])
+                         nil)))
+        filed (fn []
+                (store/with-tx st
+                  (fn [tx]
+                    (filterv #(str/includes? (str (get-in % [:data :detail]))
+                                             (str "[crack balance_drift:lc_till/" till-id "/cash:"))
+                             (store/query-rows st tx :ticket {:state :open} {:limit 200})))))]
+    (store/with-tx st
+      (fn [tx]
+        (postings/post! eng tx {:kind :lc_till :id till-id :action :take :log-id "log-1"}
+                        [{:account-kind :lc_till :account-row till-id :account-name :cash
+                          :amount (money/money "18.00" "USD")}])
+        ;; the cache drifts: a hand past the ledger writes the field
+        (inv/update-quiet! eng tx :lc_till till-id
+                           #(assoc % :cash (money/money "99.00" "USD")))))
+    (is (== 99 (cash)))
+    (live/pass! eng)
+    (testing "one pass rewrites the field from the postings"
+      (is (== 18 (cash))))
+    (testing "as the Ledger, with a log row"
+      (let [logs (store/with-tx st
+                   #(store/transitions st % {:kind :lc_till :resource-id till-id} {}))
+            rec (last logs)]
+        (is (= "recompute_balance" (name (:action rec))))
+        (is (str/includes? (pr-str (:actor rec)) (:id postings/poster)))))
+    (testing "and files one ticket naming the row, the account and both numbers"
+      (let [[t :as ts] (filed)
+            detail (get-in t [:data :detail])]
+        (is (= 1 (count ts)))
+        (doseq [s [till-id "cash" "99" "18" "Repaired: by the Ledger"]]
+          (is (str/includes? detail s) s))))
+    (testing "a second pass files nothing"
+      (live/pass! eng)
+      (is (= 1 (count (filed))))
+      (is (== 18 (cash))))))
+
+(deftest the-drift-sweep-reads-past-the-first-row-page
+  (let [eng (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket till]})
+                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
+                   :fire-adapter (sch/fake-fire))
+        st (:storage eng)
+        ids (mapv (fn [n]
+                    (Thread/sleep 2)
+                    (str (:id (:row (inv/create! eng :lc_till {:name (str "till " n)}
+                                                 {:principal elena})))))
+                  (range 3))
+        newest (peek ids)]
+    (store/with-tx st
+      (fn [tx]
+        (inv/update-quiet! eng tx :lc_till newest
+                           #(assoc % :cash (money/money "7.00" "USD")))))
+    (with-redefs [live/row-page 1]
+      (let [cs (live/balance-drift! eng)]
+        (testing "the newest row, past a one-row page, is judged and repaired"
+          (is (= 1 (count cs)))
+          (is (str/includes? (pr-str (first cs)) newest)))))))

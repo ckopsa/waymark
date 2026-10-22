@@ -24,6 +24,20 @@
   the start of the next day instead, and each such allow carries the
   warning `[week-allow-late]`: its call had expired by then.
 
+  EACH PARAM IS A STAND-IN. Every `[:param name]` the org's seed names
+  is filled with the string `week-<name>` (ticket 8db1541c): the week
+  never talks to an outside service, so a real secret has no place in
+  it, and it never reads WAYMARK10_SEED_PARAMS, so CI and a bench play
+  the same week.
+
+  AN EVENT IS THE WORLD'S (ticket 524685a0). A call `{:as :world :event
+  <integration> :body {…}}` is an outside system speaking: its body,
+  given an `id` when it has none, is signed with the key the
+  integration's secret row holds (on a rehearsal, the stand-in its
+  secret step reads) and posted to the receiver, and its receipt is
+  applied at once. Its entry's kind is `event`, its action the
+  integration's name, and its outcome the receipt's ending.
+
   A REFUSAL IS PART OF THE REPORT. The player throws only for a broken
   script: a row name no earlier call made, a cast it does not know, a
   kind the engine does not serve. Nothing renders and nothing leaves
@@ -34,14 +48,18 @@
             [clojure.walk :as walk]
             [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
+            [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org-boot]
+            [waymark10.server.secrets :as secrets]
+            [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire]
             [workqueue10.main :as main])
   (:import (java.io File)
+           (java.nio.charset StandardCharsets)
            (java.time Instant LocalDate ZoneOffset)))
 
 (set! *warn-on-reflection* true)
@@ -80,10 +98,16 @@
 
 (defn- as-of [c] (some-> (:as c) name keyword))
 
+(defn- event-name
+  "The integration an event call names, or \"\" when it names none."
+  [c]
+  (let [e (:event c)] (if (or (keyword? e) (string? e)) (name e) "")))
+
 (defn- checked!
   "Throw for a script the player cannot play: days that do not climb
   from 1 within the clock's 14, a `:card` that is not text of 1 to 280
-  characters, or a call with no known cast, kind or door. `rdefs` is
+  characters, a call with no known cast, kind or door, or an event that
+  is not the world's map of :event and :body. `rdefs` is
   the engine's resources."
   [week rdefs]
   (let [days (:days week)
@@ -105,14 +129,28 @@
         (throw (broken (str "Day " day " has a call made as `" (pr-str (:as c))
                             "`, and the week's cast is :world, :mayor and :person.")
                        {:call c})))
-      (when-not (get rdefs (keyword (str kind)))
+      (cond
+        (contains? c :event)
+        (when-not (and (= :world (as-of c)) (seq (event-name c)) (map? (:body c {})))
+          (throw (broken (str "Day " day " posts an event that is not {:as :world :event <integration> :body {…}}.")
+                         {:call c})))
+
+        (not (get rdefs (keyword (str kind))))
         (throw (broken (str "Day " day " calls `" kind "`, a kind this engine does not serve.")
-                       {:call c})))
-      (when (str/blank? (str action))
+                       {:call c}))
+
+        (str/blank? (str action))
         (throw (broken (str "Day " day " has a `" kind "` call that names no :action.")
                        {:call c}))))))
 
 ;; ── the engine ────────────────────────────────────────────────────────────────
+
+(defn stand-in-params
+  "The boot's params for the org `org` under `orgs-dir`: each param its
+  seed names, filled with the stand-in `week-<name>`."
+  [org orgs-dir]
+  (into {} (map (fn [k] [k (str "week-" (name k))]))
+        (seed/param-names (org-boot/read-seed org orgs-dir))))
 
 (defn boot!
   "An engine for the org `org` under `orgs-dir`, as an org clone boots
@@ -128,7 +166,7 @@
                   :suppress-mirror-refresh true
                   :clone? true
                   :now-fn (constantly now)})))]
-      (main/org-on-boot! eng org {:params {} :orgs-dir orgs-dir})
+      (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})
       eng)))
 
 (defn- row-of [eng kind id]
@@ -281,6 +319,50 @@
 
       :else (refused entry res))))
 
+(defn- signed-headers
+  "The headers integration row `irow` signs `bs` with: its `signature`'s
+  header over the hex hmac of its secret's value, and its timestamp
+  header when it names one. No signature when its secret holds no value."
+  [eng irow ^bytes bs]
+  (let [d (:data irow)
+        sig (merge integrations/default-signature
+                   (into {} (remove (comp nil? val)) (:signature d)))
+        k (some->> (:secret d) str (secrets/value-of eng) :value)]
+    (cond-> {}
+      k (assoc (str/lower-case (str (:header sig))) (integrations/sign k bs))
+      (:timestamp_header sig) (assoc (str/lower-case (str (:timestamp_header sig)))
+                                     (str (.getEpochSecond ^Instant ((:now-fn eng))))))))
+
+(defn- posted
+  "One outside event, sent as its integration sends it (ticket
+  524685a0): the body, given an `id` when it has none, signed with the
+  key the integration's secret row holds, kept by the receiver and
+  applied at once, as the applier would. → its report entry, kind
+  `event` and action the integration's name, its `outcome` the
+  receipt's ending (`applied`, `refused`, `unmatched`, `ambiguous` or
+  `ignored`), or `refused` when the receiver keeps nothing."
+  [eng names day c]
+  (let [nm (event-name c)
+        st (:storage eng)
+        body (resolved names day (:body c))
+        body (if (or (contains? body :id) (contains? body "id"))
+               body
+               (assoc body :id (str "week-" (random-uuid))))
+        bs (.getBytes ^String (wire/write-json body) StandardCharsets/UTF_8)
+        irow (some->> (store/with-tx st (fn [tx] (first (store/query-rows st tx :integration {:name nm} {:limit 1}))))
+                      (inv/decode-row (get (inv/resources eng) :integration)))
+        entry (cond-> {:day day :as "world" :kind "event" :action nm :event nm}
+                (:name c) (assoc :name (str (:name c))))]
+    (try
+      (let [rid (str (:receipt (integrations/receive! eng nm (if irow (signed-headers eng irow bs) {}) bs)))
+            _ (integrations/apply! eng rid)
+            state (some-> (row-of eng :integration_event rid) :state name)]
+        (cond-> (assoc entry :receipt rid :outcome state)
+          (= "refused" state)
+          (assoc :detail (str "the door the " nm " event runs refused it; its receipt keeps the refusal"))))
+      (catch clojure.lang.ExceptionInfo e
+        (refused entry {:status (:status (ex-data e)) :body (ex-data e)})))))
+
 (defn- allows-of
   "A day's `:person-allows`: `:none`, `:yesterday`, or else `:today`."
   [d]
@@ -360,10 +442,14 @@
                tap (fn [hs] (mapv #(allowed eng h cast day %) hs))
                morning (if (= :yesterday mode) (tap held) [])
                [names today] (reduce (fn [[names out] c]
-                                       (let [e (played eng h cast names day c)]
+                                       (let [e (if (contains? c :event)
+                                                 (posted eng names day c)
+                                                 (played eng h cast names day c))]
                                          [(cond-> names
                                             (and (:name c) (= "moved" (:outcome e)))
-                                            (assoc (str (:name c)) (:id e)))
+                                            (assoc (str (:name c)) (:id e))
+                                            (and (:name c) (:receipt e))
+                                            (assoc (str (:name c)) (:receipt e)))
                                           (conj out e)]))
                                      [names []]
                                      (:calls d))

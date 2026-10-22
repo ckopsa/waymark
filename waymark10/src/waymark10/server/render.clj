@@ -136,6 +136,7 @@
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgment :as judgment]
@@ -317,18 +318,61 @@
     (schema/conceal js (schema/engine-written-fields (:schema rdef)))
     js))
 
+(defn- purge-word
+  "A personal field as a purge's sentence names it: its label, read as
+  prose (lower-cased, unless it reads as an acronym), else its name
+  with the underscores spaced."
+  [k props]
+  (let [^String l (or (some #(when (and (string? %) (not (str/blank? %))) %)
+                            [(:title props) (:label props)
+                             (get-in props [:x-display :label])])
+                      (str/replace (name k) "_" " "))]
+    (if (and (> (count l) 1) (Character/isUpperCase (.charAt l 1)))
+      l
+      (str (str/lower-case (subs l 0 1)) (subs l 1)))))
+
+(defn purge-consequence
+  "A :purge door's confirm sentence, derived from the declaration and
+  this row (docs/spec-documents.md §5): the row named by its summary
+  line, the personal fields the purge clears by label and the documents
+  they hold by count. No pronoun — a declaration does not say one."
+  [rdef row]
+  (let [form (:schema rdef)
+        em (when form (schema/entry-map form))
+        words (into []
+                    (comp (remove #(get-in em [% :properties :waymark/document]))
+                          (map #(purge-word % (get-in em [% :properties]))))
+                    (schema/personal-fields form))
+        n (count (schema/document-ids form (:data row)))
+        parts (cond-> words
+                (pos? n) (conj (str n (if (= 1 n) " document" " documents"))))]
+    (str (summary/line rdef (assoc row :kind (:kind rdef))) "'s "
+         (case (count parts)
+           0 "personal fields"
+           1 (first parts)
+           (str (str/join ", " (pop parts)) " and " (peek parts)))
+         (if (and (= 1 (count parts)) (<= n 1)) " is" " are")
+         " erased for good; the record stays.")))
+
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         ;; per-origin consequence (batch H): a {from-state sentence}
         ;; map resolves by the row's CURRENT state at render time —
         ;; the one moment the origin is known. A string consequence
         ;; already landed in :display :description at normalize.
-        display (if (and (map? (:consequence safety))
-                         (nil? (:description display)))
+        display (cond
+                  ;; a purge says what it erases, read off this row
+                  ;; (docs/spec-documents.md §5), unless it wrote its own
+                  (and (:purge defn') row (nil? (:description display)))
+                  (assoc display :description (purge-consequence rdef row))
+
+                  (and (map? (:consequence safety))
+                       (nil? (:description display)))
                   (if-some [sentence (get (:consequence safety) (:state row))]
                     (assoc display :description sentence)
                     display)
-                  display)
+
+                  :else display)
         href (str self "/-/" (name (:name defn')))
         input-js (when (:input defn')
                    (-> (fold-acceptance (schema/json-schema (:input defn'))
@@ -985,6 +1029,27 @@
                         [field entry])))))
           (schema/ref-fields (:schema rdef)))))
 
+(defn- documents-block
+  "The envelope's `documents` block (docs/spec-documents.md §2): for each
+  :waymark/document field this reader holds a value in, each file's
+  {:id :added_by :added_at} as the ctx-opts :document-log hook reads
+  them off the attachment's own log — the row stores nothing but the
+  ref. A scalar field answers one entry, a list one per file; a file
+  the hook answers nil for is left out. No hook, no block."
+  [rdef enc-data hashed document-log]
+  (when document-log
+    (into {}
+          (keep (fn [[f {:keys [properties]}]]
+                  (let [v (get enc-data f)
+                        one #(some-> (document-log (str %)) (assoc :id (str %)))]
+                    (when (and (:waymark/document properties)
+                               (some? v)
+                               (not (contains? hashed f)))
+                      (if (sequential? v)
+                        (when-some [es (seq (keep one v))] [f (vec es)])
+                        (when-some [e (one v)] [f e]))))))
+          (schema/entry-map (:schema rdef)))))
+
 (defn- project-display
   "Top-level :display, resolved per row (the recorded demand, landed:
   authored in three mealplan10 kinds, consumed nowhere until now).
@@ -1034,6 +1099,9 @@
                 :find (or (:find ctx-opts) (:find hooks))
                 ;; the request's own clock, for a field that reads time
                 :now (:now ctx-opts)
+                ;; a close's :reconciles sides, summed over the period
+                ;; (docs/spec-ledger-money.md §7)
+                :balance-over (or (:balance-over ctx-opts) (:balance-over hooks))
                 :rdef-of (when-some [rs (:resources ctx-opts)]
                            (fn [token]
                              (let [t (name token)]
@@ -1095,7 +1163,15 @@
                     ;; clock and about whose hand is asking, so a probe
                     ;; that could not read the last transition would
                     ;; advertise a way back that had already expired
-                    :last-transition (:last-transition ctx-opts)})
+                    :last-transition (:last-transition ctx-opts)
+                    ;; …and the day a row entered a state, which a
+                    ;; :keep counting from {:state s} reads
+                    :entered-at (:entered-at ctx-opts)
+                    ;; …and the house's calendar (docs/spec-calendar-time.md
+                    ;; §6): a guard that reads today — retention-has-passed
+                    ;; among them — must read it in the zone the invoke
+                    ;; and the sweep read it in, not in UTC
+                    :calendar (:calendar ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
         ;; the field/argument projection closures (batch B) — guards
@@ -1227,7 +1303,8 @@
         parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)
         ;; the ref labels read over enc-data — what LEFT the building —
         ;; so a redacted ref field names no target here either
-        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))]
+        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))
+        documents (documents-block rdef enc-data hashed (:document-log ctx-opts))]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
@@ -1246,9 +1323,18 @@
               :meta (cond-> {:version (:version row)
                              :etag (inv/etag (:kind rdef) (:id row) (:version row))}
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
-                      (:law-revision row) (assoc :law-revision (:law-revision row)))}
+                      (:law-revision row) (assoc :law-revision (:law-revision row))
+                      ;; the day the kind's :keep lets the row go
+                      ;; (docs/spec-documents.md §4), once it has one
+                      (map? (:keep rdef))
+                      (as-> m (if-some [d (retention/due-on
+                                           (:keep rdef) row (:entered-at ctx-opts)
+                                           (retention/zone-of (:calendar ctx-opts)))]
+                                (assoc m :retained-until (str d))
+                                m)))}
        (seq parts) (assoc :parts parts)
        (seq refs) (assoc :refs refs)
+       (seq documents) (assoc :documents documents)
        (:display rdef) (assoc :display (project-display rdef hrow redacted))))))
 
 (defn envelope-stub

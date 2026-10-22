@@ -119,6 +119,18 @@
     (is (nil? (refusal #(walk! eng id :check))))
     (is (= "ready" (name (:state (row-of eng :scene id)))))))
 
+(deftest an-event-shot-checks-and-binds-its-receipt
+  (let [eng (fresh-engine)
+        shot {:event {:source "payments" :body {:id "evt_1" :type "payment_intent.succeeded"}}
+              :bind "receipt"}
+        id (write! eng (update well-formed :shots conj shot))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id))))))
+  (testing "its source is a name and its body a map"
+    (let [eng (fresh-engine)]
+      (is (str/includes? (why-not eng 1 {:event {:source "" :body {}}}) "`event` names `source`"))
+      (is (str/includes? (why-not eng 1 {:event {:source "payments" :body "paid"}}) "`event` names `body`")))))
+
 (deftest each-refusal-names-its-shot
   (let [eng (fresh-engine)]
     (testing "an unknown verb"
@@ -322,6 +334,24 @@
     (is (false? (get-in row [:data :ok])))
     (testing "a take of a version the scene never had is refused"
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
+                                        {:principal mayor})))))))
+
+(deftest a-take-accepts-every-key-the-performer-writes-on-a-shot
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        shot {:shot 1 :id 1 :ok true :pressed "held" :focus "field:title"
+              :expects [{:surface "held" :path "title" :op "=" :value "x" :was "x" :ok true}]
+              :why nil :still "stills/1.png" :role "turn"
+              :card "Monday" :hold_ms 1200}
+        take {:scene (str id) :scene_version 1 :device "phone"
+              :commit "9c4248d" :film "film-1" :shots [shot]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)]
+    (is (= "recorded" (name (:state row))))
+    (is (= "field:title" (:focus (first (get-in row [:data :shots])))))
+    (testing "the shot schema stays closed"
+      (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :stray] 1)
                                         {:principal mayor})))))))
 
 (deftest a-take-names-its-engine-and-org-commits

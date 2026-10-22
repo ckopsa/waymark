@@ -15,33 +15,39 @@
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
     :schema :create-schema :create-safety :fields :shape :upcasts
     :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
-    :allow-undo
+    :allow-undo :frozen-in
     :derived :computed :one-of :unique :part-scopes
     :occupies :calendar :explain :recurs
     :filterable :index :sortable :faceted :worksheet :default-filters :views
-    :absent-as :collection-doors
+    :absent-as :narrows :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
-    :retain :on-event
+    :retain :keep :on-event
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
+    :scope-default
     :accounts
     :lines
     :rate-table
+    :conserves
+    :measures
+    :reconciles :closes
     :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :effect :unwinds
+    :stamp :not-by
     :engine
     :out-of-state-says :replay :log-says :decided :decided-held
-    :posts :reverses-posts})
+    :posts :reverses-posts :purge :evidence})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless :touches})
+    :record :edit :place :handler :emits :waives :unless :touches
+    :stamp :not-by})
 
 (defn- entries [node]
   (when (and node (api/map-node? node))

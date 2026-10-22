@@ -254,6 +254,15 @@
                         (when (and show? ref) [{:open {:self ref}}])))]
     (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
 
+(defn- event-shots
+  "The shot that plays week.edn event `c` (ticket 524685a0): an `event`
+  shot the performer signs as the integration and posts as it plays,
+  binding the receipt a named one keeps. Trimmed when not shown."
+  [c show?]
+  [(cond-> {:event {:source (name (:event c)) :body (or (:body c) {})}}
+     (:name c) (assoc :bind (row-bind (:name c)))
+     (not show?) (assoc :trim true))])
+
 (defn- week-shots
   "Each day of `week-script` that has calls, to the shots that play
   them, its days in order: day 1 in full, a later day the calls it shows
@@ -266,9 +275,11 @@
                          (reduce (fn [[shots seen] [i c]]
                                    (let [show? (shown? c (= 1 day) (= i (dec n)))
                                          as (cast-of c)]
-                                     [(into shots (call-shots c (not (seen as)) mayor-seat
-                                                              resources show?))
-                                      (cond-> seen show? (conj as))]))
+                                     [(into shots (if (contains? c :event)
+                                                    (event-shots c show?)
+                                                    (call-shots c (not (seen as)) mayor-seat
+                                                                resources show?)))
+                                      (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]
                                  (map-indexed vector calls))]
                      [(assoc acc day shots) seen]))]
@@ -442,8 +453,15 @@
                     taken))
     (map vector (framed taken) (framed shots))))
 
+(def ^:private copied
+  "What line-up copies from a scene shot onto the take shot that films
+  it: its id and role, and what the live week's film rules read (ticket
+  4b7af799), its day, card and hold, the page it opens, its press, its
+  call and its event."
+  [:id :role :day :card :hold :open :press :call :event])
+
 (defn line-up
-  "The take `tk` with each scene shot's `:id` and `:role` copied onto
+  "The take `tk` with each scene shot's `copied` keys copied onto
   the take shot that films it, where that shot carries none (ticket
   ef24488d), the shots matched as `matches` does. `tk` as given when the
   plan carries no scene."
@@ -452,9 +470,9 @@
     (if (and (map? tk) (sequential? (:shots tk)) (seq shots))
       (let [taken (vec (:shots tk))
             copy (fn [t s]
-                   (cond-> t
-                     (and (nil? (:id t)) (some? (:id s))) (assoc :id (:id s))
-                     (and (nil? (:role t)) (some? (:role s))) (assoc :role (:role s))))]
+                   (reduce (fn [t k]
+                             (if (and (nil? (get t k)) (some? (get s k))) (assoc t k (get s k)) t))
+                           t copied))]
         (assoc tk :shots
                (reduce (fn [v [i j]]
                          (let [t (nth v i) s (nth shots j)]
@@ -623,6 +641,28 @@
                                  (str/join "; " differs) ".")
                             240)
             :remedy "Find why the clone refused what the audit's dry week moved, and film the week again."}])))))
+
+(defn take-stopped
+  "The `take_stopped` warning of the take `tk` (ticket d49008cc): the
+  first of its shots with `ok: false`, named with its why. A take that
+  stopped on a shot is the performer's failure, not the org's, so it is
+  voided and filmed again, not judged. nil when every shot passed."
+  [tk]
+  (let [shots (when (map? tk) (:shots (walk/keywordize-keys tk)))]
+    (when (sequential? shots)
+      (when-some [[i s] (first (keep-indexed (fn [i s] (when (and (map? s) (false? (:ok s))) [i s]))
+                                             shots))]
+        (let [why (str/trim (str (:why s)))]
+          {:key "take_stopped"
+           :severity "warning"
+           :class "film"
+           :subject "film"
+           :sentence (clip (str "The take stopped at shot " (or (:id s) (inc i))
+                                " of " (count shots)
+                                (if (str/blank? why) "" (str ": " why))
+                                ", so it was voided, not judged.")
+                           240)
+           :remedy "Fix what stopped the shot, and let the director film the plan again."})))))
 
 (defn- missed?
   "True when `rule` of the judge's answer keeps the film from landing: a
