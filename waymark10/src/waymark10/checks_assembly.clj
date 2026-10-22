@@ -808,7 +808,10 @@
   or instant field of it or transition:<action> naming its door.
   [measure-unfiltered]: every field :among names, and the :at field,
   is :filterable on the :of kind — an error, for [exists-unfiltered]'s
-  reason: the sweep reads through :find."
+  reason: the sweep reads through :find. Then [measure-shape] again:
+  each :among value a plain filter key carries is one the :of kind
+  admits — a state name, a value its field's schema admits — by the
+  battery a view's :where meets (checks/view-where-problems)."
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
@@ -838,7 +841,16 @@
                 :when (not (or (own? f) (contains? (:filterable target) f)))]
           (err kind :measure-unfiltered
                (str label " reads " (name of) " by " (name f) ", a field " (name of)
-                    " does not declare :filterable — the sweep reads through :find")))))
+                    " does not declare :filterable — the sweep reads through :find")))
+        (when target
+          (doseq [problem (checks/view-where-problems
+                           target
+                           (into (sorted-map)
+                                 (for [[k vs] (measures/parse-among (:among m))
+                                       :when (checks/where-field? target k)]
+                                   [k (str/join "," vs)])))]
+            (err kind :measure-shape
+                 (str label " :among " (str/replace-first problem #"^:where " "")))))))
     []))
 
 ;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
