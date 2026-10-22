@@ -1,0 +1,50 @@
+;; landscape_rehearsal's first week (docs/orgkit.md § The week): the
+;; Elm crew builds the Hendersons' $14,800 patio and planting Monday to
+;; Friday, one booking per crew day; the Parks' $12,600 irrigation quote
+;; waits for the owner's tap; Friday the job is done and billed its
+;; balance, $14,800 less the $4,440 deposit already cleared.
+{:day-one "2026-10-26"
+ :card "A landscaping company's last week of the season: the Elm crew builds the Hendersons' patio and planting, and the Parks want new irrigation."
+ :goal {:kind "booking" :state "billed"}
+ :days [{:day 1
+         :card "Monday. The Hendersons' deposit cleared last week, so the Elm crew starts their $14,800 patio and planting."
+         :calls [{:as :mayor :kind "crew" :action "create" :name "elm" :input {:name "The Elm crew"}}
+                 {:as :mayor :kind "crew" :action "create" :name "oak" :input {:name "The Oak crew"}}
+                 {:as :world :cast :hendersons :kind "booking" :action "create" :name "hend_mon"
+                  :input {:customer_name "the Hendersons' patio" :crew_id {"$row" "elm"}
+                          :starts_at "2026-10-26T08:00:00Z" :ends_at "2026-10-26T17:00:00Z"}}
+                 {:as :mayor :kind "booking" :action "start" :row "hend_mon"}
+                 {:as :mayor :kind "booking" :action "finish" :row "hend_mon"}]}
+        {:day 2
+         :card "Tuesday. The Oak crew measures the Parks' yard for drip irrigation; the quote comes to $12,600, over the owner's $10,000 line."
+         :calls [{:as :mayor :kind "booking" :action "create" :name "hend_tue"
+                  :input {:customer_name "the Hendersons' patio" :crew_id {"$row" "elm"}
+                          :starts_at "2026-10-27T08:00:00Z" :ends_at "2026-10-27T17:00:00Z"}}
+                 {:as :world :cast :parks :kind "booking" :action "create" :name "parks_measure"
+                  :input {:customer_name "the Parks' irrigation" :crew_id {"$row" "oak"}
+                          :starts_at "2026-10-27T08:00:00Z" :ends_at "2026-10-27T12:00:00Z"}}
+                 {:as :mayor :kind "booking" :action "send_quote" :row "parks_measure"
+                  :input {:quote_cents 1260000} :show true}
+                 {:as :mayor :kind "booking" :action "finish" :row "hend_tue"}]}
+        {:day 3
+         :card "Wednesday. Pavers down at the Hendersons'. The owner approved the Parks' quote; it is out, good for 30 days."
+         :calls [{:as :mayor :kind "booking" :action "create" :name "hend_wed"
+                  :input {:customer_name "the Hendersons' patio" :crew_id {"$row" "elm"}
+                          :starts_at "2026-10-28T08:00:00Z" :ends_at "2026-10-28T17:00:00Z"}}
+                 {:as :mayor :kind "booking" :action "finish" :row "parks_measure"}
+                 {:as :mayor :kind "booking" :action "finish" :row "hend_wed"}]}
+        {:day 4
+         :card "Thursday. The Elm crew sets the Hendersons' border plantings, each with a one-year warranty."
+         :calls [{:as :mayor :kind "booking" :action "create" :name "hend_thu"
+                  :input {:customer_name "the Hendersons' patio" :crew_id {"$row" "elm"}
+                          :starts_at "2026-10-29T08:00:00Z" :ends_at "2026-10-29T17:00:00Z"}}
+                 {:as :mayor :kind "booking" :action "finish" :row "hend_thu"}]}
+        {:day 5
+         :card "Friday. The crew lead marks the patio done with photos; the Hendersons are billed the $10,360 balance, due in 15 days."
+         :calls [{:as :mayor :kind "booking" :action "create" :name "hend_fri"
+                  :input {:customer_name "the Hendersons' patio" :crew_id {"$row" "elm"}
+                          :starts_at "2026-10-30T08:00:00Z" :ends_at "2026-10-30T15:00:00Z"}}
+                 {:as :mayor :kind "booking" :action "start" :row "hend_fri"}
+                 {:as :mayor :kind "booking" :action "finish" :row "hend_fri"}
+                 {:as :mayor :kind "booking" :action "bill" :row "hend_fri"
+                  :input {:amount_cents 1036000} :show true}]}]}
