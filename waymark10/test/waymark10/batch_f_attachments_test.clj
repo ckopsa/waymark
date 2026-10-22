@@ -15,17 +15,22 @@
             [waymark10.server.attachments :as attachments]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.law-sweep :as law-sweep]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.worksheet :as worksheet]
+            [waymark10.server.xlsx :as xlsx]
             [waymark10.test.db :as db]
+            [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
 (def ^:private attachment-dir "target/test-attachments-batch-f")
 
-;; a kind with a document field (docs/spec-documents.md §2)
-(def ^:private site-visit
-  (r/resource
-   {:kind :site_visit
+;; a kind with document fields (docs/spec-documents.md §2); the cover's
+;; :accept is an argument so a test can tighten it as a later law would
+(defn- site-visit-decl [cover-accept]
+  {:kind :site_visit
     :plural "site_visits"
     :states [:open :done]
     :initial :open
@@ -36,14 +41,23 @@
              [:photos {:optional true
                        :waymark/document {:accept ["image/*"] :min 2 :personal false}
                        :x-display {:label "Photos"}}
-              [:maybe [:vector :string]]]]
+              [:maybe [:vector :string]]]
+             [:cover {:optional true
+                      :waymark/document {:accept cover-accept :personal false}
+                      :x-display {:label "Cover"}}
+              [:maybe :string]]]
+    :worksheet {:columns [{:field :title :create-only true}
+                          {:field :cover :create-only true}]
+                :create true}
     :actions
     {:finish {:from #{:open} :to :done
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Finish" :order 1}}
      :reopen {:from #{:done} :to :open
               :safety {:idempotent true :reversible true :confirm false}
-              :display {:label "Reopen" :order 2}}}}))
+              :display {:label "Reopen" :order 2}}}})
+
+(def ^:private site-visit (r/resource (site-visit-decl ["image/*"])))
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *h* nil)
@@ -56,6 +70,7 @@
           (fn [tx]
             (doseq [table ["attachments" "members" "roles" "grants"
                            "subscriptions" "jobs" "definitions" "site_visits"
+                           "worksheets"
                            "waymark10_transitions" "waymark10_idempotency"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [dir (io/file attachment-dir)]
@@ -216,3 +231,41 @@
         "…not the bytes route that stored it")
     (is (= (str (:at stored)) (:added_at entry))
         "when is its mark_stored")))
+
+;; ── 4. the type is judged at every write, and a tightened law says so ─
+
+(def ^:private colton (t/principal {:id "colton" :type :human :display "Colton"}))
+
+(deftest an-import-writing-an-unaccepted-type-is-refused
+  (let [notes (media! "notes.txt" "text/plain")
+        rdef (get (inv/resources *eng*) :site_visit)
+        ws (:row (worksheet/stage! *eng* rdef
+                                   (xlsx/write-sheet [["id" "title" "cover"]
+                                                      [nil "Imported patio" notes]])
+                                   {:principal colton}))
+        applied (:row (inv/invoke! *eng* :worksheet (:id ws) :apply nil
+                                   {:principal colton
+                                    :idempotency-key (str (random-uuid))}))
+        [line] (get-in applied [:data :report])]
+    (is (= "refused" (:outcome line))
+        (str "the import's create runs the same :accept check: " (pr-str line)))))
+
+(deftest the-law-sweep-lists-rows-a-tightened-accept-leaves-behind
+  (let [patio (media! "patio.jpg" "image/jpeg")
+        kept (id-of (req :post "/api/site_visits" {:title "Covered" :cover patio}))
+        bare (id-of (req :post "/api/site_visits" {:title "No cover"}))
+        tightened (r/resource (site-visit-decl ["image/png"]))
+        st (:storage *eng*)
+        rows (store/with-tx st
+               #(store/query-rows st % :site_visit {} {:limit 500}))
+        found (law-sweep/document-type-findings
+               *eng* tightened (mapv #(inv/decode-row tightened %) rows))
+        ids (set (map (comp str :id) found))]
+    (is (contains? ids kept) "the row filed under image/* is named")
+    (is (not (contains? ids bare)) "a row with no cover is not")
+    (is (every? #(= :document_type_drift (:class %)) found))
+    (is (str/includes? (str (:detail (first found))) "patio.jpg")
+        "the detail names the file and its type")
+    (is (empty? (law-sweep/document-type-findings
+                 *eng* site-visit (mapv #(inv/decode-row site-visit %) rows)))
+        "under the law it was filed in, nothing drifts")))
