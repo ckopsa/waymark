@@ -1062,6 +1062,31 @@
                      (str " WHERE " (str/join " AND " (map first parts)))))]
       (:s (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
+  (sum-amounts [_ tx kind of conds]
+    (let [table (table-for tables kind)
+          parts (conds-sql tables promoted kind conds)
+          f (store/definition-checked-name of)
+          v (str "(data->'" f "')")
+          ;; money is an object: its amount is cast as search-rows'
+          ;; :magnitude casts it (the regex spells no ? — JDBC's), and
+          ;; summed per currency; a bare number is summed as itself.
+          ;; No LIMIT: every matching row adds.
+          money? (str "(jsonb_typeof(" v ") = 'object'"
+                      " AND (" v "->>'currency') IS NOT NULL)")
+          sql (str "SELECT CASE WHEN " money? " THEN " v "->>'currency' END AS c,"
+                   " SUM(CASE WHEN jsonb_typeof(" v ") = 'number'"
+                   " THEN (data->>'" f "')::numeric"
+                   " WHEN " money? " AND ((" v "->>'amount')"
+                   " ~ '^-{0,1}[0-9]+([.][0-9]+){0,1}$')"
+                   " THEN (" v "->>'amount')::numeric END) AS s"
+                   " FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   " GROUP BY 1")]
+      (into {}
+            (keep (fn [{:keys [c s]}] (when (some? s) [(or c :number) s])))
+            (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+
   (ids-matching [_ tx kind conds limit]
     (let [table (table-for tables kind)
           parts (conds-sql tables promoted kind conds)

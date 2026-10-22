@@ -233,6 +233,14 @@
     nil — answers nil. → a BigDecimal or nil; landing it (and the
     declaration's empty default: 0, or absent under {:when-empty
     :absent}) in the fact's declared type is the maintainer's job.")
+  (sum-amounts [st tx kind of conds]
+    "Exact sums of the :of data field over EVERY row matching the conds
+    (search-rows' grammar), with no row limit — a ledger's balance over
+    a period reads it, where search-rows' page of 100 would drop
+    postings. Grouped by unit: a money value ({amount, currency}) adds
+    to its currency's sum, a bare number to :number's; a value that is
+    neither adds nothing. → {\"USD\" BigDecimal, :number BigDecimal …},
+    empty when nothing contributed.")
   (ids-matching [st tx kind conds limit]
     "Row ids matching every cond (same grammar as count-matching),
     id-ordered, LIMIT'd — the inverted dependent query and the

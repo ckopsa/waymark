@@ -73,14 +73,17 @@
             [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
-            [waymark10.types :as t])
-  (:import (java.time Instant LocalDate LocalTime ZoneId)
+            [waymark10.types :as t]
+            [waymark10.windows :as windows])
+  (:import (java.math BigDecimal RoundingMode)
+           (java.time Instant LocalDate LocalTime ZoneId)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -92,15 +95,17 @@
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
   [:name :sentence :kind :attempt :recurs :age :entered :row :input :as :at :calendar :events :effects :given :history
-   :history-mode :postings :rates :cast :teams :expect])
+   :history-mode :postings :rates :cast :teams :goals :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
   :because and :remedies as optional tightenings of a refusal, and
   :balances the accounts the walk leaves as it says
   (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
-  the fields the allowed door's handler leaves on its row."
-  [:allowed :refused :because :remedies :balances :lands])
+  the fields the allowed door's handler leaves on its row, and
+  :readings the measures the walk leaves at :at (docs/spec-measures.md
+  §7)."
+  [:allowed :refused :because :remedies :balances :lands :readings])
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -126,6 +131,10 @@
 ;; the house's calendar a scenario declares (docs/spec-calendar-time.md
 ;; §6): the same values a work_calendar row keeps
 (def calendar-keys [:zone :workdays :hours :holidays])
+;; one goal a scenario holds a measure to, as a goal row says it, and one
+;; reading it expects (docs/spec-measures.md §7)
+(def goal-keys [:measure :op :target])
+(def reading-keys [:value :verdict :among :met])
 ;; one outside event a scenario replays (docs/spec-integrations.md §6):
 ;; the integration that sends it, its type — or the one its body carries
 ;; — and the body as recorded
@@ -579,6 +588,48 @@
           (err sname (str ":expect :balances " (pr-str a)
                           " is a whole number, a decimal or money written \"0.00 USD\"")))))))
 
+(defn- readings!
+  "The scenario's :goals and :expect :readings (docs/spec-measures.md
+  §7): each goal {:measure \"kind.name\" :op \">=\" :target n}, each
+  expected reading {:value n :verdict :met} under its measure's token.
+  A reading is a window's, and a window is a moment's in the house's
+  zone: expecting one with no :at, or no :calendar, is refused here, as
+  a clock-reading law is."
+  [sname m]
+  (when-some [goals (:goals m)]
+    (when-not (vector? goals)
+      (err sname ":goals is a vector of {:measure \"kind.name\" :op \">=\" :target n}"))
+    (doseq [gl goals]
+      (when-not (map? gl)
+        (err sname "each :goals entry is {:measure \"kind.name\" :op \">=\" :target n}"))
+      (closed! sname "goal" goal-keys gl)
+      (when-not (and (string? (:measure gl)) (str/includes? (:measure gl) "."))
+        (err sname "a goal names its :measure by token, \"kind.name\""))
+      (when-not (some #{(:op gl)} measures/goal-ops)
+        (err sname (str "a goal's :op is one of " measures/goal-ops)))
+      (when-not (number? (:target gl))
+        (err sname "a goal's :target is a number")))
+    (when-some [twice (seq (for [[tk n] (frequencies (map :measure goals)) :when (> n 1)] tk))]
+      (err sname (str "two :goals name " (first twice) " — one active goal per measure"))))
+  (when-some [want (get-in m [:expect :readings])]
+    (when-not (and (map? want) (seq want) (every? string? (keys want)))
+      (err sname ":expect :readings maps each measure's token to its reading, {\"order.on_time\" {:value 0.5 :verdict :missed}}"))
+    (doseq [[token r] want]
+      (when-not (and (map? r) (seq r))
+        (err sname (str ":expect :readings " token " is {:value … :verdict …}")))
+      (closed! sname "reading" reading-keys r)
+      (when (and (some? (:value r)) (not (number? (:value r))))
+        (err sname (str ":expect :readings " token " :value is a number, or nil for a window with no rows")))
+      (when (and (some? (:verdict r)) (not (#{:met :missed :unjudged} (:verdict r))))
+        (err sname (str ":expect :readings " token " :verdict is :met, :missed or :unjudged")))
+      (doseq [k [:among :met]]
+        (when (and (some? (get r k)) (not (nat-int? (get r k))))
+          (err sname (str ":expect :readings " token " " k " is a count of rows")))))
+    (when (nil? (:at m))
+      (err sname ":expect :readings reads a window, and a window is a moment's: say :at"))
+    (when (nil? (:calendar m))
+      (err sname ":expect :readings reads a window in the house's zone: say :calendar"))))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -674,6 +725,7 @@
   (events! sname (:events m))
   (effects! sname (:effects m))
   (ledger! sname m)
+  (readings! sname m)
   (cond
     (some? (:recurs m)) (occurrences-expect! sname (:expect m))
     (some? (:age m)) (age-expect! sname m)
@@ -818,6 +870,9 @@
   ;; (docs/spec-calendar-time.md §6, ticket 4b20e9e1)
   (or (some? (:recurs s))
       (some? (:age s))
+      ;; a reading scenario is read here, over its own rows; structural
+      ;; refuses a door whose guards read more than this tier answers
+      (some? (get-in s [:expect :readings]))
       (let [{:keys [guards missing]} (attempted rdef s)
             guards (into (vec guards) (event-guards rdef s))]
         (boolean (and (nil? missing)
@@ -1098,6 +1153,53 @@
      :state (:state row)
      :data (:data row {})}))
 
+(defn- measure-of
+  "The measure a token names on this kind, `<kind>.<name>`, with its
+  defaults written in; nil when the kind declares none of that name."
+  [rdef token]
+  (let [[k n] (str/split (str token) #"\." 2)]
+    (when (= k (name (:kind rdef)))
+      (some (fn [[mn m]] (when (= n (measures/spelled mn)) m))
+            (measures/with-defaults (:kind rdef) (:measures rdef))))))
+
+(defn- readings-faults
+  "What the assembled declaration says of a scenario's :goals and
+  :expect :readings: each token a measure this kind declares, of a stat
+  a scenario reads (:rate or :count) over a time field, its :among by
+  equality on a declared field; and the door judged here, where
+  readings are read, so its guards read nothing this tier cannot answer."
+  [rdef s guards]
+  (let [want (get-in s [:expect :readings])
+        fields (conj (set (schema/entry-keys (:schema rdef))) :state)
+        declared (or (measures/tokens rdef) [])]
+    (concat
+     (for [token (sort (keys want))
+           :let [m (measure-of rdef token)
+                 stat (some-> m :stat measures/spelled)
+                 stray (when (= (:kind rdef) (some-> m :of measures/spelled keyword))
+                         (seq (remove fields (keys (measures/parse-among (:among m))))))
+                 fault (cond
+                         (nil? m)
+                         (str ":expect :readings names " token ", which " (name (:kind rdef))
+                              " does not declare — its measures are " declared)
+                         (not (#{"rate" "count"} stat))
+                         (str ":expect :readings " token " is a :" stat
+                              " measure; a scenario reads :rate and :count")
+                         (measures/transition-action (measures/spelled (:at m)))
+                         (str ":expect :readings " token " counts the log, which a scenario does not read")
+                         stray
+                         (str ":expect :readings " token "'s :among filters by " (pr-str (vec stray))
+                              ", and a scenario reads :among by equality on a declared field"))]
+           :when fault]
+       fault)
+     (for [gl (:goals s) :when (nil? (measure-of rdef (:measure gl)))]
+       (str ":goals names " (:measure gl) ", which " (name (:kind rdef))
+            " does not declare — its measures are " declared))
+     (when (seq want)
+       (when-some [beyond (seq (into (sorted-set) (map str) (mapcat unserved-reads guards)))]
+         [(str "expects readings, which are read in the check tier, but " (:attempt s)
+               " reads " (str/join ", " beyond))])))))
+
 (defn- structural
   "What the assembled declaration can answer and the def line could
   not: the door exists, the row suits the door, the expected guard is
@@ -1114,7 +1216,8 @@
             (comp (remove nil?)
                   (map #(str (name (:name s)) " [" (name (:kind s)) "/"
                              (name (:attempt s)) "] " %)))
-            [(when (and (= :create door) (:row s))
+            (concat
+             [(when (and (= :create door) (:row s))
                "attempts the create door with a :row — no instance exists yet")
              (when (and (= :action door) (nil? (:row s)))
                (str "attempts " (:attempt s) " with no :row — an action judges an instance"))
@@ -1156,7 +1259,8 @@
                  ":expect :lands judges an action's handler; a create is judged by its verdict"
                  (when-some [stray (seq (remove (set (schema/entry-keys (:schema rdef))) (keys lands)))]
                    (str ":expect :lands names " (pr-str (vec stray))
-                        ", which " (name (:kind s)) "'s schema does not declare"))))])))))
+                        ", which " (name (:kind s)) "'s schema does not declare"))))]
+             (readings-faults rdef s guards)))))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -1468,6 +1572,86 @@
         (when (seq off)
           (str "the row lands " (str/join "; " off)))))))
 
+(defn- point
+  "A row's time field as the instant or date it names; nil when it
+  names neither."
+  [v]
+  (cond (or (instance? Instant v) (instance? LocalDate v)) v
+        (string? v) (or (try (Instant/parse ^String v) (catch DateTimeParseException _ nil))
+                        (try (LocalDate/parse ^String v) (catch DateTimeParseException _ nil)))))
+
+(defn- among?
+  "Does this row pass a parsed :among, by equality — its state for
+  `state`, its field for any other key?"
+  [among row]
+  (every? (fn [[k vs]]
+            (let [v (if (= :state k) (:state row) (get-in row [:data k]))]
+              (contains? (set vs) (if (keyword? v) (name v) (str v)))))
+          among))
+
+(defn- reading
+  "One measure read as the sweep reads it, over the scenario's own rows:
+  those whose :at falls in the window `now` falls in and that pass
+  :among → {:among :met :value}, a rate to four places as the sweep
+  rounds it."
+  [m rows cal ^Instant now]
+  (let [at (keyword (measures/spelled (:at m)))
+        w (windows/window (:over m) cal now)
+        among (measures/parse-among (:among m))
+        in (filterv #(and (windows/within? w (point (get-in % [:data at]))) (among? among %)) rows)
+        n (count in)]
+    (if (= "rate" (measures/spelled (:stat m)))
+      (let [form (expr/normalize (:where m))
+            calendar (fn ([] cal) ([_ref] cal))
+            met (count (filter #(true? (expr/evaluate form {:data (:data %) :now now :calendar calendar}))
+                               in))]
+        {:among n
+         :met met
+         :value (when (pos? n)
+                  (.divide (BigDecimal/valueOf (long met)) (BigDecimal/valueOf (long n))
+                           4 RoundingMode/HALF_UP))})
+      {:among n
+       :value (when (pos? n) (BigDecimal/valueOf (long n)))})))
+
+(defn- readings-clause
+  "Where the readings the scenario expects differ from the ones its walk
+  leaves at :at — each measure read over the :given rows of its kind and
+  the walked row, wearing the door's :to state once allowed, and judged
+  against the scenario's :goals — or nil when each reads what was said."
+  [rdef s {:keys [row got]}]
+  (when-some [want (not-empty (get-in s [:expect :readings]))]
+    (let [{:keys [door action]} (attempted rdef s)
+          now (Instant/parse ^String (:at s))
+          cal (calendar-answer (:calendar s))
+          walked (cond-> row
+                   (and row (= :action door) (nil? (:refused got))) (assoc :state (:to action)))
+          off (for [[token want-r] (sort-by key want)
+                    :let [m (measure-of rdef token)
+                          of (some-> m :of measures/spelled keyword)
+                          rows (cond-> (filterv #(= of (:kind %)) (:given s))
+                                 (and walked (= of (:kind s))) (conj walked))
+                          r (reading m rows cal now)
+                          gl (first (filter #(= token (:measure %)) (:goals s)))
+                          verdict (measures/verdict m r (:op gl) (:target gl))
+                          value (:value r)
+                          diffs (remove nil?
+                                        [(when (and (contains? want-r :value)
+                                                    (not (if (and (some? (:value want-r)) (some? value))
+                                                           (zero? (compare (bigdec (:value want-r)) value))
+                                                           (= (:value want-r) value))))
+                                           (str "value " (or value "none") ", not " (:value want-r)))
+                                         (when (and (some? (:verdict want-r))
+                                                    (not= (name (:verdict want-r)) verdict))
+                                           (str "verdict " verdict ", not " (name (:verdict want-r))))
+                                         (when (and (some? (:among want-r)) (not= (:among want-r) (:among r)))
+                                           (str "among " (:among r) ", not " (:among want-r)))
+                                         (when (and (some? (:met want-r)) (not= (:met want-r) (:met r)))
+                                           (str "met " (:met r) ", not " (:met want-r)))])]
+                    :when (seq diffs)]
+                (str token " reads " (str/join "; " diffs)))]
+      (when (seq off)
+        (str "the readings answer " (str/join " · " off))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1478,7 +1662,8 @@
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
           (vec (remove nil? [(violation s got)
                              (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
-                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))
+                             (some->> (readings-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row

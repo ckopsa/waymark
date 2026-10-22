@@ -144,13 +144,13 @@
   none: the truth its projected field caches (step 3c), and what step
   10's [balance-drift] compares that field with."
   [eng tx account-kind account-row account-name]
-  (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
-             (completing (fn [acc a] (if (some? acc) (money/plus acc a) a)))
-             nil
-             (store/search-rows (:storage eng) tx :posting
-                                [{:target :data :field :account :op :=
-                                  :value (account-address account-kind account-row account-name)}]
-                                {})))
+  ;; the store's sum over every posting, not search-rows' page of 100
+  (let [unit (get-in (inv/resources eng) [account-kind :accounts (keyword (name account-name)) :unit])
+        vs (inv/amount-sums unit
+                            (store/sum-amounts (:storage eng) tx :posting :amount
+                                               [{:target :data :field :account :op :=
+                                                 :value (account-address account-kind account-row account-name)}]))]
+    (when (seq vs) (reduce money/plus vs))))
 
 (defn- posted
   "The postings the transition `log-id` wrote, as stored."
